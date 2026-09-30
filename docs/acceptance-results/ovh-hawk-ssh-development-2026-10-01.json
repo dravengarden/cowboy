@@ -1,0 +1,342 @@
+{
+  "schema": 1,
+  "machine": "ovh",
+  "service": "svc-4e4d5154f3df9aa109d7d841dd925fd7",
+  "session": "sess-1790783866445",
+  "provider": "codex",
+  "model": "gpt-6-luna",
+  "effort": "max",
+  "ssh_identity": "permanent matrix-agent",
+  "remote_workspace": "/workspace/taskboard-acceptance",
+  "temporary_key": false,
+  "feature": {
+    "commit": "716c280b9a756b90d5f2c719e5b3e1c61de1ac2a",
+    "baseline_failures": 2,
+    "final_tests": 5,
+    "independent_csv_records": 100
+  },
+  "storage": {
+    "commit": "da81fa00436d92b3d6c1eef97fc332f0a1222e21",
+    "baseline_failures": 3,
+    "final_tests": 11,
+    "concurrent_writes": 144,
+    "complete_reader_samples": 265,
+    "interrupted_writer_trials": 12,
+    "custom_mode_preserved": "0640",
+    "corrupt_input_rejected": true,
+    "readonly_export_passed": true
+  },
+  "frozen_tests": {
+    "test_existing.py": "aaff3ed5f47ec3fccd99735473a8c8b9ad97efc7c42d09d9e44b3344ed55b0af",
+    "test_export.py": "af3049fea1c666ed867ee66cbc41f472cef443402927eb209306522f319ac6bb",
+    "test_storage.py": "7e24ce01ed8f5c5881c80cc551a11f8a647921acb6eeeda1be362b06f62ad3ac"
+  },
+  "ssh_tools": {
+    "feature": 24,
+    "storage": 27
+  },
+  "turn_wait": {
+    "deadline_seconds": 900,
+    "storage_wait_timed_out": true,
+    "work_resubmitted": false,
+    "replay_status": {
+      "sessionId": "sess-1790783866445",
+      "provider": "codex",
+      "state": "running",
+      "turnRunning": false,
+      "agentAlive": true,
+      "seq": 2091,
+      "detail": null,
+      "backgroundRunning": null
+    }
+  },
+  "network": {
+    "exit_code": 0,
+    "error": null,
+    "samples": [
+      {
+        "sequence": 0,
+        "elapsed": 13.398227990001033
+      },
+      {
+        "sequence": 1,
+        "elapsed": 18.395599488001608
+      },
+      {
+        "sequence": 2,
+        "elapsed": 23.394633976000478
+      },
+      {
+        "sequence": 3,
+        "elapsed": 28.39165553199564
+      },
+      {
+        "sequence": 4,
+        "elapsed": 33.39010004499869
+      },
+      {
+        "sequence": 5,
+        "elapsed": 38.38744526899973
+      },
+      {
+        "sequence": 6,
+        "elapsed": 43.38539794200187
+      },
+      {
+        "sequence": 7,
+        "elapsed": 48.384377370995935
+      },
+      {
+        "sequence": 8,
+        "elapsed": 53.38308257600147
+      },
+      {
+        "sequence": 9,
+        "elapsed": 58.37989904699498
+      },
+      {
+        "sequence": 10,
+        "elapsed": 63.37901633000001
+      },
+      {
+        "sequence": 11,
+        "elapsed": 68.37612931500189
+      },
+      {
+        "sequence": 12,
+        "elapsed": 73.37440454199532
+      },
+      {
+        "sequence": 13,
+        "elapsed": 78.37228582499665
+      },
+      {
+        "sequence": 14,
+        "elapsed": 83.37069611199695
+      },
+      {
+        "sequence": 15,
+        "elapsed": 88.36808856599964
+      },
+      {
+        "sequence": 16,
+        "elapsed": 93.36764327499986
+      },
+      {
+        "sequence": 17,
+        "elapsed": 98.36811021199537
+      },
+      {
+        "sequence": 18,
+        "elapsed": 103.36345330599579
+      },
+      {
+        "sequence": 19,
+        "elapsed": 108.36181430899887
+      },
+      {
+        "sequence": 20,
+        "elapsed": 113.35880061300122
+      },
+      {
+        "sequence": 21,
+        "elapsed": 118.35907028799556
+      },
+      {
+        "sequence": 22,
+        "elapsed": 123.35689721899689
+      },
+      {
+        "sequence": 23,
+        "elapsed": 128.3535529189976
+      },
+      {
+        "sequence": 24,
+        "elapsed": 133.35127038099745
+      },
+      {
+        "sequence": 25,
+        "elapsed": 138.35069936399668
+      },
+      {
+        "sequence": 26,
+        "elapsed": 143.34937238800194
+      },
+      {
+        "sequence": 27,
+        "elapsed": 148.34719437699823
+      },
+      {
+        "sequence": 28,
+        "elapsed": 153.34376856299787
+      },
+      {
+        "sequence": 29,
+        "elapsed": 158.34352510199824
+      },
+      {
+        "sequence": 30,
+        "elapsed": 163.342088616002
+      },
+      {
+        "sequence": 31,
+        "elapsed": 168.3387332009952
+      },
+      {
+        "sequence": 32,
+        "elapsed": 173.33709508199536
+      },
+      {
+        "sequence": 33,
+        "elapsed": 178.33562872499897
+      },
+      {
+        "sequence": 34,
+        "elapsed": 183.33295344699582
+      },
+      {
+        "sequence": 35,
+        "elapsed": 188.33287699499488
+      },
+      {
+        "sequence": 36,
+        "elapsed": 193.3304902969976
+      },
+      {
+        "sequence": 37,
+        "elapsed": 198.32836373499595
+      },
+      {
+        "sequence": 38,
+        "elapsed": 203.32626814000105
+      },
+      {
+        "sequence": 39,
+        "elapsed": 208.32505082599528
+      },
+      {
+        "sequence": 40,
+        "elapsed": 213.32249736599624
+      },
+      {
+        "sequence": 41,
+        "elapsed": 218.320283740999
+      },
+      {
+        "sequence": 42,
+        "elapsed": 223.31930024499889
+      },
+      {
+        "sequence": 43,
+        "elapsed": 228.3185780519998
+      },
+      {
+        "sequence": 44,
+        "elapsed": 233.31548072399892
+      },
+      {
+        "sequence": 45,
+        "elapsed": 238.31451987200126
+      },
+      {
+        "sequence": 46,
+        "elapsed": 243.31164533599804
+      },
+      {
+        "sequence": 47,
+        "elapsed": 248.3112106059998
+      },
+      {
+        "sequence": 48,
+        "elapsed": 253.30894042
+      },
+      {
+        "sequence": 49,
+        "elapsed": 258.3065569359969
+      },
+      {
+        "sequence": 50,
+        "elapsed": 263.3050673539983
+      },
+      {
+        "sequence": 51,
+        "elapsed": 268.3042917099956
+      },
+      {
+        "sequence": 52,
+        "elapsed": 273.30143380099616
+      },
+      {
+        "sequence": 53,
+        "elapsed": 278.30062484800146
+      },
+      {
+        "sequence": 54,
+        "elapsed": 283.29696250899724
+      },
+      {
+        "sequence": 55,
+        "elapsed": 288.2980650249956
+      },
+      {
+        "sequence": 56,
+        "elapsed": 293.2945341109953
+      },
+      {
+        "sequence": 57,
+        "elapsed": 298.29508907499985
+      },
+      {
+        "sequence": 58,
+        "elapsed": 303.3013239579959
+      },
+      {
+        "sequence": 59,
+        "elapsed": 308.289147534997
+      },
+      {
+        "sequence": 60,
+        "elapsed": 313.2862411219976
+      }
+    ],
+    "contiguous": true,
+    "max_gap": 5.006234882996068
+  },
+  "outer_observer_failure": {
+    "exit_code": 255,
+    "samples": [
+      {
+        "sequence": 0,
+        "elapsed": 19.136139003996504
+      },
+      {
+        "sequence": 1,
+        "elapsed": 24.12959692897857
+      }
+    ],
+    "contiguous": false,
+    "max_gap": 4.993457924982067
+  },
+  "artifacts": {
+    "fixture-history.patch": "cd9bddaa06ae185fdabef4db8a614a3eaf41e0671c29d733ab0ab45109885629",
+    "holdout.py": "42dbc3c70411731ea6f91d807b5ab32ef8d8bff57efe9f87562ec7aef1cafd14",
+    "test-runs.json": "df06b27f44bf846d1a55e2700f171fb8351474fa4b43d6d7b10556987f32ee87",
+    "independent-results.txt": "c2618750f451b16dd2151c4e7341c607a0ec919b89739f4f2922233c25394f6c"
+  },
+  "pending": [
+    "Falcon execution cohort",
+    "30-minute zero-failure window",
+    "JMS failover and fail-closed proof",
+    "browser Code and physical-device acceptance",
+    "reboot/cold recovery"
+  ],
+  "cleanup": {
+    "remote_fixture_removed": true,
+    "temporary_observer_removed": true,
+    "permanent_machine_retained": true,
+    "permanent_ssh_identity_retained": true,
+    "persistent_workspace_retained": true,
+    "temporary_authorization_created": false
+  },
+  "fixture_replay_tree": "50a2124a0962aa55c0cd460a9441f3eba641268c"
+}

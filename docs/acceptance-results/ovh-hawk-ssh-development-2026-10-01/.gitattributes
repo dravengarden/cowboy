@@ -1,0 +1,2 @@
+# Empty context lines in a unified diff contain a significant single space.
+fixture-history.patch -whitespace

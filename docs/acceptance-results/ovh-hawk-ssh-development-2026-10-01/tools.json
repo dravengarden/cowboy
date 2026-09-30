@@ -1,0 +1,359 @@
+[
+  {
+    "id": "exec-5bceaaac-6053-41e8-b378-c811eba9a169",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short --branch'",
+    "started_at": 1790786393.1114342,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-ad88dd2e-9de5-471b-8678-b9fcf4347666",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat AGENTS.md'",
+    "started_at": 1790786393.11153,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-2d78ab72-98da-442c-9d74-7ac708e7ef87",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat README.md'",
+    "started_at": 1790786393.1115465,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-17503858-caf8-4851-96ab-312aafaedc66",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && rg --files -g \"! .git\"'",
+    "started_at": 1790786423.8464532,
+    "exit_code": 127
+  },
+  {
+    "id": "exec-357e230c-b9d0-4ff1-844a-419198dc7a27",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && python3 -m unittest -v'",
+    "started_at": 1790786423.84658,
+    "exit_code": 1
+  },
+  {
+    "id": "exec-638c32a1-bb91-434c-bde8-3558eb460026",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && find . -maxdepth 2 -type f -not -path \"./.git/*\" -print'",
+    "started_at": 1790786449.2194273,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-6655850b-41fa-4406-a38f-f6ce5d86501a",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat test_existing.py'",
+    "started_at": 1790786449.2195182,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-f423f747-9bf9-4870-9fba-29bcfb32c246",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && sed -n \"1,280p\" taskboard.py'",
+    "started_at": 1790786449.2195415,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-0cb66c63-c8d5-4a1e-8773-60defe169eb9",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat test_export.py'",
+    "started_at": 1790786449.887514,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-bf91a59f-aa63-4e75-b2f3-b10a3b2b60a9",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && printf %s IiIiU21hbGwgdGFzay1ib2FyZCBDTEkuIENoYW5nZXMgdG8gc3RvcmFnZSBhcmUgYSBzZXBhcmF0ZSB0YXNrIGZyb20gZXhwb3J0LiIiIgppbXBvcnQgYXJncGFyc2UKaW1wb3J0IGNzdgppbXBvcnQganNvbgpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKaW1wb3J0IHN5cwoKCmRlZiBsb2FkKHBhdGgpOgogICAgcmV0dXJuIGpzb24ubG9hZHMocGF0aC5yZWFkX3RleHQoKSkgaWYgcGF0aC5leGlzdHMoKSBlbHNlIHsnbmV4dF9pZCc6IDEsICd0YXNrcyc6IFtdfQoKCmRlZiBzYXZlKHBhdGgsIHN0YXRlKToKICAgIHBhdGgud3JpdGVfdGV4dChqc29uLmR1bXBzKHN0YXRlLCBlbnN1cmVfYXNjaWk9RmFsc2UpICsgJ1xuJykKCgpkZWYgbWFpbigpOgogICAgcGFyc2VyID0gYXJncGFyc2UuQXJndW1lbnRQYXJzZXIoKQogICAgcGFyc2VyLmFkZF9hcmd1bWVudCgnLS1kYicsIHJlcXVpcmVkPVRydWUsIHR5cGU9UGF0aCkKICAgIGNvbW1hbmRzID0gcGFyc2VyLmFkZF9zdWJwYXJzZXJzKGRlc3Q9J2NvbW1hbmQnLCByZXF1aXJlZD1UcnVlKQogICAgYWRkID0gY29tbWFuZHMuYWRkX3BhcnNlcignYWRkJykKICAgIGFkZC5hZGRfYXJndW1lbnQoJ3RpdGxlJykKICAgIGFkZC5hZGRfYXJndW1lbnQoJy0tdGFnJywgYWN0aW9uPSdhcHBlbmQnLCBkZWZhdWx0PVtdKQogICAgZG9uZSA9IGNvbW1hbmRzLmFkZF9wYXJzZXIoJ2RvbmUnKQogICAgZG9uZS5hZGRfYXJndW1lbnQoJ2lkJywgdHlwZT1pbnQpCiAgICBsaXN0aW5nID0gY29tbWFuZHMuYWRkX3BhcnNlcignbGlzdCcpCiAgICBsaXN0aW5nLmFkZF9hcmd1bWVudCgnLS10YWcnKQogICAgZXhwb3J0ID0gY29tbWFuZHMuYWRkX3BhcnNlcignZXhwb3J0JykKICAgIGV4cG9ydC5hZGRfYXJndW1lbnQoJy0tZm9ybWF0JywgcmVxdWlyZWQ9VHJ1ZSwgY2hvaWNlcz1bJ2NzdiddKQogICAgZXhwb3J0LmFkZF9hcmd1bWVudCgnLS10YWcnKQogICAgYXJncyA9IHBhcnNlci5wYXJzZV9hcmdzKCkKICAgIHN0YXRlID0gbG9hZChhcmdzLmRiKQogICAgaWYgYXJncy5jb21tYW5kID09ICdhZGQnOgogICAgICAgIHRhc2sgPSBkaWN0KGlkPXN0YXRlWyduZXh0X2lkJ10sIHRpdGxlPWFyZ3MudGl0bGUsIHRhZ3M9c29ydGVkKHNldChhcmdzLnRhZykpLCBkb25lPUZhbHNlKQogICAgICAgIHN0YXRlWyduZXh0X2lkJ10gKz0gMQogICAgICAgIHN0YXRlWyd0YXNrcyddLmFwcGVuZCh0YXNrKQogICAgICAgIHNhdmUoYXJncy5kYiwgc3RhdGUpCiAgICAgICAgcHJpbnQoanNvbi5kdW1wcyh0YXNrLCBlbnN1cmVfYXNjaWk9RmFsc2UpKQogICAgZWxpZiBhcmdzLmNvbW1hbmQgPT0gJ2RvbmUnOgogICAgICAgIGZvciB0YXNrIGluIHN0YXRlWyd0YXNrcyddOgogICAgICAgICAgICBpZiB0YXNrWydpZCddID09IGFyZ3MuaWQ6CiAgICAgICAgICAgICAgICB0YXNrWydkb25lJ10gPSBUcnVlCiAgICAgICAgICAgICAgICBzYXZlKGFyZ3MuZGIsIHN0YXRlKQogICAgICAgICAgICAgICAgcHJpbnQoanNvbi5kdW1wcyh0YXNrLCBlbnN1cmVfYXNjaWk9RmFsc2UpKQogICAgICAgICAgICAgICAgcmV0dXJuCiAgICAgICAgcGFyc2VyLmVycm9yKCd1bmtub3duIHRhc2sgSUQnKQogICAgZWxpZiBhcmdzLmNvbW1hbmQgPT0gJ2V4cG9ydCc6CiAgICAgICAgc3lzLnN0ZG91dC5yZWNvbmZpZ3VyZShlbmNvZGluZz0ndXRmLTgnLCBuZXdsaW5lPScnKQogICAgICAgIHdyaXRlciA9IGNzdi53cml0ZXIoc3lzLnN0ZG91dCwgbGluZXRlcm1pbmF0b3I9J1xuJykKICAgICAgICB3cml0ZXIud3JpdGVyb3coKCdpZCcsICd0aXRsZScsICdkb25lJywgJ3RhZ3MnKSkKICAgICAgICByb3dzID0gW3Rhc2sgZm9yIHRhc2sgaW4gc3RhdGVbJ3Rhc2tzJ10gaWYgbm90IGFyZ3MudGFnIG9yIGFyZ3MudGFnIGluIHRhc2tbJ3RhZ3MnXV0KICAgICAgICBmb3IgdGFzayBpbiBzb3J0ZWQocm93cywga2V5PWxhbWJkYSByb3c6IGludChyb3dbJ2lkJ10pKToKICAgICAgICAgICAgd3JpdGVyLndyaXRlcm93KCh0YXNrWydpZCddLCB0YXNrWyd0aXRsZSddLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICd0cnVlJyBpZiB0YXNrWydkb25lJ10gZWxzZSAnZmFsc2UnLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICc7Jy5qb2luKHNvcnRlZChzZXQodGFza1sndGFncyddKSkpKSkKICAgIGVsc2U6CiAgICAgICAgcm93cyA9IFt0YXNrIGZvciB0YXNrIGluIHN0YXRlWyd0YXNrcyddIGlmIG5vdCBhcmdzLnRhZyBvciBhcmdzLnRhZyBpbiB0YXNrWyd0YWdzJ11dCiAgICAgICAgcHJpbnQoanNvbi5kdW1wcyhzb3J0ZWQocm93cywga2V5PWxhbWJkYSB0YXNrOiB0YXNrWydpZCddKSwgZW5zdXJlX2FzY2lpPUZhbHNlKSkKCgppZiBfX25hbWVfXyA9PSAnX19tYWluX18nOgogICAgbWFpbigpCg== | base64 -d > taskboard.py'",
+    "started_at": 1790786680.2725585,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-ba7485ff-ef8c-4e3a-8c23-a1e08c6b1dff",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && printf %s aW1wb3J0IGpzb24KZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKaW1wb3J0IHRlbXBmaWxlCmltcG9ydCB1bml0dGVzdAoKCmNsYXNzIEV4cG9ydFJlZ3Jlc3Npb25zKHVuaXR0ZXN0LlRlc3RDYXNlKToKICAgIGRlZiB0ZXN0X251bWVyaWNfb3JkZXJfdW5pcXVlX3RhZ3NfYW5kX2xmX291dHB1dChzZWxmKToKICAgICAgICByb3dzID0gWwogICAgICAgICAgICBkaWN0KGlkPTEwLCB0aXRsZT0ndGVuJywgZG9uZT1GYWxzZSwgdGFncz1bJ3dvcmsnLCAneicsICd3b3JrJ10pLAogICAgICAgICAgICBkaWN0KGlkPTIsIHRpdGxlPSd0d28nLCBkb25lPVRydWUsIHRhZ3M9Wyd3b3JrJywgJ2EnLCAnd29yayddKSwKICAgICAgICBdCiAgICAgICAgd2l0aCB0ZW1wZmlsZS5UZW1wb3JhcnlEaXJlY3RvcnkoKSBhcyBkaXJlY3Rvcnk6CiAgICAgICAgICAgIGRiID0gUGF0aChkaXJlY3RvcnkpIC8gJ3Rhc2tzLmpzb24nCiAgICAgICAgICAgIGRiLndyaXRlX3RleHQoanNvbi5kdW1wcyhkaWN0KG5leHRfaWQ9MTEsIHRhc2tzPXJvd3MpKSkKICAgICAgICAgICAgYmVmb3JlID0gZGIucmVhZF9ieXRlcygpCiAgICAgICAgICAgIHJlc3VsdCA9IHN1YnByb2Nlc3MucnVuKAogICAgICAgICAgICAgICAgW3N5cy5leGVjdXRhYmxlLCAndGFza2JvYXJkLnB5JywgJy0tZGInLCBzdHIoZGIpLCAnZXhwb3J0JywgJy0tZm9ybWF0JywgJ2NzdiddLAogICAgICAgICAgICAgICAgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwKICAgICAgICAgICAgKQoKICAgICAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChyZXN1bHQucmV0dXJuY29kZSwgMCwgcmVzdWx0LnN0ZGVyci5kZWNvZGUoJ3V0Zi04JykpCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoCiAgICAgICAgICAgICAgICByZXN1bHQuc3Rkb3V0LAogICAgICAgICAgICAgICAgYidpZCx0aXRsZSxkb25lLHRhZ3NcbnR3bywyLHRydWUsYTt3b3JrXG50ZW4sMTAsZmFsc2Usd29yazt6XG4nLAogICAgICAgICAgICApCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoZGIucmVhZF9ieXRlcygpLCBiZWZvcmUpCgoKaWYgX19uYW1lX18gPT0gJ19fbWFpbl9fJzoKICAgIHVuaXR0ZXN0Lm1haW4oKQo= | base64 -d > test_export_regressions.py'",
+    "started_at": 1790786691.172982,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-b536e75b-22da-4694-88fa-0db56f58371c",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && python3 -m unittest -v'",
+    "started_at": 1790786710.609789,
+    "exit_code": 1
+  },
+  {
+    "id": "exec-25542d79-9df1-4c7c-af19-c5ee9ef25052",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --check'",
+    "started_at": 1790786711.2767549,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-fb1b62da-e51e-4d22-910a-b6097fd65c1a",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && printf %s aW1wb3J0IGpzb24KZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKaW1wb3J0IHRlbXBmaWxlCmltcG9ydCB1bml0dGVzdAoKCmNsYXNzIEV4cG9ydFJlZ3Jlc3Npb25zKHVuaXR0ZXN0LlRlc3RDYXNlKToKICAgIGRlZiB0ZXN0X251bWVyaWNfb3JkZXJfdW5pcXVlX3RhZ3NfYW5kX2xmX291dHB1dChzZWxmKToKICAgICAgICByb3dzID0gWwogICAgICAgICAgICBkaWN0KGlkPTEwLCB0aXRsZT0ndGVuJywgZG9uZT1GYWxzZSwgdGFncz1bJ3dvcmsnLCAneicsICd3b3JrJ10pLAogICAgICAgICAgICBkaWN0KGlkPTIsIHRpdGxlPSd0d28nLCBkb25lPVRydWUsIHRhZ3M9Wyd3b3JrJywgJ2EnLCAnd29yayddKSwKICAgICAgICBdCiAgICAgICAgd2l0aCB0ZW1wZmlsZS5UZW1wb3JhcnlEaXJlY3RvcnkoKSBhcyBkaXJlY3Rvcnk6CiAgICAgICAgICAgIGRiID0gUGF0aChkaXJlY3RvcnkpIC8gJ3Rhc2tzLmpzb24nCiAgICAgICAgICAgIGRiLndyaXRlX3RleHQoanNvbi5kdW1wcyhkaWN0KG5leHRfaWQ9MTEsIHRhc2tzPXJvd3MpKSkKICAgICAgICAgICAgYmVmb3JlID0gZGIucmVhZF9ieXRlcygpCiAgICAgICAgICAgIHJlc3VsdCA9IHN1YnByb2Nlc3MucnVuKAogICAgICAgICAgICAgICAgW3N5cy5leGVjdXRhYmxlLCAndGFza2JvYXJkLnB5JywgJy0tZGInLCBzdHIoZGIpLCAnZXhwb3J0JywgJy0tZm9ybWF0JywgJ2NzdiddLAogICAgICAgICAgICAgICAgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwKICAgICAgICAgICAgKQoKICAgICAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChyZXN1bHQucmV0dXJuY29kZSwgMCwgcmVzdWx0LnN0ZGVyci5kZWNvZGUoJ3V0Zi04JykpCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoCiAgICAgICAgICAgICAgICByZXN1bHQuc3Rkb3V0LAogICAgICAgICAgICAgICAgYidpZCx0aXRsZSxkb25lLHRhZ3NcbjIsdHdvLHRydWUsYTt3b3JrXG4xMCx0ZW4sZmFsc2Usd29yazt6XG4nLAogICAgICAgICAgICApCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoZGIucmVhZF9ieXRlcygpLCBiZWZvcmUpCgoKaWYgX19uYW1lX18gPT0gJ19fbWFpbl9fJzoKICAgIHVuaXR0ZXN0Lm1haW4oKQo= | base64 -d > test_export_regressions.py'",
+    "started_at": 1790786745.2016876,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-90a5081c-9f76-4880-b5a0-70e23405bf2c",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --check'",
+    "started_at": 1790786762.6445885,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-4dad8af5-8af4-45a3-9fa9-3e112f23007a",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && python3 -m unittest -v'",
+    "started_at": 1790786762.6446745,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-f0acedb2-eeb6-4125-975b-9132fec5cfb0",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git add taskboard.py test_export_regressions.py'",
+    "started_at": 1790786798.5405364,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-460409d0-1765-41ac-9a7c-63f8b9efdf4b",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --cached --check'",
+    "started_at": 1790786810.5624716,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-c03408be-b906-4e35-bfd7-8b1c70a4d680",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --cached -- taskboard.py test_export_regressions.py'",
+    "started_at": 1790786811.581777,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-5cdf18dc-965f-435e-9cc7-675574b89d37",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short'",
+    "started_at": 1790786811.5819104,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-9d879fac-0d94-49d7-a07d-7a4b74d348b7",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && find __pycache__ -type f -delete && rmdir __pycache__'",
+    "started_at": 1790786875.5709472,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-e2aabe86-ac14-40d9-888e-5c571ac66c7e",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short'",
+    "started_at": 1790786888.879035,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-ded83cb0-c102-4577-a000-4b13629b9250",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git commit -m \"Implement task CSV export\"'",
+    "started_at": 1790786901.2300436,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-eaa8f3a9-e584-457c-8418-7f5552d7e940",
+    "phase": "feature",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git rev-parse HEAD && git status --short --branch'",
+    "started_at": 1790786913.4994547,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-65db8713-3a9f-4918-b80e-ed5acf097593",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat README.md'",
+    "started_at": 1790787211.77874,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-cca798c2-1a78-4c05-8c18-600d6106f292",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short --branch'",
+    "started_at": 1790787212.057594,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-a36a358d-e386-4677-8b3f-bb312b1a58d6",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat AGENTS.md'",
+    "started_at": 1790787212.057778,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-266fd5f3-7ef1-4779-a1bd-f0c748c9e302",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat test_storage.py'",
+    "started_at": 1790787212.0584364,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-7aa84ca7-3470-457a-a949-2815d2c3cc21",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git log -3 --oneline'",
+    "started_at": 1790787213.5626504,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-dc91535d-19cc-486b-81c1-1626966b7adb",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && python3 -m unittest -v'",
+    "started_at": 1790787213.5631194,
+    "exit_code": 1
+  },
+  {
+    "id": "exec-dee49b97-0f43-44f7-95d3-5c61d425aaa0",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && sed -n \"1,260p\" taskboard.py'",
+    "started_at": 1790787401.7244534,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-743a889e-2e17-4165-8615-0f7791f4a344",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git show --stat --oneline HEAD'",
+    "started_at": 1790787401.724731,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-14e0b78b-e5dc-4ea7-b1ea-37ee005c710b",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short'",
+    "started_at": 1790787402.8778045,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-08a407bb-73d3-498f-ba15-be7fe97f3bac",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && printf %s IiIiU21hbGwgdGFzay1ib2FyZCBDTEkgd2l0aCBhdG9taWMsIGNyb3NzLXByb2Nlc3Mtc2FmZSBzdG9yYWdlLiIiIgppbXBvcnQgYXJncGFyc2UKZnJvbSBjb250ZXh0bGliIGltcG9ydCBjb250ZXh0bWFuYWdlcgppbXBvcnQgY3N2CmltcG9ydCBmY250bAppbXBvcnQganNvbgppbXBvcnQgb3MKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCBzdGF0CmltcG9ydCBzeXMKaW1wb3J0IHRlbXBmaWxlCgoKZGVmIGxvYWQocGF0aCk6CiAgICB0cnk6CiAgICAgICAgY29udGVudHMgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQogICAgZXhjZXB0IEZpbGVOb3RGb3VuZEVycm9yOgogICAgICAgIHJldHVybiB7J25leHRfaWQnOiAxLCAndGFza3MnOiBbXX0KICAgIHJldHVybiBqc29uLmxvYWRzKGNvbnRlbnRzKQoKCmRlZiBzYXZlKHBhdGgsIHN0YXRlKToKICAgIHBhdGggPSBQYXRoKHBhdGgpCiAgICBwYXlsb2FkID0gKGpzb24uZHVtcHMoc3RhdGUsIGVuc3VyZV9hc2NpaT1GYWxzZSkgKyAnXG4nKS5lbmNvZGUoJ3V0Zi04JykKICAgIHRyeToKICAgICAgICBtb2RlID0gc3RhdC5TX0lNT0RFKHBhdGguc3RhdCgpLnN0X21vZGUpCiAgICBleGNlcHQgRmlsZU5vdEZvdW5kRXJyb3I6CiAgICAgICAgbW9kZSA9IDBvNjAwCgogICAgZmQsIHRlbXBvcmFyeV9wYXRoID0gdGVtcGZpbGUubWtzdGVtcChwcmVmaXg9Jy4nICsgcGF0aC5uYW1lICsgJy4nLCBkaXI9cGF0aC5wYXJlbnQpCiAgICB0cnk6CiAgICAgICAgc3RyZWFtID0gb3MuZmRvcGVuKGZkLCAnd2InKQogICAgICAgIGZkID0gTm9uZQogICAgICAgIHdpdGggc3RyZWFtOgogICAgICAgICAgICBzdHJlYW0ud3JpdGUocGF5bG9hZCkKICAgICAgICAgICAgc3RyZWFtLmZsdXNoKCkKICAgICAgICAgICAgb3MuZmNobW9kKHN0cmVhbS5maWxlbm8oKSwgbW9kZSkKICAgICAgICAgICAgb3MuZnN5bmMoc3RyZWFtLmZpbGVubygpKQoKICAgICAgICBvcy5yZXBsYWNlKHRlbXBvcmFyeV9wYXRoLCBwYXRoKQogICAgICAgIHRlbXBvcmFyeV9wYXRoID0gTm9uZQoKICAgICAgICBkaXJlY3RvcnlfZmQgPSBvcy5vcGVuKHBhdGgucGFyZW50LCBvcy5PX1JET05MWSkKICAgICAgICB0cnk6CiAgICAgICAgICAgIG9zLmZzeW5jKGRpcmVjdG9yeV9mZCkKICAgICAgICBmaW5hbGx5OgogICAgICAgICAgICBvcy5jbG9zZShkaXJlY3RvcnlfZmQpCiAgICBmaW5hbGx5OgogICAgICAgIGlmIGZkIGlzIG5vdCBOb25lOgogICAgICAgICAgICBvcy5jbG9zZShmZCkKICAgICAgICBpZiB0ZW1wb3JhcnlfcGF0aCBpcyBub3QgTm9uZToKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgb3MudW5saW5rKHRlbXBvcmFyeV9wYXRoKQogICAgICAgICAgICBleGNlcHQgRmlsZU5vdEZvdW5kRXJyb3I6CiAgICAgICAgICAgICAgICBwYXNzCgoKQGNvbnRleHRtYW5hZ2VyCmRlZiBtdXRhdGlvbl9sb2NrKHBhdGgpOgogICAgcGF0aCA9IFBhdGgocGF0aCkKICAgIGxvY2tfcGF0aCA9IHBhdGgud2l0aF9uYW1lKHBhdGgubmFtZSArICcubG9jaycpCiAgICBsb2NrX2ZkID0gb3Mub3Blbihsb2NrX3BhdGgsIG9zLk9fQ1JFQVQgfCBvcy5PX1JEV1IsIDBvNjAwKQogICAgdHJ5OgogICAgICAgIG9zLmZjaG1vZChsb2NrX2ZkLCAwbzYwMCkKICAgICAgICBmY250bC5mbG9jayhsb2NrX2ZkLCBmY250bC5MT0NLX0VYKQogICAgICAgIHlpZWxkCiAgICBmaW5hbGx5OgogICAgICAgIG9zLmNsb3NlKGxvY2tfZmQpCgoKZGVmIG1haW4oKToKICAgIHBhcnNlciA9IGFyZ3BhcnNlLkFyZ3VtZW50UGFyc2VyKCkKICAgIHBhcnNlci5hZGRfYXJndW1lbnQoJy0tZGInLCByZXF1aXJlZD1UcnVlLCB0eXBlPVBhdGgpCiAgICBjb21tYW5kcyA9IHBhcnNlci5hZGRfc3VicGFyc2VycyhkZXN0PSdjb21tYW5kJywgcmVxdWlyZWQ9VHJ1ZSkKICAgIGFkZCA9IGNvbW1hbmRzLmFkZF9wYXJzZXIoJ2FkZCcpCiAgICBhZGQuYWRkX2FyZ3VtZW50KCd0aXRsZScpCiAgICBhZGQuYWRkX2FyZ3VtZW50KCctLXRhZycsIGFjdGlvbj0nYXBwZW5kJywgZGVmYXVsdD1bXSkKICAgIGRvbmUgPSBjb21tYW5kcy5hZGRfcGFyc2VyKCdkb25lJykKICAgIGRvbmUuYWRkX2FyZ3VtZW50KCdpZCcsIHR5cGU9aW50KQogICAgbGlzdGluZyA9IGNvbW1hbmRzLmFkZF9wYXJzZXIoJ2xpc3QnKQogICAgbGlzdGluZy5hZGRfYXJndW1lbnQoJy0tdGFnJykKICAgIGV4cG9ydCA9IGNvbW1hbmRzLmFkZF9wYXJzZXIoJ2V4cG9ydCcpCiAgICBleHBvcnQuYWRkX2FyZ3VtZW50KCctLWZvcm1hdCcsIHJlcXVpcmVkPVRydWUsIGNob2ljZXM9Wydjc3YnXSkKICAgIGV4cG9ydC5hZGRfYXJndW1lbnQoJy0tdGFnJykKICAgIGFyZ3MgPSBwYXJzZXIucGFyc2VfYXJncygpCgogICAgaWYgYXJncy5jb21tYW5kID09ICdhZGQnOgogICAgICAgIHdpdGggbXV0YXRpb25fbG9jayhhcmdzLmRiKToKICAgICAgICAgICAgc3RhdGUgPSBsb2FkKGFyZ3MuZGIpCiAgICAgICAgICAgIHRhc2sgPSBkaWN0KGlkPXN0YXRlWyduZXh0X2lkJ10sIHRpdGxlPWFyZ3MudGl0bGUsCiAgICAgICAgICAgICAgICAgICAgICAgIHRhZ3M9c29ydGVkKHNldChhcmdzLnRhZykpLCBkb25lPUZhbHNlKQogICAgICAgICAgICBzdGF0ZVsnbmV4dF9pZCddICs9IDEKICAgICAgICAgICAgc3RhdGVbJ3Rhc2tzJ10uYXBwZW5kKHRhc2spCiAgICAgICAgICAgIHNhdmUoYXJncy5kYiwgc3RhdGUpCiAgICAgICAgcHJpbnQoanNvbi5kdW1wcyh0YXNrLCBlbnN1cmVfYXNjaWk9RmFsc2UpKQogICAgZWxpZiBhcmdzLmNvbW1hbmQgPT0gJ2RvbmUnOgogICAgICAgIHdpdGggbXV0YXRpb25fbG9jayhhcmdzLmRiKToKICAgICAgICAgICAgc3RhdGUgPSBsb2FkKGFyZ3MuZGIpCiAgICAgICAgICAgIHRhc2sgPSBuZXh0KChyb3cgZm9yIHJvdyBpbiBzdGF0ZVsndGFza3MnXSBpZiByb3dbJ2lkJ10gPT0gYXJncy5pZCksIE5vbmUpCiAgICAgICAgICAgIGlmIHRhc2sgaXMgTm9uZToKICAgICAgICAgICAgICAgIHBhcnNlci5lcnJvcigndW5rbm93biB0YXNrIElEJykKICAgICAgICAgICAgdGFza1snZG9uZSddID0gVHJ1ZQogICAgICAgICAgICBzYXZlKGFyZ3MuZGIsIHN0YXRlKQogICAgICAgIHByaW50KGpzb24uZHVtcHModGFzaywgZW5zdXJlX2FzY2lpPUZhbHNlKSkKICAgIGVsaWYgYXJncy5jb21tYW5kID09ICdleHBvcnQnOgogICAgICAgIHN0YXRlID0gbG9hZChhcmdzLmRiKQogICAgICAgIHN5cy5zdGRvdXQucmVjb25maWd1cmUoZW5jb2Rpbmc9J3V0Zi04JywgbmV3bGluZT0nJykKICAgICAgICB3cml0ZXIgPSBjc3Yud3JpdGVyKHN5cy5zdGRvdXQsIGxpbmV0ZXJtaW5hdG9yPSdcbicpCiAgICAgICAgd3JpdGVyLndyaXRlcm93KCgnaWQnLCAndGl0bGUnLCAnZG9uZScsICd0YWdzJykpCiAgICAgICAgcm93cyA9IFt0YXNrIGZvciB0YXNrIGluIHN0YXRlWyd0YXNrcyddIGlmIG5vdCBhcmdzLnRhZyBvciBhcmdzLnRhZyBpbiB0YXNrWyd0YWdzJ11dCiAgICAgICAgZm9yIHRhc2sgaW4gc29ydGVkKHJvd3MsIGtleT1sYW1iZGEgcm93OiBpbnQocm93WydpZCddKSk6CiAgICAgICAgICAgIHdyaXRlci53cml0ZXJvdygodGFza1snaWQnXSwgdGFza1sndGl0bGUnXSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAndHJ1ZScgaWYgdGFza1snZG9uZSddIGVsc2UgJ2ZhbHNlJywKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAnOycuam9pbihzb3J0ZWQoc2V0KHRhc2tbJ3RhZ3MnXSkpKSkKICAgIGVsc2U6CiAgICAgICAgc3RhdGUgPSBsb2FkKGFyZ3MuZGIpCiAgICAgICAgcm93cyA9IFt0YXNrIGZvciB0YXNrIGluIHN0YXRlWyd0YXNrcyddIGlmIG5vdCBhcmdzLnRhZyBvciBhcmdzLnRhZyBpbiB0YXNrWyd0YWdzJ11dCiAgICAgICAgcHJpbnQoanNvbi5kdW1wcyhzb3J0ZWQocm93cywga2V5PWxhbWJkYSB0YXNrOiB0YXNrWydpZCddKSwgZW5zdXJlX2FzY2lpPUZhbHNlKSkKCgppZiBfX25hbWVfXyA9PSAnX19tYWluX18nOgogICAgbWFpbigpCg== | base64 -d > taskboard.py'",
+    "started_at": 1790787706.4618301,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-cc713848-9a21-4a91-a8ad-bf59701b825f",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && printf %s aW1wb3J0IGpzb24KZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCBzdGF0CmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKaW1wb3J0IHRlbXBmaWxlCmZyb20gdGhyZWFkaW5nIGltcG9ydCBFdmVudCwgVGhyZWFkCmltcG9ydCB1bml0dGVzdApmcm9tIHVuaXR0ZXN0Lm1vY2sgaW1wb3J0IHBhdGNoCgppbXBvcnQgdGFza2JvYXJkCgoKY2xhc3MgU3RvcmFnZVJlZ3Jlc3Npb25zKHVuaXR0ZXN0LlRlc3RDYXNlKToKICAgIGRlZiB0ZXN0X2V4aXN0aW5nX2RhdGFiYXNlX3Blcm1pc3Npb25zX2FyZV9wcmVzZXJ2ZWQoc2VsZik6CiAgICAgICAgd2l0aCB0ZW1wZmlsZS5UZW1wb3JhcnlEaXJlY3RvcnkoKSBhcyBkaXJlY3Rvcnk6CiAgICAgICAgICAgIGRiID0gUGF0aChkaXJlY3RvcnkpIC8gJ3Rhc2tzLmpzb24nCiAgICAgICAgICAgIGRiLndyaXRlX3RleHQoanNvbi5kdW1wcyhkaWN0KG5leHRfaWQ9MSwgdGFza3M9W10pKSkKICAgICAgICAgICAgZGIuY2htb2QoMG82NDApCgogICAgICAgICAgICByZXN1bHQgPSBzdWJwcm9jZXNzLnJ1bigKICAgICAgICAgICAgICAgIFtzeXMuZXhlY3V0YWJsZSwgJ3Rhc2tib2FyZC5weScsICctLWRiJywgc3RyKGRiKSwgJ2FkZCcsICdrZXB0IG1vZGUnXSwKICAgICAgICAgICAgICAgIGNhcHR1cmVfb3V0cHV0PVRydWUsCiAgICAgICAgICAgICAgICB0ZXh0PVRydWUsCiAgICAgICAgICAgICkKCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwocmVzdWx0LnJldHVybmNvZGUsIDAsIHJlc3VsdC5zdGRlcnIpCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoc3RhdC5TX0lNT0RFKGRiLnN0YXQoKS5zdF9tb2RlKSwgMG82NDApCiAgICAgICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoanNvbi5sb2FkcyhkYi5yZWFkX3RleHQoKSlbJ3Rhc2tzJ11bMF1bJ3RpdGxlJ10sICdrZXB0IG1vZGUnKQoKICAgIGRlZiB0ZXN0X2NvcnJ1cHRfZGF0YWJhc2VfaXNfcmVqZWN0ZWRfd2l0aG91dF9yZXNldChzZWxmKToKICAgICAgICB3aXRoIHRlbXBmaWxlLlRlbXBvcmFyeURpcmVjdG9yeSgpIGFzIGRpcmVjdG9yeToKICAgICAgICAgICAgZGIgPSBQYXRoKGRpcmVjdG9yeSkgLyAndGFza3MuanNvbicKICAgICAgICAgICAgb3JpZ2luYWwgPSBiJ3sibmV4dF9pZCI6MSwidGFza3MiOltub3QgdmFsaWQgSlNPTl19XG4nCiAgICAgICAgICAgIGRiLndyaXRlX2J5dGVzKG9yaWdpbmFsKQogICAgICAgICAgICBkYi5jaG1vZCgwbzYwMCkKCiAgICAgICAgICAgIHJlc3VsdCA9IHN1YnByb2Nlc3MucnVuKAogICAgICAgICAgICAgICAgW3N5cy5leGVjdXRhYmxlLCAndGFza2JvYXJkLnB5JywgJy0tZGInLCBzdHIoZGIpLCAnYWRkJywgJ211c3Qgbm90IHJlcGxhY2UgZGF0YSddLAogICAgICAgICAgICAgICAgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwKICAgICAgICAgICAgKQoKICAgICAgICAgICAgc2VsZi5hc3NlcnROb3RFcXVhbChyZXN1bHQucmV0dXJuY29kZSwgMCkKICAgICAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChkYi5yZWFkX2J5dGVzKCksIG9yaWdpbmFsKQoKICAgIGRlZiB0ZXN0X3JlYWRlcnNfc2VlX2NvbXBsZXRlX29sZF9zdGF0ZV91bnRpbF9hdG9taWNfY29tbWl0KHNlbGYpOgogICAgICAgIHdpdGggdGVtcGZpbGUuVGVtcG9yYXJ5RGlyZWN0b3J5KCkgYXMgZGlyZWN0b3J5OgogICAgICAgICAgICBkYiA9IFBhdGgoZGlyZWN0b3J5KSAvICd0YXNrcy5qc29uJwogICAgICAgICAgICBvbGRfc3RhdGUgPSBkaWN0KG5leHRfaWQ9MiwgdGFza3M9WwogICAgICAgICAgICAgICAgZGljdChpZD0xLCB0aXRsZT0nb2xkJywgdGFncz1bXSwgZG9uZT1GYWxzZSksCiAgICAgICAgICAgIF0pCiAgICAgICAgICAgIG5ld19zdGF0ZSA9IGRpY3QobmV4dF9pZD0zLCB0YXNrcz1bCiAgICAgICAgICAgICAgICBkaWN0KGlkPTEsIHRpdGxlPSdvbGQnLCB0YWdzPVtdLCBkb25lPUZhbHNlKSwKICAgICAgICAgICAgICAgIGRpY3QoaWQ9MiwgdGl0bGU9J25ldycsIHRhZ3M9W10sIGRvbmU9RmFsc2UpLAogICAgICAgICAgICBdKQogICAgICAgICAgICBkYi53cml0ZV90ZXh0KGpzb24uZHVtcHMob2xkX3N0YXRlKSArICdcbicpCgogICAgICAgICAgICBhdF9jb21taXQgPSBFdmVudCgpCiAgICAgICAgICAgIGFsbG93X2NvbW1pdCA9IEV2ZW50KCkKICAgICAgICAgICAgZmFpbHVyZXMgPSBbXQogICAgICAgICAgICBhY3R1YWxfcmVwbGFjZSA9IG9zLnJlcGxhY2UKCiAgICAgICAgICAgIGRlZiBwYXVzZV9hdF9jb21taXQoc291cmNlLCBkZXN0aW5hdGlvbik6CiAgICAgICAgICAgICAgICBhdF9jb21taXQuc2V0KCkKICAgICAgICAgICAgICAgIGlmIG5vdCBhbGxvd19jb21taXQud2FpdCh0aW1lb3V0PTEwKToKICAgICAgICAgICAgICAgICAgICByYWlzZSBUaW1lb3V0RXJyb3IoJ3Rlc3QgZGlkIG5vdCByZWxlYXNlIHRoZSBjb21taXQnKQogICAgICAgICAgICAgICAgYWN0dWFsX3JlcGxhY2Uoc291cmNlLCBkZXN0aW5hdGlvbikKCiAgICAgICAgICAgIGRlZiB3cml0ZV9zdGF0ZSgpOgogICAgICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgICAgIHRhc2tib2FyZC5zYXZlKGRiLCBuZXdfc3RhdGUpCiAgICAgICAgICAgICAgICBleGNlcHQgQmFzZUV4Y2VwdGlvbiBhcyBlcnJvcjoKICAgICAgICAgICAgICAgICAgICBmYWlsdXJlcy5hcHBlbmQoZXJyb3IpCgogICAgICAgICAgICB3aXRoIHBhdGNoLm9iamVjdCh0YXNrYm9hcmQub3MsICdyZXBsYWNlJywgc2lkZV9lZmZlY3Q9cGF1c2VfYXRfY29tbWl0KToKICAgICAgICAgICAgICAgIHdyaXRlciA9IFRocmVhZCh0YXJnZXQ9d3JpdGVfc3RhdGUpCiAgICAgICAgICAgICAgICB3cml0ZXIuc3RhcnQoKQogICAgICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhdF9jb21taXQud2FpdCh0aW1lb3V0PTEwKSkKICAgICAgICAgICAgICAgICAgICBzZWxmLmFzc2VydEVxdWFsKGpzb24ubG9hZHMoZGIucmVhZF90ZXh0KCkpLCBvbGRfc3RhdGUpCiAgICAgICAgICAgICAgICBmaW5hbGx5OgogICAgICAgICAgICAgICAgICAgIGFsbG93X2NvbW1pdC5zZXQoKQogICAgICAgICAgICAgICAgICAgIHdyaXRlci5qb2luKHRpbWVvdXQ9MTApCgogICAgICAgICAgICBzZWxmLmFzc2VydEZhbHNlKHdyaXRlci5pc19hbGl2ZSgpKQogICAgICAgICAgICBzZWxmLmFzc2VydEVxdWFsKGZhaWx1cmVzLCBbXSkKICAgICAgICAgICAgc2VsZi5hc3NlcnRFcXVhbChqc29uLmxvYWRzKGRiLnJlYWRfdGV4dCgpKSwgbmV3X3N0YXRlKQoKCmlmIF9fbmFtZV9fID09ICdfX21haW5fXyc6CiAgICB1bml0dGVzdC5tYWluKCkK | base64 -d > test_storage_regressions.py'",
+    "started_at": 1790787722.6586368,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-099d5a9b-38a0-485a-9b3b-dcb947a45c92",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --check'",
+    "started_at": 1790787758.4639423,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-3224594e-5a20-4d49-99a2-282ccf63c981",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && python3 -m unittest -v'",
+    "started_at": 1790787758.4642692,
+    "exit_code": 1
+  },
+  {
+    "id": "exec-0b34a3b8-b6e9-4800-8ac6-fffc18734ef1",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && printf %s ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwYXRoID0gUGF0aCgndGFza2JvYXJkLnB5JykKc291cmNlID0gcGF0aC5yZWFkX3RleHQoKQpvbGQgPSAiICAgICAgICAgICAgICAgICAgICAgICAgICAgICAnOycuam9pbihzb3J0ZWQoc2V0KHRhc2tbJ3RhZ3MnXSkpKSkiCm5ldyA9ICIgICAgICAgICAgICAgICAgICAgICAgICAgICAgICc7Jy5qb2luKHNvcnRlZChzZXQodGFza1sndGFncyddKSkpKSkiCmFzc2VydCBvbGQgaW4gc291cmNlCnBhdGgud3JpdGVfdGV4dChzb3VyY2UucmVwbGFjZShvbGQsIG5ldywgMSkpCgpwYXRoID0gUGF0aCgndGVzdF9zdG9yYWdlX3JlZ3Jlc3Npb25zLnB5JykKc291cmNlID0gcGF0aC5yZWFkX3RleHQoKQpvbGQgPSAnaW1wb3J0IGpzb25cbicKbmV3ID0gJ2ltcG9ydCBqc29uXG5pbXBvcnQgb3NcbicKYXNzZXJ0IG9sZCBpbiBzb3VyY2UKcGF0aC53cml0ZV90ZXh0KHNvdXJjZS5yZXBsYWNlKG9sZCwgbmV3LCAxKSkK | base64 -d | python3'",
+    "started_at": 1790787832.0261903,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-fb3f2f6a-6a89-43c4-b57b-871b926779d6",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --check'",
+    "started_at": 1790787845.3619843,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-7dda2834-7ffa-4833-9393-28da22eb3b69",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && python3 -m unittest -v'",
+    "started_at": 1790787846.3877058,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-32849d8c-a302-46e7-8d0c-d26502173bc8",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short --branch'",
+    "started_at": 1790787900.8937643,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-d8e673e9-97f2-447d-99fb-33c3d99ffb43",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff -- taskboard.py'",
+    "started_at": 1790787902.143469,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-538dd2b6-ed46-4488-adab-61910543dae4",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff -- test_existing.py test_export.py test_export_regressions.py test_storage.py'",
+    "started_at": 1790787903.209956,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-3e1b8ede-b1d6-4451-b4a2-a0a2065a97e6",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && cat test_storage_regressions.py'",
+    "started_at": 1790787904.5164754,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-c7d63a5e-085c-4178-8d52-3d80ab394231",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && find __pycache__ -type f -delete && rmdir __pycache__'",
+    "started_at": 1790787962.9007792,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-51dd9f56-481d-45c1-9078-ec63706c779b",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git add taskboard.py test_storage_regressions.py'",
+    "started_at": 1790787972.3176906,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-9969450b-beb8-4d68-ae53-964d98815454",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --cached --check'",
+    "started_at": 1790787983.7887871,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-bb9e319e-a1d2-4352-b4d9-5d47a13c6f33",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git status --short --branch'",
+    "started_at": 1790787983.7894473,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-b623e1a0-82a6-4549-abd6-6e6b8bf0f43e",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git diff --cached -- taskboard.py test_storage_regressions.py'",
+    "started_at": 1790787983.7896879,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-20862129-e362-48ae-9876-0cf32a4625ce",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git commit -m \"Fix taskboard storage atomicity\"'",
+    "started_at": 1790788019.012644,
+    "exit_code": 0
+  },
+  {
+    "id": "exec-e561984c-a668-4ae1-b063-abc348411838",
+    "phase": "storage",
+    "command": "ssh hawk 'cd /workspace/taskboard-acceptance && git rev-parse HEAD && git status --short --branch'",
+    "started_at": 1790788031.9827015,
+    "exit_code": 0
+  }
+]

@@ -1,0 +1,27 @@
+sent tapfd=5 for tap0
+received tapfd=5
+da81fa00436d92b3d6c1eef97fc332f0a1222e21
+test_add_list_done_and_unicode (test_existing.Existing.test_add_list_done_and_unicode) ... ok
+test_unknown_id_preserves_data (test_existing.Existing.test_unknown_id_preserves_data) ... ok
+test_csv_escaping_filter_order_and_read_only (test_export.Export.test_csv_escaping_filter_order_and_read_only) ... ok
+test_empty_export_header_without_creating_database (test_export.Export.test_empty_export_header_without_creating_database) ... ok
+test_numeric_order_unique_tags_and_lf_output (test_export_regressions.ExportRegressions.test_numeric_order_unique_tags_and_lf_output) ... ok
+test_concurrent_adds_preserve_all_successful_mutations (test_storage.StorageTests.test_concurrent_adds_preserve_all_successful_mutations) ... ok
+test_failed_write_preserves_previous_database (test_storage.StorageTests.test_failed_write_preserves_previous_database) ... ok
+test_new_database_is_private (test_storage.StorageTests.test_new_database_is_private) ... ok
+test_corrupt_database_is_rejected_without_reset (test_storage_regressions.StorageRegressions.test_corrupt_database_is_rejected_without_reset) ... ok
+test_existing_database_permissions_are_preserved (test_storage_regressions.StorageRegressions.test_existing_database_permissions_are_preserved) ... ok
+test_readers_see_complete_old_state_until_atomic_commit (test_storage_regressions.StorageRegressions.test_readers_see_complete_old_state_until_atomic_commit) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.496s
+
+OK
+
+da81fa00436d92b3d6c1eef97fc332f0a1222e21
+sent tapfd=5 for tap0
+received tapfd=5
+holdout: 100 CSV records with Unicode, quotes, commas and newlines passed
+holdout: 144 concurrent writes and 265 complete JSON reads passed
+holdout: custom permissions and 12 interrupted-writer JSON checks passed
+holdout: corrupt input preserved and rejected
