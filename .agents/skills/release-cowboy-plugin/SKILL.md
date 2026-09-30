@@ -710,16 +710,16 @@ Machine that does not converge stops the rest, so a bad release reaches one
 host rather than the fleet. With no `--machine` at all, every connected Machine
 converges in registry order.
 
-Installation through the local Operator is currently accepted for the
-Controller's own Machine. A remote Machine can return HTTP 409 "preconditions
-changed" for every target, including a same-bytes reinstall of the version it
-already runs, which shows the refusal is machine-level rather than
-release-specific. The refusal names its precondition, and for those Machines it is
-"the Machine did not report an observable installation target": their agent runs
-without `--plugin-operation-admission`, which is a per-host recovery-contract
-decision rather than anything a release or an upgrade command can supply. Treat
-such a 409 as an unfinished convergence to report, never as a reason to retry
-with a new identity.
+Inspect the actual Machine capability and named refusal; eligibility is not a
+property of its hostname. A remote Machine can return HTTP 409
+`plugin_sdk_unsupported` or "the Machine did not report an observable
+installation target", even when `--plugin-operation-admission` is enabled.
+An unsupported SDK requires a compatible Machine release and accepted actual
+recovery readers. Enabling admission or changing a host recovery baseline is a
+separate host-maintenance boundary, not something a Plugin release can supply.
+Treat such a 409 as unfinished convergence, inspect the original operation and
+report the specific missing prerequisite. Never retry under a new identity or
+copy browser credentials, modify installation pointers or relax a reader floor.
 
 For first-party artifacts, sign and independently re-verify the exact output:
 

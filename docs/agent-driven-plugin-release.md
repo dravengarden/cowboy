@@ -29,13 +29,21 @@ to accept it. A Machine only reports an observable installation target when its
 own agent runs with `--plugin-operation-admission`, and that flag is a host
 recovery-contract decision taken per machine, not part of a release.
 
-Hawk passes it. Falcon and macbook-air do not, so every install to them is
-refused before dispatch — including a same-bytes reinstall of the version they
-already run, which is how to tell this apart from a release problem. The
-Controller now names that refusal: "the Machine did not report an observable
-installation target." Enabling admission elsewhere is separate host maintenance
-(Columbus `machines/docs/nixos-deployment.md`), not something an upgrade command
-can do for you.
+Read the current Machine's advertised capabilities and the refusal returned by
+the installation request. Do not infer eligibility from its hostname or the
+presence of that flag alone. An older Machine can enable admission while lacking
+the Plugin's required SDK or an observable installation target. The Controller
+reports these separately as `plugin_sdk_unsupported` and "the Machine did not
+report an observable installation target."
+
+The [2026-09-30 rollout](releases/cowboy-upgrades-2026-09-30.md) installed seven
+upgrades on Hawk. Falcon and macbook-air both enabled admission, but their
+Machine builds could not install the new SDK-1.9 releases. Falcon also retained
+a cold bootstrap predating installation-journal support. Upgrading a Machine
+requires accepting its actual recovery readers; merely replacing its active
+binary is insufficient. Enabling admission or changing the host recovery
+baseline is separate host maintenance (Columbus
+`machines/docs/nixos-deployment.md`).
 
 So a fleet convergence can legitimately end with Machines still behind. Report
 them; do not retry under a new operation identity.
@@ -63,7 +71,7 @@ survives Controller restarts; captured in-flight approvals do not.
 Review the exact signed release and installed target before submitting:
 
 ```sh
-cowboy operator upgrade \
+cowboy operator install \
   --machine hawk --plugin claude-code --version 3.1.25 \
   --digest sha256:88e7b0d1a832102e09fc1d2cc3f968a831046c357a89d7d59b1977792204d1f9 \
   --operation-id hawk-claude-code-3-1-25-reviewed-upgrade
@@ -191,7 +199,7 @@ client uses reqwest's
    Controller restart is separate from Machine maintenance.
 3. With upgrade authorization and host delegation, inspect Catalog, Machine
    inventory and any outstanding operation. Submit an exact release with one
-   saved operation ID through `cowboy operator upgrade`.
+   saved operation ID through `cowboy operator install`.
 4. Inspect the durable result, installed version/digest and account usage.
    Preserve running sessions bound to earlier generations. Report those
    sessions separately from the Machine's newly installed default.
