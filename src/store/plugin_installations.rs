@@ -206,10 +206,10 @@ impl Store {
                         matches!(&saved.outcome, InstallOutcome::Pending { .. })
                     }))
                 && receipt.matches(&before.intent.machine_step()?)
-                && matches!(
+                && (matches!(
                     receipt.outcome,
                     InstallOutcome::Applied { .. } | InstallOutcome::Rejected { .. }
-                ),
+                ) || receipt.outcome.retryable_staging_failure()),
             "installation is not eligible for terminal receipt reconciliation"
         );
         if before.attention_from == Some(InstallPhase::MachineAcknowledged) {
@@ -219,6 +219,17 @@ impl Store {
                 "acknowledged installation recovery must retain its applied receipt"
             );
         } else if let Some(saved) = &before.machine_receipt {
+            ensure!(
+                !receipt.outcome.retryable_staging_failure()
+                    || matches!(
+                        saved.outcome,
+                        InstallOutcome::Pending {
+                            phase: crate::machine_protocol::plugin_install::InstallPhase::Prepared
+                                | crate::machine_protocol::plugin_install::InstallPhase::Staging
+                        }
+                    ),
+                "staging evidence cannot replace a later Machine phase"
+            );
             ensure!(
                 !matches!(receipt.outcome, InstallOutcome::Rejected { .. })
                     || matches!(
@@ -464,29 +475,31 @@ macro_rules! implement_journal {
                 let saved = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations WHERE operation_id = $1")
                     .bind(&before.intent.operation_id).fetch_one(&mut *tx).await?.decode()?;
                 ensure!(saved == *before, "install reconciliation evidence changed");
-                let (phase, problem) = match receipt.outcome {
-                    InstallOutcome::Applied { .. } => (InstallPhase::MachineAcknowledged, None),
-                    InstallOutcome::Rejected { .. } => (InstallPhase::Aborted, Some(InstallProblem::MachineRejected)),
+                let (phase, problem, attention_from) = match receipt.outcome {
+                    InstallOutcome::Applied { .. } => (InstallPhase::MachineAcknowledged, None, None),
+                    InstallOutcome::Rejected { .. } => (InstallPhase::Aborted, Some(InstallProblem::MachineRejected), None),
+                    InstallOutcome::Unknown { .. } if receipt.outcome.retryable_staging_failure() =>
+                        (InstallPhase::NeedsAttention, Some(InstallProblem::UnknownMachineOutcome), Some(InstallPhase::Installing)),
                     InstallOutcome::Pending { .. } | InstallOutcome::Unknown { .. } => anyhow::bail!("nonterminal receipt cannot resolve installation"),
                 };
                 let next = InstallOperation {
                     phase,
                     problem,
-                    attention_from: None,
+                    attention_from,
                     updated_at_ms: chrono::Utc::now().timestamp_millis().max(saved.updated_at_ms),
                     machine_receipt: Some(receipt.clone()),
                     ..saved
                 };
                 next.validate()?;
                 let changed = sqlx::query(
-                    "UPDATE plugin_install_operations SET phase = $2, problem = $3, attention_from = NULL, updated_at_ms = $4, \
+                    "UPDATE plugin_install_operations SET phase = $2, problem = $3, attention_from = $8, updated_at_ms = $4, \
                      machine_receipt = $5, machine_receipt_sha256 = $6 \
                      WHERE operation_id = $1 AND phase = 'needs_attention' AND updated_at_ms = $7"
                 ).bind(&before.intent.operation_id).bind(next.phase.as_str())
                     .bind(next.problem.map(|p| serde_json::to_string(&p)).transpose()?)
                     .bind(next.updated_at_ms).bind(document)
                     .bind(format!("{:x}", Sha256::digest(document.as_bytes())))
-                    .bind(before.updated_at_ms).execute(&mut *tx).await?;
+                    .bind(before.updated_at_ms).bind(next.attention_from.map(InstallPhase::as_str)).execute(&mut *tx).await?;
                 ensure!(changed.rows_affected() == 1, "install reconciliation changed");
                 tx.commit().await.context("committing reconciled Machine installation receipt")?;
                 Ok(next)

@@ -188,7 +188,7 @@ pub struct Args {
     #[arg(
         long,
         env = "COWBOY_MACHINE_CONTROLLER_URL",
-        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy"]
+        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact"]
     )]
     controller_url: Option<String>,
     /// Stable identity of the Cowboy Service that owns this local namespace.
@@ -212,6 +212,13 @@ pub struct Args {
     /// opens the SQLite spool read-only and does not contact the controller.
     #[arg(long, default_value_t = false)]
     provider_usage_status: bool,
+    /// Cache public runtime bytes by digest without installing or executing them.
+    /// Requires an existing absolute Service state directory. Signed installation
+    /// authority is still checked separately when the Controller requests install.
+    #[arg(long, requires = "artifact_sha256", conflicts_with_all = ["provider_usage_status", "check_telemetry_writer_policy", "controller_url", "plugin_operation_admission"])]
+    cache_runtime_artifact: Option<PathBuf>,
+    #[arg(long, requires = "cache_runtime_artifact")]
+    artifact_sha256: Option<String>,
     /// Validate the local telemetry writer policy and print a closed JSON
     /// report without opening Machine state or contacting the controller.
     /// This does not check runtime identity, destination policy or readiness.
@@ -306,6 +313,18 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
 }
 
 async fn run_args(args: Args) -> anyhow::Result<()> {
+    if let Some(source) = &args.cache_runtime_artifact {
+        let digest = args
+            .artifact_sha256
+            .as_deref()
+            .context("artifact SHA-256 required")?;
+        let bytes = MachinePluginStore::cache_runtime_artifact(&args.state_dir, source, digest)?;
+        println!(
+            "{}",
+            serde_json::json!({"cached": true, "sha256": digest, "bytes": bytes, "installed": false})
+        );
+        return Ok(());
+    }
     anyhow::ensure!(
         !(args.check_telemetry_writer_policy && args.provider_usage_status),
         "Machine diagnostic modes are mutually exclusive"
@@ -3478,6 +3497,36 @@ mod tests {
         ])
         .expect("parse read-only status command");
         assert!(args.provider_usage_status);
+    }
+
+    #[test]
+    fn artifact_cache_import_is_separate_from_daemon_and_diagnostic_modes() {
+        let digest = format!("sha256:{}", "0".repeat(64));
+        let base = [
+            "cowboy-machine",
+            "--cache-runtime-artifact",
+            "/tmp/public-runtime",
+            "--artifact-sha256",
+            &digest,
+            "--state-dir",
+            "/tmp/service-state",
+        ];
+        assert!(Args::try_parse_from(base).unwrap().controller_url.is_none());
+        for other in [
+            vec!["--provider-usage-status"],
+            vec!["--check-telemetry-writer-policy"],
+            vec!["--controller-url", "https://example.test"],
+        ] {
+            assert!(Args::try_parse_from(base.into_iter().chain(other)).is_err());
+        }
+        assert!(
+            Args::try_parse_from([
+                "cowboy-machine",
+                "--cache-runtime-artifact",
+                "/tmp/public-runtime"
+            ])
+            .is_err()
+        );
     }
 
     #[tokio::test]

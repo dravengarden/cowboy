@@ -625,3 +625,99 @@ fn schema_one_serialization_is_unchanged_and_cannot_be_promoted_without_a_target
     changed.machine_target = Some(InstallTarget::Vacant {});
     assert!(changed.validate().is_err());
 }
+
+#[tokio::test]
+async fn late_staging_receipt_is_recorded_without_releasing_the_slot_or_retargeting_authority() {
+    for previous in [
+        None,
+        Some(MachinePhase::Staging),
+        Some(MachinePhase::Activating),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let intent = machine_fixture("late-staging-receipt");
+        installing(&store, &intent).await;
+        if let Some(phase) = previous {
+            store
+                .record_plugin_install_receipt(
+                    &intent,
+                    &receipt(&intent, InstallOutcome::Pending { phase }),
+                )
+                .await
+                .unwrap();
+        } else {
+            store
+                .advance_plugin_install(
+                    &intent,
+                    InstallPhase::Installing,
+                    InstallPhase::NeedsAttention,
+                    Some(InstallProblem::UnknownMachineOutcome),
+                )
+                .await
+                .unwrap();
+        }
+        let before = store
+            .plugin_install_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let observed = receipt(
+            &intent,
+            InstallOutcome::Unknown {
+                phase: MachinePhase::Staging,
+                reason: InstallUncertainty::Expired,
+            },
+        );
+        let result = store
+            .reconcile_plugin_install_receipt(&before, &observed)
+            .await;
+        if previous == Some(MachinePhase::Activating) {
+            assert!(
+                result.is_err(),
+                "later evidence cannot regress into staging"
+            );
+            continue;
+        }
+        let saved = result.unwrap();
+        assert_eq!(saved.phase, InstallPhase::NeedsAttention);
+        assert_eq!(saved.attention_from, Some(InstallPhase::Installing));
+        assert_eq!(saved.machine_receipt.as_ref(), Some(&observed));
+        let replacement = machine_fixture("new-install-after-staging");
+        assert!(
+            store.begin_plugin_install(&replacement).await.is_err(),
+            "recording evidence keeps the slot fenced"
+        );
+        assert!(
+            store
+                .reconcile_plugin_install_receipt(&before, &observed)
+                .await
+                .is_err(),
+            "stale snapshot cannot write again"
+        );
+        let old_authority = staging_resolution_permit(&before, InstallTarget::Vacant {});
+        assert!(
+            store
+                .resolve_plugin_install_staging(&old_authority, &saved)
+                .await
+                .is_err()
+        );
+        let fresh = staging_resolution_permit(&saved, InstallTarget::Vacant {});
+        store
+            .resolve_plugin_install_staging(&fresh, &saved)
+            .await
+            .unwrap();
+        store.begin_plugin_install(&replacement).await.unwrap();
+        let retained = store
+            .plugin_install_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retained, saved,
+            "resolution retains the original uncertain receipt"
+        );
+    }
+}

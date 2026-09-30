@@ -106,6 +106,17 @@ original fence in place. A saved Applied receipt interrupted after
 replaced. Agent Providers repeat the ordinary post-install authentication sync,
 falling back to `AuthenticationPending` without replaying installation.
 
+If the original observer timed out before the Machine completed Staging, the
+first reconciliation records the later exact `Unknown/Staging` receipt with a
+complete-snapshot compare-and-swap. It returns HTTP 202 with
+`receipt_recorded: true` and `requires_reconciliation: true`; the slot remains
+fenced. Invoke `reconcile-install` again with the **same** operation ID so fresh
+Operator authority binds the newly recorded snapshot. The second request can
+perform the existing unchanged-target resolution. Neither request replays
+installation, renews the original lease, rewrites a terminal receipt, or uses
+inventory to infer success. A previously recorded Activating-or-later phase
+cannot be replaced with Staging evidence.
+
 Before dispatch/HTTP startup, the Controller validates the bounded journal and
 every staging-resolution record, then reconstructs all unresolved slot fences.
 It preserves the original interruption
