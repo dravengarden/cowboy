@@ -22,8 +22,8 @@ installation was submitted by that dry run.
 The complete pinned-shell `just check-compact` passed, including lint, frontend,
 PostgreSQL, Plugin conformance, and release builds. Native diff review found no
 actionable defect. The immutable release and production activation are recorded
-below when completed. Until activation, a successful new CLI dry run does not
-repair the installed timer's executable. Hawk's unrelated LiveView backup
+below. CLI dry-run validation alone did not repair the installed timer's
+executable; that required the component activation. Hawk's unrelated LiveView backup
 failure also remains a separate blocker for the Columbus host transaction.
 
 ## Production activation
