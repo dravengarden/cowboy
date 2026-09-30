@@ -25,3 +25,29 @@ actionable defect. The immutable release and production activation are recorded
 below when completed. Until activation, a successful new CLI dry run does not
 repair the installed timer's executable. Hawk's unrelated LiveView backup
 failure also remains a separate blocker for the Columbus host transaction.
+
+## Production activation
+
+Source `14c77e88f56d76efe84e0f6d422eddbf231e5fc1` was published to main and
+built cleanly as Controller release
+`/nix/store/57czafnjavsxpkcmv0s9hhmdnk6jiiyr-cowboy-controller-release`.
+The immutable release's CLI passed the same real-Service dry run before
+activation. The owning component activator completed transaction
+`1790729939408406762-14c77e88f56d` at `2026-09-30T00:59:11.829736124Z` with
+`outcome=succeeded`. Its receipt remains at
+`/var/lib/hawk-component-deployments/cowboy-controller/current.json`.
+
+Postflight verified the running Controller executable resolves to this exact
+release, local and ordinary private-origin HTTPS health checks return success,
+and the installed component-profile CLI completes Catalog convergence planning
+with `applied=false` and no unreachable Machine. All 19 pre-existing resident
+Machine/worker units retained their PID, monotonic start timestamp, and restart
+count. Web stayed at `ff0260393edeb134b45ed3efdeeca6dd66e74de6`; Machine stayed
+at `a225d618a9bf60fd71d2a2a8cbab73c70711914a`.
+
+No manual `converge --apply` was run: the plan contained six upgrades, which
+belong to the existing signed Plugin lifecycle and active-session lease gates.
+The timer's old failed status is historical until its next genuine execution;
+it was not reset to manufacture a successful run. This receipt proves the
+Catalog reader repair and bounded Controller release continuity, not permanent
+OVH Machine enrollment or the outstanding interactive Grok acceptance.
