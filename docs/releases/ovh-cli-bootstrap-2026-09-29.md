@@ -107,3 +107,11 @@ message-less response, both ceremony kinds, and approval continuation into the
 completed UI state. Web typecheck, lint, all 1,954 tests, and build pass.
 This establishes a code defect and its regression fix; it does not establish
 that every symptom in the physical iPhone screenshots had the same cause.
+
+Web revision `b14fc8f8455571fcf6fd489c171e4b34ed457fbf` was published and
+activated as `/nix/store/9idiklgnk77ddnrlvh75hhsq84lyzcxz-cowboy-web-release`.
+The Hawk Web activator recorded transaction
+`1790772562707346069-b14fc8f84555`, outcome `succeeded`, phase `committed`,
+at `2026-09-30T12:49:22.750111846Z`. Readback returned `cowboy-v1772` and
+`/healthz` returned `ok`; Controller PID 603952 remained unchanged. Native diff
+review found no actionable defects after the deterministic Web gates passed.
