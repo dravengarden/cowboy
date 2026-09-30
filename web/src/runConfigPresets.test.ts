@@ -70,7 +70,7 @@ Deno.test("custom configuration remains visible without a matching preset", () =
   assertEquals(runConfigCurrentTitle(undefined), "Current · Custom");
 });
 
-Deno.test("Codex recommends Astra Medium without changing the default", async () => {
+Deno.test("Codex recommends only generation 6 and defaults to Sol 6 Medium", async () => {
   const provider = JSON.parse(
     await Deno.readTextFile(
       new URL("../../plugins/codex/provider.json", import.meta.url),
@@ -83,7 +83,15 @@ Deno.test("Codex recommends Astra Medium without changing the default", async ()
   });
   assertEquals(
     presets.filter((preset) => preset.is_default).map((preset) => preset.id),
-    ["sol-medium"],
+    ["sol-6-medium"],
+  );
+  assertEquals(
+    presets.every((preset) => preset.values.model.startsWith("gpt-6-")),
+    true,
+  );
+  assertEquals(
+    presets.find((preset) => preset.is_default)?.values,
+    provider.runtime.behavior.default_preferences,
   );
 });
 

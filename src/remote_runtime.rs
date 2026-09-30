@@ -2632,7 +2632,7 @@ mod tests {
         assert!(
             config_commands
                 .iter()
-                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-5.6-sol"))
+                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-6-sol"))
         );
         assert!(
             config_commands
