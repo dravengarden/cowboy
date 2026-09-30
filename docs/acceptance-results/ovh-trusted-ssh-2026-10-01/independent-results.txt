@@ -1,0 +1,4 @@
+holdout: 100 CSV records with Unicode, quotes, commas and newlines passed
+holdout: 144 concurrent writes and 408 complete JSON reads passed
+holdout: custom permissions and 12 interrupted-writer JSON checks passed
+holdout: corrupt input preserved and rejected

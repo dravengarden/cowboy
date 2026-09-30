@@ -1,0 +1,9 @@
+You are running in Cowboy on Machine ovh. Complete a real remote development task through the ordinary `ssh hawk` interface. The target uses the normal developer account with full permissions. Work only in `~/test/ovh-trusted-20261001/codex` on hawk. It is an existing task-owned Git worktree; read its AGENTS.md and README.md through SSH first. Do not implement or run project tests locally on OVH. Do not delegate. No credentials, network configuration, physical addresses, system changes or provider secrets are needed; do not inspect them.
+
+First verify the SSH identity using `ssh hawk 'id -un; sudo -n id -u'` (read-only authority check, expected normal developer and UID 0). Then run the existing frozen tests inside the fixture's pinned Nix dev shell, retaining the initial failures.
+
+Complete BOTH tasks, in TWO commits:
+1. Implement the CSV export feature specified by README; add useful regression tests in new files and verify feature tests. Do not fix storage in this first commit.
+2. Diagnose and fix existing concurrent-write data loss and failed-write truncation. Provide atomic whole-file writes with correct locking, preserve existing permissions, private new databases, and reject corrupt input. Add regression tests without modifying frozen tests. Run the entire suite and review your diff before committing the repair.
+
+Use real shell tools containing `ssh hawk` for every remote read/edit/test/Git action. Use `nix develop -c` for project commands. Stay on the current task branch; do not push or modify other worktrees. Preserve and report any failed intermediate attempts; do not hide them. Finish by reporting the two commits, final test results, and any remaining limitations. Continue until both tasks are complete.

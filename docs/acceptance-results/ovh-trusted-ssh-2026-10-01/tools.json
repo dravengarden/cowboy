@@ -1,0 +1,227 @@
+[
+  {
+    "id": "exec-75ee2673-c0e7-4ec1-b973-56c8dc4e5cbf",
+    "provider": "codex",
+    "command": "ssh hawk 'id -un; sudo -n id -u'",
+    "title": "ssh hawk 'id -un; sudo -n id -u'",
+    "started_at": 1790790266.173854,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-6b551c38-3de8-4bd0-b673-c0d6960066fa",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && printf \"%s\\n\" \"--- AGENTS.md ---\" && cat AGENTS.md && printf \"%s\\n\" \"--- README.md ---\" && cat README.md'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && printf \"%s\\n\" \"--- AGENTS.md ---\" && cat AGENTS.md && printf \"%s\\n\" \"--- README.md ---\" && cat README.md'",
+    "started_at": 1790790281.0822585,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-6f398ebe-5d46-48db-9aea-235c555367c7",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && nix develop -c python3 -m unittest -v'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && nix develop -c python3 -m unittest -v'",
+    "started_at": 1790790302.084897,
+    "exit_code": 1,
+    "status": "failed"
+  },
+  {
+    "id": "exec-24378826-dadf-4a0d-a3d1-8eede0bcd137",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && printf \"%s\\n\" \"--- git ---\" && git status --short --branch && git log -1 --oneline && printf \"%s\\n\" \"--- files ---\" && ls -la && printf \"%s\\n\" \"--- taskboard.py ---\" && sed -n \"1,260p\" taskboard.py && printf \"%s\\n\" \"--- test_existing.py ---\" && cat test_existing.py && printf \"%s\\n\" \"--- test_export.py ---\" && cat test_export.py && printf \"%s\\n\" \"--- test_storage.py ---\" && cat test_storage.py && printf \"%s\\n\" \"--- flake.nix ---\" && cat flake.nix'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && printf \"%s\\n\" \"--- git ---\" && git status --short --branch && git log -1 --oneline && printf \"%s\\n\" \"--- files ---\" && ls -la && printf \"%s\\n\" \"--- taskboard.py ---\" && sed -n \"1,260p\" taskboard.py && printf \"%s\\n\" \"--- test_existing.py ---\" && cat test_existing.py && printf \"%s\\n\" \"--- test_export.py ---\" && cat test_export.py && printf \"%s\\n\" \"--- test_storage.py ---\" && cat test_storage.py && printf \"%s\\n\" \"--- flake.nix ---\" && cat flake.nix'",
+    "started_at": 1790790329.5463974,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-392c7d80-8582-40d6-a6cd-54cfe8b5d7c0",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > taskboard.py' <<'REMOTE_EOF'\n\"\"\"Small task-board CLI. Changes to storage are a separate task from export.\"\"\"\nimport argparse\nimport csv\nimport io\nimport json\nfrom pathlib import Path\nimport sys\n\n\ndef load(path):\n    return json.loads(path.read_text()) if path.exists() else {'next_id': 1, 'tasks': []}\n\n\ndef save(path, state):\n    path.write_text(json.dumps(state, ensure_ascii=False) + '\\n')\n\n\ndef export_csv(state, tag):\n    output = io.StringIO(newline='')\n    writer = csv.writer(output, lineterminator='\\n')\n    writer.writerow(('id', 'title', 'done', 'tags'))\n    rows = [task for task in state['tasks'] if tag is None or tag in task['tags']]\n    for task in sorted(rows, key=lambda item: item['id']):\n        writer.writerow((task['id'], task['title'], str(task['done']).lower(),\n                         ';'.join(sorted(set(task['tags'])))))\n    sys.stdout.buffer.write(output.getvalue().encode('utf-8'))\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument('--db', required=True, type=Path)\n    commands = parser.add_subparsers(dest='command', required=True)\n    add = commands.add_parser('add')\n    add.add_argument('title')\n    add.add_argument('--tag', action='append', default=[])\n    done = commands.add_parser('done')\n    done.add_argument('id', type=int)\n    listing = commands.add_parser('list')\n    listing.add_argument('--tag')\n    export = commands.add_parser('export')\n    export.add_argument('--format', choices=('csv',), required=True)\n    export.add_argument('--tag')\n    args = parser.parse_args()\n    state = load(args.db)\n    if args.command == 'add':\n        task = dict(id=state['next_id'], title=args.title, tags=sorted(set(args.tag)), done=False)\n        state['next_id'] += 1\n        state['tasks'].append(task)\n        save(args.db, state)\n        print(json.dumps(task, ensure_ascii=False))\n    elif args.command == 'done':\n        for task in state['tasks']:\n            if task['id'] == args.id:\n                task['done'] = True\n                save(args.db, state)\n                print(json.dumps(task, ensure_ascii=False))\n                return\n        parser.error('unknown task ID')\n    elif args.command == 'export':\n        export_csv(state, args.tag)\n    else:\n        rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]\n        print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))\n\n\nif __name__ == '__main__':\n    main()\nREMOTE_EOF\nssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > test_export_regressions.py' <<'REMOTE_EOF'\nimport json\nfrom pathlib import Path\nimport subprocess\nimport sys\nimport tempfile\nimport unittest\n\n\nclass ExportRegressions(unittest.TestCase):\n    def test_utf8_lf_output_numeric_order_and_canonical_tags(self):\n        tasks = [\n            dict(id=10, title='café, \"title\"', tags=['z', 'a', 'a'], done=False),\n            dict(id=2, title='line\\nbreak', tags=[], done=True),\n        ]\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'tasks.json'\n            db.write_text(json.dumps(dict(next_id=11, tasks=tasks), ensure_ascii=False))\n            before = db.read_bytes()\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],\n                capture_output=True,\n            )\n            self.assertEqual(result.returncode, 0, result.stderr.decode())\n            self.assertEqual(\n                result.stdout,\n                'id,title,done,tags\\n'\n                '2,\"line\\nbreak\",true,\\n'\n                '10,\"café, \"\"title\"\"\",false,a;z\\n'.encode('utf-8'),\n            )\n            self.assertEqual(db.read_bytes(), before)\n\n    def test_empty_state_exports_header(self):\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'empty.json'\n            db.write_text('{\"next_id\": 1, \"tasks\": []}\\n')\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],\n                capture_output=True,\n            )\n            self.assertEqual(result.returncode, 0, result.stderr.decode())\n            self.assertEqual(result.stdout, b'id,title,done,tags\\n')\n\n\nif __name__ == '__main__':\n    unittest.main()\nREMOTE_EOF",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > taskboard.py' <<'REMOTE_EOF'\n\"\"\"Small task-board CLI. Changes to storage are a separate task from export.\"\"\"\nimport argparse\nimport csv\nimport io\nimport json\nfrom pathlib import Path\nimport sys\n\n\ndef load(path):\n    return json.loads(path.read_text()) if path.exists() else {'next_id': 1, 'tasks': []}\n\n\ndef save(path, state):\n    path.write_text(json.dumps(state, ensure_ascii=False) + '\\n')\n\n\ndef export_csv(state, tag):\n    output = io.StringIO(newline='')\n    writer = csv.writer(output, lineterminator='\\n')\n    writer.writerow(('id', 'title', 'done', 'tags'))\n    rows = [task for task in state['tasks'] if tag is None or tag in task['tags']]\n    for task in sorted(rows, key=lambda item: item['id']):\n        writer.writerow((task['id'], task['title'], str(task['done']).lower(),\n                         ';'.join(sorted(set(task['tags'])))))\n    sys.stdout.buffer.write(output.getvalue().encode('utf-8'))\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument('--db', required=True, type=Path)\n    commands = parser.add_subparsers(dest='command', required=True)\n    add = commands.add_parser('add')\n    add.add_argument('title')\n    add.add_argument('--tag', action='append', default=[])\n    done = commands.add_parser('done')\n    done.add_argument('id', type=int)\n    listing = commands.add_parser('list')\n    listing.add_argument('--tag')\n    export = commands.add_parser('export')\n    export.add_argument('--format', choices=('csv',), required=True)\n    export.add_argument('--tag')\n    args = parser.parse_args()\n    state = load(args.db)\n    if args.command == 'add':\n        task = dict(id=state['next_id'], title=args.title, tags=sorted(set(args.tag)), done=False)\n        state['next_id'] += 1\n        state['tasks'].append(task)\n        save(args.db, state)\n        print(json.dumps(task, ensure_ascii=False))\n    elif args.command == 'done':\n        for task in state['tasks']:\n            if task['id'] == args.id:\n                task['done'] = True\n                save(args.db, state)\n                print(json.dumps(task, ensure_ascii=False))\n                return\n        parser.error('unknown task ID')\n    elif args.command == 'export':\n        export_csv(state, args.tag)\n    else:\n        rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]\n        print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))\n\n\nif __name__ == '__main__':\n    main()\nREMOTE_EOF\nssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > test_export_regressions.py' <<'REMOTE_EOF'\nimport json\nfrom pathlib import Path\nimport subprocess\nimport sys\nimport tempfile\nimport unittest\n\n\nclass ExportRegressions(unittest.TestCase):\n    def test_utf8_lf_output_numeric_order_and_canonical_tags(self):\n        tasks = [\n            dict(id=10, title='café, \"title\"', tags=['z', 'a', 'a'], done=False),\n            dict(id=2, title='line\\nbreak', tags=[], done=True),\n        ]\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'tasks.json'\n            db.write_text(json.dumps(dict(next_id=11, tasks=tasks), ensure_ascii=False))\n            before = db.read_bytes()\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],\n                capture_output=True,\n            )\n            self.assertEqual(result.returncode, 0, result.stderr.decode())\n            self.assertEqual(\n                result.stdout,\n                'id,title,done,tags\\n'\n                '2,\"line\\nbreak\",true,\\n'\n                '10,\"café, \"\"title\"\"\",false,a;z\\n'.encode('utf-8'),\n            )\n            self.assertEqual(db.read_bytes(), before)\n\n    def test_empty_state_exports_header(self):\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'empty.json'\n            db.write_text('{\"next_id\": 1, \"tasks\": []}\\n')\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],\n                capture_output=True,\n            )\n            self.assertEqual(result.returncode, 0, result.stderr.decode())\n            self.assertEqual(result.stdout, b'id,title,done,tags\\n')\n\n\nif __name__ == '__main__':\n    unittest.main()\nREMOTE_EOF",
+    "started_at": 1790790474.7400715,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-c567e992-045f-45a4-89e3-d1a015a8dbb5",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && nix develop -c python3 -m unittest -v test_export test_export_regressions'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && nix develop -c python3 -m unittest -v test_export test_export_regressions'",
+    "started_at": 1790790500.724686,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-5e42e39c-3136-4090-a818-63ae4ef8ce5e",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && rm -rf __pycache__ && git diff --check && git diff -- taskboard.py && cat test_export_regressions.py && git status --short --branch'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && rm -rf __pycache__ && git diff --check && git diff -- taskboard.py && cat test_export_regressions.py && git status --short --branch'",
+    "started_at": 1790790530.1780193,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-b7f33da4-edaf-413a-aec0-79c11d3742ce",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git add taskboard.py test_export_regressions.py && git commit -m \"Add CSV export command\"'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git add taskboard.py test_export_regressions.py && git commit -m \"Add CSV export command\"'",
+    "started_at": 1790790544.2144618,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-d7714858-2477-4409-ad0d-b96d3570c143",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > taskboard.py' <<'REMOTE_EOF'\n\"\"\"Small task-board CLI with CSV export and atomic JSON storage.\"\"\"\nimport argparse\nimport csv\nimport fcntl\nimport io\nimport json\nimport os\nfrom pathlib import Path\nimport stat\nimport sys\nimport tempfile\nfrom contextlib import contextmanager\n\n\ndef load(path):\n    return json.loads(path.read_text()) if path.exists() else {'next_id': 1, 'tasks': []}\n\n\n@contextmanager\ndef database_lock(path):\n    lock_path = path.with_name(path.name + '.lock')\n    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)\n    try:\n        fcntl.flock(descriptor, fcntl.LOCK_EX)\n        yield\n    finally:\n        os.close(descriptor)\n\n\ndef save(path, state):\n    contents = (json.dumps(state, ensure_ascii=False) + '\\n').encode('utf-8')\n    try:\n        mode = stat.S_IMODE(path.stat().st_mode)\n    except FileNotFoundError:\n        mode = 0o600\n\n    descriptor, temporary = tempfile.mkstemp(\n        prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent\n    )\n    try:\n        with os.fdopen(descriptor, 'wb') as stream:\n            stream.write(contents)\n            stream.flush()\n            os.fchmod(stream.fileno(), mode)\n            os.fsync(stream.fileno())\n        os.replace(temporary, path)\n        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))\n        try:\n            os.fsync(directory_fd)\n        finally:\n            os.close(directory_fd)\n    except BaseException:\n        try:\n            os.close(descriptor)\n        except OSError:\n            pass\n        try:\n            os.unlink(temporary)\n        except FileNotFoundError:\n            pass\n        raise\n\n\ndef export_csv(state, tag):\n    output = io.StringIO(newline='')\n    writer = csv.writer(output, lineterminator='\\n')\n    writer.writerow(('id', 'title', 'done', 'tags'))\n    rows = [task for task in state['tasks'] if tag is None or tag in task['tags']]\n    for task in sorted(rows, key=lambda item: item['id']):\n        writer.writerow((task['id'], task['title'], str(task['done']).lower(),\n                         ';'.join(sorted(set(task['tags'])))))\n    sys.stdout.buffer.write(output.getvalue().encode('utf-8'))\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument('--db', required=True, type=Path)\n    commands = parser.add_subparsers(dest='command', required=True)\n    add = commands.add_parser('add')\n    add.add_argument('title')\n    add.add_argument('--tag', action='append', default=[])\n    done = commands.add_parser('done')\n    done.add_argument('id', type=int)\n    listing = commands.add_parser('list')\n    listing.add_argument('--tag')\n    export = commands.add_parser('export')\n    export.add_argument('--format', choices=('csv',), required=True)\n    export.add_argument('--tag')\n    args = parser.parse_args()\n\n    if args.command == 'add':\n        with database_lock(args.db):\n            state = load(args.db)\n            task = dict(id=state['next_id'], title=args.title,\n                        tags=sorted(set(args.tag)), done=False)\n            state['next_id'] += 1\n            state['tasks'].append(task)\n            save(args.db, state)\n        print(json.dumps(task, ensure_ascii=False))\n    elif args.command == 'done':\n        with database_lock(args.db):\n            state = load(args.db)\n            result = None\n            for task in state['tasks']:\n                if task['id'] == args.id:\n                    task['done'] = True\n                    save(args.db, state)\n                    result = task\n                    break\n        if result is None:\n            parser.error('unknown task ID')\n        print(json.dumps(result, ensure_ascii=False))\n    else:\n        state = load(args.db)\n        if args.command == 'export':\n            export_csv(state, args.tag)\n        else:\n            rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]\n            print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))\n\n\nif __name__ == '__main__':\n    main()\nREMOTE_EOF\nssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > test_storage_regressions.py' <<'REMOTE_EOF'\nimport json\nfrom pathlib import Path\nimport subprocess\nimport sys\nimport tempfile\nimport unittest\n\n\nclass StorageRegressions(unittest.TestCase):\n    def test_existing_database_permissions_are_preserved(self):\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'tasks.json'\n            db.write_text('{\"next_id\": 1, \"tasks\": []}\\n')\n            db.chmod(0o640)\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'add', 'kept mode'],\n                capture_output=True,\n            )\n            self.assertEqual(result.returncode, 0, result.stderr.decode())\n            self.assertEqual(db.stat().st_mode & 0o777, 0o640)\n\n    def test_corrupt_database_is_rejected_without_replacement(self):\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'tasks.json'\n            original = b'{not valid JSON\\n'\n            db.write_bytes(original)\n            db.chmod(0o600)\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'add', 'must not reset'],\n                capture_output=True,\n            )\n            self.assertNotEqual(result.returncode, 0)\n            self.assertEqual(db.read_bytes(), original)\n\n\nif __name__ == '__main__':\n    unittest.main()\nREMOTE_EOF",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > taskboard.py' <<'REMOTE_EOF'\n\"\"\"Small task-board CLI with CSV export and atomic JSON storage.\"\"\"\nimport argparse\nimport csv\nimport fcntl\nimport io\nimport json\nimport os\nfrom pathlib import Path\nimport stat\nimport sys\nimport tempfile\nfrom contextlib import contextmanager\n\n\ndef load(path):\n    return json.loads(path.read_text()) if path.exists() else {'next_id': 1, 'tasks': []}\n\n\n@contextmanager\ndef database_lock(path):\n    lock_path = path.with_name(path.name + '.lock')\n    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)\n    try:\n        fcntl.flock(descriptor, fcntl.LOCK_EX)\n        yield\n    finally:\n        os.close(descriptor)\n\n\ndef save(path, state):\n    contents = (json.dumps(state, ensure_ascii=False) + '\\n').encode('utf-8')\n    try:\n        mode = stat.S_IMODE(path.stat().st_mode)\n    except FileNotFoundError:\n        mode = 0o600\n\n    descriptor, temporary = tempfile.mkstemp(\n        prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent\n    )\n    try:\n        with os.fdopen(descriptor, 'wb') as stream:\n            stream.write(contents)\n            stream.flush()\n            os.fchmod(stream.fileno(), mode)\n            os.fsync(stream.fileno())\n        os.replace(temporary, path)\n        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))\n        try:\n            os.fsync(directory_fd)\n        finally:\n            os.close(directory_fd)\n    except BaseException:\n        try:\n            os.close(descriptor)\n        except OSError:\n            pass\n        try:\n            os.unlink(temporary)\n        except FileNotFoundError:\n            pass\n        raise\n\n\ndef export_csv(state, tag):\n    output = io.StringIO(newline='')\n    writer = csv.writer(output, lineterminator='\\n')\n    writer.writerow(('id', 'title', 'done', 'tags'))\n    rows = [task for task in state['tasks'] if tag is None or tag in task['tags']]\n    for task in sorted(rows, key=lambda item: item['id']):\n        writer.writerow((task['id'], task['title'], str(task['done']).lower(),\n                         ';'.join(sorted(set(task['tags'])))))\n    sys.stdout.buffer.write(output.getvalue().encode('utf-8'))\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument('--db', required=True, type=Path)\n    commands = parser.add_subparsers(dest='command', required=True)\n    add = commands.add_parser('add')\n    add.add_argument('title')\n    add.add_argument('--tag', action='append', default=[])\n    done = commands.add_parser('done')\n    done.add_argument('id', type=int)\n    listing = commands.add_parser('list')\n    listing.add_argument('--tag')\n    export = commands.add_parser('export')\n    export.add_argument('--format', choices=('csv',), required=True)\n    export.add_argument('--tag')\n    args = parser.parse_args()\n\n    if args.command == 'add':\n        with database_lock(args.db):\n            state = load(args.db)\n            task = dict(id=state['next_id'], title=args.title,\n                        tags=sorted(set(args.tag)), done=False)\n            state['next_id'] += 1\n            state['tasks'].append(task)\n            save(args.db, state)\n        print(json.dumps(task, ensure_ascii=False))\n    elif args.command == 'done':\n        with database_lock(args.db):\n            state = load(args.db)\n            result = None\n            for task in state['tasks']:\n                if task['id'] == args.id:\n                    task['done'] = True\n                    save(args.db, state)\n                    result = task\n                    break\n        if result is None:\n            parser.error('unknown task ID')\n        print(json.dumps(result, ensure_ascii=False))\n    else:\n        state = load(args.db)\n        if args.command == 'export':\n            export_csv(state, args.tag)\n        else:\n            rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]\n            print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))\n\n\nif __name__ == '__main__':\n    main()\nREMOTE_EOF\nssh hawk 'cd ~/test/ovh-trusted-20261001/codex && cat > test_storage_regressions.py' <<'REMOTE_EOF'\nimport json\nfrom pathlib import Path\nimport subprocess\nimport sys\nimport tempfile\nimport unittest\n\n\nclass StorageRegressions(unittest.TestCase):\n    def test_existing_database_permissions_are_preserved(self):\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'tasks.json'\n            db.write_text('{\"next_id\": 1, \"tasks\": []}\\n')\n            db.chmod(0o640)\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'add', 'kept mode'],\n                capture_output=True,\n            )\n            self.assertEqual(result.returncode, 0, result.stderr.decode())\n            self.assertEqual(db.stat().st_mode & 0o777, 0o640)\n\n    def test_corrupt_database_is_rejected_without_replacement(self):\n        with tempfile.TemporaryDirectory() as directory:\n            db = Path(directory) / 'tasks.json'\n            original = b'{not valid JSON\\n'\n            db.write_bytes(original)\n            db.chmod(0o600)\n            result = subprocess.run(\n                [sys.executable, 'taskboard.py', '--db', str(db), 'add', 'must not reset'],\n                capture_output=True,\n            )\n            self.assertNotEqual(result.returncode, 0)\n            self.assertEqual(db.read_bytes(), original)\n\n\nif __name__ == '__main__':\n    unittest.main()\nREMOTE_EOF",
+    "started_at": 1790790652.379068,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-a33041da-5fdf-4b93-871e-834be1361550",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && nix develop -c python3 -m unittest -v'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && nix develop -c python3 -m unittest -v'",
+    "started_at": 1790790681.2146337,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-36f356de-d4f4-41c5-812c-021c480539d7",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && rm -rf __pycache__ && git diff --check && git status --short --branch && git diff --stat && git diff -- taskboard.py && cat test_storage_regressions.py'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && rm -rf __pycache__ && git diff --check && git status --short --branch && git diff --stat && git diff -- taskboard.py && cat test_storage_regressions.py'",
+    "started_at": 1790790726.4995651,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-17e93ff1-d852-4fb1-a2cc-c734fdf411b0",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git add taskboard.py test_storage_regressions.py && git commit -m \"Make task storage atomic and concurrency-safe\"'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git add taskboard.py test_storage_regressions.py && git commit -m \"Make task storage atomic and concurrency-safe\"'",
+    "started_at": 1790790767.869528,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-748aded1-51d2-4346-b8e4-cf006832d99b",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git status --short --branch && git log -2 --oneline'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git status --short --branch && git log -2 --oneline'",
+    "started_at": 1790790784.0124512,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-ecf67a11-d2a4-4fc8-8b2a-6d8125a0809c",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git status --short --branch && git log -2 --oneline && git show --format=fuller --stat --oneline 221f02d && git show --format=fuller --stat --oneline c302a7e'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git status --short --branch && git log -2 --oneline && git show --format=fuller --stat --oneline 221f02d && git show --format=fuller --stat --oneline c302a7e'",
+    "started_at": 1790790887.4983144,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-bac77698-4f3d-455e-86de-2c87e1c6ea13",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && PYTHONDONTWRITEBYTECODE=1 nix develop -c python3 -m unittest -v'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && PYTHONDONTWRITEBYTECODE=1 nix develop -c python3 -m unittest -v'",
+    "started_at": 1790790907.4210143,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "exec-2ef5890b-02e0-4c4d-8c06-6b146bf7406d",
+    "provider": "codex",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git status --short --branch && git log -2 --oneline'",
+    "title": "ssh hawk 'cd ~/test/ovh-trusted-20261001/codex && git status --short --branch && git log -2 --oneline'",
+    "started_at": 1790790922.9689562,
+    "exit_code": 0,
+    "status": "completed"
+  },
+  {
+    "id": "call-4905f2ac-1da4-4cbe-82a7-e44b71bb025a-0",
+    "provider": "grok",
+    "command": "ssh hawk 'id -un; sudo -n id -u'",
+    "title": "run_terminal_command",
+    "started_at": 1790790267.1702745,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-49dac5f2-4ad6-44da-a396-eb2628e17d7f-1",
+    "provider": "grok",
+    "command": "ssh hawk 'ls -la ~/test/ovh-trusted-20261001/grok'",
+    "title": "run_terminal_command",
+    "started_at": 1790790283.4010196,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-166cd071-41b7-43e2-ba3e-e8c6f1aa75fa-2",
+    "provider": "grok",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/grok && cat README.md'",
+    "title": "run_terminal_command",
+    "started_at": 1790790298.1171038,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-76bb6101-9804-4c5a-9986-8654ba1f9a0b-3",
+    "provider": "grok",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/grok && cat AGENTS.md'",
+    "title": "run_terminal_command",
+    "started_at": 1790790314.8957865,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-89fe6c39-e4d4-4147-abbd-23f9c0b6c5c6-4",
+    "provider": "grok",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/grok && cat taskboard.py'",
+    "title": "run_terminal_command",
+    "started_at": 1790790327.2403154,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-84854757-1dfa-4751-b681-191ff71bd9a2-5",
+    "provider": "grok",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/grok && cat test_export.py'",
+    "title": "run_terminal_command",
+    "started_at": 1790790343.005787,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-ece7a887-ac5a-4fc9-9b82-d2570f168b00-6",
+    "provider": "grok",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/grok && cat test_storage.py'",
+    "title": "run_terminal_command",
+    "started_at": 1790790362.902852,
+    "exit_code": null,
+    "status": "in_progress"
+  },
+  {
+    "id": "call-c4e4f74c-c5de-4029-aaf9-e2cd4e6923c6-7",
+    "provider": "grok",
+    "command": null,
+    "title": "get_command_or_subagent_output",
+    "started_at": 1790790375.7680228,
+    "exit_code": null,
+    "status": "completed"
+  },
+  {
+    "id": "call-2efe32fb-7345-4a30-9305-8f99d2e445f0-8",
+    "provider": "grok",
+    "command": "ssh hawk 'cd ~/test/ovh-trusted-20261001/grok && cat test_storage.py'",
+    "title": "run_terminal_command",
+    "started_at": 1790790377.3767,
+    "exit_code": null,
+    "status": "completed"
+  }
+]

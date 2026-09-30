@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "http_status": 200,
+  "operation_id": null,
+  "data": [
+    {
+      "plugin_id": "codex",
+      "plugin_version": "3.1.30",
+      "plugin_kind": "agent_provider",
+      "generation_digest": "sha256:10e7c0bfd658ff9cb612f913e431a7d01fb66d0225c31e3147b0405045c44cd1",
+      "installation_revision": "installation-5b46d7bf2e3046c9a003f5a27d39f6366e6f0cece06b5b8f268b9113aca937d4",
+      "contract_fingerprint": "sha256:9bf75f3a36b390c52a87626f272a98c115a867dc2f41863bd7afbf30755fa79b",
+      "state": "active",
+      "active_session_leases": 0,
+      "auth_generation": 7,
+      "replica_state": "current",
+      "materialization_state": "current"
+    },
+    {
+      "plugin_id": "grok",
+      "plugin_version": "3.1.25",
+      "plugin_kind": "agent_provider",
+      "generation_digest": "sha256:b4c1743efaad0fd2698b20d0a798c4aad9270809934f9d70d65199d1022cfcc8",
+      "installation_revision": "installation-6cc9a5e9ddd490c1226ce356cdcca6cdb4c63550302014a80d82765a4399c86b",
+      "contract_fingerprint": "sha256:97360dc8ac3f31c347f30ed158f88968a005fa80eb7ddbc7f9e1b27cbb956100",
+      "state": "active",
+      "active_session_leases": 0,
+      "auth_generation": 1026,
+      "replica_state": "current",
+      "materialization_state": "current"
+    },
+    {
+      "plugin_id": "zed",
+      "plugin_version": "1.20.0",
+      "plugin_kind": "code_intelligence",
+      "generation_digest": "sha256:b000481cf7548af7598bad0498141daca1d1e422efa2ac1dd90d8cb00830b65f",
+      "installation_revision": "installation-fab43f60ce01e662e935b6957d750177a811025c9c82f4b940a8452d81e5f677",
+      "contract_fingerprint": "sha256:b317168255b68ce092c035cb90648986984c3de06b24da26e3a7bcc3c92ab6a9",
+      "state": "active",
+      "active_session_leases": 0,
+      "replica_state": "absent",
+      "materialization_state": "not_installed"
+    }
+  ]
+}

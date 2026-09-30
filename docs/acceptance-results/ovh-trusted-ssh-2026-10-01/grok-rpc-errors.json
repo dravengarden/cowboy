@@ -1,0 +1,7 @@
+[
+  {
+    "code": -32603,
+    "message": "Internal error",
+    "data": "error: Rate limited: {\n  \"message\": \"API error (status 429 Too Many Requests): subscription:free-usage-exhausted: You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 510172/500000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\",\n  \"promptUsage\": {\n    \"inputTokens\": 173148,\n    \"outputTokens\": 1128,\n    \"totalTokens\": 174276,\n    \"cachedReadTokens\": 113280,\n    \"cacheCreationTokens\": 0,\n    \"reasoningTokens\": 762,\n    \"modelCalls\": 9,\n    \"apiDurationMs\": 29736,\n    \"costUsdTicks\": 1831440000,\n    \"modelUsage\": {\n      \"grok-4.7\": {\n        \"inputTokens\": 173148,\n        \"outputTokens\": 1128,\n        \"totalTokens\": 174276,\n        \"cachedReadTokens\": 113280,\n        \"cacheCreationTokens\": 0,\n        \"reasoningTokens\": 762,\n        \"modelCalls\": 9,\n        \"apiDurationMs\": 29736,\n        \"costUsdTicks\": 1831440000\n      }\n    },\n    \"numTurns\": 9\n  }\n}"
+  }
+]

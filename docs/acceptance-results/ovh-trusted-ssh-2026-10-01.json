@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "machine": "ovh",
+  "service": "svc-4e4d5154f3df9aa109d7d841dd925fd7",
+  "columbus_source": "45a0669d2eb7181a907dd1768f98572aa2f4b6bc",
+  "columbus_receipt_commit": "a86499d3",
+  "ssh_identity": "draven",
+  "sudo_uid": 0,
+  "temporary_key": false,
+  "providers": {
+    "codex": {
+      "session": "sess-1790783866447",
+      "ssh_tool_count": 16,
+      "tool_count": 16,
+      "replay_status": {
+        "sessionId": "sess-1790783866447",
+        "provider": "codex",
+        "state": "running",
+        "turnRunning": false,
+        "agentAlive": true,
+        "seq": 1029
+      },
+      "frozen_tests": {
+        "test_export.py": "af3049fea1c666ed867ee66cbc41f472cef443402927eb209306522f319ac6bb",
+        "test_storage.py": "7e24ce01ed8f5c5881c80cc551a11f8a647921acb6eeeda1be362b06f62ad3ac",
+        "test_existing.py": "aaff3ed5f47ec3fccd99735473a8c8b9ad97efc7c42d09d9e44b3344ed55b0af"
+      },
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "result": "passed",
+      "final_tests": 11,
+      "baseline_failures": 5,
+      "feature_commit": "221f02d5b74fee3865d4e3cfc74781dad3d37a21",
+      "storage_commit": "c302a7e49ebea735848c276167b4f4851fbc2380",
+      "holdout": {
+        "csv_records": 100,
+        "concurrent_writes": 144,
+        "complete_reads": 408,
+        "interrupted_writers": 12
+      }
+    },
+    "grok": {
+      "session": "sess-1790783866446",
+      "ssh_tool_count": 8,
+      "tool_count": 9,
+      "replay_status": {
+        "sessionId": "sess-1790783866446",
+        "provider": "grok",
+        "state": "running",
+        "turnRunning": false,
+        "agentAlive": true,
+        "seq": 86
+      },
+      "frozen_tests": {
+        "test_export.py": "af3049fea1c666ed867ee66cbc41f472cef443402927eb209306522f319ac6bb",
+        "test_storage.py": "7e24ce01ed8f5c5881c80cc551a11f8a647921acb6eeeda1be362b06f62ad3ac",
+        "test_existing.py": "aaff3ed5f47ec3fccd99735473a8c8b9ad97efc7c42d09d9e44b3344ed55b0af"
+      },
+      "model": "grok-4.7",
+      "effort": "high",
+      "result": "blocked_provider_quota",
+      "http_status": 429,
+      "error_code": "subscription:free-usage-exhausted",
+      "reported_tokens": 510172,
+      "reported_limit": 500000,
+      "commits": 0,
+      "baseline_completed": false
+    }
+  },
+  "network": {
+    "samples": 121,
+    "duration_seconds": 600.4326689243317,
+    "max_delivery_gap_seconds": 5.004804427997442,
+    "exit_code": 0,
+    "sequence_gaps": 0,
+    "duplicate_sequences": 0,
+    "fault_injection": false,
+    "observer_initial_error": "operator fixture quoting SyntaxError before any SSH; fixed before observation",
+    "observer_staging_retry": "install into existing user-owned sticky-/tmp file failed; staged root-owned /run script instead",
+    "thirty_minute_gate": false
+  },
+  "artifacts": {
+    "tools": "ovh-trusted-ssh-2026-10-01/tools.json",
+    "tests": "ovh-trusted-ssh-2026-10-01/test-runs.json",
+    "fixture": "ovh-trusted-ssh-2026-10-01/fixture-history.patch",
+    "holdout": "ovh-trusted-ssh-2026-10-01/holdout.py",
+    "independent": "ovh-trusted-ssh-2026-10-01/independent-results.txt",
+    "plugins": "ovh-trusted-ssh-2026-10-01/plugin-inventory.json",
+    "grok_error": "ovh-trusted-ssh-2026-10-01/grok-rpc-errors.json",
+    "continuous_ssh": "ovh-trusted-ssh-2026-10-01/continuous-ssh.json"
+  },
+  "pending": [
+    "Grok full development tasks after Provider quota restoration",
+    "Falcon execution cohort",
+    "public SSH network source admission",
+    "complete JMS fault/fail-closed gate",
+    "browser Code surface and physical-device regressions"
+  ],
+  "resource_observation": {
+    "ovh_oom_kernel_messages": 0,
+    "ovh_memory_mib": 11671,
+    "ovh_memory_used_mib_at_postflight": 1203,
+    "ovh_memory_available_mib_at_postflight": 10468,
+    "peak_not_measured": true
+  },
+  "cleanup": {
+    "task_worktrees_removed": true,
+    "temporary_observer_files_removed": true,
+    "observer_units": "not-found/inactive",
+    "permanent_machine_retained": true,
+    "permanent_key_retained": true,
+    "cowboy_sessions_retained": true,
+    "temporary_auth_created": false,
+    "fixture_bundles_verified": true,
+    "fixture_patch_replay_tree": "a9a3d36a301a6a9f0bf9ba32d0bd1d466d2da580"
+  },
+  "postflight": {
+    "ovh_machine_pid": 56151,
+    "ovh_machine_restarts": 0,
+    "ovh_ssh": "active",
+    "ovh_stormbird": "active",
+    "pty": true,
+    "sftp_hash_match": true
+  },
+  "validation": {
+    "columbus_verify": 0,
+    "cowboy_check_compact": 0,
+    "cowboy_diff_review": "complete manual evidence review",
+    "cowboy_runtime_change": false
+  }
+}

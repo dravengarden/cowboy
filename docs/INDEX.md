@@ -111,6 +111,8 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`releases/ovh-trusted-ssh-2026-10-01.md`](releases/ovh-trusted-ssh-2026-10-01.md) — Normal-account OVH SSH authority, Luna development tasks and Grok quota blocker
+- [`releases/ovh-hawk-ssh-development-2026-10-01.md`](releases/ovh-hawk-ssh-development-2026-10-01.md) — Earlier isolated development-shell feature and storage acceptance
 - [`releases/ovh-cli-bootstrap-2026-09-29.md`](releases/ovh-cli-bootstrap-2026-09-29.md) — Remote Machine CLI correction and incomplete permanent OVH enrollment
 - [`releases/ovh-luna-acceptance-2026-09-30.md`](releases/ovh-luna-acceptance-2026-09-30.md) — Real OVH Codex/Luna cases, installation receipt and failed network baseline
 - [`releases/ovh-hawk-ssh-repair-2026-09-30.md`](releases/ovh-hawk-ssh-repair-2026-09-30.md) — OVH Luna diagnoses, edits, tests and commits an isolated Hawk project through SSH

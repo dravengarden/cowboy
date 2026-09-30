@@ -1,0 +1,626 @@
+From d109698ad94b3497680b05550e68a0658dbbbeb4 Mon Sep 17 00:00:00 2001
+From: OVH acceptance <acceptance@localhost>
+Date: Thu, 1 Oct 2026 01:42:48 +0800
+Subject: [PATCH 1/3] fixture: freeze trusted SSH feature and integrity
+ acceptance
+
+---
+ AGENTS.md        |  9 +++++++
+ README.md        | 28 ++++++++++++++++++++++
+ flake.lock       | 27 +++++++++++++++++++++
+ flake.nix        |  1 +
+ taskboard.py     | 48 +++++++++++++++++++++++++++++++++++++
+ test_existing.py | 35 +++++++++++++++++++++++++++
+ test_export.py   | 41 ++++++++++++++++++++++++++++++++
+ test_storage.py  | 61 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 250 insertions(+)
+ create mode 100644 AGENTS.md
+ create mode 100644 README.md
+ create mode 100644 flake.lock
+ create mode 100644 flake.nix
+ create mode 100644 taskboard.py
+ create mode 100644 test_existing.py
+ create mode 100644 test_export.py
+ create mode 100644 test_storage.py
+
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..c60a066
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,9 @@
++# SSH development acceptance
++
++This is a disposable project, operated through ordinary SSH as the normal
++Hawk developer. All source reads, edits, tests and Git operations must run
++through `ssh hawk`. Use `nix develop -c` for Python and test commands.
++Implement the feature and storage repair in separate commits. Do not modify
++`test_existing.py`, `test_export.py`, or `test_storage.py`; add regression tests
++in separate files. Do not delegate, inspect credentials, change services or
++network configuration, or modify any other workspace.
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..7f51b2d
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,28 @@
++# Taskboard acceptance project
++
++This is a disposable project on the remote execution host. Use only ordinary
++SSH in this task-owned worktree; no host administration is needed.
++Use Python's standard library, retain existing tests, and commit each task
++locally. Do not push. Work only on this fixture, not real business directories.
++
++The CLI is `python3 taskboard.py --db PATH COMMAND`. Existing commands add,
++complete and list tasks. State is a JSON object containing `next_id` and `tasks`.
++
++Feature task: implement `export --format csv [--tag TAG]`. Output UTF-8 CSV with
++LF line endings and columns `id,title,done,tags`. Sort by numeric ID, encode
++done as lowercase true/false, join sorted unique tags with semicolons, and use
++correct CSV escaping. Missing or empty databases produce only the header.
++Export is read-only and must not create the database. This task must not alter
++the storage/write implementation; a separate task covers storage integrity.
++
++Storage bug task: concurrent successful mutations must retain every task and
++allocate unique monotonically increasing IDs. Readers must never see a partial
++JSON write. Failed or interrupted writes must preserve the previous database.
++Preserve existing database permissions; new databases should be private (0600).
++Do not silently reset corrupt input or weaken acceptance tests.
++
++Run `nix develop -c python3 -m unittest -v`; add useful regressions in new files. All diagnosis,
++edits, tests and Git actions must run through SSH on this host. Do not copy the
++project to OVH to implement or test it. Do not inspect addresses, routing,
++credentials or proxy configuration. Report infrastructure failures; do not
++change the target or bypass the managed SSH interface.
+diff --git a/flake.lock b/flake.lock
+new file mode 100644
+index 0000000..1f3cbec
+--- /dev/null
++++ b/flake.lock
+@@ -0,0 +1,27 @@
++{
++  "nodes": {
++    "nixpkgs": {
++      "locked": {
++        "lastModified": 1785318670,
++        "narHash": "sha256-dN6Ou5x/+23FZLEpYP3IffO+NyJFzUlGumt1uu3MMaY=",
++        "owner": "NixOS",
++        "repo": "nixpkgs",
++        "rev": "0954f7ee2f6bb3dc7d4e3d0d8bcb8fd4bde4cfc5",
++        "type": "github"
++      },
++      "original": {
++        "owner": "NixOS",
++        "repo": "nixpkgs",
++        "rev": "0954f7ee2f6bb3dc7d4e3d0d8bcb8fd4bde4cfc5",
++        "type": "github"
++      }
++    },
++    "root": {
++      "inputs": {
++        "nixpkgs": "nixpkgs"
++      }
++    }
++  },
++  "root": "root",
++  "version": 7
++}
+diff --git a/flake.nix b/flake.nix
+new file mode 100644
+index 0000000..4b65cf0
+--- /dev/null
++++ b/flake.nix
+@@ -0,0 +1 @@
++{ inputs.nixpkgs.url = "github:NixOS/nixpkgs/0954f7ee2f6bb3dc7d4e3d0d8bcb8fd4bde4cfc5"; outputs = { nixpkgs, ... }: { devShells.x86_64-linux.default = let pkgs = import nixpkgs { system = "x86_64-linux"; }; in pkgs.mkShell { packages = [ pkgs.python3 pkgs.git ]; }; }; }
+diff --git a/taskboard.py b/taskboard.py
+new file mode 100644
+index 0000000..51e3e8b
+--- /dev/null
++++ b/taskboard.py
+@@ -0,0 +1,48 @@
++"""Small task-board CLI. Changes to storage are a separate task from export."""
++import argparse
++import json
++from pathlib import Path
++
++
++def load(path):
++    return json.loads(path.read_text()) if path.exists() else {'next_id': 1, 'tasks': []}
++
++
++def save(path, state):
++    path.write_text(json.dumps(state, ensure_ascii=False) + '\n')
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument('--db', required=True, type=Path)
++    commands = parser.add_subparsers(dest='command', required=True)
++    add = commands.add_parser('add')
++    add.add_argument('title')
++    add.add_argument('--tag', action='append', default=[])
++    done = commands.add_parser('done')
++    done.add_argument('id', type=int)
++    listing = commands.add_parser('list')
++    listing.add_argument('--tag')
++    args = parser.parse_args()
++    state = load(args.db)
++    if args.command == 'add':
++        task = dict(id=state['next_id'], title=args.title, tags=sorted(set(args.tag)), done=False)
++        state['next_id'] += 1
++        state['tasks'].append(task)
++        save(args.db, state)
++        print(json.dumps(task, ensure_ascii=False))
++    elif args.command == 'done':
++        for task in state['tasks']:
++            if task['id'] == args.id:
++                task['done'] = True
++                save(args.db, state)
++                print(json.dumps(task, ensure_ascii=False))
++                return
++        parser.error('unknown task ID')
++    else:
++        rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]
++        print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test_existing.py b/test_existing.py
+new file mode 100644
+index 0000000..c056442
+--- /dev/null
++++ b/test_existing.py
+@@ -0,0 +1,35 @@
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++
++class Existing(unittest.TestCase):
++    def test_add_list_done_and_unicode(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / '任务.json'
++            def call(*args):
++                return subprocess.run([sys.executable, 'taskboard.py', '--db', str(db), *args],
++                                      text=True, capture_output=True, check=True)
++            task = json.loads(call('add', '修复测试', '--tag', 'b', '--tag', 'a', '--tag', 'a').stdout)
++            self.assertEqual(task, dict(id=1, title='修复测试', tags=['a', 'b'], done=False))
++            self.assertEqual(json.loads(call('list', '--tag', 'none').stdout), [])
++            self.assertTrue(json.loads(call('done', '1').stdout)['done'])
++            self.assertEqual(json.loads(call('list').stdout)[0]['id'], 1)
++
++    def test_unknown_id_preserves_data(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            subprocess.run([sys.executable, 'taskboard.py', '--db', str(db), 'add', 'one'],
++                           capture_output=True, check=True)
++            before = db.read_bytes()
++            result = subprocess.run([sys.executable, 'taskboard.py', '--db', str(db), 'done', '99'],
++                                    capture_output=True)
++            self.assertNotEqual(result.returncode, 0)
++            self.assertEqual(db.read_bytes(), before)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/test_export.py b/test_export.py
+new file mode 100644
+index 0000000..bfe4c94
+--- /dev/null
++++ b/test_export.py
+@@ -0,0 +1,41 @@
++import csv
++import io
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++
++class Export(unittest.TestCase):
++    def test_csv_escaping_filter_order_and_read_only(self):
++        rows = [dict(id=3, title='skip', tags=['other'], done=False),
++                dict(id=2, title='quote " and, comma\n新行', tags=['work', 'a'], done=True),
++                dict(id=1, title='first', tags=['work'], done=False)]
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / '任务 board.json'
++            db.write_text(json.dumps(dict(next_id=4, tasks=rows), ensure_ascii=False))
++            before = db.read_bytes()
++            result = subprocess.run([sys.executable, 'taskboard.py', '--db', str(db),
++                                     'export', '--format', 'csv', '--tag', 'work'],
++                                    capture_output=True, text=True)
++            self.assertEqual(result.returncode, 0, result.stderr)
++            parsed = list(csv.DictReader(io.StringIO(result.stdout)))
++            self.assertEqual(parsed, [dict(id='1', title='first', done='false', tags='work'),
++                                     dict(id='2', title='quote " and, comma\n新行', done='true', tags='a;work')])
++            self.assertTrue(result.stdout.startswith('id,title,done,tags\n'))
++            self.assertEqual(db.read_bytes(), before)
++
++    def test_empty_export_header_without_creating_database(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'absent.json'
++            result = subprocess.run([sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],
++                                    capture_output=True, text=True)
++            self.assertEqual(result.returncode, 0, result.stderr)
++            self.assertEqual(result.stdout, 'id,title,done,tags\n')
++            self.assertFalse(db.exists())
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/test_storage.py b/test_storage.py
+new file mode 100644
+index 0000000..5561ef3
+--- /dev/null
++++ b/test_storage.py
+@@ -0,0 +1,61 @@
++"""Frozen regression for process concurrency and durable JSON writes."""
++from concurrent.futures import ThreadPoolExecutor
++import json
++from pathlib import Path
++import resource
++import subprocess
++import sys
++import tempfile
++import unittest
++
++CLI = Path(__file__).with_name('taskboard.py')
++
++
++class StorageTests(unittest.TestCase):
++    def test_concurrent_adds_preserve_all_successful_mutations(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            existing = [dict(id=i, title='seed-' + str(i) + 'x' * 300, tags=[], done=False)
++                        for i in range(1, 301)]
++            db.write_text(json.dumps(dict(next_id=301, tasks=existing)))
++            db.chmod(0o600)
++
++            def add(i):
++                return subprocess.run([sys.executable, str(CLI), '--db', str(db), 'add', 'new-' + str(i)],
++                                      capture_output=True, text=True, timeout=30)
++
++            with ThreadPoolExecutor(max_workers=8) as pool:
++                results = list(pool.map(add, range(80)))
++            self.assertTrue(all(result.returncode == 0 for result in results), 'a concurrent CLI call failed')
++            state = json.loads(db.read_text())
++            self.assertEqual(len(state['tasks']), 380)
++            self.assertEqual(sorted(task['id'] for task in state['tasks']), list(range(1, 381)))
++            self.assertEqual(state['next_id'], 381)
++            self.assertEqual(state['tasks'][:300], existing)
++            self.assertEqual(db.stat().st_mode & 0o777, 0o600)
++
++    def test_failed_write_preserves_previous_database(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            original = b'{"next_id":1,"tasks":[]}\n'
++            db.write_bytes(original)
++            db.chmod(0o600)
++
++            def limit():
++                resource.setrlimit(resource.RLIMIT_FSIZE, (512, 512))
++
++            result = subprocess.run([sys.executable, str(CLI), '--db', str(db), 'add', 'x' * 5000],
++                                    capture_output=True, timeout=30, preexec_fn=limit)
++            self.assertNotEqual(result.returncode, 0)
++            self.assertEqual(db.read_bytes(), original)
++
++    def test_new_database_is_private(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            subprocess.run([sys.executable, str(CLI), '--db', str(db), 'add', 'first'],
++                           check=True, capture_output=True)
++            self.assertEqual(db.stat().st_mode & 0o777, 0o600)
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.54.0
+
+
+From 221f02d5b74fee3865d4e3cfc74781dad3d37a21 Mon Sep 17 00:00:00 2001
+From: OVH acceptance <acceptance@localhost>
+Date: Thu, 1 Oct 2026 01:49:12 +0800
+Subject: [PATCH 2/3] Add CSV export command
+
+---
+ taskboard.py               | 19 ++++++++++++++++
+ test_export_regressions.py | 45 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 64 insertions(+)
+ create mode 100644 test_export_regressions.py
+
+diff --git a/taskboard.py b/taskboard.py
+index 51e3e8b..d82221e 100644
+--- a/taskboard.py
++++ b/taskboard.py
+@@ -1,7 +1,10 @@
+ """Small task-board CLI. Changes to storage are a separate task from export."""
+ import argparse
++import csv
++import io
+ import json
+ from pathlib import Path
++import sys
+ 
+ 
+ def load(path):
+@@ -12,6 +15,17 @@ def save(path, state):
+     path.write_text(json.dumps(state, ensure_ascii=False) + '\n')
+ 
+ 
++def export_csv(state, tag):
++    output = io.StringIO(newline='')
++    writer = csv.writer(output, lineterminator='\n')
++    writer.writerow(('id', 'title', 'done', 'tags'))
++    rows = [task for task in state['tasks'] if tag is None or tag in task['tags']]
++    for task in sorted(rows, key=lambda item: item['id']):
++        writer.writerow((task['id'], task['title'], str(task['done']).lower(),
++                         ';'.join(sorted(set(task['tags'])))))
++    sys.stdout.buffer.write(output.getvalue().encode('utf-8'))
++
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument('--db', required=True, type=Path)
+@@ -23,6 +37,9 @@ def main():
+     done.add_argument('id', type=int)
+     listing = commands.add_parser('list')
+     listing.add_argument('--tag')
++    export = commands.add_parser('export')
++    export.add_argument('--format', choices=('csv',), required=True)
++    export.add_argument('--tag')
+     args = parser.parse_args()
+     state = load(args.db)
+     if args.command == 'add':
+@@ -39,6 +56,8 @@ def main():
+                 print(json.dumps(task, ensure_ascii=False))
+                 return
+         parser.error('unknown task ID')
++    elif args.command == 'export':
++        export_csv(state, args.tag)
+     else:
+         rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]
+         print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))
+diff --git a/test_export_regressions.py b/test_export_regressions.py
+new file mode 100644
+index 0000000..4587b79
+--- /dev/null
++++ b/test_export_regressions.py
+@@ -0,0 +1,45 @@
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++
++class ExportRegressions(unittest.TestCase):
++    def test_utf8_lf_output_numeric_order_and_canonical_tags(self):
++        tasks = [
++            dict(id=10, title='café, "title"', tags=['z', 'a', 'a'], done=False),
++            dict(id=2, title='line\nbreak', tags=[], done=True),
++        ]
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            db.write_text(json.dumps(dict(next_id=11, tasks=tasks), ensure_ascii=False))
++            before = db.read_bytes()
++            result = subprocess.run(
++                [sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],
++                capture_output=True,
++            )
++            self.assertEqual(result.returncode, 0, result.stderr.decode())
++            self.assertEqual(
++                result.stdout,
++                'id,title,done,tags\n'
++                '2,"line\nbreak",true,\n'
++                '10,"café, ""title""",false,a;z\n'.encode('utf-8'),
++            )
++            self.assertEqual(db.read_bytes(), before)
++
++    def test_empty_state_exports_header(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'empty.json'
++            db.write_text('{"next_id": 1, "tasks": []}\n')
++            result = subprocess.run(
++                [sys.executable, 'taskboard.py', '--db', str(db), 'export', '--format', 'csv'],
++                capture_output=True,
++            )
++            self.assertEqual(result.returncode, 0, result.stderr.decode())
++            self.assertEqual(result.stdout, b'id,title,done,tags\n')
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.54.0
+
+
+From c302a7e49ebea735848c276167b4f4851fbc2380 Mon Sep 17 00:00:00 2001
+From: OVH acceptance <acceptance@localhost>
+Date: Thu, 1 Oct 2026 01:52:55 +0800
+Subject: [PATCH 3/3] Make task storage atomic and concurrency-safe
+
+---
+ taskboard.py                | 92 +++++++++++++++++++++++++++++--------
+ test_storage_regressions.py | 37 +++++++++++++++
+ 2 files changed, 111 insertions(+), 18 deletions(-)
+ create mode 100644 test_storage_regressions.py
+
+diff --git a/taskboard.py b/taskboard.py
+index d82221e..af7b376 100644
+--- a/taskboard.py
++++ b/taskboard.py
+@@ -1,18 +1,64 @@
+-"""Small task-board CLI. Changes to storage are a separate task from export."""
++"""Small task-board CLI with CSV export and atomic JSON storage."""
+ import argparse
+ import csv
++import fcntl
+ import io
+ import json
++import os
+ from pathlib import Path
++import stat
+ import sys
++import tempfile
++from contextlib import contextmanager
+ 
+ 
+ def load(path):
+     return json.loads(path.read_text()) if path.exists() else {'next_id': 1, 'tasks': []}
+ 
+ 
++@contextmanager
++def database_lock(path):
++    lock_path = path.with_name(path.name + '.lock')
++    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
++    try:
++        fcntl.flock(descriptor, fcntl.LOCK_EX)
++        yield
++    finally:
++        os.close(descriptor)
++
++
+ def save(path, state):
+-    path.write_text(json.dumps(state, ensure_ascii=False) + '\n')
++    contents = (json.dumps(state, ensure_ascii=False) + '\n').encode('utf-8')
++    try:
++        mode = stat.S_IMODE(path.stat().st_mode)
++    except FileNotFoundError:
++        mode = 0o600
++
++    descriptor, temporary = tempfile.mkstemp(
++        prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent
++    )
++    try:
++        with os.fdopen(descriptor, 'wb') as stream:
++            stream.write(contents)
++            stream.flush()
++            os.fchmod(stream.fileno(), mode)
++            os.fsync(stream.fileno())
++        os.replace(temporary, path)
++        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
++        try:
++            os.fsync(directory_fd)
++        finally:
++            os.close(directory_fd)
++    except BaseException:
++        try:
++            os.close(descriptor)
++        except OSError:
++            pass
++        try:
++            os.unlink(temporary)
++        except FileNotFoundError:
++            pass
++        raise
+ 
+ 
+ def export_csv(state, tag):
+@@ -41,26 +87,36 @@ def main():
+     export.add_argument('--format', choices=('csv',), required=True)
+     export.add_argument('--tag')
+     args = parser.parse_args()
+-    state = load(args.db)
++
+     if args.command == 'add':
+-        task = dict(id=state['next_id'], title=args.title, tags=sorted(set(args.tag)), done=False)
+-        state['next_id'] += 1
+-        state['tasks'].append(task)
+-        save(args.db, state)
++        with database_lock(args.db):
++            state = load(args.db)
++            task = dict(id=state['next_id'], title=args.title,
++                        tags=sorted(set(args.tag)), done=False)
++            state['next_id'] += 1
++            state['tasks'].append(task)
++            save(args.db, state)
+         print(json.dumps(task, ensure_ascii=False))
+     elif args.command == 'done':
+-        for task in state['tasks']:
+-            if task['id'] == args.id:
+-                task['done'] = True
+-                save(args.db, state)
+-                print(json.dumps(task, ensure_ascii=False))
+-                return
+-        parser.error('unknown task ID')
+-    elif args.command == 'export':
+-        export_csv(state, args.tag)
++        with database_lock(args.db):
++            state = load(args.db)
++            result = None
++            for task in state['tasks']:
++                if task['id'] == args.id:
++                    task['done'] = True
++                    save(args.db, state)
++                    result = task
++                    break
++        if result is None:
++            parser.error('unknown task ID')
++        print(json.dumps(result, ensure_ascii=False))
+     else:
+-        rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]
+-        print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))
++        state = load(args.db)
++        if args.command == 'export':
++            export_csv(state, args.tag)
++        else:
++            rows = [task for task in state['tasks'] if not args.tag or args.tag in task['tags']]
++            print(json.dumps(sorted(rows, key=lambda task: task['id']), ensure_ascii=False))
+ 
+ 
+ if __name__ == '__main__':
+diff --git a/test_storage_regressions.py b/test_storage_regressions.py
+new file mode 100644
+index 0000000..13736c2
+--- /dev/null
++++ b/test_storage_regressions.py
+@@ -0,0 +1,37 @@
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++
++class StorageRegressions(unittest.TestCase):
++    def test_existing_database_permissions_are_preserved(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            db.write_text('{"next_id": 1, "tasks": []}\n')
++            db.chmod(0o640)
++            result = subprocess.run(
++                [sys.executable, 'taskboard.py', '--db', str(db), 'add', 'kept mode'],
++                capture_output=True,
++            )
++            self.assertEqual(result.returncode, 0, result.stderr.decode())
++            self.assertEqual(db.stat().st_mode & 0o777, 0o640)
++
++    def test_corrupt_database_is_rejected_without_replacement(self):
++        with tempfile.TemporaryDirectory() as directory:
++            db = Path(directory) / 'tasks.json'
++            original = b'{not valid JSON\n'
++            db.write_bytes(original)
++            db.chmod(0o600)
++            result = subprocess.run(
++                [sys.executable, 'taskboard.py', '--db', str(db), 'add', 'must not reset'],
++                capture_output=True,
++            )
++            self.assertNotEqual(result.returncode, 0)
++            self.assertEqual(db.read_bytes(), original)
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.54.0
+
