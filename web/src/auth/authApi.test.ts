@@ -234,6 +234,34 @@ Deno.test("auth API surfaces structured safe errors", async () => {
   }
 });
 
+Deno.test("session freshness errors preserve the required ceremony without a message field", async () => {
+  for (const kind of ["primary", "passkey", "unknown"] as const) {
+    const restore = withFetch(() =>
+      new Response(
+        JSON.stringify({
+          code: "session_reauthentication_required",
+          kind,
+        }),
+        { status: 428 },
+      )
+    );
+    try {
+      const error = await assertRejects(
+        () =>
+          authApi.approveDeviceAuthorization({
+            request_id: "test-request",
+            approval_token: "test-token",
+          }),
+        AuthApiError,
+      );
+      assertEquals(error.code, "session_reauthentication_required");
+      assertEquals(error.reauthKind, kind === "unknown" ? undefined : kind);
+    } finally {
+      restore();
+    }
+  }
+});
+
 Deno.test("external Passkey handoff keeps the verifier in the signed-in client", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {

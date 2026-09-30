@@ -15,6 +15,7 @@ import {
   storedDeviceAuthorization,
 } from "./deviceAuthorization.ts";
 import { sessionCountdownLabel } from "./sessionSchedule.ts";
+import { retryWithRecentProductAuth } from "./recentAuth.ts";
 
 const request: DeviceAuthorizationRequest = {
   request_id: "request_abcdefghijklmnopqrstuvwxyz",
@@ -92,6 +93,36 @@ Deno.test("missing device links never inspect or authorize", async () => {
   await flow.approve();
   assertEquals(flow.getSnapshot().phase, "missing");
   assertEquals(test.approvals(), 0);
+});
+
+Deno.test("approval resumes after primary login and reaches the completed surface", async () => {
+  const test = fixture();
+  let fresh = false;
+  let attempts = 0;
+  test.dependencies.approve = () => {
+    attempts++;
+    if (!fresh) {
+      throw new AuthApiError(
+        "",
+        428,
+        "session_reauthentication_required",
+        "primary",
+      );
+    }
+    return Promise.resolve({ ok: true });
+  };
+  test.dependencies.authorize = (operation) =>
+    retryWithRecentProductAuth(operation, (options) => {
+      assertEquals(options?.purpose, "primary");
+      fresh = true;
+      return Promise.resolve({ account: "test", role: "owner" });
+    });
+  await test.flow.inspect();
+  await test.flow.approve();
+  assertEquals(attempts, 2);
+  assertEquals(test.flow.getSnapshot().phase, "approved");
+  assertEquals(test.flow.getSnapshot().busy, false);
+  assertEquals(test.cleared, [request]);
 });
 
 Deno.test("explicit sign-in rechecks the same request without approving it", async () => {

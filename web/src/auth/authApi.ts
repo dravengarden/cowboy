@@ -424,12 +424,19 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
 export class AuthApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
+  readonly reauthKind: "primary" | "passkey" | undefined;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    reauthKind?: "primary" | "passkey",
+  ) {
     super(message);
     this.name = "AuthApiError";
     this.status = status;
     this.code = code;
+    this.reauthKind = reauthKind;
   }
 }
 
@@ -513,12 +520,23 @@ function authApiError(
 ): AuthApiError {
   if (text !== "") {
     try {
-      const body = JSON.parse(text) as { message?: unknown; code?: unknown };
-      if (typeof body.message === "string") {
+      const body = JSON.parse(text) as {
+        message?: unknown;
+        code?: unknown;
+        kind?: unknown;
+      } | null;
+      if (
+        body &&
+        (typeof body.message === "string" || typeof body.code === "string")
+      ) {
         return new AuthApiError(
-          body.message,
+          typeof body.message === "string" ? body.message : statusText,
           status,
           typeof body.code === "string" ? body.code : undefined,
+          body.code === "session_reauthentication_required" &&
+            (body.kind === "primary" || body.kind === "passkey")
+            ? body.kind
+            : undefined,
         );
       }
     } catch {

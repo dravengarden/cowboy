@@ -1,8 +1,42 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert";
 import { AuthApiError, type ProductMe } from "./authApi.ts";
-import { retryWithRecentProductAuth } from "./recentAuth.ts";
+import {
+  type RecentProductAuthOptions,
+  retryWithRecentProductAuth,
+} from "./recentAuth.ts";
 
 const verified: ProductMe = { account: "draven", role: "owner" };
+
+Deno.test("server session ceremony overrides recent-auth preference and preserves continuation", async () => {
+  for (const kind of ["primary", "passkey"] as const) {
+    let calls = 0;
+    let received: RecentProductAuthOptions | undefined;
+    await retryWithRecentProductAuth(() => {
+      if (++calls === 1) {
+        throw new AuthApiError(
+          "",
+          428,
+          "session_reauthentication_required",
+          kind,
+        );
+      }
+      return Promise.resolve();
+    }, (options) => {
+      received = options;
+      return Promise.resolve(verified);
+    }, {
+      purpose: "recent",
+      resumeLabel: "Continue",
+      resumeWithUserGesture: true,
+    });
+    assertEquals(received, {
+      purpose: kind,
+      resumeLabel: "Continue",
+      resumeWithUserGesture: true,
+    });
+    assertEquals(calls, 2);
+  }
+});
 
 Deno.test("recent-auth retry verifies once and repeats the protected operation", async () => {
   let operations = 0;
