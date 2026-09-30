@@ -47,7 +47,10 @@ at `a225d618a9bf60fd71d2a2a8cbab73c70711914a`.
 
 No manual `converge --apply` was run: the plan contained six upgrades, which
 belong to the existing signed Plugin lifecycle and active-session lease gates.
-The timer's old failed status is historical until its next genuine execution;
-it was not reset to manufacture a successful run. This receipt proves the
+The timer subsequently ran on its normal schedule at 09:04:20 +0800 and
+completed with `Result=success`, `ExecMainStatus=0`. Its failed status was not
+reset to manufacture a successful run. A settled check after that real execution
+still found all 19 original Machine/worker PID/start/restart identities unchanged.
+This receipt proves the
 Catalog reader repair and bounded Controller release continuity, not permanent
 OVH Machine enrollment or the outstanding interactive Grok acceptance.
