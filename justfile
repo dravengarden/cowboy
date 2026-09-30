@@ -486,7 +486,7 @@ composition-check:
     deno test --allow-read contracts/composition.test.ts contracts/composition-check.test.ts
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
     cargo build --locked --bin cowboy
-    deno run --allow-read --allow-write --allow-run=target/debug/cowboy tools/composition-link-conformance.ts target/debug/cowboy
+    deno run --allow-read --allow-write --allow-run="$(realpath target/debug/cowboy)" tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"
 
 fmt:
     cargo fmt --check

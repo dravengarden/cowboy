@@ -269,10 +269,18 @@ async fn run_acp_server(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: ListSessionsRequest, responder, _cx: ConnectionTo<Client>| {
-                responder.respond(ListSessionsResponse::new(
-                    list_bridge.list_sessions(request.cwd.as_ref()),
-                ))
+            async move |request: ListSessionsRequest, responder, cx: ConnectionTo<Client>| {
+                let bridge = list_bridge.clone();
+                cx.spawn(async move {
+                    match bridge.ready_sessions(request.cwd.as_ref()).await {
+                        Ok(sessions) => responder.respond(ListSessionsResponse::new(sessions))?,
+                        Err(error) => responder.respond_with_error(
+                            agent_client_protocol::util::internal_error(error),
+                        )?,
+                    }
+                    Ok(())
+                })?;
+                Ok(())
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -326,7 +334,10 @@ async fn run_acp_server(
                         &request.additional_directories,
                         request.mcp_servers.len(),
                     );
-                    if let Err(error) = bridge.validate_session(&session_id, Some(&request.cwd)) {
+                    if let Err(error) = bridge
+                        .validate_ready_session(&session_id, Some(&request.cwd))
+                        .await
+                    {
                         responder.respond_with_error(
                             agent_client_protocol::util::internal_error(error),
                         )?;
@@ -531,6 +542,20 @@ impl Bridge {
                 "TODO(acp-bridge): client-provided MCP servers are not yet forwarded through the daemon"
             );
         }
+    }
+
+    async fn ready_sessions(&self, cwd: Option<&PathBuf>) -> Result<Vec<SessionInfo>, String> {
+        self.wait_for_daemon().await?;
+        Ok(self.list_sessions(cwd))
+    }
+
+    async fn validate_ready_session(
+        &self,
+        session_id: &str,
+        cwd: Option<&PathBuf>,
+    ) -> Result<(), String> {
+        self.wait_for_daemon().await?;
+        self.validate_session(session_id, cwd)
     }
 
     fn list_sessions(&self, cwd: Option<&PathBuf>) -> Vec<SessionInfo> {
@@ -1942,6 +1967,55 @@ mod tests {
         assert!(bridge.validate_session("remote", Some(&client_cwd)).is_ok());
         for id in ["other-machine", "other-workspace", "other-provider"] {
             assert!(bridge.validate_session(id, Some(&client_cwd)).is_err());
+        }
+
+        // A fresh stdio client can list/load immediately after initialize,
+        // before the independently connected WebSocket has its bootstrap.
+        {
+            let mut cold = bridge.clone();
+            cold.state = Arc::new(Mutex::new(BridgeState::default()));
+            cold.connected_notify = Arc::new(Notify::new());
+            let listing = cold.ready_sessions(Some(&client_cwd));
+            let loading = cold.validate_ready_session("remote", Some(&client_cwd));
+            tokio::pin!(listing, loading);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut listing)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut loading)
+                    .await
+                    .is_err()
+            );
+            cold.state.lock().sessions = bridge
+                .state
+                .lock()
+                .sessions
+                .iter()
+                .map(|(id, cached)| {
+                    (
+                        id.clone(),
+                        CachedSession {
+                            meta: cached.meta.clone(),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+            cold.set_connected(true);
+            assert_eq!(listing.await.unwrap()[0].session_id.0.as_ref(), "remote");
+            loading.await.unwrap();
+            assert!(
+                cold.validate_ready_session("missing", Some(&client_cwd))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                cold.validate_ready_session("other-machine", Some(&client_cwd))
+                    .await
+                    .is_err()
+            );
         }
 
         bridge.provider = Arc::from("async-fixture");

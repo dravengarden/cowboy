@@ -104,6 +104,14 @@ The bridge supports:
   the Hub's authoritative `Busy` lifecycle and the original `session/prompt`
   remains pending through the matching `TurnEnd`.
 
+On a fresh bridge, session listing and loading wait for the Controller's
+WebSocket bootstrap before consulting the local session cache, using the same
+bounded readiness wait as session creation. `initialize` still replies
+immediately. A slow connection must not turn a retained session into an
+"unknown session" error or an empty history list. If the Controller cannot
+connect within the readiness deadline, the request returns a connection error;
+it does not create a replacement session.
+
 ## Known TODOs
 
 - `Cowboy · Provider` names with provider icons require published ACP Registry

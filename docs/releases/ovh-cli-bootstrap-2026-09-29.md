@@ -115,3 +115,57 @@ The Hawk Web activator recorded transaction
 at `2026-09-30T12:49:22.750111846Z`. Readback returned `cowboy-v1772` and
 `/healthz` returned `ok`; Controller PID 603952 remained unchanged. Native diff
 review found no actionable defects after the deterministic Web gates passed.
+
+## Managed Grok session acceptance
+
+The official CLI authorization subsequently completed and persisted its private
+sender-constrained credential. `cowboy serve-acp --provider grok --machine ovh
+--workspace matrix` created retained session `sess-1790767522144` through the
+Controller. Grok 3.1.25 reported Grok 4.7 with high reasoning effort and streamed
+the exact requested marker `OVH_GROK_READY_20260930`. These are real
+Cowboy-managed session results, not a separately launched native CLI.
+
+Initial shell calls failed because the packaged SSH client in the isolated
+Provider HOME could not discover the operator's home-only aliases. Columbus
+revision `9bf8e60d` moved the existing restricted client configuration into an
+ordinary system SSH include, scoped to local user `ubuntu` and exact Hawk
+aliases. After activation, the same session successfully executed
+`ssh -o BatchMode=yes -o ConnectTimeout=10 hawk hostname` and
+`ssh -6 -o BatchMode=yes -o ConnectTimeout=10 hawk id`, reporting exit zero,
+`hawk`, and the non-root `matrix-agent` identity. No Provider credential or
+private SSH key was copied into its runtime home. Falcon remains a recorded,
+deferred failure. The packaged SSH warning about Ubuntu's GSSAPI option remains
+visible and did not prevent the successful calls.
+
+Cold loading from a newly started ACP client exposed a separate CLI race:
+`initialize` could finish before the asynchronous WebSocket bootstrap populated
+the session cache. Loading then falsely reported `unknown cowboy session`.
+Session list/load now use the existing bounded daemon-readiness wait, leaving
+initialize nonblocking and retaining Machine/workspace/Provider checks. A
+regression holds both reads pending with an empty cache, then delivers bootstrap
+and verifies successful load plus missing/wrong-Machine rejection. An actual
+fresh candidate CLI loaded the retained production session immediately after
+initialize and replayed the successful tool results. Effort changed to low
+through the ACP config API; a subsequent turn recalled the original marker and
+correctly distinguished the successful latest SSH checks.
+
+One no-tool follow-up submitted at a WebSocket reconnect boundary timed out at
+the acceptance driver's 300-second limit while the session reported idle.
+Controller PID remained unchanged. A fresh client could load and continue the
+session afterwards. Preserve this as a prompt-recovery failure requiring
+diagnosis; neither cold-load repair nor successful later interaction establishes
+lossless reconnect, exactly-once replay, or a network-fault acceptance pass.
+Physical browser completion, Code surface, follow-up queue, context usage,
+host reboot, formal fault matrix, and mobile regressions remain separate gates.
+
+Cancellation was sent after the first streamed character of a requested
+5,000-line numeric response. Output stopped after 160 numbers; the prompt
+completed 52.996 seconds after cancellation with `end_turn`, not `cancelled`.
+A following prompt returned `OVH_CANCEL_FOLLOWUP_OK`. Continued usability is
+verified, but cancellation latency and stop-reason fidelity remain findings;
+this is not a full cancellation acceptance pass.
+
+The complete gate initially encountered Deno's executable permission check on
+the task's relocated Cargo cache: `target` is a symlink to the storage volume.
+The conformance recipe now grants run permission to the canonical executable
+path and invokes that same path, retaining the single-executable allowlist.
