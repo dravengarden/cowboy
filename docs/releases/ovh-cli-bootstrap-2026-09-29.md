@@ -79,3 +79,31 @@ Stormbird owns the missing managed transport and recovery path. This CLI adds
 no Stormbird, SSH-tunnel, or SOCKS protocol to Cowboy. Actual Grok interaction,
 SSH from that session, Code surface, reconnect/replay, restart persistence,
 resource peaks, fault recovery, and physical-client regression remain pending.
+
+## September 30 activation and client authorization follow-up
+
+The bootstrap observations above are historical. OVH is now enrolled as the
+permanent Machine `ovh`, with its default Service state directory and the
+Matrix, Columbus, and Suger workspaces. Official `operator inspect` returns
+HTTP 200. Grok 3.1.25 and Zed 1.20.0 have completed signed installation receipts;
+Grok credential replica and materialization are current at generation 1025.
+The fleet-owned activation and encrypted backup evidence is recorded in
+Columbus at `machines/ovh/docs/cowboy-activation-2026-09-30.json`.
+
+Interactive acceptance is still blocked on product client authorization.
+The last browser request remained pending on the server and expired without
+producing a CLI credential. A user's Cardea approval alone is not evidence of
+the client authorization exchange completing.
+
+A confirmed Web defect discarded the `kind` in the Controller's HTTP 428
+`session_reauthentication_required` response because that response has no
+`message` field. The generic recent-auth retry could consequently select a
+Passkey when the session specifically required primary login. The Web fix
+preserves the closed primary/passkey kind and uses the required ceremony before
+retrying the protected operation once. It does not weaken the server policy,
+extend link expiry, automatically approve a newly opened link, or grant host
+Operator delegation access to user sessions. Regression tests cover the actual
+message-less response, both ceremony kinds, and approval continuation into the
+completed UI state. Web typecheck, lint, all 1,954 tests, and build pass.
+This establishes a code defect and its regression fix; it does not establish
+that every symptom in the physical iPhone screenshots had the same cause.
