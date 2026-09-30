@@ -23,6 +23,7 @@ import {
   clearDeviceAuthorization,
   DeviceAuthorizationFlow,
   sameDeviceAuthorization,
+  signInForDeviceAuthorization,
   storedDeviceAuthorization,
 } from "./deviceAuthorization";
 
@@ -41,6 +42,8 @@ export function DeviceAuthorizationRoute({
 export function DeviceAuthorizationPage(): React.JSX.Element {
   const [request, setRequest] = useState(() => storedDeviceAuthorization());
   const { reauthenticate } = useProductAuth();
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const flow = useMemo(() =>
     new DeviceAuthorizationFlow(request, {
       inspect: authApi.inspectDeviceAuthorization,
@@ -57,11 +60,35 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
   );
   const needsNewLink = ["expired", "unavailable", "missing"].includes(phase);
 
+  const signIn = async (): Promise<void> => {
+    if (!request || signingIn || busy) return;
+    setSigningIn(true);
+    setSignInError(null);
+    try {
+      await signInForDeviceAuthorization(
+        request,
+        () => reauthenticate({ purpose: "primary" }),
+        flow.inspect,
+      );
+    } catch (reason) {
+      if (sameDeviceAuthorization(storedDeviceAuthorization(), request)) {
+        setSignInError(
+          reason instanceof DOMException && reason.name === "AbortError"
+            ? "Sign-in was cancelled. You can try again while this request is valid."
+            : "Sign-in did not complete. Try again; this client has not been authorized.",
+        );
+      }
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
   useEffect(() => {
     const capture = (): void => {
       if (globalThis.location.pathname !== "/auth/device") return;
       captureDeviceAuthorizationFromLocation();
       const next = storedDeviceAuthorization();
+      setSignInError(null);
       setRequest((previous) =>
         sameDeviceAuthorization(previous, next) ? previous : next
       );
@@ -105,10 +132,21 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
         placeItems: "center",
         bgcolor: "background.default",
         px: 2,
-        py: "max(24px, var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)))",
+        py:
+          "max(24px, var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)))",
       }}
     >
       <Stack spacing={2.5} sx={{ width: "100%", maxWidth: 520 }}>
+        <Button
+          color="inherit"
+          sx={{ alignSelf: "flex-start" }}
+          onClick={() => {
+            if (request) clearDeviceAuthorization(request);
+            globalThis.location.assign("/");
+          }}
+        >
+          Back to Cowboy
+        </Button>
         <Stack direction="row" spacing={1.5} alignItems="center">
           <Box
             sx={{
@@ -147,15 +185,24 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
               <>
                 <Alert severity="warning">{error}</Alert>
                 <Button
+                  variant="contained"
+                  size="large"
+                  disabled={busy || signingIn}
+                  onClick={() => void signIn()}
+                >
+                  {signingIn ? "Signing in…" : "Sign in again"}
+                </Button>
+                <Button
                   variant="outlined"
                   size="large"
-                  disabled={busy}
+                  disabled={busy || signingIn}
                   onClick={() => void flow.inspect()}
                 >
                   Check request again
                 </Button>
               </>
             )}
+            {signInError && <Alert severity="warning">{signInError}</Alert>}
             {needsNewLink && (
               <>
                 <Alert severity="warning">
@@ -174,9 +221,6 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                   within 5 minutes. Refreshing this page cannot renew the old
                   request.
                 </Typography>
-                <Button component="a" href="/" variant="outlined" size="large">
-                  Back to Cowboy
-                </Button>
               </>
             )}
             {phase === "loading" && !error && (
@@ -245,7 +289,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                     color="inherit"
                     size="large"
                     fullWidth
-                    disabled={busy}
+                    disabled={busy || signingIn}
                     onClick={() => void flow.deny()}
                   >
                     Deny
@@ -254,7 +298,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                     variant="contained"
                     size="large"
                     fullWidth
-                    disabled={busy}
+                    disabled={busy || signingIn}
                     onClick={() => void flow.approve()}
                   >
                     {busy ? "Authorizing…" : "Authorize client"}

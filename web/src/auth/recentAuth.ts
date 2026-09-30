@@ -1,6 +1,7 @@
 import { isRecentProductAuthRequired, type ProductMe } from "./authApi";
 
 export interface RecentProductAuthOptions {
+  purpose?: "recent" | "primary";
   resumeLabel?: string;
   resumeWithUserGesture?: boolean;
 }

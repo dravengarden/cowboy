@@ -42,6 +42,17 @@ export function sameDeviceAuthorization(
     left?.approval_token === right?.approval_token;
 }
 
+/** Recheck after explicit sign-in, without approving or reviving another link. */
+export async function signInForDeviceAuthorization(
+  request: DeviceAuthorizationRequest,
+  signIn: () => Promise<unknown>,
+  inspect: () => Promise<void>,
+  current: () => DeviceAuthorizationRequest | null = storedDeviceAuthorization,
+): Promise<void> {
+  await signIn();
+  if (sameDeviceAuthorization(current(), request)) await inspect();
+}
+
 export function clearDeviceAuthorization(
   request: DeviceAuthorizationRequest,
   storage: RequestStorage = globalThis.sessionStorage,

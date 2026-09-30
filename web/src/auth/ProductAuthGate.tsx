@@ -661,6 +661,7 @@ export function ProductAuthGate({
         )}
         <ProductRecentAuthSheet
           open={recentAuthOpen}
+          purpose={recentAuthOptions.purpose ?? "recent"}
           me={me}
           providers={providers}
           hostPlugins={hostPlugins}

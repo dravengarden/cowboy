@@ -11,6 +11,7 @@ import {
   DeviceAuthorizationFlow,
   parseDeviceAuthorization,
   sameDeviceAuthorization,
+  signInForDeviceAuthorization,
   storedDeviceAuthorization,
 } from "./deviceAuthorization.ts";
 import { sessionCountdownLabel } from "./sessionSchedule.ts";
@@ -91,6 +92,69 @@ Deno.test("missing device links never inspect or authorize", async () => {
   await flow.approve();
   assertEquals(flow.getSnapshot().phase, "missing");
   assertEquals(test.approvals(), 0);
+});
+
+Deno.test("explicit sign-in rechecks the same request without approving it", async () => {
+  const test = fixture();
+  let signIns = 0;
+  await signInForDeviceAuthorization(
+    request,
+    () => {
+      signIns++;
+      return Promise.resolve();
+    },
+    test.flow.inspect,
+    () => request,
+  );
+  assertEquals(signIns, 1);
+  assertEquals(test.flow.getSnapshot().phase, "pending");
+  assertEquals(test.approvals(), 0);
+  assertEquals(test.denials(), 0);
+});
+
+Deno.test("sign-in cannot revive an expired link or inspect a replacement link", async () => {
+  const test = fixture();
+  await test.flow.inspect();
+  await signInForDeviceAuthorization(
+    request,
+    () => {
+      test.advance(300_001);
+      test.flow.tick();
+      return Promise.resolve();
+    },
+    test.flow.inspect,
+    () => request,
+  );
+  assertEquals(test.flow.getSnapshot().phase, "expired");
+  assertEquals(test.approvals(), 0);
+  let inspections = 0;
+  await signInForDeviceAuthorization(request, () => Promise.resolve(), () => {
+    inspections++;
+    return Promise.resolve();
+  }, () => another);
+  assertEquals(inspections, 0);
+});
+
+Deno.test("cancelled explicit sign-in does not inspect or authorize", async () => {
+  const test = fixture();
+  await test.flow.inspect();
+  let cancelled = false;
+  try {
+    await signInForDeviceAuthorization(
+      request,
+      () => {
+        throw new DOMException("Cancelled", "AbortError");
+      },
+      test.flow.inspect,
+      () => request,
+    );
+  } catch (reason) {
+    cancelled = reason instanceof DOMException && reason.name === "AbortError";
+  }
+  assert(cancelled);
+  assertEquals(test.flow.getSnapshot().phase, "pending");
+  assertEquals(test.approvals(), 0);
+  assertEquals(test.cleared.length, 0);
 });
 
 Deno.test("expired server requests are terminal and never expose raw error text", async () => {
