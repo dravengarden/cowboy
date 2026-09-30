@@ -9,15 +9,18 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   compareProviderVersions,
+  genericPluginCompatibilityProblem,
   validateMachinePluginInventory,
 } from "@cowboy/provider-ui";
 import { ConfirmSheet } from "../Sheet";
 import { useStoreSelector } from "../store";
 import { createPluginInstallRequest } from "../pluginInstallation";
 import type { PluginRelease, PluginRemovalPlan } from "../admin/adminApi";
+import type { MachineSummary } from "../protocol";
+import { PluginLifecycleHistory } from "../PluginLifecycleHistory";
 import {
   changeExtensionInstallation,
   extensionManagementJson as json,
@@ -28,20 +31,46 @@ export function ExtensionManager(
   { initialMachineId }: { initialMachineId?: string | undefined } = {},
 ): React.JSX.Element {
   const machines = useStoreSelector((snapshot) => snapshot.machines);
-  const [machineId, setMachineId] = useState(
-    initialMachineId ?? machines[0]?.id ?? "",
+  return (
+    <ExtensionManagerView
+      machines={machines}
+      initialMachineId={initialMachineId}
+    />
   );
+}
+
+/** The shared management surface consumes the live Machine inventory. */
+export function ExtensionManagerView(
+  { machines, initialMachineId }: {
+    machines: readonly MachineSummary[];
+    initialMachineId?: string | undefined;
+  },
+): React.JSX.Element {
+  const firstMachineId = machines[0]?.id;
+  const [selectedMachineId, setMachineId] = useState(
+    initialMachineId ?? firstMachineId,
+  );
+  const machineId = selectedMachineId ?? firstMachineId ?? "";
+  useEffect(() => {
+    if (selectedMachineId === undefined && firstMachineId !== undefined) {
+      setMachineId(firstMachineId);
+    }
+  }, [firstMachineId, selectedMachineId]);
   const machine = machines.find((m) => m.id === machineId);
   let installedPlugins: ReturnType<typeof validateMachinePluginInventory>;
+  let inventoryUnavailable = false;
   try {
     installedPlugins = validateMachinePluginInventory(machine?.plugins ?? []);
   } catch {
     installedPlugins = [];
+    inventoryUnavailable = true;
   }
   const [releases, setReleases] = useState<PluginRelease[]>([]);
   const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState("");
   const [busy, setBusy] = useState(false);
+  const pendingAction = useRef(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
@@ -50,6 +79,7 @@ export function ExtensionManager(
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
+    setCatalogError("");
     void json<{ plugins: PluginRelease[] }>("/api/plugins", {
       signal: controller.signal,
     }).then((result) => {
@@ -60,7 +90,7 @@ export function ExtensionManager(
       }
     }).catch(() => {
       if (!controller.signal.aborted) {
-        setError("Extension catalog unavailable.");
+        setCatalogError("Extension catalog unavailable. Refresh to try again.");
       }
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
@@ -68,6 +98,8 @@ export function ExtensionManager(
     return () => controller.abort();
   }, [refresh]);
   async function run(action: () => Promise<unknown>, success: string) {
+    if (pendingAction.current) return;
+    pendingAction.current = true;
     setBusy(true);
     setError("");
     setMessage("");
@@ -82,6 +114,7 @@ export function ExtensionManager(
           : "Extension operation unavailable",
       );
     } finally {
+      pendingAction.current = false;
       setBusy(false);
     }
   }
@@ -92,6 +125,9 @@ export function ExtensionManager(
         .map((p) => p.plugin_id),
     ]),
   ].sort();
+  const matchingIds = ids.filter((id) =>
+    id.includes(search.trim().toLowerCase())
+  );
   return (
     <Stack spacing={2}>
       <Stack direction="row" alignItems="center">
@@ -99,7 +135,7 @@ export function ExtensionManager(
           Manage extensions
         </Typography>
         <IconButton
-          disabled={busy}
+          disabled={busy || loading}
           aria-label="Refresh extension catalog"
           onClick={() => setRefresh((v) => v + 1)}
         >
@@ -114,7 +150,7 @@ export function ExtensionManager(
         select
         label="Machine"
         size="small"
-        value={machineId}
+        value={machine?.id ?? ""}
         disabled={busy}
         onChange={(e) => {
           setMachineId(e.target.value);
@@ -123,45 +159,87 @@ export function ExtensionManager(
           setMessage("");
         }}
       >
+        <MenuItem value="" disabled>Select a Machine</MenuItem>
         {machines.map((m) => (
-          <MenuItem key={m.id} value={m.id}>{m.display_name || m.id}</MenuItem>
+          <MenuItem key={m.id} value={m.id}>
+            {m.display_name || m.id} · {m.status}
+          </MenuItem>
         ))}
       </TextField>
+      {!machine && (
+        <Alert severity="info">
+          Select a Machine to manage its extensions.
+        </Alert>
+      )}
+      {machine && machine.status !== "online" && (
+        <Alert severity="info">
+          {machine.display_name || machine.id} is{" "}
+          {machine.status}. Installation changes are available when it is
+          online.
+        </Alert>
+      )}
+      {inventoryUnavailable && (
+        <Alert severity="warning">
+          Installed extension status is unavailable. Reconnect this Machine
+          before changing extensions.
+        </Alert>
+      )}
       <TextField
         label="Find an extension"
         size="small"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
+      {catalogError && <Alert severity="warning">{catalogError}</Alert>}
       {error && <Alert severity="warning">{error}</Alert>}
       {message && <Alert severity="success">{message}</Alert>}
-      {loading
-        ? <CircularProgress size={24} />
+      {loading && (
+        <CircularProgress size={24} aria-label="Loading extension catalog" />
+      )}
+      {loading && !ids.length
+        ? null
+        : !ids.length && catalogError
+        ? null
         : !ids.length
         ? (
           <Typography color="text.secondary">
             No extensions are available in the catalog yet.
           </Typography>
         )
-        : ids.filter((id) => id.includes(search.toLowerCase())).map((id) => {
+        : !matchingIds.length
+        ? (
+          <Typography color="text.secondary">
+            No extensions match your search.
+          </Typography>
+        )
+        : matchingIds.map((id) => {
           const versions = releases.filter((p) =>
             p.plugin_id === id && p.release_state === "ready" &&
             p.artifact_digest
           ).sort((a, b) =>
             compareProviderVersions(b.plugin_version, a.plugin_version)
           );
-          const release = versions.find((p) =>
-            p.artifact_digest === selected[id]
-          ) ?? versions[0];
           const installed = installedPlugins.find((p) => p.plugin_id === id);
+          const selectionKey = JSON.stringify([machineId, id]);
+          const latestCompatible = machine
+            ? versions.find((candidate) =>
+              !genericPluginCompatibilityProblem(candidate, machine)
+            )
+            : undefined;
+          // Keep an installed or explicitly selected digest even when it leaves
+          // the catalog; refreshing must never silently select another release.
+          const selectedDigest = selected[selectionKey] ??
+            installed?.generation_digest ??
+            latestCompatible?.artifact_digest ?? versions[0]?.artifact_digest;
+          const release = versions.find((p) =>
+            p.artifact_digest === selectedDigest
+          );
           const current = installed?.state === "active" &&
-            installed.generation_digest === release?.artifact_digest;
-          const supported = release?.supported_platforms.some((p) =>
-            p.os === machine?.platform &&
-            p.architecture === machine?.architecture
-          ) &&
-            (machine?.plugin_contracts?.max_release_schema ?? 0) >=
-              (release?.compatibility_requirements?.release_schema ?? 3);
+            installed.generation_digest === selectedDigest;
+          const problem = machine && release
+            ? genericPluginCompatibilityProblem(release, machine)
+            : undefined;
+          const supported = Boolean(machine && release && !problem);
           return (
             <Stack
               key={id}
@@ -174,33 +252,59 @@ export function ExtensionManager(
               }}
             >
               <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography fontWeight={650} sx={{ flex: 1 }}>{id}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {installed
+                <Typography
+                  fontWeight={650}
+                  sx={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}
+                >
+                  {id}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ minWidth: 0, overflowWrap: "anywhere" }}
+                >
+                  {!machine
+                    ? "No Machine selected"
+                    : inventoryUnavailable
+                    ? "Installation status unavailable"
+                    : installed
                     ? `${installed.plugin_version} · ${installed.state}`
                     : "Not installed"}
                 </Typography>
               </Stack>
-              {release
+              {versions.length > 0 || selectedDigest
                 ? (
                   <TextField
                     select
                     size="small"
                     label="Available version"
-                    value={release.artifact_digest}
-                    disabled={busy}
+                    value={selectedDigest ?? ""}
+                    disabled={busy || loading}
                     onChange={(e) =>
                       setSelected((values) => ({
                         ...values,
-                        [id]: e.target.value,
+                        [selectionKey]: e.target.value,
                       }))}
                   >
+                    {selectedDigest && !release && (
+                      <MenuItem value={selectedDigest} disabled>
+                        {installed?.generation_digest === selectedDigest
+                          ? `${installed.plugin_version} · Current installation`
+                          : "Selected release unavailable"}
+                      </MenuItem>
+                    )}
                     {versions.map((v) => (
                       <MenuItem
                         key={v.artifact_digest}
                         value={v.artifact_digest!}
                       >
                         {v.plugin_version}
+                        {v.artifact_digest === installed?.generation_digest
+                          ? " · Current installation"
+                          : v.artifact_digest ===
+                              latestCompatible?.artifact_digest
+                          ? " · Latest compatible"
+                          : ""}
                       </MenuItem>
                     ))}
                   </TextField>
@@ -210,15 +314,31 @@ export function ExtensionManager(
                     A signed release is not available yet.
                   </Typography>
                 )}
-              {release && !supported && (
+              {selectedDigest && !release && (
                 <Typography variant="caption" color="text.secondary">
-                  Update Cowboy Machine to a compatible version to install this
-                  extension.
+                  This exact release is no longer available in the catalog.
+                  Select an available version to change the installation.
+                </Typography>
+              )}
+              {installed && latestCompatible &&
+                compareProviderVersions(
+                    latestCompatible.plugin_version,
+                    installed.plugin_version,
+                  ) > 0 &&
+                (
+                  <Typography variant="caption" color="text.secondary">
+                    Update available: {latestCompatible.plugin_version}
+                  </Typography>
+                )}
+              {problem && (
+                <Typography variant="caption" color="text.secondary">
+                  {problem.detail}
                 </Typography>
               )}
               <Stack direction="row" spacing={1}>
                 <Button
-                  disabled={busy || !release || !supported || current ||
+                  disabled={busy || loading || inventoryUnavailable ||
+                    !release || !supported || current ||
                     machine?.status !== "online"}
                   onClick={() => {
                     if (!release?.artifact_digest) return;
@@ -238,7 +358,7 @@ export function ExtensionManager(
                             body: JSON.stringify(request),
                           },
                         ),
-                      "Extension installed. Return to Extensions and refresh.",
+                      "Extension installed.",
                     );
                   }}
                 >
@@ -268,6 +388,13 @@ export function ExtensionManager(
                   </Button>
                 )}
               </Stack>
+              {machine && (
+                <PluginLifecycleHistory
+                  key={selectionKey}
+                  machine={machine.id}
+                  plugin={id}
+                />
+              )}
             </Stack>
           );
         })}

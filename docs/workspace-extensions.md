@@ -64,6 +64,12 @@ details in Cowboy and an explicit source link opens GitHub. Loading, empty,
 offline, missing session, unavailable dependency and access failures belong to
 the host renderer. Manage opens a common Machine selector and exact-version install, upgrade and
 uninstall controls inside the workbench. It starts on the workspace’s Machine.
+Management uses the common Plugin compatibility contract for platform, SDK and
+schema requirements. New installations start with the newest compatible release;
+existing installations and explicit choices retain their exact digest even when
+the Catalog changes. Version choices belong to their selected Machine. Catalog
+recovery is separate from installation failures, and the shared operation history
+provides read-only receipts without repeating an install or uninstall attempt.
 
 ## Acceptance
 
