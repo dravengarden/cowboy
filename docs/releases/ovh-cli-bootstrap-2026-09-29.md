@@ -169,3 +169,21 @@ The complete gate initially encountered Deno's executable permission check on
 the task's relocated Cargo cache: `target` is a symlink to the storage volume.
 The conformance recipe now grants run permission to the canonical executable
 path and invokes that same path, retaining the single-executable allowlist.
+
+The final integrated `just check-compact` gate and native diff review passed.
+Published revision `ca59271466d7ee6b68813672a6f283d337d5dbca` produced the clean
+Nix artifact `/nix/store/dgawpz267mbjmdr398ml7a6p177ljzxh-cowboy-controller-release`;
+its `bin/cowboy` SHA-256 is
+`400d8482870c2f10abd41be46fc3e41f3b56645909c0432739137d428a2a5f19`.
+Only that artifact's CLI was adopted for acceptance; the Controller release
+profile was not switched. Controller PID 603952 and OVH Machine PID 56151
+remained unchanged, and the Machine reported zero restarts.
+
+The exact immutable CLI, with no pre-list polling or artificial startup delay,
+loaded the retained session immediately after `initialize`, replayed its
+history, restored reasoning effort to high, and streamed
+`OVH_COWBOY_RELEASE_READY` with `end_turn`. The permanent Machine and Grok
+session remain retained. The CLI artifact has a GC root in the protected
+operator evidence directory; temporary test scripts were removed after the
+receipt was recorded. Product client authorization remains available for the
+remaining acceptance work and must be revoked when that work is finished.
