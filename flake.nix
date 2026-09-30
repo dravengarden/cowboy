@@ -3,11 +3,9 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Exact pinned Rust toolchain from rust-toolchain.toml. rustc 1.97.1 is
-  # measurably faster than the nixpkgs 1.95 default (clean check 19.8s -> 13.3s,
-  # clean debug build 30.3s -> 19.5s) while staying within the same compiler
-  # family; the overlay also makes the dev shell and every Nix build use the
-  # exact same rustc/cargo pair.
+  # Keep the dev shell and every release build on the exact rustc/cargo pair
+  # declared in rust-toolchain.toml. SDK minimum compiler versions are separate
+  # compatibility floors and need not rise with the project's build toolchain.
   inputs.rust-overlay = {
     url = "github:oxalica/rust-overlay";
     inputs.nixpkgs.follows = "nixpkgs";
@@ -26,6 +24,7 @@
         rustc = rustToolchain;
       };
       deno = import ./nix/deno.nix { inherit pkgs; };
+      cowboy-nodejs = import ./nix/nodejs.nix { inherit pkgs; };
       buildDenoViteApp = import ./nix/deno-vite-app.nix {
         inherit pkgs deno;
         lib = pkgs.lib;
@@ -227,6 +226,7 @@
       cowboy-web = buildDenoViteApp {
         pname = "cowboy";
         version = "0.1.0";
+        nodejs = cowboy-nodejs;
         src = pkgs.lib.cleanSource ./.;
         localPackages = [
           "components/app-shell"
@@ -236,7 +236,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-kcrOzWTndZQ4zh3tHN4YNi051g74zMoDLDOmtv67n6A=";
+        depsHash = "sha256-BDS3iPCz68bCcFfAXl5zxl82j/wKigavO/UzadFSxWg=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
@@ -264,7 +264,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-GM0Ril04yD0ANrdzEZ/fHhRaxVfRE1vpWxhmZwIKYrE=";
+        hash = "sha256-0Fv8MzQaHAKYbr+p7hRSsvCl8NKJmj0EJs3y8+1LhL4=";
         preBuild = staticCratesVendorPatch;
       };
 
@@ -684,6 +684,7 @@
         # (Cowboy's pinned Deno + node 24 for any node-shaped tool that
         # deno's npm interop can't shim).
         COWBOY_DENO_VERSION = deno.version;
+        COWBOY_NODE_VERSION = cowboy-nodejs.version;
         nativeBuildInputs = with pkgs; [
           rustToolchain
           sccache
@@ -698,7 +699,6 @@
           just
           jq
           go
-          nodejs_24
           imagemagick
           python3
           util-linux
@@ -710,7 +710,7 @@
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)
-        ] ++ [ deno ];
+        ] ++ [ deno cowboy-nodejs ];
 
         shellHook = ''
           echo "cowboy dev shell — rust + optional sccache + deno"

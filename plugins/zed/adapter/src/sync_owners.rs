@@ -473,7 +473,9 @@ async fn clear_fence(buffers: &Buffers, slot: &Slot, id: u64) {
 fn digest_bytes(hex: &str) -> Vec<u8> {
     // Called only on a validated closed Content, never arbitrary wire input.
     hex.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let nibble = |byte: u8| {
                 if byte.is_ascii_digit() {

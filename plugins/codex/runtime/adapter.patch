@@ -1,17 +1,16 @@
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
-index 0f79117..f33231c 100644
 --- a/src/CodexJsonRpcConnection.ts
 +++ b/src/CodexJsonRpcConnection.ts
-@@ -3,6 +3,7 @@ import type {MessageConnection} from "vscode-jsonrpc/node";
+@@ -3,6 +3,7 @@
  import type {ChildProcessWithoutNullStreams} from "node:child_process";
  import {spawn} from "node:child_process";
  import {createRequire} from "node:module";
 +import {isAbsolute} from "node:path";
- 
+
  import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
  import {logger} from "./Logger";
-@@ -14,12 +15,22 @@ export interface CodexConnection {
- 
+@@ -14,12 +15,22 @@
+
  export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv): CodexConnection {
      const spawnEnv = env ?? process.env;
 +    const configuration: unknown = JSON.parse(spawnEnv['COWBOY_PRIVATE_CODEX_ARGUMENTS'] ?? '[]');
@@ -24,7 +23,7 @@ index 0f79117..f33231c 100644
 +        throw new Error('Configured Codex requires an exact executable');
 +    }
 +    const nativeArguments = [...configuration, 'app-server'] as string[];
- 
+
      let codex: ChildProcessWithoutNullStreams;
      if (codexPath) {
          codex = process.platform === 'win32'
@@ -34,48 +33,39 @@ index 0f79117..f33231c 100644
      } else {
          const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
          codex = spawn(process.execPath, [bundledCodexPath, 'app-server'], {env: spawnEnv});
-@@ -32,6 +43,13 @@ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv
- 
+@@ -31,6 +42,13 @@
+     const writer = createJSONRPCWriter(codex.stdin);
+
      let connection = rpc.createMessageConnection(reader, writer);
- 
++
 +    // Closing the stream must reject pending requests, including resume. The
 +    // JSON-RPC library's close notification alone does not dispose requests.
 +    connection.onClose(() => {
 +        connection.dispose();
 +        if (codex.exitCode === null && codex.signalCode === null) codex.kill();
 +    });
-+
+
      connection.listen();
- 
-     // Terminate all current activities on process termination
+
 diff --git a/src/StdUtils.ts b/src/StdUtils.ts
-index 3d9e215..3dd6a4c 100644
 --- a/src/StdUtils.ts
 +++ b/src/StdUtils.ts
-@@ -28,40 +28,112 @@ export function createJSONRPCWriter(writable: Writable): MessageWriter {
+@@ -1,9 +1,7 @@
+-import {StringDecoder} from "node:string_decoder";
+ import {Readable, Writable} from "node:stream";
+ import {Emitter} from "vscode-jsonrpc/node";
+ import type {DataCallback, Disposable, Message, MessageReader, MessageWriter, PartialMessageInfo} from "vscode-jsonrpc/node";
+ import * as acp from "@agentclientprotocol/sdk";
+-import {logger} from "./Logger";
+
+ //TODO ask to include proper jsonrpc field and remove
+ export function createJSONRPCWriter(writable: Writable): MessageWriter {
+@@ -30,43 +28,112 @@
      };
  }
- 
+
 -//TODO ask to include proper jsonrpc field and remove
 -export function createJSONRPCReader(readable: Readable): MessageReader {
--    return {
--        listen(callback: DataCallback): Disposable {
--            let buf = '';
--            const onData = (chunk: Buffer) => {
--                buf += chunk.toString();
--                for (;;) {
--                    const i = buf.indexOf('\n');
--                    if (i < 0) break;
--                    const line = buf.slice(0, i).trim();
--                    buf = buf.slice(i + 1);
--                    if (!line) continue;
--                    try {
--                        const msg = JSON.parse(line);
--                        if (msg && typeof msg === 'object' && msg.jsonrpc === undefined) {
--                            msg.jsonrpc = '2.0';
--                        }
--                        callback(msg);
--                    } catch {/* ignore malformed lines; they're still logged above */}
 +// Legacy history loads can still contain a large inline-image frame. Resume
 +// excludes turns; this compatibility ceiling bounds a broken or hostile peer.
 +export const MAX_APP_SERVER_FRAME_BYTES = 256 * 1024 * 1024;
@@ -115,8 +105,30 @@ index 3d9e215..3dd6a4c 100644
 +        fail('App Server transport failed');
 +    }
 +    function onEnd() {
-+        if (frameBytes) fail('App Server closed with an incomplete JSON frame');
-+        else onClose();
++        if (frameBytes && !dispatchFrame('App Server closed with an incomplete JSON frame')) return;
++        onClose();
++    }
++    function dispatchFrame(errorMessage = 'App Server returned an invalid UTF-8 or JSON frame'): boolean {
++        const bytes = Buffer.concat(fragments, frameBytes);
++        fragments = [];
++        frameBytes = 0;
++        let message: Message;
++        try {
++            const line = decoder.decode(bytes).trim();
++            if (!line) return true;
++            const value: unknown = JSON.parse(line);
++            if (!value || typeof value !== 'object' || Array.isArray(value)) {
++                throw new Error('Expected a JSON-RPC object');
++            }
++            message = value as Message;
++            if (message.jsonrpc === undefined) message.jsonrpc = '2.0';
++        } catch {
++            // Parser messages can contain conversation data. Expose only the failure class.
++            fail(errorMessage);
++            return false;
++        }
++        callback?.(message);
++        return true;
 +    }
 +    function onData(chunk: Buffer) {
 +        // Search only the incoming bytes. Assemble and decode each complete
@@ -135,52 +147,51 @@ index 3d9e215..3dd6a4c 100644
 +                frameBytes += size;
 +            }
 +            if (newline < 0) return;
-+            const bytes = Buffer.concat(fragments, frameBytes);
-+            fragments = [];
-+            frameBytes = 0;
-+            let message: Message;
-+            try {
-+                const line = decoder.decode(bytes).trim();
-+                if (!line) {
-+                    offset = newline + 1;
-+                    continue;
-                 }
++            if (!dispatchFrame()) return;
++            offset = newline + 1;
++        }
++    }
+     return {
+-        listen(callback: DataCallback): Disposable {
+-            const onLine = (text: string) => {
+-                const line = text.trim();
+-                if (!line) return;
+-                let msg: unknown;
+-                try {
+-                    msg = JSON.parse(line);
+-                } catch (error) {
+-                    // A lost line can be a lost response, and its request then waits forever.
+-                    logger.error(`Dropped a Codex app-server line that is not JSON (${line.length} chars)`, error);
+-                    return;
+-                }
+-                if (msg && typeof msg === 'object' && (msg as {jsonrpc?: unknown}).jsonrpc === undefined) {
+-                    (msg as {jsonrpc: string}).jsonrpc = '2.0';
+-                }
+-                callback(msg as Message);
 -            };
--            readable.on('data', onData);
+-            const lines = new LineSplitter(onLine);
+-            const onData = (chunk: Buffer) => lines.push(chunk);
+-            const onEnd = () => lines.end();
++        listen(listener: DataCallback): Disposable {
++            if (closed || callback) throw new Error('App Server reader is not available');
++            callback = listener;
+             readable.on('data', onData);
++            readable.on('error', onError);
+             readable.on('end', onEnd);
 -            return {
 -                dispose() {
 -                    readable.off('data', onData);
-+                const value: unknown = JSON.parse(line);
-+                if (!value || typeof value !== 'object' || Array.isArray(value)) {
-+                    throw new Error('Expected a JSON-RPC object');
-                 }
-+                message = value as Message;
-+                if (message.jsonrpc === undefined) message.jsonrpc = '2.0';
-+            } catch {
-+                // Parser messages may contain conversation data. Report only
-+                // the failure class and close outstanding RPCs explicitly.
-+                fail('App Server returned an invalid UTF-8 or JSON frame');
-+                return;
-             }
--        },
+-                    readable.off('end', onEnd);
+-                }
+-            }
++            readable.on('close', onClose);
++            return {dispose: detach};
+         },
 -        onError: new Emitter<Error>().event,
 -        onClose: new Emitter<void>().event,
 -        onPartialMessage: new Emitter<PartialMessageInfo>().event,
 -        dispose() {}
-+            callback?.(message);
-+            offset = newline + 1;
-+        }
-     }
-+    return {
-+        listen(listener: DataCallback): Disposable {
-+            if (closed || callback) throw new Error('App Server reader is not available');
-+            callback = listener;
-+            readable.on('data', onData);
-+            readable.on('error', onError);
-+            readable.on('end', onEnd);
-+            readable.on('close', onClose);
-+            return {dispose: detach};
-+        },
+-    }
 +        onError: errors.event,
 +        onClose: closes.event,
 +        onPartialMessage: partials.event,
@@ -193,11 +204,51 @@ index 3d9e215..3dd6a4c 100644
 +        }
 +    };
  }
- 
+
  export function createJsonStream(readable: Readable, writable: Writable){
+@@ -74,41 +141,3 @@
+     const output = Readable.toWeb(readable) as ReadableStream<Uint8Array>;
+     return acp.ndJsonStream(input, output);
+ }
+-
+-/**
+- * Splits a byte stream into lines at `\n` only.
+- *
+- * JSON allows U+2028 and U+2029 unescaped in a string, and Codex writes them so. `readline` also ends a line at
+- * these characters, so it split a message and lost it. The splitter decodes UTF-8 across chunks and searches only
+- * the new text for a line break, so a long line costs linear time.
+- */
+-class LineSplitter {
+-    private readonly decoder = new StringDecoder("utf8");
+-    /** The parts of the line whose end has not arrived yet. */
+-    private parts: string[] = [];
+-
+-    constructor(private readonly onLine: (line: string) => void) {}
+-
+-    push(chunk: Buffer): void {
+-        const text = this.decoder.write(chunk);
+-        let start = 0;
+-        for (let end = text.indexOf("\n"); end >= 0; end = text.indexOf("\n", start)) {
+-            this.parts.push(text.slice(start, end));
+-            const line = this.parts.join("");
+-            this.parts = [];
+-            start = end + 1;
+-            this.onLine(line);
+-        }
+-        if (start < text.length) this.parts.push(text.slice(start));
+-    }
+-
+-    end(): void {
+-        const rest = this.decoder.end();
+-        if (rest.length > 0) this.parts.push(rest);
+-        if (this.parts.length > 0) {
+-            const line = this.parts.join("");
+-            this.parts = [];
+-            this.onLine(line);
+-        }
+-    }
+-}
 diff --git a/src/__tests__/CodexJsonRpcConnection.test.ts b/src/__tests__/CodexJsonRpcConnection.test.ts
-new file mode 100644
-index 0000000..a3e56c1
 --- /dev/null
 +++ b/src/__tests__/CodexJsonRpcConnection.test.ts
 @@ -0,0 +1,28 @@
@@ -230,10 +281,22 @@ index 0000000..a3e56c1
 +    child.stderr.destroy();
 +});
 diff --git a/src/__tests__/StdUtils.test.ts b/src/__tests__/StdUtils.test.ts
-new file mode 100644
-index 0000000..8c6b285
---- /dev/null
+--- a/src/__tests__/StdUtils.test.ts
 +++ b/src/__tests__/StdUtils.test.ts
+@@ -39,8 +39,8 @@
+         ]);
+     });
+
+-    it("reads several messages of one chunk and skips blank and malformed lines", async () => {
+-        const messages = await read([Buffer.from('{"id":1,"result":{}}\n\n{bad\n{"id":2,"result":{}}\r\n')]);
++    it("reads several messages of one chunk and skips blank lines", async () => {
++        const messages = await read([Buffer.from('{"id":1,"result":{}}\n\n{"id":2,"result":{}}\r\n')]);
+
+         expect(messages).toEqual([
+             {jsonrpc: "2.0", id: 1, result: {}},
+diff --git a/src/__tests__/CowboyStdUtils.test.ts b/src/__tests__/CowboyStdUtils.test.ts
+--- /dev/null
++++ b/src/__tests__/CowboyStdUtils.test.ts
 @@ -0,0 +1,100 @@
 +import {PassThrough} from 'node:stream';
 +import {describe, expect, it} from 'vitest';

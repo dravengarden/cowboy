@@ -1,11 +1,9 @@
 //! `SQLite` implementation of the stable [`super::Store`] API.
 
-use std::io::Read as _;
 use std::str::FromStr as _;
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
-use base64::Engine as _;
+use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Connection as _, SqlitePool};
 

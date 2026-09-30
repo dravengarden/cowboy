@@ -6,6 +6,7 @@ default:
 toolchain-check: worktree-deps-check
     required="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cowboy") | .rust_version')"; actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; test "$required" = "$actual" || { echo "rust-version $required does not match pinned rustc $actual" >&2; exit 1; }
     actual="$(deno --version | awk 'NR == 1 { print $2 }')"; test "$actual" = "$COWBOY_DENO_VERSION" || { echo "Deno $actual does not match pinned Deno $COWBOY_DENO_VERSION" >&2; exit 1; }
+    actual="$(node --version)"; test "$actual" = "v$COWBOY_NODE_VERSION" || { echo "Node $actual does not match pinned Node $COWBOY_NODE_VERSION" >&2; exit 1; }
 
 # Reject dependency views borrowed from another checkout. Deno's global cache
 # may be shared, but node_modules and file: package links belong to this tree.

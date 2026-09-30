@@ -29,6 +29,9 @@ ignore = true
 multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
+# WebAuthn 0.5 still requires base64 0.21; the current HTTP stack uses 0.23.
+# Permit only this exact legacy codec, keeping its advisory/license checks.
+skip = [{ name = "base64", version = "=0.21.7" }]
 # SQLx and ACP currently bridge independently versioned protocol ecosystems.
 # Their subtrees remain covered by advisory, license, and source checks.
 skip-tree = [

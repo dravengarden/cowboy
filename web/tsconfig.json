@@ -4,7 +4,6 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
-    "baseUrl": ".",
     "paths": {
       "@cowboy/app-shell": ["../components/app-shell/index.ts"],
       "@cowboy/provider-authoring": ["../components/provider-authoring/index.ts"],
@@ -13,11 +12,11 @@
       "@cowboy/state-store/scope": ["../components/state-store/owned-scope.ts"],
       "@cowboy/state-sync": ["../components/state-sync/index.ts"],
       "@cowboy/state-sync-idb": ["../components/state-sync-idb/index.ts"],
-      "@emotion/*": ["node_modules/@emotion/*"],
-      "@mui/*": ["node_modules/@mui/*"],
-      "react": ["node_modules/@types/react/index.d.ts"],
-      "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime.d.ts"],
-      "react-dom": ["node_modules/@types/react-dom/index.d.ts"]
+      "@emotion/*": ["./node_modules/@emotion/*"],
+      "@mui/*": ["./node_modules/@mui/*"],
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"]
     },
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",

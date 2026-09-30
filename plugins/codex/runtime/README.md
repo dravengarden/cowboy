@@ -28,6 +28,26 @@ The shared runtime component remains unchanged. This Provider owns the changes:
   client, which launches the exact bound `CODEX_PATH` directly. No intermediary
   executable owns or rewrites the native protocol.
 
+## Dependency audit (2026-09-30)
+
+The candidate pins ACP `2.0.1` at
+`7a8e00fe46b299264f5ebe9f250288636f1485cc` and native Codex `0.159.2`.
+Upstream ACP 2 introduces the AIR tool-call contract and exact diff patches;
+its Codex range includes this native patch release. Source type checks, the
+complete upstream tests and Cowboy worker/resume checks remain release gates.
+
+Upstream now has a linear UTF-8 line splitter. The owned patch retains bounded
+frames, strict UTF-8 validation, redacted parse failures and explicit disposal
+of pending requests on stream closure. It preserves upstream's valid final
+JSON frame without a trailing newline. Malformed frames remain fatal instead
+of being skipped: dropping a response can otherwise leave a resume pending.
+Upstream Unicode, final-frame and linear-time tests remain; separate Cowboy
+tests cover malformed/oversized/incomplete frames and native process cleanup.
+
+Authoritative sources:
+[ACP 2.0.1](https://github.com/agentclientprotocol/codex-acp/releases/tag/v2.0.1),
+[Codex 0.159.2](https://github.com/openai/codex/releases/tag/rust-v0.159.2).
+
 ## Dependency audit (2026-09-25)
 
 The pin moves to ACP `1.13.1` at

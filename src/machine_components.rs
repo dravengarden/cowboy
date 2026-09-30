@@ -436,7 +436,6 @@ fn set_executable(path: &Path) -> std::io::Result<()> {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use sha2::{Digest as _, Sha256};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use super::*;

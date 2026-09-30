@@ -5022,6 +5022,10 @@ async fn product_session_and_user_from_store_cookie(
     user.disabled_at_ms.is_none().then_some((session, user))
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
 async fn ensure_product_session_fresh(
     store: &Store,
     session: &crate::store::ProductUserSession,
@@ -7066,6 +7070,10 @@ async fn api_auth_me(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
 async fn require_product_user(
     state: &ProductAuthState,
     headers: &HeaderMap,
@@ -7075,6 +7083,10 @@ async fn require_product_user(
         .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
 async fn require_fresh_product_user(
     state: &ProductAuthState,
     headers: &HeaderMap,
@@ -7103,6 +7115,10 @@ fn product_session_has_recent_step_up(
         && verified_at.saturating_add(PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS) > now_ms
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
 async fn require_recent_product_user(
     state: &ProductAuthState,
     headers: &HeaderMap,
@@ -7261,6 +7277,10 @@ async fn api_auth_passkey_register_complete(
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
 async fn persist_product_passkey_registration(
     store: &Store,
     user: &crate::store::ProductUser,
@@ -7415,6 +7435,10 @@ struct ProductPasskeyAssertionResult {
     set_cookie: Option<String>,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejection is an owned Axum response returned directly by its handler"
+)]
 async fn persist_product_passkey_assertion(
     state: &ProductAuthState,
     headers: &HeaderMap,

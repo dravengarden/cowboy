@@ -1,10 +1,10 @@
 # Workspace extensions — 2026-09-29
 
-Status: implementation, full product gates and the Web/Controller/Machine
-component releases are complete. **GitHub 0.1.0 is built, signed and verified,
-but publication and installation remain pending.** Hawk rejected the required
-cold-reader host refresh because four unrelated units were already failed.
-No failed state was cleared and the host configuration was not switched.
+Status updated 2026-09-30: implementation, full product gates and the
+Web/Controller/Machine releases are complete. **GitHub 0.1.0 is published and
+ready in the Catalog.** Installation remains a separate Machine operation.
+The original rejected host refresh and its evidence below are retained as
+history; the publication follow-up at the end records the accepted actual floor.
 
 The [design](../workspace-extensions.md) describes the signed data-only
 `workspace_extension` capability, exact Plugin dependencies, borrowed CLI
@@ -177,3 +177,27 @@ No physical iPhone, iOS release, installed production GitHub extension, native
 Zed marketplace ABI, new telemetry policy or general post-effect rollback
 acceptance is claimed. GitHub API reads are confined to repository-scoped GET;
 issue creation, PR review/merge and workflow writes are outside payload 1.
+
+## Publication follow-up — 2026-09-30
+
+The actual successful Hawk host transaction now runs Columbus
+`593125efec3824880bff6afcaae1405a95b2e99d` at
+`/nix/store/i6dc0pzcmdgm3d1h8pcs1alj2bq6ls6m-nixos-system-hawk-26.05.20260731.5b4f72e`.
+Its cold Controller and Machine bootstrap are the `a225d618` outputs listed
+above. Current Controller `14c77e88` includes the Catalog null-digest repair.
+Fresh checks bind the actual active, next-recovery and cold roles: all 174
+Controller journal checks, 84 Machine journal checks and 16 complete Catalog
+reads pass. This acceptance supersedes the prospective-only reader result;
+it does not reinterpret the earlier rejected host transaction.
+
+`just plugin-publish github` published the unchanged signed 0.1.0 bytes to
+both `/var/lib/cowboy/plugins/catalog` and `/var/lib/cowboy/plugin-catalog`.
+The existing local Operator refreshed the Catalog without rotating delegation.
+The exact composite digest above is `ready`, and downloading the package
+through the public HTTPS authority with explicit loopback origin routing
+reproduces its package SHA-256. No installation was submitted.
+
+Create-only evidence is under `/home/draven/tmp/cowboy-upgrades-20260930`:
+`github-controller-readers.json`, `github-machine-readers.json`,
+`github-host-floor-binding.json`, `github-catalog-readers.json`,
+`github-public-artifacts.json` and `github-catalog-visible.json`.

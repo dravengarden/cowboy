@@ -135,6 +135,18 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.31.0 records provider-runtime 1.1.8 and Node 24.21.0 LTS.
+The six Agent Plugins take independent patch versions for Claude Code 2.1.285,
+Claude Agent ACP 0.84.0, Codex 0.159.2, Codex ACP 2.0.1, Gemini CLI 0.62.0,
+and Grok 1.0.44. The exact DeepSeek gateway revisions and authentication
+contracts remain unchanged. The Codex source patch retains bounded strict
+UTF-8 framing, configured executable arguments and pending-request cleanup
+while accepting the upstream valid unterminated final frame. GitHub keeps its
+source, version and 3.30.0 component-release pin. Zed advances independently to
+1.20.2 for the Rust lint-compatible fixed-size chunk iterator, retaining its
+3.30.0 component pin and private upstream revision. Publication and Machine
+upgrade acceptance are recorded separately from this source matrix.
+
 Scoped release 3.29.0 records provider-runtime 1.1.7. Both DeepSeek gateways
 advance to Columbus `27352e34`: `codex-deepseek` 0.3.0 serves `deepseek-flash`
 (DeepSeek-V4.1-Flash, with image input), its retained `deepseek-v4-flash` alias
