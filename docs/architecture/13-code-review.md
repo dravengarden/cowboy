@@ -135,6 +135,15 @@ TTL, and bounded 48 MiB / 12-entry cache; generation is capped at 16 MiB. A
 missing cursor snapshot returns `410 Gone`, prompting a clean restart instead
 of partial data.
 
+Git paths are always literal file identities, including brackets, wildcards,
+and pathspec-looking names. Working, staged, branch-comparison, and commit
+diffs must never include another file through pattern expansion. Before the
+first commit, combined changes compare the working tree with Git's empty tree
+for the repository's object format; staged changes show only the index, and
+unstaged changes compare against that index. Review creates no commit, tree
+object, or index entry. Added/removed totals count hunk content, including
+source lines beginning with `++` or `--`, while excluding patch metadata.
+
 Source windows end on a complete UTF-8 and preferably line boundary. The
 revision covers the worktree-relative path plus filesystem identity, size,
 mtime, and ctime; continuations therefore reject replacement and in-place

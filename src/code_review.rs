@@ -22,6 +22,8 @@ pub(crate) const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
 
 #[cfg(test)]
+mod diff_tests;
+#[cfg(test)]
 mod file_page_tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -880,10 +882,24 @@ impl CodeProvider for LocalCodeProvider {
         }
         match (comparison, scope) {
             (Some(comparison), _) => args.push(self.comparison_base(comparison)?),
-            (None, DiffScope::Combined) => args.push("HEAD".to_owned()),
+            (None, DiffScope::Combined) => {
+                let base = if let Some(head) = self.head() {
+                    head
+                } else {
+                    // An unborn worktree is compared with the empty tree. Ask
+                    // Git for its hash so SHA-256 repositories work too. This
+                    // computes the object ID without writing an object/index.
+                    let empty_tree =
+                        git_output(&self.root, &["hash-object", "-t", "tree", "--stdin"], 128)?;
+                    let oid = String::from_utf8(empty_tree)
+                        .map_err(|_| "invalid empty tree oid".to_owned())?;
+                    safe_oid(oid.trim())?.to_owned()
+                };
+                args.push(base);
+            }
             (None, DiffScope::Staged) => {
+                // With no explicit tree, Git handles the unborn HEAD case.
                 args.push("--cached".to_owned());
-                args.push("HEAD".to_owned());
             }
             (None, DiffScope::Unstaged) => {}
         }
@@ -1298,6 +1314,9 @@ fn git_path_is_tracked(root: &Path, path: &str) -> bool {
 
 fn git_output(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, String> {
     let mut child = Command::new("git")
+        // Review paths identify exact files, including names such as [id].tsx
+        // or :(glob)*.txt. They are never Git pathspec patterns or magic.
+        .arg("--literal-pathspecs")
         .args(args)
         .current_dir(root)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -1359,10 +1378,15 @@ fn untracked_diff(root: &Path, relative: &Path, limit: usize) -> Result<Vec<u8>,
 fn count_diff_lines(diff: &str) -> (usize, usize) {
     let mut added = 0;
     let mut removed = 0;
+    let mut in_hunk = false;
     for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
+        if line.starts_with("diff ") {
+            in_hunk = false;
+        } else if line.starts_with("@@") {
+            in_hunk = true;
+        } else if in_hunk && line.starts_with('+') {
             added += 1;
-        } else if line.starts_with('-') && !line.starts_with("---") {
+        } else if in_hunk && line.starts_with('-') {
             removed += 1;
         }
     }
