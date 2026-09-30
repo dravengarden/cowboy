@@ -32,12 +32,19 @@ use std::collections::BTreeMap;
 pub(super) struct CatalogRelease {
     pub plugin_id: String,
     pub plugin_version: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_digest")]
     pub artifact_digest: String,
     #[serde(default)]
     pub release_state: String,
     #[serde(default)]
     pub supported_platforms: Vec<SupportedPlatform>,
+}
+
+// Unbound Catalog entries serialize their optional digest as null. Keep them
+// in the inventory; latest_ready must exclude them without blocking other
+// Plugins' signed, ready releases.
+fn nullable_digest<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Deserialize)]

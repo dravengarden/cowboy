@@ -42,6 +42,42 @@ fn hawk() -> MachineTarget {
 }
 
 #[test]
+fn nullable_catalog_digests_do_not_block_ready_releases() {
+    let mut entries = Vec::new();
+    for digest in [
+        None,
+        Some(serde_json::Value::Null),
+        Some(serde_json::json!("")),
+    ] {
+        for state in ["unbound", "ready"] {
+            let mut entry = serde_json::json!({
+                "plugin_id": "unbound-plugin", "plugin_version": "99.0.0",
+                "release_state": state,
+                "supported_platforms": [{"os": "linux", "architecture": "x86_64"}]
+            });
+            if let Some(value) = &digest {
+                entry["artifact_digest"] = value.clone();
+            }
+            entries.push(entry);
+        }
+    }
+    entries.push(serde_json::json!({
+        "plugin_id": "grok", "plugin_version": "3.1.25",
+        "artifact_digest": "sha256:signed-release", "release_state": "ready",
+        "supported_platforms": [{"os": "linux", "architecture": "x86_64"}]
+    }));
+    let releases: Vec<CatalogRelease> = super::decode(serde_json::json!(entries), "the Catalog")
+        .expect("Catalog permits unbound entries with null or absent digests");
+    let latest = latest_ready(&releases, "linux", "x86_64");
+    assert_eq!(latest.len(), 1);
+    assert_eq!(latest["grok"].artifact_digest, "sha256:signed-release");
+    let malformed = serde_json::json!([{
+        "plugin_id": "grok", "plugin_version": "3.1.25", "artifact_digest": 42
+    }]);
+    assert!(super::decode::<CatalogRelease>(malformed, "the Catalog").is_err());
+}
+
+#[test]
 fn versions_compare_ordinally_and_survive_nonsense() {
     assert_eq!(compare_versions("3.1.9", "3.1.10"), Ordering::Less);
     assert_eq!(compare_versions("3.2.0", "3.1.99"), Ordering::Greater);
