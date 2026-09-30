@@ -240,6 +240,32 @@ The generated Ed25519 private key stays mode 0600 under the
 Machine state root. Remote HTTP is rejected; loopback HTTP exists only for
 hermetic tests.
 
+## Preloading public runtime artifacts
+
+Slow artifact delivery must not extend an installation's execution authority.
+An operator may copy the exact public runtime blobs from an approved signed
+release to the target, then import them through the native Machine CLI:
+
+```bash
+cowboy-machine --cache-runtime-artifact /path/to/public-runtime.tar.gz \
+  --artifact-sha256 sha256:<runtime-artifact-digest> \
+  --state-dir /absolute/default/Service/state
+```
+
+Use the runtime component's `artifact_digest`, not the Plugin package or release
+digest. The import checks bounded regular-file input and its SHA-256, then
+writes only a private content-addressed `artifact-cache/`. It neither executes
+the blob nor opens identity, credentials, installation journals, or a Controller
+connection. Importing bytes is not Plugin admission or proof of a trusted release.
+
+The ordinary Controller-authorized installation still verifies the signed
+release and exact artifact digest, probes the runtime, honors its original
+lease, and writes the normal receipts. A cache hit avoids HTTP download; a
+miss follows the existing HTTPS path. Corrupt or symlinked cache input fails
+closed. No active generation or credential pointer is populated by preloading.
+Remove unused cached blobs separately when their public bytes are no longer
+needed; they are reproducible artifacts, not Machine recovery identity.
+
 ## Provider usage spool status
 
 The Machine binary has a controller-independent, read-only status command for

@@ -574,13 +574,15 @@ async fn commit_reconciled_receipt(
             ensure!(
                 saved.intent == before.intent
                     && saved.machine_receipt.as_ref() == Some(receipt)
-                    && matches!(
+                    && (matches!(
                         (&receipt.outcome, saved.phase),
                         (
                             InstallOutcome::Applied { .. },
                             InstallPhase::MachineAcknowledged
                         ) | (InstallOutcome::Rejected { .. }, InstallPhase::Aborted)
-                    ),
+                    ) || (receipt.outcome.retryable_staging_failure()
+                        && saved.phase == InstallPhase::NeedsAttention
+                        && saved.attention_from == Some(InstallPhase::Installing))),
                 "installation receipt reconciliation was not committed"
             );
             Ok(saved)
@@ -783,6 +785,27 @@ pub(super) async fn confirmed_reconcile_install(
                 result: InstallLookup::Found { receipt },
                 ..
             }) if receipt.outcome.retryable_staging_failure() => {
+                if before.machine_receipt.as_ref() != Some(receipt.as_ref()) {
+                    // The original response may have timed out before this
+                    // terminal Staging receipt existed. Persist exact evidence
+                    // under the existing snapshot CAS, but keep the fence.
+                    // A new request must authorize the changed snapshot; never
+                    // silently renew or retarget this reconciliation grant.
+                    let recorded = match commit_reconciled_receipt(store, &before, &receipt).await {
+                        Ok(recorded) => recorded,
+                        Err(_) => return StatusCode::CONFLICT.into_response(),
+                    };
+                    return (
+                        StatusCode::ACCEPTED,
+                        Json(serde_json::json!({
+                            "operation_id": recorded.intent.operation_id,
+                            "receipt_recorded": true,
+                            "requires_reconciliation": true,
+                            "installation_replayed": false
+                        })),
+                    )
+                        .into_response();
+                }
                 let query = step.target_query();
                 let target = match state
                     .machine_control

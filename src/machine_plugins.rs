@@ -7,6 +7,7 @@
 
 #![warn(clippy::pedantic)]
 
+mod artifact_cache;
 mod auth_refresh;
 pub(crate) mod auth_watch;
 #[cfg(test)]
@@ -491,7 +492,12 @@ impl MachinePluginStore {
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
 
         let runtime = guard
-            .bounded(stage_provider_runtime(&content, runtime_artifacts, guard))
+            .bounded(stage_provider_runtime(
+                &content,
+                runtime_artifacts,
+                guard,
+                self.root.parent(),
+            ))
             .await?;
         let launch_command = runtime
             .commands
@@ -579,7 +585,12 @@ impl MachinePluginStore {
         )?;
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
         guard
-            .bounded(stage_provider_runtime(&content, &runtime_artifacts, guard))
+            .bounded(stage_provider_runtime(
+                &content,
+                &runtime_artifacts,
+                guard,
+                self.root.parent(),
+            ))
             .await?;
         if matches!(package.payload, PluginPayload::CodeIntelligence(_))
             && let Some(plan) =
@@ -3359,6 +3370,7 @@ async fn stage_provider_runtime(
     content: &Path,
     artifacts: &PlatformRuntimeArtifacts,
     guard: &InstallGuard<'_>,
+    cache_state: Option<&Path>,
 ) -> Result<InstalledRuntimeMetadata> {
     guard.check()?;
     let active = content.join("runtime");
@@ -3384,7 +3396,8 @@ async fn stage_provider_runtime(
         let mut commands = BTreeMap::new();
         for artifact in &artifacts.components {
             guard.check()?;
-            let staged = stage_runtime_component(&client, &temporary, artifact, guard).await?;
+            let staged =
+                stage_runtime_component(&client, &temporary, artifact, guard, cache_state).await?;
             let executable = staged
                 .executable
                 .strip_prefix(&temporary)
@@ -3600,6 +3613,7 @@ async fn stage_runtime_component(
     runtime_root: &Path,
     artifact: &ReleasedPrivateComponent,
     guard: &InstallGuard<'_>,
+    cache_state: Option<&Path>,
 ) -> Result<StagedRuntimeComponent> {
     guard.check()?;
     let url = reqwest::Url::parse(&artifact.artifact_url)?;
@@ -3608,35 +3622,44 @@ async fn stage_runtime_component(
         url.scheme() == "https" || (url.scheme() == "http" && loopback),
         "Provider runtime artifact must use HTTPS"
     );
-    let response = client.get(url).send().await?.error_for_status()?;
-    if let Some(length) = response.content_length() {
-        ensure!(
-            length <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64,
-            "Provider runtime artifact exceeds 1 GiB"
-        );
-    }
-    let capacity = usize::try_from(
-        response
-            .content_length()
-            .unwrap_or_default()
-            .min(MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64),
-    )
-    .context("Provider runtime artifact capacity does not fit this platform")?;
-    let mut bytes = Vec::with_capacity(capacity);
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        guard.check()?;
-        let chunk = chunk.context("downloading Provider runtime artifact")?;
-        let next_size = bytes
-            .len()
-            .checked_add(chunk.len())
-            .context("Provider runtime artifact size overflow")?;
-        ensure!(
-            next_size <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES,
-            "Provider runtime artifact exceeds 1 GiB"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
+    let cached = cache_state
+        .map(|state| artifact_cache::read(state, &artifact.artifact_digest))
+        .transpose()?
+        .flatten();
+    let bytes = if let Some(bytes) = cached {
+        bytes
+    } else {
+        let response = client.get(url).send().await?.error_for_status()?;
+        if let Some(length) = response.content_length() {
+            ensure!(
+                length <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64,
+                "Provider runtime artifact exceeds 1 GiB"
+            );
+        }
+        let capacity = usize::try_from(
+            response
+                .content_length()
+                .unwrap_or_default()
+                .min(MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64),
+        )
+        .context("Provider runtime artifact capacity does not fit this platform")?;
+        let mut bytes = Vec::with_capacity(capacity);
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            guard.check()?;
+            let chunk = chunk.context("downloading Provider runtime artifact")?;
+            let next_size = bytes
+                .len()
+                .checked_add(chunk.len())
+                .context("Provider runtime artifact size overflow")?;
+            ensure!(
+                next_size <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES,
+                "Provider runtime artifact exceeds 1 GiB"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        bytes
+    };
     let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
     ensure!(
         digest == artifact.artifact_digest.to_ascii_lowercase(),
@@ -5812,7 +5835,7 @@ mod tests {
             }],
         };
 
-        let error = stage_provider_runtime(&root, &artifacts, &InstallGuard::Legacy)
+        let error = stage_provider_runtime(&root, &artifacts, &InstallGuard::Legacy, None)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("must use HTTPS"));
