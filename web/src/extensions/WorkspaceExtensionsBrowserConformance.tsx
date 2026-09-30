@@ -9,12 +9,12 @@ import WorkspaceExtensions from "./WorkspaceExtensions.tsx";
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
-async function until(predicate: () => boolean) {
+async function until(description: string, predicate: () => boolean) {
   for (let n = 0; n < 400; n++) {
     if (predicate()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Extension navigation timed out");
+  throw new Error(`Extension navigation timed out: ${description}`);
 }
 const response = (value: unknown) =>
   new Response(JSON.stringify(value), {
@@ -109,16 +109,23 @@ export async function runWorkspaceExtensionsBrowserConformance(): Promise<
       button.textContent?.includes(label)
     );
     check(target, `missing ${label}`);
+    check(
+      !(target instanceof HTMLButtonElement && target.disabled) &&
+        target.getAttribute("aria-disabled") !== "true",
+      `disabled ${label}`,
+    );
     target.click();
   }
   try {
     render("first");
-    await until(() =>
-      container.textContent?.includes("Fixture resources") ?? false
+    await until(
+      "first workspace extensions",
+      () => container.textContent?.includes("Fixture resources") ?? false,
     );
     click("Fixture resources");
-    await until(() =>
-      container.textContent?.includes("First workspace") ?? false
+    await until(
+      "first workspace items",
+      () => container.textContent?.includes("First workspace") ?? false,
     );
     check(
       requests.some((r) =>
@@ -128,7 +135,10 @@ export async function runWorkspaceExtensionsBrowserConformance(): Promise<
       "generic renderer must bind the exact extension",
     );
     click("First workspace");
-    await until(() => container.textContent?.includes("Item detail") ?? false);
+    await until(
+      "resource detail",
+      () => container.textContent?.includes("Item detail") ?? false,
+    );
     const link = container.querySelector<HTMLAnchorElement>(
       'a[aria-label="Open original resource"]',
     );
@@ -137,16 +147,23 @@ export async function runWorkspaceExtensionsBrowserConformance(): Promise<
       "detail source link must be explicit",
     );
     click("Back to list");
-    await until(() => !!container.querySelector('[aria-label="Next page"]'));
+    await until(
+      "next page available after returning to the list",
+      () =>
+        container.querySelector<HTMLButtonElement>('[aria-label="Next page"]')
+          ?.disabled === false,
+    );
     click("Next page");
-    await until(() => pending.length > 0);
+    await until("pending page request", () => pending.length > 0);
     render("second");
-    await until(() =>
-      container.textContent?.includes("Fixture resources") ?? false
+    await until(
+      "second workspace extensions",
+      () => container.textContent?.includes("Fixture resources") ?? false,
     );
     click("Fixture resources");
-    await until(() =>
-      container.textContent?.includes("Second workspace") ?? false
+    await until(
+      "second workspace items",
+      () => container.textContent?.includes("Second workspace") ?? false,
     );
     pending.forEach((resolve) =>
       resolve(

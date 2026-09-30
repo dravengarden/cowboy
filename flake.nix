@@ -694,6 +694,7 @@
           brotli
           curl
           git
+          nix
           gnutar
           gzip
           just

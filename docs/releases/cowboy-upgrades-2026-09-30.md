@@ -95,3 +95,18 @@ Operator and preserve its saved operation identities and active-session fences.
 The Firefox regression run passes 16 suites / 131 checks across workbench,
 Plugin management, Review and IndexedDB. Full quality, signed runtime and
 production rollout receipts are recorded after their completion below.
+
+`just check-compact` passes on source `3b73dddb`: formatting, lint, source and
+dependency policy, feature slices, native-shell contracts, Provider isolation,
+composition and site gates, 1,654 core Rust tests, 392 standalone Machine tests,
+27 core adapter tests, 126 private Zed adapter tests, 1,948 frontend tests,
+17 disposable PostgreSQL checks and production builds. Existing explicitly
+ignored integration cases remain separate conformance gates.
+
+Rechecking the browser suites with Node 24.21 exposed a timing-dependent fixture
+click after returning from resource detail. It now waits for the next-page
+button to become enabled and asserts that every clicked control is enabled;
+all original resource and stale-response assertions remain. The new fixture
+passes the actual Firefox gate. This is a test synchronization correction,
+not a change to the product's loading or request behavior. The pinned shell
+also explicitly includes Nix, required by the private gateway builder.
