@@ -5398,7 +5398,7 @@ mod config_preference_tests {
     use super::*;
 
     #[test]
-    fn new_codex_sessions_start_with_sol_6_medium_preferences() {
+    fn new_codex_sessions_start_with_sol_6_1_medium_preferences() {
         let hub = Hub::new();
         hub.create_local_session(
             "codex-session".to_owned(),
@@ -5412,7 +5412,7 @@ mod config_preference_tests {
         assert_eq!(
             hub.config_preferences("codex-session"),
             Some(serde_json::json!({
-                "model": "gpt-6-sol",
+                "model": "gpt-6.1-sol",
                 "reasoning_effort": "medium",
             }))
         );
