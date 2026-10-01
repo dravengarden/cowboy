@@ -57,14 +57,18 @@ function clock() {
     },
   };
 }
-function authFixture() {
+function authFixture(
+  executor?: () => Promise<
+    ReturnType<typeof managementEntryFixture> | undefined
+  >,
+) {
   const http = transport(), time = clock();
   let closes = 0, refreshes = 0;
   const copy = deferredFixture<boolean>();
   const copiedValues: string[] = [];
   const owner = createProviderAuthenticationOwner({
     fetch: http.fetch,
-    executor: (id) => managementEntryFixture(id),
+    executor: executor ?? ((id) => managementEntryFixture(id)),
     refresh: () => {
       refreshes++;
       return Promise.resolve();
@@ -133,6 +137,45 @@ function challenge(provider = "example", request = "request-a") {
 function events(events: unknown[], request_id = "request-a") {
   return { request_id, events };
 }
+
+Deno.test("sign-in waits for refreshed executor inventory and admits only one start", async () => {
+  const selection = deferredFixture<
+    ReturnType<typeof managementEntryFixture>
+  >();
+  const f = authFixture(() => selection.promise);
+  try {
+    f.open();
+    const start = f.owner.start("key");
+    await f.owner.start("key");
+    assertEquals(f.calls.length, 0);
+    assertEquals(f.owner.snapshot().busy, "start");
+    selection.resolve(managementEntryFixture("example"));
+    await settle();
+    assertEquals(f.calls.length, 1);
+    f.reply(0, { request_id: "request-a", expires_at_ms: 1_999_999_999_999 });
+    await start;
+    assertEquals(f.calls.length, 2);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+Deno.test("closing during executor refresh prevents a late sign-in mutation", async () => {
+  const selection = deferredFixture<
+    ReturnType<typeof managementEntryFixture>
+  >();
+  const f = authFixture(() => selection.promise);
+  try {
+    f.open();
+    const start = f.owner.start("key");
+    f.owner.dismiss();
+    selection.resolve(managementEntryFixture("example"));
+    await start;
+    assertEquals(f.calls.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
 
 Deno.test("accepted authorization input retains visible submission progress until provider completion", async () => {
   const f = authFixture();
