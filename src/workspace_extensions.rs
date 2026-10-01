@@ -2,7 +2,7 @@
 
 #[cfg(feature = "machine-host")]
 use cowboy_plugin_sdk::WorkspaceExtensionContract;
-use cowboy_plugin_sdk::WorkspaceResourceFilter;
+use cowboy_plugin_sdk::{WorkspaceResourceFilter, WorkspaceReviewKind};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "machine-host")]
@@ -29,6 +29,8 @@ pub(crate) enum Operation {
         filter: Option<String>,
         #[serde(default = "first_page")]
         page: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review: Option<Box<ReviewRead>>,
     },
 }
 
@@ -72,6 +74,7 @@ impl Extension {
                     id: v.id.clone(),
                     label: v.label.clone(),
                     filters: v.filters.clone(),
+                    review: v.review,
                 })
                 .collect(),
             available,
@@ -85,6 +88,82 @@ pub(crate) struct View {
     pub id: String,
     pub label: String,
     pub filters: Vec<WorkspaceResourceFilter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<WorkspaceReviewKind>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReviewRead {
+    pub repository_id: Option<String>,
+    pub revision: Option<String>,
+}
+
+/// Durable selection only: never a credential, installation grant or cached body.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReviewBinding {
+    pub plugin_id: String,
+    pub view: String,
+    pub host: String,
+    pub owner: String,
+    pub repository: String,
+    pub repository_id: String,
+    pub number: String,
+}
+
+#[cfg(feature = "full")]
+impl ReviewBinding {
+    pub(crate) fn valid(&self) -> bool {
+        let segment = |s: &str, max: usize| {
+            !s.is_empty()
+                && s.len() <= max
+                && s != "."
+                && s != ".."
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        };
+        let numeric =
+            |s: &str| !s.is_empty() && s.len() <= 24 && s.bytes().all(|b| b.is_ascii_digit());
+        segment(&self.plugin_id, 128)
+            && segment(&self.view, 128)
+            && segment(&self.host, 253)
+            && self.host.contains('.')
+            && segment(&self.owner, 100)
+            && segment(&self.repository, 100)
+            && numeric(&self.repository_id)
+            && numeric(&self.number)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReviewFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub patch: Option<String>,
+    pub limited: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReviewPage {
+    pub repository_id: String,
+    pub number: String,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub head: String,
+    pub base: String,
+    pub revision: String,
+    pub total_files: u64,
+    pub files: Vec<ReviewFile>,
+    pub next_page: Option<u32>,
+    pub limited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +210,9 @@ pub(crate) enum Response {
     Detail {
         item: Resource,
     },
+    Review {
+        review: ReviewPage,
+    },
     Unavailable {
         code: Failure,
     },
@@ -147,4 +229,6 @@ pub(crate) enum Failure {
     RequestFailed,
     Busy,
     InvalidRequest,
+    ReviewChanged,
+    ReviewUnavailable,
 }

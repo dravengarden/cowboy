@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cowboy.stormbird.xyz/schemas/workspace-extension-v1.json",
+  "$id": "https://cowboy.stormbird.xyz/schemas/workspace-extension-v2.json",
   "title": "Cowboy workspace extension",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,10 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "id": {
       "$ref": "#/$defs/id"
@@ -239,8 +242,37 @@
         },
         "fields": {
           "$ref": "#/$defs/fields"
+        },
+        "review": {
+          "enum": [
+            "pull_request"
+          ]
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "views": {
+            "items": {
+              "not": {
+                "required": [
+                  "review"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

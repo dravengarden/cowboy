@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::workspace_extensions::{
-    Failure, Identity, Operation, Request, Response as ExtensionResponse,
+    Failure, Identity, Operation, Request, Response as ExtensionResponse, ReviewRead,
 };
 
 #[derive(Deserialize)]
@@ -16,6 +16,9 @@ pub(super) struct ResourceQuery {
     item: Option<String>,
     filter: Option<String>,
     page: Option<u32>,
+    review: Option<bool>,
+    repository_id: Option<String>,
+    revision: Option<String>,
 }
 
 async fn read(
@@ -91,6 +94,8 @@ pub(super) async fn resources(
         .any(|v| v.len() > 256)
             || query.item.as_ref().is_some_and(|v| v.len() > 24)
             || query.filter.as_ref().is_some_and(|v| v.len() > 64)
+            || query.repository_id.as_ref().is_some_and(|v| v.len() > 24)
+            || query.revision.as_ref().is_some_and(|v| v.len() > 256)
         {
             return response(ExtensionResponse::Unavailable {
                 code: Failure::InvalidRequest,
@@ -111,6 +116,13 @@ pub(super) async fn resources(
                     item: query.item,
                     filter: query.filter,
                     page: query.page.unwrap_or(1),
+                    review: query
+                        .review
+                        .unwrap_or(false)
+                        .then_some(Box::new(ReviewRead {
+                            repository_id: query.repository_id,
+                            revision: query.revision,
+                        })),
                 },
             )
             .await,

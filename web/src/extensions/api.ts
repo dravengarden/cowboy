@@ -1,4 +1,8 @@
 /** The resource protocol is intentionally independent of Plugin identity. */
+import {
+  decodeRemoteReview,
+  type RemoteReviewPage,
+} from "../mobile/review/remoteReviewModel.ts";
 export interface ExtensionIdentity {
   pluginId: string;
   pluginVersion: string;
@@ -8,6 +12,7 @@ export interface ExtensionView {
   id: string;
   label: string;
   filters: { value: string; label: string }[];
+  review?: "pull_request" | null;
 }
 export interface WorkspaceExtension {
   identity: ExtensionIdentity;
@@ -40,9 +45,14 @@ export type ExtensionResponse =
   }
   | { type: "page"; items: Resource[]; nextPage: number | null }
   | { type: "detail"; item: Resource }
+  | { type: "review"; review: RemoteReviewPage }
   | { type: "unavailable"; code: keyof typeof failures };
 
 const failures = {
+  review_changed:
+    "This PR changed while loading. Refresh to read its new version.",
+  review_unavailable:
+    "The PR preview is unavailable or exceeds the preview limit. Retry or open it on GitHub.",
   machine_unavailable:
     "The workspace’s Machine is unavailable. Reconnect it and refresh.",
   extension_changed:
@@ -107,6 +117,8 @@ function resource(input: unknown): Resource {
 export function decodeExtensionResponse(input: unknown): ExtensionResponse {
   const v = record(input);
   switch (v.type) {
+    case "review":
+      return { type: "review", review: decodeRemoteReview(v.review) };
     case "unavailable": {
       const code = text(v.code);
       if (!Object.hasOwn(failures, code)) invalid();
@@ -129,9 +141,13 @@ export function decodeExtensionResponse(input: unknown): ExtensionResponse {
             available: row.available,
             views: array(row.views, 16, (item) => {
               const view = record(item);
+              if (view.review != null && view.review !== "pull_request") {
+                invalid();
+              }
               return {
                 id: text(view.id, 128),
                 label: text(view.label, 80),
+                review: view.review === "pull_request" ? "pull_request" : null,
                 filters: array(view.filters, 8, (item) => {
                   const filter = record(item);
                   return {

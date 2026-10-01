@@ -3,6 +3,7 @@ import {
   ArrowBack,
   ArrowForward,
   ChatBubbleOutline,
+  CloudOutlined,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -93,6 +94,7 @@ import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { type ReviewProgress, revisionMatches } from "./reviewProgress";
 import { ReviewRepository } from "./ReviewRepository";
 import { ReviewCommit } from "./ReviewCommit";
+import { RemoteReviewApp } from "./RemoteReviewApp";
 import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
@@ -2081,7 +2083,7 @@ export function DocumentView({
 }
 
 export function ReviewApp({
-  active,
+  active: surfaceActive,
   onDrawerOpenChange,
 }: {
   active: boolean;
@@ -2102,6 +2104,12 @@ export function ReviewApp({
     } | undefined
   >();
   const workspace = projectCodeContext ?? boundWorkspace;
+  const syncedReview = useMobileReviewState(workspace?.sessionId);
+  const remoteSelected = !projectCodeContext && syncedReview.remote_selected === true;
+  const active = surfaceActive && !remoteSelected;
+  useEffect(() => {
+    if (remoteSelected) onDrawerOpenChange(false);
+  }, [remoteSelected, onDrawerOpenChange]);
   const controlPlaneActivity = useControlPlaneSessionActivity(
     workspace?.sessionId,
   );
@@ -2122,7 +2130,7 @@ export function ReviewApp({
   const target: ReviewTarget = mode === "files"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
-  const leasedPath = target.kind === "changes" ? undefined : target.path;
+  const leasedPath = remoteSelected || target.kind === "changes" ? undefined : target.path;
   const [closeRequest, setCloseRequest] = useState(0);
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -2193,7 +2201,6 @@ export function ReviewApp({
   const symbolRestoreId = useRef(0);
   const revealRangeId = useRef(0);
   const [outlineOpen, setOutlineOpen] = useState(false);
-  const syncedReview = useMobileReviewState(workspace?.sessionId);
   const syncedReviewRef = useRef(syncedReview);
   syncedReviewRef.current = syncedReview;
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
@@ -3044,6 +3051,15 @@ export function ReviewApp({
     }
   };
 
+  if (remoteSelected && workspace?.sessionId) {
+    const sessionId = workspace.sessionId;
+    return <RemoteReviewApp key={sessionId} context={sessionId}
+      title={currentSession?.title ?? "Session"} binding={syncedReview.remote_review}
+      active={surfaceActive}
+      onBind={(binding) => mutateMobileReview(sessionId, "setRemoteReview", { binding })}
+      onLocal={() => mutateMobileReview(sessionId, "selectRemoteReview", { selected: false })} />;
+  }
+
   return (
     <ReviewDrawerShell
       onOpenChange={handleDrawerOpenChange}
@@ -3234,6 +3250,14 @@ export function ReviewApp({
               {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
             </IconButton>
           )}
+          {!projectCodeContext && workspace?.sessionId && <IconButton
+            aria-label={syncedReview.remote_review ? `Review remote PR #${syncedReview.remote_review.number}` : "Associate remote PR"}
+            title={syncedReview.remote_review ? `Remote PR #${syncedReview.remote_review.number}` : "Remote PR"}
+            onClick={() => {
+              setCloseRequest((value) => value + 1);
+              mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
+            }}
+          ><CloudOutlined /></IconButton>}
           <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={projectCodeContext?.machineId ?? currentSession?.machine_id} />
           <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
         </Stack>

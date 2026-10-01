@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "id": "zed",
-  "version": "1.20.2",
-  "component_release": "3.30.0",
+  "version": "1.20.3",
+  "component_release": "3.32.0",
   "publisher": "cowboy-first-party",
   "kind": "code_intelligence",
   "entrypoint": "contract.json",
   "components": [
-    { "id": "cowboy.plugin-contract", "version": "1.9.0" },
-    { "id": "cowboy.plugin-sdk", "version": "1.9.0" },
+    { "id": "cowboy.plugin-contract", "version": "1.10.0" },
+    { "id": "cowboy.plugin-sdk", "version": "1.10.0" },
     { "id": "cowboy.code-intelligence", "version": "1.2.0" }
   ]
 }

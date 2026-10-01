@@ -86,6 +86,10 @@ References: [Zed extension capabilities](https://zed.dev/docs/extensions/develop
 
 ## Reader compatibility
 
+Payload 2 adds a closed remote pull-request review capability (SDK 1.10).
+See [session remote PR review](remote-pr-review.md) for selection, snapshot,
+resource-bound and compatibility behavior.
+
 Workspace payload 1 requires Plugin SDK 1.9 and outer release schema 3. The
 complete runtime matrix contains no executables. Retained schema-1/2 Catalog
 readers skip this envelope before decoding its new capability. All existing

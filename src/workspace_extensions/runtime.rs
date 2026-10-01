@@ -8,6 +8,9 @@ use serde_json::Value;
 
 use super::{Failure, Metadata, Remote, Resource, Response};
 
+mod review;
+pub(crate) use review::read_review;
+
 const MAX_BODY: usize = 64 * 1024;
 
 fn segment(value: &str) -> bool {
