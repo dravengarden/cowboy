@@ -204,6 +204,11 @@ enum OperatorCommand {
         #[arg(long)]
         machine: String,
     },
+    /// Reload a Machine's declarative workspaces and refresh its inventory.
+    RefreshMachine {
+        #[arg(long)]
+        machine: String,
+    },
     /// Install an exact signed release through the durable Service/Machine transaction.
     #[command(alias = "upgrade")]
     Install {
@@ -375,6 +380,12 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
         OperatorCommand::Inspect { machine } => (
             reqwest::Method::GET,
             vec!["machines".into(), machine, "plugins".into()],
+            None,
+            None,
+        ),
+        OperatorCommand::RefreshMachine { machine } => (
+            reqwest::Method::POST,
+            vec!["machines".into(), machine, "refresh".into()],
             None,
             None,
         ),
