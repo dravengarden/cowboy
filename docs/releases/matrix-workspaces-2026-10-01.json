@@ -1,0 +1,144 @@
+{
+  "date": "2026-10-01",
+  "matrix_revision": "b7c98bead188caf0cad439b3b8b181fa85e6f2ec",
+  "timing_probe_matrix_revision": "476ee225d5ec686596b64217bab9c00e440e7d25",
+  "web": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790850754147142221-730813dd2d0d",
+    "revision": "730813dd2d0d1125b24ad61ec0e23480a5ed0a90",
+    "published": true,
+    "release": "/nix/store/90acvjkldimib9i04gdx0lwzv824qjf6-cowboy-web-release",
+    "previousRelease": "/nix/store/i4krpcm21dyaabpnnq46jhi83yakrhps-cowboy-web-release",
+    "activeRelease": "/nix/store/90acvjkldimib9i04gdx0lwzv824qjf6-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T10:32:34.147142221Z",
+    "recordedAt": "2026-10-01T10:32:34.197991768Z",
+    "recovered": false
+  },
+  "controller": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "controller",
+    "transaction": "1790851233640762160-23feef74f52e",
+    "revision": "23feef74f52e69da538b9ab86fa698b782e66d96",
+    "published": true,
+    "release": "/nix/store/hi65jzb5nxvfhrld61fzfwb6xj98i39l-cowboy-controller-release",
+    "previousRelease": "/nix/store/23yhwbi2hp8cvzhrcgixc1d3qvmw0bgr-cowboy-controller-release",
+    "activeRelease": "/nix/store/hi65jzb5nxvfhrld61fzfwb6xj98i39l-cowboy-controller-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T10:40:33.64076216Z",
+    "recordedAt": "2026-10-01T10:40:47.010106255Z",
+    "recovered": false
+  },
+  "ovh_machine": {
+    "revision": "730813dd2d0d1125b24ad61ec0e23480a5ed0a90",
+    "release": "/nix/store/h798qjg5k5px2skz2g85bwi674w3qcb0-cowboy-machine-release",
+    "receipt": {
+      "previous_pid": 228802,
+      "pid": 233388,
+      "start": "12904068",
+      "parent": 1463,
+      "exe": "/nix/store/y2ps8f6l9xcvvfwbdxg8jjlah3yb3cid-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "accepted_at": 1790851314,
+      "configuration_sha256": "4bd4a85ba4d4ef0c639d4f7bf2830b0b6b06e30f5a42453ce3d8a225d996a558"
+    },
+    "retained_workers": 8,
+    "workers_preserved": true,
+    "kill_mode": "control-group"
+  },
+  "workspaces": {
+    "total": 19,
+    "mapped": 16,
+    "revision": "matrix-workspaces-2026-10-01",
+    "ids_sha256": "03e50ee4b8eabfdf37ed0767a8eef1bae01cb1c3a9576c462545d60cfec3b2d6",
+    "refresh": {
+      "schema": 1,
+      "http_status": 200,
+      "operation_id": null,
+      "data": {
+        "request_id": "refresh-8WPmFuOdXZnZZC8GhSiinjZGJ7eDsmpxTH9GhgYkyXU"
+      }
+    }
+  },
+  "remote_probe": {
+    "hawk/suger": {
+      "fresh_prepare_s": 11.875,
+      "warm_run_s": [
+        1.291,
+        1.299,
+        1.79,
+        1.194,
+        1.177
+      ],
+      "warm_median_s": 1.291,
+      "unicode_write_read": true,
+      "stale_write_refused": true,
+      "remote_test": true,
+      "exit_status_37": true,
+      "target_revision": "77a078e167b11f9765e86cbc1f0bad91a7baac8d"
+    },
+    "falcon/suger": {
+      "fresh_prepare_s": 7.164,
+      "warm_run_s": [
+        2.3,
+        2.082,
+        1.726,
+        1.667,
+        2.19
+      ],
+      "warm_median_s": 2.082,
+      "unicode_write_read": true,
+      "stale_write_refused": true,
+      "remote_test": true,
+      "exit_status_37": true,
+      "target_revision": "77a078e167b11f9765e86cbc1f0bad91a7baac8d"
+    },
+    "ovh_hawk_ssh_true": {
+      "cold_s": [
+        6.734,
+        5.861,
+        5.681,
+        5.216,
+        6.584
+      ],
+      "warm_s": [
+        1.641,
+        2.38,
+        1.382,
+        1.48,
+        1.115
+      ],
+      "cold_median_s": 5.861,
+      "warm_median_s": 1.48
+    }
+  },
+  "native_task_probe": {
+    "automatic_task_identity": true,
+    "same_task_reused": true,
+    "different_tasks_isolated": true,
+    "target_revisions": [
+      "77a078e167b11f9765e86cbc1f0bad91a7baac8d",
+      "77a078e167b11f9765e86cbc1f0bad91a7baac8d"
+    ]
+  },
+  "browser": {
+    "engine": "Firefox 151.0.1",
+    "fixture_sha256": "cde0d402b2cdf4bd369ea76370a0d1431283f0651f5eed981b5a746eca09c35e",
+    "physical_device": false
+  },
+  "model_token_benchmark": false,
+  "provider_home_probe": {
+    "isolated_provider_home": true,
+    "default_mapping_found": true,
+    "remote_command_passed": true
+  },
+  "native_local_file_tools_redirected": false
+}
