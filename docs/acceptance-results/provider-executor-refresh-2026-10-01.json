@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "issue": "Sign-in reports no compatible online executor while the account is already signed in",
+  "observed": {
+    "ovh_resident_service": "active under ubuntu user manager; querying the operator user manager is not authoritative",
+    "claude_installed_version": "3.1.35",
+    "claude_installed_state": "active",
+    "auth_generation": 47,
+    "replica_and_materialization": "current",
+    "catalog_display_version": "3.1.36",
+    "live_catalog_contains_installed_executor": true,
+    "actual_frontend_selector_on_live_catalog": "matched 3.1.35",
+    "phone_failure_snapshot": "unavailable; transient connection state versus stale snapshot not conclusively distinguished"
+  },
+  "fix": "Refresh the catalog before resolving the exact installed authentication executor; do not reject from cached availability or prescribe an upgrade without evidence",
+  "safety": [
+    "Preserves exact signed release identity",
+    "Refresh remains single-flight with other catalog readers",
+    "No login POST after the originating dialog closes during refresh",
+    "No existing credential or Machine identity changed"
+  ],
+  "validation": {
+    "frontend_tests_passed": 1966,
+    "typecheck_lint_build": "passed",
+    "review": "Complete active diff reviewed after deterministic gates",
+    "physical_iphone_retry": "pending"
+  },
+  "deployment": {
+    "revision": "a82260a72e6439dbece7bd9381027d5c8f8eb660",
+    "release": "/nix/store/sy0vdi6rklrhfz9y46y4p5ngjlbai79x-cowboy-web-release",
+    "transaction": "1790830143993730397-a82260a72e64",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "service_worker": "cowboy-v1779",
+    "healthz": "ok",
+    "controller_pid_unchanged": true,
+    "machine_or_worker_restart_requested": false
+  }
+}
