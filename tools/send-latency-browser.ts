@@ -1,13 +1,20 @@
 // Run in the pinned Nix shell and a private loopback network namespace.
 // Arguments: pinned Firefox executable, one or more built fixture directories.
 const [browser, ...args] = Deno.args;
+const chromium = browser?.endsWith("/bin/chromium");
+const queued = args.includes("--queued");
+const metadata = args.includes("--metadata");
+const local = args.includes("--local") || metadata || queued;
 const safety = args.includes("--safety");
 const recovery = args.includes("--transcript-recovery");
 const bundles = args.filter((argument) =>
+  argument !== "--queued" && argument !== "--metadata" &&
+  argument !== "--local" &&
   argument !== "--safety" && argument !== "--transcript-recovery"
 );
 if (
-  !browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox") ||
+  !browser?.startsWith("/nix/store/") ||
+  (!browser.endsWith("/bin/firefox") && !chromium) ||
   !bundles.length
 ) {
   throw new Error(
@@ -35,7 +42,13 @@ const session = {
   updated_at_ms: 0,
 };
 const cases = bundles.flatMap((bundle) =>
-  (recovery
+  (metadata
+    ? ["metadata"]
+    : queued
+    ? ["queued"]
+    : local
+    ? ["local"]
+    : recovery
     ? ["transcript-recovery"]
     : safety
     ? ["changed-dataset", "missing-protocol"]
@@ -51,6 +64,7 @@ for (const { bundle, scenario } of cases) {
   let bootstraps = 0;
   let discoveries = 0;
   let deliveries = 0;
+  let metadataMutations = 0;
   let seq = 0;
   let attempts = 0;
   let datasetId = descriptor.dataset_id;
@@ -61,10 +75,26 @@ for (const { bundle, scenario } of cases) {
     { hostname: "127.0.0.1", port: 0, onListen() {} },
     async (request) => {
       const url = new URL(request.url);
+
       if (url.pathname === "/fixture.js") {
         return new Response(script, {
           headers: { "Content-Type": "text/javascript" },
         });
+      }
+      if (local && /^\/[a-zA-Z0-9_-]+\.js$/.test(url.pathname)) {
+        try {
+          return new Response(
+            await Deno.readTextFile(`${bundle}${url.pathname}`),
+            {
+              headers: { "Content-Type": "text/javascript" },
+            },
+          );
+        } catch {
+          return new Response("missing fixture chunk", { status: 404 });
+        }
+      }
+      if (url.pathname === "/fixture/metrics") {
+        return Response.json({ deliveries, metadataMutations });
       }
       if (url.pathname === "/report") {
         report.resolve(await request.json());
@@ -100,19 +130,41 @@ for (const { bundle, scenario } of cases) {
         sockets.add(socket);
         socket.onopen = () => {
           socket.send(
-            JSON.stringify({ type: "sessions", sessions: [session] }),
+            JSON.stringify({
+              type: "sessions",
+              sessions: metadata
+                ? [session, {
+                  ...session,
+                  id: "fixture-other",
+                  title: "Other fixture",
+                }]
+                : [{
+                  ...session,
+                  status: queued ? "starting" : session.status,
+                }],
+            }),
           );
           socket.send(JSON.stringify({ type: "bootstrap_complete" }));
         };
         socket.onmessage = async (event) => {
           const message = JSON.parse(event.data);
+          if (message.type === "sync") metadataMutations++;
           if (message.type !== "submit") {
             return;
           }
           if (seen.has(message.cmid)) return;
           seen.add(message.cmid);
           deliveries++;
-          await delay(40);
+          if (local) {
+            socket.send(JSON.stringify({
+              type: "sync_patch",
+              state: `queue:${session.id}`,
+              version: deliveries,
+              value: { queue: [], drafts: [] },
+              confirmed: [message.cmid],
+            }));
+          }
+          await delay(local ? 800 : 40);
           const echo = {
             session_id: session.id,
             seq: ++seq,
@@ -166,8 +218,7 @@ for (const { bundle, scenario } of cases) {
       if (url.pathname === "/") {
         return new Response(
           `<!doctype html><div id="root"></div><script type="module">
-import { run } from '/fixture.js';
-let result; try { result = { ok: true, samples: await run() }; }
+let result; try { const { run } = await import('/fixture.js'); result = { ok: true, samples: await run() }; }
 catch (error) { result = { ok: false, error: String(error) }; }
 await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
 </script>`,
@@ -180,15 +231,29 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
   try {
     const profile = `${temporary}/profile`;
     await Deno.mkdir(profile);
+
     child = new Deno.Command(browser, {
-      args: [
-        "--headless",
-        "--no-remote",
-        "--new-instance",
-        "--profile",
-        profile,
-        `http://127.0.0.1:${server.addr.port}/?scenario=${scenario}`,
-      ],
+      args: chromium
+        ? [
+          "--headless",
+          "--no-sandbox",
+          "--disable-gpu",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-background-networking",
+          "--disable-component-update",
+          "--remote-debugging-port=0",
+          `--user-data-dir=${profile}`,
+          `http://127.0.0.1:${server.addr.port}/?scenario=${scenario}`,
+        ]
+        : [
+          "--headless",
+          "--no-remote",
+          "--new-instance",
+          "--profile",
+          profile,
+          `http://127.0.0.1:${server.addr.port}/?scenario=${scenario}`,
+        ],
       clearEnv: true,
       env: {
         MOZ_HEADLESS: "1",
@@ -202,8 +267,26 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
       stdout: "null",
       stderr: "null",
     }).spawn();
+    void child.status.then((status) => {
+      if (status.code !== 0) {
+        report.reject(
+          new Error(
+            `browser exited: ${status.code} ${
+              JSON.stringify({ discoveries, attempts, deliveries })
+            }`,
+          ),
+        );
+      }
+    });
     deadline = setTimeout(
-      () => report.reject(new Error("browser deadline exceeded")),
+      () =>
+        report.reject(
+          new Error(
+            `browser deadline exceeded: ${
+              JSON.stringify({ discoveries, attempts, deliveries })
+            }`,
+          ),
+        ),
       45_000,
     );
     const result = await report.promise;
@@ -227,7 +310,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
     );
     if (
       !(result as { ok?: boolean }).ok ||
-      deliveries !== (safety || recovery ? 0 : 17) ||
+      deliveries !== (metadata ? 0 : local ? 1 : safety || recovery ? 0 : 17) ||
       attempts < 1
     ) {
       throw new Error("send fixture failed");
@@ -235,6 +318,29 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
   } finally {
     clearTimeout(deadline);
     for (const socket of sockets) socket.close();
+    if (chromium && child) {
+      try {
+        const [port, path] =
+          (await Deno.readTextFile(`${temporary}/profile/DevToolsActivePort`))
+            .trim().split("\n");
+        const debuggerSocket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(() => {
+            debuggerSocket.close();
+            resolve();
+          }, 2000);
+          debuggerSocket.onopen = () =>
+            debuggerSocket.send(
+              JSON.stringify({ id: 1, method: "Browser.close" }),
+            );
+          debuggerSocket.onclose = debuggerSocket.onerror = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+        });
+        await Promise.race([child.status, delay(2000)]);
+      } catch { /* An already-exited browser needs no graceful close. */ }
+    }
     try {
       child?.kill("SIGKILL");
     } catch { /* The browser may have exited. */ }

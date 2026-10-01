@@ -593,3 +593,22 @@ sheet-keyboard-browser-conformance BROWSER:
 # Actual cached transcript recovery after failed/malformed bootstrap responses.
 transcript-recovery-browser BROWSER BUNDLE:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" --transcript-recovery' recovery "{{BROWSER}}" "{{BUNDLE}}"
+
+# Real local presentation before slow restoration/save, and receipt/echo gaps.
+# Pass a pinned Firefox or Chromium executable; no normal browser profile.
+local-presentation-browser-conformance BROWSER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fixture=$(mktemp -d /tmp/cowboy-local-presentation.XXXXXX)
+    trap 'rm -rf "$fixture"' EXIT
+    for suite in local metadata; do
+      if ! node tools/send-latency-bundle.mjs "$fixture/$suite" "--$suite" > "$fixture/$suite-build.log" 2>&1; then
+        tail -80 "$fixture/$suite-build.log"
+        exit 1
+      fi
+    done
+    for suite in local queued metadata; do
+      bundle=local
+      if [ "$suite" = metadata ]; then bundle=metadata; fi
+      unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" "$3"' conformance "{{BROWSER}}" "$fixture/$bundle" "--$suite"
+    done

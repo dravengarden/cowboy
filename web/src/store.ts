@@ -2875,6 +2875,7 @@ function registerSync<T, M extends Mutators<T>>(
   onChange: () => void = commitSessions,
 ): { view: () => T; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
   if (productSessionAbandoned) throw new Error("product sync owner is closed");
+  const previews = new Map<string, (value: T) => T>();
   const store = replicatedStore<T, M>({
     clientId: `${syncBase}:${syncState}`,
     mutators,
@@ -2882,7 +2883,10 @@ function registerSync<T, M extends Mutators<T>>(
     send: (m): void => {
       send({ type: "sync", state: syncState, id: m.id, name: m.name, args: m.args });
     },
-    onChange,
+    onChange: () => {
+      for (const mutation of store.pending()) previews.delete(mutation.id);
+      onChange();
+    },
     // Instant-load + durable outbox: cache {base, pending} to IndexedDB. On
     // reload we hydrate this alongside the socket (see connect()), so the
     // last-known title/order paint immediately; the first server patch arrives
@@ -2912,19 +2916,36 @@ function registerSync<T, M extends Mutators<T>>(
     });
   }
   return {
-    view: (): T => store.get(),
+    view: (): T => {
+      let value = store.get();
+      for (const project of previews.values()) value = project(value);
+      return value;
+    },
     mutate: (name, args): void => {
+      if (productSessionAbandoned) return;
       // The sidebar paints from the local replica, so a rename or a reorder can
       // be authored before this state's outbox read completes. Adopt the exact
       // delta baseline first — the same barrier the send path runs before its
       // own durable write — instead of reporting an unsaved change for a race.
-      void store.hydrate().then(() => store.mutateDurably(name, args)).catch((error: unknown) => {
+      const id = newCmid();
+      previews.set(id, (value) =>
+        (mutators[name] as (value: T, args: unknown) => T)(value, args)
+      );
+      onChange();
+      emitInteractive();
+      void store.hydrate().then(() => store.mutateDurably(name, args, id)).catch((error: unknown) => {
         if (productSessionAbandoned) return;
         const code = reportSyncStorageFailure("sync_durable_write_failed", syncState, name, error);
         notify(
           `Local change could not be durably saved; it was not sent. Check browser storage before retrying.${code}`,
           "warning",
         );
+      }).finally(() => {
+        previews.delete(id);
+        if (!productSessionAbandoned) {
+          onChange();
+          emitInteractive();
+        }
       });
     },
   };
@@ -3617,6 +3638,54 @@ async function durableQueue(
   return store;
 }
 
+// Presentation starts at the gesture, before dataset discovery or IndexedDB
+// restoration. These previews never enter the transport or durable retry lane.
+// The real mutation takes ownership synchronously once its baseline is ready.
+const queuePreviews = new Map<string, Map<string, {
+  project: (value: QValue) => QValue;
+  row?: QueuedMessage;
+}>>();
+
+async function mutateQueueDurably<K extends keyof typeof qMut & string>(
+  sessionId: string,
+  name: K,
+  args: ArgsOf<QValue, typeof qMut, K>,
+  id: string,
+) {
+  if (productSessionAbandoned) throw new Error("product sync owner is closed");
+  const previews = queuePreviews.get(sessionId) ?? new Map();
+  const row = (args as { row?: QueuedMessage }).row;
+  previews.set(id, {
+    project: (value: QValue) =>
+      (qMut[name] as (value: QValue, args: unknown) => QValue)(value, args),
+    ...(row !== undefined ? { row } : {}),
+  });
+  queuePreviews.set(sessionId, previews);
+  commitQueue(sessionId);
+  try {
+    const store = await durableQueue(sessionId);
+    return await store.mutateDurably(name, args, id);
+  } catch (error) {
+    // A preview is not a saved message. Keep the editor/source row as recovery,
+    // and remove only the bubble created by this failed outgoing transition.
+    if (!productSessionAbandoned && row?.cmid !== undefined &&
+      ["submitPrompt", "activateDraft", "sendQueued", "forceQueued"].includes(name)) {
+      const optimisticMessages = new Map(state.optimisticMessages);
+      const kept = (optimisticMessages.get(sessionId) ?? []).filter((message) =>
+        message.cmid !== row.cmid
+      );
+      if (kept.length) optimisticMessages.set(sessionId, kept);
+      else optimisticMessages.delete(sessionId);
+      setInteractiveState({ ...state, optimisticMessages });
+    }
+    throw error;
+  } finally {
+    previews.delete(id);
+    if (previews.size === 0) queuePreviews.delete(sessionId);
+    if (!productSessionAbandoned) commitQueue(sessionId);
+  }
+}
+
 /** Eager-restore every per-session queue durable outbox cached in IndexedDB,
  *  concurrently with socket connection. Enumerating
  *  the keys is what makes this correct: the qClients are created lazily during
@@ -3645,8 +3714,18 @@ async function hydrateCachedQueues(): Promise<void> {
  *  pending optimistic row. */
 function commitQueue(sessionId: string): void {
   const c = qClients.get(sessionId);
-  const view: QValue = c ? c.get() : emptyQueueValue<QueuedMessage>();
+  let view: QValue = c ? c.get() : emptyQueueValue<QueuedMessage>();
   const pending = c?.pending() ?? [];
+  const previews = queuePreviews.get(sessionId);
+  for (const [id, preview] of previews ?? []) {
+    if (pending.some((mutation) => mutation.id === id)) {
+      // Local apply now owns this row; do not apply the preview twice, or
+      // resurrect it when a fast service acknowledgement retires the mutation.
+      previews?.delete(id);
+    } else {
+      view = preview.project(view);
+    }
+  }
   const pend = new Set(pending.map((m) => m.id));
   const pendingRowStatuses = new Map<string, DeliveryStatus>();
   for (const mutation of pending) {
@@ -3656,6 +3735,11 @@ function commitQueue(sessionId: string): void {
         row.id,
         qStatus.get(mutation.id) ?? "pending",
       );
+    }
+  }
+  for (const [id, preview] of previews ?? []) {
+    if (preview.row !== undefined) {
+      pendingRowStatuses.set(preview.row.id, qStatus.get(id) ?? "committing");
     }
   }
   const withStatus = (rows: readonly QueuedMessage[]): QueuedMessage[] =>
@@ -3885,7 +3969,6 @@ async function qAdd(
     origin,
     ...(opts.schedule !== undefined ? { schedule: opts.schedule } : {}),
   };
-  const store = qClient(sessionId);
   // Set status BEFORE mutating: the local apply fires `onChange` → commitQueue,
   // which reads this status. `mutateDurably` commits the outbox transaction before
   // its transport callback can send. The source editor may clear only after this
@@ -3920,8 +4003,7 @@ async function qAdd(
     // A newly opened session can be authored before its queue read completes.
     // Adopt this outbox's exact delta baseline before saving; unrelated caches
     // and network readiness remain independent of this durability barrier.
-    await restoreQueue(sessionId);
-    await store.mutateDurably(mutator, { row }, cmid);
+    await mutateQueueDurably(sessionId, mutator, { row }, cmid);
   } catch (error) {
     qStatus.delete(cmid);
     // The sync client rolls back its mutation, but commitQueue deliberately
@@ -3953,14 +4035,13 @@ async function qAdd(
   await waitForState(
     (snapshot) =>
       target === "transcript"
-        ? (snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
-          message.cmid === cmid
-        )
+        ? transcriptDeliveryVisible(snapshot, sessionId, cmid, attachments)
         : (target === "drafts" || target === "scheduled"
           ? snapshot.drafts
           : snapshot.queues)
           .get(sessionId)
-          ?.some((message) => message.cmid === cmid) === true,
+          ?.some((message) => message.cmid === cmid) === true ||
+          (target === "queue" && transcriptDeliveryVisible(snapshot, sessionId, cmid, attachments)),
     ackLabel,
   );
   if (target === "transcript") {
@@ -4106,6 +4187,14 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     inFlight: [],
   };
   const store = qClient(sessionId);
+  // A prompt guessed as queued may dispatch before the creation receipt. Keep
+  // its local content available to bridge the empty queue receipt to the echo.
+  const acceptedQueueRows = store.pending().flatMap((mutation) => {
+    if (!confirmed.includes(mutation.id) ||
+      !["addQueue", "frontQueue", "forceQueue"].includes(mutation.name)) return [];
+    const row = (mutation.args as { row?: QueuedMessage }).row;
+    return row === undefined ? [] : [row];
+  });
   // Stale patches may still acknowledge a cmid, but their old list cannot
   // retire a transition, recover an orphan, or replace the source-id lookup.
   const acceptsValue = resync || version > store.version();
@@ -4118,8 +4207,11 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       const pending = store.pending().find((mutation) => mutation.id === id);
       if (pending !== undefined && QUEUE_TRANSITION_MUTATORS.has(pending.name)) {
         const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid ?? id;
-        suppressedInFlight.add(echoCmid);
-        settledSuppressed.push(echoCmid);
+        if (next.queue.some((row) => row.cmid === echoCmid) ||
+          next.drafts.some((row) => row.cmid === echoCmid)) {
+          suppressedInFlight.add(echoCmid);
+          settledSuppressed.push(echoCmid);
+        }
         qStatus.delete(echoCmid);
       }
       clearOptTimers(id);
@@ -4174,8 +4266,25 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       commandForQueueMutation(sessionId, mutation) !== null
     ) dispatchQueueMutation(sessionId, mutation);
   }
+  if (acceptsValue && acceptedQueueRows.length > 0) {
+    const optimisticMessages = new Map(state.optimisticMessages);
+    const bubbles = [...(optimisticMessages.get(sessionId) ?? [])];
+    for (const row of acceptedQueueRows) {
+      if (next.queue.some((item) => item.cmid === row.cmid) ||
+        next.drafts.some((item) => item.cmid === row.cmid) ||
+        bubbles.some((item) => item.cmid === row.cmid) ||
+        promptEchoReadyToReplaceOptimistic(row, state.timelines.get(sessionId) ?? [])) continue;
+      if (row.cmid !== undefined) rememberSendImagePreviews(row.cmid, row.attachments);
+      bubbles.push(withDelivery(row, "sending"));
+    }
+    if (bubbles.length) optimisticMessages.set(sessionId, bubbles);
+    setInteractiveState({ ...state, optimisticMessages });
+  }
   if (delivered.length > 0) {
-    const set = new Set<string | undefined>(delivered);
+    const set = new Set<string | undefined>(acceptsValue ? delivered.filter((cmid) =>
+      next.queue.some((row) => row.cmid === cmid) ||
+      next.drafts.some((row) => row.cmid === cmid)
+    ) : []);
     setState({ ...state, optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, set) });
   }
   commitQueue(sessionId);
@@ -4447,7 +4556,6 @@ async function editPendingRow(
   text: string,
   attachments: Attachment[],
 ): Promise<void> {
-  const store = await durableQueue(sessionId);
   const source = target === "draft"
     ? findDraft(sessionId, id)
     : findQueued(sessionId, id);
@@ -4462,7 +4570,7 @@ async function editPendingRow(
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       target === "draft" ? "editDraft" : "editQueue",
       { id, row },
       opId,
@@ -4485,7 +4593,6 @@ async function editPendingRow(
 }
 
 export async function requestSendQueued(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
@@ -4512,7 +4619,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
   qStatus.set(opId, "committing");
   qStatus.set(echoCmid, "committing");
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       "sendQueued",
       { id, row: presented },
       opId,
@@ -4536,7 +4643,6 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
 // next. The daemon promotes it and cancels the in-flight turn (or just sends it
 // if the session is already idle).
 export async function forcePushQueued(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
@@ -4557,7 +4663,7 @@ export async function forcePushQueued(sessionId: string, id: string): Promise<vo
   qStatus.set(opId, "committing");
   qStatus.set(echoCmid, "committing");
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       "forceQueued",
       { id, row: presented },
       opId,
@@ -4590,9 +4696,8 @@ export function editQueued(
 
 // Drop one queued prompt.
 export async function removeQueued(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   if (findQueued(sessionId, id) === undefined) return;
-  return store.mutateDurably(
+  return mutateQueueDurably(sessionId,
     "removeQueue",
     { id },
     newCmid(),
@@ -4684,9 +4789,8 @@ export function editDraft(
 
 // Drop one draft.
 export async function removeDraft(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   if (findDraft(sessionId, id) === undefined) return;
-  return store.mutateDurably(
+  return mutateQueueDurably(sessionId,
     "removeDraft",
     { id },
     newCmid(),
@@ -4713,7 +4817,6 @@ export function clearDrafts(sessionId: string): Promise<void> {
 // Activate a draft: the daemon submits it (send-or-queue) and removes it from
 // drafts.
 export async function activateDraft(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const dest = destinationForPrompt(
@@ -4734,7 +4837,7 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
     revealPendingArrival({ kind: "queued", id: presented.id, cmid: opId });
   }
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       "activateDraft",
       {
         id,
@@ -4787,7 +4890,6 @@ export async function scheduleDraft(
       schedule: { fire_at_ms: fireAtMs, delivery },
     });
   }
-  const store = await durableQueue(sessionId);
   const source = findDraft(sessionId, id);
   if (source === undefined) {
     return Promise.reject(new Error("Cannot schedule a draft that no longer exists"));
@@ -4801,7 +4903,7 @@ export async function scheduleDraft(
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       "rescheduleDraft",
       { id, row },
       opId,
@@ -4824,7 +4926,6 @@ export async function scheduleDraft(
 
 // Strip the schedule off a draft (it stays a plain parked draft).
 export async function unscheduleDraft(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   const source = findDraft(sessionId, id);
   if (source === undefined || source.schedule === undefined) {
     return Promise.resolve();
@@ -4839,7 +4940,7 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       "unscheduleDraft",
       { id, row },
       opId,
@@ -4860,7 +4961,6 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
 
 // Move a queued prompt back to drafts.
 export async function queuedToDraft(sessionId: string, id: string): Promise<void> {
-  const store = await durableQueue(sessionId);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   if (row.status !== undefined && row.cmid !== undefined) {
@@ -4887,7 +4987,7 @@ export async function queuedToDraft(sessionId: string, id: string): Promise<void
     ...(presented.cmid !== undefined ? { cmid: presented.cmid } : {}),
   });
   try {
-    await store.mutateDurably(
+    await mutateQueueDurably(sessionId,
       "returnQueuedToDraft",
       { id, row: presented },
       opId,

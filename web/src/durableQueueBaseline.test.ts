@@ -10,7 +10,9 @@ import { createSyncShutdown } from "./syncShutdown.ts";
  *  not started) with `outbox_loading`, and a send tapped moments after a reload
  *  then fails instead of being saved — the draft ▶ path shipped that way. */
 Deno.test("no durable write runs before its outbox baseline is adopted", async () => {
-  const source = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const source = await Deno.readTextFile(
+    new URL("./store.ts", import.meta.url),
+  );
   const starts = [...source.matchAll(/^(?:export )?(?:async )?function \w+/gm)]
     .map((match) => match.index ?? 0);
   assert(starts.length > 0);
@@ -20,14 +22,32 @@ Deno.test("no durable write runs before its outbox baseline is adopted", async (
     at >= 0;
     at = source.indexOf(".mutateDurably(", at + 1)
   ) {
-    const body = source.slice(starts.filter((start) => start < at).pop() ?? 0, at);
+    const body = source.slice(
+      starts.filter((start) => start < at).pop() ?? 0,
+      at,
+    );
     assert(
-      /await (?:durableQueue|restoreQueue)\(/.test(body) || body.includes(".hydrate()"),
+      /await (?:durableQueue|restoreQueue)\(/.test(body) ||
+        body.includes(".hydrate()"),
       `a durable write near offset ${at} does not adopt its outbox baseline first`,
     );
     checked += 1;
   }
-  assert(checked >= 9, `expected every durable write to be covered, saw ${checked}`);
+  assert(
+    checked >= 2,
+    `expected the service and queue durability gates, saw ${checked}`,
+  );
+  const queueGate = source.slice(
+    source.indexOf("async function mutateQueueDurably<"),
+    source.indexOf("async function hydrateCachedQueues("),
+  );
+  assert(
+    queueGate.indexOf("commitQueue(sessionId)") <
+      queueGate.indexOf("await durableQueue(sessionId)"),
+  );
+  assert(
+    [...source.matchAll(/await mutateQueueDurably\(sessionId,/g)].length >= 8,
+  );
 
   // Discarding a row is durable too: it removes an outbox mutation.
   const discard = source.slice(
@@ -40,13 +60,21 @@ Deno.test("no durable write runs before its outbox baseline is adopted", async (
 /** The restore is memoized per session, so the write barrier above waits for
  *  exactly the work lazy creation started instead of racing a second one. */
 Deno.test("queue restore keeps held decisions ahead of the outbox replay", async () => {
-  const source = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const source = await Deno.readTextFile(
+    new URL("./store.ts", import.meta.url),
+  );
   const restore = source.slice(
     source.indexOf("function restoreQueue("),
     source.indexOf("async function durableQueue("),
   );
-  assert(restore.indexOf("restoreHeld(sessionId)") < restore.indexOf("store.hydrate()"));
-  assert(restore.indexOf("forgetSettledHeld(sessionId, held)") < restore.indexOf("store.resend()"));
+  assert(
+    restore.indexOf("restoreHeld(sessionId)") <
+      restore.indexOf("store.hydrate()"),
+  );
+  assert(
+    restore.indexOf("forgetSettledHeld(sessionId, held)") <
+      restore.indexOf("store.resend()"),
+  );
   assert(restore.includes("qRestores.set(sessionId, restore)"));
 });
 
@@ -65,7 +93,9 @@ Deno.test("a send tapped while the queue is still restoring is saved, not reject
   const store = replicatedStore({
     clientId: "fixture",
     initial: 0,
-    mutators: { add: (value: number, amount: number): number => value + amount },
+    mutators: {
+      add: (value: number, amount: number): number => value + amount,
+    },
     send: (m) => sent.push(m),
     local: owner.outbox<number>("queue"),
   });

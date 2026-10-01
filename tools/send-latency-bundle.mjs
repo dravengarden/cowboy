@@ -34,8 +34,11 @@ await build({
     emptyOutDir: false,
     minify: true,
     lib: {
-      entry: new URL("../web/src/sendLatencyBrowserFixture.ts", import.meta.url)
-        .pathname,
+      entry: new URL(process.argv[3] === "--metadata"
+        ? "../web/src/metadataLatencyBrowserFixture.tsx"
+        : process.argv[3] === "--local"
+        ? "../web/src/localLatencyBrowserFixture.tsx"
+        : "../web/src/sendLatencyBrowserFixture.ts", import.meta.url).pathname,
       formats: ["es"],
       fileName: () => "fixture.js",
     },

@@ -1,9 +1,11 @@
 import { assert } from "jsr:@std/assert";
 
 Deno.test("local delivery failures are reported before callers can swallow them", async () => {
-  const source = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const source = await Deno.readTextFile(
+    new URL("./store.ts", import.meta.url),
+  );
   const start = source.indexOf('"delivery_persist_started"');
-  const persist = source.indexOf("await store.mutateDurably", start);
+  const persist = source.indexOf("await mutateQueueDurably", start);
   const failed = source.indexOf('"delivery_persist_failed"', persist);
   const rethrow = source.indexOf("throw error;", failed);
   const completed = source.indexOf('"delivery_persist_completed"', rethrow);
@@ -16,6 +18,10 @@ Deno.test("local delivery failures are reported before callers can swallow them"
   assert(!reporting.includes("row.text"));
   assert(!reporting.includes("attachments"));
   const rollback = source.slice(persist, failed);
-  assert(rollback.includes("reconcileOptimistic(state.optimisticMessages, sessionId, new Set([cmid]))"));
+  assert(
+    rollback.includes(
+      "reconcileOptimistic(state.optimisticMessages, sessionId, new Set([cmid]))",
+    ),
+  );
   assert(!rollback.includes("clearDraft"));
 });

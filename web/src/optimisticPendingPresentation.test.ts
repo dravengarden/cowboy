@@ -128,9 +128,9 @@ Deno.test("local content paints and reveals before the durable transport barrier
   assert(add.indexOf('qStatus.set(cmid, "committing")') >= 0);
   assert(
     add.indexOf("revealPendingArrival({") <
-      add.indexOf("await store.mutateDurably"),
+      add.indexOf("await mutateQueueDurably"),
   );
-  assert(add.indexOf("await store.mutateDurably") >= 0);
+  assert(add.indexOf("await mutateQueueDurably") >= 0);
   assert(add.includes("rememberSendImagePreviews(cmid, attachments)"));
 
   const activateStart = store.indexOf("export async function activateDraft(");
@@ -141,7 +141,7 @@ Deno.test("local content paints and reveals before the durable transport barrier
   const activate = store.slice(activateStart, activateEnd);
   assert(
     activate.indexOf('qStatus.set(opId, "committing")') <
-      activate.indexOf("await store.mutateDurably"),
+      activate.indexOf("await mutateQueueDurably"),
   );
   assert(activate.includes("row: presented"));
   assert(activate.includes("destination: dest"));
@@ -164,7 +164,7 @@ Deno.test("local content paints and reveals before the durable transport barrier
   const edit = store.slice(editStart, editEnd);
   assert(
     edit.indexOf('qStatus.set(opId, "committing")') <
-      edit.indexOf("await store.mutateDurably"),
+      edit.indexOf("await mutateQueueDurably"),
   );
   assert(edit.includes("qStatus.delete(opId)"));
 
@@ -192,7 +192,9 @@ Deno.test("unfocused pending draft activation actively recovers a missing server
     store.indexOf("async function hydrateSession("),
     store.indexOf("export function retrySessionHydration("),
   );
-  assert(hydration.includes("const retryDraft = needsDraftSource(sessionId) &&"));
+  assert(
+    hydration.includes("const retryDraft = needsDraftSource(sessionId) &&"),
+  );
   assert(hydration.includes("retryTranscript || retryDraft"));
   assert(hydration.includes("retryableFailure = needsDraftSource(sessionId)"));
   assert(hydration.includes('qStatus.set(mutation.id, "failed")'));
