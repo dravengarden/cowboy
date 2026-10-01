@@ -1,0 +1,303 @@
+# Native execution environments
+
+Status: implementation decision and acceptance plan, 2026-10-01. No remote
+session writer, Provider capability, Machine execution grant, or production
+cutover is enabled by this document. The existing Matrix adapter remains a
+compatibility entry point until the native path passes the gates below.
+
+## Product outcome
+
+The Agent runtime stays on OVH. Its model connection, native conversation,
+subscription authentication and private runtime state stay with that runtime.
+Hawk or Falcon supplies the task's files, shell, tools and processes. A normal
+file edit and verification should require the same model-visible operations as
+running the Agent beside the files. Network round trips still cost time.
+
+The remote environment represents a real computer, including its native paths,
+operating system, users, installed toolchain and services. It is not necessarily
+a container or a security sandbox. A container's service manager and filesystem
+must not be presented as the host's when the task concerns the actual host.
+Repository tasks use target-owned isolated worktrees. Host administration uses
+an explicit host-access scope; a repository binding alone does not grant it.
+
+## Ownership decision
+
+Cowboy must understand the environment. A Provider-only SSH wrapper would leave
+Code, Review, uploads, process cancellation, reconnect and cleanup pointed at
+the OVH entry repository. It would also let a resumed session silently execute
+against a different target.
+
+| Concern                                                                         | Owner                                               | Delivery                                     |
+| ------------------------------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------- |
+| Environment identity, selection, authorization and durable session binding      | Cowboy core                                         | Controller and Machine components            |
+| Authenticated routing, streams, cancellation, operation identities and recovery | Cowboy core                                         | Existing Machine transport and lifecycle     |
+| Target worktree, file identity and process ownership                            | Target Machine                                      | Machine-owned execution implementation       |
+| Codex environment protocol and Claude tool translation                          | Respective Agent Provider                           | Existing signed Agent Plugins                |
+| Code, Review, resource views and target health                                  | Cowboy core and their existing capability consumers | Existing Web, Controller and Code boundaries |
+| Physical placement and provisioned logical interfaces                           | Columbus / Stormbird                                | Machine-owned infrastructure configuration   |
+| Logical project aliases                                                         | Matrix configuration                                | Data consumed by workspace resolution        |
+
+Do not add a separately installed SSH Plugin for these native Machines. Do not
+put arbitrary process execution into `workspace_extension`: that contract is
+data-only and provides bounded resource access. A future external environment
+backend may become a Plugin when it has an independently useful implementation,
+but it must consume the same core binding and authorization contracts and use
+the existing signed lifecycle. It cannot own a second installer or supervisor.
+
+```mermaid
+flowchart LR
+    Runtime["OVH: native Agent runtime and subscription"] --> Provider["OVH: existing Provider Plugin"]
+    Provider --> Channel["Cowboy: bound Machine channel"]
+    Binding["Cowboy: durable session/environment binding"] --> Channel
+    Binding --> Code["Code / Review / uploads / cancellation"]
+    Code --> Channel
+    Channel --> Executor["Hawk or Falcon: Machine executor"]
+    Executor --> Workspace["Target worktree, files and processes"]
+```
+
+Keep upstream protocol codecs outside core routing decisions. A reusable
+executor implementation can be an owned, pinned component. Reusing Codex's
+executor code does not make the target depend on an installed, authenticated
+Codex Agent Plugin, and must not borrow another Plugin's private generation.
+
+For the first implementation, prefer a Provider-neutral Machine execution
+contract with upstream codecs in the respective Provider adapter. The Codex
+probe below evaluates upstream primitives; it does not select its entire CLI as
+the mandatory common executor. If a codec requires additional target code,
+declare and pin that code through an owned component and its accepted launch
+contract, rather than reaching into an Agent installation on the target.
+
+### Alternatives considered
+
+| Approach                                          | Fit for this requirement                                                                                                                                                           |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model-authored SSH or `mx` wrappers               | Useful compatibility path; leaves routing, quoting and tool choice in each model turn. Native tools and Code can still disagree.                                                   |
+| SSHFS or a synchronized local checkout            | Can help browsing, but does not move command execution, hooks, processes or services. Chatty filesystem operations and a second writable view require their own consistency model. |
+| Run the whole Agent in the remote VM              | Naturally aligns its tools, but violates the requirement that the Agent runtime and model connection stay on OVH.                                                                  |
+| Redirect only the shell through a sandbox hook    | Insufficient coverage: filesystem tools, image reads, guidance, checkpoints and background-task control need the same target.                                                      |
+| Native session binding and Provider tool adapters | Chosen direction. Keeps one target filesystem and target-owned processes while retaining the native Agent and subscription on OVH. Requires integration and connected acceptance.  |
+
+## Session identity and routing
+
+The current `SessionMeta.machine_id` describes runtime placement; preserve that
+meaning for existing rows and clients. Add a separately versioned execution
+binding rather than relabeling that field or guessing placement from a path. The
+conceptual binding contains:
+
+```text
+session / binding id / binding revision
+runtime Machine / exact Provider generation / auth generation / runtime cwd
+execution Machine / environment incarnation / executor contract and generation
+workspace identity / target worktree identity / target cwd / access scope
+```
+
+These are requirements, not a new accepted JSON schema. Durable migrations,
+strict wire schemas and reader compatibility must precede the first writer.
+Legacy sessions resolve to their original Machine and cwd. A missing remote
+binding, missing target or old reader must never resolve to OVH by default.
+
+The runtime cwd is private OVH state. The execution cwd is a target-native path.
+Do not make paths appear equivalent by rewriting arbitrary tool output or
+mounting a second writable copy. File URLs, absolute paths, symlinks, temporary
+directories and process handles retain their original environment identity.
+
+Consumers use the same core resolver:
+
+- Agent file and shell tools execute against the bound target.
+- Code, Review, Git diff and workspace resources select its worktree and
+  Machine.
+- Uploaded files needed by a command are materialized in that environment;
+  model-only attachments remain ordinary Service attachments.
+- Artifact reads and image viewing consume original target handles.
+- Runtime stop, remote command stop and environment unavailability are distinct
+  states. Killing an OVH process alone is not evidence of remote cancellation.
+- Restart and resume validate the existing binding and native session together.
+  They do not create a fresh worktree or silently switch executors.
+- Deleting a session never treats a target source root as disposable runtime
+  state. Uncommitted task files survive disconnects and component upgrades.
+
+The New Session surface separates Agent runtime from execution environment. For
+this deployment the runtime defaults to OVH. Selecting a logical project
+resolves its target and prepares the environment before the first model turn.
+Show a compact `Agent: OVH · Environment: Hawk` distinction in session details.
+Provider readiness depends on OVH; file and command readiness depends on Hawk.
+
+Matrix entries become configuration references to advertised target workspaces,
+not directory names parsed as routing instructions. For example,
+`hawk/columbus/cowboy` selects a stable workspace identity; its concrete target
+worktree is allocated for that session. Stormbird/Columbus keep ownership of the
+logical interface and its physical route. The Agent receives the target's native
+cwd, shell, OS and project guidance, but needs no SSH host, address, key,
+transfer command or routing argument in ordinary tool calls.
+
+In New Session, select the execution environment/project before the Agent
+Provider. Keep runtime placement in a separate advanced control, defaulting to
+OVH for this installation. Provider choices come from OVH's installed, ready
+releases and are filtered by execution compatibility with the selected target;
+they must not accidentally come from Hawk's installed Agent list. A later
+Recommended-preset or configuration refresh changes preferences, not placement.
+Loading a newer Provider must also validate the existing execution contract,
+without replacing the target, worktree or remote jobs.
+
+Bind once per session initially. A later environment-switch operation must fence
+in-flight tools, retain the origin of existing jobs, replace project guidance
+and advance the binding revision atomically. Each admitted tool call captures
+its binding. Never implement switching with a process-global variable or assume
+`cd` in one shell changes other tools.
+
+## Provider integration
+
+Codex `0.159.3` includes environment selection, remote filesystem and process
+interfaces, target instruction loading, and `codex exec-server`. Its upstream
+tests include `environments.toml` invoking `ssh ... exec-server --listen stdio`.
+The current Cowboy Codex adapter does not yet forward a core execution binding
+when starting/resuming a thread. Add that behavior inside its owned source patch
+and signed release; it is not a new Provider-ID branch in core.
+
+Claude Agent SDK `0.3.284` exposes custom tools, `tools`, `disallowedTools` and
+`toolAliases`; the pinned ACP adapter accepts these through session options. Use
+a small file/process tool facade with familiar schemas and concise results. An
+alias alone does not block harness-internal direct calls. Remove conflicting
+local project tools and verify actual dispatch, including background-task tools,
+search, images, notebooks and any enabled nested-agent tool path.
+
+For Claude, audit implicit local access separately: project instructions,
+settings, hooks, skills, Git context, file checkpoints and language services.
+Transport aliases do not redirect these automatically. Explicitly project the
+target project guidance into the session and execute project-owned hooks beside
+the project. Keep Provider settings, authentication and native session history
+owned by OVH. Unsupported project capabilities must be visible; they must not
+read or modify the entry repository as a fallback.
+
+Subscription authentication remains with the unmodified native CLI and its
+supported login flow. The executor makes no model requests and needs no model
+API key. Do not replace either native runtime with a vendor Managed Agents API
+or copy its credentials into the execution environment. The existing
+Service-scoped authentication contract remains independently authoritative; this
+design does not authorize changing its replication policy.
+
+DeepSeek variants inherit only capabilities accepted for their exact runtime
+generation and retain their separate private state. They do not borrow standard
+Codex or Claude homes. Capability negotiation must fail before starting a remote
+session if its Provider cannot cover the required tool surface.
+
+## Execution contract and efficiency
+
+Core provides an execution capability bound to one session and target; it does
+not give the Provider an arbitrary destination URL, SSH command or credential.
+Production traffic reuses enrolled Machine connections, with bounded streams and
+independent remote process ownership. A direct SSH experiment is protocol
+evidence only, not production enrollment or product authorization evidence.
+
+The minimum contract covers reads, atomic conditional edits, search, process
+start/input/output/wait/cancel and bounded artifact access. Match native output
+conventions. Keep file lookup, edit validation and replacement on the target so
+one model edit does not become a read/download/upload conversation. Commands are
+transmitted as structured argv or an uninterpreted script body and parsed once
+by the selected target shell. Preserve exit status, output order, Unicode,
+binary data, stdin and bounded backpressure.
+
+Keep a persistent execution connection. Background jobs have target-owned
+handles and bounded output retention. Reconnect may query an original operation
+but must not replay an uncertain write or process start. Recovering a transport
+is not proof that a job or executor incarnation survived. Caller retries cannot
+turn an unknown effect into a second invocation.
+
+Expose one project tool surface to the model. Add environment identity outside
+model-generated arguments where possible. Load guidance once and on relevant
+changes; do not prepend routing instructions, connection logs or inventories to
+every result. Preserve native batching and parallel reads, with every request
+capturing its target. Shell syntax mistakes remain possible as they are locally.
+
+## Delivery and acceptance
+
+1. Verify pinned native interfaces in disposable fixtures, without production
+   credentials, model inference, provider upgrades or daemon restarts. Capture
+   executable identities and actual results. Separate protocol proof from
+   subscription, token-cost and live-session acceptance.
+2. Add the core binding readers and typed Machine execution contract, retaining
+   existing local behavior. Accept restart, incarnation loss, unknown outcomes,
+   bounded resources and active/recovery/cold readers before writer activation.
+3. Prepare target worktrees and connect both Provider adapters through the same
+   binding. Bind Code/Review, attachments, artifacts and task cancellation. Core
+   must not infer successful routing from a Provider's displayed label.
+4. Publish immutable Provider releases after their existing gates and install
+   them on OVH through the normal lifecycle. Upgrade native Machine components
+   only through their scoped maintenance path, preserving active workers.
+5. Enable new remote sessions after connected acceptance. Existing Matrix/mx
+   sessions retain their current behavior; their native conversations are not
+   silently rebound. Offer migration only after native resume is proven.
+
+Required comparisons use the same model, preferences, project revision and task
+against local execution and the candidate environment. Include ordinary edits,
+quoted/multiline contents, pinned builds, failures, background processes, target
+switch races, uploads, Code/Review consistency and disconnects after effects.
+Record model-visible tool calls, model round trips, input/output and cached
+tokens, retries, bytes, tool latency and end-to-end time. A no-model protocol
+probe cannot establish token savings or subscription billing.
+
+Completion requires both native Providers to retain subscription authentication,
+execute all project operations on the intended target, preserve native resume,
+and avoid extra model turns for connection setup and transfer. Core routing and
+UI must agree after restart. Missing evidence keeps remote session creation
+unavailable, not partially redirected.
+
+## Reproducible protocol probe
+
+The [2026-10-01 receipt](experiments/execution-environments-2026-10-01.json)
+records two successful runs with the probe process on OVH and native Codex
+`0.159.3` execution on each target. Both passed all eight checks, including the
+observed target hostname and fixture cleanup. These are small metadata RPCs on
+one persistent connection, not Agent task timings or a general network SLA:
+
+| Route                      | Median of 10 sequential metadata requests | Wall time of 10 pipelined metadata requests |
+| -------------------------- | ----------------------------------------- | ------------------------------------------- |
+| OVH to Hawk                | 402 ms per request                        | 711 ms for the batch                        |
+| OVH through Hawk to Falcon | 405 ms per request                        | 722 ms for the batch                        |
+
+The earlier Matrix/SSH command measurements used a different operation and are
+not a controlled speedup comparison. Model-visible turns and token usage have
+not been measured for this candidate. Claude tool dispatch and subscriptions are
+not exercised by these executor probes.
+
+Two packaging/identity observations affect the production contract. Copying the
+Falcon executable alone reported `executorVersion: 0.0.0`, despite `--version`
+printing `0.159.3`; retaining the original `codex-package.json` and `bin` layout
+fixed the handshake. The version check was not weakened. Also, both hosts
+reported the same upstream `providerId`, which describes a build rather than
+Cowboy Machine identity. Neither that field nor a displayed version is target
+authorization or an exact executable digest. The Falcon binary/metadata fixture
+was temporary and has been removed; it was not a complete Plugin installation or
+a sandbox-runtime acceptance test.
+
+[`tools/execution_environment_probe.py`](../tools/execution_environment_probe.py)
+accepts an explicit executor command after `--`. It creates only a uniquely
+named temporary fixture, verifies file bytes, structured argv, stdout/stderr, a
+nonzero exit, shared file/process cwd, stdin, background cancellation, error
+isolation and pipelined reads, and removes its fixture. The current fixture uses
+NixOS Linux tool paths. Invoke it from the pinned project shell:
+
+```sh
+nix develop -c python3 tools/execution_environment_probe.py \
+  --receipt /tmp/execution-probe.json --expected-host hawk \
+  -- /absolute/path/to/pinned/codex exec-server --listen stdio
+```
+
+The command can instead be an already authorized SSH stdio invocation. This
+probe does not enroll a Machine, create a Cowboy session, install or upgrade a
+Plugin, modify authentication, or ask a model to perform work. Its receipt
+explicitly excludes subscription, token-cost, reconnect and Cowboy integration
+acceptance. The executable digest must be checked separately when transporting
+the executable for a disposable target probe.
+
+## Sources
+
+- [Core requirements](requirements.md) and
+  [core/Plugin ownership](plugin-spatiotemporal-design.md)
+- [Existing ACP transport](architecture/01-acp-transport.md)
+- [Workspace extension boundary](workspace-extensions.md)
+- [Matrix compatibility release](releases/matrix-workspaces-2026-10-01.md)
+- [Codex App Server environment interface](https://learn.chatgpt.com/docs/app-server)
+- [Pinned Codex executor source](https://github.com/openai/codex/tree/rust-v0.159.3/codex-rs/exec-server)
+- [Pinned Claude SDK types](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.284/sdk.d.ts)
+- [Claude Code subscription hosting conditions](https://code.claude.com/docs/en/legal-and-compliance)

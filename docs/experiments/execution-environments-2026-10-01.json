@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "kind": "execution_environment_research",
+  "cowboy_inspected_revision": "2316a1e25caf6f76fe2d9227cc12f2695378b549",
+  "probe_path": "tools/execution_environment_probe.py",
+  "probe_sha256": "1cf1c637b4fe1e97a155803db3556b68b7e8ac5b606912f84bb810832483adaf",
+  "status": "native_protocol_probes_passed",
+  "production_activated": false,
+  "transport_acceptance": "direct provisioned SSH stdio only; Cowboy Machine transport is not exercised",
+  "temporary_falcon_executor_removed": true,
+  "packaging_observation": "The binary-only Falcon fixture reported executorVersion 0.0.0 despite CLI --version 0.159.3. Keeping the original codex-package.json and bin layout restored the executor handshake version; no version check was relaxed.",
+  "probes": [
+    {
+      "schema": 1,
+      "kind": "native_executor_protocol_probe",
+      "started_at": "2026-10-01T11:47:26.821022+00:00",
+      "checks": [
+        "target_hostname",
+        "file_roundtrip_unicode_quotes_binary",
+        "argv_streams_and_exit_status",
+        "file_and_process_share_workspace",
+        "process_stdin",
+        "background_process_cancel_and_settle",
+        "error_isolation_on_persistent_connection",
+        "pipelined_reads"
+      ],
+      "fixture_removed": true,
+      "status": "passed",
+      "claims": {
+        "model_inference": false,
+        "subscription_acceptance": false,
+        "cowboy_session_integration": false,
+        "reconnect_acceptance": false,
+        "token_savings_measured": false
+      },
+      "executor": {
+        "version": "0.159.3",
+        "provider_id": "sha256:7005fdb65b40671b255065f62d7c921946a4b5fd61efffe65429081d87843029",
+        "platform": "linux",
+        "observed_hostname": "hawk",
+        "executable_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+      },
+      "metadata_roundtrip_ms": {
+        "samples": [
+          401.94,
+          940.41,
+          401.972,
+          402.024,
+          400.593,
+          401.329,
+          400.43,
+          402.852,
+          767.065,
+          403.714
+        ],
+        "median": 401.998
+      },
+      "metadata_batch_10_ms": 711.27,
+      "placement": {
+        "client": "ovh",
+        "executor": "hawk",
+        "transport": "authorized SSH stdio; one connection",
+        "route": [
+          "hawk"
+        ]
+      },
+      "probe_sha256": "1cf1c637b4fe1e97a155803db3556b68b7e8ac5b606912f84bb810832483adaf"
+    },
+    {
+      "schema": 1,
+      "kind": "native_executor_protocol_probe",
+      "started_at": "2026-10-01T11:54:31.770324+00:00",
+      "checks": [
+        "target_hostname",
+        "file_roundtrip_unicode_quotes_binary",
+        "argv_streams_and_exit_status",
+        "file_and_process_share_workspace",
+        "process_stdin",
+        "background_process_cancel_and_settle",
+        "error_isolation_on_persistent_connection",
+        "pipelined_reads"
+      ],
+      "fixture_removed": true,
+      "status": "passed",
+      "claims": {
+        "model_inference": false,
+        "subscription_acceptance": false,
+        "cowboy_session_integration": false,
+        "reconnect_acceptance": false,
+        "token_savings_measured": false
+      },
+      "executor": {
+        "version": "0.159.3",
+        "provider_id": "sha256:7005fdb65b40671b255065f62d7c921946a4b5fd61efffe65429081d87843029",
+        "platform": "linux",
+        "observed_hostname": "falcon",
+        "executable_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+        "package_manifest_sha256": "969efb3fa54edecc615de3c84289b3676e578420d053145d73b8b0e61421fd32"
+      },
+      "metadata_roundtrip_ms": {
+        "samples": [
+          405.424,
+          403.544,
+          403.369,
+          403.137,
+          559.281,
+          404.523,
+          1624.46,
+          1060.945,
+          404.172,
+          404.71
+        ],
+        "median": 404.616
+      },
+      "metadata_batch_10_ms": 721.838,
+      "placement": {
+        "client": "ovh",
+        "executor": "falcon",
+        "transport": "authorized SSH stdio; one connection",
+        "route": [
+          "hawk",
+          "falcon"
+        ]
+      },
+      "probe_sha256": "1cf1c637b4fe1e97a155803db3556b68b7e8ac5b606912f84bb810832483adaf"
+    }
+  ]
+}
