@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "issue": "Notification enrollment required an admin cookie instead of the product login",
+  "fix_revision": "2260e5a2",
+  "fix": "Exact GET/HEAD config and PUT/DELETE subscription routes use Product authentication; session freshness and cookie mutation origin validation remain enabled",
+  "validation": {
+    "web_push_tests": 3,
+    "product_auth_tests": 39,
+    "cargo_fmt": "passed",
+    "clippy_all_targets_all_features": "passed",
+    "provider_release_coverage": "passed",
+    "actual_service_configuration_preflight": "passed",
+    "anonymous_config": "401 retained",
+    "iphone_enrollment_and_delivery": "pending user retry"
+  },
+  "deployment": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "controller",
+    "transaction": "1790831306780828029-70b5189fc1d5",
+    "revision": "70b5189fc1d5a93f2f84c0d87d76d0b47f7463ca",
+    "published": true,
+    "release": "/nix/store/dn1zxl89yb5wy7di31mpc3nc6001qwg7-cowboy-controller-release",
+    "previousRelease": "/nix/store/y9bnxqg8pc45n7mb53lfw5iyz3mq63an-cowboy-controller-release",
+    "activeRelease": "/nix/store/dn1zxl89yb5wy7di31mpc3nc6001qwg7-cowboy-controller-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T05:08:26.780828029Z",
+    "recordedAt": "2026-10-01T05:08:37.077308619Z",
+    "recovered": false
+  },
+  "postflight": {
+    "/healthz": {
+      "status": 200,
+      "cache_control": null,
+      "body": "ok"
+    },
+    "/version": {
+      "status": 200,
+      "cache_control": null,
+      "body": "{\"version\":\"f6075527157a973494a5b4f523c67217\"}"
+    },
+    "/api/machines/hawk/deployment-health": {
+      "status": 200,
+      "cache_control": null,
+      "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-401a0858f41aa4ab4470\",\"workspace_revision\":\"de7faa3b55e12770d23aa7ac23c5a1cdb8aec91a\",\"workspace_ids_sha256\":\"29024f538a318968883fff43f6c185aa10df6d00d6d28814f17d984a97ba09f8\"}"
+    },
+    "/": {
+      "status": 200,
+      "cache_control": "no-store"
+    },
+    "/sw.js": {
+      "status": 200,
+      "cache_control": "no-store"
+    },
+    "/api/web-push/config": {
+      "status": 401,
+      "cache_control": null
+    }
+  },
+  "unchanged_existing_workers": 18,
+  "machine_pid_unchanged": true,
+  "web_and_machine_release_receipts_unchanged": true
+}
