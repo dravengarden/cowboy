@@ -1,0 +1,58 @@
+{
+  "diagnostic_only": true,
+  "plugin_id": "github",
+  "plugin_version": "0.2.0",
+  "package_digest": "sha256:b3eaaa6024c81a14b0c4eefaef4806fbc6239794776cced4b1eff354b996df56",
+  "fixture_signature_verified": true,
+  "production_changed": false,
+  "publication_accepted": false,
+  "readers": [
+    {
+      "role": "active",
+      "reader": "/nix/store/90qr5ijalm9v6x0spwnjwfqx271jndik-cowboy-controller-release",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "controller",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "dbd19bbf74e039d38962f27ff91eb2e8da4ddcfb",
+        "schema": 1
+      },
+      "exit_code": 1,
+      "detail": "Error: validating Plugin artifact <fixture>/catalog/github.cowboy-plugin\n\nCaused by:\n    unknown field `review`, expected one of `id`, `label`, `endpoint`, `items_pointer`, `detail_endpoint`, `filters`, `fields`, `exclude_if_present` at line 1 column 1386\n",
+      "report": null
+    },
+    {
+      "role": "candidate",
+      "reader": "/nix/store/hq3ghhy1zijnhrk6kxvy3psx7183ya32-cowboy-controller-release",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "controller",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "0bf0ca61e3fa945f0112faef9beb0635b659b33d",
+        "schema": 1
+      },
+      "exit_code": 0,
+      "detail": "",
+      "report": {
+        "schema": "dravengarden.cowboy.catalog-reader-preflight/v1",
+        "status": "readable",
+        "supported_release_schema": 3,
+        "releases": [
+          {
+            "plugin_id": "github",
+            "plugin_version": "0.2.0",
+            "artifact_digest": "sha256:8eceeaa8091f7708dc03cfa6493f5e0b950f297b03bf76d10ac8061c7339998f"
+          }
+        ],
+        "not_checked": [
+          "runtime_artifact_bytes",
+          "host_activation",
+          "database_migrations",
+          "real_login"
+        ]
+      }
+    }
+  ]
+}

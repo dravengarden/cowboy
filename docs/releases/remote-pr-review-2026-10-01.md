@@ -18,6 +18,8 @@ Agent private dependency was upgraded.
   SHA-256: `b96d6442e080a739d19a1f7ae144407a3d11d48c2e66fa6bc673727d60fec807`.
 - Plugin pack 1.10.0 built through the immutable Nix output after refreshing
   the Cargo vendor hash.
+- The complete `just check-compact` gate passed before integration, including
+  19 isolated PostgreSQL tests and optimized executable builds.
 - No physical iPhone or production private-repository authentication acceptance
   is claimed.
 
@@ -40,3 +42,17 @@ installing GitHub 0.2.0 remain explicitly separate maintenance/installation
 steps; do not restart resident Machine or existing sessions as a Web release.
 
 No Controller, Web, Machine, Plugin or iOS release is claimed by this ledger.
+
+## Built candidates
+
+Clean integrated source `0bf0ca61e3fa945f0112faef9beb0635b659b33d` produced:
+
+- Controller: `/nix/store/hq3ghhy1zijnhrk6kxvy3psx7183ya32-cowboy-controller-release`
+- Machine: `/nix/store/djh60qw50afackpp2qsy0q6a5nhjnwdn-cowboy-machine-release`
+- Web: `/nix/store/davmxm1af9x7sv0fhnllpjybhhyrajrl-cowboy-web-release`
+
+The [reader diagnostic](remote-pr-review-reader-diagnostic-2026-10-01.json)
+compares the actual active Controller with this immutable candidate using the
+same verified temporary-signature package. The candidate reads GitHub 0.2.0;
+the active reader refuses it. This proves neither the production recovery/cold
+floor nor publication, installation or host activation acceptance.
