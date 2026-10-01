@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "revision": "e134898396b40a61821f5004808a6eeebc84f1cc",
+  "components": {
+    "controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1790848524715085502-e134898396b4",
+      "revision": "e134898396b40a61821f5004808a6eeebc84f1cc",
+      "published": true,
+      "release": "/nix/store/23yhwbi2hp8cvzhrcgixc1d3qvmw0bgr-cowboy-controller-release",
+      "previousRelease": "/nix/store/j5pblwjsv4yc5rz4kdc2c63vcnhcyk9w-cowboy-controller-release",
+      "activeRelease": "/nix/store/23yhwbi2hp8cvzhrcgixc1d3qvmw0bgr-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T09:55:24.715085502Z",
+      "recordedAt": "2026-10-01T09:55:37.532361988Z",
+      "recovered": false
+    },
+    "web": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1790848575165832962-e134898396b4",
+      "revision": "e134898396b40a61821f5004808a6eeebc84f1cc",
+      "published": true,
+      "release": "/nix/store/i4krpcm21dyaabpnnq46jhi83yakrhps-cowboy-web-release",
+      "previousRelease": "/nix/store/c7nmlr0nr382x52sarhh00a44sxcbhs1-cowboy-web-release",
+      "activeRelease": "/nix/store/i4krpcm21dyaabpnnq46jhi83yakrhps-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T09:56:15.165832962Z",
+      "recordedAt": "2026-10-01T09:56:15.204873493Z",
+      "recovered": false
+    }
+  },
+  "checks": {
+    "health": "ok",
+    "web_version": "2c686b1c72718ad8d0ac7d8db55e9bd4",
+    "service_worker": "cowboy-v1784",
+    "spa_and_worker_cache_control": "no-store",
+    "unauthenticated_policy_put": 401,
+    "machine_and_worker_pids_preserved": 19
+  },
+  "browser": {
+    "bundle": "/tmp/cowboy-transcript-recovery-bundle",
+    "digest": "907af91d2b1289fdd2deb445d19f8195d11c9bf19c2afad09f762f5b0b932769",
+    "scenario": "transcript-recovery",
+    "discoveries": 1,
+    "bootstraps": 4,
+    "attempts": 1,
+    "deliveries": 0,
+    "result": {
+      "ok": true,
+      "samples": [
+        "replica paint",
+        "503 retry",
+        "empty 200 not acknowledgement",
+        "automatic recovery",
+        "no duplicates",
+        "caption cleared"
+      ]
+    }
+  }
+}
