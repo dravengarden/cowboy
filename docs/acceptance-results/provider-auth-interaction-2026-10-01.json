@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "observation": {
+    "official_authenticated_event_read": ["login_state:pending", "login_challenge", "command_result:accepted", "login_state:pending", "login_state:signed_in"],
+    "conclusion": "The observed authorization was accepted and completed. The original phone tap sequence was not instrumented; no claim that it was dropped.",
+    "authorization_codes_or_urls_logged": false
+  },
+  "changes": [
+    "Prefer switching accounts on the existing Provider page if supported; private-browser copy is a disclosed fallback",
+    "Copy button directly reports copying and copied states",
+    "Submit displays a spinner; accepted submission retains visible progress while waiting for Provider",
+    "Reuse reliable touch activation and paired-click suppression for submit, account-switch controls and status checks",
+    "Disable authorization input spell checking and autocorrection"
+  ],
+  "validation": {
+    "frontend_tests_passed": 1964,
+    "typecheck_lint_build": "passed",
+    "react_browser_conformance_cases": 6,
+    "browser_checks": ["same-browser action", "fallback initially hidden", "copy on touch without synthetic click", "paired click does not duplicate copy", "copied button label", "mobile width", "disabled controls"],
+    "review": "Active diff reviewed after deterministic gates",
+    "physical_iphone_new_interactions": "pending"
+  },
+  "deployment": {
+    "revision": "c5d608f90db4bf8c0ec826a17c6788a3f1265f4e",
+    "release": "/nix/store/ml95wygs06q9ak4ahqlycmqgsmx8a1cx-cowboy-web-release",
+    "transaction": "1790829809189110697-c5d608f90db4",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "recorded_at": "2026-10-01T04:43:29.232531655Z",
+    "service_worker": "cowboy-v1778",
+    "healthz": "ok",
+    "controller_pid_unchanged": true,
+    "machine_or_worker_restart_requested": false
+  },
+  "limitations": ["Cowboy cannot create a missing account-switch control on the Provider website", "No native iOS binary changed"]
+}
