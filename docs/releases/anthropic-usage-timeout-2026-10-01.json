@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "source_revision": "f24c04bacf87b5653e6f5bd84b93f45dc5f959c2",
+  "host_configuration_revision": "0968e16f",
+  "machine_id": "ovh",
+  "release": "/nix/store/lfmg11fp9ygylnmq4x6nrcdm6inxr9w0-cowboy-machine-release",
+  "closure_paths": 35,
+  "missing_paths_transferred": 7,
+  "transfer_sha256": "ee09099cffc52a02855128f6dccf727f35e2f53010008b6547c2db9f0bef6a02",
+  "activation": {
+    "previous_pid": 56151,
+    "pid": 228802,
+    "executable": "/nix/store/vigclrqbzldp26fnrxwrqmxbns7d4vrm-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+    "accepted_at_remote_epoch_seconds": 1790850471,
+    "configuration_sha256": "1bff68251375b16da2c61e9b7325f3e413d36ed85fd2b782e2c1124f4b88207a",
+    "rollback_deadline_seconds": 240,
+    "rollback_timer_stopped_after_acceptance": true,
+    "kill_mode_restored": "control-group"
+  },
+  "preservation": {
+    "worker_generation": "worker-dd872931e193f388490f",
+    "worker_executable": "/nix/store/jv46k7qndn8zbjk1xdfhwi4r5garng4m-cowboy-0.1.0/bin/cowboy-acp-worker",
+    "worker_pids": [154815, 154830, 154846, 154862, 155862, 165905, 165906, 168585],
+    "all_worker_start_times_and_executables_unchanged": true,
+    "plugin_inventory_and_credential_readiness_unchanged": true,
+    "new_interactive_conversation_test": false
+  },
+  "before": {
+    "failure": "Machine Plugin host request timed out",
+    "host_budget_seconds": 45,
+    "measured_timeout_seconds": 45.001,
+    "exact_archive_verifier_seconds_for_two_claude_archives": 7.358
+  },
+  "after": [
+    {"query": 1, "status": "available", "stale": false, "queue_ms": 0, "preparation_ms": 27317, "command_ms": 1328, "machine_total_ms": 28646, "cli_total_seconds": 43.633, "observed_at_ms": 1790850418128},
+    {"query": 2, "status": "available", "stale": false, "queue_ms": 0, "preparation_ms": 27378, "command_ms": 1328, "machine_total_ms": 28706, "cli_total_seconds": 29.148, "observed_at_ms": 1790850499691},
+    {"query": 3, "status": "available", "stale": false, "queue_ms": 0, "preparation_ms": 27079, "command_ms": 1315, "machine_total_ms": 28395, "cli_total_seconds": 37.111, "observed_at_ms": 1790850575974}
+  ],
+  "returned_limit_ids": ["claude-five_hour", "claude-seven_day"],
+  "placement": {"anthropic": "ovh", "openai": "hawk", "xai": "hawk", "deepseek": "hawk"},
+  "final_available_accounts": ["anthropic", "openai", "xai", "deepseek"],
+  "validation": {
+    "cowboy_check_compact": "passed",
+    "regression_failed_before_fix": true,
+    "columbus_verify": "passed",
+    "maintenance_safety_tests": 9,
+    "native_reviews": "passed after maintenance corrections",
+    "systemd_native_validation": "passed",
+    "disposable_host_only_stop_preserved_child": true,
+    "integration_first_attempt": "unrelated existing inode-reuse assertion failed; unchanged full rerun passed"
+  }
+}

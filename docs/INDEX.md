@@ -112,6 +112,7 @@ primary phone/desktop product path.
 ### Integrations
 
 - [`releases/usage-execution-2026-10-01.md`](releases/usage-execution-2026-10-01.md) — Account usage placement release, production pins and remaining OVH Anthropic timeout
+- [`releases/anthropic-usage-timeout-2026-10-01.md`](releases/anthropic-usage-timeout-2026-10-01.md) — OVH preparation root cause, host-only repair and three real account queries
 
 - [`usage-execution.md`](usage-execution.md) — Durable account usage Machine selection, CLI and failure behavior
 
