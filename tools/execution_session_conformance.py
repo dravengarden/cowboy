@@ -168,6 +168,10 @@ def main():
     identities = {name: {"path": str(Path(inputs[name]).resolve()),
         "sha256": hashlib.sha256(Path(inputs[name]).read_bytes()).hexdigest()}
         for name in ("controller", "machine", "worker", "keeper", "pack", "native_cli")}
+    if inputs.get("recovery_controller"):
+        path = Path(inputs["recovery_controller"])
+        identities["recovery_controller"] = {"path": str(path.resolve()),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     checks = []
     children = []
     logs = []
@@ -340,6 +344,18 @@ def main():
             first_effect = effects.read_bytes()
             controller.terminate()
             controller.wait(timeout=20)
+            if inputs.get("recovery_controller"):
+                recovery_command = [inputs["recovery_controller"], *controller_command[1:-2]]
+                for index in range(2):
+                    recovery = start(f"recovery-{index}", recovery_command)
+                    wait(lambda: call("GET", "/healthz")[0] == 200, "recovery Controller")
+                    wait(lambda: connected("runtime"), "recovery Machine handshake")
+                    require(info()["execution_binding"] == binding, "recovery reader changed binding")
+                    require(effects.read_bytes() == first_effect, "recovery reader replayed tools")
+                    require(not (Path(meta["cwd"]) / "route.txt").exists(), "recovery reader touched runtime")
+                    recovery.terminate()
+                    recovery.wait(timeout=20)
+                checks.append("actual_recovery_controller_preserves_binding_across_two_cold_opens")
             controller = start("controller-restored", controller_command)
             wait(lambda: call("GET", "/healthz")[0] == 200, "Controller restart")
             wait(lambda: connected("runtime"), "runtime reconnect")
