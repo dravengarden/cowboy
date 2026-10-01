@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "revision": "0edfed9b360cbeac1cd240bb31d7c8ffd4aac24a",
+  "receipts": {
+    "controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1790847030430624560-0edfed9b360c",
+      "revision": "0edfed9b360cbeac1cd240bb31d7c8ffd4aac24a",
+      "published": true,
+      "release": "/nix/store/j5pblwjsv4yc5rz4kdc2c63vcnhcyk9w-cowboy-controller-release",
+      "previousRelease": "/nix/store/1q88gxwz5889brmljy8w4d82qxw95zkb-cowboy-controller-release",
+      "activeRelease": "/nix/store/j5pblwjsv4yc5rz4kdc2c63vcnhcyk9w-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T09:30:30.43062456Z",
+      "recordedAt": "2026-10-01T09:30:42.273638733Z",
+      "recovered": false
+    },
+    "web": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1790847059609990515-0edfed9b360c",
+      "revision": "0edfed9b360cbeac1cd240bb31d7c8ffd4aac24a",
+      "published": true,
+      "release": "/nix/store/c7nmlr0nr382x52sarhh00a44sxcbhs1-cowboy-web-release",
+      "previousRelease": "/nix/store/w3i9ffg0cl5ci0xax1jww6h8ngp40vk9-cowboy-web-release",
+      "activeRelease": "/nix/store/c7nmlr0nr382x52sarhh00a44sxcbhs1-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T09:30:59.609990515Z",
+      "recordedAt": "2026-10-01T09:30:59.646162633Z",
+      "recovered": false
+    }
+  },
+  "configuration": {
+    "anthropic": {
+      "machine_id": "ovh",
+      "selected_machine_id": "ovh",
+      "status": "ready",
+      "detail": null
+    },
+    "deepseek": {
+      "machine_id": "hawk",
+      "selected_machine_id": "hawk",
+      "status": "ready",
+      "detail": null
+    },
+    "openai": {
+      "machine_id": "hawk",
+      "selected_machine_id": "hawk",
+      "status": "ready",
+      "detail": null
+    },
+    "xai": {
+      "machine_id": "hawk",
+      "selected_machine_id": "hawk",
+      "status": "ready",
+      "detail": null
+    }
+  },
+  "query_results": {
+    "anthropic": {
+      "provider": "anthropic",
+      "status": "session-only",
+      "source": "Anthropic",
+      "error": "Plan usage is unavailable. Refresh to try again.",
+      "observed_at_ms": 1790847126630,
+      "refresh": {
+        "last_attempt_at_ms": 1790847126630,
+        "manual_refresh_after_ms": 1790847156630,
+        "next_auto_refresh_at_ms": 1790847426630,
+        "stale": false
+      }
+    },
+    "openai": {
+      "provider": "openai",
+      "status": "available",
+      "source": "OpenAI",
+      "error": null,
+      "observed_at_ms": 1790847158218,
+      "refresh": {
+        "last_attempt_at_ms": 1790847167654,
+        "manual_refresh_after_ms": 1790847197654,
+        "next_auto_refresh_at_ms": 1790847467654,
+        "stale": false
+      }
+    },
+    "xai": {
+      "provider": "xai",
+      "status": "available",
+      "source": "xAI",
+      "error": null,
+      "observed_at_ms": 1790847165643,
+      "refresh": {
+        "last_attempt_at_ms": 1790847167654,
+        "manual_refresh_after_ms": 1790847197654,
+        "next_auto_refresh_at_ms": 1790847467654,
+        "stale": false
+      }
+    },
+    "deepseek": {
+      "provider": "deepseek",
+      "status": "available",
+      "source": "DeepSeek",
+      "error": null,
+      "observed_at_ms": 1790847147060,
+      "refresh": {
+        "last_attempt_at_ms": 1790847167654,
+        "manual_refresh_after_ms": 1790847197654,
+        "next_auto_refresh_at_ms": 1790847467654,
+        "stale": false
+      }
+    }
+  },
+  "dispatch_evidence": [
+    "2026-10-01T09:31:10.927589Z  INFO cowboy::usage::execution: usage execution Machine updated account=\"anthropic\"",
+    "2026-10-01T09:31:10.934972Z  INFO cowboy::usage::execution: usage execution Machine updated account=\"openai\"",
+    "2026-10-01T09:31:10.942227Z  INFO cowboy::usage::execution: usage execution Machine updated account=\"xai\"",
+    "2026-10-01T09:31:10.949544Z  INFO cowboy::usage::execution: usage execution Machine updated account=\"deepseek\"",
+    "2026-10-01T09:31:21.629624Z  INFO cowboy::usage: dispatching account usage collection account=\"anthropic\" machine_id=\"ovh\" plugin_id=\"claude-code\"",
+    "2026-10-01T09:32:06.630839Z  WARN cowboy::usage: provider usage refresh failed provider=\"anthropic\" failure=Transient retained_cached_value=false error=Machine Plugin host request timed out",
+    "2026-10-01T09:32:06.640333Z  INFO cowboy::usage: dispatching account usage collection account=\"deepseek\" machine_id=\"hawk\" plugin_id=\"claude-deepseek\"",
+    "2026-10-01T09:32:27.071971Z  INFO cowboy::usage: dispatching account usage collection account=\"openai\" machine_id=\"hawk\" plugin_id=\"codex\"",
+    "2026-10-01T09:32:38.236844Z  INFO cowboy::usage: dispatching account usage collection account=\"xai\" machine_id=\"hawk\" plugin_id=\"grok\""
+  ],
+  "public": {
+    "health": "ok",
+    "version": "22284acf30b8695b39932f6b7383bf8d",
+    "worker": "cowboy-v1783",
+    "shell_cache_control": "no-store",
+    "worker_cache_control": "no-store",
+    "app_asset": "App-sUiz9OhA.js",
+    "app_sha256": "d6940e18c5a6131840546cacd6540f580576ed1c64161b0cc23873b49d7125ee",
+    "unauthenticated_mutation_status": 401
+  },
+  "ovh": {
+    "machine_pid_before": 56151,
+    "machine_pid_after": 56151,
+    "active_since_utc": "2026-09-30T11:16:10Z",
+    "workers_before": [
+      154815,
+      154830,
+      154846,
+      154862,
+      155862,
+      165905,
+      165906,
+      168585
+    ],
+    "workers_after": [
+      154815,
+      154830,
+      154846,
+      154862,
+      155862,
+      165905,
+      165906,
+      168585
+    ]
+  },
+  "remaining": [
+    "Anthropic account query times out on OVH; full root cause unresolved",
+    "Physical iPhone selector interaction unverified"
+  ]
+}

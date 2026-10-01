@@ -111,6 +111,8 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`releases/usage-execution-2026-10-01.md`](releases/usage-execution-2026-10-01.md) — Account usage placement release, production pins and remaining OVH Anthropic timeout
+
 - [`usage-execution.md`](usage-execution.md) — Durable account usage Machine selection, CLI and failure behavior
 
 - [`releases/message-retry-retention-2026-10-01.md`](releases/message-retry-retention-2026-10-01.md) — Premature delivery confirmation repair, retry retention and OVH Provider diagnostics
