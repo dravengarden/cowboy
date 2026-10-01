@@ -349,8 +349,11 @@ def main():
                 for index in range(2):
                     recovery = start(f"recovery-{index}", recovery_command)
                     wait(lambda: call("GET", "/healthz")[0] == 200, "recovery Controller")
-                    wait(lambda: connected("runtime"), "recovery Machine handshake")
-                    require(info()["execution_binding"] == binding, "recovery reader changed binding")
+                    # Recovery is a reader floor, not permission to run the new
+                    # worker protocol. An older Controller may deliberately
+                    # refuse the upgraded Machine while retaining this record.
+                    wait(lambda: info().get("execution_binding") == binding,
+                         "recovery binding retention")
                     require(effects.read_bytes() == first_effect, "recovery reader replayed tools")
                     require(not (Path(meta["cwd"]) / "route.txt").exists(), "recovery reader touched runtime")
                     recovery.terminate()
