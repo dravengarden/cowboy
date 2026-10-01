@@ -68,6 +68,23 @@ class PublicationReaderTests(unittest.TestCase):
         self.assertEqual(self.inspect(self.report(entries)), "visible")
         self.assertEqual(self.inspect(self.report(list(reversed(entries)))), "visible")
 
+    def test_future_provider_sdk_requires_verified_version_and_explicit_reader_limit(self):
+        self.publication.update(plugin_kind="agent_provider", release_schema=2)
+        def inspect(limit="3.1.11", requested="3.1.12", allow_skip=True, supported=2):
+            report = json.loads(self.report([self.legacy], supported=supported).stdout)
+            report["supported_provider_sdk_version"] = limit
+            result = subprocess.CompletedProcess([], 0, json.dumps(report), "")
+            return publication_reader_result(result, self.legacy, self.publication,
+                allow_skip=allow_skip, provider_sdk_version=requested)["status"]
+        self.assertEqual(inspect(), "skipped_future_provider_sdk")
+        self.assertEqual(inspect(allow_skip=False), "unexpected_inventory")
+        for limit in [None, True, "garbage", "3.1.12", "3.2.0"]:
+            self.assertEqual(inspect(limit=limit), "unexpected_inventory")
+        for requested in [None, True, "garbage", "3.1.11", "3.0.0"]:
+            self.assertEqual(inspect(requested=requested), "unexpected_inventory")
+        for supported in [None, True, "2", 0, -1]:
+            self.assertEqual(inspect(supported=supported), "unexpected_inventory")
+
     def test_only_a_future_outer_envelope_can_be_skipped_without_nested_schema_evidence(self):
         self.assertEqual(self.inspect(self.report([self.legacy])), "skipped_future_envelope")
         self.assertEqual(self.inspect(self.report([self.legacy]), allow_skip=False), "unexpected_inventory")

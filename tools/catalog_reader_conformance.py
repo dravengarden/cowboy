@@ -95,7 +95,10 @@ def publication_reader_result(result, legacy, publication, allow_skip=False,
         stable = lambda value: (tuple(map(int, value.split(".")))
                                 if isinstance(value, str) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value)
                                 else None)
-        if (allow_skip and publication.get("plugin_kind") == "agent_provider"
+        if (allow_skip and type(supported) is int and supported > 0
+                and type(publication["release_schema"]) is int
+                and 0 < publication["release_schema"] <= supported
+                and publication.get("plugin_kind") == "agent_provider"
                 and stable(provider_limit) is not None and stable(provider_sdk_version) is not None
                 and stable(provider_sdk_version) > stable(provider_limit)
                 and actual == [immutable_identity(legacy)]):
