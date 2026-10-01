@@ -6,7 +6,7 @@ creation admission, a target-owned keeper, authenticated routing and a native
 Provider bridge. Eighteen native-turn checks pass, including a lost actual start
 receipt, 35-second transport interruption, image reads and cold resume. These
 checks do not establish cross-host latency or production subscription inference.
-The separate public-session gate passes eight checks through actual product
+The separate public-session gate passes nine checks through actual product
 login, a temporary signed Plugin and two enrolled Machines, including target
 edits, Controller and target Machine restarts, and confirmed deletion while
 preserving work. Its fixture Agent performs no model inference. Both gates use
@@ -15,6 +15,14 @@ drives the built Codex ACP artifact through a real new session and cold load;
 both retain target guidance and the original filesystem without effect replay.
 Receipts: [native worker](experiments/execution-worker-2026-10-02.json) and
 [authenticated sessions](experiments/execution-session-2026-10-02.json).
+The public-session gate also passes with the built
+[cold recovery Controller](experiments/execution-session-cold-floor-2026-10-02.json).
+The [Catalog gate](experiments/execution-catalog-readers-2026-10-02.json) accepts
+all six exact staged releases against the active reader bridge, next-transaction
+recovery reader and built cold reader. These candidate cold-reader results do
+not establish that a host has activated that recovery configuration. See the
+[rollout record](releases/native-execution-rollout-2026-10-02.md) for the current
+production boundary.
 The existing Matrix adapter remains available until the native path is activated.
 The
 [Controller release receipt](releases/execution-binding-readers-2026-10-01.md)

@@ -1,0 +1,652 @@
+{
+  "schema": "cowboy.catalog-publication-conformance/v1",
+  "accepted": true,
+  "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+  "candidate": {
+    "release": "/nix/store/vd0mva862nz1wxlrgz88d86jdpn7mds4-cowboy-controller-release",
+    "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+    "executable_sha256": "sha256:f1cbd310e776419a63a8c2c8b07ffee5f92bebfd97d420a819fcbfa23c82094b"
+  },
+  "sdk_sha256": "sha256:a1924647f223371b742d4b8f8bc531bcbfc75fdcfcaf6bdc3c3b635254f1511b",
+  "publications": [
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "codex",
+        "plugin_version": "3.2.0",
+        "artifact_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c"
+      },
+      "release_schema": 4,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:ef599f12b87ea94d97333b79fbf3234dec3848a02288cee71e0dd72b21d3679e",
+      "package_digest": "sha256:e02c46b4047a5d575cf3c3bdb4b1247ec2fad7f5695d12d96cc4ff46a3d837a7",
+      "host_bundle_digest": "sha256:e7c6ab4e801eb3db6215f0f0d6ba46bb750d0798501ccdc826cf5ba3111e0059",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_envelope"
+        },
+        {
+          "status": "skipped_future_envelope"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "codex",
+        "plugin_version": "3.2.0",
+        "artifact_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c"
+      },
+      "release_schema": 4,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:ef599f12b87ea94d97333b79fbf3234dec3848a02288cee71e0dd72b21d3679e",
+      "package_digest": "sha256:e02c46b4047a5d575cf3c3bdb4b1247ec2fad7f5695d12d96cc4ff46a3d837a7",
+      "host_bundle_digest": "sha256:e7c6ab4e801eb3db6215f0f0d6ba46bb750d0798501ccdc826cf5ba3111e0059",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_envelope"
+        },
+        {
+          "status": "skipped_future_envelope"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release",
+        "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "executable_sha256": "sha256:1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
+      },
+      "release": {
+        "plugin_id": "codex",
+        "plugin_version": "3.2.0",
+        "artifact_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c"
+      },
+      "release_schema": 4,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:ef599f12b87ea94d97333b79fbf3234dec3848a02288cee71e0dd72b21d3679e",
+      "package_digest": "sha256:e02c46b4047a5d575cf3c3bdb4b1247ec2fad7f5695d12d96cc4ff46a3d837a7",
+      "host_bundle_digest": "sha256:e7c6ab4e801eb3db6215f0f0d6ba46bb750d0798501ccdc826cf5ba3111e0059",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.1.38",
+        "artifact_digest": "sha256:b17104d47c736bc6dfb0ef529b754653c2acdc6d8209d42205514dc5514a20f2"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:036ecda616c96499d8f7017c361683a25d5c17d70a84f7350365558187715d1d",
+      "package_digest": "sha256:3726dace128af096c0b5eaf68ae977528c7a08e20f2da28f86a99be1e9d835d9",
+      "host_bundle_digest": "sha256:2e6a0669b944936bb59bb3c336a491165e3770443622111b34e9cfe0add04803",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.1.38",
+        "artifact_digest": "sha256:b17104d47c736bc6dfb0ef529b754653c2acdc6d8209d42205514dc5514a20f2"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:036ecda616c96499d8f7017c361683a25d5c17d70a84f7350365558187715d1d",
+      "package_digest": "sha256:3726dace128af096c0b5eaf68ae977528c7a08e20f2da28f86a99be1e9d835d9",
+      "host_bundle_digest": "sha256:2e6a0669b944936bb59bb3c336a491165e3770443622111b34e9cfe0add04803",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release",
+        "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "executable_sha256": "sha256:1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
+      },
+      "release": {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.1.38",
+        "artifact_digest": "sha256:b17104d47c736bc6dfb0ef529b754653c2acdc6d8209d42205514dc5514a20f2"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:036ecda616c96499d8f7017c361683a25d5c17d70a84f7350365558187715d1d",
+      "package_digest": "sha256:3726dace128af096c0b5eaf68ae977528c7a08e20f2da28f86a99be1e9d835d9",
+      "host_bundle_digest": "sha256:2e6a0669b944936bb59bb3c336a491165e3770443622111b34e9cfe0add04803",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "claude-deepseek",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:5e5149c7d6ade88e447fef7f9dce84dd44a96fe9f061239777086ca99d80795e"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:c95ba7dbcbcfa1ae6dfc22a39a05e3e598045b9aeca9eeaf591f31c57bc6a7eb",
+      "package_digest": "sha256:146ebaec2ed552824a803cfc8de8e1eed2658a91c4ecf61b3a58d4f03d972bd4",
+      "host_bundle_digest": "sha256:2118f26178b5e2db5ef2f259cb688326cf579e7abba7adeae520fc57b1206789",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "claude-deepseek",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:5e5149c7d6ade88e447fef7f9dce84dd44a96fe9f061239777086ca99d80795e"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:c95ba7dbcbcfa1ae6dfc22a39a05e3e598045b9aeca9eeaf591f31c57bc6a7eb",
+      "package_digest": "sha256:146ebaec2ed552824a803cfc8de8e1eed2658a91c4ecf61b3a58d4f03d972bd4",
+      "host_bundle_digest": "sha256:2118f26178b5e2db5ef2f259cb688326cf579e7abba7adeae520fc57b1206789",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release",
+        "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "executable_sha256": "sha256:1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
+      },
+      "release": {
+        "plugin_id": "claude-deepseek",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:5e5149c7d6ade88e447fef7f9dce84dd44a96fe9f061239777086ca99d80795e"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:c95ba7dbcbcfa1ae6dfc22a39a05e3e598045b9aeca9eeaf591f31c57bc6a7eb",
+      "package_digest": "sha256:146ebaec2ed552824a803cfc8de8e1eed2658a91c4ecf61b3a58d4f03d972bd4",
+      "host_bundle_digest": "sha256:2118f26178b5e2db5ef2f259cb688326cf579e7abba7adeae520fc57b1206789",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "codex-deepseek",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:050a705887b26fb984a25a6d0da9d7b4313708c7555f6a61104043f0e500e25d"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:ffe8093f5df2b483140988dc3d3c632ac64e29d706e37ce85663c897d115bfcd",
+      "package_digest": "sha256:37892f736171d2957458c5b04cc23691e18e59f1a0ecf536e89c7ddd31582d91",
+      "host_bundle_digest": "sha256:deb43c2fd43972c077eb504ef26817bf52bc879791e91e3ac79c07425236b717",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "codex-deepseek",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:050a705887b26fb984a25a6d0da9d7b4313708c7555f6a61104043f0e500e25d"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:ffe8093f5df2b483140988dc3d3c632ac64e29d706e37ce85663c897d115bfcd",
+      "package_digest": "sha256:37892f736171d2957458c5b04cc23691e18e59f1a0ecf536e89c7ddd31582d91",
+      "host_bundle_digest": "sha256:deb43c2fd43972c077eb504ef26817bf52bc879791e91e3ac79c07425236b717",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release",
+        "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "executable_sha256": "sha256:1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
+      },
+      "release": {
+        "plugin_id": "codex-deepseek",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:050a705887b26fb984a25a6d0da9d7b4313708c7555f6a61104043f0e500e25d"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:ffe8093f5df2b483140988dc3d3c632ac64e29d706e37ce85663c897d115bfcd",
+      "package_digest": "sha256:37892f736171d2957458c5b04cc23691e18e59f1a0ecf536e89c7ddd31582d91",
+      "host_bundle_digest": "sha256:deb43c2fd43972c077eb504ef26817bf52bc879791e91e3ac79c07425236b717",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "gemini",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:072214b328252778e0572ea7cc4338200eefd5fce809d64dd6bba34efd24ae34"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:eef907540f0907a13cf19f8965519c9b38f2fd071d26c9363f059780d077dd48",
+      "package_digest": "sha256:3fe83a16d7dc7b652f9972a3eb2df64f9879356189f448ebdd07e1cac77a3ef6",
+      "host_bundle_digest": "sha256:d0231c056b66440534668a11a0c06691ff23e27915cc663424bb464adec89e9d",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "gemini",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:072214b328252778e0572ea7cc4338200eefd5fce809d64dd6bba34efd24ae34"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:eef907540f0907a13cf19f8965519c9b38f2fd071d26c9363f059780d077dd48",
+      "package_digest": "sha256:3fe83a16d7dc7b652f9972a3eb2df64f9879356189f448ebdd07e1cac77a3ef6",
+      "host_bundle_digest": "sha256:d0231c056b66440534668a11a0c06691ff23e27915cc663424bb464adec89e9d",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release",
+        "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "executable_sha256": "sha256:1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
+      },
+      "release": {
+        "plugin_id": "gemini",
+        "plugin_version": "3.1.28",
+        "artifact_digest": "sha256:072214b328252778e0572ea7cc4338200eefd5fce809d64dd6bba34efd24ae34"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:eef907540f0907a13cf19f8965519c9b38f2fd071d26c9363f059780d077dd48",
+      "package_digest": "sha256:3fe83a16d7dc7b652f9972a3eb2df64f9879356189f448ebdd07e1cac77a3ef6",
+      "host_bundle_digest": "sha256:d0231c056b66440534668a11a0c06691ff23e27915cc663424bb464adec89e9d",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "grok",
+        "plugin_version": "3.1.29",
+        "artifact_digest": "sha256:b9e2a0904f04591569b291dba908bf51bb3ac93921721e80dc3e140688c73562"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:f20d95636775fbacc043a5ee4b92785b8718a42b054b460df8e1ba779625ca08",
+      "package_digest": "sha256:2178e9607d20a55adf3c35ac12aa6692fe29800642ea02c94e63f05dd0950ac6",
+      "host_bundle_digest": "sha256:da93c54c7f4a134bf39341287cc208255583bf5f995eedabca78edd85d0b5f6c",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "source_revision": "e2ed4f366db44e48d4c400d784df401cdcb1e0a1",
+        "executable_sha256": "sha256:626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      },
+      "release": {
+        "plugin_id": "grok",
+        "plugin_version": "3.1.29",
+        "artifact_digest": "sha256:b9e2a0904f04591569b291dba908bf51bb3ac93921721e80dc3e140688c73562"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:f20d95636775fbacc043a5ee4b92785b8718a42b054b460df8e1ba779625ca08",
+      "package_digest": "sha256:2178e9607d20a55adf3c35ac12aa6692fe29800642ea02c94e63f05dd0950ac6",
+      "host_bundle_digest": "sha256:da93c54c7f4a134bf39341287cc208255583bf5f995eedabca78edd85d0b5f6c",
+      "bridge_cold_reads": [
+        {
+          "status": "skipped_future_provider_sdk"
+        },
+        {
+          "status": "skipped_future_provider_sdk"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release",
+        "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "executable_sha256": "sha256:1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
+      },
+      "release": {
+        "plugin_id": "grok",
+        "plugin_version": "3.1.29",
+        "artifact_digest": "sha256:b9e2a0904f04591569b291dba908bf51bb3ac93921721e80dc3e140688c73562"
+      },
+      "release_schema": 2,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:f20d95636775fbacc043a5ee4b92785b8718a42b054b460df8e1ba779625ca08",
+      "package_digest": "sha256:2178e9607d20a55adf3c35ac12aa6692fe29800642ea02c94e63f05dd0950ac6",
+      "host_bundle_digest": "sha256:da93c54c7f4a134bf39341287cc208255583bf5f995eedabca78edd85d0b5f6c",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    }
+  ],
+  "production_mutated": false,
+  "production_credentials": false,
+  "not_checked": [
+    "production_signature",
+    "actual_role_provenance",
+    "complete_production_catalog_and_host_policy",
+    "historical_pre_host_migration",
+    "runtime_platform_drain_and_installation"
+  ]
+}

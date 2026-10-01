@@ -38,15 +38,15 @@
       "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
     },
     "recovery_controller": {
-      "path": "/nix/store/qhg5nq3p2v0r25agjmgibdgb7cinhn4n-cowboy-0.1.0/bin/cowboy",
-      "sha256": "626a877d4b9801154ad680702043fa40669cb88278ce5cdb4614abd72f15c890"
+      "path": "/nix/store/phg6cib9jf7ygji51ip507fnf390iaj2-cowboy-0.1.0/bin/cowboy",
+      "sha256": "1344b59d9ae6914734c7fd6a253c705f489f732474e43527a9faeeebdeb08128"
     }
   },
   "fixture_release": {
     "release_schema": 4,
     "plugin_id": "execution-fixture",
     "plugin_version": "1.0.0",
-    "artifact_digest": "sha256:118666cd94be9f59ad72fa4ddac6eee17529d9c262a8bca15eb03978579c52b5"
+    "artifact_digest": "sha256:064874587a1ff7ed8e515ef97a74866101db64900ed97bff11647cdf911f69f1"
   },
   "harness_sha256": "aaaf71b1e9b956068e3e752d849c2fc4838f3b260d655b80d8165fa5bf91f770",
   "real_model_requests": 0,
