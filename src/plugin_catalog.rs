@@ -658,6 +658,17 @@ fn load_catalog_root(
         };
         let bytes = fs::read(&path)
             .with_context(|| format!("reading Plugin artifact {}", path.display()))?;
+        if requires_newer_provider_sdk(&bytes)? {
+            // The package is opaque to this reader. It contributes neither a
+            // Catalog identity nor host/install authority. An exact active
+            // host pin still fails closed if only an unsupported release exists.
+            ensure!(
+                PluginPackage::artifact_digest(&bytes) == release.package_digest,
+                "unsupported Plugin package digest mismatch"
+            );
+            tracing::warn!("newer Provider SDK package skipped by Catalog reader");
+            continue;
+        }
         let package = PluginPackage::from_bytes(&bytes)
             .with_context(|| format!("validating Plugin artifact {}", path.display()))?;
         release
@@ -703,6 +714,44 @@ fn load_catalog_root(
         next.insert(key, artifact);
     }
     Ok(())
+}
+
+fn requires_newer_provider_sdk(bytes: &[u8]) -> Result<bool> {
+    // Inspect only the existing typed format discriminator, before decoding a
+    // future Provider vocabulary. Derived structs reject duplicate identity
+    // fields; unknown future fields confer no authority and remain opaque.
+    #[derive(serde::Deserialize)]
+    struct PackageHeader {
+        payload: PayloadHeader,
+    }
+    #[derive(serde::Deserialize)]
+    struct PayloadHeader {
+        kind: PluginKind,
+        contract: ContractHeader,
+    }
+    #[derive(serde::Deserialize)]
+    struct ContractHeader {
+        manifest: Option<ManifestHeader>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ManifestHeader {
+        sdk_version: String,
+    }
+    let header: PackageHeader =
+        serde_json::from_slice(bytes).context("decoding Plugin payload SDK header")?;
+    if header.payload.kind != PluginKind::AgentProvider {
+        return Ok(false);
+    }
+    let version = header
+        .payload
+        .contract
+        .manifest
+        .context("Agent Plugin is missing its Provider manifest")?
+        .sdk_version;
+    ensure!(version.len() <= 128, "Provider SDK version is too long");
+    let requested = semver::Version::parse(&version).context("invalid Provider SDK version")?;
+    let supported = semver::Version::parse(cowboy_provider_sdk::PROVIDER_SDK_VERSION)?;
+    Ok(requested > supported)
 }
 
 fn read_supported_release(path: &Path) -> Result<Option<PluginRelease>> {
@@ -1182,6 +1231,64 @@ mod tests {
                 .to_string()
                 .contains("too large")
         );
+    }
+
+    #[test]
+    fn future_provider_sdk_is_opaque_but_ambiguous_headers_fail() {
+        let mut version =
+            semver::Version::parse(cowboy_provider_sdk::PROVIDER_SDK_VERSION).unwrap();
+        let header = |version: &str| {
+            format!(
+                r#"{{"payload":{{"kind":"agent_provider","contract":{{"manifest":{{"sdk_version":"{version}","future":true}}}}}}}}"#
+            )
+        };
+        assert!(!requires_newer_provider_sdk(header(&version.to_string()).as_bytes()).unwrap());
+        version.patch += 1;
+        assert!(requires_newer_provider_sdk(header(&version.to_string()).as_bytes()).unwrap());
+        for bytes in [
+            r#"{"payload":{"kind":"agent_provider","contract":{}}}"#,
+            r#"{"payload":{"kind":"agent_provider","contract":{"manifest":{"sdk_version":"future"}}}}"#,
+            r#"{"payload":{"kind":"agent_provider","contract":{"manifest":{"sdk_version":"3.1.0","sdk_version":"99.0.0"}}}}"#,
+            r#"{"payload":{"kind":"agent_provider","kind":"code_intelligence","contract":{}}}"#,
+        ] {
+            assert!(requires_newer_provider_sdk(bytes.as_bytes()).is_err());
+        }
+        assert!(
+            !requires_newer_provider_sdk(
+                br#"{"payload":{"kind":"code_intelligence","contract":{"schema_version":1}}}"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn future_provider_sdk_never_grants_catalog_authority() {
+        let fixture = ReaderFixture::new();
+        let root = fixture.0.join("catalog");
+        fs::create_dir(&root).unwrap();
+        let bytes = br#"{"payload":{"kind":"agent_provider","contract":{"manifest":{"sdk_version":"99.0.0"},"future_vocabulary":true}}}"#;
+        let digest = PluginPackage::artifact_digest(bytes);
+        let envelope = serde_json::json!({
+            "release_schema": 1, "plugin_id": "future", "plugin_version": "1.0.0",
+            "plugin_kind": "agent_provider", "package_digest": digest,
+            "artifact_digest": digest, "artifact_url": "https://example.invalid/future.cowboy-plugin",
+            "publisher": "future", "contract_fingerprint": digest, "component_release": "1.0.0",
+            "signature": "", "supported_platforms": [], "runtime_artifacts": []
+        });
+        fs::write(root.join("future.cowboy-plugin"), bytes).unwrap();
+        fs::write(
+            root.join("future.release.json"),
+            serde_json::to_vec(&envelope).unwrap(),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let catalog = PluginCatalog::inspect(&fixture.0, Some(root.clone())).unwrap();
+            assert!(catalog.released_plugins().is_empty());
+            assert!(catalog.resolve("future", Some("1.0.0"), None).is_err());
+            assert!(catalog.host_releases().is_empty());
+        }
+        fs::write(root.join("future.cowboy-plugin"), b"changed").unwrap();
+        assert!(PluginCatalog::inspect(&fixture.0, Some(root)).is_err());
     }
 
     #[test]

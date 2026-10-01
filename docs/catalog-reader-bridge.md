@@ -1,5 +1,26 @@
 # Pre-cutover Catalog reader bridge
 
+## Provider SDK reader floor (2026-10-02)
+
+A shared Provider SDK update can require a newer reader even when an Agent
+retains its outer release schema. The 2026-10-02 candidate inspects the typed
+Provider SDK version before decoding its vocabulary, verifies the package
+digest, and skips a newer SDK without granting Catalog, host or installation
+authority. Supported packages retain full structural and signature validation;
+ambiguous or malformed discriminators still fail. An exact host policy pin
+cannot resolve through an opaque release.
+
+The read-only Catalog report declares `supported_provider_sdk_version`.
+Publication acceptance must compare the SDK version from the independently
+verified exact package with that explicit reader limit, retain every legacy
+identity across two cold reads, and require the successor to read and validate
+the candidate. This is a core reader change; it does not upgrade the embedded
+Providers or admit remote execution. Establish it in the active, next-transaction
+recovery and cold roles before publishing the SDK successor. A built candidate
+is not evidence of an activated production floor.
+
+## Historical outer-envelope bridge
+
 The separate bridge branch is a narrow backport onto deployed Cowboy revision
 `c293e0e91d00744cf4d82034c1be789b30c5e44c`. It prepares that legacy Controller to
 coexist with append-only publication of newer Plugin formats; it does not
