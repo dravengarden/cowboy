@@ -376,6 +376,14 @@ pub struct SessionMeta {
     pub workspace_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_source_path: Option<String>,
+    /// Independent target identity. Absence preserves legacy runtime-local
+    /// execution; an unknown or invalid record must never fall back to it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::execution_environment::deserialize_optional_binding"
+    )]
+    pub execution_binding: Option<crate::execution_environment::ExecutionBinding>,
     pub cwd: String,
     pub title: String,
     pub status: Status,
@@ -438,6 +446,23 @@ pub struct SessionMeta {
     pub owner_username: Option<String>,
 }
 
+impl SessionMeta {
+    /// Reader-first migration: the current worker launch contract has no
+    /// execution grant. Keep a recognized target usable for scoped reads but
+    /// never launch a runtime-local worker for a bound session.
+    pub(crate) fn require_runtime_launch(&self) -> Result<(), String> {
+        if let Some(binding) = &self.execution_binding {
+            binding
+                .for_runtime(&self.machine_id, &self.cwd)
+                .map_err(str::to_owned)?;
+            return Err(
+                "this Cowboy runtime cannot launch bound execution environments yet".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if passes a reference.
 const fn is_zero_u32(value: &u32) -> bool {
     *value == 0
@@ -490,6 +515,7 @@ pub struct SessionRegistration {
     pub workspace_id: Option<String>,
     pub workspace_name: Option<String>,
     pub workspace_source_path: Option<String>,
+    pub execution_binding: Option<crate::execution_environment::ExecutionBinding>,
     pub cwd: String,
     pub title: String,
     pub origin: SessionOrigin,
@@ -2114,12 +2140,27 @@ impl Hub {
         }
     }
 
+    /// Reader-first fence shared by snapshots and streamed events. A native
+    /// id, config update or permission request cannot adopt an unsupported
+    /// environment through the event path while snapshots reject it.
+    pub(crate) fn accepts_runtime_projection(&self, session_id: &str) -> bool {
+        !self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|session| session.meta.require_runtime_launch().is_err())
+    }
+
     /// Decide whether an incoming runtime snapshot may project lifecycle state
     /// into the Hub. A real connected owner atomically settles startup
     /// reconciliation. A broker-only placeholder is ignored while a persisted
     /// Busy turn is still waiting for its owner, so it cannot overwrite Busy
     /// with a speculative Starting/Running state.
     pub fn accept_runtime_snapshot(&self, worker: &WorkerSnapshot) -> bool {
+        if !self.accepts_runtime_projection(&worker.session_id) {
+            return false;
+        }
         if worker.has_connected_owner() {
             let settling = self
                 .inner
@@ -2479,6 +2520,7 @@ impl Hub {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd,
             title,
             origin,
@@ -2501,6 +2543,7 @@ impl Hub {
             workspace_id,
             workspace_name,
             workspace_source_path,
+            execution_binding,
             cwd,
             title,
             origin,
@@ -2520,6 +2563,7 @@ impl Hub {
             workspace_id,
             workspace_name,
             workspace_source_path,
+            execution_binding,
             cwd,
             title,
             status: Status::Starting,
@@ -3511,6 +3555,7 @@ impl Hub {
                 return;
             };
             if session.meta.provider != launch.provider
+                || session.meta.require_runtime_launch().is_err()
                 || session.meta.cwd != launch.cwd
                 || session.meta.provider_auth_generation != launch.provider_auth_generation
                 || session.meta.agent_session_id.is_none()
@@ -3555,6 +3600,11 @@ impl Hub {
                 .ok_or_else(|| format!("unknown session {session_id:?}"))?;
             if session.meta.cwd == cwd {
                 return Ok(());
+            }
+            if session.meta.execution_binding.is_some() {
+                return Err(
+                    "bound execution environment requires an atomic workspace change".into(),
+                );
             }
             let default_title = format!("{} · {}", session.meta.provider, session.meta.cwd);
             let title = (session.meta.title == default_title)
@@ -5326,6 +5376,7 @@ mod session_owner_tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: "/tmp".to_owned(),
             title: "owner stamp".to_owned(),
             origin: SessionOrigin::Web,
@@ -5737,6 +5788,7 @@ mod runtime_reconciliation_tests {
                 workspace_id: None,
                 workspace_name: None,
                 workspace_source_path: None,
+                execution_binding: None,
                 cwd: "/tmp".to_owned(),
                 title: "test".to_owned(),
                 status: Status::Busy,
@@ -8179,6 +8231,7 @@ mod core_tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             origin: SessionOrigin::Web,

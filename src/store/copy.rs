@@ -95,6 +95,11 @@ fn postgres_projection(destination: &str, source: &BTreeMap<String, PgColumn>) -
         format!(
             "CASE WHEN {quoted_source} IS NULL THEN NULL ELSE round(extract(epoch FROM {quoted_source}) * 1000)::bigint END"
         )
+    } else if matches!(column.data_type.as_str(), "json" | "jsonb") {
+        // Encode the JSON document as text inside the transport row. Otherwise
+        // row_to_json + json_extract collapses JSON null into SQL NULL, which
+        // would turn an invalid execution binding into legacy local execution.
+        format!("{quoted_source}::text")
     } else {
         quoted_source
     };
@@ -399,6 +404,75 @@ pub(crate) async fn postgres_to_sqlite(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+    async fn postgres_copy_keeps_execution_binding_json_distinct_from_sql_null() {
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated database URL");
+        let mut source = PgConnection::connect(&url).await.unwrap();
+        let mut destination = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TEMP TABLE sample (id INTEGER, execution_binding JSONB)")
+            .execute(&mut source)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE sample (id INTEGER, execution_binding TEXT CHECK (execution_binding IS NULL OR json_valid(execution_binding)))")
+            .execute(&mut destination).await.unwrap();
+        let records = [
+            None,
+            Some(serde_json::Value::Null),
+            Some(crate::execution_environment::fixture().record().clone()),
+            Some(serde_json::json!({ "schema": 99, "retain": [true, "future"] })),
+            Some(serde_json::json!("unknown")),
+            Some(serde_json::json!(true)),
+            Some(serde_json::json!(42)),
+        ];
+        for (id, record) in records.iter().enumerate() {
+            sqlx::query("INSERT INTO sample VALUES ($1, $2)")
+                .bind(i32::try_from(id).unwrap())
+                .bind(record)
+                .execute(&mut source)
+                .await
+                .unwrap();
+        }
+        let columns = vec!["id".to_owned(), "execution_binding".to_owned()];
+        let source_columns = BTreeMap::from([
+            (
+                "id".into(),
+                PgColumn {
+                    name: "id".into(),
+                    data_type: "integer".into(),
+                },
+            ),
+            (
+                "execution_binding".into(),
+                PgColumn {
+                    name: "execution_binding".into(),
+                    data_type: "jsonb".into(),
+                },
+            ),
+        ]);
+        let projections = columns
+            .iter()
+            .map(|name| postgres_projection(name, &source_columns).unwrap())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows: Vec<String> = sqlx::query_scalar(&format!(
+            "SELECT row_to_json(projected)::text FROM (SELECT {projections} FROM sample) AS projected"
+        )).fetch_all(&mut source).await.unwrap();
+        for row in rows {
+            sqlx::query(&sqlite_insert_sql("sample", &columns).unwrap())
+                .bind(row)
+                .execute(&mut destination)
+                .await
+                .unwrap();
+        }
+        let copied: Vec<Option<serde_json::Value>> =
+            sqlx::query_scalar("SELECT execution_binding FROM sample ORDER BY id")
+                .fetch_all(&mut destination)
+                .await
+                .unwrap();
+        assert_eq!(copied, records);
+    }
 
     #[test]
     fn timestamp_columns_map_to_millisecond_destinations() {

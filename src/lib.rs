@@ -53,6 +53,8 @@ mod deepseek_cache;
 mod deepseek_context;
 #[cfg(feature = "full")]
 mod diff_snapshot;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod execution_environment;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]

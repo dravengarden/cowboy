@@ -81,3 +81,91 @@ fn machine_workspace_and_principal_are_checked_even_with_same_incarnation() {
         meta.owner_user_id = None;
     }
 }
+
+fn bind(hub: &Hub) {
+    create(hub, "remote-session");
+    let mut sessions = hub.inner.sessions.lock();
+    let meta = &mut sessions.get_mut("remote-session").unwrap().meta;
+    meta.machine_id = "ovh".into();
+    meta.cwd = "/runtime/session".into();
+    meta.execution_binding = Some(crate::execution_environment::fixture());
+}
+
+#[test]
+fn execution_environment_routes_code_to_target_without_moving_runtime() {
+    let hub = Hub::new();
+    bind(&hub);
+    let scope = hub.session_code_scope("remote-session").unwrap();
+    assert_eq!(scope.machine_id(), "hawk");
+    assert_eq!(scope.cwd(), "/tasks/cowboy");
+    assert_eq!(scope.workspace_id.as_deref(), Some("cowboy"));
+    let meta = hub.session_info("remote-session").unwrap().meta;
+    assert_eq!(meta.machine_id, "ovh");
+    assert_eq!(meta.cwd, "/runtime/session");
+    assert!(meta.require_runtime_launch().is_err());
+    assert!(
+        hub.update_session_cwd("remote-session", "/different-runtime".into())
+            .is_err()
+    );
+    assert!(hub.code_scope_is_current(&scope));
+
+    for pointer in [
+        "/revision",
+        "/environment/incarnation",
+        "/environment/executor_digest",
+        "/workspace/worktree_id",
+    ] {
+        let mut changed = crate::execution_environment::fixture().record().clone();
+        *changed.pointer_mut(pointer).unwrap() = match pointer {
+            "/revision" => serde_json::json!(2),
+            "/environment/executor_digest" => {
+                serde_json::json!(format!("sha256:{}", "cd".repeat(32)))
+            }
+            _ => serde_json::json!("another-identity"),
+        };
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("remote-session")
+            .unwrap()
+            .meta
+            .execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+            changed,
+        ));
+        assert!(!hub.code_scope_is_current(&scope), "{pointer}");
+        assert!(hub.session_code_scope("remote-session").is_some());
+    }
+}
+
+#[test]
+fn execution_environment_unknown_or_wrong_runtime_never_resolves_as_local() {
+    let hub = Hub::new();
+    bind(&hub);
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!({"schema": 2}),
+        serde_json::json!(false),
+    ] {
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("remote-session")
+            .unwrap()
+            .meta
+            .execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+            value,
+        ));
+        let meta = hub.session_info("remote-session").unwrap().meta;
+        let restored: crate::core::SessionMeta =
+            serde_json::from_value(serde_json::to_value(&meta).unwrap()).unwrap();
+        assert_eq!(restored.execution_binding, meta.execution_binding);
+        assert!(restored.require_runtime_launch().is_err());
+        assert!(hub.session_code_scope("remote-session").is_none());
+    }
+    let mut sessions = hub.inner.sessions.lock();
+    let meta = &mut sessions.get_mut("remote-session").unwrap().meta;
+    meta.execution_binding = Some(crate::execution_environment::fixture());
+    meta.machine_id = "falcon".into();
+    drop(sessions);
+    assert!(hub.session_code_scope("remote-session").is_none());
+}

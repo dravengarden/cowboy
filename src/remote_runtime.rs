@@ -897,6 +897,16 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         .collect();
     commands.sort_by_key(|(_, command)| command_priority(command));
     for (key, command) in commands {
+        if command
+            .session_id()
+            .is_some_and(|id| !shared.hub.accepts_runtime_projection(id))
+            && !matches!(
+                command,
+                CoreCommand::StopSession { .. } | CoreCommand::Cancel { .. }
+            )
+        {
+            continue;
+        }
         if let CoreCommand::Prompt { session_id, .. } = &command {
             let startups = shared.config_startups.lock();
             if startups.contains(session_id) || !shared.pending.lock().contains_key(&key) {
@@ -939,6 +949,9 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
     let mut declarations: Vec<_> = shared.declarations.lock().values().cloned().collect();
     declarations.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     for mut session in declarations {
+        if !shared.hub.accepts_runtime_projection(&session.session_id) {
+            continue;
+        }
         session.adopt_only = true;
         write_broker_frame(
             writer,
@@ -1044,7 +1057,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         runtime_seq,
                         "ignoring stale idle status while a newer turn is active"
                     );
-                } else if !resetting {
+                } else if !resetting && shared.hub.accepts_runtime_projection(&session_id) {
                     if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
                         telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
                     }
@@ -1266,6 +1279,9 @@ fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
 }
 
 fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
+    if !shared.hub.accepts_runtime_projection(&worker.session_id) {
+        return;
+    }
     let Some(mut session) = worker.launch.clone() else {
         return;
     };
@@ -1726,7 +1742,11 @@ fn apply_worker_status(hub: &Hub, session_id: &str, state: WorkerState, detail: 
     hub.set_status(session_id, status, detail);
 }
 
+#[allow(clippy::too_many_lines)] // Keep the exhaustive lifecycle projection behind one binding fence.
 fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
+    if !hub.accepts_runtime_projection(session_id) {
+        return;
+    }
     match event {
         RuntimeEvent::Ready { agent_session_id } => {
             if let Some(agent_session_id) = agent_session_id {
@@ -1960,6 +1980,9 @@ fn handle_rejected_command(
 }
 
 fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
+    if !shared.hub.accepts_runtime_projection(session_id) {
+        return;
+    }
     let Some(mut session) = shared
         .declarations
         .lock()
@@ -2014,6 +2037,106 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One restored binding exercises every adoption/replay boundary.
+    async fn execution_environment_restore_rejects_events_and_worker_adoption() {
+        for binding in [
+            crate::execution_environment::fixture(),
+            crate::execution_environment::ExecutionBinding::from_record(serde_json::json!({
+                "schema": 99, "retained": "future"
+            })),
+            crate::execution_environment::ExecutionBinding::from_record(serde_json::Value::Null),
+        ] {
+            let hub = Hub::new();
+            hub.create_session(crate::core::SessionRegistration {
+                id: "s".into(),
+                provider: "codex".into(),
+                provider_version: "1.0.0".into(),
+                provider_generation_digest: "sha256:original".into(),
+                provider_auth_generation: Some(7),
+                provider_behavior: None,
+                machine_id: "ovh".into(),
+                workspace_id: None,
+                workspace_name: None,
+                workspace_source_path: None,
+                execution_binding: Some(binding.clone()),
+                cwd: "/runtime/session".into(),
+                title: "test".into(),
+                origin: crate::core::SessionOrigin::Web,
+                system: false,
+                owner_user_id: None,
+                owner_username: None,
+            });
+            hub.set_agent_session_id("s", "original-native".into());
+            hub.set_config_options(
+                "s",
+                serde_json::json!([{ "id": "model", "currentValue": "original" }]),
+            );
+            let before = serde_json::to_value(hub.session_info("s").unwrap()).unwrap();
+            let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+            let mut worker = snapshot("s");
+            worker.agent_session_id = Some("different-native".into());
+            worker.config_options =
+                Some(serde_json::json!([{ "id": "model", "currentValue": "different" }]));
+            assert!(!apply_snapshot(&runtime.shared, &worker));
+            update_worker_snapshots(&runtime.shared, vec![worker.clone()]);
+            assert!(runtime.shared.declarations.lock().is_empty());
+            reset_after_workspace_replacement(&runtime.shared, "s");
+            assert!(runtime.pending_for_test().is_empty());
+            for event in [
+                RuntimeEvent::Ready {
+                    agent_session_id: Some("different-native".into()),
+                },
+                RuntimeEvent::ConfigOptions {
+                    options: serde_json::json!([]),
+                },
+                RuntimeEvent::Status {
+                    state: WorkerState::Running,
+                    detail: None,
+                },
+            ] {
+                apply_event(&hub, "s", event);
+            }
+            assert_eq!(
+                serde_json::to_value(hub.session_info("s").unwrap()).unwrap(),
+                before
+            );
+            assert_eq!(
+                hub.session_info("s").unwrap().meta.execution_binding,
+                Some(binding)
+            );
+
+            // Even an already-retained legacy launch cannot cross a reconnect
+            // as a local Ensure/config/prompt. Explicit Stop/Cancel remain usable.
+            let launch = worker.launch.unwrap();
+            runtime
+                .shared
+                .declarations
+                .lock()
+                .insert("s".into(), launch.clone());
+            runtime.queue(
+                "ensure:s".into(),
+                CoreCommand::EnsureSession { session: launch },
+            );
+            runtime.set_config_option("s", "model", serde_json::json!("different"));
+            runtime.prompt("s", vec![], None);
+            let mut bytes = Vec::new();
+            send_declarations(&runtime.shared, &mut bytes)
+                .await
+                .unwrap();
+            assert!(bytes.is_empty());
+            assert!(pending_wire_commands(&runtime).await.is_empty());
+            runtime.cancel("s");
+            runtime.stop("s");
+            let stop_commands = pending_wire_commands(&runtime).await;
+            assert_eq!(stop_commands.len(), 2);
+            assert!(stop_commands.iter().all(|command| matches!(
+                command,
+                CoreCommand::Cancel { .. } | CoreCommand::StopSession { .. }
+            )));
+        }
+    }
 
     #[tokio::test]
     async fn background_task_level_is_session_metadata_restored_from_snapshots() {
@@ -2311,6 +2434,7 @@ mod tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             origin: crate::core::SessionOrigin::Web,

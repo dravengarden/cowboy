@@ -1,9 +1,9 @@
 # Native execution environments
 
-Status: implementation decision and acceptance plan, 2026-10-01. No remote
-session writer, Provider capability, Machine execution grant, or production
-cutover is enabled by this document. The existing Matrix adapter remains a
-compatibility entry point until the native path passes the gates below.
+Status: core binding readers implemented, 2026-10-01. Remote session creation,
+Provider tool adapters and Machine execution grants remain disabled. The
+existing Matrix adapter remains a compatibility entry point until the native
+path passes the gates below. Reader support alone is not remote execution.
 
 ## Product outcome
 
@@ -91,10 +91,33 @@ execution Machine / environment incarnation / executor contract and generation
 workspace identity / target worktree identity / target cwd / access scope
 ```
 
-These are requirements, not a new accepted JSON schema. Durable migrations,
-strict wire schemas and reader compatibility must precede the first writer.
-Legacy sessions resolve to their original Machine and cwd. A missing remote
-binding, missing target or old reader must never resolve to OVH by default.
+The metadata codec is now defined in
+[`src/execution_environment.rs`](../src/execution_environment.rs): schema 1
+records the binding ID/revision, runtime location, target environment identity,
+executor digest/protocol, workspace/worktree identity and access scope. The
+session retains its existing exact Provider and authentication generations. This
+is an identity record, not a Machine execution grant or worker launch contract.
+Durable migrations and reader compatibility precede the first writer. Legacy
+sessions resolve to their original Machine and cwd. A missing remote target or
+unsupported binding must never resolve to OVH by default.
+
+PostgreSQL migration 0053 and SQLite migration 0027 retain this independent
+record. Absent fields/SQL NULL mean legacy placement; a present JSON null is an
+invalid binding and stays present across metadata serialization and database
+restore. Unknown versions and fields are retained without interpretation. The
+PostgreSQL-to-SQLite copier carries JSON columns as documents so JSON null
+cannot collapse into SQL NULL. Code read/cache scopes include the entire
+recognized binding; changes to its revision, environment incarnation, executor
+or worktree invalidate previous scopes even when paths match. Missing target
+connections never select the runtime connection instead.
+
+Until the execution launch contract is implemented, all present bindings refuse
+runtime start, adoption, configuration replay and native event projection. A
+reconnect cannot resend an old local worker declaration for them; explicit
+runtime Stop/Cancel remain available. The Web/API do not create bound sessions.
+Older Controller generations do not read the new column: this candidate does not
+establish a production active/recovery/cold reader floor or authorize a writer
+rollout. That floor must be established before enabling creation.
 
 The runtime cwd is private OVH state. The execution cwd is a target-native path.
 Do not make paths appear equivalent by rewriting arbitrary tool output or
@@ -243,6 +266,27 @@ UI must agree after restart. Missing evidence keeps remote session creation
 unavailable, not partially redirected.
 
 ## Reproducible protocol probe
+
+The
+[native binding receipt](experiments/execution-native-binding-2026-10-01.json)
+adds six checks against the exact same native executable. In a disposable
+network namespace, with separate closed homes and runtime/target directories,
+`environment/add` and `thread/start` retain both locations, load only the
+target's `AGENTS.md`, refuse an unknown environment, and do not create global
+`environments.toml`. There is no model turn or production authentication. The
+native response's top-level `cwd` still describes the runtime; consumers must
+use `thread.environments` for execution placement. These checks do not prove
+native resume: a thread without a materialized conversation cannot establish
+warm or cold conversation recovery.
+
+Run
+[`tools/execution_environment_native_probe.py`](../tools/execution_environment_native_probe.py)
+inside `unshare --user --map-current-user --keep-caps --net`, enabling only
+loopback. Supply the complete native executable/resource layout with
+`--native-cli`, its exact `--version` and `--sha256`, and a new absolute
+`--receipt` path. It refuses ordinary host networking and inherits no runtime
+credentials. This complements the cross-host executor probe below; it does not
+exercise an enrolled Cowboy Machine channel or a Provider release.
 
 The [2026-10-01 receipt](experiments/execution-environments-2026-10-01.json)
 records two successful runs with the probe process on OVH and native Codex

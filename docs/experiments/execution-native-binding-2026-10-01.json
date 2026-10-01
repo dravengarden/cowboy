@@ -1,0 +1,23 @@
+{
+  "schema": "cowboy.native-environment-probe/v1",
+  "accepted": true,
+  "native_cli": {
+    "version": "0.159.3",
+    "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+  },
+  "checks": [
+    "exact_native_version",
+    "separate_execution_cwd",
+    "native_thread_retains_runtime_and_execution_locations",
+    "target_guidance_without_runtime_guidance",
+    "unknown_environment_refused_without_local_fallback",
+    "no_global_environment_configuration_written"
+  ],
+  "topology": "isolated_loopback_distinct_homes_and_workspaces",
+  "model_requests": 0,
+  "production_credentials": false,
+  "proves_cowboy_routing": false,
+  "proves_native_resume": false,
+  "proves_subscription": false,
+  "proves_token_savings": false
+}

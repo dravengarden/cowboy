@@ -89,6 +89,7 @@ async fn language_queries_never_adopt_replacement_routes_or_changed_sessions() {
                 workspace_id: None,
                 workspace_name: None,
                 workspace_source_path: None,
+                execution_binding: None,
                 cwd: "/worktree".into(),
                 title: "fixture".into(),
                 origin: SessionOrigin::default(),

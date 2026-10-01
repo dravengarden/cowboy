@@ -2137,6 +2137,7 @@ mod tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             status: Status::Busy,

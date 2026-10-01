@@ -55,6 +55,7 @@ pub(crate) struct SessionCodeScope {
     workspace_id: Option<String>,
     cwd: String,
     owner_user_id: Option<String>,
+    execution_binding: Option<Arc<crate::execution_environment::BindingV1>>,
 }
 
 impl SessionCodeScope {
@@ -64,17 +65,45 @@ impl SessionCodeScope {
             + self.workspace_id.as_ref().map_or(0, String::len)
             + self.cwd.len()
             + self.owner_user_id.as_ref().map_or(0, String::len)
+            + self
+                .execution_binding
+                .as_deref()
+                .map_or(0, crate::execution_environment::BindingV1::string_bytes)
     }
 
-    fn observe(session: &Session) -> Self {
-        Self {
+    fn observe(session: &Session) -> Option<Self> {
+        let execution_binding = session
+            .meta
+            .execution_binding
+            .as_ref()
+            .map(|binding| binding.for_runtime(&session.meta.machine_id, &session.meta.cwd))
+            .transpose()
+            .ok()?;
+        let (machine_id, workspace_id, cwd) = execution_binding.as_ref().map_or_else(
+            || {
+                (
+                    session.meta.machine_id.clone(),
+                    session.meta.workspace_id.clone(),
+                    session.meta.cwd.clone(),
+                )
+            },
+            |binding| {
+                (
+                    binding.environment.machine_id.clone(),
+                    Some(binding.workspace.id.clone()),
+                    binding.workspace.cwd.clone(),
+                )
+            },
+        );
+        Some(Self {
             incarnation: session.code_incarnation.clone(),
             session_id: session.meta.id.clone(),
-            machine_id: session.meta.machine_id.clone(),
-            workspace_id: session.meta.workspace_id.clone(),
-            cwd: session.meta.cwd.clone(),
+            machine_id,
+            workspace_id,
+            cwd,
             owner_user_id: session.meta.owner_user_id.clone(),
-        }
+            execution_binding: execution_binding.map(Arc::new),
+        })
     }
 
     pub(crate) fn machine_id(&self) -> &str {
@@ -96,7 +125,7 @@ impl Hub {
             .sessions
             .lock()
             .get(session_id)
-            .map(SessionCodeScope::observe)
+            .and_then(SessionCodeScope::observe)
     }
 
     /// Recheck the exact original observation. Removal, replacement or cwd ABA

@@ -29,12 +29,13 @@ def require(condition, message):
 
 
 class Executor:
-    def __init__(self, command, timeout):
+    def __init__(self, command, timeout, *, environment=None, cwd=None):
         self.timeout = timeout
         # Never collect a transport's stderr: it may contain private diagnostics.
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, bufsize=0,
+            env=environment, cwd=cwd,
         )
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)

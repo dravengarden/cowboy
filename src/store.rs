@@ -3161,7 +3161,7 @@ impl PostgresStorage {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
-             cwd, title, origin, status, agent_session_id, \
+             execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
              config_options, config_preferences, mobile_review_state, folder_id, \
              owner_user_id, \
@@ -3598,8 +3598,8 @@ impl PostgresStorage {
         sqlx::query(
             "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
-             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)",
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17)",
         )
         .bind(&m.id)
         .bind(&m.provider)
@@ -3622,6 +3622,7 @@ impl PostgresStorage {
         .bind(status_to_str(m.status))
         .bind(m.system)
         .bind(m.owner_user_id.as_deref())
+        .bind(m.execution_binding.as_ref().map(crate::execution_environment::ExecutionBinding::record))
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT session {}", m.id))?;
@@ -8669,6 +8670,7 @@ struct SessionRow {
     workspace_id: Option<String>,
     workspace_name: Option<String>,
     workspace_source_path: Option<String>,
+    execution_binding: Option<serde_json::Value>,
     cwd: String,
     title: String,
     origin: String,
@@ -8703,6 +8705,9 @@ impl SessionRow {
             workspace_id: self.workspace_id,
             workspace_name: self.workspace_name,
             workspace_source_path: self.workspace_source_path,
+            execution_binding: self
+                .execution_binding
+                .map(crate::execution_environment::ExecutionBinding::from_record),
             cwd: self.cwd,
             title: self.title,
             status: status_from_str(&self.status),
@@ -8750,6 +8755,7 @@ mod storage_contract_tests {
             workspace_id: Some("cowboy".to_owned()),
             workspace_name: Some("Cowboy".to_owned()),
             workspace_source_path: Some("/tmp/cowboy".to_owned()),
+            execution_binding: None,
             cwd: "/tmp/cowboy-worktree".to_owned(),
             title: "Storage contract".to_owned(),
             status: Status::Starting,
@@ -8773,6 +8779,76 @@ mod storage_contract_tests {
         assert!(valid_machine_id(&id), "{id}");
         assert!(id.starts_with("m-"), "{id}");
         assert_eq!(id.len(), 18, "{id}");
+    }
+
+    async fn execution_binding_restore_contract(url: &str, root: &std::path::Path) {
+        use crate::execution_environment::ExecutionBinding;
+        let store = Store::connect(url, root.join("artifacts")).await.unwrap();
+        store.migrate().await.unwrap();
+        let mut known = crate::execution_environment::fixture().record().clone();
+        known["runtime"]["machine_id"] = "hawk".into();
+        known["runtime"]["cwd"] = "/tmp/cowboy-worktree".into();
+        known["environment"]["machine_id"] = "falcon".into();
+        let mut unknown = known.clone();
+        unknown["schema"] = 99.into();
+        unknown["future_field"] = serde_json::json!({"preserve": [1, 2, 3]});
+        let records = [
+            None,
+            Some(known),
+            Some(unknown),
+            Some(serde_json::Value::Null),
+        ];
+        for (index, record) in records.iter().enumerate() {
+            let mut meta = session(&format!("execution-binding-{index}"));
+            meta.execution_binding = record.clone().map(ExecutionBinding::from_record);
+            store.insert_session(&meta).await.unwrap();
+        }
+        drop(store);
+        // A second real database open exercises the persisted column, rather
+        // than a cached Hub copy. Unknown records survive alongside local ones.
+        let reopened = Store::connect(url, root.join("artifacts")).await.unwrap();
+        reopened.migrate().await.unwrap();
+        let rows = reopened.load_all().await.unwrap();
+        for (index, record) in records.iter().enumerate() {
+            let meta = &rows
+                .iter()
+                .find(|row| row.meta.id == format!("execution-binding-{index}"))
+                .unwrap()
+                .meta;
+            assert_eq!(
+                meta.execution_binding
+                    .as_ref()
+                    .map(ExecutionBinding::record),
+                record.as_ref()
+            );
+            assert_eq!(meta.require_runtime_launch().is_ok(), index == 0);
+            assert_eq!(meta.machine_id, "hawk");
+            assert_eq!(meta.cwd, "/tmp/cowboy-worktree");
+            if index == 1 {
+                let binding = meta.execution_binding.as_ref().unwrap().decode().unwrap();
+                assert_eq!(binding.environment.machine_id, "falcon");
+                assert_eq!(binding.workspace.cwd, "/tasks/cowboy");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_execution_environment_binding_survives_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}",
+            root.path().join("sessions.sqlite3").display()
+        );
+        execution_binding_restore_contract(&url, root.path()).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+    async fn postgres_execution_environment_binding_survives_restore() {
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+        let root = tempfile::tempdir().unwrap();
+        execution_binding_restore_contract(&url, root.path()).await;
     }
 
     #[test]

@@ -194,6 +194,7 @@ impl Supervisor {
             workspace_id: workspace.map(|value| value.id.clone()),
             workspace_name: workspace.map(|value| value.display_name.clone()),
             workspace_source_path: workspace.map(|value| value.canonical_path.clone()),
+            execution_binding: None,
             cwd: cwd.display().to_string(),
             title,
             origin,
@@ -219,6 +220,7 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        meta.require_runtime_launch()?;
         let spec = if meta.provider_generation_digest.is_empty() {
             provider::lookup(&meta.provider)
         } else {
@@ -281,6 +283,7 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        meta.require_runtime_launch()?;
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
@@ -446,6 +449,7 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        meta.require_runtime_launch()?;
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
@@ -775,6 +779,7 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        meta.require_runtime_launch()?;
         // Remote paths belong to the selected Machine and are validated by
         // its trusted-workspace boundary. Never reinterpret them against the
         // controller's local workspace layout during resume.
@@ -922,6 +927,7 @@ mod tests {
             workspace_id: Some("columbus".to_owned()),
             workspace_name: Some("columbus".to_owned()),
             workspace_source_path: Some(cwd.to_owned()),
+            execution_binding: None,
             cwd: cwd.to_owned(),
             title: "test".to_owned(),
             origin: SessionOrigin::Web,
@@ -954,6 +960,7 @@ mod tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: cwd.display().to_string(),
             title: "test".to_owned(),
             origin: SessionOrigin::Web,
@@ -1504,6 +1511,7 @@ mod tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: root.path().display().to_string(),
             title: "test".to_owned(),
             origin: SessionOrigin::Web,

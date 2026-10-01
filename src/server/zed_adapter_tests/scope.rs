@@ -14,6 +14,7 @@ pub(super) fn create(hub: &Hub, machine: &str) {
         workspace_id: Some("workspace".into()),
         workspace_name: None,
         workspace_source_path: None,
+        execution_binding: None,
         cwd: "/work/a".into(),
         title: "title".into(),
         origin: SessionOrigin::default(),

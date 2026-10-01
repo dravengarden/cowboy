@@ -360,6 +360,7 @@ struct SqliteSessionRow {
     workspace_id: Option<String>,
     workspace_name: Option<String>,
     workspace_source_path: Option<String>,
+    execution_binding: Option<serde_json::Value>,
     cwd: String,
     title: String,
     origin: String,
@@ -1564,6 +1565,9 @@ impl SqliteSessionRow {
             workspace_id: self.workspace_id,
             workspace_name: self.workspace_name,
             workspace_source_path: self.workspace_source_path,
+            execution_binding: self
+                .execution_binding
+                .map(crate::execution_environment::ExecutionBinding::from_record),
             cwd: self.cwd,
             title: self.title,
             status: status_from_str(&self.status),
@@ -2244,7 +2248,7 @@ impl SqliteStorage {
         let session_rows: Vec<SqliteSessionRow> = sqlx::query_as(
             "SELECT id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
-             cwd, title, origin, status, agent_session_id, \
+             execution_binding, cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
              config_options, config_preferences, mobile_review_state, folder_id, \
              owner_user_id, \
@@ -2574,8 +2578,8 @@ impl SqliteStorage {
         sqlx::query(
             "INSERT INTO sessions(id, provider, provider_version, provider_generation_digest, \
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, \
-             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16)",
+             workspace_source_path, cwd, title, origin, status, next_seq, system, owner_user_id, execution_binding) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16, ?17)",
         )
         .bind(&meta.id)
         .bind(&meta.provider)
@@ -2601,6 +2605,7 @@ impl SqliteStorage {
         .bind(status_to_str(meta.status))
         .bind(meta.system)
         .bind(meta.owner_user_id.as_deref())
+        .bind(meta.execution_binding.as_ref().map(crate::execution_environment::ExecutionBinding::record))
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT SQLite session {}", meta.id))?;

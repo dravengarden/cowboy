@@ -98,6 +98,7 @@ pub(super) fn create_owned(hub: &Hub, machine: &str, user: &str) {
         workspace_id: Some("workspace".into()),
         workspace_name: None,
         workspace_source_path: None,
+        execution_binding: None,
         cwd: "/original/worktree".into(),
         title: "fixture".into(),
         origin: SessionOrigin::default(),

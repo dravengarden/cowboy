@@ -121,6 +121,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
         workspace_id: None,
         workspace_name: None,
         workspace_source_path: None,
+        execution_binding: None,
         cwd: "/tmp".to_owned(),
         title: "owner stamp".to_owned(),
         status: Status::Starting,

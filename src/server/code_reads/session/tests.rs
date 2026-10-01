@@ -24,6 +24,7 @@ fn create(hub: &Hub, id: &str, machine: &str) {
         workspace_id: Some("workspace".into()),
         workspace_name: None,
         workspace_source_path: None,
+        execution_binding: None,
         cwd: worktree(),
         title: "fixture".into(),
         origin: SessionOrigin::default(),
@@ -154,6 +155,51 @@ fn session_read_routes_keep_metadata_and_independent_sessions_but_not_cwd_aba() 
     create(&hub, "one", "machine");
     assert!(!current(&hub, &control, &first));
     assert_eq!(scope(&hub, &control, "two"), second);
+}
+
+#[test]
+fn execution_environment_reads_follow_target_connection_and_never_runtime_fallback() {
+    let hub = Hub::new();
+    let control = MachineControl::default();
+    hub.create_session(SessionRegistration {
+        id: "bound".into(),
+        provider: "codex".into(),
+        provider_version: String::new(),
+        provider_generation_digest: String::new(),
+        provider_auth_generation: None,
+        provider_behavior: None,
+        machine_id: "ovh".into(),
+        workspace_id: None,
+        workspace_name: None,
+        workspace_source_path: None,
+        execution_binding: Some(crate::execution_environment::fixture()),
+        cwd: "/runtime/session".into(),
+        title: "remote".into(),
+        origin: SessionOrigin::Web,
+        system: false,
+        owner_user_id: Some("user".into()),
+        owner_username: None,
+    });
+    let (_runtime, _runtime_commands) = connect(&control, "ovh", false);
+    assert!(resolve(&hub, &control, "service-test", "bound").is_none());
+    let (_target, _target_commands) = connect(&control, "hawk", false);
+    let CodeReadScope::Session(original) = scope(&hub, &control, "bound") else {
+        unreachable!()
+    };
+    assert_eq!(original.session().machine_id(), "hawk");
+    assert_eq!(original.session().cwd(), "/tasks/cowboy");
+    control.disconnect("ovh");
+    assert!(current(&hub, &control, &original));
+    let (_runtime, _runtime_commands) = connect(&control, "ovh", false);
+    control.disconnect("hawk");
+    assert!(!current(&hub, &control, &original));
+    assert!(resolve(&hub, &control, "service-test", "bound").is_none());
+    let (_replacement, _new_target_commands) = connect(&control, "hawk", false);
+    assert!(!current(&hub, &control, &original));
+    assert_ne!(
+        scope(&hub, &control, "bound"),
+        CodeReadScope::Session(original)
+    );
 }
 
 #[tokio::test]

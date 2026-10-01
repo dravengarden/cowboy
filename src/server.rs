@@ -15432,6 +15432,7 @@ mod machine_provider_tests {
             workspace_id: None,
             workspace_name: None,
             workspace_source_path: None,
+            execution_binding: None,
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             origin: SessionOrigin::Web,
