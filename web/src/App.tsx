@@ -93,7 +93,7 @@ import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { AppIconSettings } from "./AppIconSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
-import { KEYBOARD_INSET_CHANGED_EVENT } from "./keyboardInset";
+import { KEYBOARD_INSET_CHANGED_EVENT, useKeyboardOpen } from "./keyboardInset";
 import {
     machineConvergencePresentation,
     machineSupersessionPresentation,
@@ -2161,6 +2161,7 @@ function NewSessionDialog({
     /** Called with a local projection so the UI can focus it before the WS list catches up. */
     onCreated: (session: SessionMeta) => void;
 }): React.JSX.Element {
+    const keyboardOpen = useKeyboardOpen();
     const [provider, setProvider] = useState<string>("");
     const [machineId, setMachineId] = useState<string>("");
     const machines = useStoreSelector((snapshot) => snapshot.machines);
@@ -2520,11 +2521,13 @@ function NewSessionDialog({
                 cover
                 frosted
                 ariaLabel="New session"
+                keyboardOpen={keyboardOpen}
                 surfaceColor={theme.palette.background.default}
                 footer={
                     <Box data-new-session-footer-actions sx={{ width: "100%" }}>
                         <MobileDecisionActions
                             shelf
+                            flat
                             onCancel={creating ? (): void => {} : onClose}
                             cancelDisabled={creating}
                             confirmLabel={creating ? "Creating…" : "Create"}

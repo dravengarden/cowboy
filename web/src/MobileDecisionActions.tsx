@@ -1,7 +1,12 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Box, Button, CircularProgress } from "@mui/material";
 import type { ButtonProps } from "@mui/material";
-import { decisionActionEmphasis, decisionShelfSurface } from "./decisionShelf";
+import {
+  decisionActionEmphasis,
+  decisionShelfSurface,
+  flatDecisionActions,
+  flatDecisionShelf,
+} from "./decisionShelf";
 
 /**
  * Canonical mobile Cancel / confirm footer.
@@ -22,6 +27,7 @@ export function MobileDecisionActions({
   confirmColor = "primary",
   preserveFocus = false,
   shelf = false,
+  flat = false,
 }: {
   readonly cancelLabel?: string | undefined;
   readonly onCancel: () => void;
@@ -35,6 +41,8 @@ export function MobileDecisionActions({
   readonly preserveFocus?: boolean | undefined;
   /** Bleed a solid Cancel/confirm strip to the sheet edges. */
   readonly shelf?: boolean | undefined;
+  /** Quiet, shadow-free actions for full-screen forms. */
+  readonly flat?: boolean | undefined;
 }): React.JSX.Element {
   const preserveInput = preserveFocus
     ? (event: ReactPointerEvent): void => event.preventDefault()
@@ -51,6 +59,7 @@ export function MobileDecisionActions({
         // An overlay (unshelved) footer floats on its own, so it still wants the
         // accent glow even without the plate.
         ...decisionActionEmphasis(theme),
+        ...(flat ? flatDecisionActions(theme) : {}),
       })}
     >
       <Button
@@ -88,7 +97,7 @@ export function MobileDecisionActions({
         mx: -2,
         px: 2,
         pt: 1,
-        ...decisionShelfSurface(theme),
+        ...(flat ? flatDecisionShelf(theme) : decisionShelfSurface(theme)),
       })}
     >
       {actions}

@@ -26,6 +26,32 @@ export const DECISION_RISER_PX = 22;
  *  Selectors are doubled so this wins over MUI's own contained/text rules
  *  regardless of stylesheet order — `actions` children come from foreign
  *  call sites (ConfirmSheet's NetworkButton), not just this module's JSX. */
+export function flatDecisionActions(t: Theme): Record<string, unknown> {
+  return {
+    "& > .MuiButton-root": { flex: 1, minHeight: 44 },
+    "& .MuiButton-contained.MuiButton-contained": {
+      boxShadow: "none",
+      "&:hover, &:active, &:focus-visible, &.Mui-disabled": {
+        boxShadow: "none",
+        transform: "none",
+      },
+    },
+    "& .MuiButton-text.MuiButton-text": {
+      backgroundColor: alpha(t.palette.text.primary, 0.05),
+    },
+  };
+}
+
+export function flatDecisionShelf(t: Theme): Record<string, unknown> {
+  return {
+    backgroundColor: t.palette.background.default,
+    borderTop: `1px solid ${t.palette.divider}`,
+    borderRadius: 0,
+    boxShadow: "none",
+    ...flatDecisionActions(t),
+  };
+}
+
 export function decisionActionEmphasis(t: Theme): Record<string, unknown> {
   const dark = t.palette.mode === "dark";
   // The glow is the BUTTON's colour, not the app accent. A destructive confirm

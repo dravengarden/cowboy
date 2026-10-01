@@ -74,9 +74,11 @@ Deno.test("the hairline carries the app accent; the glow carries the decision's"
   assert(emphasis.includes(".MuiButton-text.MuiButton-text"));
 });
 
-Deno.test("every Cancel/confirm surface takes the same material", () => {
+Deno.test("decision surfaces share their default material with an explicit flat form variant", () => {
   // The two real decision FOOTERS get the whole plate.
-  assert(actions.includes("...decisionShelfSurface(theme),"));
+  assert(actions.includes("decisionShelfSurface(theme)"));
+  assert(actions.includes("flatDecisionShelf(theme)"));
+  assert(actions.includes("flatDecisionActions(theme)"));
   assert(actions.includes("...decisionActionEmphasis(theme),"));
   assert(
     card.includes("...decisionShelfSurface(theme, { riser: bodyScrolls }),"),

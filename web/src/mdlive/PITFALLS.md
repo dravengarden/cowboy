@@ -2049,6 +2049,14 @@ Desktop Vim + IME checks:
     empty body + Cancel/Create (Title gone). Pin covers to
     `--vv-offset` / `--vv-height`. Leave compact Obsidian cards on
     their own bottom docking.
+    **New Session footer (2026-10-01):** zero `--kb-inset` is not
+    keyboard-closed under resizes-content. The cover now receives the existing
+    baseline-aware `useKeyboardOpen` result and keeps 8px footer padding in
+    either keyboard mode; it restores home-indicator clearance when closed.
+    Do not infer footer safe-area padding solely from the overlap amount.
+    The form uses flat decision actions without an upward gradient or shadow.
+    Synthetic browser geometry passes; physical iPhone/IME confirmation is
+    still separate.
 
 78. **Dock Paste is a clipboard port, not a native-only bridge.** The
     native shell can probe UIPasteboard and read image bytes without a

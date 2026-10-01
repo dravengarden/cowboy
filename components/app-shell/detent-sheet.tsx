@@ -259,6 +259,9 @@ export interface DetentSheetProps {
    *  The body keeps enough trailing clearance that its final content can still
    *  scroll above the controls. Bottom-anchored sheets only. */
   readonly footerOverlay?: boolean | undefined;
+  /** Explicit keyboard visibility when the host also supports resized viewports.
+   * A zero overlap does not mean the keyboard is closed in that mode. */
+  readonly keyboardOpen?: boolean | undefined;
   /** Opaque surface colour (typically the theme's `background.paper`). When set,
    *  the standalone iOS/Android status bar is dimmed in lockstep with the scrim
    *  while open and restored on close — so the top safe-area strip stops reading
@@ -349,6 +352,7 @@ export function DetentSheet(
     children,
     footer,
     footerOverlay = false,
+    keyboardOpen,
     surfaceColor,
     frosted = false,
     cover = false,
@@ -878,7 +882,9 @@ export function DetentSheet(
           aria-modal="true"
           aria-label={ariaLabel}
           data-detent-sheet="true"
-          elevation={8}
+          // A cover ends at the keyboard edge; elevation casts a dark band
+          // into the accessory gap. Only content-sized overlays need a shadow.
+          elevation={isCover ? 0 : 8}
           square
           // The sheet is an inline overlay, so its controls would otherwise
           // bubble click/pointer events into the page component that owns it.
@@ -1043,7 +1049,9 @@ export function DetentSheet(
                       // when the keyboard is up the home-indicator clearance is moot —
                       // collapse to a small gap above the keyboard; full SAFE_BOTTOM
                       // when it's down (or for non-cover sheets).
-                      pb: isCover ? `max(8px, calc(${SAFE_BOTTOM} - var(--kb-inset, 0px)))` : SAFE_BOTTOM,
+                      pb: isCover && keyboardOpen !== undefined
+                        ? (keyboardOpen ? "8px" : SAFE_BOTTOM)
+                        : isCover ? `max(8px, calc(${SAFE_BOTTOM} - var(--kb-inset, 0px)))` : SAFE_BOTTOM,
                     }}
                   >
                     {footer}
