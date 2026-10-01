@@ -4,12 +4,16 @@
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
 
-/** Coalesce independent recovery triggers around one in-flight replacement.
- *  The socket's own connect guard will retire it if the upgrade wedges. */
+/** Coalesce recovery through bootstrap. Connect/bootstrap guards retire wedged
+ *  attempts; the liveness watchdog still owns stale capacity-waiting sockets. */
 export function shouldStartImmediateReconnect(
   readyState: number | undefined,
+  socketReady = true,
+  openingDataset = false,
+  recoveryStale = false,
 ): boolean {
-  return readyState !== WEBSOCKET_CONNECTING;
+  return !openingDataset && readyState !== WEBSOCKET_CONNECTING &&
+    !(readyState === WEBSOCKET_OPEN && !socketReady && !recoveryStale);
 }
 
 export function shouldReconnectOnForeground(
@@ -17,9 +21,55 @@ export function shouldReconnectOnForeground(
   silenceMs: number,
   staleMs: number,
   forceOpenSocket = false,
+  socketReady = true,
+  openingDataset = false,
 ): boolean {
-  if (!shouldStartImmediateReconnect(readyState)) return false;
+  if (!shouldStartImmediateReconnect(readyState, socketReady, openingDataset)) return false;
   return forceOpenSocket || readyState !== WEBSOCKET_OPEN || silenceMs > staleMs;
+}
+
+/** One foreground probe at a time. Only its addressed reply proves that the
+ *  server consumed new traffic; buffered heartbeats do not prove liveness. */
+export class ForegroundProbe {
+  private sequence = 0;
+  private pending: { nonce: number; cancel: () => void } | undefined;
+
+  constructor(
+    private readonly timeoutMs: number,
+    private readonly schedule: (callback: () => void, delay: number) => () => void = (callback, delay) => {
+      const timer = globalThis.setTimeout(callback, delay);
+      return () => globalThis.clearTimeout(timer);
+    },
+  ) {}
+
+  start(send: (nonce: number) => void, expired: () => void): boolean {
+    if (this.pending) return false;
+    const nonce = ++this.sequence;
+    const cancel = this.schedule(() => {
+      if (this.pending?.nonce !== nonce) return;
+      this.pending = undefined;
+      expired();
+    }, this.timeoutMs);
+    this.pending = { nonce, cancel };
+    try {
+      send(nonce);
+    } catch {
+      this.cancel();
+      expired();
+    }
+    return true;
+  }
+
+  acknowledge(nonce: number): boolean {
+    if (this.pending?.nonce !== nonce) return false;
+    this.cancel();
+    return true;
+  }
+
+  cancel(): void {
+    this.pending?.cancel();
+    this.pending = undefined;
+  }
 }
 
 export function isAppleTouchWebView(

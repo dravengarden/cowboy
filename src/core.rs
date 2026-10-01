@@ -886,6 +886,8 @@ pub enum Inbound {
     /// Coarse, user-gesture-only browser activity used to slide the idle
     /// deadline. Heartbeats, agent output, and background refreshes never send it.
     AuthActivity,
+    /// Foreground liveness check; never extends the user session idle deadline.
+    ConnectionProbe { nonce: u64 },
     /// Start a new agent session.
     NewSession {
         provider: String,
@@ -1187,6 +1189,8 @@ pub enum Outbound {
     /// so reconnect (→ fresh snapshot). A failed send also reaps a dead client
     /// server-side. Carries no data; the client only reads its arrival time.
     Ping,
+    /// Addressed reply on the requesting socket, never broadcast or persisted.
+    ConnectionProbe { nonce: u64 },
     /// Agent-advertised per-session config options (mode / model / effort and
     /// whatever else upstream adds). Sent (a) on client connect for every
     /// session whose options were captured during this daemon's lifetime,

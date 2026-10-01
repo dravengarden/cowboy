@@ -1375,6 +1375,7 @@ impl Bridge {
             | Outbound::ClientCapacity { .. }
             | Outbound::Machines { .. }
             | Outbound::Ping
+            | Outbound::ConnectionProbe { .. }
             | Outbound::SyncPatch { .. }
             // The bridge submits without a durable browser outbox; an addressed
             // refusal belongs to the Web device that minted the cmid.
@@ -1722,6 +1723,7 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
         | Outbound::ClientCapacity { .. }
         | Outbound::Machines { .. }
         | Outbound::Ping
+        | Outbound::ConnectionProbe { .. }
         | Outbound::SyncPatch { .. }
         | Outbound::Settings { .. }
         | Outbound::CommandResult { .. }

@@ -31,6 +31,7 @@ import {
   rememberSendImagePreviews,
 } from "./sendImagePreviews";
 import {
+  ForegroundProbe,
   isAppleTouchWebView,
   shouldReconnectOnForeground,
   shouldStartImmediateReconnect,
@@ -500,6 +501,9 @@ const STALE_MS = 60_000; // ~2.4 missed 25s heartbeats → dead (conservative)
 const FOREGROUND_STALE_MS = 30_000; // on app-foreground, suspend likely killed it
 const FOREGROUND_RECOVERY_COALESCE_MS = 1_000;
 const LIVENESS_CHECK_MS = 15_000;
+const FOREGROUND_PROBE_MS = 4_000;
+const foregroundProbe = new ForegroundProbe(FOREGROUND_PROBE_MS);
+let foregroundProbeStartedAt = 0;
 let lastMessageAt = 0;
 let lastForegroundRecoveryAt = 0;
 let livenessTimer: ReturnType<typeof setInterval> | undefined;
@@ -508,6 +512,7 @@ function markAlive(): void {
   lastMessageAt = Date.now();
 }
 function stopLiveness(): void {
+  foregroundProbe.cancel();
   if (livenessTimer !== undefined) {
     clearInterval(livenessTimer);
     livenessTimer = undefined;
@@ -520,7 +525,10 @@ function startLiveness(ws: WebSocket): void {
       socket === ws && ws.readyState === WebSocket.OPEN &&
       Date.now() - lastMessageAt > STALE_MS
     ) {
-      reconnectNow("liveness_stale");
+      // Frozen watchdog timers can run just before visibilitychange on resume.
+      // Let the foreground probe own recovery instead of replacing its socket.
+      if (globalThis.document?.visibilityState === "visible") recoverSocket("liveness_stale");
+      else reconnectNow("liveness_stale");
       return;
     }
     publishSyncStatus(); // silence may have crossed the degraded threshold
@@ -536,7 +544,10 @@ function startLiveness(ws: WebSocket): void {
 function reconnectNow(reason: string): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
   const stale = socket;
-  if (!shouldStartImmediateReconnect(stale?.readyState)) {
+  const silenceMs = lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0;
+  const forced = reason === "user_retry" || reason === "auth_cookie_changed" || reason === "bootstrap_timeout";
+  const recoveryStale = reason === "liveness_stale" && silenceMs > STALE_MS;
+  if (!forced && !shouldStartImmediateReconnect(stale?.readyState, socketReady, openingDataset, recoveryStale)) {
     reportClientLog("info", "websocket_reconnect_coalesced", "Cowboy WebSocket reconnect coalesced", {
       reason,
       ready_state: stale?.readyState ?? -1,
@@ -546,7 +557,6 @@ function reconnectNow(reason: string): void {
     clearReconnectTimer();
     return;
   }
-  const silenceMs = lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0;
   reportClientLog("warn", "websocket_reconnect_triggered", "Cowboy WebSocket reconnect triggered", {
     reason,
     ready_state: stale?.readyState ?? -1,
@@ -567,6 +577,32 @@ function reconnectNow(reason: string): void {
   publishSyncStatus();
 }
 
+function recoverSocket(reason: string): void {
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
+  const current = socket;
+  if (current?.readyState !== WebSocket.OPEN || !socketReady) {
+    reconnectNow(reason);
+    return;
+  }
+  const startedAt = performance.now();
+  foregroundProbe.start(
+    (nonce) => {
+      foregroundProbeStartedAt = startedAt;
+      reportClientLog("info", "websocket_probe_started", "Checking the existing Cowboy connection", { reason, nonce });
+      current.send(JSON.stringify({ type: "connection_probe", nonce } satisfies Inbound));
+    },
+    () => {
+      if (socket !== current) return;
+      reportClientLog("warn", "websocket_probe_timeout", "Cowboy foreground probe timed out", {
+        reason,
+        duration_ms: performance.now() - startedAt,
+        timeout_ms: FOREGROUND_PROBE_MS,
+      });
+      reconnectNow("foreground_probe_timeout");
+    },
+  );
+}
+
 /** User-driven retry from the sync status pill / status line. */
 export function retrySyncNow(): void {
   reconnectNow("user_retry");
@@ -575,7 +611,7 @@ export function retrySyncNow(): void {
 // Mobile suspends a backgrounded tab (freezing timers AND often killing the
 // socket without an `onclose`); on return the socket may be a zombie. Timers
 // were frozen, so the watchdog above hasn't run — repaint pending canonical
-// state immediately, then probe the socket and reconnect if it has gone stale.
+// state immediately, then probe the socket and reconnect only if the probe fails.
 // Keep the liveness and reconnect policy unchanged while hidden so background
 // turn notifications retain their existing delivery behaviour.
 if (typeof document !== "undefined") {
@@ -585,12 +621,15 @@ if (typeof document !== "undefined") {
     globalThis.navigator?.maxTouchPoints ?? 0,
   );
   const recoverForeground = (): void => {
-    if (document.visibilityState !== "visible") return;
+    if (document.visibilityState !== "visible") {
+      foregroundProbe.cancel();
+      return;
+    }
     if (notifyScheduled) flushNotify();
     const now = Date.now();
     // iOS can dispatch both visibilitychange and pageshow for one foreground
-    // transition. Coalesce them so the forced Apple reconnect never replaces
-    // its own in-flight successor.
+    // transition. Coalesce refresh work; the probe and bootstrap guards also
+    // preserve recovery when events arrive farther apart than this window.
     if (now - lastForegroundRecoveryAt < FOREGROUND_RECOVERY_COALESCE_MS) return;
     if (state.connected) {
       refreshProviderCatalog();
@@ -605,17 +644,19 @@ if (typeof document !== "undefined") {
         now - lastMessageAt,
         FOREGROUND_STALE_MS,
         appleTouchWebView,
+        socketReady,
+        openingDataset,
       )
     ) {
       lastForegroundRecoveryAt = now;
-      reconnectNow(appleTouchWebView ? "apple_foreground" : "foreground_stale");
+      recoverSocket(appleTouchWebView ? "apple_foreground" : "foreground_stale");
     }
   };
   document.addEventListener("visibilitychange", recoverForeground);
   globalThis.addEventListener("pageshow", recoverForeground);
   globalThis.addEventListener("online", () => {
     publishSyncStatus();
-    reconnectNow("network_online");
+    recoverSocket("network_online");
   });
   globalThis.addEventListener("offline", publishSyncStatus);
   globalThis.addEventListener("cowboy:product-sign-out", (event) => {
@@ -1432,6 +1473,16 @@ function setPagination(
 
 function handle(msg: Outbound): void {
   switch (msg.type) {
+    case "connection_probe":
+      if (foregroundProbe.acknowledge(msg.nonce)) {
+        const durationMs = performance.now() - foregroundProbeStartedAt;
+        reportClientMetric("websocket_probe_duration_ms", durationMs);
+        reportClientLog("info", "websocket_probe_succeeded", "Reused the existing Cowboy connection", {
+          nonce: msg.nonce,
+          duration_ms: durationMs,
+        });
+      }
+      break;
     case "auth_session":
       announceProductAuthSession(msg.session);
       break;
@@ -1944,6 +1995,7 @@ function classifyMeHandshake(status: number | "network"): MeHandshake {
 async function probeProductAuth(): Promise<MeHandshake> {
   try {
     const response = await fetch("/api/auth/me", {
+      signal: AbortSignal.timeout(4_000),
       cache: "no-store",
       credentials: "same-origin",
       headers: { accept: "application/json" },
@@ -2154,6 +2206,16 @@ function openBoundSocket(dataset: SyncDataset): void {
   socketReady = false;
   let openedAt: number | undefined;
   let ready = false;
+  let bootstrapGuard: ReturnType<typeof setTimeout> | undefined;
+  const armBootstrapGuard = (): void => {
+    clearTimeout(bootstrapGuard);
+    bootstrapGuard = setTimeout(() => {
+      if (socket !== ws || ready || ws.readyState !== WebSocket.OPEN) return;
+      reportClientLog("warn", "websocket_bootstrap_timeout", "Cowboy WebSocket bootstrap timed out", { timeout_ms: 12_000 });
+      connectionSpan?.end("timeout");
+      reconnectNow("bootstrap_timeout");
+    }, 12_000);
+  };
   // A socket wedged in CONNECTING (a half-open proxy / network that completes the
   // TCP handshake but never the WS upgrade) fires NEITHER onopen NOR onclose, so
   // without this it strands the UI on "Connecting…" forever with no reconnect.
@@ -2172,6 +2234,7 @@ function openBoundSocket(dataset: SyncDataset): void {
   }, 8000);
   const markSocketReady = (): void => {
     if (ready || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
+    clearTimeout(bootstrapGuard);
     ready = true;
     socketReady = true;
     connectionSpan?.end();
@@ -2244,6 +2307,7 @@ function openBoundSocket(dataset: SyncDataset): void {
     });
     markAlive();
     startLiveness(ws);
+    armBootstrapGuard();
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
     if (socket !== ws || ws.protocol !== PRODUCT_SYNC_SUBPROTOCOL) return;
@@ -2252,11 +2316,19 @@ function openBoundSocket(dataset: SyncDataset): void {
       const message = JSON.parse(e.data) as Outbound;
       handle(message);
       if (message.type === "bootstrap_complete") markSocketReady();
+      else if (!ready) {
+        // Capacity waiting is intentional admission, not a wedged bootstrap.
+        // Re-arm when admission becomes active rather than killing its queue.
+        if (message.type === "client_capacity" && message.capacity.status === "waiting") {
+          clearTimeout(bootstrapGuard);
+        } else armBootstrapGuard();
+      }
     } catch (err) {
       console.warn("bad message", err);
     }
   };
   ws.onclose = (event): void => {
+    clearTimeout(bootstrapGuard);
     connectionSpan?.end("error");
     clearTimeout(connectGuard);
     // A superseded socket may close after its replacement has opened. It no

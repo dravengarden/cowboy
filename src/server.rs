@@ -18088,6 +18088,7 @@ fn project_outbound(
         | Outbound::AuthSession { .. }
         | Outbound::ClientCapacity { .. }
         | Outbound::Ping
+        | Outbound::ConnectionProbe { .. }
         | Outbound::BootstrapComplete
         | Outbound::Settings { .. } => Some(message),
         Outbound::SyncPatch {
@@ -18530,6 +18531,7 @@ async fn handle_ws(
     let capacity_channel_limit = capacity_policy.websocket_channels_per_client;
     let (direct_tx, mut direct_rx) =
         tokio::sync::mpsc::unbounded_channel::<Option<ProductAuthSessionSnapshot>>();
+    let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel::<u64>(1);
     let mut fanout = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
         let mut capacity_heartbeat = tokio::time::interval(std::time::Duration::from_millis(
@@ -18545,6 +18547,11 @@ async fn handle_ws(
         capacity_heartbeat.tick().await;
         loop {
             tokio::select! {
+                Some(nonce) = probe_rx.recv() => {
+                    if send_json(&mut sink, &Outbound::ConnectionProbe { nonce }).await.is_err() {
+                        break;
+                    }
+                }
                 Some(update) = direct_rx.recv() => {
                     let Some(snapshot) = update else {
                         let _ = sink.send(ws_close_auth_required()).await;
@@ -18736,10 +18743,14 @@ async fn handle_ws(
                             wait_for_auth_close = true;
                             break;
                         }
-                        if matches!(
-                            serde_json::from_str::<Inbound>(&text),
-                            Ok(Inbound::AuthActivity)
-                        ) {
+                        let command = serde_json::from_str::<Inbound>(&text);
+                        if let Ok(Inbound::ConnectionProbe { nonce }) = &command {
+                            // Already authenticated above. Reply only on this socket;
+                            // probes do not touch idle activity or the event log.
+                            let _ = probe_tx.try_send(*nonce);
+                            continue;
+                        }
+                        if matches!(command, Ok(Inbound::AuthActivity)) {
                             if let (Some(store), Some(token)) =
                                 (state.store.as_ref(), cookie_token.as_deref())
                             {
@@ -18900,6 +18911,7 @@ fn handle_command(
         // Sync mutations are state-scoped (title/order), not session-scoped — a
         // failure surfaces as a daemon-level error (None).
         Inbound::AuthActivity
+        | Inbound::ConnectionProbe { .. }
         | Inbound::NewSession { .. }
         | Inbound::ReorderSessions { .. }
         | Inbound::Sync { .. }
@@ -18995,6 +19007,7 @@ fn handle_command(
     }
     let result = match cmd {
         Inbound::AuthActivity => Ok(()),
+        Inbound::ConnectionProbe { .. } => Err("connection probes require a WebSocket".to_owned()),
         Inbound::NewSession { .. } => Err(
             "legacy WebSocket session creation is disabled; use POST /api/sessions with a connected Machine"
                 .to_owned(),

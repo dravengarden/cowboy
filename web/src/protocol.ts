@@ -314,6 +314,7 @@ export type Outbound =
   // ARRIVAL is the signal — the client tracks the last-message time to detect a
   // half-open socket that never fires `onclose` and reconnect.
   | { type: "ping" }
+  | { type: "connection_probe"; nonce: number }
   // The RECENT log tail (last SNAPSHOT_TAIL events). `reached_start` = these are
   // the whole log (nothing older to page to). Older history is fetched on demand
   // over HTTP — see loadOlder + GET /api/history/:id?before_seq=….
@@ -364,6 +365,7 @@ export interface SessionBootstrapResponse {
 
 export type Inbound =
   | { type: "auth_activity" }
+  | { type: "connection_probe"; nonce: number }
   | { type: "new_session"; provider: string; cwd?: string }
   | {
     type: "prompt";
