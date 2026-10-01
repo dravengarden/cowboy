@@ -1,0 +1,190 @@
+{
+  "schema": "dravengarden.cowboy.code-buffer-connected-conformance/v15",
+  "source_revision": "45c89f797e1e172582664122dddc694e7e26db8f",
+  "artifacts": [
+    {
+      "lane": "controller",
+      "role": "supplied",
+      "release": "/nix/store/1d11izxmsknn9708qlplz6navwg2sdgs-cowboy-controller-release",
+      "executable": "/nix/store/dg0ymj90z8vc9vhflqfs0yjkc52f3p2i-cowboy-0.1.0/bin/cowboy",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "controller",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "45c89f797e1e172582664122dddc694e7e26db8f",
+        "schema": 1
+      },
+      "source_sha256": "ba422393d61ea33eb24a45454a48d192aaa44ae9d890f23e302561a693e4e69d",
+      "executable_sha256": "a711a9a6021ba68002ba529be92c2deb9fcf3f9e36dca47193b8a0f02048687f",
+      "executable_chain": [
+        {
+          "path": "/nix/store/dg0ymj90z8vc9vhflqfs0yjkc52f3p2i-cowboy-0.1.0/bin/cowboy",
+          "sha256": "a711a9a6021ba68002ba529be92c2deb9fcf3f9e36dca47193b8a0f02048687f"
+        }
+      ]
+    },
+    {
+      "lane": "machine",
+      "role": "supplied",
+      "release": "/nix/store/zxsm21sikajhb2z8vhmayra41r3s3bm7-cowboy-machine-release",
+      "executable": "/nix/store/zxsm21sikajhb2z8vhmayra41r3s3bm7-cowboy-machine-release/bin/cowboy-machine",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "ce6470b0c8075cd35c715220f43c1905fa1bf9a7",
+        "schema": 1,
+        "workerGeneration": "worker-401a0858f41aa4ab4470"
+      },
+      "source_sha256": "a99b7c1241aff0cc60ae55d192be008b4ea726af8803c5cf1c4ab79de0e8bdf5",
+      "executable_sha256": "5c02358d83fd18a19c6ce4c16b0ee0b199f7cae4c9e712676d367c9ac13ca08d",
+      "executable_chain": [
+        {
+          "path": "/nix/store/zxsm21sikajhb2z8vhmayra41r3s3bm7-cowboy-machine-release/bin/cowboy-machine",
+          "sha256": "5c02358d83fd18a19c6ce4c16b0ee0b199f7cae4c9e712676d367c9ac13ca08d"
+        },
+        {
+          "path": "/nix/store/zqpxbhn9pni0k2gbz11k21w7lca22rdq-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "a355b88f9d7b03bb1c7a8f39219faf51e42d68047cc451ebaa752065a498c615"
+        },
+        {
+          "path": "/nix/store/zqpxbhn9pni0k2gbz11k21w7lca22rdq-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+          "sha256": "72be86d498963d3d1342c3dc8cc31251cb27696f813282bdad4480c9c8cf058b"
+        }
+      ]
+    }
+  ],
+  "native": [
+    {
+      "path": "/nix/store/qiy99cssc692ghfrkr9l8wi7mkxp94zq-cowboy-zed-adapter-1.20.3/bin/cowboy-zed-adapter",
+      "sha256": "db4fcb6d4ae607e412247bfac50bfaae7ed4b293c577e9357272ce548265e5ca"
+    },
+    {
+      "path": "/nix/store/j27dma3v67b3snax2yip1gw19nmm9w66-cowboy-zed-server-x86_64-unknown-linux-musl-1.6.0/bin/cowboy-zed-server",
+      "sha256": "d84c0516b2dc872b2c3ac97a23a972056532249cea7daa6414274fee877014c3"
+    }
+  ],
+  "core_adapter": {
+    "path": "/nix/store/mssb2y44r98vd4qh84zw61w33f32jsrj-cowboy-code-adapter-0.1.0/bin/cowboy-code-adapter",
+    "sha256": "30c49d275fa511e083ab7b96c93e39a21e2734a7b781a5196df16e626d0f8550"
+  },
+  "ssh_keygen": {
+    "path": "/nix/store/mpzrhvrkdzkajhgay1dngqpf062vb1iq-openssh-10.3p1/bin/ssh-keygen",
+    "sha256": "537e2ee4d99426c4491fc8c3fe032cd30eb806b76f564d34009aadaf1bacb379"
+  },
+  "git": {
+    "path": "/nix/store/bcnisk3ydfgv26v2gw3zlky24g00yww2-git-2.54.0/bin/git",
+    "sha256": "bb109beeee3d9dc486e3b0749028e18a58572670b283a1092d9fe2034440437e"
+  },
+  "test_lsp": {
+    "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/plugins/zed/adapter/target/debug/examples/navigation_lsp",
+    "sha256": "fdd28585648ba5e5ac6d4670538ee331f0fb469bada66bc948a359f8057d5ea3"
+  },
+  "package_sha256": "8c4e1cb01cac4c4b1e84f22655d091ae793e5f95e20a8ed185b9c50367a2c8ee",
+  "release_sha256": "82417be15c5f84434cff4f925f449053921b3a98880c4c7d3d1ef93a311cd1d4",
+  "stage": "complete",
+  "checks": [
+    "authenticated_code_installation",
+    "real_login_enrollment_and_effect_free_unready_refusal",
+    "held_real_core_file_reply_is_discarded_after_original_cookie_logout",
+    "machine_owned_root_identity_refuses_a_replaced_advertised_root",
+    "cancelled_http_open_drains_without_replay",
+    "legacy_language_original_login_revocation",
+    "legacy_hover_original_login_revocation",
+    "legacy_navigation_original_login_revocation",
+    "legacy_outline_original_login_revocation",
+    "independent_owners_unicode_content_equality_and_disk_mismatch",
+    "cancelled_read_drains_before_explicit_release_without_closing_peer",
+    "owned_open_original_login_revocation",
+    "owned_query_original_login_revocation",
+    "owned_release_original_login_revocation",
+    "owned_read_failed_reply_original_login_revocation",
+    "navigation_failed_query_original_login_revocation",
+    "lost_real_navigation_execute_reply_original_query_without_replay",
+    "enrolled_protocol21_all_five_navigation_kinds_unicode_original_owner",
+    "explicit_synchronization_authentication_shared_owner_refusal_and_local_fence",
+    "synchronization_failed_query_original_login_revocation",
+    "lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall",
+    "synchronization_retirement_drains_after_cancelled_http_without_replay",
+    "cancelled_destination_observer_handoff_to_ordinary_owner_after_uninstall",
+    "lost_real_parent_release_reply_original_query_without_replay",
+    "native_budget_refusal_lost_reply_original_query_unchanged_text_and_explicit_retirement",
+    "http_uninstall_and_missing_paths_preserve_original_native_reads",
+    "complete_native_destination_text_pages_after_parent_and_path_removal",
+    "destination_content_read_after_parent_release_and_path_removal",
+    "cancelled_release_observed_once_and_independent_owner_retained",
+    "navigation_replacement_connection_and_restart_refuse_adoption",
+    "replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id",
+    "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
+    "bound_session_reads_target_without_runtime_connection_and_fences_unknown_and_replaced_routes",
+    "colocated_reads_execute_here_only_by_permission_and_fence_a_replaced_root",
+    "withdrawing_colocation_permission_routes_the_same_root_to_the_retained_machine"
+  ],
+  "wire": {
+    "connections": 5,
+    "configurations": 5,
+    "protocols": [
+      22,
+      22,
+      22,
+      22,
+      22
+    ],
+    "commands": {
+      "bufferHover": 3,
+      "bufferLanguage": 3,
+      "bufferLeaseContentSupport": 43,
+      "bufferLeaseSupport": 9,
+      "bufferLeaseTextSupport": 2,
+      "bufferNavigate": 3,
+      "bufferSymbols": 3,
+      "codeNavigationDestination": 1,
+      "codeNavigationExecute": 6,
+      "codeNavigationPrepare": 6,
+      "codeNavigationQuery": 9,
+      "codeNavigationRelease": 5,
+      "codeSyncApply": 2,
+      "codeSyncPrepare": 4,
+      "codeSyncQuery": 3,
+      "codeSyncRetire": 2,
+      "coreColocatedFile": 2,
+      "coreFile": 5,
+      "coreManifest": 1,
+      "coreSwapFile": 3,
+      "ensureWorktree": 1,
+      "installationObservation": 1,
+      "installationStep": 1,
+      "openBufferLease": 9,
+      "prepareBuffer": 9,
+      "queryBufferLease": 4,
+      "readBufferLease": 45,
+      "refreshInventory": 2,
+      "releaseBufferLease": 7,
+      "uninstallObservation": 1,
+      "uninstallStep": 1
+    },
+    "replies": 196,
+    "held_replies": 21,
+    "discarded_replies": 7,
+    "cuts": 1
+  },
+  "last_http": {
+    "status": 200,
+    "elapsed_ms": 7,
+    "result": "json"
+  },
+  "failure": null,
+  "cleanup": true,
+  "accepted": true,
+  "not_checked": [
+    "production_roles_policies_accounts_installation_and_activation",
+    "review_integration_browser_storage_and_supported_devices",
+    "real_language_implementation_or_atomic_diagnostics_freshness",
+    "dirty_buffer_override_independent_restoration_and_full_destination_view",
+    "abandoned_browser_restart_restoration_and_post_effect_recovery",
+    "agent_authentication_sessions_and_native_worker_generation_upgrade",
+    "physical_power_loss_general_graph_state_leases_and_refactor_completion"
+  ]
+}
