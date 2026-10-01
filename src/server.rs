@@ -4623,6 +4623,14 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             RouteAuth::ProductSessionMutate
         };
     }
+    // Notification enrollment belongs to the signed-in product user. Leaving
+    // these routes to the API fallback incorrectly requires an admin cookie.
+    // Product authentication still enforces session freshness and mutation origin.
+    if (path == "/api/web-push/config" && matches!(*method, Method::GET | Method::HEAD))
+        || (path == "/api/web-push/subscription" && matches!(*method, Method::PUT | Method::DELETE))
+    {
+        return RouteAuth::Product;
+    }
     if matches!(
         path,
         "/api/usage"
@@ -21148,6 +21156,26 @@ mod product_auth_api_tests {
             StatusCode::OK.into_response()
         } else {
             StatusCode::NOT_FOUND.into_response()
+        }
+    }
+
+    #[test]
+    fn web_push_enrollment_uses_product_authentication() {
+        for (method, path) in [
+            (Method::GET, "/api/web-push/config"),
+            (Method::HEAD, "/api/web-push/config"),
+            (Method::PUT, "/api/web-push/subscription"),
+            (Method::DELETE, "/api/web-push/subscription"),
+        ] {
+            assert_eq!(classify_route(&method, path), RouteAuth::Product);
+            assert!(enforce_product_session_freshness_before_dispatch(path));
+        }
+        for (method, path) in [
+            (Method::POST, "/api/web-push/config"),
+            (Method::GET, "/api/web-push/subscription"),
+            (Method::PUT, "/api/web-push/unknown"),
+        ] {
+            assert_eq!(classify_route(&method, path), RouteAuth::AdminOperator);
         }
     }
 
