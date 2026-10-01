@@ -3,6 +3,28 @@ use super::*;
 use reqwest::{Method, StatusCode};
 
 pub(super) const FILE: &str = "route-read.txt";
+pub(super) const BOUND: &str = "sess-902";
+pub(super) const INVALID: &str = "sess-903";
+
+/// The runtime Machine has no connection. The actual enrolled target must
+/// answer, and the malformed binding must never dispatch any file operation.
+pub(super) async fn execution_binding(pair: &Pair<'_>) -> Result<String, Failure> {
+    let before = pair.proxy.counts()?.commands;
+    let invalid = format!("/api/code/sessions/{INVALID}/file?path={FILE}");
+    let response = pair.http.call(Method::GET, &invalid, None).await?;
+    check(response.status == StatusCode::NOT_FOUND && response.no_store && !response.has_etag)?;
+    check(pair.proxy.counts()?.commands == before)?;
+    let path = format!("/api/code/sessions/{BOUND}/file?path={FILE}");
+    let first = pair.http.get(&path).await?;
+    check(first["text"] == "r".repeat(256 * 1024 - 1))?;
+    let cursor = first["nextCursor"]
+        .as_str()
+        .ok_or(Failure::WrongObservation)?;
+    let mut expected = before;
+    *expected.entry("coreFile".into()).or_default() += 1;
+    check(pair.proxy.counts()?.commands == expected)?;
+    Ok(format!("{path}&cursor={cursor}"))
+}
 
 pub(super) async fn prepare(pair: &Pair<'_>) -> Result<String, Failure> {
     // A non-BMP scalar straddles the core adapter's 256 KiB page boundary.

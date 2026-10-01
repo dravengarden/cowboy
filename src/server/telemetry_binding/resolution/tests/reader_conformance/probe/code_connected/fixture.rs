@@ -164,6 +164,7 @@ pub(super) async fn seed(
     let store =
         crate::store::Store::connect(&database(root), root.join("controller/artifacts")).await?;
     store.insert_session(&session).await?;
+    seed_execution_bindings(root, &store, &session).await?;
     Ok(Seeded {
         password,
         package_sha256: sha256(&bytes),
@@ -174,6 +175,48 @@ pub(super) async fn seed(
         // install them via actual authenticated Controller admission below.
         artifacts: tokio::spawn(async move { axum::serve(listener, router).await }),
     })
+}
+
+async fn seed_execution_bindings(
+    root: &Path,
+    store: &crate::store::Store,
+    local: &crate::core::SessionMeta,
+) -> Result<()> {
+    // Disposable pre-start fixtures, never a production binding writer or
+    // Agent session. A conflicting local file makes accidental routing visible.
+    std::fs::create_dir(root.join("runtime"))?;
+    private_write(
+        &root.join("runtime").join(read_routes::FILE),
+        b"wrong runtime file",
+    )?;
+    let mut session = local.clone();
+    session.id = read_routes::BOUND.into();
+    session.machine_id = "offline-runtime".into();
+    session.cwd = root.join("runtime").to_string_lossy().into_owned();
+    let mut binding = crate::execution_environment::fixture().record().clone();
+    binding["runtime"] = json!({ "machine_id": session.machine_id, "cwd": session.cwd });
+    binding["environment"]["machine_id"] = MACHINE.into();
+    binding["workspace"] = json!({
+        "id": "fixture", "worktree_id": "fixture-worktree",
+        "cwd": root.join("workspace"), "source_path": root.join("workspace"),
+    });
+    session.execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+        binding,
+    ));
+    session
+        .execution_binding
+        .as_ref()
+        .unwrap()
+        .decode()
+        .map_err(anyhow::Error::msg)?;
+    store.insert_session(&session).await?;
+    session.id = read_routes::INVALID.into();
+    // Presence must survive Store + Controller restart, including JSON null.
+    session.execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
+        Value::Null,
+    ));
+    store.insert_session(&session).await?;
+    Ok(())
 }
 
 /// Test teardown only: exact installed executables confined to this private root.

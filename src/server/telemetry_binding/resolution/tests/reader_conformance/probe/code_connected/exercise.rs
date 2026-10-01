@@ -129,6 +129,9 @@ pub(super) async fn run(
     *stage = "session_file_read_route";
     let file_continuation = read_routes::prepare(pair).await?;
 
+    *stage = "independent_execution_binding";
+    let bound_continuation = read_routes::execution_binding(pair).await?;
+
     *stage = "original_read_credential_revocation";
     read_routes::authorization(pair, password).await?;
     checks.push("held_real_core_file_reply_is_discarded_after_original_cookie_logout");
@@ -273,6 +276,7 @@ pub(super) async fn run(
     pair.proxy.cut()?;
     pair.connected(2).await?;
     read_routes::refused(pair, &file_continuation).await?;
+    read_routes::refused(pair, &bound_continuation).await?;
     synchronization::replacement_refused(pair, &sync).await?;
     navigation::unavailable(pair, &navigation, StatusCode::CONFLICT).await?;
     let observed = pair
@@ -301,6 +305,7 @@ pub(super) async fn run(
     pair.start_controller().await?;
     pair.connected(3).await?;
     read_routes::refused(pair, &file_continuation).await?;
+    read_routes::refused(pair, &bound_continuation).await?;
     let missing = pair
         .http
         .call(Method::GET, &endpoint(&retained), None)
@@ -318,6 +323,7 @@ pub(super) async fn run(
     checks.push(
         "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
     );
+    checks.push("bound_session_reads_target_without_runtime_connection_and_fences_unknown_and_replaced_routes");
 
     colocated::run(pair, password, stage, checks).await?;
     Ok(())
