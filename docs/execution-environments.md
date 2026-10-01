@@ -1,7 +1,10 @@
 # Native execution environments
 
-Status: Codex implementation candidate, 2026-10-02; not yet production activated.
-Core binding readers were deployed on 2026-10-01. The candidate adds explicit
+Status: Codex native remote execution activated, 2026-10-02. Its runtime and
+existing authentication remain on OVH; Hawk and Falcon provide execution.
+See the [production receipt](releases/native-execution-rollout-2026-10-02.json).
+Claude remains an intentional upstream context gap and is not enabled here.
+Core binding readers were deployed on 2026-10-01. The implementation adds explicit
 creation admission, a target-owned keeper, authenticated routing and a native
 Provider bridge. Eighteen native-turn checks pass, including a lost actual start
 receipt, 35-second transport interruption, image reads and cold resume. These
@@ -23,7 +26,8 @@ recovery reader and built cold reader. These candidate cold-reader results do
 not establish that a host has activated that recovery configuration. See the
 [rollout record](releases/native-execution-rollout-2026-10-02.md) for the current
 production boundary.
-The existing Matrix adapter remains available until the native path is activated.
+The existing Matrix adapter remains available for retained sessions and
+unsupported Providers; existing conversations do not move automatically.
 The
 [Controller release receipt](releases/execution-binding-readers-2026-10-01.md)
 records the activated reader revision and connected Code acceptance.

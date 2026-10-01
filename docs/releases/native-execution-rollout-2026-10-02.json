@@ -1,0 +1,315 @@
+{
+  "schema": "cowboy.execution-production-rollout/v1",
+  "source_revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+  "host_source_revision": "d8a08d147e1c41747f7cd897da86751ec128c775",
+  "production_activation": true,
+  "scope": "Codex runtime on OVH with Hawk or Falcon execution",
+  "hosts": {
+    "hawk": {
+      "machine": "hawk",
+      "revision": "d8a08d147e1c41747f7cd897da86751ec128c775",
+      "transaction": "1790883120980278155-d8a08d147e1c",
+      "activeClosure": "/nix/store/qc2f210r0b7mjpkzldwax78aiglyfs17-nixos-system-hawk-26.05.20260731.5b4f72e",
+      "previousClosure": "/nix/store/6ymyxd7dyiycg7zdz71l43h5p0psq2ah-nixos-system-hawk-26.05.20260731.5b4f72e",
+      "outcome": "succeeded",
+      "recordedAt": "2026-10-02T03:32:06+08:00",
+      "explicitRestarts": {
+        "completedSystem": [],
+        "completedUser": [],
+        "requestedSystem": [],
+        "requestedUser": []
+      },
+      "retainedProcessPids": {
+        "after": {
+          "system": {
+            "cowboy.service": 3291068
+          },
+          "user": {}
+        },
+        "before": {
+          "system": {
+            "cowboy.service": 3291068
+          },
+          "user": {}
+        },
+        "violations": []
+      }
+    },
+    "falcon": {
+      "machine": "falcon",
+      "revision": "d8a08d147e1c41747f7cd897da86751ec128c775",
+      "transaction": "1790883105989988698-d8a08d147e1c",
+      "activeClosure": "/nix/store/6c8b2n6mi86yqrqlpdvz8fc8hxqaz2ib-nixos-system-falcon-26.05.20260714.8eeec93",
+      "previousClosure": "/nix/store/nrh8jx46yagxgwk4n8j41fxg2wiwfcd4-nixos-system-falcon-26.05.20260714.8eeec93",
+      "outcome": "succeeded",
+      "recordedAt": "2026-10-02T03:32:06+08:00",
+      "explicitRestarts": {
+        "completedSystem": [],
+        "completedUser": [],
+        "requestedSystem": [],
+        "requestedUser": []
+      },
+      "retainedProcessPids": {
+        "after": {
+          "system": {},
+          "user": {
+            "cowboy-machine.service": 1378
+          }
+        },
+        "before": {
+          "system": {},
+          "user": {
+            "cowboy-machine.service": 1378
+          }
+        },
+        "violations": []
+      }
+    }
+  },
+  "components": {
+    "hawk": {
+      "controller": {
+        "schema": 1,
+        "machine": "hawk",
+        "component": "cowboy",
+        "lane": "controller",
+        "transaction": "1790883492826910412-ac7f58cb46dc",
+        "revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "published": true,
+        "release": "/nix/store/vd0mva862nz1wxlrgz88d86jdpn7mds4-cowboy-controller-release",
+        "previousRelease": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+        "activeRelease": "/nix/store/vd0mva862nz1wxlrgz88d86jdpn7mds4-cowboy-controller-release",
+        "outcome": "succeeded",
+        "phase": "committed",
+        "maintenance": false,
+        "startedAt": "2026-10-01T19:38:12.826910412Z",
+        "recordedAt": "2026-10-01T19:38:26.165455175Z",
+        "recovered": false
+      },
+      "machine": {
+        "schema": 1,
+        "machine": "hawk",
+        "component": "cowboy",
+        "lane": "machine",
+        "transaction": "1790883540630168142-ac7f58cb46dc",
+        "revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "workerGeneration": "worker-2f2104b90426f41a64f3",
+        "published": true,
+        "release": "/nix/store/ga7nc046x8nb992gy518j58dgjl8z0xi-cowboy-machine-release",
+        "previousRelease": "/nix/store/zxsm21sikajhb2z8vhmayra41r3s3bm7-cowboy-machine-release",
+        "activeRelease": "/nix/store/ga7nc046x8nb992gy518j58dgjl8z0xi-cowboy-machine-release",
+        "outcome": "succeeded",
+        "phase": "committed",
+        "maintenance": true,
+        "startedAt": "2026-10-01T19:39:00.630168142Z",
+        "recordedAt": "2026-10-01T19:39:07.750780217Z",
+        "recovered": false
+      },
+      "web": {
+        "schema": 1,
+        "machine": "hawk",
+        "component": "cowboy",
+        "lane": "web",
+        "transaction": "1790883857072071321-ac7f58cb46dc",
+        "revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+        "published": true,
+        "release": "/nix/store/z8lm0jpwn86xf8c51ac1rwlmgza53kjg-cowboy-web-release",
+        "previousRelease": "/nix/store/d9rmgl8b8asvg612zimlxqygc8bg562f-cowboy-web-release",
+        "activeRelease": "/nix/store/z8lm0jpwn86xf8c51ac1rwlmgza53kjg-cowboy-web-release",
+        "outcome": "succeeded",
+        "phase": "committed",
+        "maintenance": false,
+        "startedAt": "2026-10-01T19:44:17.072071321Z",
+        "recordedAt": "2026-10-01T19:44:17.118075399Z",
+        "recovered": false
+      }
+    },
+    "falcon_machine": {
+      "schema": 1,
+      "machine": "falcon",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1790883548824431965-ac7f58cb46dc",
+      "revision": "ac7f58cb46dcc0114bb1b3e67c117669fd3338b4",
+      "workerGeneration": "worker-2f2104b90426f41a64f3",
+      "published": true,
+      "release": "/nix/store/ga7nc046x8nb992gy518j58dgjl8z0xi-cowboy-machine-release",
+      "previousRelease": "/nix/store/9waprpb994brhbf3frswqjq64i0na3iw-cowboy-machine-release",
+      "activeRelease": "/nix/store/ga7nc046x8nb992gy518j58dgjl8z0xi-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-01T19:39:08.824431965Z",
+      "recordedAt": "2026-10-01T19:39:15.465601827Z",
+      "recovered": false
+    },
+    "ovh_machine": {
+      "accepted_at": 1790883690,
+      "worker_generation": "worker-2f2104b90426f41a64f3",
+      "host_executable": "/nix/store/aapr3gz90i31xi1vk2vqkv99b44yjjla-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "configuration_sha256": "ae6529f06f5a96597825d002aa936caff5712b9fba8b920208324cdb5b260964",
+      "original_workers_preserved_until_host_start": true,
+      "workers": {
+        "retained": 2,
+        "native_generation_handoffs": 0
+      },
+      "maintenance_helper_sha256": "f52f449c50bb3ee47c07eba6c40e35ba7e7f71c1eef93f17da8116b580f9a122",
+      "rollback_timer": "inactive",
+      "normal_containment": "control-group"
+    }
+  },
+  "provider": {
+    "machine": "ovh",
+    "plugin_id": "codex",
+    "plugin_version": "3.2.0",
+    "artifact_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c",
+    "installation_revision": "installation-8d6d5b37cf040c2e6d37c503f8060d897414e0a22bf4223e200f7cba76d5fcc3",
+    "state": "active",
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "installation": {
+    "first_operation": "ovh-codex-3-2-0-native-execution-20261002",
+    "first_resolution": {
+      "schema": 1,
+      "operation_id": "ovh-codex-3-2-0-native-execution-20261002",
+      "phase": "needs_attention",
+      "machine_receipt": {
+        "state": "unknown",
+        "phase": "staging",
+        "reason": "expired"
+      },
+      "reconciliation_performed": true,
+      "staging_failure_resolved": true,
+      "resolution_id": "install-staging-2c1dd552a5260721bc584230a33422b7953cdc4f5d1a030edcbcf6b0ff07ece9",
+      "resolved_at_ms": 1790884139758
+    },
+    "accepted_operation": "ovh-codex-3-2-0-native-execution-cached-20261002",
+    "accepted_result": {
+      "schema": 1,
+      "operation_id": "ovh-codex-3-2-0-native-execution-cached-20261002",
+      "phase": "completed",
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-8d6d5b37cf040c2e6d37c503f8060d897414e0a22bf4223e200f7cba76d5fcc3"
+      },
+      "reconciliation_performed": true
+    },
+    "requires_reconciliation": false,
+    "public_runtime_preloaded_through_native_cache": true
+  },
+  "published_releases": [
+    {
+      "plugin_id": "codex",
+      "plugin_version": "3.2.0",
+      "artifact_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c",
+      "release_schema": 4
+    },
+    {
+      "plugin_id": "claude-code",
+      "plugin_version": "3.1.38",
+      "artifact_digest": "sha256:b17104d47c736bc6dfb0ef529b754653c2acdc6d8209d42205514dc5514a20f2",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "claude-deepseek",
+      "plugin_version": "3.1.28",
+      "artifact_digest": "sha256:5e5149c7d6ade88e447fef7f9dce84dd44a96fe9f061239777086ca99d80795e",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "codex-deepseek",
+      "plugin_version": "3.1.28",
+      "artifact_digest": "sha256:050a705887b26fb984a25a6d0da9d7b4313708c7555f6a61104043f0e500e25d",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "gemini",
+      "plugin_version": "3.1.28",
+      "artifact_digest": "sha256:072214b328252778e0572ea7cc4338200eefd5fce809d64dd6bba34efd24ae34",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "grok",
+      "plugin_version": "3.1.29",
+      "artifact_digest": "sha256:b9e2a0904f04591569b291dba908bf51bb3ac93921721e80dc3e140688c73562",
+      "release_schema": 2
+    }
+  ],
+  "publication_verification": {
+    "artifacts": 24,
+    "bytes": 1063082032,
+    "all_digests_matched": true
+  },
+  "accepted_reader_roles": {
+    "active": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+    "next_transaction_recovery": "/nix/store/lrdkqhysyyqn2mq5mkxfh1s7qpm8bxvv-cowboy-controller-release",
+    "cold": "/nix/store/zh052a2s7srj5bjs3hlvdyci68vdxpjx-cowboy-controller-release"
+  },
+  "production_preflight": {
+    "configuration": "configuration_valid",
+    "workspace_root": "/home/draven",
+    "runtime_machine": "ovh",
+    "all_six_published_releases_selected": true,
+    "telemetry_writer_policy": "unconfigured"
+  },
+  "health": {
+    "hawk": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-2f2104b90426f41a64f3",
+      "workspace_revision": "d8a08d147e1c41747f7cd897da86751ec128c775",
+      "workspace_ids_sha256": "29024f538a318968883fff43f6c185aa10df6d00d6d28814f17d984a97ba09f8"
+    },
+    "falcon": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-2f2104b90426f41a64f3",
+      "workspace_revision": "d8a08d147e1c41747f7cd897da86751ec128c775",
+      "workspace_ids_sha256": "29024f538a318968883fff43f6c185aa10df6d00d6d28814f17d984a97ba09f8"
+    },
+    "ovh": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-2f2104b90426f41a64f3",
+      "workspace_revision": "matrix-workspaces-2026-10-01",
+      "workspace_ids_sha256": "03e50ee4b8eabfdf37ed0767a8eef1bae01cb1c3a9576c462545d60cfec3b2d6"
+    }
+  },
+  "public_web": {
+    "/healthz": {
+      "status": 200,
+      "cache_control": null,
+      "etag": null,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df"
+    },
+    "/version": {
+      "status": 200,
+      "cache_control": null,
+      "etag": null,
+      "sha256": "31bc8fd84dede01c761adf850b9da6a82392f0a14398bf4cecfaa16e1a76b3fe",
+      "version": "b5e982d05f39ad4de20b51a2fbc7f6ab"
+    },
+    "/": {
+      "status": 200,
+      "cache_control": "no-store",
+      "etag": "\"b5e982d05f39ad4de20b51a2fbc7f6ab\"",
+      "sha256": "b5e982d05f39ad4de20b51a2fbc7f6ab2a2a8929f5fb1e8c65adb35dc6fc46f0"
+    }
+  },
+  "convergence_restored": {
+    "restored_at": "2026-10-01T19:56:34.841948+00:00",
+    "own_freeze_removed": true,
+    "previous_freeze_restored": true
+  },
+  "rollout_timer_restored": true,
+  "not_checked": [
+    "production_subscription_model_inference",
+    "cross_host_latency_and_token_turn_parity",
+    "inline_user_attachments",
+    "native_nested_agents"
+  ],
+  "unsupported": [
+    "claude_native_remote_execution"
+  ]
+}
