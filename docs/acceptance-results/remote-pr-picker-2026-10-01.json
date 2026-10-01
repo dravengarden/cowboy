@@ -1,0 +1,154 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "source_revision": "ce6470b0c8075cd35c715220f43c1905fa1bf9a7",
+  "status": "deployed",
+  "default": "current GitHub CLI user authored open PRs across repositories",
+  "filters": [
+    "relationship",
+    "state",
+    "repository scope"
+  ],
+  "navigation": "safe-area-aware bottom actions, minimum 44px icon targets",
+  "validation": {
+    "rust_all_features": 1680,
+    "standalone_machine": 408,
+    "frontend_tests": 1966,
+    "typecheck_lint_fmt": "passed",
+    "browser": {
+      "ok": true,
+      "suite": "workspace-extensions",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "54a56404e54864fe9af4fa124f9d94d2701b7a60c05c12b194c2a53576350b53",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "generic exact-release resource navigation",
+        "readable detail and explicit source link",
+        "late private response discarded across workspace change",
+        "previous page remains reachable while another page is pending and rejects its late response",
+        "a failed page does not trap navigation away from previously readable resources",
+        "extension installation uses the shared complete Plugin compatibility contract",
+        "catalog recovery clears its error and selects the newest compatible release",
+        "manual version choices remain scoped to each Machine and keep incompatible choices visibly blocked",
+        "late Machine inventory supplies a usable initial target",
+        "duplicate clicks share one pending action and catalog refresh preserves unresolved operation feedback",
+        "extensions expose the shared read-only operation history without replaying effects",
+        "installed and explicitly selected digests survive catalog changes without silent upgrades or fallback",
+        "unknown inventory, offline Machines and empty search retain explicit actionable states",
+        "account PR discovery is the default and Back stays at the bottom",
+        "refresh and failure preserve readable PRs with explicit retry",
+        "slow discovery shows skeletons and retains working bottom navigation",
+        "abandoned account lists cannot cross sessions and empty lists offer filters",
+        "relationship filter executes a new bounded account search",
+        "PR association retains repository identity without code bodies",
+        "actual CodeMirror renders the remote patch without workspace or native reads",
+        "PR page continuation retains repository and revision",
+        "concurrent remote update refuses continuation and preserves readable files",
+        "late private PR replies cannot cross session changes",
+        "local worktree remains reachable from remote review"
+      ],
+      "physical_device": "not_checked"
+    },
+    "github_live_search": {
+      "status": "passed",
+      "identity_stable": true,
+      "default_search": "is:pr author:<current-user> is:open",
+      "total": 0,
+      "incomplete": false,
+      "rows": 0,
+      "credentials_exported": false,
+      "raw_results_saved": false
+    },
+    "physical_iphone": "not_checked"
+  },
+  "deployment": {
+    "controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1790832606417383350-ce6470b0c807",
+      "revision": "ce6470b0c8075cd35c715220f43c1905fa1bf9a7",
+      "published": true,
+      "release": "/nix/store/xrywkk6pf997lxhrbhsrfzyikdflmg13-cowboy-controller-release",
+      "previousRelease": "/nix/store/dn1zxl89yb5wy7di31mpc3nc6001qwg7-cowboy-controller-release",
+      "activeRelease": "/nix/store/xrywkk6pf997lxhrbhsrfzyikdflmg13-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T05:30:06.41738335Z",
+      "recordedAt": "2026-10-01T05:30:18.749628972Z",
+      "recovered": false
+    },
+    "machine": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1790832634652113141-ce6470b0c807",
+      "revision": "ce6470b0c8075cd35c715220f43c1905fa1bf9a7",
+      "workerGeneration": "worker-401a0858f41aa4ab4470",
+      "published": true,
+      "release": "/nix/store/zxsm21sikajhb2z8vhmayra41r3s3bm7-cowboy-machine-release",
+      "previousRelease": "/nix/store/i30i3hnr240nadk5lcga637w70ih08g9-cowboy-machine-release",
+      "activeRelease": "/nix/store/zxsm21sikajhb2z8vhmayra41r3s3bm7-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-01T05:30:34.652113141Z",
+      "recordedAt": "2026-10-01T05:30:48.681793557Z",
+      "recovered": false
+    },
+    "web": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1790832671984574958-ce6470b0c807",
+      "revision": "ce6470b0c8075cd35c715220f43c1905fa1bf9a7",
+      "published": true,
+      "release": "/nix/store/4d5manqfbh8kaq9bcbc2wmhijld24436-cowboy-web-release",
+      "previousRelease": "/nix/store/sy0vdi6rklrhfz9y46y4p5ngjlbai79x-cowboy-web-release",
+      "activeRelease": "/nix/store/4d5manqfbh8kaq9bcbc2wmhijld24436-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T05:31:11.984574958Z",
+      "recordedAt": "2026-10-01T05:31:12.028131766Z",
+      "recovered": false
+    }
+  },
+  "http": {
+    "/healthz": {
+      "status": 200,
+      "cache_control": null,
+      "body": "ok"
+    },
+    "/version": {
+      "status": 200,
+      "cache_control": null,
+      "body": "{\"version\":\"4fd58b556dbf67aef04b933e5656f7f1\"}"
+    },
+    "/api/machines/hawk/deployment-health": {
+      "status": 200,
+      "cache_control": null,
+      "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-401a0858f41aa4ab4470\",\"workspace_revision\":\"de7faa3b55e12770d23aa7ac23c5a1cdb8aec91a\",\"workspace_ids_sha256\":\"29024f538a318968883fff43f6c185aa10df6d00d6d28814f17d984a97ba09f8\"}"
+    },
+    "/": {
+      "status": 200,
+      "cache_control": "no-store"
+    },
+    "/sw.js": {
+      "status": 200,
+      "cache_control": "no-store"
+    },
+    "/assets/main-CGxO2UdH.js": {
+      "status": 200,
+      "sha256": "af5fe792b88f92b1c285f7923e427500c2a7396d339449fa531011e70c53aff4"
+    }
+  },
+  "service_worker": "cowboy-v1780",
+  "existing_worker_identities_preserved": 18,
+  "plugin_or_credentials_changed": false
+}
