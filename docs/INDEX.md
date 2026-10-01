@@ -111,6 +111,8 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`usage-execution.md`](usage-execution.md) — Durable account usage Machine selection, CLI and failure behavior
+
 - [`releases/message-retry-retention-2026-10-01.md`](releases/message-retry-retention-2026-10-01.md) — Premature delivery confirmation repair, retry retention and OVH Provider diagnostics
 - [`releases/ovh-trusted-ssh-2026-10-01.md`](releases/ovh-trusted-ssh-2026-10-01.md) — Normal-account OVH SSH authority, Luna development tasks and Grok quota blocker
 - [`releases/ovh-hawk-ssh-development-2026-10-01.md`](releases/ovh-hawk-ssh-development-2026-10-01.md) — Earlier isolated development-shell feature and storage acceptance

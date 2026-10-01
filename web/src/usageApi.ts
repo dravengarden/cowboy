@@ -1,4 +1,36 @@
 import { expectHttpOk } from "./httpResponse.ts";
+
+export interface UsageExecutionSettings {
+  providers: Record<string, {
+    machine_id: string | null;
+    selected_machine_id: string | null;
+    status: "ready" | "service" | "unavailable";
+    detail: string | null;
+  }>;
+  machines: { id: string; name: string; status: string }[];
+}
+
+export async function readUsageExecutors(): Promise<UsageExecutionSettings> {
+  const response = await fetch("/api/usage/executors");
+  await expectHttpOk(response, "Could not load usage Machines");
+  return await response.json() as UsageExecutionSettings;
+}
+
+export async function setUsageExecutor(
+  account: string,
+  machine: string | null,
+): Promise<UsageExecutionSettings> {
+  const response = await fetch(
+    `/api/usage/${encodeURIComponent(account)}/executor`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine_id: machine }),
+    },
+  );
+  await expectHttpOk(response, "Could not save usage Machine");
+  return await response.json() as UsageExecutionSettings;
+}
 import {
   accountProviderLabel,
   providerUsageAccount,

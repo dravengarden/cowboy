@@ -17,6 +17,7 @@ use super::sqlite::SqliteStorage;
 const TABLES: &[&str] = &[
     "core_security_authority",
     "machines",
+    "usage_execution_machines",
     "plugin_install_operations",
     "plugin_install_staging_resolutions",
     "plugin_uninstall_operations",

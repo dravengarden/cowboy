@@ -20,6 +20,12 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "./pluginHost";
+import { UsageExecutorPicker } from "./UsageExecutorPicker";
+import {
+  readUsageExecutors,
+  setUsageExecutor,
+  type UsageExecutionSettings,
+} from "./usageApi";
 import {
   acceptedScheduleTime,
   accountManageUrl,
@@ -185,7 +191,9 @@ function ProviderUsageCard({
   now,
   onUsageChanged,
   onRefresh,
+  children,
 }: {
+  children?: React.ReactNode;
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
   now: number;
@@ -199,6 +207,7 @@ function ProviderUsageCard({
       now={now}
       onUsageChanged={onUsageChanged}
       onRefresh={onRefresh}
+      children={children}
     />
   );
 }
@@ -209,7 +218,9 @@ function ProviderUsageCardBody({
   now,
   onUsageChanged,
   onRefresh,
+  children,
 }: {
+  children?: React.ReactNode;
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
   now: number;
@@ -579,6 +590,7 @@ function ProviderUsageCardBody({
           {usage.source} · {stale ? "Cached" : "Updated"}{" "}
           {relativeUpdateTime(usage.observed_at_ms)}
         </Typography>
+        {children}
       </Stack>
       <ConfirmSheet
         open={resetOpen}
@@ -668,6 +680,9 @@ function ProviderUsageCardBody({
 
 function UsageInfoSection(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  const [execution, setExecution] = useState<UsageExecutionSettings | null>(
+    null,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clock, setClock] = useState(() => Date.now());
@@ -677,6 +692,7 @@ function UsageInfoSection(): React.JSX.Element {
     setError(null);
     try {
       setSnapshot(await (manual ? refreshUsage() : readUsage()));
+      setExecution(await readUsageExecutors());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     } finally {
@@ -741,7 +757,18 @@ function UsageInfoSection(): React.JSX.Element {
           now={clock}
           onUsageChanged={() => load(false)}
           onRefresh={() => loadProvider(provider.provider)}
-        />
+        >
+          {execution && (
+            <UsageExecutorPicker
+              account={provider.provider}
+              settings={execution}
+              onChange={async (account, machine) => {
+                setExecution(await setUsageExecutor(account, machine));
+                await loadProvider(account);
+              }}
+            />
+          )}
+        </ProviderUsageCard>
       ))}
       {!snapshot && !error && (
         <Typography variant="body2" color="text.secondary">
@@ -914,9 +941,7 @@ export function InfoContent({
       <Stack spacing={desktop ? 1.25 : 2.5}>
         <Stack
           spacing={1}
-          sx={desktop
-            ? { ...desktopPanelSx(), p: 1.5 }
-            : undefined}
+          sx={desktop ? { ...desktopPanelSx(), p: 1.5 } : undefined}
         >
           <Typography variant="overline" color="text.secondary">
             Storage
@@ -949,9 +974,7 @@ export function InfoContent({
         {!desktop && <Divider />}
         <Stack
           spacing={0.5}
-          sx={desktop
-            ? { ...desktopPanelSx(), p: 1.5 }
-            : undefined}
+          sx={desktop ? { ...desktopPanelSx(), p: 1.5 } : undefined}
         >
           <Typography variant="overline" color="text.secondary">
             About

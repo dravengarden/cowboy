@@ -210,6 +210,11 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
             post(reconcile_install),
         )
         .route("/v1/usage", get(api_usage))
+        .route("/v1/usage/executors", get(api_usage_executors))
+        .route(
+            "/v1/usage/{provider}/executor",
+            axum::routing::put(api_usage_executor_update),
+        )
         .route(
             "/v1/machines/{id}/plugins/{plugin}/uninstall-operations",
             get(plugin_uninstall::api_machine_plugin_operations),

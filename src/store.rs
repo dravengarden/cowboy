@@ -41,6 +41,7 @@ mod plugin_installations;
 mod plugin_operations;
 mod sqlite;
 mod telemetry_bindings;
+mod usage_execution;
 
 use sqlite::SqliteStorage;
 

@@ -22,6 +22,8 @@ use crate::machine_protocol::{PluginHostOperation, PluginInstallationState, Plug
 use crate::plugin_host::PluginUsageSpec;
 use crate::plugin_process::run_plugin_command;
 
+mod execution;
+
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 const MANUAL_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
 const TRANSIENT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
@@ -128,6 +130,7 @@ pub struct UsageService {
     reset_schedules: Arc<Mutex<BTreeMap<String, ResetSchedule>>>,
     cache_path: Option<PathBuf>,
     warming: Arc<AtomicBool>,
+    execution_machines: Arc<parking_lot::RwLock<BTreeMap<String, String>>>,
 }
 
 enum PluginCommandRoute {
@@ -223,6 +226,7 @@ impl UsageService {
             reset_schedules: Arc::new(Mutex::new(BTreeMap::new())),
             cache_path,
             warming: Arc::new(AtomicBool::new(false)),
+            execution_machines: Arc::default(),
         }
     }
 
@@ -245,7 +249,13 @@ impl UsageService {
             );
         };
         let released_hosts = runtime.exact_usage_hosts(account);
+        let preferred_machine = self.execution_machines.read().get(account).cloned();
         if released_hosts.is_empty() {
+            if preferred_machine.is_some() {
+                return PluginCommandRoute::Unavailable(
+                    "Configured usage Machine requires a released Plugin host".to_owned(),
+                );
+            }
             return PluginCommandRoute::Bootstrap;
         }
         let hosts = released_hosts
@@ -267,7 +277,7 @@ impl UsageService {
             );
         }
         let installed = self.machine_control.connected_plugin_inventory();
-        let mut candidates = hosts
+        let candidates = hosts
             .into_iter()
             .flat_map(|host| {
                 installed
@@ -289,18 +299,13 @@ impl UsageService {
                     })
             })
             .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| {
-            semver::Version::parse(right.0)
-                .ok()
-                .cmp(&semver::Version::parse(left.0).ok())
-                .then(left.1.cmp(&right.1))
-                .then(left.2.generation_digest.cmp(&right.2.generation_digest))
-        });
-        candidates.into_iter().next().map_or_else(
+        execution::select_candidate(preferred_machine.as_deref(), candidates).map_or_else(
             || {
                 PluginCommandRoute::Unavailable(
-                    "Plugin host is temporarily unavailable: no connected Machine has a matching exact generation"
-                        .to_owned(),
+                    preferred_machine.map_or_else(
+                        || "Plugin host is temporarily unavailable: no connected Machine has a matching exact generation".to_owned(),
+                        |machine| format!("Configured usage Machine {machine} is temporarily unavailable or has no matching active Plugin generation"),
+                    ),
                 )
             },
             |(_, machine_id, plugin)| PluginCommandRoute::Machine { machine_id, plugin },
@@ -1027,15 +1032,23 @@ async fn collect_command(
     });
     let result = async {
         let response = match route {
-            PluginCommandRoute::Machine { machine_id, plugin } => machine_control
-                .plugin_host_request(
-                    &machine_id,
-                    &plugin,
-                    PluginHostOperation::CollectUsage,
-                    request,
-                )
-                .await
-                .map_err(|error| anyhow::anyhow!(error.detail))?,
+            PluginCommandRoute::Machine { machine_id, plugin } => {
+                tracing::info!(
+                    account,
+                    machine_id,
+                    plugin_id = plugin.plugin_id,
+                    "dispatching account usage collection"
+                );
+                machine_control
+                    .plugin_host_request(
+                        &machine_id,
+                        &plugin,
+                        PluginHostOperation::CollectUsage,
+                        request,
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.detail))?
+            }
             PluginCommandRoute::Unavailable(detail) => bail!(detail),
             PluginCommandRoute::Bootstrap => {
                 let (program, args) = binding
@@ -1366,7 +1379,7 @@ mod tests {
         assert_eq!(error.to_string(), "provider outcome is unknown");
     }
 
-    fn openai_usage_binding() -> PluginUsageSpec {
+    pub(super) fn openai_usage_binding() -> PluginUsageSpec {
         PluginUsageSpec {
             account: "openai".to_owned(),
             collector: UsageCollectorKind::Command,

@@ -273,6 +273,13 @@ enum OperatorCommand {
         #[arg(long)]
         refresh: Option<String>,
     },
+    /// Inspect usage placement, or pin one account to a Machine (automatic clears the pin).
+    UsageExecutor {
+        #[arg(long, requires = "machine")]
+        provider: Option<String>,
+        #[arg(long, requires = "provider")]
+        machine: Option<String>,
+    },
 }
 
 pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
@@ -470,6 +477,20 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
                 Some(operation_id),
             )
         }
+        OperatorCommand::UsageExecutor { provider, machine } => match provider {
+            Some(provider) => (
+                reqwest::Method::PUT,
+                vec!["usage".into(), provider, "executor".into()],
+                Some(json!({"machine_id": machine.filter(|machine| machine != "automatic")})),
+                None,
+            ),
+            None => (
+                reqwest::Method::GET,
+                vec!["usage".into(), "executors".into()],
+                None,
+                None,
+            ),
+        },
         OperatorCommand::Usage { refresh } => match refresh {
             Some(provider) => (
                 reqwest::Method::POST,

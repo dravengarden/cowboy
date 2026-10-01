@@ -1207,6 +1207,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&plugin_catalog),
         Arc::clone(&machine_control),
     );
+    usage.restore_execution_settings().await?;
     let runtime_router = RuntimeRouter::new();
     // Usage collectors and authenticated Machine connections must share this
     // registry; a second instance leaves collectors permanently without routes.
@@ -4652,7 +4653,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     // rest of that screen already uses. The legacy admin console keeps its own
     // path through the admin cookie.
     if path.starts_with("/api/usage/")
-        && (path.ends_with("/reset") || path.ends_with("/reset/schedule"))
+        && (path.ends_with("/reset")
+            || path.ends_with("/reset/schedule")
+            || (path.ends_with("/executor") && method == Method::PUT))
     {
         return RouteAuth::ProductOrAdminOperator;
     }
@@ -9450,6 +9453,8 @@ async fn serve_axum(
         .route("/api/logs", get(api_diagnostic_logs))
         .route("/api/logs/{id}", get(api_diagnostic_log_detail))
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
+        .route("/api/usage/executors", get(api_usage_executors))
+        .route("/api/usage/{provider}/executor", axum::routing::put(api_usage_executor_update))
         .route("/api/usage/{provider}/activity", get(api_usage_activity))
         .route("/api/usage/{provider}", post(api_usage_provider_refresh))
         .route("/api/usage/logs", get(api_usage_logs))
@@ -10113,6 +10118,44 @@ async fn api_usage(State(state): State<Arc<AppState>>) -> Response {
         &bindings,
     );
     Json(snapshot).into_response()
+}
+
+async fn api_usage_executors(State(state): State<Arc<AppState>>) -> Response {
+    match state.usage.execution_settings().await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "usage execution settings read failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Usage execution settings are unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UsageExecutorUpdate {
+    machine_id: Option<String>,
+}
+
+async fn api_usage_executor_update(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+    Json(request): Json<UsageExecutorUpdate>,
+) -> Response {
+    match state
+        .usage
+        .set_execution_machine(&provider, request.machine_id)
+        .await
+    {
+        Ok(()) => api_usage_executors(State(state)).await,
+        Err(error) => {
+            tracing::warn!(%error, "usage execution settings update failed");
+            (StatusCode::BAD_REQUEST, "Could not save usage Machine. Select an enrolled Machine and an account with a usage collector.").into_response()
+        }
+    }
 }
 
 async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
@@ -21276,6 +21319,7 @@ mod product_auth_api_tests {
             (Method::POST, "/api/usage/codex/reset"),
             (Method::PUT, "/api/usage/codex/reset/schedule"),
             (Method::DELETE, "/api/usage/codex/reset/schedule"),
+            (Method::PUT, "/api/usage/anthropic/executor"),
         ] {
             assert_eq!(
                 classify_route(&method, path),

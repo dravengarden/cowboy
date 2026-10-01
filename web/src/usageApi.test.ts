@@ -6,7 +6,49 @@ import {
   resetProviderCatalog,
 } from "./providerCatalogRegistry.ts";
 import { providerUsage, type UsageSnapshot } from "./usageLimits.ts";
-import { readUsage, refreshSessionUsage, refreshUsage } from "./usageApi.ts";
+import {
+  readUsage,
+  readUsageExecutors,
+  refreshSessionUsage,
+  refreshUsage,
+  setUsageExecutor,
+} from "./usageApi.ts";
+
+Deno.test("usage placement pins an account and can restore automatic routing", async () => {
+  const original = globalThis.fetch;
+  const requests: { url: string; method: string; body: unknown }[] = [];
+  globalThis.fetch = (input, options) => {
+    requests.push({
+      url: String(input),
+      method: options?.method ?? "GET",
+      body: options?.body ? JSON.parse(String(options.body)) : null,
+    });
+    return Promise.resolve(Response.json({ providers: {}, machines: [] }));
+  };
+  try {
+    await readUsageExecutors();
+    await setUsageExecutor("anthropic", "ovh");
+    await setUsageExecutor("anthropic", null);
+    assertEquals(requests, [
+      { url: "/api/usage/executors", method: "GET", body: null },
+      {
+        url: "/api/usage/anthropic/executor",
+        method: "PUT",
+        body: { machine_id: "ovh" },
+      },
+      {
+        url: "/api/usage/anthropic/executor",
+        method: "PUT",
+        body: { machine_id: null },
+      },
+    ]);
+    globalThis.fetch = () =>
+      Promise.resolve(new Response("Forbidden", { status: 403 }));
+    await assertRejects(() => setUsageExecutor("anthropic", "ovh"));
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 
 const digest = `sha256:${"1".repeat(64)}`;
 
