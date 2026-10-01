@@ -3250,7 +3250,8 @@ export function ReviewApp({
               {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
             </IconButton>
           )}
-          {!projectCodeContext && workspace?.sessionId && <IconButton
+          {!projectCodeContext && workspace?.sessionId &&
+            typeof syncedReview.remote_selected === "boolean" && <IconButton
             aria-label={syncedReview.remote_review ? `Review remote PR #${syncedReview.remote_review.number}` : "Associate remote PR"}
             title={syncedReview.remote_review ? `Remote PR #${syncedReview.remote_review.number}` : "Remote PR"}
             onClick={() => {
