@@ -284,6 +284,13 @@ export function createProviderAuthenticationOwner(
             );
             return;
           }
+          if (response.status === 428) {
+            stop();
+            lease.error(
+              "Your Cowboy sign-in needs to be refreshed. Close this dialog, sign in to Cowboy again, then reopen Provider sign-in. The Provider request has not been cancelled.",
+            );
+            return;
+          }
           if (!response.ok) return;
           const body: unknown = await response.json();
           if (!live()) return;

@@ -563,6 +563,25 @@ Deno.test("unknown login states and revoked status access stop observation witho
   }
 });
 
+Deno.test("expired Cowboy authentication does not silently poll Provider sign-in forever", async () => {
+  const f = authFixture();
+  try {
+    const poll = await f.start();
+    f.reply(poll, {
+      code: "session_reauthentication_required",
+      kind: "primary",
+    }, 428);
+    await settle();
+    assertStringIncludes(f.owner.snapshot().error, "sign in to Cowboy again");
+    assertEquals(f.owner.snapshot().value?.flow.requestId, "request-a");
+    assertEquals(f.time.timers.size, 0);
+    assertEquals(f.calls.length, 2);
+    assertEquals(f.closes(), 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 Deno.test("uninstall preview projection discards unowned fields and freezes nested consent", async () => {
   const f = uninstallFixture();
   try {
