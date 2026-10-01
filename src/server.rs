@@ -10,6 +10,8 @@
 //! Machine connections use one-time enrollment plus an OpenSSH Ed25519
 //! challenge before WebSocket protocol negotiation.
 
+mod session_provider_updates;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
 use std::net::SocketAddr;
@@ -9648,7 +9650,7 @@ async fn serve_axum(
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route(
             "/api/sessions/{id}/reload",
-            get(api_session_reload_plan).post(api_session_reload),
+            get(api_session_reload_plan).post(api_session_reload).put(session_provider_updates::configure),
         )
         .route(
             "/api/sessions/{id}/cache-protection",
@@ -9700,6 +9702,7 @@ async fn serve_axum(
         state.shutdown.clone(),
     ));
 
+    let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -9711,6 +9714,7 @@ async fn serve_axum(
     #[cfg(unix)]
     local_operator.shutdown().await;
     convergence_task.abort();
+    provider_update_task.abort();
     code_buffers.shutdown().await;
     result?;
     Ok(())
@@ -14387,6 +14391,7 @@ async fn api_session_reload_plan(
     match session_reload_target(&state, &info.meta).await {
         Ok(target) => Json(serde_json::json!({
             "current_version": info.meta.provider_version,
+            "automatic_updates": session_provider_updates::enabled(&state.hub, &session_id),
             "target_version": target.version,
             "target_digest": target.digest,
             "upgrade_available": target.digest != info.meta.provider_generation_digest,
@@ -14394,11 +14399,38 @@ async fn api_session_reload_plan(
         .into_response(),
         Err(error) => Json(serde_json::json!({
             "current_version": info.meta.provider_version,
+            "automatic_updates": session_provider_updates::enabled(&state.hub, &session_id),
             "upgrade_available": false,
             "blocked_reason": error,
         }))
         .into_response(),
     }
+}
+
+fn apply_session_provider_reload(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    target: &ResolvedProviderGeneration,
+) -> Result<(), String> {
+    state
+        .provider_auth
+        .with_scheduling_generation(
+            &meta.provider,
+            target.auth_generation.is_some(),
+            target.auth_generation,
+            || {
+                state.supervisor.reload_session_provider(
+                    meta,
+                    crate::supervisor::ProviderGeneration {
+                        version: &target.version,
+                        digest: &target.digest,
+                        auth_generation: meta.provider_auth_generation,
+                        behavior: Some(&target.behavior),
+                    },
+                )
+            },
+        )
+        .map_err(|error| error.to_string())?
 }
 
 async fn api_session_reload(
@@ -14428,28 +14460,11 @@ async fn api_session_reload(
             )
                 .into_response();
         }
-        let result = state.provider_auth.with_scheduling_generation(
-            &info.meta.provider,
-            target.auth_generation.is_some(),
-            target.auth_generation,
-            || {
-                state.supervisor.reload_session_provider(
-                    &info.meta,
-                    crate::supervisor::ProviderGeneration {
-                        version: &target.version,
-                        digest: &target.digest,
-                        auth_generation: info.meta.provider_auth_generation,
-                        behavior: Some(&target.behavior),
-                    },
-                )
-            },
-        );
-        return match result {
-            Ok(Ok(())) => {
+        return match apply_session_provider_reload(&state, &info.meta, &target) {
+            Ok(()) => {
                 (StatusCode::ACCEPTED, "reloading installed Provider version").into_response()
             }
-            Ok(Err(error)) => (StatusCode::CONFLICT, error).into_response(),
-            Err(error) => (StatusCode::CONFLICT, error.to_string()).into_response(),
+            Err(error) => (StatusCode::CONFLICT, error).into_response(),
         };
     }
     let reload_key = provider_fence_key_for_session(&state.hub, &session_id);

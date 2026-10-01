@@ -192,7 +192,8 @@ Deno.test("unfocused pending draft activation actively recovers a missing server
     store.indexOf("async function hydrateSession("),
     store.indexOf("export function retrySessionHydration("),
   );
-  assert(hydration.includes("needsDraftSource(sessionId) ||"));
+  assert(hydration.includes("const retryDraft = needsDraftSource(sessionId) &&"));
+  assert(hydration.includes("retryTranscript || retryDraft"));
   assert(hydration.includes("retryableFailure = needsDraftSource(sessionId)"));
   assert(hydration.includes('qStatus.set(mutation.id, "failed")'));
   const discard = store.slice(

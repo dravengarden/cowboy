@@ -860,3 +860,22 @@ separate `service:workspaces` cache is not needed.
 - **Rename conflicts.** Last writer wins is proposed as sufficient; a
   base-aware prompt is listed as optional because the cost lands in the
   arbiter and the frequency is low.
+
+### Cached transcript recovery (2026-10-01)
+
+A replica tail makes history readable, but does not acknowledge the live
+bootstrap. Focused cached transcripts keep retrying failed bootstrap requests
+with 750 ms, 2 s, 10 s, then 30 s backoff while visible and connected. A 200
+response without the session's snapshot is still a failure. Superseded requests
+cannot apply snapshots or schedule retries. Returning to the foreground retries
+a cached transcript even when its WebSocket remained healthy.
+
+The cached caption shows retrying or failure and offers **Retry sync**. Only a
+real snapshot removes it; receiving unrelated WebSocket traffic is insufficient.
+Queue source retries retain their separate finite failure behavior.
+
+The loopback browser regression uses the actual product store, IndexedDB and
+WebSocket with synthetic data: `just transcript-recovery-browser BROWSER BUNDLE`
+after `just send-latency-bundle BUNDLE`. It restores an old partial answer,
+receives two 503s and an empty 200, then checks automatic recovery, exact
+canonical content and removal of the cached caption.

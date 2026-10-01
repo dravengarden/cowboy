@@ -589,3 +589,7 @@ cache-clean:
 # Actual cover/footer DOM with overlay and resized keyboard geometry.
 sheet-keyboard-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" sheet-keyboard' conformance "{{BROWSER}}"
+
+# Actual cached transcript recovery after failed/malformed bootstrap responses.
+transcript-recovery-browser BROWSER BUNDLE:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" --transcript-recovery' recovery "{{BROWSER}}" "{{BUNDLE}}"

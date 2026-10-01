@@ -15,6 +15,7 @@ import {
   loadSessionReloadPlan,
   reloadSession,
   type SessionReloadPlan,
+  setAutomaticProviderUpdates,
 } from "./sessionReload";
 import { ConfirmSheet } from "./Sheet";
 
@@ -115,6 +116,26 @@ export function SessionReloadDialog({
         drafts, and saved agent configuration are retained. If the new runtime
         no longer supports a saved setting, its supported value is used.
       </DialogContentText>
+      {plan?.automatic_updates !== undefined && session && (
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={plan.automatic_updates}
+              disabled={action.pending}
+              onChange={(_, enabled): void => {
+                void action.run(async () => {
+                  await setAutomaticProviderUpdates(session.id, enabled);
+                  setLoaded({
+                    key: planKey,
+                    plan: { ...plan, automatic_updates: enabled },
+                  });
+                });
+              }}
+            />
+          }
+          label="Automatically load compatible Provider updates when this session is idle"
+        />
+      )}
       {!result && !activeTurn && (
         <DialogContentText sx={{ mt: 1.5 }}>
           Checking installed Provider version…

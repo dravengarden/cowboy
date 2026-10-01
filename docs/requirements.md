@@ -425,7 +425,8 @@ new sessions use the active generation. Provider names or mutable active links
 are never sufficient session identity.
 
 Ordinary session Reload retains that exact release. An explicit idle-only
-"Load installed Provider" confirmation may rebind one existing session to its
+"Load installed Provider" confirmation, or an explicitly enabled per-session
+"automatic Provider updates" policy, may rebind one existing session to its
 Machine's trusted active release, bound to the confirmed artifact digest. It
 must validate compatible authentication, native-session, and configuration
 contracts, retain the original auth-generation runtime home, and fence racing
@@ -435,6 +436,11 @@ the runtime's advertised compatible values. Resume failure is visible and must
 never fall back to a blank native session. This shared ACP contract applies to
 Codex and followers; a Provider without native resume/load support fails closed.
 It does not install software, migrate accounts, or restart other sessions.
+The automatic policy is persisted by the Controller and defaults off. Every
+30 seconds it considers only running, idle sessions and newer stable installed
+versions. It uses the same compatibility checks and prompt fence, never revives
+stopped/failed sessions, never downgrades, and keeps selected model preferences.
+The policy continues while the Web client is closed.
 If a reload is interrupted before the reset and persistence both complete,
 reconnection reconciles the release binding with the surviving worker only
 when its native ID, workspace, and auth-generation home still match. The UI

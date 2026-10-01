@@ -1,3 +1,4 @@
+import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 // Single WebSocket store shared by the whole app. cowboy is the source of
 // truth; this store just accumulates what it pushes. Exposed via
 // useSyncExternalStore so any component re-renders on change.
@@ -266,6 +267,7 @@ export interface State {
 export interface TranscriptSource {
   readonly source: "replica" | "live";
   readonly syncedAt: number;
+  readonly syncState?: "syncing" | "retrying" | "failed";
 }
 
 let errorSeq = 0;
@@ -592,6 +594,9 @@ if (typeof document !== "undefined") {
     if (now - lastForegroundRecoveryAt < FOREGROUND_RECOVERY_COALESCE_MS) return;
     if (state.connected) {
       refreshProviderCatalog();
+      if (openedSessionId && state.transcriptSources.get(openedSessionId)?.source === "replica") {
+        void hydrateSession(openedSessionId);
+      }
       schedulePrefetch();
     }
     if (
@@ -1809,6 +1814,7 @@ async function hydrateSession(
   if (scheduledRetry !== undefined) clearTimeout(scheduledRetry);
   sessionHydrationRetryTimers.delete(sessionId);
   const controller = new AbortController();
+  setTranscriptSyncState(sessionId, "syncing");
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -1827,6 +1833,7 @@ async function hydrateSession(
         throw new Error(`session bootstrap failed: ${String(response.status)}`);
       }
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
+      if (controller.signal.aborted) return;
       const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
         configOptionsRevisionAtRequestStart,
         configOptionsRevisions.get(sessionId) ?? 0,
@@ -1837,7 +1844,7 @@ async function hydrateSession(
         }
         handle(message);
       }
-      if (!state.hydrated.has(sessionId)) {
+      if (!bootstrap.messages.some((message) => message.type === "snapshot" && message.session_id === sessionId)) {
         throw new Error("session bootstrap contained no transcript snapshot");
       }
       // HTTP 200 is not a source acknowledgement: creation can still be racing,
@@ -1850,37 +1857,39 @@ async function hydrateSession(
       clearTimeout(timeout);
       if (sessionHydrations.get(sessionId)?.controller === controller) {
         sessionHydrations.delete(sessionId);
-      }
-      if (
-        retryableFailure &&
-        (needsDraftSource(sessionId) ||
-          (!state.hydrated.has(sessionId) &&
-            transcriptIsCached(sessionId) &&
-            openedSessionId === sessionId)) &&
-        retryAttempt < SESSION_HYDRATION_RETRY_DELAYS_MS.length
-      ) {
-        const delay = SESSION_HYDRATION_RETRY_DELAYS_MS[retryAttempt]!;
-        const retry = setTimeout(() => {
-          if (sessionHydrationRetryTimers.get(sessionId) !== retry) return;
-          sessionHydrationRetryTimers.delete(sessionId);
-          if (
-            needsDraftSource(sessionId) ||
-            (!state.hydrated.has(sessionId) &&
-              transcriptIsCached(sessionId) &&
-              openedSessionId === sessionId)
-          ) {
-            void hydrateSession(sessionId, true, retryAttempt + 1);
-          }
-        }, delay);
-        sessionHydrationRetryTimers.set(sessionId, retry);
-      } else if (retryableFailure && needsDraftSource(sessionId)) {
-        for (const mutation of qClients.get(sessionId)?.pending() ?? []) {
-          if (mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null) {
-            qStatus.set(mutation.id, "failed");
-          }
+        const needsFocusedTranscript = (): boolean =>
+          transcriptIsCached(sessionId) && openedSessionId === sessionId &&
+          transcriptNeedsHydration(state.hydrated.has(sessionId), state.transcriptSources.get(sessionId)?.source);
+        const retryTranscript = needsFocusedTranscript() && state.connected &&
+          globalThis.document?.visibilityState !== "hidden";
+        const retryDraft = needsDraftSource(sessionId) &&
+          retryAttempt < SESSION_HYDRATION_RETRY_DELAYS_MS.length;
+        if (retryableFailure) setTranscriptSyncState(sessionId, retryTranscript ? "retrying" : "failed");
+        if (retryableFailure && (retryTranscript || retryDraft)) {
+          const delay = transcriptRetryDelay(retryAttempt);
+          const retry = setTimeout(() => {
+            if (sessionHydrationRetryTimers.get(sessionId) !== retry) return;
+            sessionHydrationRetryTimers.delete(sessionId);
+            if (
+              (needsDraftSource(sessionId) && retryAttempt < SESSION_HYDRATION_RETRY_DELAYS_MS.length) ||
+              (needsFocusedTranscript() && state.connected && globalThis.document?.visibilityState !== "hidden")
+            ) {
+              void hydrateSession(sessionId, true, retryAttempt + 1);
+            }
+          }, delay);
+          sessionHydrationRetryTimers.set(sessionId, retry);
         }
-        commitQueue(sessionId);
-        notify("Draft source could not be synchronized. Retry sending when connected.");
+        if (retryableFailure && needsDraftSource(sessionId) && retryAttempt >= SESSION_HYDRATION_RETRY_DELAYS_MS.length) {
+          let newlyFailed = false;
+          for (const mutation of qClients.get(sessionId)?.pending() ?? []) {
+            if (mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null && qStatus.get(mutation.id) !== "failed") {
+              qStatus.set(mutation.id, "failed");
+              newlyFailed = true;
+            }
+          }
+          commitQueue(sessionId);
+          if (newlyFailed) notify("Draft source could not be synchronized. Retry sending when connected.");
+        }
       }
     }
   })();
@@ -2512,6 +2521,12 @@ function discardReplicaTimeline(sessionId: string): void {
   const transcriptSources = new Map(state.transcriptSources);
   transcriptSources.delete(sessionId);
   setState({ ...state, timelines, hydrated, pagination, transcriptSources });
+}
+
+function setTranscriptSyncState(sessionId: string, syncState: "syncing" | "retrying" | "failed"): void {
+  const source = state.transcriptSources.get(sessionId);
+  if (source?.source !== "replica" || source.syncState === syncState) return;
+  setState({ ...state, transcriptSources: new Map(state.transcriptSources).set(sessionId, { ...source, syncState }) });
 }
 
 function markTranscriptLive(

@@ -10,6 +10,7 @@ export interface SessionReloadOptions {
 
 export interface SessionReloadPlan {
   current_version: string;
+  automatic_updates?: boolean;
   target_version?: string;
   target_digest?: string;
   upgrade_available: boolean;
@@ -76,4 +77,25 @@ export async function reloadSession(
   throw new Error(
     detail || `Session reload failed (HTTP ${String(response.status)})`,
   );
+}
+
+/** Persist the per-session policy on the Controller, including while the UI is closed. */
+export async function setAutomaticProviderUpdates(
+  sessionId: string,
+  enabled: boolean,
+  fetcher: SessionReloadFetch = globalThis.fetch,
+): Promise<void> {
+  const response = await fetcher(
+    `/api/sessions/${encodeURIComponent(sessionId)}/reload`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      (await response.text()).trim() || "Could not save automatic updates",
+    );
+  }
 }

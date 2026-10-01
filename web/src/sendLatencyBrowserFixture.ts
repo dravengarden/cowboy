@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSyncDatabase } from "./productSyncDatabase.ts";
+import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
 import { openSession, submitPrompt, useStore } from "./store.ts";
 
 const delay = (ms: number) =>
@@ -11,12 +12,14 @@ const delay = (ms: number) =>
 let snapshot: ReturnType<typeof useStore>;
 function Probe() {
   snapshot = useStore();
-  return null;
+  return createElement(TranscriptCachedCaption, {
+    sessionId: "fixture-session",
+  });
 }
-async function until(predicate: () => boolean, label: string) {
+async function until(predicate: () => boolean, label: string, timeout = 8000) {
   const started = performance.now();
   while (!predicate()) {
-    if (performance.now() - started > 8000) {
+    if (performance.now() - started > timeout) {
       throw new Error(
         `fixture timed out: ${label}; ${
           JSON.stringify({
@@ -103,6 +106,63 @@ export async function run() {
       () => snapshot?.connected && snapshot.sessionsLoaded,
       "initial connection",
     );
+    if (scenario === "transcript-recovery") {
+      await productSyncDatabase.cache({
+        kind: "session",
+        session,
+        state: "tail",
+      }).save({
+        receivedAt: Date.now() - 17 * 60_000,
+        lastSeq: 1,
+        reachedStart: true,
+        events: [{
+          session_id: session,
+          seq: 1,
+          kind: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "old partial answer" },
+          },
+        }],
+      });
+      openSession(session);
+      await until(
+        () => snapshot.transcriptSources.get(session)?.source === "replica",
+        "cached paint",
+      );
+      await until(
+        () => snapshot.transcriptSources.get(session)?.syncState === "retrying",
+        "failed bootstrap retries cached tail",
+      );
+      if (!document.body.textContent?.includes("Retry sync")) {
+        throw new Error("retry action missing");
+      }
+      await until(
+        () => snapshot.transcriptSources.get(session)?.source === "live",
+        "authoritative snapshot after repeated failures",
+        20_000,
+      );
+      const rows = snapshot.timelines.get(session) ?? [];
+      if (
+        rows.length !== 1 ||
+        !JSON.stringify(rows).includes("fresh complete answer")
+      ) {
+        throw new Error(
+          "canonical snapshot did not replace stale partial answer exactly once",
+        );
+      }
+      if (document.querySelector("[data-transcript-cached-caption]")) {
+        throw new Error("cached caption survived live acknowledgement");
+      }
+      return [
+        "replica paint",
+        "503 retry",
+        "empty 200 not acknowledgement",
+        "automatic recovery",
+        "no duplicates",
+        "caption cleared",
+      ];
+    }
     openSession(session);
     if (scenario === "changed-dataset") {
       await fetch("/fixture/switch-dataset", { method: "POST" });

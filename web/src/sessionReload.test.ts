@@ -3,6 +3,7 @@ import {
   loadSessionReloadPlan,
   reloadSession,
   type SessionReloadFetch,
+  setAutomaticProviderUpdates,
 } from "./sessionReload.ts";
 
 Deno.test("session reload posts to the encoded session endpoint", async () => {
@@ -101,5 +102,29 @@ Deno.test("reload plan fails closed for old controllers and missing target ident
         )),
     Error,
     "Invalid session reload plan",
+  );
+});
+
+Deno.test("automatic update policy saves independently from reloading a busy session", async () => {
+  const requests: { input: string; init: RequestInit }[] = [];
+  const fetcher: SessionReloadFetch = (input, init) => {
+    requests.push({ input, init });
+    return Promise.resolve(Response.json({ enabled: true }));
+  };
+  await setAutomaticProviderUpdates("a/b", true, fetcher);
+  await setAutomaticProviderUpdates("a/b", false, fetcher);
+  assertEquals(requests.map((r) => [r.input, r.init.method, r.init.body]), [
+    ["/api/sessions/a%2Fb/reload", "PUT", '{"enabled":true}'],
+    ["/api/sessions/a%2Fb/reload", "PUT", '{"enabled":false}'],
+  ]);
+  await assertRejects(
+    () =>
+      setAutomaticProviderUpdates(
+        "a/b",
+        true,
+        () => Promise.resolve(new Response("not allowed", { status: 403 })),
+      ),
+    Error,
+    "not allowed",
   );
 });

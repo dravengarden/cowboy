@@ -1,7 +1,11 @@
-import { Box } from "@mui/material";
+import { Box, Button } from "@mui/material";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { useStoreSelector, useSyncStatus } from "./store";
+import {
+  retrySessionHydration,
+  useStoreSelector,
+  useSyncStatus,
+} from "./store";
 import { relativeAge } from "./syncStatus";
 
 /**
@@ -10,8 +14,12 @@ import { relativeAge } from "./syncStatus";
  * (docs/offline-first-sync.md §Transcript). Disappears the moment the live
  * snapshot lands; never blocks reading or typing.
  */
-export function TranscriptCachedCaption({ sessionId }: { readonly sessionId: string }): ReactNode {
-  const source = useStoreSelector((snapshot) => snapshot.transcriptSources.get(sessionId));
+export function TranscriptCachedCaption(
+  { sessionId }: { readonly sessionId: string },
+): ReactNode {
+  const source = useStoreSelector((snapshot) =>
+    snapshot.transcriptSources.get(sessionId)
+  );
   const sync = useSyncStatus();
   const cached = source?.source === "replica";
   const [now, setNow] = useState(() => Date.now());
@@ -22,7 +30,13 @@ export function TranscriptCachedCaption({ sessionId }: { readonly sessionId: str
   }, [cached]);
   if (!cached || source === undefined) return null;
   const age = relativeAge(source.syncedAt, now);
-  const verb = sync.phase === "live" || sync.phase === "connecting" ? "syncing…" : "offline";
+  const verb = sync.phase !== "live" && sync.phase !== "connecting"
+    ? "offline"
+    : source.syncState === "failed"
+    ? "sync failed"
+    : source.syncState === "retrying"
+    ? "retrying…"
+    : "syncing…";
   return (
     <Box
       data-transcript-cached-caption
@@ -35,11 +49,21 @@ export function TranscriptCachedCaption({ sessionId }: { readonly sessionId: str
         fontSize: "0.75rem",
         color: "text.secondary",
         bgcolor: "action.hover",
-        pointerEvents: "none",
         userSelect: "none",
       }}
     >
       {age === null ? `Cached · ${verb}` : `Cached · updated ${age} · ${verb}`}
+      {(source.syncState === "failed" || source.syncState === "retrying") && (
+        <Button
+          size="small"
+          onClick={(): void => {
+            void retrySessionHydration(sessionId);
+          }}
+          sx={{ minHeight: 44 }}
+        >
+          Retry sync
+        </Button>
+      )}
     </Box>
   );
 }

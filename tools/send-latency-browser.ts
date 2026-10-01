@@ -2,7 +2,10 @@
 // Arguments: pinned Firefox executable, one or more built fixture directories.
 const [browser, ...args] = Deno.args;
 const safety = args.includes("--safety");
-const bundles = args.filter((argument) => argument !== "--safety");
+const recovery = args.includes("--transcript-recovery");
+const bundles = args.filter((argument) =>
+  argument !== "--safety" && argument !== "--transcript-recovery"
+);
 if (
   !browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox") ||
   !bundles.length
@@ -32,7 +35,11 @@ const session = {
   updated_at_ms: 0,
 };
 const cases = bundles.flatMap((bundle) =>
-  (safety ? ["changed-dataset", "missing-protocol"] : ["timing"])
+  (recovery
+    ? ["transcript-recovery"]
+    : safety
+    ? ["changed-dataset", "missing-protocol"]
+    : ["timing"])
     .map((scenario) => ({ bundle, scenario }))
 );
 for (const { bundle, scenario } of cases) {
@@ -41,6 +48,7 @@ for (const { bundle, scenario } of cases) {
   let deadline: ReturnType<typeof setTimeout> | undefined;
   const sockets = new Set<WebSocket>();
   const report = Promise.withResolvers<unknown>();
+  let bootstraps = 0;
   let discoveries = 0;
   let deliveries = 0;
   let seq = 0;
@@ -129,6 +137,23 @@ for (const { bundle, scenario } of cases) {
         return response;
       }
       if (url.pathname.endsWith("/bootstrap")) {
+        if (recovery) {
+          bootstraps++;
+          await delay(150);
+          if (bootstraps <= 2) {
+            return new Response("temporary failure", { status: 503 });
+          }
+          if (bootstraps === 3) return Response.json({ messages: [] });
+          history.splice(0, history.length, {
+            session_id: session.id,
+            seq: 1,
+            kind: "update",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "fresh complete answer" },
+            },
+          });
+        }
         return Response.json({
           messages: [{
             type: "snapshot",
@@ -194,13 +219,15 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
         digest,
         scenario,
         discoveries,
+        bootstraps,
         attempts,
         deliveries,
         result,
       }),
     );
     if (
-      !(result as { ok?: boolean }).ok || deliveries !== (safety ? 0 : 17) ||
+      !(result as { ok?: boolean }).ok ||
+      deliveries !== (safety || recovery ? 0 : 17) ||
       attempts < 1
     ) {
       throw new Error("send fixture failed");
