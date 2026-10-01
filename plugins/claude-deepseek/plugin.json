@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "claude-deepseek",
-  "version": "3.1.28",
-  "component_release": "3.34.0",
+  "version": "3.1.29",
+  "component_release": "3.35.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -29,7 +29,7 @@
     },
     {
       "id": "cowboy.provider-runtime",
-      "version": "1.1.10"
+      "version": "1.1.11"
     }
   ]
 }

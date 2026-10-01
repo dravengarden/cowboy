@@ -303,19 +303,42 @@ async function validateNpmRecipe(
     `${providerId}: runtime npm package version mismatch for ${dependency.id}`,
   );
   const directDependencies = Object.entries(packageJson.dependencies);
-  assert(
-    directDependencies.length === 1,
-    `${providerId}: ${dependency.id} runtime package must have one direct dependency`,
+  assert(lock.lockfileVersion === 3, `${providerId}: npm lockfile must be v3`);
+  const primary = directDependencies.filter(([name, version]) =>
+    version === dependency.version &&
+    lock.packages[`node_modules/${name}`]?.resolved === dependency.source
   );
+  assert(
+    primary.length === 1,
+    `${providerId}: ${dependency.id} runtime package must have one exact primary dependency`,
+  );
+  // Private transport libraries belong to this adapter's complete npm lock,
+  // not to a Machine-wide installation or a new executable component. Every
+  // direct input must be exact and agree with the integrity-bound lock.
+  assert(
+    JSON.stringify(Object.keys(packageJson.dependencies).sort()) ===
+      JSON.stringify(Object.keys(lock.packages[""]?.dependencies ?? {}).sort()),
+    `${providerId}: npm lock root dependency set differs`,
+  );
+  for (const [name, version] of directDependencies) {
+    const locked = lock.packages[`node_modules/${name}`];
+    assert(
+      exactVersion(version) &&
+        lock.packages[""]?.dependencies?.[name] === version &&
+        locked?.version === version &&
+        locked.resolved?.startsWith("https://") &&
+        /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(locked.integrity ?? ""),
+      `${providerId}: private npm input ${name} is not exactly integrity-pinned`,
+    );
+  }
   const [packageName, packageVersion] = required(
-    directDependencies[0],
+    primary[0],
     "missing npm dependency",
   );
   assert(
     packageVersion === dependency.version,
     `${providerId}: package.json does not pin ${dependency.id}`,
   );
-  assert(lock.lockfileVersion === 3, `${providerId}: npm lockfile must be v3`);
   assert(
     lock.packages[""]?.dependencies?.[packageName] === dependency.version,
     `${providerId}: npm lock root does not pin ${dependency.id}`,

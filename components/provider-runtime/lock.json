@@ -23,22 +23,24 @@
   "components": {
     "anthropic-claude-code": {
       "kind": "npm_archive",
-      "version": "2.1.286",
-      "probe": ["--version"],
+      "version": "2.1.287",
+      "probe": [
+        "--version"
+      ],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.286.tgz",
-          "integrity": "sha512-PnVL8ZCEev3IexLeOc9/QRfqRDUZRgnsaMLdpjlBN0VaieeTrf7mZ2JJi29ue2KAqHvq6SsOadU5G/shnFE4MA==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.287.tgz",
+          "integrity": "sha512-Q31ekN28viVjgfDuZKXUR5vxIBgUYoLGe+cRmjx/f01omqFDMi6IrgmcK5pWMnRbu/cjsTA/zO+bVES5oY3XUg==",
           "entrypoint": "package/claude"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.286.tgz",
-          "integrity": "sha512-dHQ/ObyC4jaGHVk+gFE8P8PALMIVLhQSyhiC3y3kkuLp0H0MHgLxHt/srQ3zJs892ClDbtl1swxv4bw1ioruZA==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.287.tgz",
+          "integrity": "sha512-MU3ReK1kjstDmjEOzhFZaphh2AVUKnPaik6lOV0WLs3/mOM7mE/mqkdcQ/Sv0KwHH5MnOhSkIjCEl0/8tr+vRg==",
           "entrypoint": "package/claude"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.286.tgz",
-          "integrity": "sha512-QlU1+S7cNO1BKzlMJGRR/ZqdsP6c3+QAA2u9EX7dTO6HUo1/RAenn/q+mlyX60MZzTZOjPkAmTt77eYrH1IAwg==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.287.tgz",
+          "integrity": "sha512-ZQLmkEpiWd8sxUYRpQr1yZ39DyVBhrl8MUtbxe33E+z4jFPtUy+CrJXmeRRyyM+FEfvGe/2ab+E59GiSKkprRw==",
           "entrypoint": "package/claude"
         }
       }
@@ -46,7 +48,9 @@
     "openai-codex": {
       "kind": "npm_archive",
       "version": "0.159.3",
-      "probe": ["--version"],
+      "probe": [
+        "--version"
+      ],
       "targets": {
         "linux-x86_64": {
           "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.3-linux-x64.tgz",
@@ -68,7 +72,9 @@
     "xai-grok": {
       "kind": "npm_brotli",
       "version": "1.0.46",
-      "probe": ["--version"],
+      "probe": [
+        "--version"
+      ],
       "targets": {
         "linux-x86_64": {
           "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.46.tgz",
@@ -92,7 +98,9 @@
       "version": "0.84.0",
       "package_dir": "packages/claude-agent-acp",
       "script": "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
-      "probe": ["--version"]
+      "probe": [
+        "--version"
+      ]
     },
     "codex-acp": {
       "kind": "node_npm",
@@ -100,14 +108,18 @@
       "package_dir": "packages/codex-acp",
       "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
       "launcher": "packages/codex-acp/launch.mjs",
-      "probe": ["--version"]
+      "probe": [
+        "--version"
+      ]
     },
     "google-gemini-cli": {
       "kind": "node_npm",
       "version": "0.62.0",
       "package_dir": "packages/gemini",
       "script": "node_modules/@google/gemini-cli/bundle/gemini.js",
-      "probe": ["--version"]
+      "probe": [
+        "--version"
+      ]
     },
     "claude-deepseek-gateway": {
       "kind": "git_go_static",
@@ -117,7 +129,9 @@
       "subdir": "projects/claude-deepseek",
       "source_archive_sha256": "0bc0b0b854d86846e8d45b0c91c48139c17beac9186545fea41f542f0a495658",
       "binary": "claude-deepseek",
-      "probe": ["--help"]
+      "probe": [
+        "--help"
+      ]
     },
     "codex-deepseek-gateway": {
       "kind": "git_go_static",
@@ -127,7 +141,9 @@
       "subdir": "projects/codex-deepseek",
       "source_archive_sha256": "6019b0bf8679f876e80efcef03219c0caa84af6ee8b3fb13ea73561ea245bfc5",
       "binary": "codex-deepseek",
-      "probe": ["--help"]
+      "probe": [
+        "--help"
+      ]
     }
   }
 }

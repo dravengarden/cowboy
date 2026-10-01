@@ -478,6 +478,9 @@ provider-release-coverage CATALOG:
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
+    node --test plugins/claude-code/runtime/*.test.mjs
+    deno fmt --check plugins/claude-code/runtime
+    deno check plugins/claude-code/runtime/build.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/source.json
     deno check plugins/codex/runtime/build.ts

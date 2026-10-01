@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.38",
+  "version": "3.2.0",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.12",
   "display": {
@@ -242,7 +242,13 @@
           "keep_worker_alive": true,
           "retry_once_without_visible_update": false
         }
-      ]
+      ],
+      "execution": {
+        "interface": "jsonrpc_v1",
+        "executor_digests": [
+          "sha256:8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        ]
+      }
     },
     "arguments": [],
     "environment": {
@@ -274,9 +280,9 @@
       },
       {
         "id": "anthropic-claude-code",
-        "version": "2.1.286",
-        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.286.tgz",
-        "integrity": "sha512-5UNEDKy2znv81PWqNqgPJO4qPqH5NRenh52XTtx2tT5Q6xIxjI1q0RyucY+AUHMABImzDOlh6ztuj4qNiAaRvA==",
+        "version": "2.1.287",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.287.tgz",
+        "integrity": "sha512-V5WRpA+p41siSlf/Ujxjm//RtYvySxH/p9/rh6zRxNoHeBzqTgSDw3nP8PgtACM/KcVx/g5TFUNdVkq51dfg0g==",
         "private": true
       }
     ],
@@ -323,7 +329,8 @@
       }
     ],
     "required_capabilities": [
-      "provider.runtime.v1"
+      "provider.runtime.v1",
+      "provider.execution-jsonrpc.v1"
     ]
   },
   "authentication": {

@@ -41,6 +41,7 @@ class ScriptedApi(ThreadingHTTPServer):
     def __init__(self, steps):
         self.steps = steps
         self.requests = []
+        self.token_requests = []
         self.failure = None
         super().__init__(("127.0.0.1", 0), ApiHandler)
         self.thread = threading.Thread(target=self.serve_forever, daemon=True)
@@ -61,13 +62,24 @@ class ApiHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             require(0 < length <= MAX_FRAME, "API request exceeds fixture limit")
             request = json.loads(self.rfile.read(length))
-            require(self.path.split("?")[0] == "/v1/messages", "unexpected API endpoint")
+            if self.path.split("?")[0] == "/v1/messages/count_tokens":
+                self.server.token_requests.append(request)
+                encoded = json.dumps({"input_tokens": 1000}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
+            require(self.path.split("?")[0] == "/v1/messages", f"unexpected API endpoint {self.path.split('?')[0][:256]}")
             index = len(self.server.requests)
             self.server.requests.append(request)
             require(index <= len(self.server.steps), "unexpected extra native API request")
             content = self.server.steps[index] if index < len(self.server.steps) else [
                 {"type": "text", "text": "fixture complete"},
             ]
+            if callable(content):
+                content = content(self.server.requests)
             reason = "tool_use" if any(block["type"] == "tool_use" for block in content) else "end_turn"
             message = {
                 "id": f"msg_fixture_{index}", "type": "message", "role": "assistant",
@@ -162,7 +174,7 @@ class WorkspaceFixture:
 
 class Claude:
     def __init__(self, binary, environment, runtime, fixture, *, aliases=True, resume=None,
-                 custom_system_prompt=False):
+                 custom_system_prompt=False, extra_arguments=(), model="claude-sonnet-4-6"):
         self.fixture = fixture
         self.frames = queue.Queue(maxsize=1000)
         self.messages = []
@@ -170,7 +182,7 @@ class Claude:
         arguments = [binary, "--print", "--input-format", "stream-json", "--output-format", "stream-json",
                      "--verbose", "--permission-mode", "bypassPermissions", "--tools", "",
                      "--disallowedTools", ",".join(DISALLOWED), "--setting-sources", "",
-                     "--strict-mcp-config", "--model", "claude-sonnet-4-6"]
+                     "--strict-mcp-config", "--model", model, *extra_arguments]
         if resume:
             arguments.extend(["--resume", resume])
         self.process = subprocess.Popen(arguments, cwd=runtime, env=environment, start_new_session=True,
@@ -230,11 +242,11 @@ class Claude:
                            and frame["response"].get("request_id") == "initialize-fixture")
         require(frame["response"]["subtype"] == "success", "native initialize rejected")
 
-    def prompt(self, *, client_composed=False):
-        self.send({"type": "user", "message": {"role": "user", "content": "Run the offline tool fixture."},
+    def prompt(self, *, client_composed=False, text="Run the offline tool fixture.", timeout=40):
+        self.send({"type": "user", "message": {"role": "user", "content": text},
                    **({"client_composed": True} if client_composed else {}),
                    "parent_tool_use_id": None, "session_id": ""})
-        result = self.until(lambda frame: frame.get("type") == "result")
+        result = self.until(lambda frame: frame.get("type") == "result", timeout=timeout)
         require(not result.get("is_error"), "native fixture turn failed")
         return result
 

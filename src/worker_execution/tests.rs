@@ -281,7 +281,11 @@ async fn native_worker_execution() {
         }
     });
     let status = tokio::process::Command::new("python3")
-        .arg("tools/execution_worker_conformance.py")
+        .arg(if input["provider"] == "claude-code" {
+            "tools/execution_claude_worker_conformance.py"
+        } else {
+            "tools/execution_worker_conformance.py"
+        })
         .arg("--native-cli")
         .arg(&executor)
         .arg("--descriptor")

@@ -1,34 +1,37 @@
 # Native execution environments
 
 Status: Codex native remote execution activated, 2026-10-02. Its runtime and
-existing authentication remain on OVH; Hawk and Falcon provide execution.
-See the [production receipt](releases/native-execution-rollout-2026-10-02.json).
-Claude remains an intentional upstream context gap and is not enabled here.
-Core binding readers were deployed on 2026-10-01. The implementation adds explicit
-creation admission, a target-owned keeper, authenticated routing and a native
-Provider bridge. Eighteen native-turn checks pass, including a lost actual start
-receipt, 35-second transport interruption, image reads and cold resume. These
-checks do not establish cross-host latency or production subscription inference.
-The separate public-session gate passes nine checks through actual product
-login, a temporary signed Plugin and two enrolled Machines, including target
-edits, Controller and target Machine restarts, and confirmed deletion while
-preserving work. Its fixture Agent performs no model inference. Both gates use
-disposable state and do not accept production activation. The native gate also
-drives the built Codex ACP artifact through a real new session and cold load;
-both retain target guidance and the original filesystem without effect replay.
-Receipts: [native worker](experiments/execution-worker-2026-10-02.json) and
-[authenticated sessions](experiments/execution-session-2026-10-02.json).
-The public-session gate also passes with the built
+existing authentication remain on OVH; Hawk and Falcon provide execution. See
+the [production receipt](releases/native-execution-rollout-2026-10-02.json).
+Claude's 2.1.287 Plugin candidate now supplies native context projection and
+target file/process tools. Its separate verification and rollout are recorded in
+[Claude execution integration](experiments/claude-execution-integration-2026-10-02.md).
+Core binding readers were deployed on 2026-10-01. The implementation adds
+explicit creation admission, a target-owned keeper, authenticated routing and a
+native Provider bridge. Eighteen native-turn checks pass, including a lost
+actual start receipt, 35-second transport interruption, image reads and cold
+resume. These checks do not establish cross-host latency or production
+subscription inference. The separate public-session gate passes nine checks
+through actual product login, a temporary signed Plugin and two enrolled
+Machines, including target edits, Controller and target Machine restarts, and
+confirmed deletion while preserving work. Its fixture Agent performs no model
+inference. Both gates use disposable state and do not accept production
+activation. The native gate also drives the built Codex ACP artifact through a
+real new session and cold load; both retain target guidance and the original
+filesystem without effect replay. Receipts:
+[native worker](experiments/execution-worker-2026-10-02.json) and
+[authenticated sessions](experiments/execution-session-2026-10-02.json). The
+public-session gate also passes with the built
 [cold recovery Controller](experiments/execution-session-cold-floor-2026-10-02.json).
-The [Catalog gate](experiments/execution-catalog-readers-2026-10-02.json) accepts
-all six exact staged releases against the active reader bridge, next-transaction
-recovery reader and built cold reader. These candidate cold-reader results do
-not establish that a host has activated that recovery configuration. See the
-[rollout record](releases/native-execution-rollout-2026-10-02.md) for the current
-production boundary.
-The existing Matrix adapter remains available for retained sessions and
-unsupported Providers; existing conversations do not move automatically.
-The
+The [Catalog gate](experiments/execution-catalog-readers-2026-10-02.json)
+accepts all six exact staged releases against the active reader bridge,
+next-transaction recovery reader and built cold reader. These candidate
+cold-reader results do not establish that a host has activated that recovery
+configuration. See the
+[rollout record](releases/native-execution-rollout-2026-10-02.md) for the
+current production boundary. The existing Matrix adapter remains available for
+retained sessions and unsupported Providers; existing conversations do not move
+automatically. The
 [Controller release receipt](releases/execution-binding-readers-2026-10-01.md)
 records the activated reader revision and connected Code acceptance.
 
@@ -87,13 +90,13 @@ executor implementation can be an owned, pinned component. Reusing Codex's
 executor code does not make the target depend on an installed, authenticated
 Codex Agent Plugin, and must not borrow another Plugin's private generation.
 
-The first implementation uses a Provider-neutral Machine execution contract
-and a pinned Codex execution protocol inside the Codex Provider. The target's
+The first implementation uses a Provider-neutral Machine execution contract and
+a pinned Codex execution protocol inside the Codex Provider. The target's
 `components/execution-runtime/lock.json` owns the exact native executor bytes;
 the Machine release owns its configuration and retention. It starts only the
 native `exec-server`, in a private home without Provider authentication. An
-execution-capable Provider explicitly accepts the executor digest. Neither
-side reaches into an installed target Agent's private generation.
+execution-capable Provider explicitly accepts the executor digest. Neither side
+reaches into an installed target Agent's private generation.
 
 ### Alternatives considered
 
@@ -142,10 +145,11 @@ connections never select the runtime connection instead.
 Unknown or malformed bindings refuse runtime start, adoption, configuration
 replay and native event projection. Recognized bindings additionally require the
 session's exact signed Provider generation to accept the executor digest and
-protocol. A bound worker requires runtime wire 2; old worker fallback is refused.
-Creation is separately admitted with `COWBOY_EXECUTION_RUNTIME_MACHINE`, naming
-the default Agent runtime. The default is closed. Actual active/recovery/cold
-readers must be established before enabling it.
+protocol. A bound worker requires runtime wire 2; old worker fallback is
+refused. Creation is separately admitted with
+`COWBOY_EXECUTION_RUNTIME_MACHINE`, naming the default Agent runtime. The
+default is closed. Actual active/recovery/cold readers must be established
+before enabling it.
 
 `POST /api/execution-sessions` persists a non-runnable preparation before
 allocating the target worktree. Target preparation is session-owned and reuses
@@ -212,8 +216,8 @@ interfaces, target instruction loading, and `codex exec-server`. Its upstream
 tests include `environments.toml` invoking `ssh ... exec-server --listen stdio`.
 The candidate Cowboy Codex adapter forwards the core binding through a private
 worker endpoint when starting a thread and on every turn after native resume.
-This belongs to its owned source patch and signed release; core routing does
-not branch on a Provider ID.
+This belongs to its owned source patch and signed release; core routing does not
+branch on a Provider ID.
 
 The native turn fixture establishes a more specific requirement: in `0.159.3`,
 `thread.environments` is live selection, not durable conversation placement.
@@ -242,7 +246,7 @@ the project. Keep Provider settings, authentication and native session history
 owned by OVH. Unsupported project capabilities must be visible; they must not
 read or modify the entry repository as a fallback.
 
-The locked `2.1.286` native fixture confirms an unresolved context problem (also
+The historical `2.1.286` native fixture confirmed a context problem (also
 observed in retained `2.1.285`): after disabling local project tools and
 settings, and appending target guidance, Claude still injects its **runtime
 cwd** into a model-visible user-message environment reminder. Target tool
@@ -261,14 +265,19 @@ client-composed prompts with that suppression. Each executes a real native tool
 round trip against a scripted API; each still sends the runtime directory. The
 official reminder controls do not constitute a target-environment override.
 
-For this lane, the missing upstream seam is explicit model-visible execution
-context: target cwd, platform, shell, OS version and Git status, independently
-of native runtime cwd and authentication/history paths. The Provider should
-consume an authenticated target descriptor and replace the native execution
-context at its supported construction boundary, including cold resume and
-compaction. A fabricated local directory or syscall interception is not an
-accepted substitute: it leaves implicit Git, settings, hooks and process
-behavior referring to OVH and adds a second environment to maintain.
+Native `2.1.287` exposes supported Mods hooks at that construction boundary. The
+Claude 3.2.0 Plugin uses them for target cwd, platform, Bash, OS, Git status and
+ancestor project guidance, independently of authentication/history paths. It
+refuses initialization until a zero-inference probe verifies the Mod loaded.
+Actual native resume and compaction are part of the worker gate. Reserved `Read`
+aliases still trigger native runtime file rereads after compaction, so the
+facade uses `ReadFile`, `EditFile`, `WriteFile`, `GlobFiles`, `GrepFiles` and
+`EditNotebook`; ordinary operations remain one tool call. Native project hooks,
+skills, subagents, plan files and implicit file attachments are disabled.
+Guidance is a literal bounded snapshot of ancestor `AGENTS.md`, `CLAUDE.md` and
+`.claude/CLAUDE.md`, with identical content deduplicated; automatic `@` imports,
+`.claude/rules` and nested-directory instruction discovery are not implemented.
+The agent can explicitly read further target guidance with `ReadFile`.
 
 Readiness is per exact Provider generation and execution contract. A blocked
 Claude lane must leave existing local sessions usable and must not prevent a
