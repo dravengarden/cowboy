@@ -127,6 +127,21 @@ nix develop -c deno test --config web/deno.json --sloppy-imports \
   web/src/runConfigPresets.test.ts web/src/providerSdk.test.ts
 ```
 
+For a Claude native CLI, SDK or adapter change, also retain its execution
+environment gate. The standard Claude Plugin owns
+`plugins/claude-code/runtime/`; its accepted native integration uses Mods and
+SDK tools while keeping subscription authentication on the Agent Machine. Build
+the actual immutable adapter, then run
+`just execution-worker-conformance <claude-input.json> <new-receipt.json>` with
+`provider: "claude-code"`, exact native/executor digests and the packaged
+launcher. Require all 25 checks, including runtime context replacement, image
+and large-output locators, real compaction and subsequent cold resume,
+interruption, uncertain-operation retention and zero-inference readiness
+failure. Do not update the builder's exact native-version guard from a registry
+audit alone. See
+[the integration record](../../../../docs/experiments/claude-execution-integration-2026-10-02.md).
+The isolated DeepSeek variant does not inherit standard Claude remote execution.
+
 Check schema rejection, unique IDs/defaults, order and labels, generic projection,
 unsupported model/option filtering, model-before-effort application, and latest
 presentation versus exact runtime identity. Existing tests may encode a previous

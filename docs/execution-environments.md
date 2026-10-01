@@ -3,22 +3,22 @@
 Status: Codex native remote execution activated, 2026-10-02. Its runtime and
 existing authentication remain on OVH; Hawk and Falcon provide execution. See
 the [production receipt](releases/native-execution-rollout-2026-10-02.json).
-Claude's 2.1.287 Plugin candidate now supplies native context projection and
-target file/process tools. Its separate verification and rollout are recorded in
-[Claude execution integration](experiments/claude-execution-integration-2026-10-02.md).
-Core binding readers were deployed on 2026-10-01. The implementation adds
-explicit creation admission, a target-owned keeper, authenticated routing and a
-native Provider bridge. Eighteen native-turn checks pass, including a lost
-actual start receipt, 35-second transport interruption, image reads and cold
-resume. These checks do not establish cross-host latency or production
-subscription inference. The separate public-session gate passes nine checks
-through actual product login, a temporary signed Plugin and two enrolled
-Machines, including target edits, Controller and target Machine restarts, and
-confirmed deletion while preserving work. Its fixture Agent performs no model
-inference. Both gates use disposable state and do not accept production
-activation. The native gate also drives the built Codex ACP artifact through a
-real new session and cold load; both retain target guidance and the original
-filesystem without effect replay. Receipts:
+Claude Code Plugin 3.2.0 (native CLI 2.1.287) is also installed and active on
+OVH, with target context and file/process tools. Its verification and limits are
+recorded in the
+[Claude rollout](releases/claude-native-execution-2026-10-02.md). Core binding
+readers were deployed on 2026-10-01. The implementation adds explicit creation
+admission, a target-owned keeper, authenticated routing and a native Provider
+bridge. Eighteen native-turn checks pass, including a lost actual start receipt,
+35-second transport interruption, image reads and cold resume. These checks do
+not establish cross-host latency or production subscription inference. The
+separate public-session gate passes nine checks through actual product login, a
+temporary signed Plugin and two enrolled Machines, including target edits,
+Controller and target Machine restarts, and confirmed deletion while preserving
+work. Its fixture Agent performs no model inference. Both gates use disposable
+state and do not accept production activation. The native gate also drives the
+built Codex ACP artifact through a real new session and cold load; both retain
+target guidance and the original filesystem without effect replay. Receipts:
 [native worker](experiments/execution-worker-2026-10-02.json) and
 [authenticated sessions](experiments/execution-session-2026-10-02.json). The
 public-session gate also passes with the built

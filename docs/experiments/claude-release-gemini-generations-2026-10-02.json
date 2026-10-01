@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "plugin_id": "gemini",
+  "plugin_version": "3.1.29",
+  "artifact_digest": "sha256:8f9a1ce5ce0062cea36fbf5c26b17f2b424ec154c7cb60ff7e730c0046859e64",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "probes": [
+    {
+      "command": "gemini",
+      "version": "0.62.0",
+      "artifact_digest": "sha256:374ec2bc56353eafa8e7d25d04781acd3faa99699a3d4d97e004dd4312025938",
+      "status": "passed"
+    }
+  ],
+  "uses_service_credentials": false,
+  "sends_prompt": false,
+  "previous": {
+    "plugin_version": "3.1.28",
+    "artifact_digest": "sha256:072214b328252778e0572ea7cc4338200eefd5fce809d64dd6bba34efd24ae34"
+  },
+  "worker": {
+    "executable_digest": "sha256:5ba859926b58695f5239589027a5784416f8ab86efa14804eb08581824c7047a",
+    "initialize_and_session_new": "passed",
+    "stop_and_descendant_drain": "passed",
+    "sidecar_count": 0,
+    "distinct_generation_coexistence": "passed"
+  }
+}

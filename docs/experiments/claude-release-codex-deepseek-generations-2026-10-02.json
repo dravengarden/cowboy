@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "plugin_id": "codex-deepseek",
+  "plugin_version": "3.1.29",
+  "artifact_digest": "sha256:c9305a7660a9d272ae3e30bba0c3e4d839369ff5ddc5e3c9d8736af6ea81584c",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "probes": [
+    {
+      "command": "codex",
+      "version": "0.159.3",
+      "artifact_digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+      "status": "passed"
+    },
+    {
+      "command": "codex-acp",
+      "version": "2.1.0",
+      "artifact_digest": "sha256:92405d4f024fc68ed1824679f228dcf603e2df5c418208e15ad202babef9e70d",
+      "status": "passed"
+    },
+    {
+      "command": "codex-deepseek-gateway",
+      "version": "0.3.0",
+      "artifact_digest": "sha256:c1281b11a00f679ff3a77afd0493f3263819611b5928a8bb3e0e3b7c467ab0ce",
+      "status": "passed"
+    }
+  ],
+  "uses_service_credentials": false,
+  "sends_prompt": false,
+  "previous": {
+    "plugin_version": "3.1.28",
+    "artifact_digest": "sha256:050a705887b26fb984a25a6d0da9d7b4313708c7555f6a61104043f0e500e25d"
+  },
+  "worker": {
+    "executable_digest": "sha256:5ba859926b58695f5239589027a5784416f8ab86efa14804eb08581824c7047a",
+    "initialize_and_session_new": "passed",
+    "stop_and_descendant_drain": "passed",
+    "sidecar_count": 2,
+    "distinct_generation_coexistence": "passed"
+  }
+}

@@ -1,4 +1,4 @@
-# Claude execution integration candidate
+# Claude execution integration
 
 Claude Code 2.1.287 exposes the supported Mods prompt construction hooks needed
 to separate its runtime context from an execution environment. The native CLI,
@@ -94,15 +94,17 @@ closing or reconnecting the native process retains background handles.
 
 ## Evidence boundary
 
-The development worker gate has passed actual native turns, target edits,
-Unicode/quotes/CRLF preservation, stale-edit rejection, target image input,
-background cancellation, a lost start receipt and 35-second transport outage,
-cold resume with retained process handles, real compaction, packaged ACP new and
-load, live effort changes, and rejection of a broken Mod and `--bare` before
-inference. It uses a loopback scripted API and disposable state. It does not
-establish a signed production installation, real subscription inference,
-cross-host latency or unsupported native project capabilities. Final immutable
-package receipts and the deployment record must be added after their gates.
+The final immutable packaged worker gate passed all 25 checks: actual native
+turns, target edits, Unicode/quotes/CRLF preservation, stale-edit rejection,
+target image input, background cancellation, a lost start receipt and 35-second
+transport outage, cold resume with retained process handles, real compaction,
+packaged ACP new and load, live effort changes, and rejection of a broken Mod
+and `--bare` before inference. See the
+[native receipt](claude-execution-worker-2026-10-02.json). It uses a loopback
+scripted API and disposable state. It does not establish real subscription
+inference, cross-host latency or unsupported native project capabilities. The
+separately accepted signed production installation is recorded in the
+[OVH rollout](../releases/claude-native-execution-2026-10-02.md).
 
 Sources:
 [official Mods overview](https://code.claude.com/docs/en/plugins/mods/overview),

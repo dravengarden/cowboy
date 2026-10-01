@@ -1,0 +1,207 @@
+{
+  "schema": "cowboy.claude-execution-publication-network/v1",
+  "accepted": true,
+  "source_revision": "887e9e866ed187e1a7ba491905f87e3c26706a3a",
+  "artifacts": [
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/68a8ad1f2d47fcf603165c5536af5bd909901a38acc21d1de041c64c8432b280/claude-code.cowboy-plugin",
+      "digest": "sha256:68a8ad1f2d47fcf603165c5536af5bd909901a38acc21d1de041c64c8432b280",
+      "bytes": 17297,
+      "seconds": 0.02
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111/claude.tar.gz",
+      "digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+      "bytes": 109421707,
+      "seconds": 0.304
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/499936d2a43ba3fb5879c0a3c4cbeba25701b686af6e2256e6f69a770afbb36d/claude-agent-acp.tar.gz",
+      "digest": "sha256:499936d2a43ba3fb5879c0a3c4cbeba25701b686af6e2256e6f69a770afbb36d",
+      "bytes": 52043983,
+      "seconds": 0.208
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278/claude.tar.gz",
+      "digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+      "bytes": 99617644,
+      "seconds": 0.327
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/39b11dc6664802454fb8d38786d06599181e52be3a87753aac5b71a577015c2e/claude-agent-acp.tar.gz",
+      "digest": "sha256:39b11dc6664802454fb8d38786d06599181e52be3a87753aac5b71a577015c2e",
+      "bytes": 46894866,
+      "seconds": 0.179
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/010230620eb34425750c5eb4b38c1dce97ea7f9ff84c931b41ceb5491a26e68a/claude-deepseek.cowboy-plugin",
+      "digest": "sha256:010230620eb34425750c5eb4b38c1dce97ea7f9ff84c931b41ceb5491a26e68a",
+      "bytes": 18396,
+      "seconds": 0.044
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/5ed6500654f872465e312aa5d332a7c4c571ebe9a1991934628e2869f14fcdcd/claude-agent-acp.tar.gz",
+      "digest": "sha256:5ed6500654f872465e312aa5d332a7c4c571ebe9a1991934628e2869f14fcdcd",
+      "bytes": 52025436,
+      "seconds": 0.175
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/b5f980adfcd521548f26c19304e406a7367ac1bc5ee4c8696ca8df2a9a91fe37/claude-deepseek-gateway",
+      "digest": "sha256:b5f980adfcd521548f26c19304e406a7367ac1bc5ee4c8696ca8df2a9a91fe37",
+      "bytes": 6819966,
+      "seconds": 0.063
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/a29156c614040874fb33fcd40783ee18575f538e1bc7ce0bc778613d96288d4c/claude-agent-acp.tar.gz",
+      "digest": "sha256:a29156c614040874fb33fcd40783ee18575f538e1bc7ce0bc778613d96288d4c",
+      "bytes": 46872930,
+      "seconds": 0.184
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/b69e02bd6aac587e23d86373fd522b35dc5a900684182d472d0100226d3026da/claude-deepseek-gateway",
+      "digest": "sha256:b69e02bd6aac587e23d86373fd522b35dc5a900684182d472d0100226d3026da",
+      "bytes": 6462498,
+      "seconds": 0.062
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/feded0cea76d60985c2e46f63195e95be19cbaa2e88c99b611c44fd4365ac29d/codex.cowboy-plugin",
+      "digest": "sha256:feded0cea76d60985c2e46f63195e95be19cbaa2e88c99b611c44fd4365ac29d",
+      "bytes": 16850,
+      "seconds": 0.046
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce/codex.tar.gz",
+      "digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+      "bytes": 162464331,
+      "seconds": 0.462
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/be63dea5ca096580bb74022edfa4056f7a5ca2f47bc20d7f8b6b1b0bd06ffe27/codex-acp.tar.gz",
+      "digest": "sha256:be63dea5ca096580bb74022edfa4056f7a5ca2f47bc20d7f8b6b1b0bd06ffe27",
+      "bytes": 46476655,
+      "seconds": 0.173
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/b2838cc82cfd0a9253bab7abbadec09c71fba46b34742a1338b30ca255f41237/codex.tar.gz",
+      "digest": "sha256:b2838cc82cfd0a9253bab7abbadec09c71fba46b34742a1338b30ca255f41237",
+      "bytes": 133847481,
+      "seconds": 0.395
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/be313b289990a1866c79f8e35086d63605639a6ea36fd380d61d11d20e86a3b1/codex-acp.tar.gz",
+      "digest": "sha256:be313b289990a1866c79f8e35086d63605639a6ea36fd380d61d11d20e86a3b1",
+      "bytes": 41312719,
+      "seconds": 0.15
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/3cdddaac38c7969754826fa31b2e84be7da4ab97ebc3489e29250ab7705bdf62/codex-deepseek.cowboy-plugin",
+      "digest": "sha256:3cdddaac38c7969754826fa31b2e84be7da4ab97ebc3489e29250ab7705bdf62",
+      "bytes": 18648,
+      "seconds": 0.044
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/92405d4f024fc68ed1824679f228dcf603e2df5c418208e15ad202babef9e70d/codex-acp.tar.gz",
+      "digest": "sha256:92405d4f024fc68ed1824679f228dcf603e2df5c418208e15ad202babef9e70d",
+      "bytes": 46466169,
+      "seconds": 0.163
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/c1281b11a00f679ff3a77afd0493f3263819611b5928a8bb3e0e3b7c467ab0ce/codex-deepseek-gateway",
+      "digest": "sha256:c1281b11a00f679ff3a77afd0493f3263819611b5928a8bb3e0e3b7c467ab0ce",
+      "bytes": 6819966,
+      "seconds": 0.066
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/9f809de6b933f1b226fc59a07240cab30e2abe0fedf18432732e39d4da9dbe8c/codex-acp.tar.gz",
+      "digest": "sha256:9f809de6b933f1b226fc59a07240cab30e2abe0fedf18432732e39d4da9dbe8c",
+      "bytes": 41305974,
+      "seconds": 0.155
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/469a897d4e01ac875297660e97aad1d32235d61db5d82c0151a79b0ba1ac4e78/codex-deepseek-gateway",
+      "digest": "sha256:469a897d4e01ac875297660e97aad1d32235d61db5d82c0151a79b0ba1ac4e78",
+      "bytes": 6462498,
+      "seconds": 0.063
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/9cd066f0de974f53a51cf9d881bc1fd5ea93a72cdc83d064be7c5a68ac969ec0/gemini.cowboy-plugin",
+      "digest": "sha256:9cd066f0de974f53a51cf9d881bc1fd5ea93a72cdc83d064be7c5a68ac969ec0",
+      "bytes": 13360,
+      "seconds": 0.046
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/374ec2bc56353eafa8e7d25d04781acd3faa99699a3d4d97e004dd4312025938/gemini.tar.gz",
+      "digest": "sha256:374ec2bc56353eafa8e7d25d04781acd3faa99699a3d4d97e004dd4312025938",
+      "bytes": 65106921,
+      "seconds": 0.224
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/46b9534882626c14011f8471364e5c77530787b918e355bf038efa2bc45ac713/gemini.tar.gz",
+      "digest": "sha256:46b9534882626c14011f8471364e5c77530787b918e355bf038efa2bc45ac713",
+      "bytes": 59954559,
+      "seconds": 0.204
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/3edd6b9bc6f247872ccbf287710668659555b52dd79ba34f4bd0238f93ed525c/grok.cowboy-plugin",
+      "digest": "sha256:3edd6b9bc6f247872ccbf287710668659555b52dd79ba34f4bd0238f93ed525c",
+      "bytes": 13654,
+      "seconds": 0.044
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/6ac7f83a0e851bf8865bb3ec7b3601bad2a033372a9954f7e7ad525c5f2fd454/grok.tar.gz",
+      "digest": "sha256:6ac7f83a0e851bf8865bb3ec7b3601bad2a033372a9954f7e7ad525c5f2fd454",
+      "bytes": 70123470,
+      "seconds": 0.228
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/e876636e2129dae35f6ca01a512f9e1c58f99643ea82d706dae6a24ec4499e88/grok.tar.gz",
+      "digest": "sha256:e876636e2129dae35f6ca01a512f9e1c58f99643ea82d706dae6a24ec4499e88",
+      "bytes": 63867884,
+      "seconds": 0.204
+    }
+  ],
+  "releases": [
+    {
+      "plugin_id": "claude-code",
+      "plugin_version": "3.2.0",
+      "artifact_digest": "sha256:d00b06d70fc102df9844c0aac6def5294f268d63c4e3a0afd8e48421d61c6b3a",
+      "package_digest": "sha256:68a8ad1f2d47fcf603165c5536af5bd909901a38acc21d1de041c64c8432b280",
+      "release_schema": 4
+    },
+    {
+      "plugin_id": "claude-deepseek",
+      "plugin_version": "3.1.29",
+      "artifact_digest": "sha256:369995eb00176372588884df94bd4f504f65152723e21f03e58fd07e950ddbb5",
+      "package_digest": "sha256:010230620eb34425750c5eb4b38c1dce97ea7f9ff84c931b41ceb5491a26e68a",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "codex",
+      "plugin_version": "3.2.1",
+      "artifact_digest": "sha256:65841984d47382941679582dac9204d5c8967de85b4f442abcdf9bbeef55c042",
+      "package_digest": "sha256:feded0cea76d60985c2e46f63195e95be19cbaa2e88c99b611c44fd4365ac29d",
+      "release_schema": 4
+    },
+    {
+      "plugin_id": "codex-deepseek",
+      "plugin_version": "3.1.29",
+      "artifact_digest": "sha256:c9305a7660a9d272ae3e30bba0c3e4d839369ff5ddc5e3c9d8736af6ea81584c",
+      "package_digest": "sha256:3cdddaac38c7969754826fa31b2e84be7da4ab97ebc3489e29250ab7705bdf62",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "gemini",
+      "plugin_version": "3.1.29",
+      "artifact_digest": "sha256:8f9a1ce5ce0062cea36fbf5c26b17f2b424ec154c7cb60ff7e730c0046859e64",
+      "package_digest": "sha256:9cd066f0de974f53a51cf9d881bc1fd5ea93a72cdc83d064be7c5a68ac969ec0",
+      "release_schema": 2
+    },
+    {
+      "plugin_id": "grok",
+      "plugin_version": "3.1.30",
+      "artifact_digest": "sha256:9ffa530c62a5cbc3b661a0dd17ac489ccea631519447feb96579c1d768263780",
+      "package_digest": "sha256:3edd6b9bc6f247872ccbf287710668659555b52dd79ba34f4bd0238f93ed525c",
+      "release_schema": 2
+    }
+  ]
+}

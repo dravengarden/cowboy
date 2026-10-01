@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "plugin_id": "grok",
+  "plugin_version": "3.1.30",
+  "artifact_digest": "sha256:9ffa530c62a5cbc3b661a0dd17ac489ccea631519447feb96579c1d768263780",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "probes": [
+    {
+      "command": "grok",
+      "version": "1.0.46",
+      "artifact_digest": "sha256:6ac7f83a0e851bf8865bb3ec7b3601bad2a033372a9954f7e7ad525c5f2fd454",
+      "status": "passed"
+    }
+  ],
+  "uses_service_credentials": false,
+  "sends_prompt": false,
+  "previous": {
+    "plugin_version": "3.1.29",
+    "artifact_digest": "sha256:b9e2a0904f04591569b291dba908bf51bb3ac93921721e80dc3e140688c73562"
+  },
+  "worker": {
+    "executable_digest": "sha256:5ba859926b58695f5239589027a5784416f8ab86efa14804eb08581824c7047a",
+    "initialize_and_session_new": "passed",
+    "stop_and_descendant_drain": "passed",
+    "sidecar_count": 0,
+    "distinct_generation_coexistence": "passed"
+  }
+}

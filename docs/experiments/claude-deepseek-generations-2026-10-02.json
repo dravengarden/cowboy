@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "plugin_id": "claude-deepseek",
+  "plugin_version": "3.1.29",
+  "artifact_digest": "sha256:369995eb00176372588884df94bd4f504f65152723e21f03e58fd07e950ddbb5",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "probes": [
+    {
+      "command": "claude",
+      "version": "2.1.287",
+      "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+      "status": "passed"
+    },
+    {
+      "command": "claude-agent-acp",
+      "version": "0.84.0",
+      "artifact_digest": "sha256:5ed6500654f872465e312aa5d332a7c4c571ebe9a1991934628e2869f14fcdcd",
+      "status": "passed"
+    },
+    {
+      "command": "claude-deepseek-gateway",
+      "version": "0.1.1",
+      "artifact_digest": "sha256:b5f980adfcd521548f26c19304e406a7367ac1bc5ee4c8696ca8df2a9a91fe37",
+      "status": "passed"
+    }
+  ],
+  "uses_service_credentials": false,
+  "sends_prompt": false,
+  "previous": {
+    "plugin_version": "3.1.28",
+    "artifact_digest": "sha256:5e5149c7d6ade88e447fef7f9dce84dd44a96fe9f061239777086ca99d80795e"
+  },
+  "worker": {
+    "executable_digest": "sha256:5ba859926b58695f5239589027a5784416f8ab86efa14804eb08581824c7047a",
+    "initialize_and_session_new": "passed",
+    "stop_and_descendant_drain": "passed",
+    "sidecar_count": 2,
+    "distinct_generation_coexistence": "passed"
+  }
+}
