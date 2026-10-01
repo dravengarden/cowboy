@@ -73,5 +73,17 @@ acceptance remains separate from the CLI and deterministic regressions.
 
 Only Controller and Web need activation. The permanent OVH Machine, workers,
 Provider installations, credentials and SSH/network policies are unchanged.
-The component activator owns rollback and deployment receipts. Full gate and
-production activation evidence are recorded after completion.
+The component activator owns rollback and deployment receipts. Published source
+`bb18cf6a9577e71fb3bbdfec9d3f3090b2047c03` activated successfully in the Controller
+at 08:34:58 UTC and Web at 08:35:34 UTC. The [receipts](message-retry-retention-2026-10-01.json)
+retain exact immutable release paths, transaction IDs and verification hashes.
+
+Public `/healthz` returned `ok`; `/version` returned
+`5c793bc2be23cace7069200c09d49eef`. The public shell and `cowboy-v1782` worker
+returned HTTP 200 with `Cache-Control: no-store`. The updated transcript copy
+is in the lazy App bundle, not the entry bundle.
+
+Post-activation Claude text plus valid PNG completed in 2.488 seconds with two
+user chunks and the verified reply marker. OVH Machine PID 56151 and all eight
+ACP worker PIDs were unchanged. The Machine's activation timestamp remained
+2026-09-30 11:16:10 UTC. No Machine update or session deletion was performed.

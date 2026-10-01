@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "revision": "bb18cf6a9577e71fb3bbdfec9d3f3090b2047c03",
+  "controller": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "controller",
+    "transaction": "1790843683237224698-bb18cf6a9577",
+    "revision": "bb18cf6a9577e71fb3bbdfec9d3f3090b2047c03",
+    "published": true,
+    "release": "/nix/store/1q88gxwz5889brmljy8w4d82qxw95zkb-cowboy-controller-release",
+    "previousRelease": "/nix/store/xrywkk6pf997lxhrbhsrfzyikdflmg13-cowboy-controller-release",
+    "activeRelease": "/nix/store/1q88gxwz5889brmljy8w4d82qxw95zkb-cowboy-controller-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T08:34:43.237224698Z",
+    "recordedAt": "2026-10-01T08:34:58.16334106Z",
+    "recovered": false
+  },
+  "web": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790843733989818847-bb18cf6a9577",
+    "revision": "bb18cf6a9577e71fb3bbdfec9d3f3090b2047c03",
+    "published": true,
+    "release": "/nix/store/w3i9ffg0cl5ci0xax1jww6h8ngp40vk9-cowboy-web-release",
+    "previousRelease": "/nix/store/p12kgzglhrqyz6r0c8bp1xqhfk1mpy6z-cowboy-web-release",
+    "activeRelease": "/nix/store/w3i9ffg0cl5ci0xax1jww6h8ngp40vk9-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T08:35:33.989818847Z",
+    "recordedAt": "2026-10-01T08:35:34.044790179Z",
+    "recovered": false
+  },
+  "public": {
+    "healthz": "ok",
+    "version": "5c793bc2be23cace7069200c09d49eef",
+    "service_worker": "cowboy-v1782",
+    "shell_cache_control": "no-store",
+    "worker_cache_control": "no-store"
+  },
+  "ovh": {
+    "machine_pid_before": 56151,
+    "machine_pid_after": 56151,
+    "worker_pids_preserved": 8,
+    "claude_image_and_text": {
+      "elapsed_ms": 2488,
+      "user_message_chunks": 2,
+      "reply_marker_verified": true
+    },
+    "grok": "blocked by provider HTTP 429 quota"
+  },
+  "gates": {
+    "full": {
+      "passed": true,
+      "log_sha256": "7693e49adb993af565ebaab07ba20d981173bf7d50d6525211b0d4177b64fb5f"
+    },
+    "web_after_sw_bump": {
+      "passed": true,
+      "log_sha256": "86f561300573422cf9e6df3b4f7d5579c93af4cd0ecde1acade306f378d9f046"
+    },
+    "browser": {
+      "passed": true,
+      "log_sha256": "3213a4758443f1c9aa141892e3075c0eda6d6cdb583f6114960ddcee7e0e8c62"
+    }
+  }
+}
