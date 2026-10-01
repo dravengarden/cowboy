@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "issue": "Provider sign-in remains waiting without a link or adequate progress feedback",
+  "observed": {
+    "fresh_request": "provider-login-zMS1t25Cb5RqmcsIAlPaGCz8j0BOZ-0SKKwB_jS3_5U",
+    "authenticated_controller_api": [
+      "login_state:pending",
+      "login_challenge"
+    ],
+    "authorization_url_host": "claude.com",
+    "authorization_url_logged": false,
+    "state_response_cache_control_absent": true,
+    "exact_phone_poll_response": "unavailable; original phone failure root cause not conclusively established"
+  },
+  "changes": [
+    "Read-only polls use cache:no-store",
+    "Network, non-JSON and unsuccessful HTTP reads report a recoverable error instead of silently waiting",
+    "Successful observation clears its own transient error",
+    "Check status retries observation without repeating sign-in or cancelling it; waits for prior read settlement",
+    "Loading spinner, elapsed seconds, 30-second delayed guidance and stopped/error presentation",
+    "Simpler account sign-in copy",
+    "Remote review action hidden when old Controller does not publish remote_selected"
+  ],
+  "validation": {
+    "focused_owner_tests_passed": 34,
+    "integrated_frontend_tests_passed": 1961,
+    "typecheck": "passed",
+    "oxlint": "passed",
+    "production_web_build": "passed",
+    "chromium_react_conformance_cases": 6,
+    "mobile_viewport": "390x844",
+    "browser_checks": [
+      "loading presentation",
+      "elapsed time",
+      "delayed guidance",
+      "single check callback",
+      "error transition removes spinner"
+    ],
+    "physical_iphone_confirmation": "pending",
+    "review": "complete active-task diff review; no credential contents, mutations, protocol bypass or concurrent polling introduced"
+  },
+  "deployment": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790828089392201639-04e0efa8c154",
+    "revision": "04e0efa8c15471f8617234241995c2a6f206263b",
+    "published": true,
+    "release": "/nix/store/0j0rq6ih6pz1z9lvkppmh1yah3s9w1ma-cowboy-web-release",
+    "previousRelease": "/nix/store/gkw66wdzwzn1xy32p5p9xd4q754bglq9-cowboy-web-release",
+    "activeRelease": "/nix/store/0j0rq6ih6pz1z9lvkppmh1yah3s9w1ma-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T04:14:49.392201639Z",
+    "recordedAt": "2026-10-01T04:14:49.439182252Z",
+    "recovered": false
+  },
+  "rejected_release": {
+    "revision": "dcbecb34",
+    "reason": "Activator requires fresh origin/main ancestry; no production effect",
+    "resolution": "Integrated current main; gated incompatible remote-review action; reran integrated frontend gates; built and activated 04e0efa8"
+  },
+  "postflight": {
+    "healthz": "ok",
+    "controller_pid_unchanged": true,
+    "hawk_machine_pid_unchanged": true,
+    "index_cache_control": "no-store",
+    "entry": "/assets/main-CsZrDK1P.js"
+  },
+  "pending": [
+    "User reloads iPhone client and confirms new challenge presentation",
+    "User completes new Claude account authorization"
+  ],
+  "no_new_provider_credentials_created_by_test": true
+}
