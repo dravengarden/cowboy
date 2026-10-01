@@ -111,6 +111,7 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`releases/message-retry-retention-2026-10-01.md`](releases/message-retry-retention-2026-10-01.md) — Premature delivery confirmation repair, retry retention and OVH Provider diagnostics
 - [`releases/ovh-trusted-ssh-2026-10-01.md`](releases/ovh-trusted-ssh-2026-10-01.md) — Normal-account OVH SSH authority, Luna development tasks and Grok quota blocker
 - [`releases/ovh-hawk-ssh-development-2026-10-01.md`](releases/ovh-hawk-ssh-development-2026-10-01.md) — Earlier isolated development-shell feature and storage acceptance
 - [`releases/ovh-cli-bootstrap-2026-09-29.md`](releases/ovh-cli-bootstrap-2026-09-29.md) — Remote Machine CLI correction and incomplete permanent OVH enrollment

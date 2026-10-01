@@ -1457,7 +1457,7 @@ function OptimisticUserBubble({
       {failed && (
         <Stack direction="row" spacing={0.25} alignItems="center">
           <Typography variant="caption" sx={{ color: "error.main" }}>
-            {message.failure ?? "Couldn't reach Cowboy"}
+            {message.failure ?? "Delivery not confirmed. Your message is kept here."}
           </Typography>
           <Tooltip title="Retry">
             <IconButton

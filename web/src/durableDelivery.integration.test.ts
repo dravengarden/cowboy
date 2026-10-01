@@ -108,10 +108,15 @@ Deno.test("offline durable send survives reload and resends the same cmid after 
   assertEquals(sent.map((mutation) => mutation.id), ["cmid-1"]);
 });
 
-Deno.test("a transcript prompt remains visible across reload until its user echo", async () => {
-  type Row = { id: string; text: string; cmid: string };
+Deno.test("a transcript image prompt survives retry and reload until its user echo", async () => {
+  type Row = { id: string; text: string; cmid: string; attachments: readonly string[] };
   const persistence = memoryPersistence<ClientSnapshot<QueueValue<Row>>>();
-  const row: Row = { id: "opt-cmid-2", text: "still visible", cmid: "cmid-2" };
+  const row: Row = {
+    id: "opt-cmid-2",
+    text: "still visible",
+    cmid: "cmid-2",
+    attachments: ["synthetic-image-bytes"],
+  };
 
   const beforeReload = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
     clientId: "browser-tab",
@@ -121,6 +126,13 @@ Deno.test("a transcript prompt remains visible across reload until its user echo
     send: () => {},
   });
   await beforeReload.mutateDurably("submitPrompt", { row }, row.cmid);
+  // The Hub may admit dispatch without an echo. A reconnect snapshot and
+  // retry must keep the same payload and identity until delivery is proven.
+  beforeReload.applyPatch(snapshotPatch(1, emptyQueueValue<Row>(), []));
+  beforeReload.bump(row.cmid);
+  beforeReload.resend();
+  await beforeReload.flush();
+  assertEquals(beforeReload.get().inFlight, [row]);
 
   const afterReload = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
     clientId: "browser-tab-reloaded",

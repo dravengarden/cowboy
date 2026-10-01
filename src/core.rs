@@ -609,6 +609,12 @@ pub struct SessionInfo {
     pub drafts_count: usize,
 }
 
+/// Admission and delivery are separate facts for each recent dispatch.
+struct DispatchedPrompt {
+    cmid: String,
+    echoed: bool,
+}
+
 /// Per-session state: metadata + the seq-ordered event log.
 struct Session {
     meta: SessionMeta,
@@ -663,7 +669,7 @@ struct Session {
     /// and the persisted user echo only this window knows the prompt already
     /// ran. Bounded; the echoed `cmid` in `log` covers the rest and survives a
     /// Controller restart.
-    dispatched_cmids: VecDeque<String>,
+    dispatched_cmids: VecDeque<DispatchedPrompt>,
     /// A worker reports the same completed turn through both `TurnEnded` and a
     /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
     /// next prompt before the second arrives. Latch that completion until the
@@ -3759,6 +3765,16 @@ impl Hub {
                 event,
                 cmid,
             };
+            if is_user_message_chunk(&envelope)
+                && let Some(cmid) = envelope.cmid.as_deref()
+                && let Some(dispatched) =
+                    s.dispatched_cmids.iter_mut().find(|seen| seen.cmid == cmid)
+            {
+                // The bounded hot transcript can evict this echo before a
+                // disconnected sender retries. Keep delivery evidence for as
+                // long as its dispatch record still prevents re-execution.
+                dispatched.echoed = true;
+            }
             if let Some(canonical) = self.inner.history_reducer.lock().reduce(envelope.clone()) {
                 match s
                     .log
@@ -4298,7 +4314,7 @@ impl Hub {
             // The prompt never ran: it is no longer "delivered", so the drain (or
             // a client resend) may hand it to a worker again.
             if let Some(c) = cmid.as_deref() {
-                s.dispatched_cmids.retain(|seen| seen != c);
+                s.dispatched_cmids.retain(|seen| seen.cmid != c);
             }
             if let Some(c) = cmid.as_deref()
                 && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
@@ -4468,15 +4484,15 @@ impl Hub {
         !cmid.is_empty() && !cmid.starts_with("__") && !cmid.starts_with("cowboy-")
     }
 
-    /// True once this Hub has accepted the prompt in any durable form: still
-    /// queued, handed to a worker, or echoed into the transcript (which survives
+    /// True once this Hub has accepted the prompt: still queued, handed to a
+    /// worker, or echoed into the transcript (which survives
     /// a Controller restart because the echo persists its `cmid`).
     fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
         if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid)) {
             return true;
         }
         Self::is_client_cmid(cmid)
-            && (s.dispatched_cmids.iter().any(|seen| seen == cmid)
+            && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
                 || s.log
                     .iter()
                     .rev()
@@ -4489,13 +4505,16 @@ impl Hub {
         let Some(cmid) = cmid.filter(|c| Self::is_client_cmid(c)) else {
             return;
         };
-        if s.dispatched_cmids.iter().any(|seen| seen == cmid) {
+        if s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid) {
             return;
         }
         if s.dispatched_cmids.len() >= Self::DISPATCHED_CMID_WINDOW {
             s.dispatched_cmids.pop_front();
         }
-        s.dispatched_cmids.push_back(cmid.to_owned());
+        s.dispatched_cmids.push_back(DispatchedPrompt {
+            cmid: cmid.to_owned(),
+            echoed: false,
+        });
     }
 
     /// Tell every client that `cmid` is already folded into this session, without
@@ -4508,6 +4527,24 @@ impl Hub {
             let Some(s) = sessions.get(session_id) else {
                 return;
             };
+            // Dispatch admission deduplicates execution but does not prove
+            // delivery. Until a queue row or user echo owns the prompt, the
+            // browser must retain its durable outbox (including attachments).
+            if !s
+                .queue
+                .iter()
+                .chain(&s.drafts)
+                .any(|m| m.cmid.as_deref() == Some(cmid))
+                && !s
+                    .dispatched_cmids
+                    .iter()
+                    .any(|seen| seen.cmid == cmid && seen.echoed)
+                && !s.log.iter().any(|entry| {
+                    entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
+                })
+            {
+                return;
+            }
             (s.queue.clone(), s.drafts.clone())
         };
         let mut confirmed = Self::cmids_of(&queue, &drafts);
@@ -6255,10 +6292,10 @@ mod core_tests {
         );
     }
 
-    // A reconnecting client resends every unconfirmed submit. Once the Hub has
-    // handed the prompt to a worker, the replay is confirmed, never run again.
+    // Dispatch admission prevents duplicate execution, but it is not proof
+    // that a queued row or transcript exists to replace the browser's outbox.
     #[tokio::test]
-    async fn replayed_submit_after_dispatch_is_confirmed_not_rerun() {
+    async fn replayed_submit_before_echo_stays_unconfirmed_and_is_not_rerun() {
         let hub = hub_with_session("replay");
         let (tx, mut rx) = mpsc::channel(4);
         hub.set_dispatch_tx(tx);
@@ -6280,7 +6317,27 @@ mod core_tests {
             "a replayed submit must not dispatch again"
         );
         assert!(queue_texts(&hub, "replay").is_empty());
-        let frame = live.try_recv().expect("addressed confirmation");
+        assert!(
+            live.try_recv().is_err(),
+            "dispatch admission must not erase a prompt before its user echo"
+        );
+
+        hub.push_tagged(
+            "replay",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "hello"}
+                }),
+            },
+            Some("c-1".to_owned()),
+        );
+        // A fresh reconnect can now retire the outbox: transcript replay owns
+        // the prompt. The original dispatch remains the only execution.
+        let mut live = hub.subscribe();
+        hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+        assert!(rx.try_recv().is_err());
+        let frame = live.try_recv().expect("echo-backed confirmation");
         let Outbound::SyncPatch {
             state, confirmed, ..
         } = frame.outbound()
@@ -6289,6 +6346,30 @@ mod core_tests {
         };
         assert_eq!(state, "queue:replay");
         assert_eq!(confirmed, &vec!["c-1".to_owned()]);
+
+        hub.push(
+            "replay",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "subsequent output"}
+                }),
+            },
+        );
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let s = sessions.get_mut("replay").unwrap();
+            assert!(trim_hot_log(&mut s.log, &mut s.log_bytes, false, 1));
+            assert!(!s.log.iter().any(is_user_message_chunk));
+        }
+        let mut live = hub.subscribe();
+        hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+        assert!(rx.try_recv().is_err(), "evicted echoes must not run again");
+        let frame = live.try_recv().expect("retained delivery evidence");
+        assert!(
+            matches!(frame.outbound(), Outbound::SyncPatch { confirmed, .. }
+            if confirmed == &vec!["c-1".to_owned()])
+        );
     }
 
     // After a Controller restart the dispatched-id window is empty, but the user
@@ -6327,6 +6408,67 @@ mod core_tests {
             rx.recv().await.expect("synthesized id dispatches").text,
             "again"
         );
+    }
+
+    #[tokio::test]
+    async fn replayed_image_submit_retains_payload_until_requeued() {
+        let hub = hub_with_session("image-retry");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("image-retry", Status::Running, None);
+        let content = vec![serde_json::json!({
+            "type": "image", "mimeType": "image/png", "data": "synthetic-image"
+        })];
+        hub.submit(
+            "image-retry",
+            "explain".into(),
+            content.clone(),
+            Some("image-1".into()),
+        );
+        let dispatched = rx.recv().await.unwrap();
+        assert_eq!(dispatched.content, content);
+        // A tagged diagnostic is not a user echo and must not acknowledge it.
+        hub.push_tagged(
+            "image-retry",
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "config_option_update"}),
+            },
+            Some("image-1".into()),
+        );
+        let mut live = hub.subscribe();
+        hub.submit(
+            "image-retry",
+            "explain".into(),
+            content.clone(),
+            Some("image-1".into()),
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(live.try_recv().is_err());
+
+        // A failed transport returns the exact prompt to an authoritative row.
+        hub.requeue_prompt(
+            "image-retry",
+            dispatched.text,
+            dispatched.content,
+            dispatched.cmid,
+        );
+        let mut live = hub.subscribe();
+        hub.submit(
+            "image-retry",
+            "explain".into(),
+            content.clone(),
+            Some("image-1".into()),
+        );
+        let frame = live.try_recv().expect("queue-backed acknowledgement");
+        let Outbound::SyncPatch {
+            value, confirmed, ..
+        } = frame.outbound()
+        else {
+            panic!("expected queue patch");
+        };
+        assert_eq!(confirmed, &vec!["image-1".to_owned()]);
+        assert_eq!(value["queue"][0]["content"], serde_json::json!(content));
+        assert!(rx.try_recv().is_err());
     }
 
     // A replayed draft is confirmed again so a client that missed the first
