@@ -1,6 +1,6 @@
 ---
 name: release-cowboy-plugin
-description: Build, audit, sign, publish, and verify Cowboy Plugins of every capability kind through the single immutable Plugin lifecycle.
+description: Audit and upgrade Cowboy Agent Providers (Claude, Codex, DeepSeek, Gemini, Grok), update Recommended model presets through configuration, and build, sign, publish, and verify Plugins through the immutable release lifecycle.
 ---
 
 # Release Cowboy Plugin
@@ -13,6 +13,23 @@ Machine.
 Keep this skill canonical in the Cowboy repository at
 `.agents/skills/release-cowboy-plugin`. Update and review it with the Provider
 contracts; never fork it into a user-home skill.
+
+## Agent versions and Recommended presets
+
+For requests to update Claude, Codex, DeepSeek or another Agent, or the
+Recommended cards in session settings, first read
+[Agent upgrade and recommendation workflow](references/agent-upgrades.md).
+It distinguishes private CLI/adapter versions, hosted model IDs, Plugin release
+versions, and installed Machine generations; these are not interchangeable.
+
+Recommended cards are already configuration: edit the selected
+`plugins/<id>/provider.json` → `configuration_presets`, not a model list in
+Cowboy Web. A configuration-only change still needs a new signed Plugin release
+and Catalog verification. Use the reference to decide whether runtime pins or
+new-session defaults also need changing. A request to design this workflow does
+not itself request an upstream upgrade or production Plugin publication.
+
+## Plugin kinds
 
 The first-party Plugins live under `plugins/<id>/`. Six Agent Plugins use
 `plugins/<id>/provider.json` payloads:
@@ -217,10 +234,11 @@ Never invent a command that its repository does not own.
 ## Audit candidates
 
 For first-party Providers, start with the read-only authoritative registry
-audit from this skill directory:
+audit from the repository root in its pinned shell:
 
 ```bash
-deno run --allow-read --allow-net scripts/audit-dependencies.ts <plugin-id>
+nix develop -c deno run --allow-read --allow-net \
+  .agents/skills/release-cowboy-plugin/scripts/audit-dependencies.ts <plugin-id>
 ```
 
 Use `all` only for an audit report; still upgrade, test, version, and release
