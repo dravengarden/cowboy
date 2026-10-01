@@ -25,7 +25,9 @@ pub(super) async fn seed(
     helper: &Path,
     git: &Path,
     core_adapter: &Path,
+    stage: &mut &'static str,
 ) -> Result<Seeded> {
+    *stage = "seed_base";
     super::super::seed(root, reader, helper).await?;
     std::fs::create_dir(root.join("machine/bootstrap"))?;
     std::os::unix::fs::symlink(
@@ -51,6 +53,7 @@ pub(super) async fn seed(
             .success(),
         "fixture Git initialization failed"
     );
+    *stage = "seed_code_package";
     let manifest: PluginManifest = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/plugins/zed/plugin.json"
@@ -138,13 +141,16 @@ pub(super) async fn seed(
     private_write(&root.join("catalog/zed.cowboy-plugin"), &bytes)?;
     let release_bytes = serde_json::to_vec(&release)?;
     private_write(&root.join("catalog/zed.release.json"), &release_bytes)?;
+    *stage = "seed_machine";
     let machine = crate::machine_plugins::MachinePluginStore::new(
         &root.join("machine"),
         crate::machine_protocol::Platform::Linux,
         "x86_64".into(),
     )?;
     machine.enable_installation_tracking().await?;
+    *stage = "seed_operator";
     let password = super::super::super::connected::seed_operator(root, &machine).await?;
+    *stage = "seed_code_files";
     private_write(&root.join("workspace/fixture.txt"), TEXT.as_bytes())?;
     root_identity::seed(root)?;
     colocated::seed(root)?;
@@ -156,6 +162,7 @@ pub(super) async fn seed(
         synchronization::ORIGINAL.as_bytes(),
     )?;
     // Seed a stopped owned Session before startup, never fake a native worker.
+    *stage = "seed_stopped_session";
     let session: crate::core::SessionMeta = serde_json::from_value(json!({
         "id":SESSION,"provider":"codex","machine_id":MACHINE,"workspace_id":"fixture",
         "cwd":root.join("workspace"),"title":"Connected Code fixture","status":"exited",
@@ -164,6 +171,7 @@ pub(super) async fn seed(
     let store =
         crate::store::Store::connect(&database(root), root.join("controller/artifacts")).await?;
     store.insert_session(&session).await?;
+    *stage = "seed_execution_bindings";
     seed_execution_bindings(root, &store, &session).await?;
     Ok(Seeded {
         password,

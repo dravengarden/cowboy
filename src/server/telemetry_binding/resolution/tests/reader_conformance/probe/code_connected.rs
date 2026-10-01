@@ -302,6 +302,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
 
 async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
     let root = tempfile::tempdir().map_err(|_| Failure::Setup)?;
+    receipt.stage = "reader_fixture";
     let reader = Fixture::build(Case::Absent)
         .await
         .map_err(|_| Failure::Setup)?;
@@ -312,6 +313,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         &receipt.ssh_keygen.path,
         &receipt.git.path,
         &receipt.core_adapter.path,
+        &mut receipt.stage,
     )
     .await
     .map_err(|_| Failure::Setup)?;
