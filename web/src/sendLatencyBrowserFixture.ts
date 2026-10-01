@@ -5,7 +5,8 @@ import { createRoot } from "react-dom/client";
 import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSyncDatabase } from "./productSyncDatabase.ts";
 import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
-import { openSession, submitPrompt, useStore } from "./store.ts";
+import { activateDraft, openSession, submitPrompt, useStore } from "./store.ts";
+import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -106,6 +107,49 @@ export async function run() {
       () => snapshot?.connected && snapshot.sessionsLoaded,
       "initial connection",
     );
+    if (scenario === "draft-send") {
+      openSession(session);
+      await until(
+        () => (snapshot.drafts.get(session) ?? []).length === 1,
+        "image draft hydration",
+      );
+      const sending = activateDraft(session, "fixture-draft");
+      await until(
+        () => (snapshot.optimisticMessages.get(session) ?? []).length === 1,
+        "optimistic draft send",
+      );
+      const message = snapshot.optimisticMessages.get(session)![0]!;
+      if (
+        message.attachments.length !== 2 || message.cmid === "draft-creation"
+      ) {
+        throw new Error("draft send lost its images or operation identity");
+      }
+      await sending;
+      await until(
+        () =>
+          (snapshot.timelines.get(session) ?? []).filter((event) =>
+            event.kind === "update" &&
+            event.update.sessionUpdate === "user_message_chunk"
+          ).length === 3,
+        "complete image echo",
+      );
+      await until(
+        () => (snapshot.optimisticMessages.get(session) ?? []).length === 0,
+        "Sending cleared",
+      );
+      if (
+        !promptEchoReadyToReplaceOptimistic(
+          message,
+          snapshot.timelines.get(session) ?? [],
+        )
+      ) {
+        throw new Error("confirmed echo cannot replace the image preview");
+      }
+      return [
+        "two-image draft retained until complete echo",
+        "Sending cleared on exact operation identity",
+      ];
+    }
     if (scenario === "transcript-recovery") {
       await productSyncDatabase.cache({
         kind: "session",

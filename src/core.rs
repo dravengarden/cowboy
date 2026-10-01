@@ -1108,7 +1108,12 @@ pub enum Inbound {
     /// Drop a session's whole draft list.
     ClearDrafts { session_id: String },
     /// Activate one draft: submit it (send-or-queue) and remove it from drafts.
-    ActivateDraft { session_id: String, id: String },
+    ActivateDraft {
+        session_id: String,
+        id: String,
+        #[serde(default)]
+        cmid: Option<String>,
+    },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },
     /// Attach/replace a future fire time on a draft (create it if `id`/`cmid`
@@ -5236,7 +5241,7 @@ impl Hub {
     }
 
     /// Activate one draft: remove it from drafts and submit it (send-or-queue).
-    pub fn activate_draft(&self, session_id: &str, id: &str) {
+    pub fn activate_draft(&self, session_id: &str, id: &str, cmid: Option<String>) {
         let msg = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5254,9 +5259,9 @@ impl Hub {
                 self.cancel_draft_timer(session_id, id);
                 self.broadcast_sessions();
             }
-            // Activating a draft is a server-side move, not a fresh client
-            // optimistic send — no cmid.
-            self.submit(session_id, m.text, m.content, None);
+            // Echo the explicit send identity so the sender can retire its
+            // optimistic bubble. Older clients retain the draft's identity.
+            self.submit(session_id, m.text, m.content, cmid.or(m.cmid));
         }
     }
 
@@ -5280,9 +5285,8 @@ impl Hub {
                 self.cancel_draft_timer(session_id, &m.id);
                 had_scheduled = true;
             }
-            // Activating a draft is a server-side move, not a fresh client
-            // optimistic send — no cmid.
-            self.submit(session_id, m.text, m.content, None);
+            // Bulk activation preserves the same identity as a single send.
+            self.submit(session_id, m.text, m.content, m.cmid);
         }
         if had_scheduled {
             self.broadcast_sessions();
@@ -6413,6 +6417,133 @@ mod core_tests {
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn activated_image_draft_keeps_its_echo_identity_and_replay_is_deduped() {
+        let hub = hub_with_session("draft-send");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("draft-send", Status::Running, None);
+        let content = vec![
+            serde_json::json!({"type": "image", "data": "c2hvdA==", "mimeType": "image/png"}),
+            serde_json::json!({"type": "text", "text": "caption"}),
+        ];
+        hub.add_draft(
+            "draft-send",
+            "caption".to_owned(),
+            content.clone(),
+            Some("draft-cmid".to_owned()),
+        );
+        let id = hub.inner.sessions.lock()["draft-send"].drafts[0].id.clone();
+        hub.activate_draft("draft-send", &id, Some("send-cmid".to_owned()));
+        let dispatched = rx.recv().await.expect("draft dispatch");
+        assert_eq!(dispatched.cmid.as_deref(), Some("send-cmid"));
+        assert_eq!(dispatched.content, content);
+        hub.activate_draft("draft-send", &id, Some("send-cmid".to_owned()));
+        assert!(
+            rx.try_recv().is_err(),
+            "replayed activation must not dispatch twice"
+        );
+        for (index, block) in content.into_iter().enumerate() {
+            hub.push_tagged(
+                "draft-send",
+                Event::Update {
+                    update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": block}),
+                },
+                (index == 0).then(|| dispatched.cmid.clone()).flatten(),
+            );
+        }
+        let (events, _) = hub.snapshot("draft-send").expect("transcript");
+        let echo = events
+            .iter()
+            .find(|env| is_user_message_chunk(env))
+            .expect("image echo");
+        assert_eq!(echo.cmid.as_deref(), Some("send-cmid"));
+        assert_eq!(
+            crate::persistence::persisted_event_payload(echo).expect("persisted echo")["cmid"],
+            "send-cmid"
+        );
+        let mut live = hub.subscribe();
+        hub.submit(
+            "draft-send",
+            "caption".to_owned(),
+            vec![],
+            Some("send-cmid".to_owned()),
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "replayed submit must not dispatch twice"
+        );
+        let frame = live.try_recv().expect("delivery confirmation");
+        assert!(
+            matches!(frame.outbound(), Outbound::SyncPatch { confirmed, .. }
+            if confirmed == &vec!["send-cmid".to_owned()])
+        );
+    }
+
+    #[tokio::test]
+    async fn bulk_draft_activation_preserves_ids_in_dispatch_and_queue() {
+        let hub = hub_with_session("bulk-drafts");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("bulk-drafts", Status::Running, None);
+        for cmid in [Some("first"), Some("second"), None] {
+            hub.add_draft(
+                "bulk-drafts",
+                "prompt".to_owned(),
+                vec![],
+                cmid.map(str::to_owned),
+            );
+        }
+        hub.activate_all_drafts("bulk-drafts");
+        assert_eq!(
+            rx.recv().await.expect("first dispatch").cmid.as_deref(),
+            Some("first")
+        );
+        let sessions = hub.inner.sessions.lock();
+        let session = &sessions["bulk-drafts"];
+        assert!(session.drafts.is_empty());
+        assert_eq!(session.queue.len(), 2);
+        assert_eq!(session.queue[0].cmid.as_deref(), Some("second"));
+        assert_eq!(session.queue[1].cmid, None);
+    }
+
+    #[tokio::test]
+    async fn legacy_draft_activation_keeps_the_source_identity_when_available() {
+        for cmid in [Some("legacy-draft"), None] {
+            let hub = hub_with_session("legacy-draft-send");
+            let (tx, mut rx) = mpsc::channel(4);
+            hub.set_dispatch_tx(tx);
+            hub.set_status("legacy-draft-send", Status::Running, None);
+            hub.add_draft(
+                "legacy-draft-send",
+                "prompt".to_owned(),
+                vec![],
+                cmid.map(str::to_owned),
+            );
+            let id = hub.inner.sessions.lock()["legacy-draft-send"].drafts[0]
+                .id
+                .clone();
+            let request: Inbound = serde_json::from_value(serde_json::json!({
+                "type": "activate_draft", "session_id": "legacy-draft-send", "id": id,
+            }))
+            .expect("legacy request");
+            let Inbound::ActivateDraft {
+                session_id,
+                id,
+                cmid: send_cmid,
+            } = request
+            else {
+                panic!("expected draft activation");
+            };
+            assert!(send_cmid.is_none());
+            hub.activate_draft(&session_id, &id, send_cmid);
+            assert_eq!(
+                rx.recv().await.expect("draft dispatch").cmid.as_deref(),
+                cmid
+            );
+        }
     }
 
     // Dispatch admission prevents duplicate execution, but it is not proof

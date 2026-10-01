@@ -31,6 +31,7 @@ import {
   rememberSendImagePreviews,
 } from "./sendImagePreviews";
 import {
+  checkReconnectAdmission,
   ForegroundProbe,
   isAppleTouchWebView,
   shouldReconnectOnForeground,
@@ -2363,14 +2364,14 @@ function openBoundSocket(dataset: SyncDataset): void {
       return;
     }
     void (async () => {
-      // WebSocket hides the HTTP upgrade error. Discover only on failed
-      // admission to distinguish a changed dataset from a temporary outage.
-      // Keep the permanent owner fence and the same reload recovery message.
-      const [datasetCheck, authCheck] = await Promise.allSettled([
-        ready ? Promise.resolve() : syncDatabase.connection(),
-        probeProductAuth(),
-      ]);
-      if (datasetCheck.status === "rejected" && datasetCheck.reason instanceof ProductSyncDatasetChangedError) {
+      // Do not put an HTTP auth probe in front of an admitted socket's retry.
+      // The replacement handshake still validates the cookie and frozen dataset.
+      const admission = await checkReconnectAdmission(ready, {
+        dataset: () => syncDatabase.connection(),
+        auth: probeProductAuth,
+        isDatasetChanged: (error) => error instanceof ProductSyncDatasetChangedError,
+      });
+      if (admission === "dataset_changed") {
         void abandonProductSocket("dataset_changed");
         notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
         return;
@@ -2379,7 +2380,7 @@ function openBoundSocket(dataset: SyncDataset): void {
         productSessionAbandoned || productSessionPausedForAuth ||
         socket !== undefined
       ) return;
-      if (authCheck.status === "fulfilled" && authCheck.value === "logout") {
+      if (admission === "logout") {
         logoutProductSession();
         return;
       }
@@ -2405,8 +2406,10 @@ function openBoundSocket(dataset: SyncDataset): void {
  *  mutations remain pending on `false`; ephemeral transcript sends fail. */
 export function send(cmd: Inbound): boolean {
   if (socketReady && socket && socket.readyState === WebSocket.OPEN) {
-    const traceparent = cmd.type === "submit" && cmd.cmid ? telemetryOperations.submit(cmd.session_id, cmd.cmid) : undefined;
-    socket.send(JSON.stringify(traceparent ? { ...cmd, traceparent } : cmd));
+    const traceparent = (cmd.type === "submit" || cmd.type === "activate_draft") && cmd.cmid
+      ? telemetryOperations.submit(cmd.session_id, cmd.cmid)
+      : undefined;
+    socket.send(JSON.stringify(cmd.type === "submit" && traceparent ? { ...cmd, traceparent } : cmd));
     return true;
   }
   return false;
@@ -3536,7 +3539,12 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
       // so reconnect also works for cached sessions that are not currently open.
       qClients.get(sessionId)?.baseValue().drafts ?? [],
     );
-    return id === null ? null : { type: "activate_draft", session_id: sessionId, id };
+    return id === null ? null : {
+      type: "activate_draft",
+      session_id: sessionId,
+      id,
+      cmid: args.row?.cmid ?? m.id,
+    };
   }
   if (m.name === "sendQueued" && args.id !== undefined) {
     return { type: "request_send_queued", session_id: sessionId, id: args.id };
