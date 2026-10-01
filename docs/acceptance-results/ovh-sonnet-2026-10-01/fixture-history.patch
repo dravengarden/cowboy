@@ -1,0 +1,285 @@
+From 68d8998160dd3ce9c604a4a68e1815797d805dfc Mon Sep 17 00:00:00 2001
+From: Cowboy Acceptance <acceptance@localhost>
+Date: Thu, 1 Oct 2026 13:00:00 +0800
+Subject: [PATCH 1/3] test: seed isolated SSH repair and deployment fixture
+
+---
+ AGENTS.md      |  8 ++++++++
+ README.md      | 13 +++++++++++++
+ deploy.sh      | 18 ++++++++++++++++++
+ server.py      | 24 ++++++++++++++++++++++++
+ test_frozen.py | 18 ++++++++++++++++++
+ 5 files changed, 81 insertions(+)
+ create mode 100644 AGENTS.md
+ create mode 100644 README.md
+ create mode 100644 deploy.sh
+ create mode 100644 server.py
+ create mode 100644 test_frozen.py
+
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..aebb9b0
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,8 @@
++# Disposable remote development acceptance
++
++This repository belongs only to this acceptance task. Work in the supplied Git
++worktree and use Python 3 standard-library tools. No network discovery, credentials,
++other repositories, root access, system configuration or package installation is
++needed. Do not delegate. Preserve frozen tests and deploy.sh. Add tests in new files.
++Run `python3 -m unittest discover -v` and review the diff before each commit.
++Deploy only committed changes with `bash deploy.sh`. Do not push.
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..cea480e
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,13 @@
++# Tiny calculation service
++
++Task 1: repair GET /sum?a=2&a=3 to return HTTP 200 and JSON {"sum":5}.
++Accept repeated signed integer values, including zero. Missing values, empty
++values and nonintegers must return HTTP 400 JSON {"error":"invalid integer"}.
++Unknown paths return 404 JSON {"error":"not found"}.
++Preserve /health as unavailable until task 2. Keep frozen tests unchanged.
++Add useful regression coverage, commit, deploy with `bash deploy.sh`, and verify
++real HTTP responses at http://127.0.0.1:18766 through SSH.
++
++Task 2 will arrive separately. The deployment uses a dedicated user service
++ovh-sonnet-acceptance-20261001 and immutable committed source snapshots.
++It automatically stops after 30 minutes. Do not change its port or scope.
+diff --git a/deploy.sh b/deploy.sh
+new file mode 100644
+index 0000000..97ac7ed
+--- /dev/null
++++ b/deploy.sh
+@@ -0,0 +1,18 @@
++#!/usr/bin/env bash
++set -euo pipefail
++cd "$(dirname "$0")"
++git diff --quiet
++git diff --cached --quiet
++revision=$(git rev-parse HEAD)
++base=/home/draven/test/ovh-sonnet-20261001
++release="$base/releases/$revision"
++mkdir -p "$release"
++git archive HEAD | tar -x -C "$release"
++unit=ovh-sonnet-acceptance-20261001
++systemctl --user stop "$unit.service" 2>/dev/null || true
++systemctl --user reset-failed "$unit.service" 2>/dev/null || true
++systemd-run --user --unit="$unit" --collect \
++  --property=RuntimeMaxSec=1800 --property=NoNewPrivileges=true \
++  --property=MemoryMax=128M --working-directory="$release" \
++  --setenv="APP_REVISION=$revision" "$(command -v python3)" "$release/server.py"
++printf 'deployed revision %s\n' "$revision"
+diff --git a/server.py b/server.py
+new file mode 100644
+index 0000000..8ec0a5f
+--- /dev/null
++++ b/server.py
+@@ -0,0 +1,24 @@
++import json
++from http.server import BaseHTTPRequestHandler, HTTPServer
++from urllib.parse import parse_qs, urlsplit
++
++
++def respond(target):
++    query = parse_qs(urlsplit(target).query)
++    values = query.get("a", ["0"])
++    return 200, {"sum": "".join(values)}
++
++
++class Handler(BaseHTTPRequestHandler):
++    def do_GET(self):
++        status, payload = respond(self.path)
++        body = json.dumps(payload).encode()
++        self.send_response(status)
++        self.send_header("Content-Type", "application/json")
++        self.send_header("Content-Length", str(len(body)))
++        self.end_headers()
++        self.wfile.write(body)
++
++
++if __name__ == "__main__":
++    HTTPServer(("127.0.0.1", 18766), Handler).serve_forever()
+diff --git a/test_frozen.py b/test_frozen.py
+new file mode 100644
+index 0000000..5ad598a
+--- /dev/null
++++ b/test_frozen.py
+@@ -0,0 +1,18 @@
++import unittest
++from server import respond
++
++
++class Contract(unittest.TestCase):
++    def test_sum(self):
++        self.assertEqual(respond('/sum?a=2&a=3'), (200, {'sum': 5}))
++
++    def test_negative(self):
++        self.assertEqual(respond('/sum?a=-7&a=2&a=0'), (200, {'sum': -5}))
++
++    def test_invalid(self):
++        for path in ['/sum', '/sum?a=', '/sum?a=2&a=', '/sum?a=abc']:
++            with self.subTest(path=path):
++                self.assertEqual(respond(path), (400, {'error': 'invalid integer'}))
++
++    def test_unknown(self):
++        self.assertEqual(respond('/other?a=2'), (404, {'error': 'not found'}))
+-- 
+2.54.0
+
+
+From 8736a38d76918bdae95c64abb3f8f7368fedbe39 Mon Sep 17 00:00:00 2001
+From: Cowboy Acceptance <acceptance@localhost>
+Date: Thu, 1 Oct 2026 13:01:03 +0800
+Subject: [PATCH 2/3] Fix /sum integer parsing, validation and 404 handling
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ server.py          | 13 ++++++++++---
+ test_regression.py | 26 ++++++++++++++++++++++++++
+ 2 files changed, 36 insertions(+), 3 deletions(-)
+ create mode 100644 test_regression.py
+
+diff --git a/server.py b/server.py
+index 8ec0a5f..70a5df4 100644
+--- a/server.py
++++ b/server.py
+@@ -1,12 +1,19 @@
+ import json
++import re
+ from http.server import BaseHTTPRequestHandler, HTTPServer
+ from urllib.parse import parse_qs, urlsplit
+ 
++INTEGER = re.compile(r"[+-]?[0-9]+")
++
+ 
+ def respond(target):
+-    query = parse_qs(urlsplit(target).query)
+-    values = query.get("a", ["0"])
+-    return 200, {"sum": "".join(values)}
++    parts = urlsplit(target)
++    if parts.path != "/sum":
++        return 404, {"error": "not found"}
++    values = parse_qs(parts.query, keep_blank_values=True).get("a", [])
++    if not values or not all(INTEGER.fullmatch(v) for v in values):
++        return 400, {"error": "invalid integer"}
++    return 200, {"sum": sum(int(v) for v in values)}
+ 
+ 
+ class Handler(BaseHTTPRequestHandler):
+diff --git a/test_regression.py b/test_regression.py
+new file mode 100644
+index 0000000..39ced5c
+--- /dev/null
++++ b/test_regression.py
+@@ -0,0 +1,26 @@
++import unittest
++from server import respond
++
++INVALID = {"error": "invalid integer"}
++
++
++class SumRegression(unittest.TestCase):
++    def test_single_and_zero(self):
++        self.assertEqual(respond("/sum?a=0"), (200, {"sum": 0}))
++        self.assertEqual(respond("/sum?a=42"), (200, {"sum": 42}))
++
++    def test_signed_and_multi_digit(self):
++        self.assertEqual(respond("/sum?a=%2B10&a=-3&a=15"), (200, {"sum": 22}))
++
++    def test_sum_is_numeric_not_concatenated(self):
++        self.assertEqual(respond("/sum?a=10&a=20"), (200, {"sum": 30}))
++
++    def test_invalid_values(self):
++        for path in ["/sum?a=1.5", "/sum?a=1_0", "/sum?a=%201", "/sum?a=-", "/sum?b=3", "/sum?a=1&a=x"]:
++            with self.subTest(path=path):
++                self.assertEqual(respond(path), (400, INVALID))
++
++    def test_unknown_paths(self):
++        for path in ["/", "/health", "/sum/", "/sums?a=1"]:
++            with self.subTest(path=path):
++                self.assertEqual(respond(path), (404, {"error": "not found"}))
+-- 
+2.54.0
+
+
+From 3968d0928d503d07575e5b9ab738b6385aa04b1a Mon Sep 17 00:00:00 2001
+From: Cowboy Acceptance <acceptance@localhost>
+Date: Thu, 1 Oct 2026 13:02:25 +0800
+Subject: [PATCH 3/3] Add /health endpoint reporting APP_REVISION
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ server.py          |  3 +++
+ test_health.py     | 24 ++++++++++++++++++++++++
+ test_regression.py |  2 +-
+ 3 files changed, 28 insertions(+), 1 deletion(-)
+ create mode 100644 test_health.py
+
+diff --git a/server.py b/server.py
+index 70a5df4..f8c461f 100644
+--- a/server.py
++++ b/server.py
+@@ -1,4 +1,5 @@
+ import json
++import os
+ import re
+ from http.server import BaseHTTPRequestHandler, HTTPServer
+ from urllib.parse import parse_qs, urlsplit
+@@ -8,6 +9,8 @@ INTEGER = re.compile(r"[+-]?[0-9]+")
+ 
+ def respond(target):
+     parts = urlsplit(target)
++    if parts.path == "/health":
++        return 200, {"status": "ok", "revision": os.environ.get("APP_REVISION", "development")}
+     if parts.path != "/sum":
+         return 404, {"error": "not found"}
+     values = parse_qs(parts.query, keep_blank_values=True).get("a", [])
+diff --git a/test_health.py b/test_health.py
+new file mode 100644
+index 0000000..62f34bf
+--- /dev/null
++++ b/test_health.py
+@@ -0,0 +1,24 @@
++import os
++import unittest
++from unittest import mock
++
++from server import respond
++
++
++class Health(unittest.TestCase):
++    def test_reports_revision_from_environment(self):
++        with mock.patch.dict(os.environ, {"APP_REVISION": "abc123"}):
++            self.assertEqual(respond("/health"), (200, {"status": "ok", "revision": "abc123"}))
++
++    def test_falls_back_to_development_when_unset(self):
++        with mock.patch.dict(os.environ):
++            os.environ.pop("APP_REVISION", None)
++            self.assertEqual(respond("/health"), (200, {"status": "ok", "revision": "development"}))
++
++    def test_query_string_ignored(self):
++        with mock.patch.dict(os.environ, {"APP_REVISION": "r"}):
++            self.assertEqual(respond("/health?x=1")[0], 200)
++
++    def test_sum_and_unknown_unaffected(self):
++        self.assertEqual(respond("/sum?a=2&a=3"), (200, {"sum": 5}))
++        self.assertEqual(respond("/nope"), (404, {"error": "not found"}))
+diff --git a/test_regression.py b/test_regression.py
+index 39ced5c..5fbc7bc 100644
+--- a/test_regression.py
++++ b/test_regression.py
+@@ -21,6 +21,6 @@ class SumRegression(unittest.TestCase):
+                 self.assertEqual(respond(path), (400, INVALID))
+ 
+     def test_unknown_paths(self):
+-        for path in ["/", "/health", "/sum/", "/sums?a=1"]:
++        for path in ["/", "/healthz", "/health/", "/sum/", "/sums?a=1"]:
+             with self.subTest(path=path):
+                 self.assertEqual(respond(path), (404, {"error": "not found"}))
+-- 
+2.54.0
+

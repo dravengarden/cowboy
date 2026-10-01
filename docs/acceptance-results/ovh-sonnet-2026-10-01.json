@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "machine": "ovh",
+  "session": "sess-1790828728476",
+  "provider": "claude-code",
+  "model_selection": "sonnet",
+  "model_advertised_name": "Sonnet 5.5",
+  "permission_mode": "auto",
+  "execution": {
+    "official_cowboy_acp": true,
+    "workspace": "matrix",
+    "resident_machine_pid": 56151,
+    "ovh_worker_pid": 168585,
+    "ovh_claude_pid": 168621,
+    "completed_turns": 2,
+    "stop_reasons": ["end_turn", "end_turn"],
+    "ssh_tool_calls": 7,
+    "tool_calls_completed": 6,
+    "tool_calls_failed": 1,
+    "failed_attempt": "Nested shell quoting failed during the first edit; Sonnet repaired through a script streamed over SSH. Failure retained in tools.json.",
+    "fixture_preparation_failure": "Initial Git commit lacked author identity; set identity only in disposable fixture repository, then seeded its worktree before the model task."
+  },
+  "tasks": [
+    {
+      "kind": "bug fix and deploy",
+      "commit": "8736a38d76918bdae95c64abb3f8f7368fedbe39",
+      "initial_tests": 4,
+      "initial_failure_assertions": 7,
+      "final_tests": 9,
+      "deployments": 1,
+      "independent_live_http_numeric_cases": 20
+    },
+    {
+      "kind": "health endpoint feature and repeat deployment",
+      "commit": "3968d0928d503d07575e5b9ab738b6385aa04b1a",
+      "final_tests": 13,
+      "deployments": 2,
+      "independent_health_matches_deployed_commit": true,
+      "independent_live_http_numeric_cases": 20,
+      "independent_error_cases": 3
+    }
+  ],
+  "scope": {
+    "target": "ssh hawk",
+    "disposable_service": "ovh-sonnet-acceptance-20261001",
+    "listener": "loopback only",
+    "runtime_limit_minutes": 30,
+    "immutable_git_release_snapshots": true,
+    "business_files_changed": false,
+    "frozen_tests_and_deployer_unchanged": true,
+    "model_received_public_addresses_or_geography": false,
+    "model_network_discovery_or_proxy_configuration": false,
+    "logical_aliases_and_loopback_addresses_visible": true,
+    "topology_secrecy_against_a_hostile_agent": "not a claim"
+  },
+  "network": {
+    "continuous_ssh_samples": 61,
+    "sample_interval_seconds": 2,
+    "max_delivery_gap_seconds": 3.527,
+    "sequence_gaps_or_duplicates": 0,
+    "exit_code": 0,
+    "fault_injection": false,
+    "full_30_minute_stability_gate": false
+  },
+  "pending": [
+    "Falcon logical alias still fails name resolution from OVH; no Falcon code/deployment task passed",
+    "Full JMS boundary/failover and long-duration stability acceptance",
+    "Physical browser and device acceptance beyond this CLI-driven Cowboy session"
+  ],
+  "cleanup": {
+    "service": "inactive/not-found",
+    "listener_absent": true,
+    "fixture_worktrees_and_releases_removed": true,
+    "ovh_task_scripts_removed": true,
+    "permanent_machine_retained_and_active": true,
+    "cowboy_session_retained": true,
+    "cleanup_probe_note": "An unbounded TCP connect to the already closed port stalled and was interrupted; authoritative systemd state and ss confirmed cleanup instead."
+  },
+  "reproducibility": {
+    "fixture_patch": "ovh-sonnet-2026-10-01/fixture-history.patch",
+    "replayed_tree": "ebbb6f67b2dbfd21e1c7db3b83313de5b792ad7c",
+    "patch_replay_matches_original": true,
+    "prompts": ["ovh-sonnet-2026-10-01/task1.txt", "ovh-sonnet-2026-10-01/task2.txt"],
+    "tools": "ovh-sonnet-2026-10-01/tools.json",
+    "network_samples": "ovh-sonnet-2026-10-01/continuous-ssh.json"
+  }
+}
