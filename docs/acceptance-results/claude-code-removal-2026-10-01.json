@@ -1,0 +1,223 @@
+{
+  "schema": 1,
+  "service": "svc-4e4d5154f3df9aa109d7d841dd925fd7",
+  "configuration_path": "/var/lib/cowboy/machine-plugins.json",
+  "membership_before": {
+    "schema": 1,
+    "machines": {
+      "hawk": {
+        "plugins": [
+          "claude-code",
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok",
+          "victoria",
+          "zed"
+        ],
+        "unlisted": "uninstall"
+      },
+      "falcon": {
+        "plugins": [
+          "claude-code",
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok",
+          "zed"
+        ],
+        "unlisted": "uninstall"
+      },
+      "macbook-air": {
+        "plugins": [
+          "claude-code",
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok"
+        ],
+        "unlisted": "uninstall"
+      }
+    }
+  },
+  "membership_after": {
+    "schema": 1,
+    "machines": {
+      "hawk": {
+        "plugins": [
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok",
+          "victoria",
+          "zed"
+        ],
+        "unlisted": "uninstall"
+      },
+      "falcon": {
+        "plugins": [
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok",
+          "zed"
+        ],
+        "unlisted": "uninstall"
+      },
+      "macbook-air": {
+        "plugins": [
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok"
+        ],
+        "unlisted": "uninstall"
+      }
+    }
+  },
+  "command": "cowboy operator converge --machine hawk --machine falcon --machine macbook-air --plugin claude-code --apply",
+  "apply": {
+    "schema": 1,
+    "applied": true,
+    "machines": [
+      {
+        "machine": "hawk",
+        "attempted": true,
+        "managed": true,
+        "planned": [],
+        "applied": [],
+        "planned_removals": [
+          {
+            "plugin": "claude-code",
+            "version": "3.1.35"
+          }
+        ],
+        "removed": [
+          {
+            "plugin": "claude-code",
+            "version": "3.1.35",
+            "removed": false,
+            "http_status": 409,
+            "detail": "Plugin uninstall operation kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI: needs_attention. Inspect this target's operations before retrying."
+          }
+        ],
+        "skipped": [],
+        "remaining": []
+      },
+      {
+        "machine": "falcon",
+        "attempted": true,
+        "managed": true,
+        "planned": [],
+        "applied": [],
+        "planned_removals": [
+          {
+            "plugin": "claude-code",
+            "version": "3.1.28"
+          }
+        ],
+        "removed": [
+          {
+            "plugin": "claude-code",
+            "version": "3.1.28",
+            "removed": true,
+            "http_status": 200,
+            "detail": {
+              "operation_id": "Y0BPhioxMWQJE-GKyXsGci8ILgzCXea9NokGjaUcm1E",
+              "phase": "completed",
+              "provider_id": "claude-code",
+              "machine_id": "falcon",
+              "deleted_session_ids": [],
+              "purge_after_ms": 1791077567425
+            }
+          }
+        ],
+        "skipped": [],
+        "remaining": []
+      },
+      {
+        "machine": "macbook-air",
+        "attempted": true,
+        "managed": true,
+        "planned": [],
+        "applied": [],
+        "planned_removals": [
+          {
+            "plugin": "claude-code",
+            "version": "3.1.31"
+          }
+        ],
+        "removed": [
+          {
+            "plugin": "claude-code",
+            "version": "3.1.31",
+            "removed": true,
+            "http_status": 200,
+            "detail": {
+              "operation_id": "AUffHUw6qYFIuyDHbS-uBvrYRX-pn47fCjTgwjno-Nk",
+              "phase": "completed",
+              "provider_id": "claude-code",
+              "machine_id": "macbook-air",
+              "deleted_session_ids": [],
+              "purge_after_ms": 1791077576045
+            }
+          }
+        ],
+        "skipped": [],
+        "remaining": []
+      }
+    ],
+    "unreachable": [],
+    "stopped_at": null
+  },
+  "verification": {
+    "hawk": {
+      "claude_code_installed": false,
+      "other_plugin_digests_unchanged": true,
+      "requires_reconciliation": true
+    },
+    "falcon": {
+      "claude_code_installed": false,
+      "other_plugin_digests_unchanged": true,
+      "requires_reconciliation": false
+    },
+    "macbook-air": {
+      "claude_code_installed": false,
+      "other_plugin_digests_unchanged": true,
+      "requires_reconciliation": false
+    }
+  },
+  "hawk_diagnostic": {
+    "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+    "machine_receipt": "unknown/effect_failure",
+    "installation_transition": "uninstall/unknown",
+    "active_link_removed": true,
+    "materialized_directory_exists": false,
+    "runtime_directory_exists": true,
+    "nonwritable_runtime_directories": 61895,
+    "observed_cache_mode": "0555",
+    "observed_cache_owner_uid": 1000,
+    "observed_cache_type": "Go module cache under runtime generations",
+    "implementation": "uninstall_inner removes active link before remove_dir_all(runtime); same-UID read-only module directories prevent recursive deletion",
+    "recovery": "No installed supported recovery action finalizes this partially executed uninstall. Preserve both fences and receipts; do not edit the database/journals, replay the operation, or claim completion from empty inventory."
+  },
+  "scope": {
+    "standalone_claude_cli_changed": false,
+    "claude_deepseek_changed": false,
+    "other_plugin_digests_changed": false,
+    "manual_credential_reads": false
+  },
+  "validation": [
+    "live declaration parsed by official converge dry-run",
+    "three fresh official inventories compared to preflight",
+    "Claude Code absent on all three; every other installed digest unchanged",
+    "Falcon and macbook-air durable uninstall completed with no deleted sessions",
+    "Hawk requires_reconciliation remains true; not accepted as completed"
+  ]
+}
