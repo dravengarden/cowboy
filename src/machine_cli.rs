@@ -83,6 +83,9 @@ struct WorkspaceFile {
     version: u16,
     revision: String,
     workspaces: Vec<String>,
+    /// Optional presentation paths, independent from opaque workspace IDs.
+    #[serde(default)]
+    display_names: std::collections::BTreeMap<String, String>,
 }
 
 struct WorkspaceConfig {
@@ -3202,7 +3205,7 @@ fn load_workspace_snapshot(path: &Path, fallback: &[String]) -> anyhow::Result<W
                 .with_context(|| format!("reading workspace configuration {}", path.display()));
         }
     };
-    let (revision, values) = if let Some(file) = file {
+    let (revision, values, display_names) = if let Some(file) = file {
         if file.version != 1 {
             bail!(
                 "workspace configuration {} uses unsupported version {}",
@@ -3216,13 +3219,24 @@ fn load_workspace_snapshot(path: &Path, fallback: &[String]) -> anyhow::Result<W
                 path.display()
             );
         }
-        (Some(file.revision), file.workspaces)
+        (Some(file.revision), file.workspaces, file.display_names)
     } else {
-        (None, fallback.to_vec())
+        (None, fallback.to_vec(), std::collections::BTreeMap::new())
     };
+    let mut workspaces = parse_workspaces(&values)?;
+    for (id, name) in display_names {
+        if name.trim().is_empty() || name.chars().any(char::is_control) {
+            bail!("workspace display name for {id:?} is invalid");
+        }
+        let workspace = workspaces
+            .iter_mut()
+            .find(|workspace| workspace.id == id)
+            .with_context(|| format!("display name refers to unknown workspace {id:?}"))?;
+        workspace.display_name = name;
+    }
     Ok(WorkspaceSnapshot {
         revision,
-        workspaces: parse_workspaces(&values)?,
+        workspaces,
     })
 }
 
@@ -4086,6 +4100,28 @@ mod tests {
         }
 
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn workspace_display_paths_do_not_change_identity() {
+        let root = tempfile::tempdir().expect("workspace fixture");
+        let path = root.path().join("workspaces.json");
+        let mut value = serde_json::json!({
+            "version": 1,
+            "revision": "mapped",
+            "workspaces": [format!("opaque={}", root.path().display())],
+            "display_names": {"opaque": "hawk/columbus/cowboy"}
+        });
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let snapshot = load_workspace_snapshot(&path, &[]).unwrap();
+        assert_eq!(snapshot.workspaces[0].id, "opaque");
+        assert_eq!(snapshot.workspaces[0].display_name, "hawk/columbus/cowboy");
+        value["display_names"] = serde_json::json!({"unknown": "hawk/columbus"});
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(load_workspace_snapshot(&path, &[]).is_err());
+        value["display_names"] = serde_json::json!({"opaque": "\n"});
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(load_workspace_snapshot(&path, &[]).is_err());
     }
 
     #[test]

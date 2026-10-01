@@ -12,12 +12,15 @@ if (
   suite !== "code-buffer-sync" && suite !== "review-code" &&
   suite !== "review-document-refresh" && suite !== "review-diff" &&
   suite !== "review-destination" && suite !== "review-recovery" &&
-  suite !== "workspace-extensions" && suite !== "sheet-keyboard"
+  suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
+  suite !== "workspace-picker"
 ) {
   throw new Error("unknown suite");
 }
 const entry = suite === "idb"
   ? "runIdbBrowserConformance"
+  : suite === "workspace-picker"
+  ? "runWorkspacePickerBrowserConformance"
   : suite === "sheet-keyboard"
   ? "runCoverKeyboardBrowserConformance"
   : suite === "workspace-extensions"
@@ -165,7 +168,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "sheet-keyboard"
+      (suite === "workspace-picker"
+        ? 5
+        : suite === "sheet-keyboard"
         ? 3
         : suite === "workspace-extensions"
         ? 24

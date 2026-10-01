@@ -1,3 +1,4 @@
+import { WorkspacePicker } from "./WorkspacePicker";
 import {
     Fragment,
     forwardRef,
@@ -2400,6 +2401,25 @@ function NewSessionDialog({
                     placeholder="Name this session"
                     helperText="Clear to auto-name from the first message"
                 />
+                {machines.length > 1 ? (
+                    <TextField
+                        select
+                        label="Machine"
+                        value={machineId}
+                        onChange={(e): void => setMachineId(e.target.value)}
+                        helperText="Sessions stay on the selected machine"
+                    >
+                        {machines.map((machine) => (
+                            <MenuItem
+                                key={machine.id}
+                                value={machine.id}
+                                disabled={!machine.schedulable}
+                            >
+                                {machine.display_name}{machine.local ? " · This machine" : ""}
+                            </MenuItem>
+                        ))}
+                    </TextField>
+                ) : null}
                 <TextField
                     select
                     label="Agent / model provider"
@@ -2456,43 +2476,14 @@ function NewSessionDialog({
                         );
                     })}
                 </TextField>
-                {machines.length > 1 ? (
-                    <TextField
-                        select
-                        label="Machine"
-                        value={machineId}
-                        onChange={(e): void => setMachineId(e.target.value)}
-                        helperText="Sessions stay on the selected machine"
-                    >
-                        {machines.map((machine) => (
-                            <MenuItem
-                                key={machine.id}
-                                value={machine.id}
-                                disabled={!machine.schedulable}
-                            >
-                                {machine.display_name}{machine.local ? " · This machine" : ""}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                ) : null}
-                <TextField
-                    select
-                    label="Working directory"
+                <WorkspacePicker
+                    entries={workspaces}
                     value={cwd}
-                    onChange={(e): void => {
-                        setCwd(e.target.value);
+                    onChange={(value): void => {
+                        setCwd(value);
                         setWorkItemId("");
                     }}
-                    helperText={
-                        workspaces.find((w) => w.value === cwd)?.help ?? ""
-                    }
-                >
-                    {workspaces.map((w) => (
-                        <MenuItem key={w.value} value={w.value}>
-                            {w.label}
-                        </MenuItem>
-                    ))}
-                </TextField>
+                />
                 {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
                     <TextField
                         select
