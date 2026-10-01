@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "issue": "New session footer varies its keyboard gap and paints unwanted shadows",
+  "cause": "A visual-viewport-sized cover used keyboard overlap to infer whether to remove home-indicator footer padding. Resized keyboard mode has zero overlap despite the keyboard remaining open.",
+  "fix": [
+    "Pass existing baseline-aware keyboard visibility to cover footer",
+    "Keep 8px padding in both keyboard modes; restore safe clearance when closed",
+    "Use flat New session actions without gradient riser or confirm shadow",
+    "Remove cover elevation at the keyboard boundary; retain content-sized sheet elevation"
+  ],
+  "validation": {
+    "frontend_tests": 1966,
+    "typecheck_lint": "passed",
+    "browser": {
+      "ok": true,
+      "suite": "sheet-keyboard",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "9841a88a3462af479c28fe26fcb774e9a2d7be3cb13de106b3b9c8989a89bfc8",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "overlay and resized keyboards retain identical compact footer spacing",
+        "keyboard dismissal restores home-indicator clearance",
+        "flat New session actions have no gradient riser or button shadow"
+      ],
+      "physical_device": "not_checked"
+    },
+    "physical_iphone": "pending user verification"
+  },
+  "deployment": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790833099374619955-532119dd2240",
+    "revision": "532119dd2240c4df99f6e1e8eb27ee2239ef7669",
+    "published": true,
+    "release": "/nix/store/p12kgzglhrqyz6r0c8bp1xqhfk1mpy6z-cowboy-web-release",
+    "previousRelease": "/nix/store/4d5manqfbh8kaq9bcbc2wmhijld24436-cowboy-web-release",
+    "activeRelease": "/nix/store/p12kgzglhrqyz6r0c8bp1xqhfk1mpy6z-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-01T05:38:19.374619955Z",
+    "recordedAt": "2026-10-01T05:38:19.417461923Z",
+    "recovered": false
+  },
+  "http": {
+    "/healthz": {
+      "status": 200,
+      "cache_control": null,
+      "body": "ok"
+    },
+    "/version": {
+      "status": 200,
+      "cache_control": null,
+      "body": "{\"version\":\"a0a9ce7dde5b8026049a52da1b803d3b\"}"
+    },
+    "/": {
+      "status": 200,
+      "cache_control": "no-store"
+    },
+    "/sw.js": {
+      "status": 200,
+      "cache_control": "no-store"
+    },
+    "/assets/main-Co0T8E34.js": {
+      "status": 200,
+      "sha256": "bf5e0826958947931c4ad19ecc2b9ee96bd79256816485d1a9f1bdd89f037c31"
+    }
+  },
+  "service_worker": "cowboy-v1781",
+  "controller_and_machine_pids_unchanged": true
+}
