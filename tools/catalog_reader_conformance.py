@@ -216,6 +216,10 @@ def main():
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--publication", type=Path, action="append", default=[],
                         help="exact fully bound candidate envelope; repeat for each release, even with an old outer schema")
+    parser.add_argument("--publication-only", action="store_true",
+                        help="post-Host publication: test active/recovery inputs without replaying the historical pre-Host migration")
+    parser.add_argument("--cold-reader", type=Path,
+                        help="additional actual cold Controller release for post-Host publication")
     args = parser.parse_args()
     require_worker_isolation()
     require(not command("git", "status", "--porcelain").stdout.strip(), "Conformance needs clean committed source")
@@ -223,8 +227,10 @@ def main():
     bridge, bridge_record = controller_release(args.bridge_release)
     baseline, baseline_record = controller_release(args.baseline_release)
     candidate, candidate_record = controller_release(args.candidate_release)
-    require(bridge_record["source_revision"] != baseline_record["source_revision"], "Bridge must differ from baseline")
-    command("git", "merge-base", "--is-ancestor", baseline_record["source_revision"], bridge_record["source_revision"])
+    if not args.publication_only:
+        require(args.cold_reader is None, "Cold reader is a post-Host publication input")
+        require(bridge_record["source_revision"] != baseline_record["source_revision"], "Bridge must differ from baseline")
+        command("git", "merge-base", "--is-ancestor", baseline_record["source_revision"], bridge_record["source_revision"])
     require(args.pack.is_absolute(), "SDK pack tool must be absolute")
     pack = args.pack.resolve(strict=True)
     require(Path("/nix/store") in pack.parents and os.access(pack, os.X_OK), "SDK verifier must be an immutable executable")
@@ -237,6 +243,37 @@ def main():
     legacy_key = legacy_package.parent / "trusted-publishers" / (legacy["publisher"] + ".pub")
     original_digests = {path: digest(path) for path in (legacy_package, legacy_release, legacy_key)}
     command(pack, "verify", legacy_package, legacy_release, legacy_key)
+    if args.publication_only:
+        require(args.publication, "Post-Host publication requires actual candidate envelopes")
+        require(args.receipt.is_absolute() and not args.receipt.exists(), "New absolute receipt required")
+        readers = [("active", bridge, bridge_record), ("next_transaction_recovery", baseline, baseline_record)]
+        if args.cold_reader is not None:
+            cold, cold_record = controller_release(args.cold_reader)
+            readers.append(("cold", cold, cold_record))
+        outcomes = []
+        with tempfile.TemporaryDirectory(prefix="cowboy-catalog-publication-") as temporary:
+            root = Path(temporary)
+            key = root / "fixture-publisher"
+            command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
+            for index, envelope in enumerate(args.publication):
+                for role, reader, reader_record in readers:
+                    result = publication_preflight(f"{index}-{role}", envelope, root, pack, key,
+                        reader, candidate, legacy_package, legacy_release, legacy_key, legacy)
+                    outcomes.append(dict(role=role, reader=reader_record, **result))
+        require(all(digest(path) == value for path, value in original_digests.items()),
+                "Original signed legacy fixture changed")
+        accepted = all(result["reader_compatible"] for result in outcomes)
+        receipt = dict(schema="cowboy.catalog-publication-conformance/v1", accepted=accepted,
+            source_revision=revision, candidate=candidate_record, sdk_sha256=digest(pack),
+            publications=outcomes, production_mutated=False, production_credentials=False,
+            not_checked=["production_signature", "actual_role_provenance", "complete_production_catalog_and_host_policy",
+                         "historical_pre_host_migration", "runtime_platform_drain_and_installation"])
+        with args.receipt.open("x") as output:
+            json.dump(receipt, output, indent=2)
+            output.write("\n")
+        print(json.dumps(dict(accepted=accepted, checks=len(outcomes))))
+        require(accepted, "Exact publication is incompatible with a supplied actual reader")
+        return
     tests = []
 
     def check(name, passed):
@@ -305,13 +342,17 @@ def main():
         latest_report = json.loads(latest.stdout)
         check("candidate Controller reads both signed release formats",
               candidate_reads_both(latest_report, legacy, future) and not data.exists())
+        candidate_inventory = json.loads(command(*reader_arguments(candidate, data, catalog)).stdout)
+        supported_schema = candidate_inventory.get("supported_release_schema")
+        require(type(supported_schema) is int and 2 <= supported_schema < 65535,
+                "Candidate must declare its supported release envelope floor")
 
         # The host-capable successor retains the bridge diagnostic, but does
         # not inherit its blanket post-cutover startup prohibition. Future
         # formats remain opaque even when their unsigned identity mimics a pin.
         opaque_package = catalog / "opaque.cowboy-plugin"
         opaque_package.write_bytes(b"not a supported package")
-        opaque = dict(immutable_identity(future), release_schema=3,
+        opaque = dict(immutable_identity(future), release_schema=supported_schema + 1,
                       artifact_digest="sha256:" + "0" * 64)
         opaque_package.with_suffix(".release.json").write_text(json.dumps(opaque))
         latest_report = json.loads(command(*reader_arguments(candidate, data, catalog, candidate=True)).stdout)
@@ -321,7 +362,7 @@ def main():
         check("candidate preserves the Catalog-only diagnostic with both exact releases",
               inventory.get("schema") == "dravengarden.cowboy.catalog-reader-preflight/v1"
               and inventory.get("status") == "readable"
-              and inventory.get("supported_release_schema") == 2
+              and inventory.get("supported_release_schema") == supported_schema
               and sorted(inventory.get("releases", []), key=lambda entry: entry["plugin_id"])
               == sorted([immutable_identity(legacy), immutable_identity(future)], key=lambda entry: entry["plugin_id"])
               and not data.exists())

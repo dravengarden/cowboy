@@ -134,6 +134,16 @@ signing key is used. This is neither runtime acceptance nor a production publica
 full Catalog/Host-policy test. Review the receipt's `not_checked` fields and
 apply the canonical release skill's remaining gates before publishing.
 
+After Host activation, use `--publication-only` with the actual active and
+next-transaction recovery releases in the first two arguments, and supply
+`--cold-reader <release>` when accepting the cold floor. This runs the same
+exact-package verification, disposable-copy signing, two cold reads and candidate
+Host preflight for every supplied role and publication. It permits active and
+recovery to be the same immutable release. Its separate receipt does not replay
+or claim the historical pre-Host negative control, actual role provenance,
+production signatures or the complete production Catalog/policy. Bind those
+roles to actual profiles, transaction semantics and the cold closure separately.
+
 From the repository root in its pinned shell:
 
 ```sh
