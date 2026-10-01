@@ -46,6 +46,14 @@ pub struct WorkspaceResourceView {
     pub fields: WorkspaceResourceFields,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude_if_present: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<WorkspaceReviewKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceReviewKind {
+    PullRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +137,7 @@ impl WorkspaceExtensionContract {
     /// Refuses unknown schema, invalid identities, unsafe endpoints and unbounded views.
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == 1,
+            matches!(self.schema_version, 1 | 2),
             "unsupported workspace extension schema"
         );
         crate::validate_id(&self.id, "extension id")?;
@@ -170,6 +178,16 @@ impl WorkspaceExtensionContract {
         );
         let mut ids = BTreeSet::new();
         for view in &self.views {
+            if view.review.is_some() {
+                ensure!(
+                    self.schema_version == 2,
+                    "review requires extension schema 2"
+                );
+                ensure!(
+                    view.detail_endpoint == "repos/{owner}/{repo}/pulls/{id}",
+                    "pull request review requires the pull request detail endpoint"
+                );
+            }
             crate::validate_id(&view.id, "view id")?;
             ensure!(
                 ids.insert(&view.id) && text(&view.label, 80),
@@ -259,6 +277,23 @@ pub(crate) fn validate_release(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_is_an_explicit_versioned_capability() {
+        let mut contract: WorkspaceExtensionContract = serde_json::from_value(serde_json::json!({
+            "schema_version":2,"id":"fixture","version":"0.2.0","display_name":"Review","description":"Fixture review","dependencies":[],
+            "supported_platforms":[{"os":"linux","architecture":"x86_64"}],"connection":"github_cli",
+            "views":[{"id":"pulls","label":"PRs","endpoint":"repos/{owner}/{repo}/pulls?per_page=50&page={page}",
+                "detail_endpoint":"repos/{owner}/{repo}/pulls/{id}","items_pointer":"","filters":[],"review":"pull_request",
+                "fields":{"id":"/number","title":"/title","url":"/html_url","metadata":[]}}]
+        })).unwrap();
+        assert!(contract.validate().is_ok());
+        contract.schema_version = 1;
+        assert!(contract.validate().is_err());
+        contract.schema_version = 2;
+        contract.views[0].detail_endpoint = "repos/{owner}/{repo}/issues/{id}".into();
+        assert!(contract.validate().is_err());
+    }
 
     #[test]
     fn endpoints_cannot_select_a_host_escape_the_repository_or_run_unbounded_queries() {

@@ -2930,6 +2930,8 @@ export interface MobileReviewTabState {
 }
 
 export interface MobileReviewState {
+  readonly remote_review?: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null;
+  readonly remote_selected?: boolean;
   readonly mode: "files" | "git";
   readonly tabs: readonly MobileReviewTabState[];
   readonly active?: string;
@@ -2947,6 +2949,13 @@ const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
 };
 
 const mobileReviewMutators = {
+  setRemoteReview: (
+    value: MobileReviewState,
+    args: { binding: import("./mobile/review/remoteReviewModel").RemoteReviewBinding | null },
+  ): MobileReviewState => ({ ...value, remote_review: args.binding }),
+  selectRemoteReview: (
+    value: MobileReviewState, args: { selected: boolean },
+  ): MobileReviewState => ({ ...value, remote_selected: args.selected }),
   open: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
     const existing = value.tabs.find((tab) => tab.path === args.path);
     let tabs = existing ? [...value.tabs] : [...value.tabs, { path: args.path, pinned: false }];
@@ -2960,6 +2969,7 @@ const mobileReviewMutators = {
     const tabs = value.tabs.filter((tab) => tab.path !== args.path);
     const active = value.active === args.path ? tabs.at(-1)?.path : value.active;
     return {
+      ...value,
       mode: value.mode,
       tabs,
       progress: value.progress,
@@ -2990,6 +3000,7 @@ const mobileReviewMutators = {
     value: MobileReviewState,
     args: { path: string | null },
   ): MobileReviewState => ({
+    ...value,
     mode: value.mode,
     tabs: value.tabs,
     progress: value.progress,

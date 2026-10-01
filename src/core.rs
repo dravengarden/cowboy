@@ -735,6 +735,10 @@ struct MobileReviewPosition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MobileReviewState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remote_review: Option<crate::workspace_extensions::ReviewBinding>,
+    #[serde(default)]
+    remote_selected: bool,
     #[serde(default = "default_mobile_review_mode")]
     mode: String,
     #[serde(default)]
@@ -754,6 +758,8 @@ fn default_mobile_review_mode() -> String {
 impl Default for MobileReviewState {
     fn default() -> Self {
         Self {
+            remote_review: None,
+            remote_selected: false,
             mode: default_mobile_review_mode(),
             tabs: Vec::new(),
             active: None,
@@ -766,6 +772,14 @@ impl Default for MobileReviewState {
 impl MobileReviewState {
     fn from_stored(value: serde_json::Value) -> Self {
         let mut state = serde_json::from_value::<Self>(value).unwrap_or_default();
+        if state
+            .remote_review
+            .as_ref()
+            .is_some_and(|binding| !binding.valid())
+        {
+            state.remote_review = None;
+            state.remote_selected = false;
+        }
         if !matches!(state.mode.as_str(), "files" | "git") {
             state.mode = default_mobile_review_mode();
         }
@@ -2830,6 +2844,28 @@ impl Hub {
                 .ok_or_else(|| "unknown mobile review session".to_owned())?;
             let state = &mut session.mobile_review;
             match mutation {
+                "setRemoteReview" => {
+                    let binding = match args.get("binding") {
+                        Some(serde_json::Value::Null) => None,
+                        Some(value) => {
+                            let binding: crate::workspace_extensions::ReviewBinding =
+                                serde_json::from_value(value.clone())
+                                    .map_err(|_| "invalid PR association")?;
+                            if !binding.valid() {
+                                return Err("invalid PR association".to_owned());
+                            }
+                            Some(binding)
+                        }
+                        None => return Err("missing PR association".to_owned()),
+                    };
+                    state.remote_review = binding;
+                }
+                "selectRemoteReview" => {
+                    state.remote_selected = args
+                        .get("selected")
+                        .and_then(serde_json::Value::as_bool)
+                        .ok_or("invalid PR selection")?;
+                }
                 "open" => {
                     let path = mobile_review_string_arg(args, "path", 4096)?;
                     if !valid_mobile_review_path(&path) {
@@ -3161,6 +3197,8 @@ impl Hub {
                 if !matches!(
                     name,
                     "open"
+                        | "setRemoteReview"
+                        | "selectRemoteReview"
                         | "close"
                         | "reorder"
                         | "setPinned"
@@ -5983,6 +6021,67 @@ mod core_tests {
             value["positions"]["strategies/README.md"]["revision"],
             "abc123"
         );
+    }
+
+    #[test]
+    fn remote_review_binding_survives_local_navigation_and_is_validated() {
+        let hub = hub_with_session("remote-review");
+        let state = "mobile-review:remote-review";
+        let binding = serde_json::json!({"pluginId":"fixture", "view":"pull-requests", "host":"github.com",
+            "owner":"owner", "repository":"repo", "repositoryId":"123", "number":"12"});
+        hub.sync_apply(
+            state,
+            "bind".into(),
+            "setRemoteReview",
+            &serde_json::json!({"binding":binding}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            state,
+            "select".into(),
+            "selectRemoteReview",
+            &serde_json::json!({"selected":true}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            state,
+            "open".into(),
+            "open",
+            &serde_json::json!({"path":"README.md"}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            state,
+            "close".into(),
+            "close",
+            &serde_json::json!({"path":"README.md"}),
+        )
+        .unwrap();
+        let value = hub.sync_value(state);
+        assert_eq!(value["remote_review"], binding);
+        assert_eq!(value["remote_selected"], true);
+        let restored = super::MobileReviewState::from_stored(value);
+        assert_eq!(restored.remote_review.unwrap().number, "12");
+        let mut bad = binding.clone();
+        bad["host"] = serde_json::json!("token@github.com");
+        assert!(
+            hub.sync_apply(
+                state,
+                "invalid".into(),
+                "setRemoteReview",
+                &serde_json::json!({"binding":bad})
+            )
+            .is_err()
+        );
+        assert_eq!(hub.sync_value(state)["remote_review"], binding);
+        hub.sync_apply(
+            state,
+            "unbind".into(),
+            "setRemoteReview",
+            &serde_json::json!({"binding":null}),
+        )
+        .unwrap();
+        assert!(hub.sync_value(state).get("remote_review").is_none());
     }
 
     #[test]

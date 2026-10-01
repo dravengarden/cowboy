@@ -6,6 +6,7 @@ import { createTheme, ThemeProvider } from "@mui/material";
 import { SurfaceProvider } from "../surface/SurfaceProfile.tsx";
 import WorkspaceExtensions from "./WorkspaceExtensions.tsx";
 import { runExtensionManagerBrowserConformance } from "./ExtensionManagerBrowserConformance.tsx";
+import { runRemoteReviewBrowserConformance } from "../mobile/review/remoteReviewBrowserConformance.tsx";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -222,6 +223,7 @@ export async function runWorkspaceExtensionsBrowserConformance(): Promise<
       "previous page remains reachable while another page is pending and rejects its late response",
       "a failed page does not trap navigation away from previously readable resources",
       ...await runExtensionManagerBrowserConformance(),
+      ...await runRemoteReviewBrowserConformance(),
     ];
   } finally {
     flushSync(() => root.unmount());

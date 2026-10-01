@@ -626,11 +626,14 @@ impl PluginContractInventory {
             // schema-one support from it without changing historical proofs.
             PluginKind::WorkspaceExtension => (
                 1,
-                u16::from(
-                    Version::parse(&self.plugin_sdk_version)
-                        .is_ok_and(|v| v >= Version::new(1, 9, 0)),
-                ),
-                "workspace extension schema (Plugin SDK 1.9)",
+                Version::parse(&self.plugin_sdk_version).map_or(0, |v| {
+                    if v >= Version::new(1, 10, 0) {
+                        2
+                    } else {
+                        u16::from(v >= Version::new(1, 9, 0))
+                    }
+                }),
+                "workspace extension schema (Plugin SDK 1.9/1.10)",
             ),
             PluginKind::TelemetryBackend => (
                 1,
@@ -1226,8 +1229,13 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
                     .components
                     .iter()
                     .any(|c| c.id == "cowboy.plugin-sdk"
-                        && Version::parse(&c.version).is_ok_and(|v| v >= Version::new(1, 9, 0))),
-                "workspace extensions require Plugin SDK 1.9"
+                        && Version::parse(&c.version).is_ok_and(|v| v
+                            >= Version::new(
+                                1,
+                                if contract.schema_version >= 2 { 10 } else { 9 },
+                                0
+                            ))),
+                "workspace extension schema requires a compatible Plugin SDK"
             );
             contract.validate()?;
         }

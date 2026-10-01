@@ -203,6 +203,7 @@ impl MachinePluginStore {
                 item,
                 filter,
                 page,
+                review,
             } => {
                 let remote = remotes
                     .into_iter()
@@ -218,8 +219,20 @@ impl MachinePluginStore {
                     .iter()
                     .find(|v| v.id == view)
                     .ok_or(Failure::InvalidRequest)?;
-                let response =
-                    runtime::read(&remote, view, item.as_deref(), filter.as_deref(), page).await?;
+                let response = if let Some(review) = review {
+                    if view.review.is_none() || filter.is_some() {
+                        return Err(Failure::InvalidRequest);
+                    }
+                    runtime::read_review(
+                        &remote,
+                        item.as_deref().ok_or(Failure::InvalidRequest)?,
+                        &review,
+                        page,
+                    )
+                    .await?
+                } else {
+                    runtime::read(&remote, view, item.as_deref(), filter.as_deref(), page).await?
+                };
                 // Do not hold the installation lock across a Git subprocess.
                 let current_remotes = runtime::remotes(std::path::Path::new(&request.root)).await?;
                 let _guard = self.lifecycle.lock().await;
