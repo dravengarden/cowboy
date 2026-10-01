@@ -530,23 +530,27 @@ export function createProviderAuthenticationOwner(
         }
       }));
     },
-    copyCode(): void {
+    copyCode(target: "code" | "link" = "code"): void {
       const lease = dialog.current();
       if (!lease || copying.has(lease)) return;
       const flow = lease.value().flow;
       const challenge = flow.events.findLast((event) =>
         event.event === "login_challenge"
       );
+      const code = target === "link"
+        ? challenge?.verification_url
+        : challenge?.user_code;
       if (
-        !challenge?.user_code || providerAuthenticationCompleted(flow.events) ||
+        !code || providerAuthenticationCompleted(flow.events) ||
         providerAuthenticationPromoting(flow.events)
       ) return;
-      const code = challenge.user_code;
       const ticket = clipboardTicket = {};
       copying.add(lease);
       lease.update((value) => ({
         ...value,
-        clipboardNotice: "Copying device code…",
+        clipboardNotice: target === "link"
+          ? "Copying sign-in link…"
+          : "Copying device code…",
       }));
       if (!lease.active) {
         copying.delete(lease);
@@ -566,13 +570,21 @@ export function createProviderAuthenticationOwner(
           lease.value().flow.requestId !== flow.requestId ||
           providerAuthenticationCompleted(lease.value().flow.events) ||
           providerAuthenticationPromoting(lease.value().flow.events) ||
-          lease.value().flow.events.findLast((event) =>
-              event.event === "login_challenge"
-            )?.user_code !== code
+          (target === "link"
+              ? lease.value().flow.events.findLast((event) =>
+                event.event === "login_challenge"
+              )?.verification_url
+              : lease.value().flow.events.findLast((event) =>
+                event.event === "login_challenge"
+              )?.user_code) !== code
         ) return;
         lease.update((value) => ({
           ...value,
-          clipboardNotice: copied
+          clipboardNotice: target === "link"
+            ? copied
+              ? "Sign-in link copied. Open a private browser tab and paste it into the address bar."
+              : "Could not copy the sign-in link. Try copying again, or use the sign-in page to switch accounts."
+            : copied
             ? `Device code ${code} copied. Paste it on the Provider page if it is not filled automatically.`
             : `Could not copy the device code automatically. Close the browser, then tap Copy ${code}.`,
         }));

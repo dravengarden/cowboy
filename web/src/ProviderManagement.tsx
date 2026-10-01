@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
+import { ProviderAccountSwitch } from "./ProviderAccountSwitch";
 import { alpha } from "@mui/material/styles";
 import {
   useCallback,
@@ -1426,6 +1427,16 @@ function ProviderManagement(
                         ? "Cowboy copies the device code before opening the Provider page. Paste it only if the page does not fill it automatically. Close the browser to return here; Cowboy will keep waiting securely."
                         : "After completing the Provider page, return to Cowboy. This dialog will keep waiting securely."}
                     </Typography>
+                    {resolveProviderAuthenticationPresentation(
+                          flow.provider.manifest.authentication,
+                        ) === "account" && (
+                      <ProviderAccountSwitch
+                        key={flow.requestId}
+                        disabled={Boolean(authentication.busy)}
+                        requiresCode={Boolean(challenge.input_required)}
+                        onCopy={() => owners?.authentication.copyCode("link")}
+                      />
+                    )}
                     {authenticationClipboardNotice
                       ? (
                         <Alert

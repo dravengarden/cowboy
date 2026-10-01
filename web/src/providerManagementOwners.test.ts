@@ -61,6 +61,7 @@ function authFixture() {
   const http = transport(), time = clock();
   let closes = 0, refreshes = 0;
   const copy = deferredFixture<boolean>();
+  const copiedValues: string[] = [];
   const owner = createProviderAuthenticationOwner({
     fetch: http.fetch,
     executor: (id) => managementEntryFixture(id),
@@ -71,7 +72,10 @@ function authFixture() {
     closeBrowser: () => {
       closes++;
     },
-    copy: () => copy.promise,
+    copy: (value) => {
+      copiedValues.push(value);
+      return copy.promise;
+    },
   }, time.schedule);
   const open = (id = "example") =>
     owner.open({
@@ -85,6 +89,7 @@ function authFixture() {
     owner,
     open,
     copy,
+    copiedValues,
     closes: () => closes,
     refreshes: () => refreshes,
     async start(id = "example", request = "request-a") {
@@ -128,6 +133,51 @@ function challenge(provider = "example", request = "request-a") {
 function events(events: unknown[], request_id = "request-a") {
   return { request_id, events };
 }
+
+Deno.test("account switching copies the original challenge without replacing or cancelling authentication", async () => {
+  const f = authFixture();
+  try {
+    const poll = await f.start();
+    const event = {
+      ...challenge(),
+      user_code: undefined,
+      verification_url: "https://example.invalid/oauth?state=private-fixture",
+    };
+    f.reply(poll, events([event]));
+    await settle();
+    f.owner.copyCode("link");
+    assertEquals(f.copiedValues, [event.verification_url]);
+    f.copy.resolve(true);
+    await settle();
+    assertStringIncludes(
+      f.owner.snapshot().value!.clipboardNotice,
+      "Sign-in link copied",
+    );
+    assert(
+      !f.owner.snapshot().value!.clipboardNotice.includes("private-fixture"),
+    );
+    assertEquals(f.calls.length, 2);
+    assertEquals(f.closes(), 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+Deno.test("late account-switch clipboard completion cannot update another login", async () => {
+  const f = authFixture();
+  try {
+    const poll = await f.start();
+    f.reply(poll, events([challenge()]));
+    await settle();
+    f.owner.copyCode("link");
+    f.open("replacement");
+    f.copy.resolve(true);
+    await settle();
+    assertEquals(f.owner.snapshot().value?.clipboardNotice, "");
+  } finally {
+    await f.cleanup();
+  }
+});
 
 Deno.test("dialog owner reserves admission before observers and drains retired writes", async () => {
   const owner = createProviderDialogOwner<{ id: string }, "write">();
