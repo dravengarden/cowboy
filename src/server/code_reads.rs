@@ -119,7 +119,7 @@ pub(super) async fn scoped<F: Future<Output = Response>>(
     read: impl FnOnce(ResolvedCodeContext) -> F,
 ) -> Response {
     let Some(context) = resolve_code_context(&authority.owner, id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
+        return Denial::Visibility.into_response();
     };
     let scope = context.scope.clone();
     guarded_response(|| authority.current(id, &scope), || read(context)).await
