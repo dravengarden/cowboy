@@ -1,0 +1,381 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "machine": "ovh",
+  "outcome": "completed",
+  "scope": "Cowboy-managed Codex, Grok and Claude Code installation and credential readiness; no model conversation acceptance performed in this task",
+  "membership_path": "/var/lib/cowboy/machine-plugins.json",
+  "membership": {
+    "plugins": [
+      "claude-code",
+      "codex",
+      "grok",
+      "zed"
+    ],
+    "unlisted": "keep"
+  },
+  "other_machine_memberships_unchanged": true,
+  "machine_identity_retained": true,
+  "machine_restarted": false,
+  "before": {
+    "schema": 1,
+    "http_status": 200,
+    "operation_id": null,
+    "data": [
+      {
+        "plugin_id": "codex",
+        "plugin_version": "3.1.30",
+        "plugin_kind": "agent_provider",
+        "generation_digest": "sha256:10e7c0bfd658ff9cb612f913e431a7d01fb66d0225c31e3147b0405045c44cd1",
+        "installation_revision": "installation-5b46d7bf2e3046c9a003f5a27d39f6366e6f0cece06b5b8f268b9113aca937d4",
+        "contract_fingerprint": "sha256:9bf75f3a36b390c52a87626f272a98c115a867dc2f41863bd7afbf30755fa79b",
+        "state": "active",
+        "active_session_leases": 0,
+        "auth_generation": 7,
+        "replica_state": "current",
+        "materialization_state": "current"
+      },
+      {
+        "plugin_id": "grok",
+        "plugin_version": "3.1.25",
+        "plugin_kind": "agent_provider",
+        "generation_digest": "sha256:b4c1743efaad0fd2698b20d0a798c4aad9270809934f9d70d65199d1022cfcc8",
+        "installation_revision": "installation-6cc9a5e9ddd490c1226ce356cdcca6cdb4c63550302014a80d82765a4399c86b",
+        "contract_fingerprint": "sha256:97360dc8ac3f31c347f30ed158f88968a005fa80eb7ddbc7f9e1b27cbb956100",
+        "state": "active",
+        "active_session_leases": 0,
+        "auth_generation": 1027,
+        "replica_state": "current",
+        "materialization_state": "current"
+      },
+      {
+        "plugin_id": "zed",
+        "plugin_version": "1.20.0",
+        "plugin_kind": "code_intelligence",
+        "generation_digest": "sha256:b000481cf7548af7598bad0498141daca1d1e422efa2ac1dd90d8cb00830b65f",
+        "installation_revision": "installation-fab43f60ce01e662e935b6957d750177a811025c9c82f4b940a8452d81e5f677",
+        "contract_fingerprint": "sha256:b317168255b68ce092c035cb90648986984c3de06b24da26e3a7bcc3c92ab6a9",
+        "state": "active",
+        "active_session_leases": 0,
+        "replica_state": "absent",
+        "materialization_state": "not_installed"
+      }
+    ]
+  },
+  "after": {
+    "schema": 1,
+    "http_status": 200,
+    "operation_id": null,
+    "data": [
+      {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.1.35",
+        "plugin_kind": "agent_provider",
+        "generation_digest": "sha256:051263cb77807d62913ed0054116851778fd482d22cc605eb965146a49ff5ebe",
+        "installation_revision": "installation-6c5a82c7998a7aad2ee79cfd1442228c2292a1a020b2e17523d69a6cddeff194",
+        "contract_fingerprint": "sha256:e78dc7d34fd328b9ac001b173d0cfbcf50cdf165814dba580c7892409f3ff744",
+        "state": "active",
+        "active_session_leases": 0,
+        "auth_generation": 46,
+        "replica_state": "current",
+        "materialization_state": "current"
+      },
+      {
+        "plugin_id": "codex",
+        "plugin_version": "3.1.30",
+        "plugin_kind": "agent_provider",
+        "generation_digest": "sha256:10e7c0bfd658ff9cb612f913e431a7d01fb66d0225c31e3147b0405045c44cd1",
+        "installation_revision": "installation-5b46d7bf2e3046c9a003f5a27d39f6366e6f0cece06b5b8f268b9113aca937d4",
+        "contract_fingerprint": "sha256:9bf75f3a36b390c52a87626f272a98c115a867dc2f41863bd7afbf30755fa79b",
+        "state": "active",
+        "active_session_leases": 0,
+        "auth_generation": 7,
+        "replica_state": "current",
+        "materialization_state": "current"
+      },
+      {
+        "plugin_id": "grok",
+        "plugin_version": "3.1.26",
+        "plugin_kind": "agent_provider",
+        "generation_digest": "sha256:5ae37ee04d547a075cbacc8fb36a90ee3bf632497410e199a92bd603dd78bd5d",
+        "installation_revision": "installation-9d28c84560dad5156d9c5d1e39d9209e21fe8d00b8c84ef39f3dae8ec291790d",
+        "contract_fingerprint": "sha256:dcf66a52b3ff3c0f620b5ec109a43d4249e0b54ad5bf764f46055c537ab853b0",
+        "state": "active",
+        "rollback_generation_digest": "sha256:b4c1743efaad0fd2698b20d0a798c4aad9270809934f9d70d65199d1022cfcc8",
+        "active_session_leases": 0,
+        "auth_generation": 1027,
+        "replica_state": "current",
+        "materialization_state": "current"
+      },
+      {
+        "plugin_id": "zed",
+        "plugin_version": "1.20.0",
+        "plugin_kind": "code_intelligence",
+        "generation_digest": "sha256:b000481cf7548af7598bad0498141daca1d1e422efa2ac1dd90d8cb00830b65f",
+        "installation_revision": "installation-fab43f60ce01e662e935b6957d750177a811025c9c82f4b940a8452d81e5f677",
+        "contract_fingerprint": "sha256:b317168255b68ce092c035cb90648986984c3de06b24da26e3a7bcc3c92ab6a9",
+        "state": "active",
+        "active_session_leases": 0,
+        "replica_state": "absent",
+        "materialization_state": "not_installed"
+      }
+    ]
+  },
+  "initial_convergence": {
+    "schema": 1,
+    "applied": true,
+    "machines": [
+      {
+        "machine": "ovh",
+        "attempted": true,
+        "managed": true,
+        "planned": [
+          {
+            "kind": "upgrade",
+            "plugin": "grok",
+            "from": "3.1.25",
+            "to": "3.1.26",
+            "digest": "sha256:5ae37ee04d547a075cbacc8fb36a90ee3bf632497410e199a92bd603dd78bd5d",
+            "operation_id": "ovh-grok-3-1-26-converge"
+          },
+          {
+            "kind": "install",
+            "plugin": "claude-code",
+            "to": "3.1.35",
+            "digest": "sha256:051263cb77807d62913ed0054116851778fd482d22cc605eb965146a49ff5ebe",
+            "operation_id": "ovh-claude-code-3-1-35-converge"
+          }
+        ],
+        "applied": [
+          {
+            "kind": "upgrade",
+            "plugin": "grok",
+            "from": "3.1.25",
+            "to": "3.1.26",
+            "operation_id": "ovh-grok-3-1-26-converge",
+            "http_status": 409,
+            "detail": "Plugin installation outcome is uncertain. This installation slot remains fenced; do not retry or infer recovery from current inventory."
+          },
+          {
+            "kind": "install",
+            "plugin": "claude-code",
+            "from": null,
+            "to": "3.1.35",
+            "operation_id": "ovh-claude-code-3-1-35-converge",
+            "http_status": 409,
+            "detail": "Plugin installation was not sent: the Machine did not report an observable installation target. Confirm the Machine is connected and its Cowboy Machine build supports Plugin installation."
+          }
+        ],
+        "planned_removals": [],
+        "removed": [],
+        "skipped": [],
+        "remaining": [
+          "grok 3.1.25\u21923.1.26",
+          "claude-code install 3.1.35"
+        ]
+      }
+    ],
+    "unreachable": [],
+    "stopped_at": "ovh"
+  },
+  "grok_recovery": {
+    "first_reconciliation_http_status": 503,
+    "first_reconciliation_detail": "Exact Machine installation receipt unavailable; fence retained",
+    "receipt_recording": {
+      "schema": 1,
+      "http_status": 202,
+      "operation_id": "ovh-grok-3-1-26-converge",
+      "data": {
+        "operation_id": "ovh-grok-3-1-26-converge",
+        "receipt_recorded": true,
+        "requires_reconciliation": true,
+        "installation_replayed": false
+      }
+    },
+    "staging_resolution": {
+      "schema": 1,
+      "http_status": 200,
+      "operation_id": "ovh-grok-3-1-26-converge",
+      "data": {
+        "schema": 1,
+        "operation_id": "ovh-grok-3-1-26-converge",
+        "phase": "needs_attention",
+        "machine_receipt": {
+          "state": "unknown",
+          "phase": "staging",
+          "reason": "expired"
+        },
+        "reconciliation_performed": true,
+        "staging_failure_resolved": true,
+        "resolution_id": "install-staging-570fca37a0dbf5638d098f9d89322e4d92638a6c9b840e5499ff89eb5bbeb774",
+        "resolved_at_ms": 1790823810906
+      }
+    },
+    "activation_free_failure_verified": true,
+    "manual_journal_or_database_edits": false
+  },
+  "runtime_preload": [
+    {
+      "name": "grok",
+      "sha256": "sha256:37bb40213f540e1f82df353de610da23da449592abbcc1297b023fad3260b1d2",
+      "bytes": 68932320
+    },
+    {
+      "name": "claude",
+      "sha256": "sha256:3fea1abf2d5f42236ebf7e59126698e347ac80437a145dd6e85b87c8c3341ffe",
+      "bytes": 107536804
+    },
+    {
+      "name": "claude-agent-acp",
+      "sha256": "sha256:fb0723950bfadfa3844be0b4857bc9b046bb65d4328e41f48905c81962869026",
+      "bytes": 51994761
+    }
+  ],
+  "runtime_preload_method": "Public signed-release inputs SHA-256 checked on source, transferred over operator SSH, imported through native --cache-runtime-artifact with exact digest; ordinary signed installation then completed",
+  "credentials_manually_copied_or_printed": false,
+  "temporary_transfer_files_removed": true,
+  "native_artifact_cache_retained": true,
+  "installation_responses": {
+    "grok": {
+      "schema": 1,
+      "http_status": 204,
+      "operation_id": "ovh-grok-3-1-26-cached-20261001",
+      "data": null
+    },
+    "claude-code": {
+      "schema": 1,
+      "http_status": 204,
+      "operation_id": "ovh-claude-code-3-1-35-converge",
+      "data": null
+    }
+  },
+  "final_installation_history": {
+    "grok": {
+      "schema": 1,
+      "http_status": 200,
+      "operation_id": null,
+      "data": {
+        "schema": "dravengarden.cowboy.plugin-install-history/v2",
+        "admission_enabled": true,
+        "execution_authorized": false,
+        "requires_reconciliation": false,
+        "operations": [
+          {
+            "evidence_schema": 2,
+            "machine_receipt": {
+              "state": "applied",
+              "revision": "installation-9d28c84560dad5156d9c5d1e39d9209e21fe8d00b8c84ef39f3dae8ec291790d"
+            },
+            "operation_id": "ovh-grok-3-1-26-cached-20261001",
+            "phase": "completed",
+            "problem": null,
+            "attention_from": null,
+            "plugin_kind": "agent_provider",
+            "plugin_version": "3.1.26",
+            "generation_digest": "sha256:5ae37ee04d547a075cbacc8fb36a90ee3bf632497410e199a92bd603dd78bd5d",
+            "created_at_ms": 1790823822775,
+            "updated_at_ms": 1790823889232
+          },
+          {
+            "evidence_schema": 2,
+            "machine_receipt": {
+              "state": "unknown",
+              "phase": "staging",
+              "reason": "expired"
+            },
+            "operation_id": "ovh-grok-3-1-26-converge",
+            "phase": "needs_attention",
+            "problem": "unknown_machine_outcome",
+            "attention_from": "installing",
+            "plugin_kind": "agent_provider",
+            "plugin_version": "3.1.26",
+            "generation_digest": "sha256:5ae37ee04d547a075cbacc8fb36a90ee3bf632497410e199a92bd603dd78bd5d",
+            "created_at_ms": 1790823386231,
+            "updated_at_ms": 1790823783808
+          },
+          {
+            "evidence_schema": 2,
+            "machine_receipt": {
+              "state": "applied",
+              "revision": "installation-6cc9a5e9ddd490c1226ce356cdcca6cdb4c63550302014a80d82765a4399c86b"
+            },
+            "operation_id": "ovh-grok-3-1-25-cached-20260930",
+            "phase": "completed",
+            "problem": null,
+            "attention_from": null,
+            "plugin_kind": "agent_provider",
+            "plugin_version": "3.1.25",
+            "generation_digest": "sha256:b4c1743efaad0fd2698b20d0a798c4aad9270809934f9d70d65199d1022cfcc8",
+            "created_at_ms": 1790766661708,
+            "updated_at_ms": 1790766684721
+          },
+          {
+            "evidence_schema": 2,
+            "machine_receipt": {
+              "state": "unknown",
+              "phase": "staging",
+              "reason": "expired"
+            },
+            "operation_id": "ovh-initial-grok-3-1-25-20260930",
+            "phase": "needs_attention",
+            "problem": "unknown_machine_outcome",
+            "attention_from": "installing",
+            "plugin_kind": "agent_provider",
+            "plugin_version": "3.1.25",
+            "generation_digest": "sha256:b4c1743efaad0fd2698b20d0a798c4aad9270809934f9d70d65199d1022cfcc8",
+            "created_at_ms": 1790763810513,
+            "updated_at_ms": 1790766444578
+          }
+        ]
+      }
+    },
+    "claude-code": {
+      "schema": 1,
+      "http_status": 200,
+      "operation_id": null,
+      "data": {
+        "schema": "dravengarden.cowboy.plugin-install-history/v2",
+        "admission_enabled": true,
+        "execution_authorized": false,
+        "requires_reconciliation": false,
+        "operations": [
+          {
+            "evidence_schema": 2,
+            "machine_receipt": {
+              "state": "applied",
+              "revision": "installation-6c5a82c7998a7aad2ee79cfd1442228c2292a1a020b2e17523d69a6cddeff194"
+            },
+            "operation_id": "ovh-claude-code-3-1-35-converge",
+            "phase": "completed",
+            "problem": null,
+            "attention_from": null,
+            "plugin_kind": "agent_provider",
+            "plugin_version": "3.1.35",
+            "generation_digest": "sha256:051263cb77807d62913ed0054116851778fd482d22cc605eb965146a49ff5ebe",
+            "created_at_ms": 1790823907899,
+            "updated_at_ms": 1790824016948
+          }
+        ]
+      }
+    }
+  },
+  "final_convergence_plan": {
+    "schema": 1,
+    "applied": false,
+    "machines": [
+      {
+        "machine": "ovh",
+        "attempted": true,
+        "managed": true,
+        "planned": [],
+        "applied": [],
+        "planned_removals": [],
+        "removed": [],
+        "skipped": [],
+        "remaining": []
+      }
+    ],
+    "unreachable": [],
+    "stopped_at": null
+  }
+}
