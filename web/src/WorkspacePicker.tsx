@@ -5,6 +5,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
+  InputAdornment,
   MenuItem,
   MenuList,
   Popover,
@@ -12,7 +13,13 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { ChevronRight, ExpandMore } from "@mui/icons-material";
+import {
+  Check,
+  ChevronRight,
+  ExpandMore,
+  FolderOutlined,
+  Search,
+} from "@mui/icons-material";
 import {
   workspaceBranch,
   type WorkspaceEntry,
@@ -62,9 +69,17 @@ export function WorkspacePicker({ entries, value, onChange }: {
       key={entry.value}
       selected={entry.value === value}
       onClick={() => choose(entry.value)}
-      sx={{ minHeight: 44, whiteSpace: "normal", overflowWrap: "anywhere" }}
+      sx={{
+        minHeight: 44,
+        gap: 1.25,
+        borderRadius: 1.5,
+        whiteSpace: "normal",
+        overflowWrap: "anywhere",
+      }}
     >
-      {label}
+      <FolderOutlined fontSize="small" sx={{ color: "text.secondary" }} />
+      <Box sx={{ flex: 1, minWidth: 0 }}>{label}</Box>
+      {entry.value === value && <Check fontSize="small" color="primary" />}
     </MenuItem>
   );
   return (
@@ -112,14 +127,27 @@ export function WorkspacePicker({ entries, value, onChange }: {
               width: anchor?.clientWidth,
               maxWidth: "calc(100vw - 32px)",
               maxHeight: "min(70dvh, 600px)",
+              display: "flex",
+              flexDirection: "column",
+              border: 1,
+              borderColor: "divider",
             },
           },
         }}
       >
-        <Stack sx={{ p: 1.5, gap: 1 }}>
+        <Stack sx={{ p: 1.5, pb: 0.5, gap: 0.5, flexShrink: 0 }}>
           <TextField
             size="small"
             label="Search directories"
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search fontSize="small" />
+                  </InputAdornment>
+                ),
+              },
+            }}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             onKeyDown={(event) => {
@@ -135,9 +163,18 @@ export function WorkspacePicker({ entries, value, onChange }: {
           {hasGroups && (
             <FormControlLabel
               label="Group by directory"
+              sx={{
+                m: 0,
+                alignSelf: "flex-start",
+                "& .MuiFormControlLabel-label": {
+                  fontSize: "0.875rem",
+                  color: "text.secondary",
+                },
+              }}
               control={
                 <Checkbox
                   size="small"
+                  sx={{ p: 1.25, ml: -1.25 }}
                   checked={hierarchical}
                   onChange={(_, checked) => {
                     setHierarchical(checked);
@@ -151,23 +188,64 @@ export function WorkspacePicker({ entries, value, onChange }: {
             />
           )}
           {grouped && branch.path.length > 0 && (
-            <Breadcrumbs aria-label="Directory path">
-              <Button size="small" onClick={() => navigate([])}>All</Button>
-              {branch.path.map((part, index) => (
-                <Button
-                  key={index}
-                  size="small"
-                  onClick={() => navigate(branch.path.slice(0, index + 1))}
-                >
-                  {part}
-                </Button>
-              ))}
+            <Breadcrumbs
+              aria-label="Directory path"
+              separator={
+                <ChevronRight sx={{ fontSize: 16, color: "text.secondary" }} />
+              }
+              sx={{
+                px: 0.5,
+                bgcolor: "action.hover",
+                borderRadius: 1.5,
+                "& .MuiBreadcrumbs-separator": { mx: 0.25 },
+                "& .MuiBreadcrumbs-li": { minWidth: 0, maxWidth: "100%" },
+                "& .MuiButton-root": {
+                  minWidth: 0,
+                  minHeight: 44,
+                  px: 1,
+                  textTransform: "none",
+                  fontSize: "0.875rem",
+                  overflowWrap: "anywhere",
+                },
+              }}
+            >
+              <Button size="small" onClick={() => navigate([])}>
+                All directories
+              </Button>
+              {branch.path.map((part, index) =>
+                index === branch.path.length - 1
+                  ? (
+                    <Typography
+                      key={index}
+                      aria-current="location"
+                      sx={{
+                        px: 1,
+                        py: 1.25,
+                        fontSize: "0.875rem",
+                        fontWeight: 600,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {part}
+                    </Typography>
+                  )
+                  : (
+                    <Button
+                      key={index}
+                      size="small"
+                      onClick={() => navigate(branch.path.slice(0, index + 1))}
+                    >
+                      {part}
+                    </Button>
+                  )
+              )}
             </Breadcrumbs>
           )}
         </Stack>
         <MenuList
           id="workspace-picker-menu"
           aria-label="Working directories"
+          sx={{ px: 0.75, pb: 0.75, overflowY: "auto", minHeight: 0 }}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.stopPropagation();
             if (event.key === "ArrowLeft" && grouped && branch.path.length) {
@@ -194,8 +272,12 @@ export function WorkspacePicker({ entries, value, onChange }: {
                             navigate(child.path);
                           }
                         }}
-                        sx={{ minHeight: 44, gap: 1 }}
+                        sx={{ minHeight: 44, gap: 1.25, borderRadius: 1.5 }}
                       >
+                        <FolderOutlined
+                          fontSize="small"
+                          sx={{ color: "text.secondary" }}
+                        />
                         <Box
                           sx={{
                             flex: 1,
@@ -205,7 +287,10 @@ export function WorkspacePicker({ entries, value, onChange }: {
                         >
                           {child.label}
                         </Box>
-                        <ChevronRight />
+                        <ChevronRight
+                          fontSize="small"
+                          sx={{ color: "text.secondary" }}
+                        />
                       </MenuItem>
                     )
                     : entryRow(child.entries[0]!, child.label)
