@@ -6,6 +6,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 /** Local observation time, not a claim about remote Provider progress. */
 export function ProviderAuthenticationProgress(
@@ -17,6 +18,7 @@ export function ProviderAuthenticationProgress(
 ) {
   const [startedAt] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState(0);
+  const checkTap = useReliableTouchTap<HTMLButtonElement>(onCheck);
   useEffect(() => {
     const timer = setInterval(() => {
       setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
@@ -30,7 +32,7 @@ export function ProviderAuthenticationProgress(
           <CircularProgress
             size={22}
             disableShrink
-            aria-label="Preparing sign-in"
+            aria-label={label}
           />
         )}
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -55,7 +57,7 @@ export function ProviderAuthenticationProgress(
         <Typography variant="caption" color="text.secondary" aria-live="off">
           {elapsed}s elapsed
         </Typography>
-        <Button size="small" onClick={onCheck}>Check status</Button>
+        <Button size="small" {...checkTap}>Check status</Button>
       </Stack>
     </Box>
   );

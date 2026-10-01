@@ -134,6 +134,26 @@ function events(events: unknown[], request_id = "request-a") {
   return { request_id, events };
 }
 
+Deno.test("accepted authorization input retains visible submission progress until provider completion", async () => {
+  const f = authFixture();
+  try {
+    const poll = await f.start();
+    f.reply(poll, events([challenge()]));
+    await settle();
+    f.owner.setInput("fixture-authorization-code");
+    const submit = f.owner.submit("Submit failed");
+    assertEquals(f.owner.snapshot().busy, "submit");
+    f.reply(2, {}, 202);
+    await submit;
+    assertEquals(f.owner.snapshot().busy, null);
+    assertEquals(f.owner.snapshot().value?.input, "");
+    assert(f.owner.snapshot().value?.submittedAt);
+    assertEquals(f.calls.length, 3);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 Deno.test("account switching copies the original challenge without replacing or cancelling authentication", async () => {
   const f = authFixture();
   try {

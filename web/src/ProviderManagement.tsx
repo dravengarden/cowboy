@@ -753,7 +753,7 @@ function ProviderManagement(
     )
     : null;
   const copyAuthenticationCode = () => owners?.authentication.copyCode();
-  const authenticationPageTap = useReliableTouchTap<HTMLButtonElement>(() => {
+  const openAuthenticationPage = () => {
     const current = owners?.authentication.snapshot();
     const activeFlow = current?.value?.flow;
     const challenge = activeFlow?.events.findLast((event) =>
@@ -773,6 +773,12 @@ function ProviderManagement(
     owners?.authentication.error("");
     copyAuthenticationCode();
     openAuthenticationUrl(challenge.verification_url);
+  };
+  const authenticationPageTap = useReliableTouchTap<HTMLButtonElement>(
+    openAuthenticationPage,
+  );
+  const authenticationSubmitTap = useReliableTouchTap<HTMLButtonElement>(() => {
+    if (!authentication.busy && loginInput.trim()) void submitAuthentication();
   });
 
   return (
@@ -1435,6 +1441,8 @@ function ProviderManagement(
                         disabled={Boolean(authentication.busy)}
                         requiresCode={Boolean(challenge.input_required)}
                         onCopy={() => owners?.authentication.copyCode("link")}
+                        onOpen={openAuthenticationPage}
+                        notice={authenticationClipboardNotice}
                       />
                     )}
                     {authenticationClipboardNotice
@@ -1471,6 +1479,8 @@ function ProviderManagement(
                             value={loginInput}
                             disabled={Boolean(authentication.busy)}
                             autoComplete="off"
+                            autoCorrect="off"
+                            spellCheck={false}
                             onChange={(event) =>
                               owners?.authentication.setInput(
                                 event.target.value,
@@ -1480,9 +1490,14 @@ function ProviderManagement(
                             variant="contained"
                             disabled={Boolean(authentication.busy) ||
                               !loginInput.trim()}
-                            onClick={() => void submitAuthentication()}
+                            {...authenticationSubmitTap}
+                            startIcon={authentication.busy === "submit"
+                              ? <CircularProgress size={16} color="inherit" />
+                              : undefined}
                           >
-                            {flowCopy?.submit}
+                            {authentication.busy === "submit"
+                              ? "Submitting…"
+                              : flowCopy?.submit}
                           </Button>
                         </Stack>
                       )
@@ -1516,6 +1531,17 @@ function ProviderManagement(
                     <AlertTitle>{flowCopy?.promotingTitle}</AlertTitle>
                     {flowCopy?.promotingDetail}
                   </Alert>
+                )
+                : authentication.value?.submittedAt &&
+                    loginState?.event === "login_state" &&
+                    loginState.state === "pending"
+                ? (
+                  <ProviderAuthenticationProgress
+                    key={authentication.value.submittedAt}
+                    failed={Boolean(authenticationError)}
+                    label="Code submitted. Waiting for the Provider…"
+                    onCheck={() => owners?.authentication.checkStatus()}
+                  />
                 )
                 : loginState?.event === "login_state"
                 ? (

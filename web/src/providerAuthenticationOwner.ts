@@ -65,6 +65,7 @@ interface AuthenticationDialog {
   input: string;
   clipboardNotice: string;
   pendingMethod: string;
+  submittedAt?: number;
 }
 interface Ports {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
@@ -518,7 +519,11 @@ export function createProviderAuthenticationOwner(
           });
           await expectProviderResponse(response, fallback);
           if (lease.value().flow.requestId === flow.requestId) {
-            lease.update((value) => ({ ...value, input: "" }));
+            lease.update((value) => ({
+              ...value,
+              input: "",
+              submittedAt: Date.now(),
+            }));
           }
         } catch (cause) {
           if (
