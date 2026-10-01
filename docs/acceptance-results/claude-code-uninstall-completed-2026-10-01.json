@@ -1,0 +1,260 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "scope": "Cowboy-managed claude-code on hawk, falcon and macbook-air",
+  "previous_evidence": "claude-code-removal-2026-10-01.json",
+  "source_revision": "dbd19bbf74e039d38962f27ff91eb2e8da4ddcfb",
+  "outcome": "completed",
+  "membership": {
+    "schema": 1,
+    "machines": {
+      "hawk": {
+        "plugins": [
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok",
+          "victoria",
+          "zed"
+        ],
+        "unlisted": "uninstall"
+      },
+      "falcon": {
+        "plugins": [
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok",
+          "zed"
+        ],
+        "unlisted": "uninstall"
+      },
+      "macbook-air": {
+        "plugins": [
+          "claude-deepseek",
+          "codex",
+          "codex-deepseek",
+          "gemini",
+          "grok"
+        ],
+        "unlisted": "uninstall"
+      }
+    }
+  },
+  "verification": {
+    "hawk": {
+      "other_plugin_digests_unchanged": true,
+      "retained_plugin_count": 7,
+      "claude_code_installed": false,
+      "requires_reconciliation": false,
+      "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+      "phase": "completed",
+      "active_entry_runtime_and_materialized_projection_absent": true,
+      "absence_check_includes_dangling_symlinks": true
+    },
+    "falcon": {
+      "other_plugin_digests_unchanged": true,
+      "retained_plugin_count": 6,
+      "claude_code_installed": false,
+      "requires_reconciliation": false,
+      "operation_id": "Y0BPhioxMWQJE-GKyXsGci8ILgzCXea9NokGjaUcm1E",
+      "phase": "completed",
+      "active_entry_runtime_and_materialized_projection_absent": true,
+      "absence_check_includes_dangling_symlinks": true
+    },
+    "macbook-air": {
+      "other_plugin_digests_unchanged": true,
+      "retained_plugin_count": 5,
+      "claude_code_installed": false,
+      "requires_reconciliation": false,
+      "operation_id": "AUffHUw6qYFIuyDHbS-uBvrYRX-pn47fCjTgwjno-Nk",
+      "phase": "completed",
+      "active_entry_runtime_and_materialized_projection_absent": true,
+      "absence_check_includes_dangling_symlinks": true
+    },
+    "ovh": {
+      "other_plugin_digests_unchanged": true,
+      "retained_plugin_count": 3
+    }
+  },
+  "deployment_receipts": {
+    "web": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1790822270123980602-dbd19bbf74e0",
+      "revision": "dbd19bbf74e039d38962f27ff91eb2e8da4ddcfb",
+      "published": true,
+      "release": "/nix/store/jn0vzhk22qaclgj0gsxjbkqm00940f2v-cowboy-web-release",
+      "previousRelease": "/nix/store/aknp9ph9abjl82ngf0459qqknpmwl8k7-cowboy-web-release",
+      "activeRelease": "/nix/store/jn0vzhk22qaclgj0gsxjbkqm00940f2v-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T02:37:50.123980602Z",
+      "recordedAt": "2026-10-01T02:37:50.176229682Z",
+      "recovered": false
+    },
+    "controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1790822461674135404-dbd19bbf74e0",
+      "revision": "dbd19bbf74e039d38962f27ff91eb2e8da4ddcfb",
+      "published": true,
+      "release": "/nix/store/90qr5ijalm9v6x0spwnjwfqx271jndik-cowboy-controller-release",
+      "previousRelease": "/nix/store/2jaw07jm24a0vm9zfrbc6j9d4l8jvgqw-cowboy-controller-release",
+      "activeRelease": "/nix/store/90qr5ijalm9v6x0spwnjwfqx271jndik-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T02:41:01.674135404Z",
+      "recordedAt": "2026-10-01T02:41:15.532123451Z",
+      "recovered": false
+    },
+    "machine": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1790822525215730093-dbd19bbf74e0",
+      "revision": "dbd19bbf74e039d38962f27ff91eb2e8da4ddcfb",
+      "workerGeneration": "worker-8a138bfe2ddf6baf0b6d",
+      "published": true,
+      "release": "/nix/store/jik0dhyxv15ch6l4frbyr622wfbdny2q-cowboy-machine-release",
+      "previousRelease": "/nix/store/8pzsk6brw1jyjk8g00vs091gmjjp2v8z-cowboy-machine-release",
+      "activeRelease": "/nix/store/jik0dhyxv15ch6l4frbyr622wfbdny2q-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-01T02:42:05.215730093Z",
+      "recordedAt": "2026-10-01T02:42:12.362463907Z",
+      "recovered": false
+    }
+  },
+  "hawk_recovery": {
+    "native_maintenance": {
+      "schema": 1,
+      "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+      "service_id": "svc-4e4d5154f3df9aa109d7d841dd925fd7",
+      "machine_id": "hawk",
+      "plugin_id": "claude-code",
+      "request_digest": "sha256:9a09ea8b9520434df7c545f6d1a47251120063651ba874fa247afcbee48d4918",
+      "applied": true,
+      "requires_controller_reconciliation": true,
+      "audit_id": "6aa38be61e620a99f13874e7e7573739"
+    },
+    "completed": true,
+    "started_at_ms": 1790822604799,
+    "completed_at_ms": 1790822622345,
+    "duration_ms": 17546,
+    "controller_reconciliation": {
+      "schema": 1,
+      "http_status": 200,
+      "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+      "data": {
+        "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+        "phase": "completed",
+        "resolution": {
+          "intent": {
+            "schema": 1,
+            "resolution_id": "complete-d28c95e8a03fd5beeb65db6f8fed9f5c",
+            "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+            "service_id": "svc-4e4d5154f3df9aa109d7d841dd925fd7",
+            "machine_id": "hawk",
+            "plugin_id": "claude-code",
+            "actor": {
+              "kind": "admin",
+              "account": "unix-uid:1000"
+            },
+            "action": "complete_verified_removal",
+            "operation_digest": "sha256:8ebce4310bffe76ceb2b0e4051c4a6c9391f5a90132187d30fb1b6a0ff06fc67",
+            "before_updated_at_ms": 1790818367420,
+            "expires_at_ms": 1790822733199,
+            "machine_evidence": {
+              "state": "observed",
+              "snapshot": {
+                "request_digest": "sha256:9a09ea8b9520434df7c545f6d1a47251120063651ba874fa247afcbee48d4918",
+                "receipt": {
+                  "step": {
+                    "schema": 2,
+                    "operation_id": "kpAkBSB-SZHlH2UWnNkdDrQFRlZMz5S8rQ6VC0pWGqI",
+                    "service_id": "svc-4e4d5154f3df9aa109d7d841dd925fd7",
+                    "machine_id": "hawk",
+                    "plan_digest": "sha256:15a1122161d7a2e688220666d130a30ab00a043a85065da51c05facf973c5500",
+                    "plugin_id": "claude-code",
+                    "plugin_version": "3.1.35",
+                    "generation_digest": "sha256:051263cb77807d62913ed0054116851778fd482d22cc605eb965146a49ff5ebe",
+                    "installation_revision": "installation-9307dbd571171f40a9f19143486307c6536995d797a2594af98c0842a1275e8b",
+                    "contract_fingerprint": "sha256:e78dc7d34fd328b9ac001b173d0cfbcf50cdf165814dba580c7892409f3ff744",
+                    "expires_at_ms": 1790818956879
+                  },
+                  "request_digest": "sha256:9a09ea8b9520434df7c545f6d1a47251120063651ba874fa247afcbee48d4918",
+                  "outcome": {
+                    "state": "applied"
+                  }
+                },
+                "installation": {
+                  "state": "removed",
+                  "revision": "installation-622a0a9b8622d7f513d49801617b6c862a7bace09fd11f7aefa5545f173b9ef2",
+                  "previous_revision": "installation-9307dbd571171f40a9f19143486307c6536995d797a2594af98c0842a1275e8b",
+                  "uninstall_request_digest": "sha256:9a09ea8b9520434df7c545f6d1a47251120063651ba874fa247afcbee48d4918"
+                },
+                "slot_fenced": false
+              }
+            }
+          },
+          "resolved_at_ms": 1790822673201
+        },
+        "machine_effect_replayed": false
+      }
+    },
+    "independent_restart_timer_seconds": 90,
+    "temporary_maintenance_units_removed": true,
+    "direct_database_or_journal_edits": false
+  },
+  "service_health": {
+    "healthz": "ok",
+    "version": "8f059f509473816080d0aa6a9f1c3c4a",
+    "hawk_machine_active": true,
+    "hawk_machine_main_pid": 3223567,
+    "hawk_machine_nrestarts": 0
+  },
+  "workers": {
+    "baseline_count": 18,
+    "unchanged_pid_count": 17,
+    "changed_pid_count": 1,
+    "current_task_pid_unchanged": true,
+    "changed_unit": "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service",
+    "previous_pid": 621785,
+    "current_pid": 3223022,
+    "current_state": "active",
+    "changed_at": "2026-10-01T10:43:03+08:00",
+    "qualification": "Observed after Machine release, before offline cleanup. This record does not establish the reason or claim all worker PIDs were preserved."
+  },
+  "validation": {
+    "full_gate": "nix develop -c just check-compact passed before final directory-fsync correction",
+    "core_tests_passed": 1672,
+    "frontend_tests_passed": 1955,
+    "postgresql_checks": "passed",
+    "final_fsync_correction": [
+      "strict all-target/all-feature Clippy passed",
+      "maintenance tests: 4 passed",
+      "resolution tests: 92 passed, 15 ignored",
+      "formatting passed",
+      "native scoped review: no findings"
+    ],
+    "immutable_release_builds": "Web, Controller and Machine passed from clean source revision"
+  },
+  "retention": {
+    "standalone_claude_cli_changed": false,
+    "claude_deepseek_changed": false,
+    "ovh_machine_deleted": false,
+    "normal_signed_package_sealed_replica_and_audit_retention_preserved": true,
+    "credential_contents_read_or_logged": false
+  }
+}
