@@ -199,7 +199,9 @@ async fn seed_execution_bindings(
     )?;
     let mut session = local.clone();
     session.id = read_routes::BOUND.into();
-    session.machine_id = "offline-runtime".into();
+    // The baseline's Hawk registration is offline in this fixture. Retain the
+    // real FK contract instead of inventing an unregistered runtime identity.
+    session.machine_id = "hawk".into();
     session.cwd = root.join("runtime").to_string_lossy().into_owned();
     let mut binding = crate::execution_environment::fixture().record().clone();
     binding["runtime"] = json!({ "machine_id": session.machine_id, "cwd": session.cwd });
@@ -219,7 +221,10 @@ async fn seed_execution_bindings(
         .map_err(anyhow::Error::msg)?;
     store.insert_session(&session).await?;
     session.id = read_routes::INVALID.into();
+    session.machine_id.clone_from(&local.machine_id);
+    session.cwd.clone_from(&local.cwd);
     // Presence must survive Store + Controller restart, including JSON null.
+    // This runtime IS connected: collapsing null to absence would really read.
     session.execution_binding = Some(crate::execution_environment::ExecutionBinding::from_record(
         Value::Null,
     ));
