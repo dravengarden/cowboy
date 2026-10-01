@@ -20,6 +20,9 @@ Agent private dependency was upgraded.
   the Cargo vendor hash.
 - The complete `just check-compact` gate passed before integration, including
   19 isolated PostgreSQL tests and optimized executable builds.
+- Repeated `just check-compact` after integrating `e982da42`: passed, including
+  1,676 all-features Rust tests, 405 standalone Machine tests, 1,959 frontend
+  tests, the isolated PostgreSQL gate and optimized builds.
 - No physical iPhone or production private-repository authentication acceptance
   is claimed.
 
