@@ -204,6 +204,7 @@ impl MachinePluginStore {
                 filter,
                 page,
                 review,
+                discovery,
             } => {
                 let remote = remotes
                     .into_iter()
@@ -219,12 +220,21 @@ impl MachinePluginStore {
                     .iter()
                     .find(|v| v.id == view)
                     .ok_or(Failure::InvalidRequest)?;
-                let response = if let Some(review) = review {
+                if discovery.is_some() && (review.is_some() || item.is_some() || filter.is_some()) {
+                    return Err(Failure::InvalidRequest);
+                }
+                let response = if let Some(discovery) = discovery {
+                    if view.review.is_none() {
+                        return Err(Failure::InvalidRequest);
+                    }
+                    runtime::discover(&remote, &discovery, page).await?
+                } else if let Some(review) = review {
                     if view.review.is_none() || filter.is_some() {
                         return Err(Failure::InvalidRequest);
                     }
+                    let target = runtime::review_target(&remote, review.repository.as_deref())?;
                     runtime::read_review(
-                        &remote,
+                        &target,
                         item.as_deref().ok_or(Failure::InvalidRequest)?,
                         &review,
                         page,

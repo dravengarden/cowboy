@@ -8,7 +8,9 @@ use serde_json::Value;
 
 use super::{Failure, Metadata, Remote, Resource, Response};
 
+mod discovery;
 mod review;
+pub(crate) use discovery::{discover, review_target};
 pub(crate) use review::read_review;
 
 const MAX_BODY: usize = 64 * 1024;

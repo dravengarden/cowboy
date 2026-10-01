@@ -13,6 +13,7 @@ export interface ExtensionView {
   label: string;
   filters: { value: string; label: string }[];
   review?: "pull_request" | null;
+  discovery?: boolean;
 }
 export interface WorkspaceExtension {
   identity: ExtensionIdentity;
@@ -37,7 +38,26 @@ export interface Resource {
   updatedAt: string | null;
   metadata: { label: string; value: string }[];
 }
+export interface PullSummary {
+  number: string;
+  title: string;
+  repository: string;
+  url: string;
+  author: string;
+  state: string;
+  draft: boolean;
+  updatedAt: string;
+}
+export interface PullPage {
+  type: "pulls";
+  account: string;
+  items: PullSummary[];
+  total: number;
+  incomplete: boolean;
+  nextPage: number | null;
+}
 export type ExtensionResponse =
+  | PullPage
   | {
     type: "inventory";
     extensions: WorkspaceExtension[];
@@ -117,6 +137,40 @@ function resource(input: unknown): Resource {
 export function decodeExtensionResponse(input: unknown): ExtensionResponse {
   const v = record(input);
   switch (v.type) {
+    case "pulls": {
+      if (
+        typeof v.total !== "number" || !Number.isSafeInteger(v.total) ||
+        v.total < 0 ||
+        typeof v.incomplete !== "boolean" || (v.nextPage !== null &&
+          (typeof v.nextPage !== "number" || !Number.isInteger(v.nextPage) ||
+            v.nextPage < 2 || v.nextPage > 50))
+      ) invalid();
+      return {
+        type: "pulls",
+        account: text(v.account, 100),
+        total: v.total,
+        incomplete: v.incomplete,
+        nextPage: v.nextPage as number | null,
+        items: array(v.items, 20, (input) => {
+          const row = record(input);
+          if (typeof row.draft !== "boolean") invalid();
+          const repository = text(row.repository, 201);
+          if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repository)) invalid();
+          const number = text(row.number, 16);
+          if (!/^[1-9][0-9]*$/.test(number)) invalid();
+          return {
+            number,
+            repository,
+            title: text(row.title, 1000),
+            url: text(row.url, 2048),
+            author: text(row.author, 100),
+            state: text(row.state, 16),
+            draft: row.draft,
+            updatedAt: text(row.updatedAt, 64),
+          };
+        }),
+      };
+    }
     case "review":
       return { type: "review", review: decodeRemoteReview(v.review) };
     case "unavailable": {
@@ -148,6 +202,7 @@ export function decodeExtensionResponse(input: unknown): ExtensionResponse {
                 id: text(view.id, 128),
                 label: text(view.label, 80),
                 review: view.review === "pull_request" ? "pull_request" : null,
+                discovery: view.discovery === true,
                 filters: array(view.filters, 8, (item) => {
                   const filter = record(item);
                   return {

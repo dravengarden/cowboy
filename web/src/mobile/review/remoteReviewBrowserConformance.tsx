@@ -24,6 +24,8 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
   const pending: Array<(response: Response) => void> = [];
   let saved: RemoteReviewBinding | null = null;
   let local = false;
+  let delayList = false;
+  const listPending: Array<(response: Response) => void> = [];
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { "content-type": "application/json" },
@@ -50,6 +52,24 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
       limited: false,
     }],
   });
+  const pulls = (title = "Remote change", empty = false) =>
+    json({
+      type: "pulls",
+      account: "owner",
+      total: empty ? 0 : 1,
+      incomplete: false,
+      nextPage: null,
+      items: empty ? [] : [{
+        number: "12",
+        title,
+        repository: "owner/repo",
+        url: "https://github.com/owner/repo/pull/12",
+        author: "owner",
+        state: "open",
+        draft: false,
+        updatedAt: "2026-10-01T00:00:00Z",
+      }],
+    });
   globalThis.fetch = (input, init) => {
     check(init?.cache === "no-store", "private PR reads must bypass caches");
     const url = new URL(String(input), location.href);
@@ -60,8 +80,8 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
         remotes: [{
           name: "origin",
           host: "github.com",
-          owner: "owner",
-          repository: "repo",
+          owner: "workspace",
+          repository: "local",
         }],
         extensions: [{
           identity: {
@@ -77,9 +97,14 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
             label: "PRs",
             filters: [],
             review: "pull_request",
+            discovery: true,
           }],
         }],
       }));
+    }
+    if (url.searchParams.get("discovery") === "true") {
+      if (delayList) return new Promise((resolve) => listPending.push(resolve));
+      return Promise.resolve(pulls());
     }
     check(
       url.searchParams.get("review") === "true",
@@ -141,28 +166,62 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
   try {
     render("first");
     await until(
-      "repository",
-      () => !!container.querySelector('input:not([aria-hidden="true"])'),
+      "default PR list",
+      () => !!container.querySelector('[aria-label="Review owner/repo #12"]'),
     );
-    const input = container.querySelector<HTMLInputElement>(
-      'input:not([aria-hidden="true"])',
+    const discovery = requests.find((url) =>
+      url.searchParams.get("discovery") === "true"
+    );
+    check(
+      discovery?.searchParams.get("relation") === "author" &&
+        discovery.searchParams.get("currentRepository") === "false",
+      "default is not current account across repositories",
+    );
+    const back = container.querySelector(
+      '[aria-label="Local worktree review"]',
     )!;
-    flushSync(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
-        .call(input, "https://github.com/owner/repo/pull/12");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await until(
-      "associate enabled",
-      () =>
-        [...container.querySelectorAll("button")].some((button) =>
-          button.textContent === "Associate and review" && !button.disabled
-        ),
+    check(
+      back.getBoundingClientRect().top >
+        container.getBoundingClientRect().top + 500,
+      "back action is not thumb reachable",
     );
-    click("Associate and review");
+    delayList = true;
+    click("Refresh pull requests");
+    await until("refresh pending", () => listPending.length > 0);
+    check(
+      !!container.querySelector('[aria-label="Review owner/repo #12"]'),
+      "refresh discarded readable list",
+    );
+    listPending.splice(0).forEach((resolve) =>
+      resolve(json({ type: "unavailable", code: "request_failed" }))
+    );
+    await until(
+      "refresh error",
+      () => !!container.querySelector('[role="alert"]'),
+    );
+    check(
+      !!container.querySelector('[aria-label="Review owner/repo #12"]'),
+      "refresh failure discarded list",
+    );
+    click("Retry");
+    await until("retry pending", () => listPending.length > 0);
+    listPending.splice(0).forEach((resolve) => resolve(pulls()));
+    await until(
+      "retry complete",
+      () => !container.querySelector('[role="alert"]'),
+    );
+    delayList = false;
+    click("Review owner/repo #12");
     await until(
       "association",
       () => saved !== null && !!container.textContent?.includes("review.txt"),
+    );
+    check(
+      requests.some((url) =>
+        url.searchParams.get("review") === "true" &&
+        url.searchParams.get("repository") === "owner/repo"
+      ),
+      "cross-repository selection lost its target",
     );
     check(
       (saved as RemoteReviewBinding | null)?.repositoryId === "123",
@@ -213,16 +272,80 @@ export async function runRemoteReviewBrowserConformance(): Promise<string[]> {
     );
     await until(
       "new session",
-      () => !!container.textContent?.includes("Associate this session"),
+      () => !!container.textContent?.includes("Choose a pull request"),
     );
     await new Promise((resolve) => setTimeout(resolve, 30));
     check(
       !container.textContent?.includes("STALE PRIVATE PR"),
       "old session response leaked into new session",
     );
+    delayList = true;
+    render("slow");
+    await until(
+      "skeleton",
+      () =>
+        !!container.querySelector('[aria-label="Loading pull requests"]') &&
+        listPending.length > 0,
+    );
+    click("Local worktree review");
+    check(local, "loading blocked Back");
+    local = false;
+    const abandoned = listPending.splice(0);
+    render("new-list");
+    await until("new list pending", () => listPending.length > 0);
+    abandoned.forEach((resolve) => resolve(pulls("PRIVATE OLD LIST")));
+    listPending.splice(0).forEach((resolve) => resolve(pulls("", true)));
+    await until(
+      "empty state",
+      () => !!container.textContent?.includes("No matching pull requests"),
+    );
+    check(
+      !container.textContent?.includes("PRIVATE OLD LIST"),
+      "abandoned discovery leaked across sessions",
+    );
+    click("Change filters");
+    check(
+      !!container.textContent?.includes("Relationship") &&
+        !!container.textContent?.includes("Status"),
+      "empty state cannot reach filters",
+    );
+    delayList = false;
+    const relationship = container.querySelector<HTMLElement>(
+      '[role="combobox"]',
+    );
+    check(relationship, "missing relationship filter");
+    flushSync(() =>
+      relationship.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+      )
+    );
+    await until(
+      "relationship options",
+      () => !!document.querySelector('[role="option"][data-value="review"]'),
+    );
+    flushSync(() =>
+      (document.querySelector(
+        '[role="option"][data-value="review"]',
+      ) as HTMLElement).click()
+    );
+    await until(
+      "review filter read",
+      () =>
+        requests.some((url) => url.searchParams.get("relation") === "review"),
+    );
+    await until(
+      "filtered results",
+      () => !!container.querySelector('[aria-label="Review owner/repo #12"]'),
+    );
+    click("Done");
     click("Local worktree review");
     check(local, "local source was unreachable");
     return [
+      "account PR discovery is the default and Back stays at the bottom",
+      "refresh and failure preserve readable PRs with explicit retry",
+      "slow discovery shows skeletons and retains working bottom navigation",
+      "abandoned account lists cannot cross sessions and empty lists offer filters",
+      "relationship filter executes a new bounded account search",
       "PR association retains repository identity without code bodies",
       "actual CodeMirror renders the remote patch without workspace or native reads",
       "PR page continuation retains repository and revision",

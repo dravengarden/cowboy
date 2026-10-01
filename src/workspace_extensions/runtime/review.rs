@@ -101,7 +101,7 @@ fn file(source: &Value) -> Result<ReviewFile, Failure> {
     })
 }
 
-async fn json(program: &str, remote: &Remote, endpoint: &str) -> Result<Value, Failure> {
+pub(super) async fn json(program: &str, remote: &Remote, endpoint: &str) -> Result<Value, Failure> {
     let bytes = command(
         program,
         &[
@@ -235,6 +235,7 @@ esac
         let read = ReviewRead {
             repository_id: Some("123".into()),
             revision: None,
+            repository: None,
         };
         let result = read_with_cli(program.to_str().unwrap(), &remote, "12", &read, 1)
             .await
@@ -247,6 +248,7 @@ esac
         let wrong = ReviewRead {
             repository_id: Some("124".into()),
             revision: None,
+            repository: None,
         };
         assert!(matches!(
             read_with_cli(program.to_str().unwrap(), &remote, "12", &wrong, 1).await,
@@ -263,6 +265,7 @@ esac
         let old = ReviewRead {
             repository_id: Some("123".into()),
             revision: Some(review.revision),
+            repository: None,
         };
         std::fs::remove_file(&requested).unwrap();
         assert!(matches!(

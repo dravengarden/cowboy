@@ -100,3 +100,12 @@ inventory also carry Plugin kind, so active, recovery and cold readers must all
 understand `workspace_extension` before enabling its first production install.
 An old reader's successful Catalog skip establishes publication compatibility,
 not compatibility with a populated extension installation journal.
+
+
+The pull-request review connection port also offers account discovery when the
+Machine advertises `discovery: true`. This uses closed account/relation/state
+filters on the existing CLI host; it can select PRs outside the current repository
+without changing the workspace or host. Every selection remains subject to the
+same Code-context, exact installation and mutable-remote fences. Generic resource
+views retain their signed repository endpoint templates. See the remote PR
+contract for pagination, account observations and compatibility behavior.

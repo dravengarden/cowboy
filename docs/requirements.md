@@ -77,7 +77,9 @@ Workspace resources use the data-only `workspace_extension` kind (Plugin SDK
 Their bounded resource contracts consume core-owned workspace context and
 declare any runtime Plugin dependencies by version and artifact digest. The
 first host connection borrows the Machine user's existing GitHub CLI session
-for repository-scoped reads; it creates no Provider login, credential replica
+for repository-scoped reads and bounded account PR discovery through an installed
+pull-request review capability. Explicit PR selection may cross repositories on
+that same remote host; it creates no Provider login, credential replica
 or executable runtime. See [workspace extensions](workspace-extensions.md).
 
 Telemetry integrations use the data-only `telemetry_backend` kind. Payload

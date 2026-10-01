@@ -31,6 +31,8 @@ pub(crate) enum Operation {
         page: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         review: Option<Box<ReviewRead>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        discovery: Option<Box<PullDiscovery>>,
     },
 }
 
@@ -75,6 +77,7 @@ impl Extension {
                     label: v.label.clone(),
                     filters: v.filters.clone(),
                     review: v.review,
+                    discovery: v.review.is_some().then_some(true),
                 })
                 .collect(),
             available,
@@ -90,6 +93,8 @@ pub(crate) struct View {
     pub filters: Vec<WorkspaceResourceFilter>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review: Option<WorkspaceReviewKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +102,31 @@ pub(crate) struct View {
 pub(crate) struct ReviewRead {
     pub repository_id: Option<String>,
     pub revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+}
+
+/// Closed discovery filters; no arbitrary CLI arguments or GitHub search syntax.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PullDiscovery {
+    pub relation: String,
+    pub state: String,
+    pub current_repository: bool,
+    pub account: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PullSummary {
+    pub number: String,
+    pub title: String,
+    pub repository: String,
+    pub url: String,
+    pub author: String,
+    pub state: String,
+    pub draft: bool,
+    pub updated_at: String,
 }
 
 /// Durable selection only: never a credential, installation grant or cached body.
@@ -212,6 +242,14 @@ pub(crate) enum Response {
     },
     Review {
         review: ReviewPage,
+    },
+    Pulls {
+        account: String,
+        items: Vec<PullSummary>,
+        total: u64,
+        incomplete: bool,
+        #[serde(rename = "nextPage")]
+        next_page: Option<u32>,
     },
     Unavailable {
         code: Failure,

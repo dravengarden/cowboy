@@ -14,18 +14,14 @@ import {
   List,
   ListItemButton,
   ListItemText,
-  MenuItem,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   extensionRequest,
   type ExtensionResponse,
-  type RepositoryRemote,
   resourceQuery,
-  type WorkspaceExtension,
 } from "../../extensions/api";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import {
@@ -37,43 +33,15 @@ import {
 import { useReviewSettings } from "./reviewSettings";
 import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsButton";
 
+import { type Choice, choices, matches } from "./remoteReviewSources";
+import {
+  PullSkeleton,
+  remoteBottomSx,
+  RemotePullPicker,
+} from "./RemotePullPicker";
+
 const CodeViewer = lazy(() => import("./CodeViewer"));
 type Inventory = Extract<ExtensionResponse, { type: "inventory" }>;
-type Choice = {
-  extension: WorkspaceExtension;
-  view: string;
-  remote: RepositoryRemote;
-  key: string;
-};
-
-function choices(inventory: Inventory | undefined): Choice[] {
-  return inventory?.extensions.filter((extension) => extension.available)
-    .flatMap((extension) =>
-      extension.views.filter((view) => view.review === "pull_request").flatMap((
-        view,
-      ) =>
-        inventory.remotes.map((remote) => ({
-          extension,
-          view: view.id,
-          remote,
-          key: JSON.stringify([
-            extension.identity.pluginId,
-            view.id,
-            remote.name,
-          ]),
-        }))
-      )
-    ) ?? [];
-}
-
-function matches(choice: Choice, binding: RemoteReviewBinding): boolean {
-  return choice.extension.identity.pluginId === binding.pluginId &&
-    choice.view === binding.view &&
-    choice.remote.host === binding.host &&
-    choice.remote.owner === binding.owner &&
-    choice.remote.repository === binding.repository;
-}
-
 async function read(
   context: string,
   choice: Choice,
@@ -82,6 +50,7 @@ async function read(
   signal: AbortSignal,
   repositoryId?: string,
   revision?: string,
+  repository?: string,
 ): Promise<RemoteReviewPage> {
   const query = resourceQuery(
     choice.extension.identity,
@@ -92,6 +61,7 @@ async function read(
     number,
   );
   query.set("review", "true");
+  if (repository) query.set("repository", repository);
   if (repositoryId) query.set("repositoryId", repositoryId);
   if (revision) query.set("revision", revision);
   const response = await extensionRequest(context, query, signal);
@@ -103,18 +73,31 @@ async function read(
   const url = new URL(response.review.url);
   if (
     url.hostname !== choice.remote.host ||
-    pullNumber(url.href, choice.remote) !== number
+    pullNumber(
+        url.href,
+        repository
+          ? {
+            ...choice.remote,
+            owner: repository.split("/")[0]!,
+            repository: repository.split("/")[1]!,
+          }
+          : choice.remote,
+      ) !== number
   ) throw new Error("The PR repository changed.");
   return response.review;
 }
 
-function PullRequest({ context, choice, binding, initial, active }: {
-  context: string;
-  choice: Choice;
-  binding: RemoteReviewBinding;
-  initial: RemoteReviewPage | undefined;
-  active: boolean;
-}): React.JSX.Element {
+function PullRequest(
+  { context, choice, binding, initial, active, onLocal, onChoose }: {
+    context: string;
+    choice: Choice;
+    binding: RemoteReviewBinding;
+    initial: RemoteReviewPage | undefined;
+    active: boolean;
+    onLocal: () => void;
+    onChoose: () => void;
+  },
+): React.JSX.Element {
   const [snapshot, setSnapshot] = useState(initial);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string>();
@@ -146,6 +129,11 @@ function PullRequest({ context, choice, binding, initial, active }: {
         request.signal,
         binding.repositoryId,
         previous?.revision,
+        choice.extension.views.some((view) =>
+            view.id === choice.view && view.discovery
+          )
+          ? `${binding.owner}/${binding.repository}`
+          : undefined,
       );
       if (request.signal.aborted) return;
       if (previous && !sameReview(previous, value)) {
@@ -182,14 +170,6 @@ function PullRequest({ context, choice, binding, initial, active }: {
   return (
     <Stack sx={{ flex: 1, minHeight: 0 }}>
       <Stack direction="row" alignItems="center" sx={{ px: 1, flexShrink: 0 }}>
-        {file && (
-          <IconButton
-            aria-label="PR files"
-            onClick={() => setSelected(undefined)}
-          >
-            <ArrowBack />
-          </IconButton>
-        )}
         <Box sx={{ flex: 1, minWidth: 0, py: 1 }}>
           <Typography variant="body2" noWrap>
             {file?.path ?? snapshot?.title ?? `PR #${binding.number}`}
@@ -202,28 +182,12 @@ function PullRequest({ context, choice, binding, initial, active }: {
               : "Remote pull request"}
           </Typography>
         </Box>
-        <IconButton
-          aria-label="Refresh PR"
-          disabled={loading}
-          onClick={() => void load(1)}
-        >
-          <Refresh />
-        </IconButton>
-        <IconButton
-          component="a"
-          href={`https://${binding.host}/${binding.owner}/${binding.repository}/pull/${binding.number}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Open PR on GitHub"
-        >
-          <OpenInNew />
-        </IconButton>
       </Stack>
       {error && <Alert severity="warning">{error}</Alert>}
       {loading && (
-        <Box role="status" sx={{ p: 1 }}>
-          <CircularProgress size={20} />
-        </Box>
+        <Typography role="status" variant="caption" sx={{ px: 2, py: 1 }}>
+          {snapshot ? "Updating PR…" : "Loading changed files…"}
+        </Typography>
       )}
       {snapshot?.limited && (
         <Alert severity="info">
@@ -338,6 +302,40 @@ function PullRequest({ context, choice, binding, initial, active }: {
             )}
           </>
         )}
+      <Stack direction="row" alignItems="center" sx={remoteBottomSx}>
+        <Button
+          startIcon={<ArrowBack />}
+          aria-label={file ? "PR files" : "Choose another PR"}
+          onClick={() => file ? setSelected(undefined) : onChoose()}
+          sx={{ minHeight: 44 }}
+        >
+          {file ? "Files" : "PRs"}
+        </Button>
+        <Button
+          aria-label="Local worktree review"
+          onClick={onLocal}
+          sx={{ minHeight: 44 }}
+        >
+          Local
+        </Button>
+        <Box sx={{ flex: 1 }} />
+        <IconButton
+          aria-label="Refresh PR"
+          disabled={loading}
+          onClick={() => void load(1)}
+        >
+          <Refresh />
+        </IconButton>
+        <IconButton
+          component="a"
+          href={`https://${binding.host}/${binding.owner}/${binding.repository}/pull/${binding.number}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open PR on GitHub"
+        >
+          <OpenInNew />
+        </IconButton>
+      </Stack>
     </Stack>
   );
 }
@@ -356,14 +354,9 @@ export function RemoteReviewApp(
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
   const [editing, setEditing] = useState(!binding);
-  const [selection, setSelection] = useState("");
-  const [input, setInput] = useState(binding?.number ?? "");
-  const [loading, setLoading] = useState(false);
   const [seed, setSeed] = useState<{ key: string; review: RemoteReviewPage }>();
-  const request = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(false);
     setError(undefined);
     setInventory(undefined);
     void extensionRequest(context, null, controller.signal).then((response) => {
@@ -379,102 +372,74 @@ export function RemoteReviewApp(
         );
       }
     });
-    return () => {
-      controller.abort();
-      request.current?.abort();
-    };
+    return () => controller.abort();
   }, [context, refresh]);
   const available = choices(inventory);
   const boundChoice = binding
     ? available.find((choice) => matches(choice, binding))
     : undefined;
-  const selectedChoice = available.find((choice) => choice.key === selection) ??
-    boundChoice ?? available[0];
-  async function associate() {
-    if (!selectedChoice) return;
-    request.current?.abort();
-    const controller = new AbortController();
-    request.current = controller;
-    setError(undefined);
-    setLoading(true);
-    try {
-      const number = pullNumber(input, selectedChoice.remote);
-      const review = await read(
-        context,
-        selectedChoice,
-        number,
-        1,
-        controller.signal,
-      );
-      if (controller.signal.aborted) return;
-      const binding: RemoteReviewBinding = {
-        pluginId: selectedChoice.extension.identity.pluginId,
-        view: selectedChoice.view,
-        host: selectedChoice.remote.host,
-        owner: selectedChoice.remote.owner,
-        repository: selectedChoice.remote.repository,
-        repositoryId: review.repositoryId,
-        number,
-      };
-      setSeed({ key: JSON.stringify(binding), review });
-      onBind(binding);
-      setEditing(false);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setError(
-          error instanceof Error ? error.message : "Could not associate PR",
-        );
-      }
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
+  async function associate(
+    choice: Choice,
+    number: string,
+    signal: AbortSignal,
+  ) {
+    const review = await read(
+      context,
+      choice,
+      number,
+      1,
+      signal,
+      undefined,
+      undefined,
+      choice.extension.views.some((view) =>
+          view.id === choice.view && view.discovery
+        )
+        ? `${choice.remote.owner}/${choice.remote.repository}`
+        : undefined,
+    );
+    if (signal.aborted) return;
+    const binding: RemoteReviewBinding = {
+      pluginId: choice.extension.identity.pluginId,
+      view: choice.view,
+      host: choice.remote.host,
+      owner: choice.remote.owner,
+      repository: choice.remote.repository,
+      repositoryId: review.repositoryId,
+      number,
+    };
+    setSeed({ key: JSON.stringify(binding), review });
+    onBind(binding);
+    setEditing(false);
   }
+  const picking = editing || !binding;
   return (
     <Stack
       sx={{
         height: "100%",
+        minHeight: 0,
         minWidth: 0,
         bgcolor: "background.default",
         pt: "var(--cowboy-system-top-clearance)",
       }}
     >
-      <Stack
-        direction="row"
-        alignItems="center"
-        sx={{ minHeight: 52, px: 1, borderBottom: 1, borderColor: "divider" }}
+      <Box
+        sx={{
+          px: 2,
+          py: 1.5,
+          borderBottom: 1,
+          borderColor: "divider",
+          flexShrink: 0,
+        }}
       >
-        <IconButton aria-label="Local worktree review" onClick={onLocal}>
-          <ArrowBack />
-        </IconButton>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" noWrap>
-            {binding
-              ? `${binding.owner}/${binding.repository} #${binding.number}`
-              : "Remote PR"}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap>
-            {title}
-          </Typography>
-        </Box>
-        {binding && (
-          <Button
-            onClick={() => {
-              request.current?.abort();
-              setLoading(false);
-              setEditing((value) => !value);
-            }}
-          >
-            {editing ? "Cancel" : "Change PR"}
-          </Button>
-        )}
-        <IconButton
-          aria-label="Refresh extensions"
-          onClick={() => setRefresh((n) => n + 1)}
-        >
-          <Refresh />
-        </IconButton>
-        <WorkspaceExtensionsButton context={context} />
-      </Stack>
+        <Typography fontWeight={600}>
+          {picking
+            ? "Choose a pull request"
+            : `${binding.owner}/${binding.repository} #${binding.number}`}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" noWrap>
+          {title}
+        </Typography>
+      </Box>
       {error && (
         <Alert
           severity="warning"
@@ -485,67 +450,33 @@ export function RemoteReviewApp(
           {error}
         </Alert>
       )}
-      {!inventory && !error && <CircularProgress size={24} sx={{ m: 2 }} />}
+      {!inventory && !error && (
+        <Box sx={{ flex: 1 }}>
+          <PullSkeleton />
+        </Box>
+      )}
       {inventory && !available.length && (
         <Alert severity="info">
-          Install a compatible GitHub extension on this session’s Machine and
-          configure a repository remote. Then refresh Extensions.
+          Connect GitHub on this session’s Machine and configure a repository
+          remote to browse pull requests.
         </Alert>
       )}
-      {inventory && (editing || !binding)
+      {active && inventory && available.length > 0 && picking
         ? (
-          <Stack spacing={2} sx={{ p: 2, ...mobileNativeYScrollSx }}>
-            <Typography>
-              Associate this session with a remote pull request.
-            </Typography>
-            <TextField
-              select
-              label="Repository"
-              value={selectedChoice?.key ?? ""}
-              disabled={loading || !available.length}
-              onChange={(e) => {
-                setSelection(e.target.value);
-                setError(undefined);
-              }}
-            >
-              {available.map((choice) => (
-                <MenuItem key={choice.key} value={choice.key}>
-                  {choice.remote.owner}/{choice.remote.repository} ·{" "}
-                  {choice.remote.name} · {choice.extension.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              label="PR URL or number"
-              value={input}
-              disabled={loading}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !loading) void associate();
-              }}
-            />
-            <Button
-              variant="contained"
-              disableElevation
-              disabled={loading || !selectedChoice || !input.trim()}
-              onClick={() => void associate()}
-            >
-              {loading ? "Reading PR…" : "Associate and review"}
-            </Button>
-            {binding && (
-              <Button
-                color="error"
-                disabled={loading}
-                onClick={() => {
-                  onBind(null);
-                  setSeed(undefined);
-                  setEditing(true);
-                }}
-              >
-                Remove association
-              </Button>
-            )}
-          </Stack>
+          <RemotePullPicker
+            key={context}
+            context={context}
+            available={available}
+            bound={!!binding}
+            onSelect={associate}
+            onReload={() => setRefresh((n) => n + 1)}
+            onBack={() => binding ? setEditing(false) : onLocal()}
+            onRemove={() => {
+              onBind(null);
+              setSeed(undefined);
+              setEditing(true);
+            }}
+          />
         )
         : binding && boundChoice
         ? (
@@ -562,14 +493,41 @@ export function RemoteReviewApp(
               ? seed.review
               : undefined}
             active={active}
+            onLocal={onLocal}
+            onChoose={() => setEditing(true)}
           />
         )
-        : inventory && binding && (
+        : inventory && binding && !picking && (
           <Alert severity="warning">
-            The associated repository or extension is unavailable. Choose Change
-            PR or restore the Machine connection.
+            The associated repository or extension is unavailable. Restore the
+            Machine connection or choose another PR.
           </Alert>
         )}
+      {(!inventory || !available.length || (!picking && !boundChoice)) && (
+        <Stack direction="row" sx={{ ...remoteBottomSx, mt: "auto" }}>
+          <Button
+            startIcon={<ArrowBack />}
+            aria-label="Local worktree review"
+            onClick={onLocal}
+          >
+            Back
+          </Button>
+          {binding && (
+            <Button onClick={() => setEditing(true)}>Change PR</Button>
+          )}
+          <Box sx={{ flex: 1 }} />
+          <IconButton
+            aria-label="Refresh extensions"
+            onClick={() =>
+              setRefresh((n) =>
+                n + 1
+              )}
+          >
+            <Refresh />
+          </IconButton>
+          <WorkspaceExtensionsButton context={context} />
+        </Stack>
+      )}
     </Stack>
   );
 }

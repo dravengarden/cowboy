@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::workspace_extensions::{
-    Failure, Identity, Operation, Request, Response as ExtensionResponse, ReviewRead,
+    Failure, Identity, Operation, PullDiscovery, Request, Response as ExtensionResponse, ReviewRead,
 };
 
 #[derive(Deserialize)]
@@ -19,6 +19,12 @@ pub(super) struct ResourceQuery {
     review: Option<bool>,
     repository_id: Option<String>,
     revision: Option<String>,
+    repository: Option<String>,
+    discovery: Option<bool>,
+    relation: Option<String>,
+    state: Option<String>,
+    current_repository: Option<bool>,
+    account: Option<String>,
 }
 
 async fn read(
@@ -96,6 +102,10 @@ pub(super) async fn resources(
             || query.filter.as_ref().is_some_and(|v| v.len() > 64)
             || query.repository_id.as_ref().is_some_and(|v| v.len() > 24)
             || query.revision.as_ref().is_some_and(|v| v.len() > 256)
+            || query.repository.as_ref().is_some_and(|v| v.len() > 201)
+            || query.account.as_ref().is_some_and(|v| v.len() > 100)
+            || query.relation.as_ref().is_some_and(|v| v.len() > 32)
+            || query.state.as_ref().is_some_and(|v| v.len() > 16)
         {
             return response(ExtensionResponse::Unavailable {
                 code: Failure::InvalidRequest,
@@ -122,7 +132,16 @@ pub(super) async fn resources(
                         .then_some(Box::new(ReviewRead {
                             repository_id: query.repository_id,
                             revision: query.revision,
+                            repository: query.repository,
                         })),
+                    discovery: query.discovery.unwrap_or(false).then_some(Box::new(
+                        PullDiscovery {
+                            relation: query.relation.unwrap_or_else(|| "author".into()),
+                            state: query.state.unwrap_or_else(|| "open".into()),
+                            current_repository: query.current_repository.unwrap_or(false),
+                            account: query.account,
+                        },
+                    )),
                 },
             )
             .await,
