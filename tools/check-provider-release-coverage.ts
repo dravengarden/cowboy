@@ -14,6 +14,7 @@ interface PluginRelease {
   release_schema: number;
   plugin_id: string;
   plugin_version: string;
+  plugin_kind?: string;
   package_digest: string;
   artifact_digest: string;
   artifact_url: string;
@@ -114,9 +115,15 @@ async function validatePublishedRelease(
   release: PluginRelease,
 ): Promise<void> {
   assert(
-    release.release_schema === 1 || release.release_schema === 2,
+    [1, 2, 4].includes(release.release_schema),
     "unsupported release schema",
   );
+  if (release.release_schema === 4) {
+    assert(
+      release.plugin_kind === "agent_provider",
+      "release schema 4 requires an Agent Provider",
+    );
+  }
   assert(release.signature.trim().length > 0, "release is unsigned");
   const artifactDigest = digestValue(release.artifact_digest);
   digestValue(release.package_digest);
@@ -130,13 +137,15 @@ async function validatePublishedRelease(
       release.host_bundle_digest !== undefined,
       "release schema 2 has no host bundle digest",
     );
+  }
+  if (release.host_bundle_digest !== undefined) {
+    assert(
+      release.release_schema !== 1,
+      "release schema 1 cannot bind a host bundle",
+    );
     assert(await exists(hostBundlePath), "catalog host bundle is missing");
     await validateFileDigest(hostBundlePath, release.host_bundle_digest);
   } else {
-    assert(
-      release.host_bundle_digest === undefined,
-      "release schema 1 cannot bind a host bundle",
-    );
     assert(!await exists(hostBundlePath), "catalog host bundle is unbound");
   }
   await validateArtifact(

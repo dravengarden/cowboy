@@ -105,6 +105,50 @@ Deno.test("Provider release coverage requires the exact signed published version
     );
     await Deno.writeTextFile(hostBundlePath, "host");
 
+    const nativeRelease = {
+      ...release,
+      release_schema: 4,
+      plugin_kind: "agent_provider",
+    };
+    await Deno.writeTextFile(releasePath, JSON.stringify(nativeRelease));
+    const [native] = await checkProviderReleaseCoverage(plugins, catalog);
+    assertEquals(native?.covered, true);
+
+    await Deno.writeTextFile(hostBundlePath, "tampered native host");
+    const [nativeHost] = await checkProviderReleaseCoverage(plugins, catalog);
+    assertEquals(nativeHost?.covered, false);
+    assertEquals(
+      nativeHost?.detail,
+      `published artifact digest mismatch: ${hostBundlePath}`,
+    );
+    await Deno.writeTextFile(hostBundlePath, "host");
+
+    for (
+      const [invalid, expected] of [
+        [{ ...nativeRelease, release_schema: 5 }, "unsupported release schema"],
+        [
+          { ...nativeRelease, plugin_kind: "workspace_extension" },
+          "release schema 4 requires an Agent Provider",
+        ],
+      ] as const
+    ) {
+      await Deno.writeTextFile(releasePath, JSON.stringify(invalid));
+      const [rejected] = await checkProviderReleaseCoverage(plugins, catalog);
+      assertEquals(rejected?.covered, false);
+      assertEquals(rejected?.detail, expected);
+    }
+
+    await Deno.writeTextFile(
+      releasePath,
+      JSON.stringify({ ...nativeRelease, host_bundle_digest: undefined }),
+    );
+    const [unboundHost] = await checkProviderReleaseCoverage(plugins, catalog);
+    assertEquals(unboundHost?.covered, false);
+    assertEquals(unboundHost?.detail, "catalog host bundle is unbound");
+    await Deno.remove(hostBundlePath);
+    const [withoutHost] = await checkProviderReleaseCoverage(plugins, catalog);
+    assertEquals(withoutHost?.covered, true);
+
     await Deno.remove(releasePath);
     assertEquals(await checkProviderReleaseCoverage(plugins, catalog), [{
       plugin_id: "example",
