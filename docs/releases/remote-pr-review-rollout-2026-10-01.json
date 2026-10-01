@@ -1,0 +1,291 @@
+{
+  "schema": 1,
+  "status": "deployed",
+  "evidence_directory": "/home/draven/tmp/cowboy-remote-pr-rollout-20261001",
+  "components": {
+    "controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1790828724546704189-417697f69680",
+      "revision": "417697f69680d13353ef56793cccaf8373f483c8",
+      "published": true,
+      "release": "/nix/store/y9bnxqg8pc45n7mb53lfw5iyz3mq63an-cowboy-controller-release",
+      "previousRelease": "/nix/store/90qr5ijalm9v6x0spwnjwfqx271jndik-cowboy-controller-release",
+      "activeRelease": "/nix/store/y9bnxqg8pc45n7mb53lfw5iyz3mq63an-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T04:25:24.546704189Z",
+      "recordedAt": "2026-10-01T04:25:37.0329254Z",
+      "recovered": false
+    },
+    "machine": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1790829607523752090-9747cde340a9",
+      "revision": "9747cde340a9cc6af6782b648bb3ea83b490b26b",
+      "workerGeneration": "worker-401a0858f41aa4ab4470",
+      "published": true,
+      "release": "/nix/store/i30i3hnr240nadk5lcga637w70ih08g9-cowboy-machine-release",
+      "previousRelease": "/nix/store/jik0dhyxv15ch6l4frbyr622wfbdny2q-cowboy-machine-release",
+      "activeRelease": "/nix/store/i30i3hnr240nadk5lcga637w70ih08g9-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-01T04:40:07.52375209Z",
+      "recordedAt": "2026-10-01T04:40:14.639635325Z",
+      "recovered": false
+    },
+    "web": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1790829809189110697-c5d608f90db4",
+      "revision": "c5d608f90db4bf8c0ec826a17c6788a3f1265f4e",
+      "published": true,
+      "release": "/nix/store/ml95wygs06q9ak4ahqlycmqgsmx8a1cx-cowboy-web-release",
+      "previousRelease": "/nix/store/59808mhlkrmnkcr9997y77q8z23j7rdz-cowboy-web-release",
+      "activeRelease": "/nix/store/ml95wygs06q9ak4ahqlycmqgsmx8a1cx-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-01T04:43:29.189110697Z",
+      "recordedAt": "2026-10-01T04:43:29.232531655Z",
+      "recovered": false
+    }
+  },
+  "cold_system": {
+    "activeClosure": "/nix/store/6ymyxd7dyiycg7zdz71l43h5p0psq2ah-nixos-system-hawk-26.05.20260731.5b4f72e",
+    "changedUnits": {
+      "system": [],
+      "user": []
+    },
+    "closure": "/nix/store/6ymyxd7dyiycg7zdz71l43h5p0psq2ah-nixos-system-hawk-26.05.20260731.5b4f72e",
+    "explicitRestarts": {
+      "completedSystem": [],
+      "completedUser": [],
+      "requestedSystem": [],
+      "requestedUser": []
+    },
+    "healthChecks": {
+      "failed": [],
+      "passed": [
+        "claude-deepseek",
+        "codex-deepseek",
+        "cowboy"
+      ],
+      "skipped": [
+        "blackpearl-hawk-research",
+        "carrack-hawk-batch",
+        "carrack-hawk-catalog-sync",
+        "carrack-hawk-materializer",
+        "lan0-networkd",
+        "victoriatraces",
+        "vmalert"
+      ]
+    },
+    "machine": "hawk",
+    "newFailedUnits": [],
+    "outcome": "succeeded",
+    "persistentOverrides": {
+      "rejected": []
+    },
+    "previousClosure": "/nix/store/y27ad3w2mh2c32bqh2zinappc15iq9hm-nixos-system-hawk-26.05.20260731.5b4f72e",
+    "published": false,
+    "recordedAt": "2026-10-01T12:34:40+08:00",
+    "retainedProcessPids": {
+      "after": {
+        "system": {},
+        "user": {}
+      },
+      "before": {
+        "system": {},
+        "user": {}
+      },
+      "violations": []
+    },
+    "retainedProcesses": {
+      "system": [],
+      "user": []
+    },
+    "revision": "de7faa3b55e12770d23aa7ac23c5a1cdb8aec91a",
+    "runtimeOverrides": {
+      "cleared": [],
+      "planned": [],
+      "restored": []
+    },
+    "schema": 3,
+    "transaction": "1790829273075308097-de7faa3b55e1"
+  },
+  "reader_matrix": {
+    "schema": 1,
+    "controller": {
+      "active": "/nix/store/y9bnxqg8pc45n7mb53lfw5iyz3mq63an-cowboy-controller-release",
+      "rollback": "/nix/store/y9bnxqg8pc45n7mb53lfw5iyz3mq63an-cowboy-controller-release",
+      "cold": "/nix/store/wnr91xp58iwrjyxsmgqw8mfz1q661f4v-cowboy-controller-release"
+    },
+    "machine": {
+      "active": "/nix/store/i30i3hnr240nadk5lcga637w70ih08g9-cowboy-machine-release",
+      "rollback": "/nix/store/i30i3hnr240nadk5lcga637w70ih08g9-cowboy-machine-release",
+      "cold": "/nix/store/3hfxmw8ysbsqlhxmc0417z88jqzp3djr-cowboy-machine-bootstrap-release"
+    }
+  },
+  "reader_gates": {
+    "post-plugin-install-reader-conformance.json": {
+      "sha256": "be9bff6c8681826bb4d3d87d5287676a4704b037783af4ef3ab5fe5e4cb6185e",
+      "schema": "dravengarden.cowboy.install-reader-conformance/v2",
+      "passed": true
+    },
+    "post-plugin-machine-install-reader-conformance.json": {
+      "sha256": "96223735ac93392b13fc05f517d8caca4a6d1bb3cb1486858f81f5e00a32f069",
+      "schema": "dravengarden.cowboy.machine-install-reader-conformance/v1",
+      "passed": true
+    },
+    "post-product-sync-controller-conformance.json": {
+      "sha256": "c36238c533256c669b2a6b33d2cb826f70768d243128ea5900b909c60c14bffd",
+      "schema": "dravengarden.cowboy.product-sync-controller-conformance/v1",
+      "passed": true
+    },
+    "post-telemetry-background-startup-conformance.json": {
+      "sha256": "161311111ec3b3d28f022ee08c6c783f69c269735cbd32e220a0d5162c0970ec",
+      "schema": 1,
+      "passed": true
+    },
+    "post-telemetry-reader-conformance.json": {
+      "sha256": "a192133614339170582abaf7793f2163cfe6a32efc39c5d4c179f4d2265cfd61",
+      "schema": 2,
+      "passed": true
+    },
+    "post-telemetry-writer-conformance.json": {
+      "sha256": "06f8f902d00edd141cc8a327db7626208be499424d455f0ef9d18d09fa0befa4",
+      "schema": 1,
+      "passed": true
+    }
+  },
+  "github_catalog": {
+    "version": "0.2.0",
+    "release_state": "ready",
+    "artifact_digest": "sha256:8eceeaa8091f7708dc03cfa6493f5e0b950f297b03bf76d10ac8061c7339998f",
+    "catalogs": [
+      "/var/lib/cowboy/plugins/catalog",
+      "/var/lib/cowboy/plugin-catalog"
+    ],
+    "actual_reader_checks": 16
+  },
+  "github_installation": {
+    "plugin_id": "github",
+    "plugin_version": "0.2.0",
+    "plugin_kind": "workspace_extension",
+    "generation_digest": "sha256:8eceeaa8091f7708dc03cfa6493f5e0b950f297b03bf76d10ac8061c7339998f",
+    "installation_revision": "installation-6b778f740853aede5feba3b98f026e44bff6dcd4a5535e3506ae9e5b2382b308",
+    "contract_fingerprint": "sha256:792b19caef731855f72a3514f24cedf5c19645592e0434676897aa42e02ae5c1",
+    "state": "active",
+    "active_session_leases": 0,
+    "replica_state": "absent",
+    "materialization_state": "not_installed"
+  },
+  "github_operation": {
+    "evidence_schema": 2,
+    "machine_receipt": {
+      "state": "applied",
+      "revision": "installation-6b778f740853aede5feba3b98f026e44bff6dcd4a5535e3506ae9e5b2382b308"
+    },
+    "operation_id": "hawk-github-0-2-0-converge",
+    "phase": "completed",
+    "problem": null,
+    "attention_from": null,
+    "plugin_kind": "workspace_extension",
+    "plugin_version": "0.2.0",
+    "generation_digest": "sha256:8eceeaa8091f7708dc03cfa6493f5e0b950f297b03bf76d10ac8061c7339998f",
+    "created_at_ms": 1790829791304,
+    "updated_at_ms": 1790829805380
+  },
+  "github_https": {
+    "accepted": true,
+    "origin_routing": "public HTTPS authority with explicit loopback resolution",
+    "artifacts": [
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/b3eaaa6024c81a14b0c4eefaef4806fbc6239794776cced4b1eff354b996df56/github.cowboy-plugin",
+        "digest": "sha256:b3eaaa6024c81a14b0c4eefaef4806fbc6239794776cced4b1eff354b996df56",
+        "bytes": 2599
+      }
+    ]
+  },
+  "http": {
+    "/healthz": {
+      "status": 200,
+      "cache_control": null,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "body": "ok"
+    },
+    "/version": {
+      "status": 200,
+      "cache_control": null,
+      "sha256": "8f2449ffd562b997d3f08e187eb1f13bc50e888b1f7ecebb8f0d8c15de0395cd",
+      "body": "{\"version\":\"93b8791a4329118da6334b576214b46b\"}"
+    },
+    "/": {
+      "status": 200,
+      "cache_control": "no-store",
+      "sha256": "93b8791a4329118da6334b576214b46bc009d5ba514d349a31319c61f508243a"
+    },
+    "/sw.js": {
+      "status": 200,
+      "cache_control": "no-store",
+      "sha256": "c19512e489b1cb183fae29184593ae0c29442367b620762ffe98010908d251b7",
+      "cache_version": "cowboy-v1778"
+    },
+    "/assets/main-CI05GCkc.js": {
+      "status": 200,
+      "sha256": "0e893fe316f238433e6e85258b95f975ab45f4116a87ac81a2c7c499c97dbbdb",
+      "cache_control": "public, max-age=31536000, immutable"
+    }
+  },
+  "browser": {
+    "ok": true,
+    "suite": "workspace-extensions",
+    "browser": "Mozilla Firefox 151.0.1",
+    "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+    "fixture_sha256": "1f3b4d3457e578d6337110be9f85cb3a87166bc33ccab11f629765c2d2292af2",
+    "isolation": "fresh profile / private loopback namespace / no credentials",
+    "tests": [
+      "generic exact-release resource navigation",
+      "readable detail and explicit source link",
+      "late private response discarded across workspace change",
+      "previous page remains reachable while another page is pending and rejects its late response",
+      "a failed page does not trap navigation away from previously readable resources",
+      "extension installation uses the shared complete Plugin compatibility contract",
+      "catalog recovery clears its error and selects the newest compatible release",
+      "manual version choices remain scoped to each Machine and keep incompatible choices visibly blocked",
+      "late Machine inventory supplies a usable initial target",
+      "duplicate clicks share one pending action and catalog refresh preserves unresolved operation feedback",
+      "extensions expose the shared read-only operation history without replaying effects",
+      "installed and explicitly selected digests survive catalog changes without silent upgrades or fallback",
+      "unknown inventory, offline Machines and empty search retain explicit actionable states",
+      "PR association retains repository identity without code bodies",
+      "actual CodeMirror renders the remote patch without workspace or native reads",
+      "PR page continuation retains repository and revision",
+      "concurrent remote update refuses continuation and preserves readable files",
+      "late private PR replies cannot cross session changes",
+      "local worktree remains reachable from remote review"
+    ],
+    "physical_device": "not_checked"
+  },
+  "workers": {
+    "unchanged_through_controller_cold_and_machine_activation": 18,
+    "final_unchanged": 17,
+    "subsequent_resumed_worker": "sess-1790563075661",
+    "resumed_at": "2026-10-01T04:44:22Z",
+    "cause": "not established by this rollout"
+  },
+  "not_checked": [
+    "physical iPhone performance",
+    "production PR patch: selected repository has no PRs",
+    "native iOS release"
+  ]
+}
