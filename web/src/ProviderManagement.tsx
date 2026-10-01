@@ -75,6 +75,7 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 import { ConfirmSheet } from "./Sheet";
 import { createPluginInstallRequest } from "./pluginInstallation.ts";
 import { PluginLifecycleHistory } from "./PluginLifecycleHistory.tsx";
+import { ProviderAuthenticationProgress } from "./ProviderAuthenticationProgress.tsx";
 
 interface ProviderMachine {
   id: string;
@@ -1376,8 +1377,7 @@ function ProviderManagement(
               {authentication.busy || flow.requestId
                 ? (
                   <Typography variant="caption" color="text.secondary">
-                    Closing this dialog only ends observation; a submitted
-                    sign-in request may continue.
+                    Closing this window won’t cancel sign-in.
                   </Typography>
                 )
                 : null}
@@ -1480,9 +1480,12 @@ function ProviderManagement(
                 )
                 : flow.requestId && !loginSucceeded && !loginPromoting
                 ? (
-                  <Typography variant="body2">
-                    {flowCopy?.waiting}
-                  </Typography>
+                  <ProviderAuthenticationProgress
+                    key={flow.requestId}
+                    failed={Boolean(authenticationError)}
+                    label={flowCopy?.waiting ?? "Preparing sign-in…"}
+                    onCheck={() => owners?.authentication.checkStatus()}
+                  />
                 )
                 : null}
               {loginSucceeded
@@ -1708,13 +1711,13 @@ function authenticationCopy(
         empty: "signed out",
         ready: "signed in",
         serviceDetail:
-          "This sign-in belongs to Cowboy Service. A temporary executor performs the Provider flow; the resulting encrypted generation synchronizes to every enrolled Machine.",
+          "Sign in once to use this account on your Cowboy machines. Your credentials are encrypted before they sync.",
         chooseMethod: "Choose a Provider-declared sign-in method.",
         externalAction: "Open sign-in page",
         submit: "Continue",
         submitFailed: "Could not submit the authentication value",
         clearFailed: "Provider sign-out failed",
-        waiting: "Waiting for the Provider…",
+        waiting: "Getting your sign-in link…",
         promotingTitle: "Securing sign-in…",
         promotingDetail:
           "The Provider accepted your sign-in. Cowboy Service is securing the credential now.",

@@ -235,6 +235,7 @@ export function createProviderAuthenticationOwner(
     let cancelTimer: (() => void) | undefined;
     let cancelDeadline: (() => void) | undefined;
     let read: AbortController | undefined;
+    let observationError = "";
     const seal = () => {
       stopped = true;
       if (resumeRead.get(lease) === poll) resumeRead.delete(lease);
@@ -262,6 +263,7 @@ export function createProviderAuthenticationOwner(
         try {
           const response = await ports.fetch(requestUrl(flow), {
             signal: read.signal,
+            cache: "no-store",
           });
           if (!live()) return;
           if (response.status === 404 || response.status === 410) {
@@ -291,7 +293,9 @@ export function createProviderAuthenticationOwner(
             );
             return;
           }
-          if (!response.ok) return;
+          if (!response.ok) {
+            throw new Error(`status:${response.status}`);
+          }
           const body: unknown = await response.json();
           if (!live()) return;
           let events: ProviderLoginEvent[];
@@ -309,6 +313,12 @@ export function createProviderAuthenticationOwner(
             return;
           }
           const complete = providerAuthenticationCompleted(events);
+          if (
+            observationError && dialog.snapshot().error === observationError
+          ) {
+            lease.error("");
+          }
+          observationError = "";
           lease.update((value) => ({
             ...value,
             flow: { ...value.flow, events },
@@ -320,8 +330,16 @@ export function createProviderAuthenticationOwner(
             lease.error("");
             refresh(lease);
           }
-        } catch {
-          /* A single later read can recover a transient failure. */
+        } catch (cause) {
+          if (live()) {
+            const status =
+              cause instanceof Error && /^status:\d{3}$/.test(cause.message)
+                ? ` (HTTP ${cause.message.slice(7)})`
+                : "";
+            observationError =
+              `Could not read sign-in status${status}. Retrying automatically; you can also check again. Your sign-in has not been cancelled.`;
+            lease.error(observationError);
+          }
         } finally {
           cancelDeadline?.();
           read = undefined;
@@ -398,6 +416,15 @@ export function createProviderAuthenticationOwner(
       if (lease?.active) stopPolling();
     },
     dismiss,
+    checkStatus(): void {
+      const lease = dialog.current();
+      if (
+        lease?.active && lease.value().flow.requestId && !dialog.snapshot().busy
+      ) {
+        lease.error("");
+        startPolling(lease);
+      }
+    },
     back: () => cancel(true),
     cancel: () => cancel(false),
     error: (detail: string) => dialog.current()?.error(detail),

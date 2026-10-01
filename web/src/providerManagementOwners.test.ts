@@ -582,6 +582,70 @@ Deno.test("expired Cowboy authentication does not silently poll Provider sign-in
   }
 });
 
+Deno.test("sign-in polls bypass caches and recover visibly from a failed observation", async () => {
+  for (const failure of ["network", "http", "html"]) {
+    const f = authFixture();
+    try {
+      const poll = await f.start();
+      assertEquals(f.calls[poll]!.init.cache, "no-store");
+      if (failure === "network") {
+        f.calls[poll]!.reply.reject(new Error("offline"));
+      } else if (failure === "http") f.reply(poll, {}, 502);
+      else {f.calls[poll]!.reply.resolve(
+          new Response("<html>upstream error</html>"),
+        );}
+      await settle();
+      assertStringIncludes(
+        f.owner.snapshot().error,
+        "Could not read sign-in status",
+      );
+      assertEquals(f.owner.snapshot().value?.flow.requestId, "request-a");
+      f.time.fire(750);
+      const next = f.calls.length - 1;
+      assertEquals(f.calls[next]!.init.cache, "no-store");
+      f.reply(next, events([challenge()]));
+      await settle();
+      assertEquals(f.owner.snapshot().error, "");
+      assertEquals(
+        f.owner.snapshot().value?.flow.events[0]?.event,
+        "login_challenge",
+      );
+      assertEquals(
+        f.calls.filter((call) => call.init.method === "POST").length,
+        1,
+      );
+    } finally {
+      await f.cleanup();
+    }
+  }
+});
+
+Deno.test("checking sign-in status replaces only the read and never repeats the login", async () => {
+  const f = authFixture();
+  try {
+    const poll = await f.start();
+    f.owner.checkStatus();
+    assert(f.calls[poll]!.init.signal?.aborted);
+    assertEquals(f.calls.length, 2); // Await the old read, even if abort is ignored.
+    f.calls[poll]!.reply.reject(new Error("old read settled"));
+    await settle();
+    assertEquals(f.calls.length, 3);
+    f.reply(2, events([challenge()]));
+    await settle();
+    assertEquals(
+      f.owner.snapshot().value?.flow.events[0]?.event,
+      "login_challenge",
+    );
+    assertEquals(
+      f.calls.filter((call) => call.init.method === "POST").length,
+      1,
+    );
+    assertEquals(f.closes(), 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 Deno.test("uninstall preview projection discards unowned fields and freezes nested consent", async () => {
   const f = uninstallFixture();
   try {
