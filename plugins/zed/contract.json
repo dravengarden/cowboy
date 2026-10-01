@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "zed",
-  "version": "1.20.3",
+  "version": "1.20.4",
   "transport": "unix_socket_json_v1",
   "operations": [
     "worktree_ensure",
@@ -14,9 +14,17 @@
     "references",
     "document_symbols"
   ],
-  "states": ["restricted", "warming", "ready", "failed"],
+  "states": [
+    "restricted",
+    "warming",
+    "ready",
+    "failed"
+  ],
   "supported_platforms": [
-    { "os": "linux", "architecture": "x86_64" }
+    {
+      "os": "linux",
+      "architecture": "x86_64"
+    }
   ],
   "runtime": {
     "components": [
@@ -24,7 +32,7 @@
         "kind": "code_intelligence_adapter",
         "slot": "adapter",
         "dependency": "cowboy-zed-adapter",
-        "version": "1.20.3",
+        "version": "1.20.4",
         "command": "cowboy-zed-adapter"
       },
       {
@@ -38,23 +46,56 @@
     "launch": {
       "command": "cowboy-zed-adapter",
       "arguments": [
-        { "kind": "literal", "value": "serve" },
-        { "kind": "literal", "value": "--socket" },
-        { "kind": "socket" },
-        { "kind": "literal", "value": "--zed-server" },
-        { "kind": "component_command", "command": "cowboy-zed-server" },
-        { "kind": "literal", "value": "--state-dir" },
-        { "kind": "state_directory" }
+        {
+          "kind": "literal",
+          "value": "serve"
+        },
+        {
+          "kind": "literal",
+          "value": "--socket"
+        },
+        {
+          "kind": "socket"
+        },
+        {
+          "kind": "literal",
+          "value": "--zed-server"
+        },
+        {
+          "kind": "component_command",
+          "command": "cowboy-zed-server"
+        },
+        {
+          "kind": "literal",
+          "value": "--state-dir"
+        },
+        {
+          "kind": "state_directory"
+        }
       ]
     },
     "readiness": {
       "command": "cowboy-zed-adapter",
       "arguments": [
-        { "kind": "literal", "value": "probe" },
-        { "kind": "literal", "value": "--socket" },
-        { "kind": "socket" },
-        { "kind": "literal", "value": "--wait-ms" },
-        { "kind": "literal", "value": "30000" }
+        {
+          "kind": "literal",
+          "value": "probe"
+        },
+        {
+          "kind": "literal",
+          "value": "--socket"
+        },
+        {
+          "kind": "socket"
+        },
+        {
+          "kind": "literal",
+          "value": "--wait-ms"
+        },
+        {
+          "kind": "literal",
+          "value": "30000"
+        }
       ]
     },
     "readiness_timeout_ms": 35000

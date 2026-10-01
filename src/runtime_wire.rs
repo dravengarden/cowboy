@@ -14,7 +14,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 /// Oldest runtime protocol this build accepts during a mixed-generation roll.
 pub const MIN_PROTOCOL_VERSION: u16 = 1;
 /// Upper bound for a single IPC frame. Large binary artifacts are referenced by
@@ -236,6 +236,14 @@ pub struct StartSession {
     /// converging; a later real `EnsureSession` may start one if it never returns.
     #[serde(default)]
     pub adopt_only: bool,
+    /// Presence, including unknown or malformed records, always disables a
+    /// legacy local launch. Bound workers require runtime protocol two.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::execution_environment::deserialize_optional_binding"
+    )]
+    pub execution_binding: Option<crate::execution_environment::ExecutionBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -421,6 +429,12 @@ pub enum RuntimeEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Frame {
+    ExecutionRequest {
+        request: Box<crate::execution_protocol::RuntimeRequest>,
+    },
+    ExecutionReply {
+        reply: Box<crate::execution_protocol::RuntimeReply>,
+    },
     Hello {
         role: PeerRole,
         min_protocol: u16,

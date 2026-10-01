@@ -26,6 +26,7 @@ use crate::machine_protocol::{
 };
 
 mod auth_watch;
+pub(crate) mod execution;
 mod installation;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
@@ -49,6 +50,7 @@ struct LoginIo {
 }
 
 struct ControllerConfig {
+    execution: Arc<execution::Manager>,
     controller_url: String,
     service_id: Option<String>,
     plugin_operation_admission: bool,
@@ -170,6 +172,10 @@ enum CliSpawnMode {
 #[derive(Debug, Parser)]
 #[command(version)]
 pub struct Args {
+    /// Owned immutable execution component configuration. Omission disables new
+    /// environments; already-created keepers retain their exact local contract.
+    #[arg(long, requires = "service_id")]
+    execution_config: Option<PathBuf>,
     // Keep this stable path for detached workers that survive Machine upgrades.
     #[arg(long, default_value = "/run/user/1000/cowboy/cowboy-machine.sock")]
     socket: PathBuf,
@@ -473,7 +479,31 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let provider_usage = crate::provider_usage_spool::ProviderUsageSpool::open(
         &args.state_dir.join("provider-usage.sqlite3"),
     )?;
+    let execution_config_path = args.execution_config.clone().or_else(|| {
+        args.service_id
+            .as_ref()
+            .and_then(|_| std::env::var_os("COWBOY_DEFAULT_EXECUTION_CONFIG").map(PathBuf::from))
+    });
+    let execution_config = execution_config_path
+        .as_ref()
+        .map(|path| -> anyhow::Result<execution::Configuration> {
+            let bytes = std::fs::read(path)?;
+            anyhow::ensure!(
+                bytes.len() <= 16 * 1024,
+                "execution configuration exceeds limit"
+            );
+            serde_json::from_slice(&bytes).context("invalid execution component configuration")
+        })
+        .transpose()?;
+    let execution = Arc::new(execution::Manager::new(
+        args.service_id.clone(),
+        machine_id.clone(),
+        &args.state_dir,
+        execution_config,
+        matches!(args.spawn_mode, CliSpawnMode::SystemdUser),
+    )?);
     let controller = controller_loop(ControllerConfig {
+        execution,
         controller_url,
         service_id: args.service_id,
         plugin_operation_admission: args.plugin_operation_admission,
@@ -1115,6 +1145,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         &frame,
                                         &workspace_snapshot.workspaces,
                                         &config.worktree_root,
+                                        Some(&config.execution),
                                     ) {
                                         queue_controller_frame(
                                             &controller_write_tx,
@@ -1134,6 +1165,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         continue;
                                     }
                                     handle_machine_command(command, MachineCommandContext {
+                                        execution_manager: Arc::clone(&config.execution),
                                         service_id: config.service_id.clone(),
                                         machine_id: config.machine_id.clone(),
                                         plugin_operation_admission: config.plugin_operation_admission,
@@ -1811,6 +1843,7 @@ fn probe_declared_auth(
 }
 
 struct MachineCommandContext {
+    execution_manager: Arc<execution::Manager>,
     service_id: Option<String>,
     machine_id: String,
     plugin_operation_admission: bool,
@@ -1840,6 +1873,7 @@ fn handle_machine_command(
     execution: &PluginExecutionScope,
 ) {
     let MachineCommandContext {
+        execution_manager,
         service_id,
         machine_id,
         plugin_operation_admission,
@@ -1855,6 +1889,19 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::Execution {
+            request_id,
+            request,
+        } => {
+            let workspaces = workspaces.snapshot().workspaces;
+            tokio::spawn(async move {
+                let response = execution_manager.request(*request, &workspaces).await;
+                let _ = events.send(MachineEvent::ExecutionResponse {
+                    request_id,
+                    response: Box::new(response),
+                });
+            });
+        }
         MachineCommand::CodeBufferNavigation {
             request_id,
             request,
@@ -3277,6 +3324,7 @@ fn reject_untrusted_workspace(
     frame: &crate::runtime_wire::Frame,
     workspaces: &[MachineWorkspace],
     worktree_root: &Path,
+    execution: Option<&execution::Manager>,
 ) -> Option<crate::runtime_wire::Frame> {
     let crate::runtime_wire::Frame::CoreCommand {
         command: crate::runtime_wire::CoreCommand::EnsureSession { session },
@@ -3284,9 +3332,13 @@ fn reject_untrusted_workspace(
     else {
         return None;
     };
-    let allowed = std::fs::canonicalize(&session.cwd)
-        .ok()
-        .is_some_and(|target| workspace_path_allowed(&target, workspaces, worktree_root));
+    let allowed = if session.execution_binding.is_some() {
+        execution.is_some_and(|manager| manager.owns_runtime_entry(session))
+    } else {
+        std::fs::canonicalize(&session.cwd)
+            .ok()
+            .is_some_and(|target| workspace_path_allowed(&target, workspaces, worktree_root))
+    };
     (!allowed).then(|| crate::runtime_wire::Frame::CommandAck {
         session_id: session.session_id.clone(),
         command_id: format!("ensure:{}", session.session_id),
@@ -4002,6 +4054,7 @@ mod tests {
                     generation: "test".to_owned(),
                     fallback_for: None,
                     adopt_only: false,
+                    execution_binding: None,
                 },
             },
         };
@@ -4010,6 +4063,7 @@ mod tests {
                 &ensure(nested.display().to_string()),
                 &workspaces,
                 &managed,
+                None,
             )
             .is_none()
         );
@@ -4018,6 +4072,7 @@ mod tests {
                 &ensure(managed_session.display().to_string()),
                 &[],
                 &managed,
+                None,
             )
             .is_none()
         );
@@ -4026,6 +4081,7 @@ mod tests {
                 &ensure("/definitely/not/a/workspace".to_owned()),
                 &workspaces,
                 &managed,
+                None,
             )
             .is_some()
         );

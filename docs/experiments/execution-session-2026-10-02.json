@@ -1,0 +1,55 @@
+{
+  "schema": "cowboy.execution-session-conformance/v1",
+  "accepted": true,
+  "checks": [
+    "real_product_setup_login_and_two_signed_machine_handshakes",
+    "signed_fixture_installed_through_public_operator_lifecycle",
+    "public_creation_persists_exact_binding_and_isolated_target_worktree",
+    "worker_tools_cross_both_enrolled_machine_connections",
+    "runtime_and_stable_source_remain_unchanged",
+    "controller_restart_retains_binding_and_resumes_original_environment_without_replay",
+    "target_machine_restart_reattaches_original_keeper_without_replay",
+    "public_deletion_waits_for_target_stop_and_preserves_work"
+  ],
+  "inputs": {
+    "controller": {
+      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy",
+      "sha256": "22fbe0b843f9479acb9f6998a2af5ea7d04806336af76ec7d0469f091698714b"
+    },
+    "machine": {
+      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy-machine",
+      "sha256": "192cb018b47b75924325be964e20864f7102cd25a703678ac93d23e9c82e8746"
+    },
+    "worker": {
+      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy-acp-worker",
+      "sha256": "7cd0ab0ce6c41aeb98ec2ddf239f88f659a2255fd2312d6f13cb16e67cdab3a6"
+    },
+    "keeper": {
+      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy-execution-host",
+      "sha256": "df19aff7aec8fb5fb6678242c17539ebc2e8c072ce57151fc9b834e4ccbfbc1c"
+    },
+    "pack": {
+      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/debug/cowboy-plugin-pack",
+      "sha256": "fbc82af49ed9d47a2a823ba64ba9194646682c16fe8931cddd0408980040dc5d"
+    },
+    "native_cli": {
+      "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+      "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+    }
+  },
+  "fixture_release": {
+    "release_schema": 4,
+    "plugin_id": "execution-fixture",
+    "plugin_version": "1.0.0",
+    "artifact_digest": "sha256:c08562e2eaa7d64746694416c09f75e1626bafcdb178a5e7a9df45aae0a1ae2e"
+  },
+  "harness_sha256": "32ffd555fdb2e501f04bd67a483f799b8f117d6b0801495af833adc8c02f3190",
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "production_activation": false,
+  "not_checked": [
+    "native_codex_turns_covered_by_separate_gate",
+    "cross_host_latency",
+    "production_subscription_inference"
+  ]
+}

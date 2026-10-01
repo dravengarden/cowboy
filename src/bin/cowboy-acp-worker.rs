@@ -30,6 +30,8 @@ struct Args {
     worker_epoch: Option<String>,
     #[arg(long, env = "COWBOY_FALLBACK_FOR")]
     fallback_for: Option<String>,
+    #[arg(long)]
+    execution_binding: Option<String>,
 }
 
 #[tokio::main]
@@ -56,6 +58,10 @@ async fn main() -> anyhow::Result<()> {
         generation: args.generation,
         worker_epoch: args.worker_epoch,
         fallback_for: args.fallback_for,
+        execution_binding: args
+            .execution_binding
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?,
     })
     .await
 }

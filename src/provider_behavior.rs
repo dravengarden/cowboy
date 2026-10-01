@@ -71,6 +71,7 @@ pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehavior
         configuration: ConfigurationBehavior::PortableV1,
         default_preferences: std::collections::BTreeMap::new(),
         error_rules: Vec::new(),
+        execution: None,
     }
 }
 

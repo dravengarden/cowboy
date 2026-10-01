@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "protocol": 1,
+  "version": "0.159.3",
+  "system": "x86_64-linux",
+  "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.3-linux-x64.tgz",
+  "archive_hash": "sha512-xlHydfOksnNt/qz4BEVFvjMWunweaVSNtha/DkVUwWZnVZxbqiJwsXSl2iZDk04b6k/g0OI7jU06XqzHB2s5og==",
+  "directory": "package/vendor/x86_64-unknown-linux-musl",
+  "executable_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "metadata_sha256": "969efb3fa54edecc615de3c84289b3676e578420d053145d73b8b0e61421fd32"
+}

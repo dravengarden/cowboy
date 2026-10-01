@@ -53,9 +53,12 @@ class Handler(BaseHTTPRequestHandler):
             self.server.requests.append(request)
             require(index < len(self.server.steps), "unexpected extra native API request")
             response_id = f"fixture_response_{index}"
+            step = self.server.steps[index]
+            if callable(step):
+                step = step(self.server.requests)
             events = [
                 {"type": "response.created", "response": {"id": response_id}},
-                {"type": "response.output_item.done", "item": self.server.steps[index]},
+                {"type": "response.output_item.done", "item": step},
                 {"type": "response.completed", "response": {
                     "id": response_id,
                     "usage": {"input_tokens": 0, "input_tokens_details": None, "output_tokens": 0,

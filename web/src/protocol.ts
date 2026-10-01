@@ -111,6 +111,8 @@ export interface SessionMeta {
   provider_auth_generation?: number;
   /** Stable machine placement. Missing on older daemons means local. */
   machine_id?: string;
+  /** Present unknown/null bindings must stay present and cannot imply local execution. */
+  execution_binding?: unknown;
   /** Stable selected workspace identity; cwd may point at its isolated worktree. */
   workspace_id?: string;
   workspace_name?: string;

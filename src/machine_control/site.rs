@@ -12,6 +12,7 @@ struct ClaimedSite<'a> {
 
 fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
     let (service, machine) = match command {
+        MachineCommand::Execution { request, .. } => (&request.service_id, &request.machine_id),
         MachineCommand::CodeBufferNavigation { request, .. } => {
             (&request.service_id, &request.machine_id)
         }

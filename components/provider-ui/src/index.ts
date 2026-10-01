@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.11" as const;
+export const PROVIDER_SDK_VERSION = "3.1.12" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -347,6 +347,7 @@ export interface ProviderManifest {
         | "anthropic_gateway_v1"
         | "openai_gateway_v1";
       default_preferences: Record<string, LiteralValue>;
+      execution?: { interface: "jsonrpc_v1"; executor_digests: string[] };
       error_rules: Array<{
         when: TextMatchExpression;
         user_detail?: string;
@@ -379,7 +380,11 @@ export interface ProviderManifest {
         command: string;
       }>;
     }>;
-    required_capabilities: Array<"provider.runtime.v1" | "provider.gateway.v1">;
+    required_capabilities: Array<
+      | "provider.runtime.v1"
+      | "provider.gateway.v1"
+      | "provider.execution-jsonrpc.v1"
+    >;
   };
   authentication: {
     schema_version: number;
@@ -1286,13 +1291,37 @@ export function validateProviderManifest(
   const declaresGateway = runtime.sidecars.length > 0;
   if (
     !runtime.required_capabilities.every((value) =>
-      value === "provider.runtime.v1" || value === "provider.gateway.v1"
+      value === "provider.runtime.v1" || value === "provider.gateway.v1" ||
+      value === "provider.execution-jsonrpc.v1"
     ) ||
     !capabilities.has("provider.runtime.v1") ||
     usesGateway !== declaresGateway ||
     capabilities.has("provider.gateway.v1") !== declaresGateway
   ) {
     throw new Error("Unknown or missing Provider runtime capability");
+  }
+  const execution = runtime.behavior.execution;
+  const declaresExecution = execution !== undefined && execution !== null;
+  if (
+    capabilities.has("provider.execution-jsonrpc.v1") !== declaresExecution ||
+    (declaresExecution &&
+      compareProviderVersions(String(full.sdk_version), "3.1.12") < 0)
+  ) {
+    throw new Error(
+      "Provider execution requires its signed capability and SDK 3.1.12",
+    );
+  }
+  if (
+    declaresExecution &&
+    (!isRecord(execution) || execution.interface !== "jsonrpc_v1" ||
+      !Array.isArray(execution.executor_digests) ||
+      execution.executor_digests.length === 0 ||
+      execution.executor_digests.length > 16 ||
+      !execution.executor_digests.every((digest) =>
+        typeof digest === "string" && isDigest(digest)
+      ))
+  ) {
+    throw new Error("Invalid Provider execution contract");
   }
   validateAuthentication(
     authentication,
@@ -2611,7 +2640,8 @@ export function validatePluginCompatibilityRequirements(
     (input.release_schema === 2 && input.host_bundle_schema === undefined) ||
     (input.release_schema === 3 &&
       (input.plugin_kind !== "workspace_extension" ||
-        input.host_bundle_schema !== undefined))
+        input.host_bundle_schema !== undefined)) ||
+    (input.release_schema === 4 && input.plugin_kind !== "agent_provider")
   ) {
     throw new Error("Invalid Plugin release compatibility requirements");
   }

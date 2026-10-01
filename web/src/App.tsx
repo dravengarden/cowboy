@@ -1,4 +1,5 @@
 import { WorkspacePicker } from "./WorkspacePicker";
+import { useExecutionPlacement } from "./useExecutionPlacement";
 import {
     Fragment,
     forwardRef,
@@ -2167,9 +2168,13 @@ function NewSessionDialog({
     const [machineId, setMachineId] = useState<string>("");
     const machines = useStoreSelector((snapshot) => snapshot.machines);
     const selectedMachine = machines.find((machine) => machine.id === machineId);
+    const placement = useExecutionPlacement(open, machineId, JSON.stringify(
+        machines.map((machine) => [machine.id, machine.schedulable, machine.plugins]),
+    ));
+    const runtimeMachine = machines.find((machine) => machine.id === placement.runtimeMachineId);
     const machineProviders = useMemo(
-        () => projectAgentPluginInventory(selectedMachine?.plugins ?? []),
-        [selectedMachine?.plugins],
+        () => projectAgentPluginInventory(runtimeMachine?.plugins ?? []),
+        [runtimeMachine?.plugins],
     );
     const { catalog: providerCatalog } = useProviderCatalog(open);
     const providerRows = useMemo(
@@ -2199,7 +2204,8 @@ function NewSessionDialog({
         const entry = row?.installedEntry;
         const installed = row?.installed;
         return Boolean(
-            selectedMachine && entry && installed &&
+            selectedMachine?.schedulable && runtimeMachine?.schedulable && entry && installed &&
+            (!placement.separate || placement.providers.includes(candidate)) &&
             (!entry.manifest.authentication.required || installed.materialization_state === "current"),
         );
     };
@@ -2210,7 +2216,7 @@ function NewSessionDialog({
                 .filter(providerAvailable);
             setProvider(defaultNewSessionProvider(availableProviderIds));
         }
-    }, [machineId, machines, machineProviders, provider, providerEntries]);
+    }, [machineId, machines, machineProviders, provider, providerEntries, placement.separate, placement.providers]);
     const selectedWorkItem = selectedWorkspace?.active_work_items.find(
         (item) => item.id === workItemId,
     );
@@ -2272,7 +2278,7 @@ function NewSessionDialog({
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     const create = (): void => {
-        if (creating) return;
+        if (creating || !placement.ready || !providerAvailable(provider) || !machineId || !cwd) return;
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
         // id back synchronously and can focus the new session the moment it's
         // created.
@@ -2280,12 +2286,13 @@ function NewSessionDialog({
         setCreateError("");
         void (async (): Promise<void> => {
             try {
-                const response = await fetch("/api/sessions", {
+                const response = await fetch(placement.separate ? "/api/execution-sessions" : "/api/sessions", {
                     method: "POST",
                     headers: { "content-type": "application/json" },
                     body: JSON.stringify({
                         provider,
                         machine_id: machineId,
+                        ...(placement.separate ? { runtime_machine_id: placement.runtimeMachineId } : {}),
                         cwd,
                         origin: "web",
                         initial_prompt: selectedWorkItem
@@ -2302,6 +2309,9 @@ function NewSessionDialog({
                     provider_version?: string;
                     provider_generation_digest?: string;
                     provider_auth_generation?: number;
+                    machine_id?: string;
+                    cwd?: string;
+                    execution_binding?: unknown;
                 };
                 if (!data.session_id) throw new Error("Session creation returned no id");
 
@@ -2333,8 +2343,9 @@ function NewSessionDialog({
                                 : {}),
                         }
                         : {}),
-                    machine_id: machineId || "local",
-                    cwd: sourcePath,
+                    machine_id: data.machine_id ?? placement.runtimeMachineId,
+                    cwd: data.cwd ?? sourcePath,
+                    ...(Object.hasOwn(data, "execution_binding") ? { execution_binding: data.execution_binding } : {}),
                     title: trimmedTitle || `${provider} · ${sourcePath}`,
                     status: "starting",
                     origin: "web",
@@ -2373,6 +2384,7 @@ function NewSessionDialog({
     const form = (
             <Stack spacing={2} sx={{ mt: 1 }}>
                 {createError ? <Alert severity="error">{createError}</Alert> : null}
+                {placement.error ? <Alert severity="error">{placement.error}</Alert> : null}
                 <TextField
                     label="Title"
                     value={title}
@@ -2404,10 +2416,10 @@ function NewSessionDialog({
                 {machines.length > 1 ? (
                     <TextField
                         select
-                        label="Machine"
+                        label={placement.enabled ? "Execution environment" : "Machine"}
                         value={machineId}
                         onChange={(e): void => setMachineId(e.target.value)}
-                        helperText="Sessions stay on the selected machine"
+                        helperText={placement.enabled ? "Files and commands stay in this environment" : "Sessions stay on the selected machine"}
                     >
                         {machines.map((machine) => (
                             <MenuItem
@@ -2416,6 +2428,29 @@ function NewSessionDialog({
                                 disabled={!machine.schedulable}
                             >
                                 {machine.display_name}{machine.local ? " · This machine" : ""}
+                            </MenuItem>
+                        ))}
+                    </TextField>
+                ) : null}
+                <WorkspacePicker
+                    entries={workspaces}
+                    value={cwd}
+                    onChange={(value): void => {
+                        setCwd(value);
+                        setWorkItemId("");
+                    }}
+                />
+                {placement.enabled ? (
+                    <TextField
+                        select
+                        label="Agent runtime"
+                        value={placement.runtimeMachineId}
+                        onChange={(e): void => placement.setRuntimeMachineId(e.target.value)}
+                        helperText="Agent connection and account stay on this machine"
+                    >
+                        {machines.map((machine) => (
+                            <MenuItem key={machine.id} value={machine.id} disabled={!machine.schedulable}>
+                                {machine.display_name}
                             </MenuItem>
                         ))}
                     </TextField>
@@ -2468,7 +2503,7 @@ function NewSessionDialog({
                                             color="text.secondary"
                                             sx={{ display: "block", mt: 0.25 }}
                                         >
-                                            Unavailable on this machine
+                                            {placement.separate ? "Unavailable for this runtime and environment" : "Unavailable on this machine"}
                                         </Typography>
                                     ) : null}
                                 </Box>
@@ -2476,14 +2511,6 @@ function NewSessionDialog({
                         );
                     })}
                 </TextField>
-                <WorkspacePicker
-                    entries={workspaces}
-                    value={cwd}
-                    onChange={(value): void => {
-                        setCwd(value);
-                        setWorkItemId("");
-                    }}
-                />
                 {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
                     <TextField
                         select
@@ -2502,7 +2529,7 @@ function NewSessionDialog({
                 ) : null}
             </Stack>
     );
-    const canCreate = !creating && Boolean(provider && machineId && cwd);
+    const canCreate = !creating && placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd);
     if (navbarAtBottom) {
         return (
             <>

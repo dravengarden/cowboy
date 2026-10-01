@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.1.32",
+  "version": "3.2.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.11",
+  "sdk_version": "3.1.12",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",
@@ -15,7 +15,10 @@
   },
   "card_layout": "mark_leading",
   "activity": {
-    "indicator": { "kind": "terminal_prompt", "interval_ms": 4200 },
+    "indicator": {
+      "kind": "terminal_prompt",
+      "interval_ms": 4200
+    },
     "label": {
       "kind": "phrase_cycle",
       "phrases": [
@@ -41,44 +44,65 @@
       "name": "Sol 6.1 · Medium",
       "detail": "GPT-6.1-Sol · Medium reasoning",
       "is_default": true,
-      "values": { "model": "gpt-6.1-sol", "reasoning_effort": "medium" }
+      "values": {
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      }
     },
     {
       "id": "astra-medium",
       "name": "Astra · Medium",
       "detail": "GPT-6-Astra · Medium reasoning",
       "is_default": false,
-      "values": { "model": "gpt-6-astra", "reasoning_effort": "medium" }
+      "values": {
+        "model": "gpt-6-astra",
+        "reasoning_effort": "medium"
+      }
     },
     {
       "id": "astra-max",
       "name": "Astra · Max",
       "detail": "GPT-6-Astra · Max reasoning",
       "is_default": false,
-      "values": { "model": "gpt-6-astra", "reasoning_effort": "max" }
+      "values": {
+        "model": "gpt-6-astra",
+        "reasoning_effort": "max"
+      }
     },
     {
       "id": "luna-6-max",
       "name": "Luna 6 · Max",
       "detail": "GPT-6-Luna · Max reasoning",
       "is_default": false,
-      "values": { "model": "gpt-6-luna", "reasoning_effort": "max" }
+      "values": {
+        "model": "gpt-6-luna",
+        "reasoning_effort": "max"
+      }
     },
     {
       "id": "sol-6-1-max",
       "name": "Sol 6.1 · Max",
       "detail": "GPT-6.1-Sol · Max reasoning",
       "is_default": false,
-      "values": { "model": "gpt-6.1-sol", "reasoning_effort": "max" }
+      "values": {
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "max"
+      }
     }
   ],
   "host": {
     "schema_version": 2,
     "conversation_compaction": {
-      "aliases": ["compact", "summarise", "summarize"],
+      "aliases": [
+        "compact",
+        "summarise",
+        "summarize"
+      ],
       "fallback_command": "compact"
     },
-    "account_usage": { "provider": "openai" },
+    "account_usage": {
+      "provider": "openai"
+    },
     "transcript": {
       "schema_version": 1,
       "thought": {
@@ -104,7 +128,13 @@
         "model": "gpt-6.1-sol",
         "reasoning_effort": "medium"
       },
-      "error_rules": []
+      "error_rules": [],
+      "execution": {
+        "interface": "jsonrpc_v1",
+        "executor_digests": [
+          "sha256:8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        ]
+      }
     },
     "arguments": [
       "-c",
@@ -125,7 +155,11 @@
       }
     },
     "remove_environment": [],
-    "remove_environment_prefixes": ["CHATGPT_", "CODEX_", "OPENAI_"],
+    "remove_environment_prefixes": [
+      "CHATGPT_",
+      "CODEX_",
+      "OPENAI_"
+    ],
     "dependencies": [
       {
         "id": "codex-acp",
@@ -184,7 +218,10 @@
         ]
       }
     ],
-    "required_capabilities": ["provider.runtime.v1"]
+    "required_capabilities": [
+      "provider.runtime.v1",
+      "provider.execution-jsonrpc.v1"
+    ]
   },
   "authentication": {
     "schema_version": 1,
@@ -199,14 +236,22 @@
         "flow": "device_code",
         "executor": {
           "kind": "command_v1",
-          "component": { "kind": "provider_cli", "slot": "codex" },
-          "arguments": ["login", "--device-auth"],
+          "component": {
+            "kind": "provider_cli",
+            "slot": "codex"
+          },
+          "arguments": [
+            "login",
+            "--device-auth"
+          ],
           "terminal": "pipes",
           "challenge": "device_code",
           "environment": {},
           "preflight": []
         },
-        "required_bundle_keys": ["auth_json"]
+        "required_bundle_keys": [
+          "auth_json"
+        ]
       },
       {
         "id": "api-key",
@@ -217,7 +262,9 @@
           "bundle_key": "api_key",
           "verification_url": "https://platform.openai.com/api-keys"
         },
-        "required_bundle_keys": ["api_key"]
+        "required_bundle_keys": [
+          "api_key"
+        ]
       }
     ],
     "credential_files": [
@@ -227,7 +274,9 @@
         "required": false
       }
     ],
-    "environment_projection": { "OPENAI_API_KEY": "api_key" }
+    "environment_projection": {
+      "OPENAI_API_KEY": "api_key"
+    }
   },
   "compatibility": {
     "min_controller_contract": 2,

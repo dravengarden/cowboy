@@ -761,6 +761,23 @@ impl Broker {
         let session_id = snapshot.session_id.clone();
         let state = snapshot.state;
         let launch = snapshot.launch.clone();
+        let incoming = launch
+            .as_ref()
+            .and_then(|launch| launch.execution_binding.as_ref());
+        if incoming.is_some_and(|binding| binding.decode().is_err())
+            || self
+                .sessions
+                .lock()
+                .get(&session_id)
+                .is_some_and(|declared| declared.execution_binding.as_ref() != incoming)
+        {
+            if let Some(worker) = self.workers.lock().get(&session_id) {
+                let _ = worker.tx.send(Frame::Reject {
+                    reason: "worker execution binding differs from the session declaration".into(),
+                });
+            }
+            return;
+        }
         let mut accepted = false;
         if let Some(worker) = self.workers.lock().get_mut(&session_id)
             && worker.connection_id == connection_id
@@ -1130,6 +1147,29 @@ impl Broker {
     }
 
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
+        if session
+            .execution_binding
+            .as_ref()
+            .is_some_and(|binding| binding.decode().is_err())
+            || self
+                .sessions
+                .lock()
+                .get(&session.session_id)
+                .is_some_and(|previous| previous.execution_binding != session.execution_binding)
+            || self
+                .workers
+                .lock()
+                .get(&session.session_id)
+                .and_then(|worker| worker.snapshot.launch.as_ref())
+                .is_some_and(|launch| launch.execution_binding != session.execution_binding)
+        {
+            self.command_rejected(
+                &session.session_id,
+                format!("ensure:{}", session.session_id),
+                "execution placement cannot change through worker adoption".into(),
+            );
+            return;
+        }
         let adopt_only = session.adopt_only;
         let mut session = session;
         // `adopt_only` describes this controller message, not how a future
@@ -1363,6 +1403,11 @@ impl Broker {
         session: StartSession,
         session_fallback: Option<String>,
     ) -> Result<()> {
+        // Previous generations may predate this mandatory launch field. They
+        // must never be tried as an implicit recovery path for a bound worker.
+        if session.execution_binding.is_some() {
+            return self.spawn_and_wait_ready(&session).await;
+        }
         let generation_key = (session.generation.clone(), session.provider.clone());
         let desired_is_unhealthy = self
             .unhealthy_generations
@@ -1930,6 +1975,26 @@ impl Broker {
             },
             |provider| provider.behavior.clone(),
         );
+        if let Some(binding) = &session.execution_binding {
+            let binding = binding.decode().map_err(anyhow::Error::msg)?;
+            ensure!(
+                behavior
+                    .execution
+                    .as_ref()
+                    .is_some_and(|execution| execution.accepts(
+                        binding.environment.protocol,
+                        &binding.environment.executor_digest
+                    )),
+                "Provider has not accepted this exact execution component"
+            );
+            ensure!(
+                binding.runtime.cwd == session.cwd
+                    && provider
+                        .as_ref()
+                        .is_some_and(|provider| provider.execution_jsonrpc),
+                "Provider generation cannot launch this execution binding"
+            );
+        }
         let mut session_environment =
             session_context_environment(session, &behavior.configuration)?;
         if let Some(provider) = &provider {
@@ -2090,6 +2155,11 @@ impl Broker {
             command
                 .arg("--provider-auth-generation")
                 .arg(auth_generation.to_string());
+        }
+        if let Some(binding) = &session.execution_binding {
+            command
+                .arg("--execution-binding")
+                .arg(serde_json::to_string(binding)?);
         }
         if self.args.spawn_mode == SpawnMode::Direct
             && let Some(fallback_for) = &session.fallback_for
@@ -2627,19 +2697,37 @@ async fn handle_core(
         }
     });
 
-    let result =
-        async {
-            while let Some(frame) = read_frame(reader).await? {
-                if broker.controller_for(lease).is_none() {
-                    tracing::warn!(lease, "ignoring command from fenced controller");
-                    continue;
+    let result = async {
+        while let Some(frame) = read_frame(reader).await? {
+            if broker.controller_for(lease).is_none() {
+                tracing::warn!(lease, "ignoring command from fenced controller");
+                continue;
+            }
+            match frame {
+                Frame::ExecutionReply { reply } => {
+                    if let Some(worker) = broker.workers.lock().get(&reply.session_id)
+                        && worker.epoch == reply.worker_epoch
+                        && worker
+                            .snapshot
+                            .launch
+                            .as_ref()
+                            .and_then(|launch| launch.execution_binding.as_ref())
+                            .and_then(|binding| binding.decode().ok())
+                            .is_some_and(|binding| {
+                                crate::execution_protocol::Scope::from_binding(&binding)
+                                    == reply.scope
+                            })
+                    {
+                        let _ = worker.tx.send(Frame::ExecutionReply { reply });
+                    }
                 }
-                match frame {
-                Frame::CoreCommand { command } => command_tx.try_send(command).map_err(|error| {
-                    anyhow::anyhow!(
-                        "Machine core command queue saturated; reconnecting controller: {error}"
-                    )
-                })?,
+                Frame::CoreCommand { command } => {
+                    command_tx.try_send(command).map_err(|error| {
+                        anyhow::anyhow!(
+                            "Machine core command queue saturated; reconnecting controller: {error}"
+                        )
+                    })?
+                }
                 Frame::Ack {
                     session_id,
                     worker_epoch,
@@ -2662,10 +2750,10 @@ async fn handle_core(
                 }
                 other => tracing::debug!(?other, "ignoring non-core runtime frame"),
             }
-            }
-            Ok(())
         }
-        .await;
+        Ok(())
+    }
+    .await;
 
     command_task.abort();
     let _ = command_task.await;
@@ -2834,6 +2922,34 @@ async fn handle_worker(
             continue;
         }
         match frame {
+            Frame::ExecutionRequest { request } => {
+                let allowed = request.session_id == session_id
+                    && request.worker_epoch == epoch
+                    && !broker.cancelled_sessions.lock().contains(session_id)
+                    && broker
+                        .sessions
+                        .lock()
+                        .get(session_id)
+                        .and_then(|launch| launch.execution_binding.as_ref())
+                        .and_then(|binding| binding.decode().ok())
+                        .is_some_and(|binding| binding == request.binding);
+                if allowed {
+                    broker.send_controller(Frame::ExecutionRequest { request });
+                } else if let Some(worker) = broker.workers.lock().get(session_id) {
+                    let _ = worker.tx.send(Frame::ExecutionReply {
+                        reply: Box::new(crate::execution_protocol::RuntimeReply {
+                            session_id: session_id.to_owned(),
+                            worker_epoch: epoch.to_owned(),
+                            request_id: request.request_id,
+                            scope: crate::execution_protocol::Scope::from_binding(&request.binding),
+                            response: crate::machine_protocol::execution::Response::Refused {
+                                reason:
+                                    crate::machine_protocol::execution::Refusal::IdentityMismatch,
+                            },
+                        }),
+                    });
+                }
+            }
             Frame::Snapshot { worker } if worker.session_id == session_id => {
                 broker.update_snapshot((*worker).clone(), connection_id);
                 let cancelled = broker.cancelled_sessions.lock();
@@ -3073,6 +3189,7 @@ mod tests {
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         };
         let mut configuration = cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1;
         assert_eq!(
@@ -3208,6 +3325,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         broker
@@ -3294,6 +3412,7 @@ mod tests {
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         };
 
         let error = tokio::time::timeout(
@@ -3436,6 +3555,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -3511,6 +3631,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -3622,6 +3743,7 @@ mod tests {
                     generation: "gen-1".to_owned(),
                     fallback_for: None,
                     adopt_only: false,
+                    execution_binding: None,
                 },
             );
             let (broker_end, worker_end) = UnixStream::pair().expect("worker socket pair");
@@ -3710,6 +3832,7 @@ mod tests {
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         };
         broker.update_snapshot(
             WorkerSnapshot {
@@ -3808,6 +3931,7 @@ mod tests {
                     generation: "gen-1".to_owned(),
                     fallback_for: Some("gen-2".to_owned()),
                     adopt_only: false,
+                    execution_binding: None,
                 },
             );
             broker.pin_fallback(session_id, "gen-1", "gen-2");
@@ -3871,6 +3995,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         let (late_tx, _late_rx) = mpsc::unbounded_channel();
@@ -3951,6 +4076,7 @@ mod tests {
                 generation: "gen-2".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         broker.sessions.lock().insert(
@@ -3971,6 +4097,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: Some("gen-2".to_owned()),
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         broker.pin_fallback("sess-fallback", "gen-1", "gen-2");
@@ -4072,6 +4199,7 @@ mod tests {
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         };
         broker
             .sessions
@@ -4127,6 +4255,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: true,
+                execution_binding: None,
             })
             .await;
 
@@ -4194,6 +4323,7 @@ mod tests {
                 generation: "gen-current".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             })
             .await;
 
@@ -4278,6 +4408,7 @@ mod tests {
                 generation: "gen-current".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             })
             .await;
 
@@ -4344,6 +4475,7 @@ mod tests {
                 generation: "gen-current".to_owned(),
                 fallback_for: None,
                 adopt_only: true,
+                execution_binding: None,
             })
             .await;
 
@@ -4393,6 +4525,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
 
@@ -4456,6 +4589,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
@@ -4854,6 +4988,7 @@ mod tests {
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         };
 
         let replacement_exit = broker
@@ -4920,6 +5055,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
 
@@ -4994,6 +5130,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             },
         );
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
@@ -5074,6 +5211,7 @@ mod tests {
                     generation: "gen-2".to_owned(),
                     fallback_for: None,
                     adopt_only: false,
+                    execution_binding: None,
                 },
                 Some("gen-1".to_owned()),
             )

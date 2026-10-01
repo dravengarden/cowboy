@@ -29,6 +29,7 @@ use crate::workspace::{
 pub struct SessionPlacement<'a> {
     pub machine_id: &'a str,
     pub workspace: Option<&'a crate::machine_protocol::MachineWorkspace>,
+    pub execution_binding: Option<&'a crate::execution_environment::ExecutionBinding>,
 }
 
 /// Exact immutable Agent Plugin release and Service-auth projection selected by
@@ -149,6 +150,7 @@ impl Supervisor {
         let SessionPlacement {
             machine_id,
             workspace,
+            execution_binding,
         } = placement;
         let ProviderGeneration {
             version,
@@ -194,7 +196,7 @@ impl Supervisor {
             workspace_id: workspace.map(|value| value.id.clone()),
             workspace_name: workspace.map(|value| value.display_name.clone()),
             workspace_source_path: workspace.map(|value| value.canonical_path.clone()),
-            execution_binding: None,
+            execution_binding: execution_binding.cloned(),
             cwd: cwd.display().to_string(),
             title,
             origin,
@@ -257,6 +259,7 @@ impl Supervisor {
             SessionPlacement {
                 machine_id,
                 workspace: None,
+                execution_binding: None,
             },
             provider_generation,
             owner,
@@ -303,6 +306,7 @@ impl Supervisor {
             generation: String::new(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: meta.execution_binding,
         });
         Ok(())
     }
@@ -469,6 +473,7 @@ impl Supervisor {
             generation: String::new(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: meta.execution_binding,
         })
     }
 
@@ -898,6 +903,7 @@ mod tests {
                 generation: "test-generation".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             }),
             state: WorkerState::Crashed,
             agent_session_id: Some("codex-thread-1".to_owned()),

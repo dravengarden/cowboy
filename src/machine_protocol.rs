@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod code_buffer_navigation;
 pub mod code_buffer_sync;
+pub mod execution;
 pub mod installation_revision;
 pub mod plugin_install;
 pub mod plugin_recovery;
@@ -19,7 +20,8 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 22;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 23;
+pub const EXECUTION_ENVIRONMENT_PROTOCOL_VERSION: u16 = 23;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -780,6 +782,10 @@ pub enum ArtifactFormat {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum MachineCommand {
+    Execution {
+        request_id: String,
+        request: Box<execution::Request>,
+    },
     Reconcile {
         request_id: String,
         components: Vec<DesiredComponent>,
@@ -932,6 +938,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Execution { .. } => EXECUTION_ENVIRONMENT_PROTOCOL_VERSION,
             // Only a carried root identity needs the newer Machine. Ordinary
             // adapter traffic keeps its original floor below.
             Self::AdapterRequest {
@@ -1123,6 +1130,11 @@ fn not_applicable_provider_usage_dimension() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum MachineEvent {
+    /// Session source and output bypass ordinary Machine event history.
+    ExecutionResponse {
+        request_id: String,
+        response: Box<execution::Response>,
+    },
     Inventory {
         components: Vec<ComponentInventory>,
         /// Present only when the Machine has reloaded its workspace contract.

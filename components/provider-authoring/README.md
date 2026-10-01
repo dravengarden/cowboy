@@ -2,7 +2,7 @@
 
 Pure, data-only authoring for the existing Provider UI IR. This package has no
 React, native, registration, network, installer or resource-owner API. It peers
-with exactly `@cowboy/provider-ui` 3.1.12; it does not replace its runtime
+with exactly `@cowboy/provider-ui` 3.1.16; it does not replace its runtime
 verifier or change any signed package schema.
 
 Wrap a literal `{ logic, ui }` in `defineProviderUiContract(...)`, then spread

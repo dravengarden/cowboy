@@ -70,6 +70,7 @@ use tokio_util::io::ReaderStream;
 
 mod code_buffers;
 mod code_reads;
+mod execution;
 #[cfg(unix)]
 mod local_operator;
 mod operator_approval;
@@ -266,6 +267,9 @@ struct AppState {
     code_cache: crate::code_cache::CodeCache,
     code_buffers: Arc<code_buffers::Owners>,
     code_navigation_admission: bool,
+    execution_runtime_machine: Option<String>,
+    execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
+    execution_closures: Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
     /// Machines permitted to have their Code reads executed on the
     /// Controller's own filesystem. A hello's declared connection mode is a
     /// request; this set is the permission.
@@ -1648,6 +1652,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             code_buffers: Arc::default(),
             code_navigation_admission: args.code_navigation_admission
                 == crate::cli::CodeNavigationAdmission::Candidate,
+            execution_runtime_machine: args.execution_runtime_machine,
+            execution_preparations: parking_lot::Mutex::default(),
+            execution_closures: Arc::default(),
             colocated_machines: args.colocated_machines.iter().cloned().collect(),
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
@@ -4610,7 +4617,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     {
         return RouteAuth::Public;
     }
-    if path == "/api/sessions" && method == Method::POST {
+    if matches!(path, "/api/sessions" | "/api/execution-sessions") && method == Method::POST {
         return RouteAuth::ProductOperator;
     }
     if path == "/api/sessions/reconcile-project" {
@@ -4640,6 +4647,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             | "/api/sync/dataset"
             | "/api/usage/logs"
             | "/api/workspaces"
+            | "/api/execution-environments"
             | "/api/plugins"
             | "/api/providers"
             | "/api/machines"
@@ -4982,7 +4990,7 @@ fn automation_route_allowed(
         return true;
     }
     identity.has_scope("sessions:write")
-        && ((method == Method::POST && path == "/api/sessions")
+        && ((method == Method::POST && matches!(path, "/api/sessions" | "/api/execution-sessions"))
             || session_id_from_path(path).is_some()
             || path == "/api/artifacts"
             || path.starts_with("/api/artifacts/"))
@@ -9373,6 +9381,7 @@ async fn serve_axum(
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
+    execution::sessions::start_recovery(&state);
     let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir.clone()));
     let setup_needed = match state.store.as_ref() {
         Some(store) => store
@@ -9607,6 +9616,8 @@ async fn serve_axum(
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
         .route("/api/sessions", post(api_new_session))
+        .route("/api/execution-sessions", post(execution::sessions::create))
+        .route("/api/execution-environments", get(execution::sessions::availability))
         .route(
             "/api/sessions/reconcile-project",
             post(api_reconcile_project_sessions),
@@ -13698,6 +13709,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     // disconnecting a healthy Machine merely because the queue briefly bursts.
     let (socket_sink, mut socket_stream) = socket.split();
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
+    let execution_calls = Arc::new(tokio::sync::Semaphore::new(64));
     let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
     // A declared connection mode is a request to be read on this host, not
@@ -14271,6 +14283,50 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     .await
             }
             crate::machine_protocol::MachineFrame::Runtime { frame } => {
+                if let crate::runtime_wire::Frame::ExecutionRequest { request } = frame {
+                    let permit = Arc::clone(&execution_calls).try_acquire_owned();
+                    let execution_state = Arc::clone(&state);
+                    let execution_connection = connection.clone();
+                    let runtime_machine = hello.machine_id.clone();
+                    let outgoing = machine_write_tx.clone();
+                    tokio::spawn(async move {
+                        let reply = if let Ok(_permit) = permit {
+                            execution::forward(
+                                &execution_state,
+                                &execution_connection,
+                                &runtime_machine,
+                                *request,
+                            )
+                            .await
+                        } else {
+                            crate::execution_protocol::RuntimeReply {
+                                session_id: request.session_id,
+                                worker_epoch: request.worker_epoch,
+                                request_id: request.request_id,
+                                scope: crate::execution_protocol::Scope::from_binding(
+                                    &request.binding,
+                                ),
+                                response: crate::machine_protocol::execution::Response::Refused {
+                                    reason: crate::machine_protocol::execution::Refusal::Capacity,
+                                },
+                            }
+                        };
+                        if execution_state
+                            .machine_control
+                            .is_current(&execution_connection)
+                        {
+                            let _ = queue_machine_json(
+                                &outgoing,
+                                &crate::machine_protocol::MachineFrame::Runtime {
+                                    frame: crate::runtime_wire::Frame::ExecutionReply {
+                                        reply: Box::new(reply),
+                                    },
+                                },
+                            );
+                        }
+                    });
+                    continue;
+                }
                 if let Err(error) = runtime_write_tx.send(frame) {
                     tracing::warn!(%error, machine = %hello.machine_id, "Machine runtime writer closed");
                     break;
@@ -14982,6 +15038,7 @@ async fn api_new_session(
                     crate::supervisor::SessionPlacement {
                         machine_id: &req.machine_id,
                         workspace: Some(&selected_workspace),
+                        execution_binding: None,
                     },
                     crate::supervisor::ProviderGeneration {
                         version: &provider_generation.version,
@@ -19090,9 +19147,13 @@ fn handle_command(
             // Order: tear down agent thread first (so it doesn't push more
             // events into a soon-to-be-gone Hub session), then drop Hub state
             // + broadcast updated list.
-            state.supervisor.delete_session(&session_id);
-            state.hub.delete_session(&session_id);
-            Ok(())
+            if state.hub.session_info(&session_id).is_some_and(|info| info.meta.execution_binding.is_some()) {
+                execution::sessions::delete(state, &session_id)
+            } else {
+                state.supervisor.delete_session(&session_id);
+                state.hub.delete_session(&session_id);
+                Ok(())
+            }
         }
         Inbound::RenameSession { session_id, title } => {
             // Empty title is a UI bug; reject server-side so the toast lands.

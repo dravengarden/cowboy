@@ -1599,6 +1599,26 @@ impl Store {
         dispatch_storage!(self, reload_provider(meta))
     }
 
+    pub(crate) async fn execution_binding_matches(
+        &self,
+        session_id: &str,
+        record: &serde_json::Value,
+    ) -> Result<bool> {
+        dispatch_storage!(self, execution_binding_matches(session_id, record))
+    }
+
+    pub(crate) async fn commit_execution_binding(
+        &self,
+        session_id: &str,
+        expected: &serde_json::Value,
+        prepared: &serde_json::Value,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            commit_execution_binding(session_id, expected, prepared)
+        )
+    }
+
     pub async fn update_mobile_review_state(
         &self,
         session_id: &str,
@@ -2350,6 +2370,34 @@ impl Store {
 }
 
 impl PostgresStorage {
+    pub(crate) async fn execution_binding_matches(
+        &self,
+        session_id: &str,
+        record: &serde_json::Value,
+    ) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1 AND execution_binding = $2)",
+        )
+        .bind(session_id)
+        .bind(record)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
+    pub(crate) async fn commit_execution_binding(
+        &self,
+        session_id: &str,
+        expected: &serde_json::Value,
+        prepared: &serde_json::Value,
+    ) -> Result<bool> {
+        let result = sqlx::query("UPDATE sessions SET execution_binding = $3, updated_at = now() WHERE id = $1 AND execution_binding = $2")
+            .bind(session_id).bind(expected).bind(prepared).execute(&self.pool).await?;
+        if result.rows_affected() == 1 {
+            return Ok(true);
+        }
+        self.execution_binding_matches(session_id, prepared).await
+    }
+
     /// Create a short-lived, single-use Machine enrollment secret. Only its
     /// SHA-256 digest is persisted.
     ///
@@ -8830,6 +8878,77 @@ mod storage_contract_tests {
                 assert_eq!(binding.workspace.cwd, "/tasks/cowboy");
             }
         }
+        execution_binding_creation_contract(&reopened).await;
+    }
+
+    async fn execution_binding_creation_contract(reopened: &Store) {
+        use crate::execution_environment::ExecutionBinding;
+        let mut ready = crate::execution_environment::fixture().record().clone();
+        ready["runtime"]["machine_id"] = "hawk".into();
+        ready["environment"]["machine_id"] = "falcon".into();
+        let ready = ExecutionBinding::from_record(ready);
+        let binding = ready.decode().unwrap();
+        let intent = crate::execution_environment::PreparationV1 {
+            schema: 1,
+            phase: "preparing".into(),
+            runtime: binding.runtime.clone(),
+            machine_id: binding.environment.machine_id.clone(),
+            workspace_id: binding.workspace.id.clone(),
+            source_path: binding.workspace.source_path.clone(),
+            executor_digest: binding.environment.executor_digest.clone(),
+        };
+        let expected = serde_json::to_value(intent).unwrap();
+        let mut meta = session("execution-preparing");
+        meta.machine_id = binding.runtime.machine_id;
+        meta.cwd = binding.runtime.cwd;
+        meta.execution_binding = Some(ExecutionBinding::from_record(expected.clone()));
+        meta.provider_version = "3.2.0".into();
+        meta.provider_generation_digest = format!("sha256:{}", "d".repeat(64));
+        let mut behavior = crate::provider::legacy_behavior("codex");
+        behavior.execution = Some(cowboy_provider_sdk::ExecutionBehavior::JsonrpcV1 {
+            executor_digests: std::collections::BTreeSet::from([binding
+                .environment
+                .executor_digest]),
+        });
+        meta.provider_behavior = Some(behavior);
+        assert!(meta.require_runtime_launch().is_err());
+        reopened.insert_session(&meta).await.unwrap();
+        assert!(
+            !reopened
+                .commit_execution_binding(&meta.id, &serde_json::Value::Null, ready.record())
+                .await
+                .unwrap()
+        );
+        assert!(
+            reopened
+                .execution_binding_matches(&meta.id, &expected)
+                .await
+                .unwrap()
+        );
+        assert!(
+            reopened
+                .commit_execution_binding(&meta.id, &expected, ready.record())
+                .await
+                .unwrap()
+        );
+        assert!(
+            reopened
+                .commit_execution_binding(&meta.id, &expected, ready.record())
+                .await
+                .unwrap()
+        );
+        let restored = reopened
+            .load_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.meta.id == meta.id)
+            .unwrap();
+        assert_eq!(restored.meta.execution_binding, Some(ready));
+        assert!(restored.meta.require_runtime_launch().is_ok());
+        let mut no_grant = restored.meta;
+        no_grant.provider_behavior.as_mut().unwrap().execution = None;
+        assert!(no_grant.require_runtime_launch().is_err());
     }
 
     #[tokio::test]

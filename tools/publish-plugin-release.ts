@@ -47,9 +47,10 @@ const release = JSON.parse(
 ) as PluginRelease;
 if (
   release.plugin_id !== pluginId ||
-  ![1, 2, 3].includes(release.release_schema) ||
+  ![1, 2, 3, 4].includes(release.release_schema) ||
   (release.release_schema === 3 &&
-    release.plugin_kind !== "workspace_extension")
+    release.plugin_kind !== "workspace_extension") ||
+  (release.release_schema === 4 && release.plugin_kind !== "agent_provider")
 ) {
   throw new Error("release identity or schema mismatch");
 }
@@ -59,7 +60,7 @@ if (release.package_digest !== `sha256:${packageDigest}`) {
   throw new Error("Plugin package digest mismatch");
 }
 if (
-  (release.release_schema === 2) !==
+  release.release_schema !== 4 && (release.release_schema === 2) !==
     (release.host_bundle_digest !== undefined)
 ) {
   throw new Error("Plugin release/host bundle schema mismatch");

@@ -43,6 +43,55 @@ pub struct RuntimeLocation {
     pub cwd: String,
 }
 
+/// A durable creation intent. It deliberately cannot decode as a runnable
+/// binding: older readers and every ordinary launch path must fail closed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationV1 {
+    pub schema: u16,
+    pub phase: String,
+    pub runtime: RuntimeLocation,
+    pub machine_id: String,
+    pub workspace_id: String,
+    pub source_path: String,
+    pub executor_digest: String,
+}
+
+impl PreparationV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema != EXECUTION_BINDING_SCHEMA
+            || self.phase != "preparing"
+            || ![
+                &self.runtime.machine_id,
+                &self.machine_id,
+                &self.workspace_id,
+            ]
+            .into_iter()
+            .all(|value| valid_id(value))
+            || self.runtime.machine_id == "local"
+            || self.machine_id == "local"
+            || self.runtime.machine_id == self.machine_id
+            || !valid_path(&self.runtime.cwd)
+            || !valid_path(&self.source_path)
+            || !valid_digest(&self.executor_digest)
+        {
+            return Err("execution environment preparation is invalid");
+        }
+        Ok(())
+    }
+
+    pub fn accepts(&self, binding: &BindingV1) -> bool {
+        self.validate().is_ok()
+            && binding.validate().is_ok()
+            && binding.runtime == self.runtime
+            && binding.environment.machine_id == self.machine_id
+            && binding.environment.executor_digest == self.executor_digest
+            && binding.workspace.id == self.workspace_id
+            && binding.workspace.source_path == self.source_path
+            && binding.access == ExecutionAccess::Project
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentLocation {
@@ -85,6 +134,12 @@ impl ExecutionBinding {
             .map_err(|_| "execution environment binding is unsupported or invalid")?;
         binding.validate()?;
         Ok(binding)
+    }
+
+    pub fn preparation(&self) -> Option<PreparationV1> {
+        let preparation = PreparationV1::deserialize(&self.0).ok()?;
+        preparation.validate().ok()?;
+        Some(preparation)
     }
 
     pub fn for_runtime(&self, machine_id: &str, cwd: &str) -> Result<BindingV1, &'static str> {
@@ -207,6 +262,33 @@ pub(crate) fn fixture() -> ExecutionBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_preparation_never_decodes_as_launchable_and_matches_exact_target() {
+        let ready = fixture().decode().unwrap();
+        let intent = PreparationV1 {
+            schema: 1,
+            phase: "preparing".into(),
+            runtime: ready.runtime.clone(),
+            machine_id: ready.environment.machine_id.clone(),
+            workspace_id: ready.workspace.id.clone(),
+            source_path: ready.workspace.source_path.clone(),
+            executor_digest: ready.environment.executor_digest.clone(),
+        };
+        let pending = ExecutionBinding::from_record(serde_json::to_value(&intent).unwrap());
+        assert_eq!(pending.preparation(), Some(intent.clone()));
+        assert!(pending.decode().is_err());
+        assert!(intent.accepts(&ready));
+        let mut changed = ready.clone();
+        changed.environment.executor_digest = format!("sha256:{}", "a".repeat(64));
+        assert!(!intent.accepts(&changed));
+        changed = ready.clone();
+        changed.workspace.source_path = "/different/source".into();
+        assert!(!intent.accepts(&changed));
+        changed = ready;
+        changed.runtime.cwd = "/different/entry".into();
+        assert!(!intent.accepts(&changed));
+    }
 
     #[test]
     fn binding_retains_unsupported_records_without_resolving_them() {

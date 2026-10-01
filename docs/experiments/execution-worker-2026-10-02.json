@@ -1,0 +1,36 @@
+{
+  "schema": "cowboy.execution-worker-conformance/v1",
+  "accepted": true,
+  "checks": [
+    "machine_owned_worktree",
+    "long_state_path_uses_private_short_socket",
+    "machine_restart_reattaches_same_keeper_and_binding",
+    "provider_refuses_environment_override",
+    "target_image_read_reaches_native_model_input",
+    "background_job_survives_lost_reply_and_35_second_transport_gap",
+    "cancel_reaches_original_target_job_without_replay",
+    "native_apply_patch_and_command_use_target",
+    "runtime_files_unchanged",
+    "native_target_instructions",
+    "cold_native_resume_automatically_rebinds_each_turn",
+    "cold_resume_retains_history_without_effect_replay",
+    "global_environment_config_unchanged",
+    "target_image_bytes_cross_machine_transport",
+    "idempotent_close_stops_environment_and_preserves_worktree",
+    "closed_environment_cannot_be_recreated"
+  ],
+  "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "launcher_sha256": "1b6899e492c564bedce8ca8ebe313b60278f392af6be5e4ea9aee86c94586a1b",
+  "scripted_api_requests": 8,
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "production_activation": false,
+  "not_checked": [
+    "authenticated_enrolled_transport",
+    "cross_host_network",
+    "signed_provider_release",
+    "subscription_inference",
+    "inline_user_attachments",
+    "native_nested_agents"
+  ]
+}

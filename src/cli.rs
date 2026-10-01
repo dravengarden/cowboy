@@ -393,6 +393,12 @@ pub struct ServeArgs {
     )]
     pub code_navigation_admission: CodeNavigationAdmission,
 
+    /// Admit separately placed execution sessions, with this enrolled Machine
+    /// as the default Agent runtime. Enable only after active, recovery and
+    /// bootstrap Controllers understand durable execution bindings.
+    #[arg(long, env = "COWBOY_EXECUTION_RUNTIME_MACHINE")]
+    pub execution_runtime_machine: Option<String>,
+
     /// Machines this Controller may execute Code reads for on its OWN
     /// filesystem. A Machine declares its connection mode in its authenticated
     /// hello, and that declaration is not evidence of where it runs: an

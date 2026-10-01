@@ -55,6 +55,10 @@ mod deepseek_context;
 mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_environment;
+#[cfg(feature = "machine-host")]
+pub mod execution_host;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod execution_protocol;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
@@ -176,6 +180,8 @@ mod telemetry_plugin;
 mod usage;
 #[cfg(feature = "full")]
 pub mod worker;
+#[cfg(feature = "full")]
+mod worker_execution;
 #[cfg(feature = "full")]
 mod worker_telemetry;
 #[cfg(feature = "full")]

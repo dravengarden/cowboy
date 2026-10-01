@@ -1610,6 +1610,34 @@ fn decode_event_row(row: EventRow, session_id: &str, operation: &str) -> Option<
 }
 
 impl SqliteStorage {
+    pub(super) async fn execution_binding_matches(
+        &self,
+        session_id: &str,
+        record: &serde_json::Value,
+    ) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1 AND execution_binding = ?2)",
+        )
+        .bind(session_id)
+        .bind(record)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
+    pub(super) async fn commit_execution_binding(
+        &self,
+        session_id: &str,
+        expected: &serde_json::Value,
+        prepared: &serde_json::Value,
+    ) -> Result<bool> {
+        let result = sqlx::query("UPDATE sessions SET execution_binding = ?3, updated_at_ms = ?4 WHERE id = ?1 AND execution_binding = ?2")
+            .bind(session_id).bind(expected).bind(prepared).bind(now_ms()).execute(&self.pool).await?;
+        if result.rows_affected() == 1 {
+            return Ok(true);
+        }
+        self.execution_binding_matches(session_id, prepared).await
+    }
+
     pub(super) fn durable_database_path(&self) -> Option<&std::path::Path> {
         self.database_path.as_deref()
     }

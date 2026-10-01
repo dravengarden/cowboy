@@ -34,6 +34,25 @@ import {
   subscribeProviderCatalog,
 } from "./providerCatalogRegistry.ts";
 
+Deno.test("execution contracts require an exact executor and a capable signed Provider", () => {
+  const candidate = manifest();
+  candidate.sdk_version = PROVIDER_SDK_VERSION;
+  candidate.runtime.required_capabilities.push("provider.execution-jsonrpc.v1");
+  candidate.runtime.behavior.execution = {
+    interface: "jsonrpc_v1",
+    executor_digests: [`sha256:${"a".repeat(64)}`],
+  };
+  validateProviderManifest(candidate);
+  const oldSdk = structuredClone(candidate);
+  oldSdk.sdk_version = "3.1.11";
+  assertThrows(() => validateProviderManifest(oldSdk));
+  const noCapability = structuredClone(candidate);
+  noCapability.runtime.required_capabilities = ["provider.runtime.v1"];
+  assertThrows(() => validateProviderManifest(noCapability));
+  candidate.runtime.behavior.execution.executor_digests = [];
+  assertThrows(() => validateProviderManifest(candidate));
+});
+
 function manifest(): ProviderManifest {
   const text = {
     component: "text",

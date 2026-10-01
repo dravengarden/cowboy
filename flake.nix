@@ -25,6 +25,7 @@
       };
       deno = import ./nix/deno.nix { inherit pkgs; };
       cowboy-nodejs = import ./nix/nodejs.nix { inherit pkgs; };
+      execution-runtime = import ./nix/execution-runtime.nix { inherit pkgs; };
       buildDenoViteApp = import ./nix/deno-vite-app.nix {
         inherit pkgs deno;
         lib = pkgs.lib;
@@ -115,6 +116,11 @@
           ./tests/fixtures/composition-v1.json
           ./src/claude_shell.rs
           ./src/cgroup.rs
+          ./src/execution_environment.rs
+          ./src/execution_protocol.rs
+          ./src/execution_host.rs
+          ./src/execution_host
+          ./src/bin/cowboy-execution-host.rs
           ./src/code_buffer_read.rs
           ./src/code_buffer_read
           ./plugins/zed/adapter/fixtures/content.json
@@ -201,8 +207,11 @@
         ./src/provider_behavior.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
+        ./src/execution_environment.rs
+        ./src/execution_protocol.rs
         ./src/runtime_trace.rs
         ./src/worker.rs
+        ./src/worker_execution.rs
         ./src/worker_telemetry.rs
         ./src/bin/cowboy-acp-worker.rs
       ] ++ plugin-contract-files ++ [
@@ -327,6 +336,8 @@
           "cowboy-machine"
           "--bin"
           "cowboy-machine-install"
+          "--bin"
+          "cowboy-execution-host"
         ];
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
@@ -421,6 +432,20 @@
         EOF
       '';
 
+      execution-configuration = pkgs.writeText "cowboy-execution.json" (builtins.toJSON {
+        schema = 1;
+        host_command = "${cowboy-machine}/bin/cowboy-execution-host";
+        executor = {
+          command = "${execution-runtime}/bin/codex";
+          sha256 = execution-runtime.executorDigest;
+          version = execution-runtime.executorVersion;
+        };
+        retention = {
+          command = "${pkgs.nix}/bin/nix-store";
+          closure = "${execution-runtime}";
+        };
+      });
+
       machine-release = bootstrap:
         pkgs.runCommand
           (if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
@@ -430,15 +455,19 @@
           "$out/libexec/cowboy-machine"
         ${
           if bootstrap then
-            ''ln -s "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine"''
+            ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
+              --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-configuration}''
           else
             ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
+              --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-configuration} \
               --add-flags "--desired-generation ${worker-generation}"''
         }
         # Registration finds companions beside the native current_exe. Keep
         # both the native executable and its wrapper in this complete bundle.
         cp ${cowboy-machine}/bin/cowboy-machine-install \
           "$out/bin/cowboy-machine-install"
+        cp ${cowboy-machine}/bin/cowboy-execution-host \
+          "$out/bin/cowboy-execution-host"
         cp ${cowboy-machine}/bin/.cowboy-wrapped "$out/bin/.cowboy-wrapped"
         makeWrapper "$out/bin/.cowboy-wrapped" "$out/bin/cowboy" \
           --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
@@ -589,6 +618,7 @@
     in
     {
       packages.${system} = {
+        cowboy-execution-runtime = execution-runtime;
         default = cowboy;
         cowboy = cowboy;
         cowboy-machine = cowboy-machine;

@@ -1,6 +1,6 @@
 # Installable Plugin packages
 
-Status: Plugin package schema v1, Plugin release schemas v1-3, Agent Provider payload schema v2,
+Status: Plugin package schema v1, Plugin release schemas v1-4, Agent Provider payload schema v2,
 Agent runtime-binding schema v2, and host integration schema v2 implementation
 contract. The in-tree
 `LaunchSpec` registry remains only as a compatibility fallback for pre-package
@@ -8,6 +8,14 @@ session generations.
 
 This design implements the normative ownership rules in
 [Cowboy core requirements](requirements.md).
+
+Release schema 4 is reserved for Agent Providers declaring execution environments
+(Plugin SDK 1.11+, Provider SDK 3.1.12+). It preserves optional host bundles and
+the existing immutable runtime matrix. It prevents earlier Catalog readers from
+decoding the new closed execution capability vocabulary. An execution-capable
+package cannot be signed under an older envelope; readers must skip schema 4
+before decoding its payload. Installation additionally requires compatible
+Machine readers and its exact declared executor digest.
 
 Release schema 3 is reserved for data-only workspace extensions (payload 1,
 Plugin SDK 1.9+). It cannot bind a host bundle or executables. Earlier readers

@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "gemini",
-  "version": "3.1.27",
+  "version": "3.1.28",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.11",
+  "sdk_version": "3.1.12",
   "display": {
     "name": "Gemini",
     "vendor": "Google",
@@ -18,18 +18,33 @@
       "x2_percent": 100,
       "y2_percent": 100,
       "stops": [
-        { "offset_percent": 0, "color": "#4285F4" },
-        { "offset_percent": 50, "color": "#9B72CB" },
-        { "offset_percent": 100, "color": "#D96570" }
+        {
+          "offset_percent": 0,
+          "color": "#4285F4"
+        },
+        {
+          "offset_percent": 50,
+          "color": "#9B72CB"
+        },
+        {
+          "offset_percent": 100,
+          "color": "#D96570"
+        }
       ]
     }
   },
   "card_layout": "split_status",
   "activity": {
-    "indicator": { "kind": "mark_pulse", "interval_ms": 1800 },
+    "indicator": {
+      "kind": "mark_pulse",
+      "interval_ms": 1800
+    },
     "label": {
       "kind": "text",
-      "value": { "source": "literal", "value": "Thinking…" },
+      "value": {
+        "source": "literal",
+        "value": "Thinking…"
+      },
       "effect": "shimmer"
     },
     "accessible_label": "Gemini is working"
@@ -37,10 +52,17 @@
   "host": {
     "schema_version": 2,
     "conversation_compaction": {
-      "aliases": ["compact", "compress", "summarise", "summarize"],
+      "aliases": [
+        "compact",
+        "compress",
+        "summarise",
+        "summarize"
+      ],
       "fallback_command": "compress"
     },
-    "account_usage": { "provider": "gemini" },
+    "account_usage": {
+      "provider": "gemini"
+    },
     "transcript": {
       "schema_version": 1,
       "thought": {
@@ -73,10 +95,15 @@
         }
       ]
     },
-    "arguments": ["--acp"],
+    "arguments": [
+      "--acp"
+    ],
     "environment": {},
     "remove_environment": [],
-    "remove_environment_prefixes": ["GEMINI_", "GOOGLE_"],
+    "remove_environment_prefixes": [
+      "GEMINI_",
+      "GOOGLE_"
+    ],
     "dependencies": [
       {
         "id": "google-gemini-cli",
@@ -116,7 +143,9 @@
         ]
       }
     ],
-    "required_capabilities": ["provider.runtime.v1"]
+    "required_capabilities": [
+      "provider.runtime.v1"
+    ]
   },
   "authentication": {
     "schema_version": 1,
@@ -134,7 +163,9 @@
           "bundle_key": "api_key",
           "verification_url": "https://aistudio.google.com/apikey"
         },
-        "required_bundle_keys": ["api_key"]
+        "required_bundle_keys": [
+          "api_key"
+        ]
       },
       {
         "id": "code-assist",
@@ -142,11 +173,17 @@
         "flow": "browser_code",
         "executor": {
           "kind": "command_v1",
-          "component": { "kind": "provider_cli", "slot": "gemini" },
+          "component": {
+            "kind": "provider_cli",
+            "slot": "gemini"
+          },
           "arguments": [],
           "terminal": "pty",
           "challenge": "browser_code",
-          "environment": { "NO_BROWSER": "true", "TERM": "dumb" },
+          "environment": {
+            "NO_BROWSER": "true",
+            "TERM": "dumb"
+          },
           "preflight": [
             {
               "kind": "env_file_key_required_v1",
@@ -156,12 +193,19 @@
             {
               "kind": "json_string_set_v1",
               "relative_path": ".gemini/settings.json",
-              "path": ["security", "auth", "selectedType"],
+              "path": [
+                "security",
+                "auth",
+                "selectedType"
+              ],
               "value": "oauth-personal"
             }
           ]
         },
-        "required_bundle_keys": ["settings_json", "oauth_creds_json"]
+        "required_bundle_keys": [
+          "settings_json",
+          "oauth_creds_json"
+        ]
       }
     ],
     "credential_files": [
@@ -181,7 +225,9 @@
         "required": false
       }
     ],
-    "environment_projection": { "GEMINI_API_KEY": "api_key" }
+    "environment_projection": {
+      "GEMINI_API_KEY": "api_key"
+    }
   },
   "compatibility": {
     "min_controller_contract": 2,

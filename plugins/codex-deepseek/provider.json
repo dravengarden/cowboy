@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.27",
+  "version": "3.1.28",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.11",
+  "sdk_version": "3.1.12",
   "display": {
     "name": "Codex · DeepSeek",
     "vendor": "DeepSeek",
@@ -18,14 +18,23 @@
       "x2_percent": 100,
       "y2_percent": 100,
       "stops": [
-        { "offset_percent": 0, "color": "#4D6BFE" },
-        { "offset_percent": 100, "color": "#168B78" }
+        {
+          "offset_percent": 0,
+          "color": "#4D6BFE"
+        },
+        {
+          "offset_percent": 100,
+          "color": "#168B78"
+        }
       ]
     }
   },
   "card_layout": "split_status",
   "activity": {
-    "indicator": { "kind": "terminal_prompt", "interval_ms": 4200 },
+    "indicator": {
+      "kind": "terminal_prompt",
+      "interval_ms": 4200
+    },
     "label": {
       "kind": "phrase_cycle",
       "phrases": [
@@ -51,7 +60,10 @@
       "name": "Flash · Max",
       "detail": "DeepSeek-V4.1-Flash · Max reasoning",
       "is_default": true,
-      "values": { "model": "deepseek-flash", "reasoning_effort": "max" }
+      "values": {
+        "model": "deepseek-flash",
+        "reasoning_effort": "max"
+      }
     }
   ],
   "configuration_options": [
@@ -71,10 +83,16 @@
   "host": {
     "schema_version": 2,
     "conversation_compaction": {
-      "aliases": ["compact", "summarise", "summarize"],
+      "aliases": [
+        "compact",
+        "summarise",
+        "summarize"
+      ],
       "fallback_command": "compact"
     },
-    "account_usage": { "provider": "deepseek" },
+    "account_usage": {
+      "provider": "deepseek"
+    },
     "transcript": {
       "schema_version": 1,
       "thought": {
@@ -84,7 +102,9 @@
         "current_surface": "soft"
       }
     },
-    "features": ["cache_protection_v1"]
+    "features": [
+      "cache_protection_v1"
+    ]
   },
   "runtime": {
     "driver_schema": 1,
@@ -173,7 +193,9 @@
         },
         "arguments": [],
         "environment": {},
-        "auth_environment": ["DEEPSEEK_API_KEY"],
+        "auth_environment": [
+          "DEEPSEEK_API_KEY"
+        ],
         "transport": {
           "kind": "loopback_http_v1",
           "listen_argument": "--listen",
@@ -266,7 +288,10 @@
         ]
       }
     ],
-    "required_capabilities": ["provider.runtime.v1", "provider.gateway.v1"]
+    "required_capabilities": [
+      "provider.runtime.v1",
+      "provider.gateway.v1"
+    ]
   },
   "authentication": {
     "schema_version": 1,
@@ -284,11 +309,15 @@
           "bundle_key": "api_key",
           "verification_url": "https://platform.deepseek.com/api_keys"
         },
-        "required_bundle_keys": ["api_key"]
+        "required_bundle_keys": [
+          "api_key"
+        ]
       }
     ],
     "credential_files": [],
-    "environment_projection": { "DEEPSEEK_API_KEY": "api_key" }
+    "environment_projection": {
+      "DEEPSEEK_API_KEY": "api_key"
+    }
   },
   "compatibility": {
     "min_controller_contract": 2,

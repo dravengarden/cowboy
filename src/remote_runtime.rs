@@ -318,6 +318,26 @@ impl RemoteRuntime {
             })
     }
 
+    pub(crate) fn execution_owner_matches(
+        &self,
+        request: &crate::execution_protocol::RuntimeRequest,
+    ) -> bool {
+        self.shared
+            .workers
+            .lock()
+            .get(&request.session_id)
+            .is_some_and(|worker| {
+                worker.worker_epoch == request.worker_epoch
+                    && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+                    && worker
+                        .launch
+                        .as_ref()
+                        .and_then(|launch| launch.execution_binding.as_ref())
+                        .and_then(|binding| binding.decode().ok())
+                        .is_some_and(|binding| binding == request.binding)
+            })
+    }
+
     #[must_use]
     pub fn worker_matches_cwd(&self, session_id: &str, cwd: &str) -> bool {
         self.shared
@@ -972,6 +992,7 @@ fn snapshot_satisfies_ensure(worker: &WorkerSnapshot, session: &StartSession) ->
         return false;
     };
     if launch.cwd != session.cwd
+        || launch.execution_binding != session.execution_binding
         || launch.provider != session.provider
         || launch.provider_version != session.provider_version
         || launch.provider_generation_digest != session.provider_generation_digest
@@ -2580,6 +2601,7 @@ mod tests {
                 generation: "gen-1".to_owned(),
                 fallback_for: None,
                 adopt_only: false,
+                execution_binding: None,
             }),
             state: WorkerState::Busy,
             agent_session_id: Some("agent-1".to_owned()),

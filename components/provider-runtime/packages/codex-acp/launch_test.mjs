@@ -2,9 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { splitConfigurationArguments } from "./launch.mjs";
+import {
+  bindExecutionRequest,
+  readExecutionDescriptor,
+  splitConfigurationArguments,
+} from "./launch.mjs";
 
 test("the private CLI process receives the configured argv without a shell", () => {
   const echo = (process.env.PATH ?? "").split(delimiter)
@@ -54,5 +66,71 @@ test("invalid or incomplete configuration never reaches an executable", () => {
     const args of [["-c"], ["--config", "--help"], ["-c", "../escape=true"]]
   ) {
     assert.throws(() => splitConfigurationArguments(args));
+  }
+});
+
+function descriptor() {
+  return {
+    schema: 1,
+    endpoint: "ws://127.0.0.1:43210/",
+    bearer_token: "a".repeat(64),
+    binding: {
+      schema: 1,
+      environment: { protocol: 1, id: "environment-one" },
+      workspace: { cwd: "/target/worktree" },
+    },
+  };
+}
+
+test("native new and resumed turns get the same exact environment without rewriting user input", () => {
+  for (const method of ["thread/start", "turn/start"]) {
+    const original = {
+      id: 42,
+      method,
+      params: { cwd: "/runtime/entry", input: [{ text: "quotes '$() 中文" }] },
+    };
+    const actual = bindExecutionRequest(original, descriptor());
+    assert.deepEqual(actual.params.environments, [{
+      environmentId: "environment-one",
+      cwd: "/target/worktree",
+      runtimeWorkspaceRoots: ["/target/worktree"],
+    }]);
+    assert.deepEqual(actual.params.input, original.params.input);
+    assert.equal(original.params.environments, undefined);
+    assert.throws(() =>
+      bindExecutionRequest(
+        { method, params: { environments: [] } },
+        descriptor(),
+      )
+    );
+  }
+  const resume = { method: "thread/resume", params: { threadId: "saved" } };
+  assert.deepEqual(bindExecutionRequest(resume, descriptor()), resume);
+});
+
+test("execution descriptor rejects public files, symlinks, arbitrary hosts and unsupported identities", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "cowboy-launch-"));
+  const path = join(directory, "descriptor.json");
+  try {
+    writeFileSync(path, JSON.stringify(descriptor()), { mode: 0o600 });
+    assert.deepEqual(await readExecutionDescriptor(path), descriptor());
+    chmodSync(path, 0o644);
+    await assert.rejects(readExecutionDescriptor(path));
+    chmodSync(path, 0o600);
+    symlinkSync(path, join(directory, "alias"));
+    await assert.rejects(readExecutionDescriptor(join(directory, "alias")));
+    for (
+      const patch of [
+        { endpoint: "ws://remote.example/" },
+        { endpoint: "ws://127.0.0.1/?secret=x" },
+        { bearer_token: "short" },
+        { schema: 2 },
+      ]
+    ) {
+      writeFileSync(path, JSON.stringify({ ...descriptor(), ...patch }));
+      await assert.rejects(readExecutionDescriptor(path));
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

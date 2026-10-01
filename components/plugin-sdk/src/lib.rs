@@ -8,6 +8,8 @@
 mod authentication_host;
 mod cli_auth;
 mod code_intelligence;
+#[cfg(test)]
+mod execution_tests;
 pub mod host;
 mod telemetry;
 mod workspace_extension;
@@ -39,9 +41,12 @@ pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 3;
+pub const RELEASE_SCHEMA_VERSION: u16 = 4;
 pub const HOST_RELEASE_SCHEMA_VERSION: u16 = 2;
 pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
+/// Old Catalog readers must skip execution-capable Agent payloads before
+/// decoding their new closed capability vocabulary.
+pub const EXECUTION_RELEASE_SCHEMA_VERSION: u16 = 4;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
 pub const CODE_INTELLIGENCE_SCHEMA_MIN_VERSION: u16 = 1;
@@ -466,6 +471,10 @@ impl PluginCompatibilityRequirements {
                 self.plugin_kind == PluginKind::WorkspaceExtension
                     && self.host_bundle_schema.is_none(),
                 "Plugin release schema 3 is reserved for workspace extensions"
+            ),
+            EXECUTION_RELEASE_SCHEMA_VERSION => ensure!(
+                self.plugin_kind == PluginKind::AgentProvider,
+                "Plugin release schema 4 is reserved for execution-capable Agents"
             ),
             _ => {}
         }
@@ -914,6 +923,20 @@ impl PluginPackage {
         Ok(())
     }
 
+    #[must_use]
+    pub fn minimum_release_schema(&self) -> u16 {
+        if self
+            .agent_provider()
+            .is_some_and(|provider| provider.manifest.runtime.behavior.execution.is_some())
+        {
+            EXECUTION_RELEASE_SCHEMA_VERSION
+        } else if self.manifest.kind == PluginKind::WorkspaceExtension {
+            WORKSPACE_RELEASE_SCHEMA_VERSION
+        } else {
+            RELEASE_SCHEMA_MIN_VERSION
+        }
+    }
+
     fn expected_platforms(&self) -> BTreeSet<PlatformTarget> {
         match &self.payload {
             PluginPayload::AgentProvider(provider) => provider
@@ -1070,6 +1093,10 @@ impl PluginRelease {
             (RELEASE_SCHEMA_MIN_VERSION..=RELEASE_SCHEMA_VERSION).contains(&self.release_schema),
             "unsupported plugin release schema"
         );
+        ensure!(
+            self.release_schema >= package.minimum_release_schema(),
+            "Plugin payload requires a newer release envelope for safe Catalog readers"
+        );
         match self.release_schema {
             RELEASE_SCHEMA_MIN_VERSION => ensure!(
                 self.host_bundle_digest.is_none(),
@@ -1087,6 +1114,25 @@ impl PluginRelease {
                     && self.host_bundle_digest.is_none(),
                 "release schema 3 is reserved for data-only workspace extensions"
             ),
+            EXECUTION_RELEASE_SCHEMA_VERSION => {
+                ensure!(
+                    package.minimum_release_schema() == EXECUTION_RELEASE_SCHEMA_VERSION,
+                    "release schema 4 requires an execution-capable Agent"
+                );
+                ensure!(
+                    package
+                        .manifest
+                        .components
+                        .iter()
+                        .any(|component| component.id == "cowboy.plugin-sdk"
+                            && Version::parse(&component.version)
+                                .is_ok_and(|version| version >= Version::new(1, 11, 0))),
+                    "execution-capable release requires Plugin SDK 1.11 or newer"
+                );
+                if let Some(digest) = &self.host_bundle_digest {
+                    validate_digest(digest, "plugin host bundle digest")?;
+                }
+            }
             _ => unreachable!("release schema interval was checked"),
         }
         if package.authentication_provider().is_some_and(|contract| {

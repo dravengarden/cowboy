@@ -316,6 +316,7 @@ import type {
   Status,
 } from "./protocol";
 import { sessionProjectLabel } from "./sessionProject";
+import { sessionExecution } from "./sessionExecution";
 import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import {
@@ -7370,6 +7371,10 @@ function SessionInfoSection({
   // mobile replaces the footer Close action with an explicit Save action while
   // this field is being edited. Plain Enter is intentionally not a commit path.
   const project = sessionProjectLabel(session) ?? "Not recorded";
+  const machines = useStoreSelector((snapshot) => snapshot.machines);
+  const execution = sessionExecution(session);
+  const machineName = (id: string | undefined): string =>
+    machines.find((machine) => machine.id === id)?.display_name ?? id ?? "Local";
   const contextUsed = session.context_used ?? 0;
   const contextSize = session.context_size ?? 0;
   const hasContext = contextSize > 0;
@@ -7434,7 +7439,11 @@ function SessionInfoSection({
   }, [cacheProtectionVisible, session.id]);
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Project", value: project },
-    { label: "Working dir", value: session.cwd, mono: true },
+    { label: "Working dir", value: execution.cwd, mono: true },
+    ...(execution.state === "local" ? [] : [
+      { label: "Agent runtime", value: machineName(session.machine_id) },
+      { label: "Environment", value: execution.machineId ? machineName(execution.machineId) : "Unavailable" },
+    ]),
     { label: "Source", value: originLabel(session.origin) },
     { label: "Status", value: session.status },
     { label: "Session id", value: session.id, mono: true },

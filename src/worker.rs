@@ -44,6 +44,7 @@ pub struct WorkerArgs {
     pub generation: String,
     pub worker_epoch: Option<String>,
     pub fallback_for: Option<String>,
+    pub execution_binding: Option<crate::execution_environment::ExecutionBinding>,
 }
 
 struct Shared {
@@ -62,6 +63,7 @@ struct Shared {
     seen_commands: Mutex<HashSet<String>>,
     workspace_path: PathBuf,
     workspace_identity: Option<WorkspaceIdentity>,
+    execution: Option<Arc<crate::worker_execution::Client>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,7 +349,10 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     // loopback sidecar Client is constructed during Provider preparation.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let prepared = provider::prepare(&args.provider).await?;
-    let spec = prepared.spec.clone();
+    let mut spec = prepared.spec.clone();
+    // This reserved host projection must never come from a parent process.
+    spec.package_remove_env
+        .insert(crate::worker_execution::DESCRIPTOR_ENV.to_owned());
     let provider_behavior = (!args.provider_generation_digest.is_empty())
         .then(|| crate::provider::behavior(&args.provider));
     let configuration = provider_behavior.as_ref().map_or_else(
@@ -393,8 +398,45 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         generation: args.generation.clone(),
         fallback_for: args.fallback_for.clone(),
         adopt_only: false,
+        execution_binding: args.execution_binding.clone(),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
+    let endpoint = if let Some(binding) = &args.execution_binding {
+        anyhow::ensure!(
+            prepared.execution_jsonrpc,
+            "Provider generation does not support execution environments"
+        );
+        let binding = binding.decode().map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            launch
+                .provider_behavior
+                .as_ref()
+                .and_then(|behavior| behavior.execution.as_ref())
+                .is_some_and(|execution| execution.accepts(
+                    binding.environment.protocol,
+                    &binding.environment.executor_digest
+                )),
+            "Provider generation has not accepted this exact executor"
+        );
+        anyhow::ensure!(
+            binding.runtime.cwd == args.cwd.display().to_string(),
+            "execution runtime directory mismatch"
+        );
+        let client = crate::worker_execution::Client::new(
+            args.session_id.clone(),
+            epoch.clone(),
+            binding,
+            notify_tx.clone(),
+        );
+        let endpoint = crate::worker_execution::Endpoint::start(client, &args.cwd).await?;
+        spec.env.insert(
+            crate::worker_execution::DESCRIPTOR_ENV.to_owned(),
+            endpoint.descriptor().display().to_string(),
+        );
+        Some(endpoint)
+    } else {
+        None
+    };
     let expected_workspace_identity = workspace_identity(&args.cwd);
     let shared = Arc::new(Shared {
         session_id: args.session_id.clone(),
@@ -433,6 +475,9 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         seen_commands: Mutex::new(HashSet::new()),
         workspace_path: args.cwd.clone(),
         workspace_identity: expected_workspace_identity,
+        execution: endpoint
+            .as_ref()
+            .map(|endpoint| Arc::clone(&endpoint.client)),
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -465,6 +510,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     // Dropping their kill-on-drop handles then tears down the full Provider
     // process tree before the worker exits.
     drop(prepared.sidecars);
+    drop(endpoint);
     result
 }
 
@@ -549,7 +595,11 @@ async fn connected(
         &mut writer,
         &Frame::Hello {
             role: PeerRole::Worker,
-            min_protocol: MIN_PROTOCOL_VERSION,
+            min_protocol: if shared.execution.is_some() {
+                2
+            } else {
+                MIN_PROTOCOL_VERSION
+            },
             max_protocol: PROTOCOL_VERSION,
             build: env!("CARGO_PKG_VERSION").to_owned(),
             session_id: Some(shared.session_id.clone()),
@@ -580,6 +630,11 @@ async fn connected(
     // unacknowledged final event turns this select loop into a CPU spin and can
     // starve the broker ACK that would let the worker drain.
     let mut agent_done = false;
+    if let Some(execution) = &shared.execution {
+        for frame in execution.frames(true) {
+            write_frame(&mut writer, &frame).await?;
+        }
+    }
     send_outbox(&shared, &mut writer, &mut last_sent).await?;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     loop {
@@ -589,6 +644,9 @@ async fn connected(
                     return Ok(ConnectedExit::Disconnected);
                 };
                 match frame {
+                    Frame::ExecutionReply { reply } => {
+                        if let Some(execution) = &shared.execution { execution.complete(*reply); }
+                    }
                     Frame::WorkerCommand { session_id, command }
                         if session_id == shared.session_id => {
                         let ack = handle_command(&shared, cmd_tx, command);
@@ -639,6 +697,7 @@ async fn connected(
             }
             _ = heartbeat.tick() => {
                 write_frame(&mut writer, &Frame::Heartbeat).await?;
+                send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
         }
     }
@@ -674,6 +733,11 @@ async fn send_outbox<W: tokio::io::AsyncWrite + Unpin>(
         )
         .await?;
         *last_sent = seq;
+    }
+    if let Some(execution) = &shared.execution {
+        for frame in execution.frames(false) {
+            write_frame(writer, &frame).await?;
+        }
     }
     Ok(())
 }
@@ -1069,6 +1133,7 @@ mod tests {
                 seen_commands: Mutex::new(HashSet::new()),
                 workspace_path,
                 workspace_identity: expected_workspace_identity,
+                execution: None,
             }),
             rx,
         )
@@ -1345,6 +1410,7 @@ mod tests {
             generation: "gen-1".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         });
         let sink = RemoteSink {
             shared: Arc::clone(&shared),

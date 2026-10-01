@@ -48,6 +48,7 @@ pub struct LaunchSpec {
 pub(crate) struct PreparedLaunch {
     pub spec: LaunchSpec,
     pub sidecars: Vec<tokio::process::Child>,
+    pub execution_jsonrpc: bool,
 }
 
 impl LaunchSpec {
@@ -408,6 +409,7 @@ pub(crate) async fn prepare(id: &str) -> Result<PreparedLaunch> {
         return Ok(PreparedLaunch {
             spec,
             sidecars: Vec::new(),
+            execution_jsonrpc: false,
         });
     }
     prepare_package_launch(id).await
@@ -539,6 +541,11 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(PreparedLaunch {
+        execution_jsonrpc: package
+            .manifest
+            .runtime
+            .required_capabilities
+            .contains(&cowboy_provider_sdk::RuntimeCapability::ProviderExecutionJsonrpcV1),
         spec: LaunchSpec {
             id: package.manifest.id,
             command,
@@ -1180,6 +1187,12 @@ mod tests {
             serde_json::from_str(include_str!("../../plugins/codex/provider.json")).unwrap();
         let mut package = build_package(source.compile().unwrap()).unwrap();
         package.manifest.sdk_version = "2.4.0".to_owned();
+        package
+            .manifest
+            .runtime
+            .required_capabilities
+            .remove(&cowboy_provider_sdk::RuntimeCapability::ProviderExecutionJsonrpcV1);
+        package.manifest.runtime.behavior.execution = None;
         package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
         let bytes = serde_json::to_vec(&package).unwrap();
 

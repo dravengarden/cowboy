@@ -278,7 +278,8 @@ plugin-isolation-check PLUGIN="codex":
     if test "$(jq -r .kind source/plugin.json)" = agent_provider; then
       test -s "{{PLUGIN}}.hostbundle.json"
       host_digest="$(sha256sum "{{PLUGIN}}.hostbundle.json" | cut -d' ' -f1)"
-      test "$(jq -r .release_schema "{{PLUGIN}}.release.json")" = 2
+      release_schema="$(jq -r .release_schema "{{PLUGIN}}.release.json")"
+      test "$release_schema" = 2 || test "$release_schema" = 4
       test "$(jq -r .host_bundle_digest "{{PLUGIN}}.release.json")" = "sha256:$host_digest"
       if test -s "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json"; then
         cmp "{{PLUGIN}}.hostbundle.json" "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json"
@@ -393,6 +394,22 @@ execution-claude-turn-conformance CLI VERSION SHA256 RECEIPT:
 execution-lifetime-conformance CLI VERSION SHA256 RECEIPT:
     deno check tools/execution_environment_lifetime_probe.ts
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-all tools/execution_environment_lifetime_probe.ts "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+
+# Real detached target keeper; its control clients all disconnect for 35 seconds.
+execution-keeper-conformance KEEPER CLI VERSION SHA256 RECEIPT:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_keeper_conformance.py "$@"' conformance --keeper "{{KEEPER}}" --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+
+# Actual native Provider launcher -> worker WS -> Machine manager -> keeper.
+# The PID namespace owns all detached fixture processes; no production auth.
+execution-worker-conformance INPUT RECEIPT:
+    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+
+# Actual public login, signed fixture installation and two enrolled Machines.
+# All state is disposable; the fixture Agent makes no model requests.
+execution-session-conformance INPUT RECEIPT:
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; exec python3 tools/execution_session_conformance.py "$@"' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 # Diagnostic only: does not satisfy release coexistence or authorize migration.
 agent-generation-failure-isolation RELEASE ARTIFACTS WORKER *ARGS:

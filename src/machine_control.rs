@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 mod code_buffer_navigation;
 mod code_buffer_sync;
+mod execution;
 mod installation;
 pub(crate) mod local_roots;
 mod session_reads;
@@ -141,6 +142,7 @@ pub(crate) struct PluginHostBinding {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReplyKind {
+    Execution,
     Adapter,
     Command,
     PluginHost,
@@ -190,6 +192,7 @@ impl From<AdapterFailure> for String {
 }
 
 enum Reply {
+    Execution(Box<crate::machine_protocol::execution::Response>),
     InstallationTarget(Box<crate::machine_protocol::plugin_install::InstallTargetObservation>),
     InstallationStep(Box<crate::machine_protocol::plugin_install::InstallObservation>),
     PluginStep(Box<StepObservation>),
@@ -215,6 +218,7 @@ enum Reply {
 impl Reply {
     const fn kind(&self) -> ReplyKind {
         match self {
+            Self::Execution(_) => ReplyKind::Execution,
             Self::InstallationTarget(_) => ReplyKind::InstallationTarget,
             Self::InstallationStep(_) => ReplyKind::InstallationStep,
             Self::PluginStep(_) => ReplyKind::PluginStep,
@@ -591,6 +595,12 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::ExecutionResponse {
+                request_id,
+                response,
+            } => {
+                live.complete(token, &request_id, Reply::Execution(response));
+            }
             MachineEvent::TelemetryRecoveryAuditObservation {
                 request_id,
                 observation,

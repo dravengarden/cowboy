@@ -91,6 +91,7 @@ pub(crate) struct ProviderLaunchContext {
     pub remove_environment: BTreeSet<String>,
     pub remove_environment_prefixes: BTreeSet<String>,
     pub home: Option<PathBuf>,
+    pub execution_jsonrpc: bool,
 }
 
 #[derive(Debug)]
@@ -1261,6 +1262,11 @@ impl MachinePluginStore {
         );
         let command = runtime_command(&package_path, &payload.launch_command)?;
         Ok(ProviderLaunchContext {
+            execution_jsonrpc: package
+                .manifest
+                .runtime
+                .required_capabilities
+                .contains(&cowboy_provider_sdk::RuntimeCapability::ProviderExecutionJsonrpcV1),
             package_path,
             command: command.display().to_string(),
             version: package.manifest.version.clone(),

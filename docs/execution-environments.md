@@ -1,9 +1,20 @@
 # Native execution environments
 
-Status: core binding readers deployed, 2026-10-01. Remote session creation,
-Provider tool adapters and Machine execution grants remain disabled. The
-existing Matrix adapter remains a compatibility entry point until the native
-path passes the gates below. Reader support alone is not remote execution. The
+Status: Codex implementation candidate, 2026-10-02; not yet production activated.
+Core binding readers were deployed on 2026-10-01. The candidate adds explicit
+creation admission, a target-owned keeper, authenticated routing and a native
+Provider bridge. Sixteen native-turn checks pass, including a lost actual start
+receipt, 35-second transport interruption, image reads and cold resume. These
+checks do not establish cross-host latency or production subscription inference.
+The separate public-session gate passes eight checks through actual product
+login, a temporary signed Plugin and two enrolled Machines, including target
+edits, Controller and target Machine restarts, and confirmed deletion while
+preserving work. Its fixture Agent performs no model inference. Both gates use
+disposable state and do not accept production activation.
+Receipts: [native worker](experiments/execution-worker-2026-10-02.json) and
+[authenticated sessions](experiments/execution-session-2026-10-02.json).
+The existing Matrix adapter remains available until the native path is activated.
+The
 [Controller release receipt](releases/execution-binding-readers-2026-10-01.md)
 records the activated reader revision and connected Code acceptance.
 
@@ -62,12 +73,13 @@ executor implementation can be an owned, pinned component. Reusing Codex's
 executor code does not make the target depend on an installed, authenticated
 Codex Agent Plugin, and must not borrow another Plugin's private generation.
 
-For the first implementation, prefer a Provider-neutral Machine execution
-contract with upstream codecs in the respective Provider adapter. The Codex
-probe below evaluates upstream primitives; it does not select its entire CLI as
-the mandatory common executor. If a codec requires additional target code,
-declare and pin that code through an owned component and its accepted launch
-contract, rather than reaching into an Agent installation on the target.
+The first implementation uses a Provider-neutral Machine execution contract
+and a pinned Codex execution protocol inside the Codex Provider. The target's
+`components/execution-runtime/lock.json` owns the exact native executor bytes;
+the Machine release owns its configuration and retention. It starts only the
+native `exec-server`, in a private home without Provider authentication. An
+execution-capable Provider explicitly accepts the executor digest. Neither
+side reaches into an installed target Agent's private generation.
 
 ### Alternatives considered
 
@@ -113,13 +125,22 @@ recognized binding; changes to its revision, environment incarnation, executor
 or worktree invalidate previous scopes even when paths match. Missing target
 connections never select the runtime connection instead.
 
-Until the execution launch contract is implemented, all present bindings refuse
-runtime start, adoption, configuration replay and native event projection. A
-reconnect cannot resend an old local worker declaration for them; explicit
-runtime Stop/Cancel remain available. The Web/API do not create bound sessions.
-Older Controller generations do not read the new column: this candidate does not
-establish a production active/recovery/cold reader floor or authorize a writer
-rollout. That floor must be established before enabling creation.
+Unknown or malformed bindings refuse runtime start, adoption, configuration
+replay and native event projection. Recognized bindings additionally require the
+session's exact signed Provider generation to accept the executor digest and
+protocol. A bound worker requires runtime wire 2; old worker fallback is refused.
+Creation is separately admitted with `COWBOY_EXECUTION_RUNTIME_MACHINE`, naming
+the default Agent runtime. The default is closed. Actual active/recovery/cold
+readers must be established before enabling it.
+
+`POST /api/execution-sessions` persists a non-runnable preparation before
+allocating the target worktree. Target preparation is session-owned and reuses
+the original identity. A storage compare-and-set commits the exact binding
+before launching the Agent. Controller recovery resumes that preparation; it
+never switches a missing environment to local execution. Deletion confirms a
+target stop before removing the session. Abandoning a pending preparation also
+persists a target tombstone so a late request cannot recreate it. Worktrees and
+uncommitted files are retained.
 
 The runtime cwd is private OVH state. The execution cwd is a target-native path.
 Do not make paths appear equivalent by rewriting arbitrary tool output or
@@ -175,9 +196,10 @@ its binding. Never implement switching with a process-global variable or assume
 Codex `0.159.3` includes environment selection, remote filesystem and process
 interfaces, target instruction loading, and `codex exec-server`. Its upstream
 tests include `environments.toml` invoking `ssh ... exec-server --listen stdio`.
-The current Cowboy Codex adapter does not yet forward a core execution binding
-when starting/resuming a thread. Add that behavior inside its owned source patch
-and signed release; it is not a new Provider-ID branch in core.
+The candidate Cowboy Codex adapter forwards the core binding through a private
+worker endpoint when starting a thread and on every turn after native resume.
+This belongs to its owned source patch and signed release; core routing does
+not branch on a Provider ID.
 
 The native turn fixture establishes a more specific requirement: in `0.159.3`,
 `thread.environments` is live selection, not durable conversation placement.

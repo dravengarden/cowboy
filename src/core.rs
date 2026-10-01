@@ -447,17 +447,30 @@ pub struct SessionMeta {
 }
 
 impl SessionMeta {
-    /// Reader-first migration: the current worker launch contract has no
-    /// execution grant. Keep a recognized target usable for scoped reads but
-    /// never launch a runtime-local worker for a bound session.
+    /// Binding identity alone cannot authorize execution. The selected exact
+    /// signed Provider must also accept this executor contract.
     pub(crate) fn require_runtime_launch(&self) -> Result<(), String> {
         if let Some(binding) = &self.execution_binding {
-            binding
+            let binding = binding
                 .for_runtime(&self.machine_id, &self.cwd)
                 .map_err(str::to_owned)?;
-            return Err(
-                "this Cowboy runtime cannot launch bound execution environments yet".into(),
-            );
+            if self.provider_version.is_empty()
+                || self.provider_generation_digest.is_empty()
+                || !self
+                    .provider_behavior
+                    .as_ref()
+                    .and_then(|value| value.execution.as_ref())
+                    .is_some_and(|contract| {
+                        contract.accepts(
+                            binding.environment.protocol,
+                            &binding.environment.executor_digest,
+                        )
+                    })
+            {
+                return Err(
+                    "this Provider release does not support the bound execution environment".into(),
+                );
+            }
         }
         Ok(())
     }
@@ -2165,6 +2178,19 @@ impl Hub {
         if !self.accepts_runtime_projection(&worker.session_id) {
             return false;
         }
+        if self.session_info(&worker.session_id).is_some_and(|info| {
+            info.meta.execution_binding.is_some()
+                && !worker.launch.as_ref().is_some_and(|launch| {
+                    launch.execution_binding == info.meta.execution_binding
+                        && launch.provider == info.meta.provider
+                        && launch.provider_version == info.meta.provider_version
+                        && launch.provider_generation_digest == info.meta.provider_generation_digest
+                        && launch.provider_auth_generation == info.meta.provider_auth_generation
+                        && launch.cwd == info.meta.cwd
+                })
+        }) {
+            return false;
+        }
         if worker.has_connected_owner() {
             let settling = self
                 .inner
@@ -3507,6 +3533,7 @@ impl Hub {
                 || session.meta.agent_session_id != expected.agent_session_id
                 || session.meta.machine_id != expected.machine_id
                 || session.meta.cwd != expected.cwd
+                || session.meta.execution_binding != expected.execution_binding
             {
                 return Err("session changed while preparing reload; try again".to_owned());
             }
@@ -3516,6 +3543,13 @@ impl Hub {
                     "a saved native session is required to reload a new Provider version"
                         .to_owned(),
                 );
+            }
+            if session.meta.execution_binding.is_some() {
+                let mut candidate = session.meta.clone();
+                candidate.provider_version = version.to_owned();
+                candidate.provider_generation_digest = digest.to_owned();
+                candidate.provider_behavior = Some(behavior.clone());
+                candidate.require_runtime_launch()?;
             }
             session.meta.provider_version = version.to_owned();
             session.meta.provider_generation_digest = digest.to_owned();
@@ -3626,6 +3660,39 @@ impl Hub {
                 cwd,
                 title,
             });
+        }
+        self.broadcast_sessions();
+        Ok(())
+    }
+
+    /// Publish a prepared binding only after its compare-and-set has committed
+    /// to storage. No intermediate runtime-local metadata is ever observable.
+    pub(crate) fn accept_execution_binding(
+        &self,
+        session_id: &str,
+        expected: &crate::execution_environment::ExecutionBinding,
+        prepared: crate::execution_environment::ExecutionBinding,
+    ) -> Result<(), String> {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or("session no longer exists")?;
+            if session.meta.execution_binding.as_ref() != Some(expected) {
+                return Err("execution preparation changed".into());
+            }
+            let binding = prepared.for_runtime(&session.meta.machine_id, &session.meta.cwd)?;
+            if !expected
+                .preparation()
+                .is_some_and(|intent| intent.accepts(&binding))
+            {
+                return Err("prepared execution environment does not match the session".into());
+            }
+            let mut candidate = session.meta.clone();
+            candidate.execution_binding = Some(prepared);
+            candidate.require_runtime_launch()?;
+            session.meta = candidate;
+            session.code_incarnation = code_scope::CodeIncarnation::default();
         }
         self.broadcast_sessions();
         Ok(())
@@ -7952,6 +8019,7 @@ mod core_tests {
             generation: "worker-generation".to_owned(),
             fallback_for: None,
             adopt_only: false,
+            execution_binding: None,
         });
         let history = serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap();
         for mismatch in ["native", "home", "cwd", "placeholder"] {

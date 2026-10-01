@@ -838,6 +838,25 @@ pub struct ProviderBehaviorContract {
     pub default_preferences: BTreeMap<String, LiteralValue>,
     #[serde(default)]
     pub error_rules: Vec<RuntimeErrorRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionBehavior>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "interface", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExecutionBehavior {
+    JsonrpcV1 { executor_digests: BTreeSet<String> },
+}
+
+impl ExecutionBehavior {
+    #[must_use]
+    pub fn accepts(&self, protocol: u16, digest: &str) -> bool {
+        match self {
+            Self::JsonrpcV1 { executor_digests } => {
+                protocol == 1 && executor_digests.contains(digest)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -868,6 +887,10 @@ pub enum RuntimeCapability {
     ProviderRuntimeV1,
     #[serde(rename = "provider.gateway.v1")]
     ProviderGatewayV1,
+    /// The Provider consumes a worker-private `COWBOY_EXECUTION_DESCRIPTOR` and
+    /// binds every native turn to that endpoint. No local execution fallback.
+    #[serde(rename = "provider.execution-jsonrpc.v1")]
+    ProviderExecutionJsonrpcV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1498,6 +1521,16 @@ impl ProviderManifest {
             validate_semantic_version(&self.sdk_version, "Provider SDK version")?;
         }
         validate_display(&self.display)?;
+        if self
+            .runtime
+            .required_capabilities
+            .contains(&RuntimeCapability::ProviderExecutionJsonrpcV1)
+        {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 1, 12),
+                "execution environments require Provider SDK 3.1.12 or newer"
+            );
+        }
         self.logic.validate()?;
         self.ui.validate(&self.logic)?;
         let logo = self
@@ -1960,6 +1993,15 @@ impl ProviderBehaviorContract {
             self.schema_version == 1,
             "unsupported Provider behavior schema"
         );
+        if let Some(ExecutionBehavior::JsonrpcV1 { executor_digests }) = &self.execution {
+            ensure!(
+                !executor_digests.is_empty() && executor_digests.len() <= 16,
+                "invalid execution compatibility set"
+            );
+            for digest in executor_digests {
+                validate_digest(digest, "executor digest")?;
+            }
+        }
         ensure!(
             self.default_preferences.len() <= 64,
             "too many default Provider preferences"
@@ -2097,6 +2139,12 @@ impl RuntimeContract {
             self.required_capabilities
                 .contains(&RuntimeCapability::ProviderRuntimeV1),
             "Provider runtime is missing provider.runtime.v1"
+        );
+        ensure!(
+            self.required_capabilities
+                .contains(&RuntimeCapability::ProviderExecutionJsonrpcV1)
+                == self.behavior.execution.is_some(),
+            "execution capability and behavior must be declared together"
         );
         let mut dependencies = BTreeSet::new();
         for dependency in &self.dependencies {
@@ -3822,6 +3870,17 @@ mod tests {
             serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
         let mut package = build_package(source.compile().unwrap()).unwrap();
         package.manifest.sdk_version = "2.4.0".to_owned();
+        // A historical release cannot claim a contract introduced by 3.1.12.
+        package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
+        assert!(
+            ProviderPackage::from_historical_bytes(&serde_json::to_vec(&package).unwrap()).is_err()
+        );
+        package
+            .manifest
+            .runtime
+            .required_capabilities
+            .remove(&RuntimeCapability::ProviderExecutionJsonrpcV1);
+        package.manifest.runtime.behavior.execution = None;
         package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
         let bytes = serde_json::to_vec(&package).unwrap();
 
