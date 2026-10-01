@@ -212,7 +212,7 @@ macro_rules! implement_journal {
                 // Prepared -> StoppingSessions CAS loses to this resolution.
                 let locked = sqlx::query(
                     "UPDATE plugin_uninstall_operations SET phase = phase \
-                     WHERE operation_id = $1 AND phase = 'needs_attention' AND attention_from = 'prepared'"
+                     WHERE operation_id = $1 AND phase = 'needs_attention'"
                 ).bind(&intent.operation_id).execute(&mut *tx).await?;
                 ensure!(locked.rows_affected() == 1, "resolution phase changed");
                 let before = sqlx::query_as::<_, Record>(
@@ -230,8 +230,9 @@ macro_rules! implement_journal {
                     .bind(format!("{:x}", sha2::Sha256::digest(document.as_bytes())))
                     .bind(now).execute(&mut *tx).await?;
                 let changed = sqlx::query(
-                    "UPDATE plugin_uninstall_operations SET phase = 'aborted', updated_at_ms = $2 WHERE operation_id = $1"
-                ).bind(&intent.operation_id).bind(now).execute(&mut *tx).await?;
+                    "UPDATE plugin_uninstall_operations SET phase = $3, updated_at_ms = $2 WHERE operation_id = $1"
+                ).bind(&intent.operation_id).bind(now).bind(intent.action.terminal_phase().as_str())
+                    .execute(&mut *tx).await?;
                 ensure!(changed.rows_affected() == 1, "resolution completion was not persisted");
                 // No session UPDATE, Machine RPC, auth mutation or credential
                 // projection occurs here. Keep the original cause and intent.

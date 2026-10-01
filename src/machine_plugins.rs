@@ -17,12 +17,14 @@ mod code_sync_conformance;
 mod extensions;
 mod installation;
 mod operations;
+mod remove_projection;
 mod telemetry;
 use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::InstallGuard;
 
 pub(crate) use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
 pub(crate) use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
+pub(crate) use operations::maintenance::complete_absent_uninstall;
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
 pub(crate) use telemetry::managed::ManagedExportInvocation;
 pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
@@ -739,23 +741,19 @@ impl MachinePluginStore {
             return Ok(());
         }
         let materialized = self.auth_provider_root(provider_id).join("materialized");
-        if materialized.exists() {
-            fs::remove_dir_all(&materialized).with_context(|| {
-                format!(
-                    "removing Provider credential projection {}",
-                    materialized.display()
-                )
-            })?;
-        }
+        remove_projection::remove(&materialized).with_context(|| {
+            format!(
+                "removing Provider credential projection {}",
+                materialized.display()
+            )
+        })?;
         let runtime = self.auth_provider_root(provider_id).join("runtime");
-        if runtime.exists() {
-            fs::remove_dir_all(&runtime).with_context(|| {
-                format!(
-                    "removing Provider runtime credential projections {}",
-                    runtime.display()
-                )
-            })?;
-        }
+        remove_projection::remove(&runtime).with_context(|| {
+            format!(
+                "removing Provider runtime credential projections {}",
+                runtime.display()
+            )
+        })?;
         Ok(())
     }
 
@@ -1719,9 +1717,7 @@ impl MachinePluginStore {
                 let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
                 for directory in ["materialized", "runtime"] {
                     let path = provider_auth_root.join(directory);
-                    if path.exists() {
-                        fs::remove_dir_all(path)?;
-                    }
+                    remove_projection::remove(&path)?;
                 }
                 Ok(ProviderMaterializationState::NotInstalled)
             }

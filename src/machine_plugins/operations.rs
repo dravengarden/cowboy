@@ -11,6 +11,7 @@ use crate::machine_protocol::plugin_step::{
 pub(super) mod install_attempts;
 pub(super) mod installations;
 pub(crate) mod lease;
+pub(super) mod maintenance;
 mod telemetry_bindings;
 
 use lease::UninstallExecutionLease;

@@ -575,10 +575,9 @@ pub(super) async fn run(
         } else {
             plan.clone()
         };
-        // A removal the Machine refused because a session would be affected is
-        // reported, not a rollout failure: the next run removes it once that
-        // conversation ends.
-        if apply && !remaining.steps.is_empty() {
+        // A failed removal may already have removed its active link. Empty
+        // inventory cannot overrule that operation's nonterminal result.
+        if apply && (!remaining.steps.is_empty() || removal_failed(&removed)) {
             stopped_at = Some(machine.id.clone());
         }
         reports.push(json!({
@@ -623,6 +622,12 @@ pub(super) async fn run(
         );
     }
     Ok(())
+}
+
+fn removal_failed(results: &[Value]) -> bool {
+    results
+        .iter()
+        .any(|result| result.get("removed").and_then(Value::as_bool) != Some(true))
 }
 
 #[cfg(test)]

@@ -44,7 +44,7 @@ export interface UninstallEvidence {
 }
 export interface ResolutionEvidence {
   readonly resolution_id: string;
-  readonly action: "abort_before_effects";
+  readonly action: "abort_before_effects" | "complete_verified_removal";
   readonly resolved_at_ms: number;
   readonly plugin_mutation_performed: false;
   readonly session_mutation_performed: false;
@@ -173,17 +173,27 @@ function resolution(
     "worker_restoration_performed",
   ]);
   if (
-    row.action !== "abort_before_effects" ||
+    (row.action !== "abort_before_effects" &&
+      row.action !== "complete_verified_removal") ||
     row.plugin_mutation_performed !== false ||
     row.session_mutation_performed !== false ||
-    row.worker_restoration_performed !== false || op.phase !== "aborted" ||
+    row.worker_restoration_performed !== false ||
     row.resolved_at_ms !== op.updated_at_ms ||
-    op.attention_from !== "prepared" || op.cause !== null ||
-    (op.problem !== "interrupted" && op.problem !== "storage_failure")
+    op.cause !== null
+  ) invalid();
+  if (row.action === "abort_before_effects") {
+    if (
+      op.phase !== "aborted" || op.attention_from !== "prepared" ||
+      (op.problem !== "interrupted" && op.problem !== "storage_failure")
+    ) invalid();
+  } else if (
+    op.phase !== "completed" || op.attention_from !== "uninstalling" ||
+    op.affected_session_count !== 0 ||
+    (op.problem !== "interrupted" && op.problem !== "unknown_machine_outcome")
   ) invalid();
   return Object.freeze({
     resolution_id: id(row.resolution_id),
-    action: "abort_before_effects",
+    action: row.action,
     resolved_at_ms: time(row.resolved_at_ms),
     plugin_mutation_performed: false,
     session_mutation_performed: false,

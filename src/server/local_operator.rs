@@ -96,6 +96,20 @@ async fn reconcile_install(
     plugin_install::confirmed_reconcile_install(state, machine, plugin, operation, approval).await
 }
 
+async fn reconcile_uninstall(
+    State(state): State<Arc<AppState>>,
+    Path((machine, plugin, operation)): Path<(String, String, String)>,
+    Extension(grant): Extension<Arc<Grant>>,
+) -> Response {
+    let approval = match operator_approval::OperatorApproval::capture_host(&state.service_id, grant)
+    {
+        Ok(approval) => approval,
+        Err(status) => return status.into_response(),
+    };
+    plugin_uninstall::confirmed_reconcile_uninstall(state, machine, plugin, operation, approval)
+        .await
+}
+
 /// The same preview the browser gets, with the host grant as its actor. It
 /// lists the sessions an uninstall would take with it; nothing is removed here.
 async fn uninstall_plan(
@@ -196,6 +210,14 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
             post(reconcile_install),
         )
         .route("/v1/usage", get(api_usage))
+        .route(
+            "/v1/machines/{id}/plugins/{plugin}/uninstall-operations",
+            get(plugin_uninstall::api_machine_plugin_operations),
+        )
+        .route(
+            "/v1/machines/{id}/plugins/{plugin}/uninstall-operations/{operation}/reconcile",
+            post(reconcile_uninstall),
+        )
         .route("/v1/usage/{provider}", post(api_usage_provider_refresh))
         .with_state(state)
         .layer(DefaultBodyLimit::max(4096))

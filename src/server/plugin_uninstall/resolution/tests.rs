@@ -1,5 +1,28 @@
 use super::*;
 
+#[tokio::test]
+async fn receipt_projection_reports_the_actions_actual_terminal_phase() {
+    for (action, expected) in [
+        (ResolutionAction::AbortBeforeEffects, "aborted"),
+        (ResolutionAction::CompleteVerifiedRemoval, "completed"),
+    ] {
+        let mut intent = preview();
+        intent.action = action;
+        let receipt = ResolutionReceipt {
+            intent,
+            resolved_at_ms: 42,
+        };
+        let response = receipt_response(&receipt);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["phase"], expected);
+        assert_eq!(body["plugin_mutation_performed"], false);
+        assert_eq!(body["session_mutation_performed"], false);
+    }
+}
+
 fn preview() -> ResolutionIntent {
     let operation = crate::plugin_operation::resolution::fixture();
     ResolutionIntent::new(

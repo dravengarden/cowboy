@@ -1,5 +1,82 @@
 # Plugin recovery assessment
 
+## Offline completion of a failed, already-deactivated uninstall
+
+The 2026-10-01 maintenance path handles an uninstall whose active link was
+removed before read-only runtime caches caused cleanup to fail. This is an
+explicit host-maintenance action; the observation protocol below remains
+read-only and startup never retries it.
+
+Inspect the original Service operation and its affected-session count:
+
+```sh
+cowboy operator uninstall-operations --machine hawk --plugin claude-code
+```
+
+Only a zero-session operation interrupted in `uninstalling` can subsequently
+be completed by the Controller. This path cannot restore workers, finish an
+active installation or recover a different installation incarnation. Follow
+the host's Machine maintenance boundary: verify no target Plugin workers,
+arrange an independent restart, then stop only the resident Machine. Keep
+unrelated detached worker services running.
+
+Run the immutable Machine release as the state-directory owner. Preview:
+
+```sh
+cowboy-machine --state-dir /path/to/machine-state \
+  --service-id SERVICE --machine-id MACHINE \
+  --complete-absent-uninstall ORIGINAL_OPERATION_ID
+```
+
+Repeat with `--confirm-uninstall-digest` set to the exact reported request
+digest to apply. The command acquires the resident Machine's exclusive journal
+owner lock. It verifies the failed effect receipt, exact uninstall predecessor
+and request digest, absent active link, private state/auth directories, and absence
+of an unresolved installation attempt. A matching stable removal tombstone also
+permits finishing an interrupted maintenance pass. Empty inventory alone is
+never authority. A package directory may be 0755, matching the ordinary installer,
+but it must be owned by the invoking UID and not writable by other users.
+
+Before effects it durably archives the original failed receipt and invoking UID
+under `plugin-maintenance/`. Every explicit invocation has a 60-second budget.
+It deletes only `materialized` and `runtime`; directory permissions are repaired
+through opened descriptors, symlinks are unlinked without following them, and
+file permissions stay unchanged. Filesystem boundaries, excessive nesting and
+expired budgets fail closed. Verified absence and directory fsync precede the
+native journal's completion of the matching tombstone and step receipt. Original
+failure evidence remains in the maintenance audit. There are no database edits,
+copied credentials or installation-pointer writes.
+
+Restart the resident Machine, then complete the original Service transaction:
+
+```sh
+cowboy operator reconcile-uninstall --machine MACHINE --plugin PLUGIN \
+  --operation-id ORIGINAL_OPERATION_ID
+```
+
+This captures fresh host Operator authority, holds the Service slot fence,
+queries the exact Machine receipt and current tombstone on one authenticated
+connection, and requires `MatchingRemoval`. Its bounded local transaction
+compares the entire original operation and atomically records the confirming
+actor, Machine evidence and `completed`. It performs no Machine mutation,
+session deletion, worker restoration or replay. Unknown receipts, changed
+incarnations, affected sessions, revoked grants and racing Service edits remain
+fenced. The original Service failure stays alongside the resolution.
+
+Ship the Web decoder and Controller before writing the new
+`complete_verified_removal` audit action; an older Web decoder rejects that
+history. Machine step/installation formats and the SQL schema do not change.
+Older Machine readers still read the ordinary applied step and stable
+tombstone; the maintenance archive is outside their journal. Older Controllers
+can read the terminal operation but cannot decode the new resolution audit;
+use this release to inspect that audit after rollback.
+
+Signed retained packages, sealed replicas and audit/history retention keep their
+existing lifecycle. This completes the normal uninstall contract; it is not a
+global Provider credential revocation or source/worktree deletion.
+
+## Read-only observation protocol
+
 Status: seventh spatiotemporal slice, 2026-09-10. Protocol 12 adds a **read-only**
 recovery observation to the existing core uninstall lifecycle. It does not add
 a restore command, grant, automatic retry, new journal format or SQL migration.

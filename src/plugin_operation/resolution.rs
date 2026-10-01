@@ -11,6 +11,30 @@ pub(crate) const MAX_RESOLUTION_BYTES: usize = 4096;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ResolutionAction {
     AbortBeforeEffects,
+    CompleteVerifiedRemoval,
+}
+
+impl ResolutionAction {
+    pub(crate) fn terminal_phase(self) -> Phase {
+        match self {
+            Self::AbortBeforeEffects => Phase::Aborted,
+            Self::CompleteVerifiedRemoval => Phase::Completed,
+        }
+    }
+}
+
+pub(crate) fn can_complete_removal(operation: &Operation) -> bool {
+    operation.phase == Phase::NeedsAttention
+        && operation.attention_from == Some(Phase::Uninstalling)
+        && matches!(
+            operation.problem,
+            Some(Problem::UnknownMachineOutcome | Problem::Interrupted)
+        )
+        && operation.cause.is_none()
+        && operation.intent.session_ids.is_empty()
+        && operation.intent.live_session_ids.is_empty()
+        && operation.intent.active_session_ids.is_empty()
+        && operation.intent.installation_revision.is_some()
 }
 
 pub(crate) fn can_abort_before_effects(operation: &Operation) -> bool {
@@ -37,6 +61,8 @@ pub(crate) struct ResolutionIntent {
     pub operation_digest: String,
     pub before_updated_at_ms: i64,
     pub expires_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_evidence: Option<crate::machine_protocol::plugin_recovery::RecoveryObservation>,
 }
 
 impl ResolutionIntent {
@@ -63,12 +89,54 @@ impl ResolutionIntent {
             operation_digest: canonical_digest(&serde_json::to_vec(operation)?),
             before_updated_at_ms: operation.updated_at_ms,
             expires_at_ms,
+            machine_evidence: None,
         };
         intent.validate()?;
         Ok(intent)
     }
 
+    pub(crate) fn complete_removal(
+        resolution_id: String,
+        actor: Actor,
+        operation: &Operation,
+        expires_at_ms: i64,
+        evidence: crate::machine_protocol::plugin_recovery::RecoveryObservation,
+    ) -> Result<Self> {
+        ensure!(
+            can_complete_removal(operation),
+            "uninstall is not eligible for receipt completion"
+        );
+        operation.intent.validate()?;
+        let intent = Self {
+            schema: 1,
+            resolution_id,
+            operation_id: operation.intent.operation_id.clone(),
+            service_id: operation.intent.service_id.clone(),
+            machine_id: operation.intent.machine_id.clone(),
+            plugin_id: operation.intent.plugin_id.clone(),
+            actor,
+            action: ResolutionAction::CompleteVerifiedRemoval,
+            operation_digest: canonical_digest(&serde_json::to_vec(operation)?),
+            before_updated_at_ms: operation.updated_at_ms,
+            expires_at_ms,
+            machine_evidence: Some(evidence),
+        };
+        ensure!(
+            intent.matches(operation)?,
+            "Machine removal is not verified"
+        );
+        Ok(intent)
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            matches!(
+                (self.action, self.machine_evidence.is_some()),
+                (ResolutionAction::AbortBeforeEffects, false)
+                    | (ResolutionAction::CompleteVerifiedRemoval, true)
+            ),
+            "resolution evidence does not match action"
+        );
         let actor = match &self.actor {
             Actor::Product { user_id } => user_id,
             Actor::Admin { account } => account,
@@ -104,7 +172,13 @@ impl ResolutionIntent {
 
     pub(crate) fn matches(&self, operation: &Operation) -> Result<bool> {
         self.validate()?;
-        Ok(can_abort_before_effects(operation)
+        let candidate = match self.action {
+            ResolutionAction::AbortBeforeEffects => can_abort_before_effects(operation),
+            ResolutionAction::CompleteVerifiedRemoval => can_complete_removal(operation)
+                && self.machine_evidence.as_ref().is_some_and(|evidence| operation.intent.machine_step().is_ok_and(|step|
+                    matches!(evidence.basis(&step), crate::machine_protocol::plugin_recovery::RecoveryBasis::MatchingRemoval { .. }))),
+        };
+        Ok(candidate
             && self.operation_id == operation.intent.operation_id
             && self.service_id == operation.intent.service_id
             && self.machine_id == operation.intent.machine_id
@@ -159,7 +233,8 @@ pub(crate) struct ResolutionReceipt {
 
 impl ResolutionReceipt {
     pub(crate) fn matches_completed(&self, operation: &Operation) -> Result<bool> {
-        if operation.phase != Phase::Aborted || operation.updated_at_ms != self.resolved_at_ms {
+        let terminal = self.intent.action.terminal_phase();
+        if operation.phase != terminal || operation.updated_at_ms != self.resolved_at_ms {
             return Ok(false);
         }
         let mut before = operation.clone();
@@ -185,6 +260,65 @@ pub(crate) fn fixture() -> Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_removal_requires_exact_applied_tombstone_and_no_sessions() {
+        use crate::machine_protocol::plugin_recovery::{
+            InstallationEvidence, RecoveryObservation, RecoverySnapshot,
+        };
+        use crate::machine_protocol::plugin_step::{StepOutcome, StepReceipt, StepUncertainty};
+        let mut op = fixture();
+        op.attention_from = Some(Phase::Uninstalling);
+        op.problem = Some(Problem::UnknownMachineOutcome);
+        op.intent.schema = 2;
+        op.intent.installation_revision = Some(
+            format!("installation-{}", "a".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        let step = op.intent.machine_step().unwrap();
+        let mut snapshot = RecoverySnapshot {
+            request_digest: step.request_digest().unwrap(),
+            receipt: Some(Box::new(StepReceipt {
+                step: step.clone(),
+                request_digest: step.request_digest().unwrap(),
+                outcome: StepOutcome::Applied {},
+            })),
+            installation: InstallationEvidence::Removed {
+                revision: format!("installation-{}", "b".repeat(64))
+                    .try_into()
+                    .unwrap(),
+                previous_revision: step.installation_revision.clone().unwrap(),
+                uninstall_request_digest: step.request_digest().unwrap(),
+            },
+            slot_fenced: false,
+        };
+        let make = |op: &Operation, snapshot: RecoverySnapshot| {
+            ResolutionIntent::complete_removal(
+                "resolution-complete-0001".into(),
+                op.intent.actor.clone(),
+                op,
+                chrono::Utc::now().timestamp_millis() + 60_000,
+                RecoveryObservation::Observed {
+                    snapshot: Box::new(snapshot),
+                },
+            )
+        };
+        assert!(make(&op, snapshot.clone()).is_ok());
+        let mut changed = op.clone();
+        changed
+            .intent
+            .session_ids
+            .push("session-not-approved".into());
+        assert!(make(&changed, snapshot.clone()).is_err());
+        snapshot.slot_fenced = true;
+        assert!(make(&op, snapshot.clone()).is_err());
+        snapshot.slot_fenced = false;
+        snapshot.receipt.as_mut().unwrap().outcome = StepOutcome::Unknown {
+            reason: StepUncertainty::EffectFailure,
+        };
+        assert!(make(&op, snapshot).is_err());
+    }
 
     #[test]
     fn only_proven_pre_effect_interruption_is_a_candidate() {

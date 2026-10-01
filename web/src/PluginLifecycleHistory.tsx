@@ -90,7 +90,9 @@ function EntryView({ entry }: { entry: LifecycleEntry }): React.JSX.Element {
         <Alert severity="info">
           Separate resolution: {entry.resolution.resolution_id} ·{" "}
           {new Date(entry.resolution.resolved_at_ms).toISOString()}. Confirmed
-          abort before effects; no Plugin/session mutation or worker
+          {entry.resolution.action === "complete_verified_removal"
+            ? "completion from the verified Machine removal receipt"
+            : "abort before effects"}; no Plugin/session mutation or worker
           restoration.
         </Alert>
       )}

@@ -65,6 +65,35 @@ pub(in crate::machine_plugins) struct Installations {
 }
 
 impl Installations {
+    /// Only the offline maintenance owner calls this after preserving the
+    /// original receipt and verifying the exact absent installation. No link
+    /// is used to reconstruct installation authority.
+    pub(super) fn maintenance_removal(&self, step: &UninstallStep, complete: bool) -> Result<()> {
+        let mut state = self.state.lock();
+        ensure!(
+            !state.poisoned && state.present,
+            "installation journal unavailable"
+        );
+        let transition = state
+            .slots
+            .get(&step.plugin_id)
+            .context("installation not tracked")?;
+        ensure!(
+            transition.effect == Effect::Uninstall
+                && transition.generation_digest.is_none()
+                && transition.previous_revision == step.installation_revision
+                && transition.previous_revision.is_some()
+                && transition.operation_digest.as_ref() == Some(&step.request_digest()?),
+            "pending uninstall installation changed"
+        );
+        if complete {
+            let mut transition = transition.clone();
+            transition.outcome = Outcome::Stable {};
+            self.persist(&mut state, &transition)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn open(root: PathBuf) -> Result<Self> {
         let present = match root.symlink_metadata() {
             Ok(metadata) => {

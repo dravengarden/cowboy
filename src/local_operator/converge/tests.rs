@@ -5,6 +5,21 @@ use super::{
 use crate::machine_convergence::{MachinePlugins, UnlistedPolicy};
 use std::cmp::Ordering;
 
+#[test]
+fn removal_failure_is_not_erased_by_empty_post_inventory() {
+    use serde_json::json;
+    assert!(super::removal_failed(&[
+        json!({"removed":false,"http_status":409,"detail":"needs_attention"})
+    ]));
+    assert!(super::removal_failed(&[
+        json!({"removed":false,"reason":"session would be removed"})
+    ]));
+    assert!(!super::removal_failed(&[
+        json!({"removed":true,"http_status":200})
+    ]));
+    assert!(!super::removal_failed(&[]));
+}
+
 fn release(plugin: &str, version: &str, state: &str) -> CatalogRelease {
     CatalogRelease {
         plugin_id: plugin.to_owned(),

@@ -241,6 +241,23 @@ enum OperatorCommand {
         #[arg(long)]
         plugin: String,
     },
+    /// Read durable uninstall history, including failed removals absent from inventory.
+    UninstallOperations {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        plugin: String,
+    },
+    /// Complete a zero-session uninstall from its exact verified Machine receipt.
+    /// Never repeats the Machine effect or clears an uncertain receipt.
+    ReconcileUninstall {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        plugin: String,
+        #[arg(long)]
+        operation_id: String,
+    },
     /// Reconcile an exact terminal receipt or activation-free staging failure.
     /// This never repeats the installation or infers its outcome from inventory.
     ReconcileInstall {
@@ -393,6 +410,42 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
             None,
             None,
         ),
+        OperatorCommand::UninstallOperations { machine, plugin } => (
+            reqwest::Method::GET,
+            vec![
+                "machines".into(),
+                machine,
+                "plugins".into(),
+                plugin,
+                "uninstall-operations".into(),
+            ],
+            None,
+            None,
+        ),
+        OperatorCommand::ReconcileUninstall {
+            machine,
+            plugin,
+            operation_id,
+        } => {
+            ensure!(
+                crate::plugin_operation::installation::valid_operation_id(&operation_id),
+                "invalid operation ID"
+            );
+            (
+                reqwest::Method::POST,
+                vec![
+                    "machines".into(),
+                    machine,
+                    "plugins".into(),
+                    plugin,
+                    "uninstall-operations".into(),
+                    operation_id.clone(),
+                    "reconcile".into(),
+                ],
+                None,
+                Some(operation_id),
+            )
+        }
         OperatorCommand::ReconcileInstall {
             machine,
             plugin,

@@ -507,6 +507,15 @@ cutover. This path never compensates through legacy unjournaled reactivation;
 installation CAS and verified recovery authorization remain prerequisites. See
 [Machine operation receipts](machine-plugin-operation-receipts.md).
 
+Explicit offline host maintenance may finish a recorded failed cleanup only
+for the exact already-absent installation, under the native journal owner lock,
+with a fresh bounded invocation and an archived original receipt. The Controller
+can then complete a zero-session `Uninstalling` interruption from the exact
+applied receipt and matching current tombstone, using fresh Operator authority,
+an operation-snapshot CAS and an atomic resolution audit. It never derives
+success from absence alone or replays the expired forward command. See
+[uninstall maintenance](plugin-recovery-assessment.md).
+
 ### CR-11: Release automation belongs to this repository
 
 The canonical Provider dependency-audit and release procedure is the repository

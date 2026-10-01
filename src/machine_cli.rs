@@ -188,7 +188,7 @@ pub struct Args {
     #[arg(
         long,
         env = "COWBOY_MACHINE_CONTROLLER_URL",
-        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact"]
+        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact", "complete_absent_uninstall"]
     )]
     controller_url: Option<String>,
     /// Stable identity of the Cowboy Service that owns this local namespace.
@@ -208,6 +208,14 @@ pub struct Args {
         default_value = ".cowboy-machine"
     )]
     state_dir: PathBuf,
+    /// Offline host maintenance: finish one failed uninstall whose active
+    /// link is already absent. Requires stopping the resident Machine first.
+    /// Without --confirm-uninstall-digest this only validates and reports.
+    #[arg(long, requires = "service_id", conflicts_with_all = ["controller_url", "provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact"])]
+    complete_absent_uninstall: Option<String>,
+    /// Exact request digest reported by the offline maintenance preview.
+    #[arg(long, requires = "complete_absent_uninstall")]
+    confirm_uninstall_digest: Option<String>,
     /// Print the durable provider-usage outbox status as JSON and exit. This
     /// opens the SQLite spool read-only and does not contact the controller.
     #[arg(long, default_value_t = false)]
@@ -313,6 +321,19 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
 }
 
 async fn run_args(args: Args) -> anyhow::Result<()> {
+    if let Some(operation) = &args.complete_absent_uninstall {
+        let result = crate::machine_plugins::complete_absent_uninstall(
+            &args.state_dir,
+            args.service_id
+                .as_deref()
+                .context("Service identity required")?,
+            &args.machine_id,
+            operation,
+            args.confirm_uninstall_digest.as_deref(),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     if let Some(source) = &args.cache_runtime_artifact {
         let digest = args
             .artifact_sha256

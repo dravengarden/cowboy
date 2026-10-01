@@ -11,6 +11,41 @@ import {
 } from "./pluginLifecycle.ts";
 import { lifecycleFixture } from "./pluginLifecycle.fixture.ts";
 
+Deno.test("completed removal evidence retains failure history without claiming a replay", () => {
+  const value = lifecycleFixture();
+  const row = value.entries[1];
+  const entry = {
+    ...row,
+    operation: {
+      ...row.operation,
+      phase: "completed",
+      attention_from: "uninstalling",
+      problem: "unknown_machine_outcome",
+      affected_session_count: 0,
+    },
+    resolution: { ...row.resolution, action: "complete_verified_removal" },
+  };
+  const decode = (candidate: unknown) =>
+    decodeLifecycleHistory(
+      { ...value, entries: [candidate] },
+      "hawk",
+      "victoria",
+    );
+  assertEquals(decode(entry).entries[0].operation.phase, "completed");
+  assertThrows(() =>
+    decode({
+      ...entry,
+      operation: { ...entry.operation, affected_session_count: 1 },
+    })
+  );
+  assertThrows(() =>
+    decode({
+      ...entry,
+      resolution: { ...entry.resolution, plugin_mutation_performed: true },
+    })
+  );
+});
+
 Deno.test("lifecycle projection preserves domain identity, private-free recovery and immutable evidence", () => {
   const value = lifecycleFixture();
   const history = decodeLifecycleHistory(value, "hawk", "victoria");

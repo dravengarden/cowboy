@@ -93,6 +93,7 @@ async fn session_snapshot(store: &Store) -> Vec<serde_json::Value> {
 #[allow(clippy::too_many_lines)] // One atomicity/CAS/rollback story, identical for both backends.
 async fn contract(store: &Store) {
     store.migrate().await.unwrap();
+    verified_removal_contract(store).await;
     let mut intent = fixture("local-resolution");
     intent.plugin_id = "codex".into();
     intent.session_ids = vec!["sess-709".into()];
@@ -254,6 +255,102 @@ async fn contract(store: &Store) {
             .await
             .unwrap(),
         Some(pending)
+    );
+}
+
+async fn verified_removal_contract(store: &Store) {
+    use crate::machine_protocol::plugin_recovery::{
+        InstallationEvidence, RecoveryObservation, RecoverySnapshot,
+    };
+    use crate::machine_protocol::plugin_step::{StepOutcome, StepReceipt};
+    let mut intent = fixture("verified-removal");
+    intent.plugin_id = "removal-fixture".into();
+    intent.schema = 2;
+    intent.installation_revision = Some(
+        format!("installation-{}", "a".repeat(64))
+            .try_into()
+            .unwrap(),
+    );
+    store.begin_plugin_uninstall(&intent).await.unwrap();
+    for (from, to) in [
+        (Phase::Prepared, Phase::StoppingSessions),
+        (Phase::StoppingSessions, Phase::Uninstalling),
+    ] {
+        store
+            .advance_plugin_uninstall(&intent.operation_id, from, to, None)
+            .await
+            .unwrap();
+    }
+    store
+        .advance_plugin_uninstall(
+            &intent.operation_id,
+            Phase::Uninstalling,
+            Phase::NeedsAttention,
+            Some(Problem::UnknownMachineOutcome),
+        )
+        .await
+        .unwrap();
+    let before = store
+        .plugin_uninstall_operation(&intent.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let step = intent.machine_step().unwrap();
+    let evidence = RecoveryObservation::Observed {
+        snapshot: Box::new(RecoverySnapshot {
+            request_digest: step.request_digest().unwrap(),
+            receipt: Some(Box::new(StepReceipt {
+                step: step.clone(),
+                request_digest: step.request_digest().unwrap(),
+                outcome: StepOutcome::Applied {},
+            })),
+            installation: InstallationEvidence::Removed {
+                revision: format!("installation-{}", "b".repeat(64))
+                    .try_into()
+                    .unwrap(),
+                previous_revision: step.installation_revision.clone().unwrap(),
+                uninstall_request_digest: step.request_digest().unwrap(),
+            },
+            slot_fenced: false,
+        }),
+    };
+    let approval = ResolutionIntent::complete_removal(
+        "resolution-verified-removal".into(),
+        before.intent.actor.clone(),
+        &before,
+        chrono::Utc::now().timestamp_millis() + 60_000,
+        evidence,
+    )
+    .unwrap();
+    let mut wrong = approval.clone();
+    wrong.before_updated_at_ms -= 1;
+    assert!(
+        store
+            .resolve_plugin_uninstall(&ResolutionPermit::for_test(wrong))
+            .await
+            .is_err()
+    );
+    let receipt = store
+        .resolve_plugin_uninstall(&ResolutionPermit::for_test(approval))
+        .await
+        .unwrap();
+    let after = store
+        .plugin_uninstall_operation(&intent.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.phase, Phase::Completed);
+    assert_eq!(
+        after.problem, before.problem,
+        "original failure remains auditable"
+    );
+    assert!(receipt.matches_completed(&after).unwrap());
+    assert_eq!(
+        store
+            .plugin_uninstall_resolution(&intent.operation_id)
+            .await
+            .unwrap(),
+        Some(receipt)
     );
 }
 

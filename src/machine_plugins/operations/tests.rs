@@ -61,7 +61,7 @@ impl MachinePluginStore {
     }
 }
 
-fn step() -> UninstallStep {
+pub(super) fn step() -> UninstallStep {
     UninstallStep {
         schema: 1,
         operation_id: "operation-fixture-0001".into(),

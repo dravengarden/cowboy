@@ -167,14 +167,14 @@ fn receipt_response(receipt: &ResolutionReceipt) -> Response {
     Json(serde_json::json!({
         "schema": 1, "operation_id": receipt.intent.operation_id,
         "resolution_id": receipt.intent.resolution_id, "action": receipt.intent.action,
-        "phase": Phase::Aborted, "resolved_at_ms": receipt.resolved_at_ms,
+        "phase": receipt.intent.action.terminal_phase(), "resolved_at_ms": receipt.resolved_at_ms,
         "plugin_mutation_performed": false, "session_mutation_performed": false,
         "worker_restoration_performed": false,
     }))
     .into_response()
 }
 
-async fn resolve_no_effect(
+pub(super) async fn resolve_no_effect(
     store: Store,
     permit: ResolutionPermit,
     mut fence: OperationFence,
@@ -209,7 +209,7 @@ async fn resolve_no_effect(
     // Completion of this admitted local effect; not a new restoration grant.
     // If result observation fails or the task is interrupted, Drop retains the
     // memory fence. Startup reconstructs it from the actual durable phase.
-    fence.finish(Phase::Aborted);
+    fence.finish(receipt.intent.action.terminal_phase());
     Ok(receipt)
 }
 

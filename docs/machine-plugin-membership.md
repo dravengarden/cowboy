@@ -50,6 +50,11 @@ affected session**. Automation never sends the active-session confirmation. A
 live conversation is not ended to satisfy a list; the Plugin stays installed
 until it is idle, and the next run removes it.
 
+A refused or failed removal makes an applied convergence run exit nonzero and
+stops later Machines in that rollout. This remains a failure even if a partial
+uninstall has already removed its inventory entry. Inspect the original
+uninstall history instead of retrying under another identity.
+
 Everything else convergence already refuses still applies: a release that is
 not `ready` or that does not declare the platform is not a target, a Plugin
 holding an active session lease is not recycled under a live worker, an
