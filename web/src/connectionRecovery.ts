@@ -4,6 +4,32 @@
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
 
+/** An admitted connection can retry through the authenticated WebSocket
+ * handshake. HTTP diagnostics are needed only when admission itself failed:
+ * an upgrade error hides whether authentication or the dataset changed. */
+export async function checkReconnectAdmission(
+  admitted: boolean,
+  checks: {
+    dataset: () => Promise<unknown>;
+    auth: () => Promise<"reconnect" | "logout" | "keep">;
+    isDatasetChanged: (error: unknown) => boolean;
+  },
+): Promise<"retry" | "logout" | "dataset_changed"> {
+  if (admitted) return "retry";
+  const [dataset, auth] = await Promise.allSettled([
+    checks.dataset(),
+    checks.auth(),
+  ]);
+  if (
+    dataset.status === "rejected" && checks.isDatasetChanged(dataset.reason)
+  ) {
+    return "dataset_changed";
+  }
+  return auth.status === "fulfilled" && auth.value === "logout"
+    ? "logout"
+    : "retry";
+}
+
 /** Coalesce recovery through bootstrap. Connect/bootstrap guards retire wedged
  *  attempts; the liveness watchdog still owns stale capacity-waiting sockets. */
 export function shouldStartImmediateReconnect(

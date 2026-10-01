@@ -1,10 +1,84 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  checkReconnectAdmission,
   ForegroundProbe,
   isAppleTouchWebView,
   shouldReconnectOnForeground,
   shouldStartImmediateReconnect,
 } from "./connectionRecovery.ts";
+
+Deno.test("an admitted socket retries without waiting on unavailable HTTP probes", async () => {
+  const calls: string[] = [];
+  const hung = new Promise<never>(() => {});
+  const decision = await checkReconnectAdmission(true, {
+    dataset: () => {
+      calls.push("dataset");
+      return hung;
+    },
+    auth: () => {
+      calls.push("auth");
+      return hung;
+    },
+    isDatasetChanged: () => false,
+  });
+  assertEquals(decision, "retry");
+  assertEquals(calls, []);
+});
+
+Deno.test("failed admission checks HTTP concurrently and preserves authentication loss", async () => {
+  let finishDataset!: () => void;
+  let finishAuth!: (result: "logout") => void;
+  const calls: string[] = [];
+  const decision = checkReconnectAdmission(false, {
+    dataset: () => {
+      calls.push("dataset");
+      return new Promise<void>((resolve) => {
+        finishDataset = resolve;
+      });
+    },
+    auth: () => {
+      calls.push("auth");
+      return new Promise<"logout">((resolve) => {
+        finishAuth = resolve;
+      });
+    },
+    isDatasetChanged: () => false,
+  });
+  assertEquals(calls, ["dataset", "auth"]);
+  finishAuth("logout");
+  finishDataset();
+  assertEquals(await decision, "logout");
+});
+
+Deno.test("failed admission fences a changed dataset even with a valid cookie", async () => {
+  const changed = new Error("dataset replaced");
+  assertEquals(
+    await checkReconnectAdmission(false, {
+      dataset: () => Promise.reject(changed),
+      auth: () => Promise.resolve("reconnect"),
+      isDatasetChanged: (error) => error === changed,
+    }),
+    "dataset_changed",
+  );
+});
+
+Deno.test("temporary HTTP failures keep the session and retry failed admission", async () => {
+  for (
+    const auth of [
+      () => Promise.resolve("keep" as const),
+      () => Promise.reject(new Error("offline")),
+    ]
+  ) {
+    assertEquals(
+      await checkReconnectAdmission(false, {
+        dataset: () => Promise.reject(new Error("offline")),
+        auth,
+        isDatasetChanged: () => false,
+      }),
+      "retry",
+    );
+  }
+});
 
 Deno.test("foreground recovery preserves an in-flight replacement", () => {
   assertEquals(shouldReconnectOnForeground(undefined, 0, 30_000), true);
