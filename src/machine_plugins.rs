@@ -928,7 +928,9 @@ impl MachinePluginStore {
             operation,
             mut payload,
         } = request;
+        let admitted_at = Instant::now();
         let _lifecycle = self.lifecycle.lock().await;
+        let queue_ms = admitted_at.elapsed().as_millis();
         let resolved = self
             .resolve_host_invocation(
                 &plugin_id,
@@ -975,6 +977,9 @@ impl MachinePluginStore {
         let input = serde_json::to_vec(&payload)
             .map_err(anyhow::Error::from)
             .map_err(PluginHostInvocationFailure::from)?;
+        let preparation_ms = admitted_at.elapsed().as_millis();
+        tracing::info!(%plugin_id, ?operation, queue_ms, preparation_ms, "Plugin host preparation completed");
+        let command_started = Instant::now();
         let output = crate::plugin_process::run_plugin_command_with_environment(
             program,
             command_args,
@@ -982,6 +987,7 @@ impl MachinePluginStore {
             &environment,
         )
         .await;
+        tracing::info!(%plugin_id, ?operation, command_ms = command_started.elapsed().as_millis(), total_ms = admitted_at.elapsed().as_millis(), completed = output.is_ok(), "Plugin host command completed");
         for child in &mut prepared_sidecars.children {
             let _ = child.kill().await;
         }
@@ -1076,11 +1082,17 @@ impl MachinePluginStore {
         &self,
         targets: &[PluginUsageSidecar],
     ) -> Result<PreparedUsageSidecars> {
-        let inventory = self.inventory()?;
         let mut prepared = PreparedUsageSidecars {
             children: Vec::new(),
             targets: Vec::new(),
         };
+        // Agent inventory verifies every retained runtime. A collector with no
+        // sidecars must not pay that fleet-wide cost (or depend on unrelated
+        // Plugins being readable) before its own bounded command can start.
+        if targets.is_empty() {
+            return Ok(prepared);
+        }
+        let inventory = self.inventory()?;
         for target in targets {
             let mut candidates = Vec::new();
             for installed in &inventory {
@@ -4373,6 +4385,28 @@ pub(crate) fn telemetry_release_for_test(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn empty_usage_sidecars_do_not_inspect_unrelated_plugin_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        let store = super::MachinePluginStore::new(
+            root.path(),
+            crate::machine_protocol::Platform::Linux,
+            "x86_64".to_owned(),
+        )
+        .unwrap();
+        let unrelated = root.path().join("plugins/unrelated");
+        std::fs::create_dir_all(&unrelated).unwrap();
+        std::os::unix::fs::symlink(
+            format!("generations/{}", "ab".repeat(32)),
+            unrelated.join("active"),
+        )
+        .unwrap();
+        assert!(store.inventory().is_err());
+        let sidecars = store.prepare_usage_sidecars(&[]).await.unwrap();
+        assert!(sidecars.children.is_empty());
+        assert!(sidecars.targets.is_empty());
+    }
+
     use super::*;
 
     async fn assert_installation_cas(store: &MachinePluginStore, desired: &DesiredPlugin) {
