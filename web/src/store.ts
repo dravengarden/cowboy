@@ -2405,8 +2405,10 @@ function openBoundSocket(dataset: SyncDataset): void {
  *  mutations remain pending on `false`; ephemeral transcript sends fail. */
 export function send(cmd: Inbound): boolean {
   if (socketReady && socket && socket.readyState === WebSocket.OPEN) {
-    const traceparent = cmd.type === "submit" && cmd.cmid ? telemetryOperations.submit(cmd.session_id, cmd.cmid) : undefined;
-    socket.send(JSON.stringify(traceparent ? { ...cmd, traceparent } : cmd));
+    const traceparent = (cmd.type === "submit" || cmd.type === "activate_draft") && cmd.cmid
+      ? telemetryOperations.submit(cmd.session_id, cmd.cmid)
+      : undefined;
+    socket.send(JSON.stringify(cmd.type === "submit" && traceparent ? { ...cmd, traceparent } : cmd));
     return true;
   }
   return false;
@@ -3536,7 +3538,12 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
       // so reconnect also works for cached sessions that are not currently open.
       qClients.get(sessionId)?.baseValue().drafts ?? [],
     );
-    return id === null ? null : { type: "activate_draft", session_id: sessionId, id };
+    return id === null ? null : {
+      type: "activate_draft",
+      session_id: sessionId,
+      id,
+      cmid: args.row?.cmid ?? m.id,
+    };
   }
   if (m.name === "sendQueued" && args.id !== undefined) {
     return { type: "request_send_queued", session_id: sessionId, id: args.id };

@@ -7,10 +7,12 @@ const metadata = args.includes("--metadata");
 const local = args.includes("--local") || metadata || queued;
 const safety = args.includes("--safety");
 const recovery = args.includes("--transcript-recovery");
+const draftSend = args.includes("--draft-send");
 const bundles = args.filter((argument) =>
   argument !== "--queued" && argument !== "--metadata" &&
   argument !== "--local" &&
-  argument !== "--safety" && argument !== "--transcript-recovery"
+  argument !== "--safety" && argument !== "--transcript-recovery" &&
+  argument !== "--draft-send"
 );
 if (
   !browser?.startsWith("/nix/store/") ||
@@ -42,7 +44,9 @@ const session = {
   updated_at_ms: 0,
 };
 const cases = bundles.flatMap((bundle) =>
-  (metadata
+  (draftSend
+    ? ["draft-send"]
+    : metadata
     ? ["metadata"]
     : queued
     ? ["queued"]
@@ -70,6 +74,13 @@ for (const { bundle, scenario } of cases) {
   let datasetId = descriptor.dataset_id;
   const seen = new Set<string>();
   const history: Record<string, unknown>[] = [];
+  const image = { type: "image", mimeType: "image/png", data: "c2hvdA==" };
+  const draft = {
+    id: "fixture-draft",
+    text: "image draft caption",
+    cmid: "draft-creation",
+    content: [image, { type: "text", text: "image draft caption" }, image],
+  };
   const script = await Deno.readTextFile(`${bundle}/fixture.js`);
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0, onListen() {} },
@@ -148,6 +159,43 @@ for (const { bundle, scenario } of cases) {
         };
         socket.onmessage = async (event) => {
           const message = JSON.parse(event.data);
+          if (draftSend && message.type === "activate_draft") {
+            if (
+              typeof message.cmid !== "string" || message.cmid === draft.cmid
+            ) {
+              report.resolve({
+                ok: false,
+                error: "draft send omitted its operation identity",
+              });
+              return;
+            }
+            deliveries++;
+            // The source disappears before its echo. It must not remove the
+            // image preview, nor leave Sending after the full echo arrives.
+            socket.send(
+              JSON.stringify({
+                type: "sync_patch",
+                state: `queue:${session.id}`,
+                version: 2,
+                value: { queue: [], drafts: [] },
+                confirmed: [],
+              }),
+            );
+            await delay(100);
+            for (const [index, content] of draft.content.entries()) {
+              const echo = {
+                session_id: session.id,
+                seq: ++seq,
+                kind: "update",
+                ...(index === 0 ? { cmid: message.cmid } : {}),
+                update: { sessionUpdate: "user_message_chunk", content },
+              };
+              history.push(echo);
+              socket.send(JSON.stringify({ type: "event", envelope: echo }));
+              await delay(30);
+            }
+            return;
+          }
           if (message.type === "sync") metadataMutations++;
           if (message.type !== "submit") {
             return;
@@ -207,12 +255,23 @@ for (const { bundle, scenario } of cases) {
           });
         }
         return Response.json({
-          messages: [{
-            type: "snapshot",
-            session_id: session.id,
-            events: history,
-            reached_start: true,
-          }],
+          messages: [
+            {
+              type: "snapshot",
+              session_id: session.id,
+              events: history,
+              reached_start: true,
+            },
+            ...(draftSend
+              ? [{
+                type: "sync_patch",
+                state: `queue:${session.id}`,
+                version: 1,
+                value: { queue: [], drafts: deliveries ? [] : [draft] },
+                confirmed: [draft.cmid],
+              }]
+              : []),
+          ],
         });
       }
       if (url.pathname === "/") {
@@ -310,7 +369,8 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
     );
     if (
       !(result as { ok?: boolean }).ok ||
-      deliveries !== (metadata ? 0 : local ? 1 : safety || recovery ? 0 : 17) ||
+      deliveries !==
+        (metadata ? 0 : local || draftSend ? 1 : safety || recovery ? 0 : 17) ||
       attempts < 1
     ) {
       throw new Error("send fixture failed");

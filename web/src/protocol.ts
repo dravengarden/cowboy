@@ -456,7 +456,7 @@ export type Inbound =
   }
   | { type: "remove_draft"; session_id: string; id: string; cmid?: string }
   | { type: "clear_drafts"; session_id: string }
-  | { type: "activate_draft"; session_id: string; id: string }
+  | { type: "activate_draft"; session_id: string; id: string; cmid?: string }
   | { type: "activate_all_drafts"; session_id: string }
   // Attach/replace a future fire time on a draft (creates it if id/cmid match
   // nothing). The server auto-activates it at fire_at_ms — fires even offline.

@@ -19394,8 +19394,8 @@ fn handle_command(
             state.hub.clear_drafts(&session_id);
             Ok(())
         }
-        Inbound::ActivateDraft { session_id, id } => {
-            state.hub.activate_draft(&session_id, &id);
+        Inbound::ActivateDraft { session_id, id, cmid } => {
+            state.hub.activate_draft(&session_id, &id, cmid);
             Ok(())
         }
         Inbound::ActivateAllDrafts { session_id } => {
