@@ -135,6 +135,16 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.33.0 records provider-runtime 1.1.9: Claude Code 2.1.286,
+Codex CLI 0.159.3, Codex ACP 2.1.0 and Grok 1.0.46. All six Agent Plugins
+advance independently because they pin that shared runtime component; Gemini
+CLI, Claude ACP, Node and both DeepSeek gateways retain their exact pins.
+Codex recommends Sol 6.1 Medium/Max and defaults new sessions to Medium;
+Claude's Sonnet card describes 5.5. Existing sessions retain their selections.
+This matrix also records app-shell 1.1.17 for the already-committed keyboard
+footer fix in `532119dd`, whose component version/digest had not been recorded.
+No additional app-shell behavior changes in this release.
+
 Scoped release 3.31.0 records provider-runtime 1.1.8 and Node 24.21.0 LTS.
 The six Agent Plugins take independent patch versions for Claude Code 2.1.285,
 Claude Agent ACP 0.84.0, Codex 0.159.2, Codex ACP 2.0.1, Gemini CLI 0.62.0,

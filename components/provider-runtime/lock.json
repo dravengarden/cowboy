@@ -23,66 +23,66 @@
   "components": {
     "anthropic-claude-code": {
       "kind": "npm_archive",
-      "version": "2.1.285",
+      "version": "2.1.286",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.285.tgz",
-          "integrity": "sha512-6qNST8qKemr+rD9zvUEwEq0UtWt0E5Js8bkbjh13/LM62FiGWcN6IqiJPxybJ2FNd+I3liXq6JYNv/vrGnmAow==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.286.tgz",
+          "integrity": "sha512-PnVL8ZCEev3IexLeOc9/QRfqRDUZRgnsaMLdpjlBN0VaieeTrf7mZ2JJi29ue2KAqHvq6SsOadU5G/shnFE4MA==",
           "entrypoint": "package/claude"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.285.tgz",
-          "integrity": "sha512-vAvIr+MVnm5IrSq8KoJrZkoG3BFpLvVEqfrx15w7hWW+gcSYHPvN33lfkzXvs5L8MYXxNW0Ae86MLiCH+x4ldQ==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.286.tgz",
+          "integrity": "sha512-dHQ/ObyC4jaGHVk+gFE8P8PALMIVLhQSyhiC3y3kkuLp0H0MHgLxHt/srQ3zJs892ClDbtl1swxv4bw1ioruZA==",
           "entrypoint": "package/claude"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.285.tgz",
-          "integrity": "sha512-82pac0p/rTdZvxSspGJsEdqELADhd5aR9AC6JRSJx8kx8q0ggHjOHSCEH/LZeufREACAZv13TcsOPs0AMAptCQ==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.286.tgz",
+          "integrity": "sha512-QlU1+S7cNO1BKzlMJGRR/ZqdsP6c3+QAA2u9EX7dTO6HUo1/RAenn/q+mlyX60MZzTZOjPkAmTt77eYrH1IAwg==",
           "entrypoint": "package/claude"
         }
       }
     },
     "openai-codex": {
       "kind": "npm_archive",
-      "version": "0.159.2",
+      "version": "0.159.3",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.2-linux-x64.tgz",
-          "integrity": "sha512-RrCZ1X52wpa1lOsXtCtSyhjOFdQPh7LH5Ccv8HsKmd/2UXbUwxXFqWXFK3JzatquUNGtW/TLox5Y7qVOGkV0/Q==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.3-linux-x64.tgz",
+          "integrity": "sha512-xlHydfOksnNt/qz4BEVFvjMWunweaVSNtha/DkVUwWZnVZxbqiJwsXSl2iZDk04b6k/g0OI7jU06XqzHB2s5og==",
           "entrypoint": "package/vendor/x86_64-unknown-linux-musl/bin/codex"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.2-linux-arm64.tgz",
-          "integrity": "sha512-Pm0W2PnFeTEqPx+AOIwgOVB4dBtY24cuD0tx1hjCor60CbSAT7WBPZVNUINSrTCDrMndvQC67p71ZEz+gmPPkA==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.3-linux-arm64.tgz",
+          "integrity": "sha512-84C1yhAI+i0hqh77Akp/Ma09Z4d5oLKcZKqW1WZpEDh8bKbNvvbNEd6pE+GMUe2Kwg7jCbuvkRNH1zgK+SCM3Q==",
           "entrypoint": "package/vendor/aarch64-unknown-linux-musl/bin/codex"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.2-darwin-arm64.tgz",
-          "integrity": "sha512-7SPaPFU0tdqapQ5VEgrF+wb+p9dxfWfLMXMKZMRKoWPn/tLMajlMjYBBnu8o6VtaVH2DHQ6kpnp5TMkv5bqvrg==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.159.3-darwin-arm64.tgz",
+          "integrity": "sha512-aI4UY14YURYxJxnRK+AE4QU+aek0mgtyyo7Rw9rNbCQUYETRQ0NYdJzU9ytljERGpPlht3dHHI1u4NhqHoDJDQ==",
           "entrypoint": "package/vendor/aarch64-apple-darwin/bin/codex"
         }
       }
     },
     "xai-grok": {
       "kind": "npm_brotli",
-      "version": "1.0.44",
+      "version": "1.0.46",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.44.tgz",
-          "integrity": "sha512-0ZBP5+9e+IaUHfa++bgrECRjEQFc06hxSWfhY7veFKNnN7wX4v7Z6RcJh44K9IPROqsh/KG63txhEyq1trUFDw==",
+          "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.46.tgz",
+          "integrity": "sha512-a9HSDEiXmCFW1sou2xYBZAM1jCDALWU2aNacmsFHztI6kukb8akdI0SlTI43q2uULHzNQlwhrI7GkPcraxM6bQ==",
           "entrypoint": "package/bin/grok.br"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.44.tgz",
-          "integrity": "sha512-FOPEQFrPtbwBPxOVT7VneTdL8REaLok8Vf+Rxt7ndXXo0yDopivXRTrwkUw8TMiHOwI7cRBJMN0CQK8OsEH+sA==",
+          "url": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.46.tgz",
+          "integrity": "sha512-dFSb8PffyHfGHcwGc7xpVWE/GIzDJgg3RLh6aw3mWpvbhSzVDQh5LHRMQ9USdd9SAARuWkIBsg6P7UoeQVJBWw==",
           "entrypoint": "package/bin/grok.br"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-1.0.44.tgz",
-          "integrity": "sha512-c/R2uQA1MA5644IIXPxV4xSiph3Pf8XhGxUwpafEhvSJWEb1sakOfuBDGjCLPKQ/ZNLJb+473NUjuFkTyB6u/w==",
+          "url": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-1.0.46.tgz",
+          "integrity": "sha512-u/JdKgd6Ef1PSmaMbdV32vFc3ISLI/NE7h9rbaYj+iic7oAn0q1uHo8Ijdm5Ztg8gYwTuhRBZsMnHJr5zcKEXA==",
           "entrypoint": "package/bin/grok.br"
         }
       }
@@ -96,7 +96,7 @@
     },
     "codex-acp": {
       "kind": "node_npm",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "package_dir": "packages/codex-acp",
       "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
       "launcher": "packages/codex-acp/launch.mjs",

@@ -538,7 +538,7 @@ mod service_catalog {
         }
 
         #[test]
-        fn embedded_codex_catalog_recommends_astra_and_defaults_to_sol_6_medium() {
+        fn embedded_codex_catalog_recommends_astra_and_defaults_to_sol_6_1_medium() {
             let source: cowboy_provider_sdk::StandardProviderSource =
                 serde_json::from_str(include_str!("../plugins/codex/provider.json")).unwrap();
             let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
@@ -548,10 +548,10 @@ mod service_catalog {
                 .find(|preset| preset.is_default)
                 .expect("Codex must declare a default configuration preset");
 
-            assert_eq!(default.id, "sol-6-medium");
+            assert_eq!(default.id, "sol-6-1-medium");
             assert_eq!(
                 default.values.get("model").map(String::as_str),
-                Some("gpt-6-sol")
+                Some("gpt-6.1-sol")
             );
             assert_eq!(
                 default.values.get("reasoning_effort").map(String::as_str),

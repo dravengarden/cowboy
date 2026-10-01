@@ -70,7 +70,7 @@ Deno.test("custom configuration remains visible without a matching preset", () =
   assertEquals(runConfigCurrentTitle(undefined), "Current · Custom");
 });
 
-Deno.test("Codex recommends only generation 6 and defaults to Sol 6 Medium", async () => {
+Deno.test("Codex recommends generation 6 models and defaults to Sol 6.1 Medium", async () => {
   const provider = JSON.parse(
     await Deno.readTextFile(
       new URL("../../plugins/codex/provider.json", import.meta.url),
@@ -83,10 +83,10 @@ Deno.test("Codex recommends only generation 6 and defaults to Sol 6 Medium", asy
   });
   assertEquals(
     presets.filter((preset) => preset.is_default).map((preset) => preset.id),
-    ["sol-6-medium"],
+    ["sol-6-1-medium"],
   );
   assertEquals(
-    presets.every((preset) => preset.values.model.startsWith("gpt-6-")),
+    presets.every((preset) => /^gpt-6(?:\.1)?-/.test(preset.values.model)),
     true,
   );
   assertEquals(
