@@ -92,19 +92,52 @@ async function bridgeExecution(child, descriptor) {
   });
   // A child failure before initialized must not leave an unhandled rejection.
   registered.catch(() => {});
-  let initialized = false;
+  let initializeId;
+  let initializeReply;
+  let receivedInitialized = false;
   const output = (async () => {
     for await (const message of frames(child.stdout)) {
       if (message.id === registrationId) {
         if (message.error) {
-          rejectRegistration(new Error("Bound execution environment refused"));
-        } else resolveRegistration();
+          throw new Error("Bound execution environment refused");
+        }
+        await sendFrame(process.stdout, initializeReply);
+        resolveRegistration();
+      } else if (initializeId !== undefined && message.id === initializeId) {
+        if (message.error) throw new Error("Native initialization refused");
+        initializeReply = message;
+        // Some ACP adapters omit the optional native initialized notification.
+        // This bridge owns initialization and registers before exposing success.
+        await sendFrame(child.stdin, { method: "initialized", params: {} });
+        await sendFrame(child.stdin, {
+          id: registrationId,
+          method: "environment/add",
+          params: {
+            environmentId: descriptor.binding.environment.id,
+            execServerUrl: descriptor.endpoint,
+            authBearerToken: descriptor.bearer_token,
+            connectTimeoutMs: 180000,
+          },
+        });
       } else await sendFrame(process.stdout, message);
     }
     rejectRegistration(new Error("Native execution connection ended"));
   })();
   const input = (async () => {
     for await (const message of frames(process.stdin)) {
+      if (message.method === "initialize") {
+        if (initializeId !== undefined || message.id === undefined) {
+          throw new Error("Duplicate or invalid native initialization");
+        }
+        initializeId = message.id;
+      }
+      if (message.method === "initialized") {
+        if (initializeId === undefined || receivedInitialized) {
+          throw new Error("Duplicate or invalid native initialization");
+        }
+        receivedInitialized = true;
+        continue;
+      }
       if (
         typeof message.method === "string" &&
         message.method.startsWith("environment/")
@@ -125,27 +158,12 @@ async function bridgeExecution(child, descriptor) {
           message.method,
         )
       ) {
-        if (!initialized) {
+        if (initializeId === undefined) {
           throw new Error("Execution endpoint has not been registered");
         }
         await registered;
       }
       await sendFrame(child.stdin, bindExecutionRequest(message, descriptor));
-      if (message.method === "initialized") {
-        if (initialized) throw new Error("Duplicate native initialization");
-        initialized = true;
-        await sendFrame(child.stdin, {
-          id: registrationId,
-          method: "environment/add",
-          params: {
-            environmentId: descriptor.binding.environment.id,
-            execServerUrl: descriptor.endpoint,
-            authBearerToken: descriptor.bearer_token,
-            connectTimeoutMs: 180000,
-          },
-        });
-        await registered;
-      }
     }
     child.stdin.end();
   })();
@@ -182,6 +200,7 @@ export async function main(args) {
     const environment = { ...process.env };
     delete environment[cliKey];
     delete environment[argsKey];
+    delete environment.COWBOY_PRIVATE_CODEX_BRIDGE;
     const descriptor = environment[executionKey] && args.includes("app-server")
       ? await readExecutionDescriptor(environment[executionKey])
       : undefined;

@@ -16784,7 +16784,7 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:c02820611cefd5cdd767cfd9b0692e907b5dde1b8db7469cadc795fde2e91cb8",
+          "digest": "sha256:8bdfc6d1b2f3e1bbf704463bbdf8c1f537fc52d3f2ea1d94242c1f0452963a67",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
@@ -16943,7 +16943,7 @@
                 "version": "1.1.10"
               }
             ],
-            "source_digest": "sha256:05664b9aeb25ce122ef2e5710026b33d9f92e1c61cc011099451e768e0241d83"
+            "source_digest": "sha256:a21d4a6f6bccb0ada652109a37849e4370c4e5fcac63b2cdfc562c01cd2dc7a5"
           },
           "codex-deepseek": {
             "component_release": "3.34.0",

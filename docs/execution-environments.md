@@ -3,14 +3,16 @@
 Status: Codex implementation candidate, 2026-10-02; not yet production activated.
 Core binding readers were deployed on 2026-10-01. The candidate adds explicit
 creation admission, a target-owned keeper, authenticated routing and a native
-Provider bridge. Sixteen native-turn checks pass, including a lost actual start
+Provider bridge. Eighteen native-turn checks pass, including a lost actual start
 receipt, 35-second transport interruption, image reads and cold resume. These
 checks do not establish cross-host latency or production subscription inference.
 The separate public-session gate passes eight checks through actual product
 login, a temporary signed Plugin and two enrolled Machines, including target
 edits, Controller and target Machine restarts, and confirmed deletion while
 preserving work. Its fixture Agent performs no model inference. Both gates use
-disposable state and do not accept production activation.
+disposable state and do not accept production activation. The native gate also
+drives the built Codex ACP artifact through a real new session and cold load;
+both retain target guidance and the original filesystem without effect replay.
 Receipts: [native worker](experiments/execution-worker-2026-10-02.json) and
 [authenticated sessions](experiments/execution-session-2026-10-02.json).
 The existing Matrix adapter remains available until the native path is activated.

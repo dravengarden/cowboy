@@ -7,6 +7,24 @@ const root = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = resolve(root, "..");
 const repository = resolve(root, "../../..");
 const baseUrl = (Deno.args[0] ?? "").replace(/\/+$/, "");
+// Build and probe dependencies without inheriting the invoking Agent's private
+// arguments, credentials, homes or environment endpoint. Preserve only tools
+// and CA trust; a disposable home is assigned before package scripts run.
+const buildEnvironment: Record<string, string> = {};
+for (
+  const key of [
+    "PATH",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NIX_SSL_CERT_FILE",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+  ]
+) {
+  const value = Deno.env.get(key);
+  if (value !== undefined) buildEnvironment[key] = value;
+}
 if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
   throw new Error("Provider artifact base URL must be immutable HTTPS");
 }
@@ -49,6 +67,9 @@ try {
 }
 await verify(archive, adapter.archive_sha256);
 const stage = await Deno.makeTempDir({ dir: cache, prefix: "codex-source-" });
+buildEnvironment.HOME = `${stage}/home`;
+buildEnvironment.XDG_CONFIG_HOME = `${stage}/home/.config`;
+await Deno.mkdir(buildEnvironment.HOME);
 const matrixPath = `${output}/runtime-artifacts.json`;
 let bindingComplete = false;
 try {
@@ -108,12 +129,19 @@ try {
       `${root}/launch.mjs`,
       `${targetRoot}/app/cowboy-launch.mjs`,
     );
+    await Deno.copyFile(
+      `${repository}/components/provider-runtime/packages/codex-acp/launch.mjs`,
+      `${targetRoot}/app/cowboy-execution.mjs`,
+    );
     await Deno.remove(`${targetRoot}/bin/cowboy-configured-cli`);
     const provenance = {
       schema: "cowboy.codex-source-patch/v1",
       upstream: adapter,
       patch_sha256: await sha256(`${root}/adapter.patch`),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
+      execution_bridge_sha256: await sha256(
+        `${targetRoot}/app/cowboy-execution.mjs`,
+      ),
       bundle_sha256: await sha256(`${sourceRoot}/dist/index.js`),
     };
     await Deno.writeTextFile(
@@ -192,6 +220,8 @@ async function run(
   const status = await new Deno.Command(command, {
     args,
     cwd,
+    clearEnv: true,
+    env: buildEnvironment,
     stdin: "null",
     stdout: "inherit",
     stderr: "inherit",

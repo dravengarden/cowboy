@@ -291,7 +291,7 @@ plugin-isolation-check PLUGIN="codex":
 agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
+    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
 
 # No Service credentials or inference: copy an existing rollout into a private
 # home and exercise the real packaged ACP launch in a network namespace.

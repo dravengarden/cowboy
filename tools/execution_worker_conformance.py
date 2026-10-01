@@ -46,6 +46,11 @@ def main():
     require([name for _, name in socket.if_nameindex()] == ["lo"], "loopback namespace required")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "new absolute receipt required")
     launcher = Path("components/provider-runtime/packages/codex-acp/launch.mjs").resolve()
+    inputs = json.loads(Path(os.environ["COWBOY_TEST_EXECUTION_INPUT"]).read_text())
+    packaged = Path(inputs["adapter_launcher"]) if inputs.get("adapter_launcher") else None
+    if packaged:
+        require(packaged.is_absolute() and packaged.is_file(), "packaged launcher missing")
+        launcher = packaged
     node = shutil.which("node")
     require(node, "pinned Node is missing")
     def cancel_background(requests):
@@ -137,10 +142,66 @@ def main():
         require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(api.requests), "resume runtime instructions leaked")
         require(not (home / "environments.toml").exists(), "global environments changed")
         checks.extend(["cold_native_resume_automatically_rebinds_each_turn", "cold_resume_retains_history_without_effect_replay", "global_environment_config_unchanged"])
+        if packaged:
+            client.close()
+            client = None
+            api.steps.extend([
+                command("packaged_acp_command", "cat fixture.txt; printf acp_once >> acp-once.txt"),
+                final("packaged_acp_final"),
+                command("packaged_acp_resume", "cat fixture.txt; cat acp-once.txt"),
+                final("packaged_acp_resumed_final"),
+            ])
+            class Acp(Executor):
+                def send(self, frame):
+                    super().send({"jsonrpc": "2.0", **frame})
+
+                def frame(self, deadline):
+                    frame = super().frame(deadline)
+                    if "error" in frame:
+                        # This client exists only in a disposable loopback
+                        # fixture; keep diagnostics bounded to its error class.
+                        print("ACP fixture:", json.dumps({key: frame["error"].get(key)
+                            for key in ("code", "message", "data")})[:1800], flush=True)
+                    return frame
+
+            acp_environment = {**environment, "CODEX_PATH": str(args.native_cli)}
+
+            def acp():
+                instance = Acp([node, str(packaged), "-c", "approval_policy=never",
+                    "-c", "sandbox_mode=danger-full-access"], 90,
+                    environment=acp_environment, cwd=args.runtime)
+                instance.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+                instance.request("authenticate", {"methodId": "api-key", "_meta": {
+                    "api-key": {"apiKey": "not-a-production-credential"}}})
+                return instance
+
+            client = acp()
+            created = client.request("session/new", {"cwd": str(args.runtime), "mcpServers": []})
+            acp_session = created["sessionId"]
+            client.request("session/set_config_option", {"sessionId": acp_session,
+                "configId": "mode", "value": "agent-full-access"})
+            prompt = {"sessionId": acp_session, "prompt": [{"type": "text", "text": "Run the fixture."}]}
+            result = client.request("session/prompt", prompt)
+            require(result["stopReason"] == "end_turn", "packaged ACP turn failed")
+            require((args.target / "acp-once.txt").read_text() == "acp_once", "packaged ACP missed target")
+            require(not (args.runtime / "acp-once.txt").exists(), "packaged ACP used runtime filesystem")
+            client.close()
+            client = acp()
+            client.request("session/load", {"sessionId": acp_session, "cwd": str(args.runtime), "mcpServers": []})
+            client.request("session/set_config_option", {"sessionId": acp_session,
+                "configId": "mode", "value": "agent-full-access"})
+            result = client.request("session/prompt", prompt)
+            require(result["stopReason"] == "end_turn", "packaged ACP resume failed")
+            require((args.target / "acp-once.txt").read_text() == "acp_once", "packaged ACP resume replayed an effect")
+            require("TARGET_GUIDANCE_MUST_REACH_MODEL" in json.dumps(api.requests[-2]), "packaged ACP lost target instructions")
+            require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(api.requests), "packaged ACP leaked runtime guidance")
+            checks.extend(["packaged_acp_native_spawn_routes_target_tools", "packaged_acp_cold_load_preserves_binding_history_and_effects"])
         receipt = {
             "schema": "cowboy.execution-worker-conformance/v1", "accepted": False, "checks": checks,
             "native_sha256": hashlib.sha256(args.native_cli.read_bytes()).hexdigest(),
             "launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
+            "packaged_bridge_sha256": hashlib.sha256((packaged.parent / "cowboy-execution.mjs").read_bytes()).hexdigest() if packaged else None,
+            "packaged_adapter_sha256": hashlib.sha256((packaged.parent / "node_modules/@agentclientprotocol/codex-acp/dist/index.js").read_bytes()).hexdigest() if packaged else None,
             "scripted_api_requests": len(api.requests), "real_model_requests": 0,
             "production_credentials": False, "production_activation": False,
             "not_checked": ["authenticated_enrolled_transport", "cross_host_network", "signed_provider_release",

@@ -18,6 +18,11 @@ export function splitConfigurationArguments(args) {
 }
 
 export async function main(args) {
+  if (args[0] === "--cowboy-private-cli") {
+    const bridge = await import("./cowboy-execution.mjs");
+    await bridge.main(args);
+    return;
+  }
   const { configuration, arguments: forwarded } = splitConfigurationArguments(
     args,
   );
@@ -25,6 +30,16 @@ export async function main(args) {
     throw new Error("Configured Codex requires an exact Machine-bound CLI");
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
+  if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
+    if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
+      throw new Error("Remote execution requires an exact Machine-bound CLI");
+    }
+    process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE = process.env.CODEX_PATH;
+    process.env.COWBOY_PRIVATE_CODEX_BRIDGE = fileURLToPath(import.meta.url);
+  } else {
+    delete process.env.COWBOY_PRIVATE_CODEX_EXECUTABLE;
+    delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
+  }
   const upstream = fileURLToPath(
     new URL(
       "./node_modules/@agentclientprotocol/codex-acp/dist/index.js",

@@ -13,24 +13,24 @@
   ],
   "inputs": {
     "controller": {
-      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy",
-      "sha256": "22fbe0b843f9479acb9f6998a2af5ea7d04806336af76ec7d0469f091698714b"
+      "path": "/nix/store/w4c775r1lplyzxalvh9iv230d186bsgj-cowboy-0.1.0/bin/cowboy",
+      "sha256": "9c8578322c8ed595c923e26e55f8c74e66087427bb13e30aef7aa94af9578da4"
     },
     "machine": {
-      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy-machine",
-      "sha256": "192cb018b47b75924325be964e20864f7102cd25a703678ac93d23e9c82e8746"
+      "path": "/nix/store/56igna02jrlw7s1r3brzrmbsimz8j96r-cowboy-machine-0.1.0/bin/cowboy-machine",
+      "sha256": "ea3f3b5c0e58a10a477b491ba7d1ca287c52d895265fc56ba6a151f409179db2"
     },
     "worker": {
-      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy-acp-worker",
-      "sha256": "7cd0ab0ce6c41aeb98ec2ddf239f88f659a2255fd2312d6f13cb16e67cdab3a6"
+      "path": "/nix/store/w4c775r1lplyzxalvh9iv230d186bsgj-cowboy-0.1.0/bin/cowboy-acp-worker",
+      "sha256": "f5ecffb850ea4128f915ace453d6457f54effb95d287f287cfb430e006aea109"
     },
     "keeper": {
-      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/release/cowboy-execution-host",
-      "sha256": "df19aff7aec8fb5fb6678242c17539ebc2e8c072ce57151fc9b834e4ccbfbc1c"
+      "path": "/nix/store/4q4aj463bs170s7gbd6xaj1r4d68n0hh-cowboy-machine-release/bin/cowboy-execution-host",
+      "sha256": "6106fee22aaeaac8584ef07d8770628fb5dd0d8b099086801c2f3aed99d40ec3"
     },
     "pack": {
-      "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075662/target/debug/cowboy-plugin-pack",
-      "sha256": "fbc82af49ed9d47a2a823ba64ba9194646682c16fe8931cddd0408980040dc5d"
+      "path": "/nix/store/zwp2lpzvj90s91zzgkla11fiy6zw4mij-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack",
+      "sha256": "968c4d8853d9b0f16d308a8052ee53856d8aeb35f54bc50e3de2a06d727e3ba0"
     },
     "native_cli": {
       "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
@@ -41,7 +41,7 @@
     "release_schema": 4,
     "plugin_id": "execution-fixture",
     "plugin_version": "1.0.0",
-    "artifact_digest": "sha256:c08562e2eaa7d64746694416c09f75e1626bafcdb178a5e7a9df45aae0a1ae2e"
+    "artifact_digest": "sha256:e3fc535518216678a4722ced65a185f16d627c8adc12348a1cc5bee11003756c"
   },
   "harness_sha256": "32ffd555fdb2e501f04bd67a483f799b8f117d6b0801495af833adc8c02f3190",
   "real_model_requests": 0,
