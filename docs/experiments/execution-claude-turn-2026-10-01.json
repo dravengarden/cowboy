@@ -1,0 +1,42 @@
+{
+  "schema": "cowboy.claude-tool-dispatch-probe/v1",
+  "accepted": true,
+  "native_cli": {
+    "version": "2.1.286",
+    "sha256": "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f"
+  },
+  "checks": [
+    "exact_native_version",
+    "native_model_emitted_aliases_dispatch_to_mcp",
+    "file_edits_and_commands_use_target_without_runtime_changes",
+    "only_explicit_target_project_guidance_reaches_model",
+    "native_runtime_cwd_still_injected_into_model_context",
+    "one_advertised_project_tool_surface_without_local_builtins",
+    "one_scripted_response_per_tool_no_connection_turn",
+    "disabled_native_model_calls_fail_without_local_fallback",
+    "cold_native_resume_retains_conversation_and_target_dispatch",
+    "runtime_context_persists_with_custom_system_prompt",
+    "runtime_context_persists_with_documented_context_suppression",
+    "runtime_context_persists_with_client_composed_prompt",
+    "runtime_context_persists_with_composed_prompt_and_context_suppression"
+  ],
+  "topology": "isolated_loopback_scripted_api_and_fixture_mcp",
+  "scripted_api_requests": 18,
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "proves_cowboy_routing": false,
+  "proves_subscription": false,
+  "proves_token_savings": false,
+  "remote_execution_ready": false,
+  "blocking_findings": [
+    "native_runtime_cwd_injected_into_model_visible_user_message"
+  ],
+  "not_checked": [
+    "native_nested_agents",
+    "target_hooks_and_settings",
+    "background_tasks",
+    "search_images_notebooks",
+    "native_checkpoints",
+    "production_provider_release"
+  ]
+}

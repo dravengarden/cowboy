@@ -1,9 +1,11 @@
 # Native execution environments
 
-Status: core binding readers implemented, 2026-10-01. Remote session creation,
+Status: core binding readers deployed, 2026-10-01. Remote session creation,
 Provider tool adapters and Machine execution grants remain disabled. The
 existing Matrix adapter remains a compatibility entry point until the native
-path passes the gates below. Reader support alone is not remote execution.
+path passes the gates below. Reader support alone is not remote execution. The
+[Controller release receipt](releases/execution-binding-readers-2026-10-01.md)
+records the activated reader revision and connected Code acceptance.
 
 ## Product outcome
 
@@ -177,6 +179,18 @@ The current Cowboy Codex adapter does not yet forward a core execution binding
 when starting/resuming a thread. Add that behavior inside its owned source patch
 and signed release; it is not a new Provider-ID branch in core.
 
+The native turn fixture establishes a more specific requirement: in `0.159.3`,
+`thread.environments` is live selection, not durable conversation placement.
+After a cold `thread/resume`, it is selected from process defaults. Adding an
+`environments` field to that resume request does not restore it. Disable
+implicit local execution for a bound worker (`CODEX_EXEC_SERVER_URL=none` in the
+accepted fixture), register its one exact target, and supply the core-owned
+selection on **every `turn/start`**, including the first turn after resume.
+Validate this in the Provider before admitting prompts. Never infer placement
+from native thread identity alone, accept user/model overrides of the binding,
+or resume into the server's default local environment. This selection is
+protocol metadata and requires no extra model turn.
+
 Claude Agent SDK `0.3.284` exposes custom tools, `tools`, `disallowedTools` and
 `toolAliases`; the pinned ACP adapter accepts these through session options. Use
 a small file/process tool facade with familiar schemas and concise results. An
@@ -191,6 +205,40 @@ target project guidance into the session and execute project-owned hooks beside
 the project. Keep Provider settings, authentication and native session history
 owned by OVH. Unsupported project capabilities must be visible; they must not
 read or modify the entry repository as a fallback.
+
+The locked `2.1.286` native fixture confirms an unresolved context problem (also
+observed in retained `2.1.285`): after disabling local project tools and
+settings, and appending target guidance, Claude still injects its **runtime
+cwd** into a model-visible user-message environment reminder. Target tool
+dispatch and target `CLAUDE.md` content do not remove this contradictory
+directory. The receipt explicitly records this blocker and keeps
+`remote_execution_ready: false`. A production adapter must establish a
+supported, tested projection of target cwd/OS/shell/Git context before this lane
+is enabled. Do not accept merely appending another routing instruction,
+rewriting arbitrary model output, or disabling the failed assertion as proof of
+transparent remote execution. A custom system prompt alone is not evidence that
+native user-message context has been replaced. The native task can remain on
+OVH; this is a Provider context integration requirement, not a reason to move it
+to Hawk. The reproducible fixture separately tests a custom system prompt,
+documented attachment/Git/CLAUDE.md suppression, client-composed prompts, and
+client-composed prompts with that suppression. Each executes a real native tool
+round trip against a scripted API; each still sends the runtime directory. The
+official reminder controls do not constitute a target-environment override.
+
+For this lane, the missing upstream seam is explicit model-visible execution
+context: target cwd, platform, shell, OS version and Git status, independently
+of native runtime cwd and authentication/history paths. The Provider should
+consume an authenticated target descriptor and replace the native execution
+context at its supported construction boundary, including cold resume and
+compaction. A fabricated local directory or syscall interception is not an
+accepted substitute: it leaves implicit Git, settings, hooks and process
+behavior referring to OVH and adds a second environment to maintain.
+
+Readiness is per exact Provider generation and execution contract. A blocked
+Claude lane must leave existing local sessions usable and must not prevent a
+fully accepted Codex lane from being offered. Conversely, successful Codex tests
+cannot authorize Claude or DeepSeek. Keep unavailable combinations disabled in
+the picker with the missing capability identified before creating a session.
 
 Subscription authentication remains with the unmodified native CLI and its
 supported login flow. The executor makes no model requests and needs no model
@@ -225,6 +273,24 @@ handles and bounded output retention. Reconnect may query an original operation
 but must not replay an uncertain write or process start. Recovering a transport
 is not proof that a job or executor incarnation survived. Caller retries cannot
 turn an unknown effect into a second invocation.
+
+The exact upstream executor has a **30-second detached-session lifetime**. The
+native lifetime fixture observes the original process survive a short reconnect
+and a 35-second attached interval, but observes the session expire and its
+process stop after 35 seconds detached. A persistent upstream WebSocket listener
+alone therefore does not provide the required job lifetime. The Machine needs a
+session-owned target keeper that remains attached while OVH or the Controller is
+disconnected. It must outlive ordinary Controller and Machine reconnects, retain
+bounded output and effect outcomes, and validate the original binding and
+executor incarnation before reconnecting a Provider. Its lifecycle belongs
+beside detached workers, independently of the current control connection.
+
+Do not merely increase a timeout or open a replacement upstream session and call
+that recovery. If the target keeper or executor is lost, expose that loss and
+retain the worktree; surviving processes require independent ownership evidence.
+The tested upstream process ID rejects duplicate and changed starts, but that
+does not prove file-write idempotency, persistent execution grants, or recovery
+after an executor restart. Those remain requirements of the Machine contract.
 
 Expose one project tool surface to the model. Add environment identity outside
 model-generated arguments where possible. Load guidance once and on relevant
@@ -266,6 +332,42 @@ UI must agree after restart. Missing evidence keeps remote session creation
 unavailable, not partially redirected.
 
 ## Reproducible protocol probe
+
+The following native gates use exact executable digests, fresh private homes and
+a network namespace containing only loopback. The two turn fixtures serve fixed
+API responses, not model inference; they neither access subscription credentials
+nor spend model tokens. Their observed request counts test dispatch overhead in
+the scripted sequence, not real model quality, billing or token savings.
+
+| Gate                                                                        | Result                                    | Established behavior                                                                                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Codex turn receipt](experiments/execution-codex-turn-2026-10-01.json)      | 8 checks                                  | Native patch and ordinary command affect the target, target instructions load, native conversation resumes with target selection reasserted, missing target rejects before the API, and the command is not replayed.                                                                   |
+| [Claude turn receipt](experiments/execution-claude-turn-2026-10-01.json)    | 13 observations; remote readiness blocked | Native model-emitted file/shell names dispatch through MCP aliases, runtime files stay unchanged, target project guidance is explicit, disabled local calls fail, and the conversation resumes. Four alternative public context controls still leave the runtime cwd in model context. |
+| [Executor lifetime receipt](experiments/execution-lifetime-2026-10-01.json) | 5 checks                                  | Duplicate starts refuse, short reconnect retains the original process, attached ownership survives 35 seconds, and a 35-second detach expires the session and stops its process.                                                                                                       |
+
+Run these from the pinned shell using repository-owned entrypoints, supplying
+the complete native binary/resource layout and a new absolute receipt path:
+
+```text
+just execution-codex-turn-conformance CLI VERSION SHA256 RECEIPT
+just execution-claude-turn-conformance CLI VERSION SHA256 RECEIPT
+just execution-lifetime-conformance CLI VERSION SHA256 RECEIPT
+```
+
+The fixture model identifiers select native tool metadata; they are not model
+availability or entitlement checks. In particular, an unknown Codex model falls
+back to metadata that may omit the native patch tool. The accepted Codex fixture
+uses `gpt-6-astra` with its bundled metadata. The Claude MCP implementation here
+is a deliberately small fixture, not a production file/process facade. These
+gates do not establish enrolled execution transport, target keeper behavior,
+complete implicit Claude project access, nested agents, images, uploads, native
+background-task recovery, signed Provider releases or writer admission.
+
+The Claude fixture used the Linux x64 `2.1.286` artifact from
+`components/provider-runtime/lock.json`, verified against its locked SHA-512
+archive integrity before extraction; the receipt records its executable SHA-256.
+It was extracted into an isolated temporary directory, not installed as a Plugin
+or substituted into an existing generation.
 
 The
 [native binding receipt](experiments/execution-native-binding-2026-10-01.json)
@@ -343,5 +445,7 @@ the executable for a disposable target probe.
 - [Matrix compatibility release](releases/matrix-workspaces-2026-10-01.md)
 - [Codex App Server environment interface](https://learn.chatgpt.com/docs/app-server)
 - [Pinned Codex executor source](https://github.com/openai/codex/tree/rust-v0.159.3/codex-rs/exec-server)
+- [Pinned executor detached-session lifetime](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/exec-server/src/server/session_registry.rs)
 - [Pinned Claude SDK types](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.284/sdk.d.ts)
+- [Claude prompt and reminder controls](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts)
 - [Claude Code subscription hosting conditions](https://code.claude.com/docs/en/legal-and-compliance)

@@ -1,0 +1,33 @@
+{
+  "schema": "cowboy.codex-execution-turn-probe/v1",
+  "accepted": true,
+  "native_cli": {
+    "version": "0.159.3",
+    "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+  },
+  "checks": [
+    "exact_native_version",
+    "native_patch_and_command_dispatch_to_target",
+    "native_target_guidance_without_runtime_guidance",
+    "one_scripted_response_per_tool_no_connection_turn",
+    "cold_resume_requires_host_to_reassert_execution_selection",
+    "cold_native_resume_retains_history_target_and_single_effect",
+    "missing_environment_on_resume_refused_without_local_fallback",
+    "no_global_environment_configuration_written"
+  ],
+  "topology": "isolated_loopback_scripted_api_and_native_executor",
+  "scripted_api_requests": 5,
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "proves_cowboy_routing": false,
+  "proves_subscription": false,
+  "proves_token_savings": false,
+  "not_checked": [
+    "cross_host_transport",
+    "target_keeper",
+    "background_task_resume",
+    "production_provider_release",
+    "native_nested_agents",
+    "uploads_images"
+  ]
+}

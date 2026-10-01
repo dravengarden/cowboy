@@ -381,6 +381,19 @@ plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
 agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_runtime_conformance.py "$@"' conformance "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
 
+# Native execution interfaces only: closed homes, loopback scripted API, no
+# production credentials/model inference/Provider install or Machine activation.
+execution-codex-turn-conformance CLI VERSION SHA256 RECEIPT:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_environment_codex_turn_probe.py "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+
+execution-claude-turn-conformance CLI VERSION SHA256 RECEIPT:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_environment_claude_probe.py "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+
+# Includes two real 35-second observations of executor process retention/expiry.
+execution-lifetime-conformance CLI VERSION SHA256 RECEIPT:
+    deno check tools/execution_environment_lifetime_probe.ts
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-all tools/execution_environment_lifetime_probe.ts "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+
 # Diagnostic only: does not satisfy release coexistence or authorize migration.
 agent-generation-failure-isolation RELEASE ARTIFACTS WORKER *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_generation_failure_isolation.py "$@"' diagnostic "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
