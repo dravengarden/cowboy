@@ -72,7 +72,10 @@ interface Ports {
   executor: (
     provider: string,
     method: string,
-  ) => ProviderCatalogEntry | undefined;
+  ) =>
+    | ProviderCatalogEntry
+    | undefined
+    | Promise<ProviderCatalogEntry | undefined>;
   refresh: () => Promise<unknown>;
   closeBrowser: () => void;
   copy: (text: string) => Promise<boolean>;
@@ -456,10 +459,15 @@ export function createProviderAuthenticationOwner(
                 value.id === method
               )
             ) throw new Error("Unknown Provider sign-in method");
-            const executor = ports.executor(provider.provider_id, method);
+            const selection = ports.executor(provider.provider_id, method);
+            const executor = selection instanceof Promise
+              ? await selection
+              : selection;
+            // A refreshed inventory must not start login after its dialog was closed.
+            if (!lease.active) return;
             if (!executor?.artifact_digest) {
               throw new Error(
-                "No online Machine has a compatible installed Provider for this sign-in method. Install or upgrade the Provider on one Machine, then try again.",
+                "No available Machine can run this sign-in method right now. Check that your Machine is connected and its Provider is active, then try again. Your existing sign-in has not been changed.",
               );
             }
             const response = await ports.fetch(

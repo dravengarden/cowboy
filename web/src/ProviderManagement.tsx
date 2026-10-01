@@ -19,7 +19,6 @@ import { alpha } from "@mui/material/styles";
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -456,20 +455,14 @@ function ProviderManagement(
     [machine?.plugins, scope],
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const catalogRef = useRef(catalog);
-  useLayoutEffect(() => {
-    catalogRef.current = catalog;
-  }, [catalog]);
   const { owners, authentication, uninstall } = useProviderManagementDialogs({
     fetch: (url, init) => fetch(url, init),
-    executor: (provider, method) =>
-      catalogRef.current
-        ? providerAuthenticationExecutorEntry(
-          catalogRef.current,
-          provider,
-          method,
-        )
-        : undefined,
+    executor: async (provider, method) =>
+      providerAuthenticationExecutorEntry(
+        await loadProviderCatalog(true),
+        provider,
+        method,
+      ),
     refresh: () => loadProviderCatalog(true),
     closeBrowser: () => closeAuthenticationBrowser(),
     copy: (code) => copyText(code),
