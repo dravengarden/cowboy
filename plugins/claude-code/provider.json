@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.12",
   "display": {
@@ -52,13 +52,13 @@
   },
   "configuration_presets": [
     {
-      "id": "opus-default",
-      "name": "Default",
-      "detail": "Opus 5.5 (1M context) · Model default effort",
+      "id": "sonnet-high",
+      "name": "Sonnet · High",
+      "detail": "Sonnet 5.5 · High effort",
       "is_default": true,
       "values": {
-        "model": "opus[1m]",
-        "effort": "default"
+        "model": "sonnet",
+        "effort": "high"
       }
     },
     {
@@ -77,8 +77,18 @@
       "detail": "Opus 5.5 (1M context) · High effort",
       "is_default": false,
       "values": {
-        "model": "opus[1m]",
+        "model": "opus",
         "effort": "high"
+      }
+    },
+    {
+      "id": "opus-default",
+      "name": "Opus · Recommended",
+      "detail": "Opus 5.5 (1M context) · Model default effort",
+      "is_default": false,
+      "values": {
+        "model": "opus",
+        "effort": "default"
       }
     },
     {
@@ -144,8 +154,8 @@
       "configuration": "portable_v1",
       "default_preferences": {
         "mode": "bypassPermissions",
-        "model": "opus[1m]",
-        "effort": "default"
+        "model": "sonnet",
+        "effort": "high"
       },
       "error_rules": [
         {
