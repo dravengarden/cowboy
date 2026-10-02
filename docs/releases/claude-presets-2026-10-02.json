@@ -1,0 +1,160 @@
+{
+  "schema": "cowboy.claude-presets-rollout/v1",
+  "accepted": true,
+  "source_revision": "c9d391eabe13c9b1f230de1a4f3705954cff05b9",
+  "machine": "ovh",
+  "previous_installation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.3.0",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:82f07338f73ed62cbf7a1c239019a82757a34f324093114f40eb87bd515017c3",
+    "installation_revision": "installation-29e1b6af54c6449b0201659a06f6959bd7b17d2c776f64c735c3ceea432f087c",
+    "contract_fingerprint": "sha256:edcbda1e03ebc7781a8ee622e069d57486f2fd7ec20f3646965920d1cd3399e2",
+    "state": "active",
+    "rollback_generation_digest": "sha256:449b92180f08638223d95ef2ba1084e9996eca497cfb0422cc484fe462de8db5",
+    "active_session_leases": 0,
+    "auth_generation": 51,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "active_installation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.3.1",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56",
+    "installation_revision": "installation-9b882c5de39b3ed5e5c19554119fe921e01cf9ae78d48078329cfd2bee337a4d",
+    "contract_fingerprint": "sha256:a5e153fc287dfd96cb0e3137ac7e1549e68a52f4f4d88eae324e3f83b92850b1",
+    "state": "active",
+    "rollback_generation_digest": "sha256:82f07338f73ed62cbf7a1c239019a82757a34f324093114f40eb87bd515017c3",
+    "active_session_leases": 0,
+    "auth_generation": 51,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "operation": {
+    "evidence_schema": 2,
+    "machine_receipt": {
+      "state": "applied",
+      "revision": "installation-9b882c5de39b3ed5e5c19554119fe921e01cf9ae78d48078329cfd2bee337a4d"
+    },
+    "operation_id": "ovh-claude-3-3-1-sonnet-high-20261002",
+    "phase": "completed",
+    "problem": null,
+    "attention_from": null,
+    "plugin_kind": "agent_provider",
+    "plugin_version": "3.3.1",
+    "generation_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56",
+    "created_at_ms": 1790942598813,
+    "updated_at_ms": 1790942741749
+  },
+  "reconciliation": {
+    "schema": 1,
+    "operation_id": "ovh-claude-3-3-1-sonnet-high-20261002",
+    "phase": "completed",
+    "machine_receipt": {
+      "state": "applied",
+      "revision": "installation-9b882c5de39b3ed5e5c19554119fe921e01cf9ae78d48078329cfd2bee337a4d"
+    },
+    "reconciliation_performed": true
+  },
+  "requires_reconciliation": false,
+  "installation_replayed": false,
+  "configuration_presets": [
+    {
+      "id": "sonnet-high",
+      "name": "Sonnet \u00b7 High",
+      "detail": "Sonnet 5.5 \u00b7 High effort",
+      "is_default": true,
+      "values": {
+        "model": "sonnet",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "sonnet-medium",
+      "name": "Sonnet \u00b7 Medium",
+      "detail": "Sonnet 5.5 \u00b7 Medium effort",
+      "is_default": false,
+      "values": {
+        "model": "sonnet",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "opus-high",
+      "name": "Opus \u00b7 High",
+      "detail": "Opus 5.5 (1M context) \u00b7 High effort",
+      "is_default": false,
+      "values": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opus-default",
+      "name": "Opus \u00b7 Recommended",
+      "detail": "Opus 5.5 (1M context) \u00b7 Model default effort",
+      "is_default": false,
+      "values": {
+        "model": "opus",
+        "effort": "default"
+      }
+    },
+    {
+      "id": "fable-high",
+      "name": "Fable \u00b7 High",
+      "detail": "Fable 5.1 (1M context) \u00b7 High effort",
+      "is_default": false,
+      "values": {
+        "model": "claude-fable-5-1[1m]",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "fable-max",
+      "name": "Fable \u00b7 Max",
+      "detail": "Fable 5.1 (1M context) \u00b7 Max effort",
+      "is_default": false,
+      "values": {
+        "model": "claude-fable-5-1[1m]",
+        "effort": "max"
+      }
+    }
+  ],
+  "new_session_defaults": {
+    "mode": "bypassPermissions",
+    "model": "sonnet",
+    "effort": "high"
+  },
+  "runtime_artifacts_unchanged_from": "claude-code 3.3.0",
+  "continuity": {
+    "controller": {
+      "ActiveEnterTimestampMonotonic": "350525319272",
+      "MainPID": "683531"
+    },
+    "controller_restarted": false,
+    "ovh_machine_and_existing_workers_unchanged": true,
+    "auth_generation_retained": 51,
+    "healthz": "ok"
+  },
+  "verification": {
+    "plugin_check": "passed",
+    "provider_check": "passed",
+    "full_just_check": "passed",
+    "focused_preset_and_provider_ui_checks": 40,
+    "visible_presets_on_actual_session_options": 6,
+    "catalog_reader_roles": 3,
+    "previous_controller_reader": "passed",
+    "old_new_generation_coexistence": "passed",
+    "public_urls_verified": 5,
+    "browser_verified": false,
+    "paid_inference_sent": false
+  },
+  "evidence_sha256": {
+    "docs/experiments/claude-presets-catalog-2026-10-02.json": "sha256:0378221792a752ad4b65ae1448b12cf60aafc15a6335566aa92382923c270ea6",
+    "docs/experiments/claude-presets-generations-2026-10-02.json": "sha256:c8b9d858814c7d1880453be65de5b64bfb53780ab6540c8cc732cc7d67d9a029",
+    "docs/experiments/claude-presets-live-projection-2026-10-02.json": "sha256:dc1836c106c1bf819c4775596a9202652e58c700d312bec2e7fb5536fb854ebd",
+    "docs/experiments/claude-presets-previous-controller-2026-10-02.json": "sha256:e25c5ba4ea3f55cad88fc5725c42fd2ec003eda558b833506cc3e824411a24a5",
+    "docs/experiments/claude-presets-publication-2026-10-02.json": "sha256:39c59844aa8a4b63b65fcf10eaee3c019b5e4450387213c5b562f0e727ecb605"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "accepted": true,
+  "plugin_version": "3.3.1",
+  "live_provider_version": "3.3.0",
+  "visible_presets": [
+    {
+      "id": "sonnet-high",
+      "name": "Sonnet · High",
+      "detail": "Sonnet 5.5 · High effort",
+      "isDefault": true,
+      "values": {
+        "model": "sonnet",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "sonnet-medium",
+      "name": "Sonnet · Medium",
+      "detail": "Sonnet 5.5 · Medium effort",
+      "isDefault": false,
+      "values": {
+        "model": "sonnet",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "opus-high",
+      "name": "Opus · High",
+      "detail": "Opus 5.5 (1M context) · High effort",
+      "isDefault": false,
+      "values": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "opus-default",
+      "name": "Opus · Recommended",
+      "detail": "Opus 5.5 (1M context) · Model default effort",
+      "isDefault": false,
+      "values": {
+        "model": "opus",
+        "effort": "default"
+      }
+    },
+    {
+      "id": "fable-high",
+      "name": "Fable · High",
+      "detail": "Fable 5.1 (1M context) · High effort",
+      "isDefault": false,
+      "values": {
+        "model": "claude-fable-5-1[1m]",
+        "effort": "high"
+      }
+    },
+    {
+      "id": "fable-max",
+      "name": "Fable · Max",
+      "detail": "Fable 5.1 (1M context) · Max effort",
+      "isDefault": false,
+      "values": {
+        "model": "claude-fable-5-1[1m]",
+        "effort": "max"
+      }
+    }
+  ],
+  "new_session_defaults": {
+    "mode": "bypassPermissions",
+    "model": "sonnet",
+    "effort": "high"
+  },
+  "source": "read-only persisted live ACP configOptions",
+  "browser_verified": false
+}

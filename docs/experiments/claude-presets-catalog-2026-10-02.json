@@ -1,0 +1,127 @@
+{
+  "schema": "cowboy.catalog-publication-conformance/v1",
+  "accepted": true,
+  "source_revision": "c9d391eabe13c9b1f230de1a4f3705954cff05b9",
+  "candidate": {
+    "release": "/nix/store/nh3g45vdi67vv9nxvi3nb5lnhpc497df-cowboy-controller-release",
+    "source_revision": "093380432aaead4523fbd386b06c051806700847",
+    "executable_sha256": "sha256:ab18c4c2244f4f16b2d9f2ae4644c9a9987455b030ac45b97ddd48019fb2ebfd"
+  },
+  "sdk_sha256": "sha256:a1924647f223371b742d4b8f8bc531bcbfc75fdcfcaf6bdc3c3b635254f1511b",
+  "publications": [
+    {
+      "role": "active",
+      "reader": {
+        "release": "/nix/store/nh3g45vdi67vv9nxvi3nb5lnhpc497df-cowboy-controller-release",
+        "source_revision": "093380432aaead4523fbd386b06c051806700847",
+        "executable_sha256": "sha256:ab18c4c2244f4f16b2d9f2ae4644c9a9987455b030ac45b97ddd48019fb2ebfd"
+      },
+      "release": {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.3.1",
+        "artifact_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56"
+      },
+      "release_schema": 4,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:105e0379355a58a4f8f00b889adf81d3eab9ae4797b393135d34c8ed550f69f9",
+      "package_digest": "sha256:0c74634df6cb07837653ca1ea66723ed44a6cd579f5eaa07ee24c5fe25c79d03",
+      "host_bundle_digest": "sha256:b5a781ab7a7a7180ac4885cffeb6d1bc46f7554b5795772a5e4386c81ecff1af",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "next_transaction_recovery",
+      "reader": {
+        "release": "/nix/store/nh3g45vdi67vv9nxvi3nb5lnhpc497df-cowboy-controller-release",
+        "source_revision": "093380432aaead4523fbd386b06c051806700847",
+        "executable_sha256": "sha256:ab18c4c2244f4f16b2d9f2ae4644c9a9987455b030ac45b97ddd48019fb2ebfd"
+      },
+      "release": {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.3.1",
+        "artifact_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56"
+      },
+      "release_schema": 4,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:105e0379355a58a4f8f00b889adf81d3eab9ae4797b393135d34c8ed550f69f9",
+      "package_digest": "sha256:0c74634df6cb07837653ca1ea66723ed44a6cd579f5eaa07ee24c5fe25c79d03",
+      "host_bundle_digest": "sha256:b5a781ab7a7a7180ac4885cffeb6d1bc46f7554b5795772a5e4386c81ecff1af",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    },
+    {
+      "role": "cold",
+      "reader": {
+        "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+        "source_revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+        "executable_sha256": "sha256:876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+      },
+      "release": {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.3.1",
+        "artifact_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56"
+      },
+      "release_schema": 4,
+      "code_payload_schema": null,
+      "provider_sdk_version": "3.1.12",
+      "source_envelope_sha256": "sha256:105e0379355a58a4f8f00b889adf81d3eab9ae4797b393135d34c8ed550f69f9",
+      "package_digest": "sha256:0c74634df6cb07837653ca1ea66723ed44a6cd579f5eaa07ee24c5fe25c79d03",
+      "host_bundle_digest": "sha256:b5a781ab7a7a7180ac4885cffeb6d1bc46f7554b5795772a5e4386c81ecff1af",
+      "bridge_cold_reads": [
+        {
+          "status": "visible"
+        },
+        {
+          "status": "visible"
+        }
+      ],
+      "candidate": {
+        "status": "visible"
+      },
+      "candidate_host_preflight": true,
+      "candidate_host_policy": "temporary_exact_pin",
+      "candidate_host_error": null,
+      "reader_compatible": true,
+      "production_signature_checked": false
+    }
+  ],
+  "production_mutated": false,
+  "production_credentials": false,
+  "not_checked": [
+    "production_signature",
+    "actual_role_provenance",
+    "complete_production_catalog_and_host_policy",
+    "historical_pre_host_migration",
+    "runtime_platform_drain_and_installation"
+  ]
+}
