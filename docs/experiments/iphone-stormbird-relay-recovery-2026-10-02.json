@@ -1,0 +1,141 @@
+{
+  "schema": "cowboy.iphone-stormbird-relay-recovery/v1",
+  "recorded_at": "2026-10-02T07:13:08.633945+00:00",
+  "cause": {
+    "phone_preferred_derp_region": 999,
+    "hawk_preferred_derp_region": 17,
+    "previous_approved_data_relays": [
+      "derp17b.tailscale.com:443",
+      "derp17c.tailscale.com:443"
+    ],
+    "before_phone_probe": "overlay_ping_timeout",
+    "note": "The restricted Hawk relay map omitted the iPhone home region. Mixed DERP home regions require reaching each peer home region."
+  },
+  "repair": {
+    "node": "hawk",
+    "previous_intent_revision": 397,
+    "published_and_running_intent_revision": 398,
+    "added_relay": "headscale.stormbird.xyz:443",
+    "profile_sha256": "83655c1ed885aab11cf2912fc84be86babc1cc72412622754db51f41b9d92930",
+    "proxy_required_preserved": true,
+    "native_allowed_cidrs": [
+      "192.168.0.0/24"
+    ],
+    "code_change": false
+  },
+  "validation": {
+    "checks": [
+      "just verify-config",
+      "typed Stormbird profile-preview",
+      "installed Stormbird daemon config check",
+      "control-plane device readback",
+      "active local intent readback"
+    ],
+    "iphone_probe": {
+      "latencyMilliseconds": 480.943303,
+      "direct": false,
+      "derpRegionId": 999,
+      "derpRegionCode": "headscale"
+    },
+    "ovh_probe": {
+      "latencyMilliseconds": 181.793381,
+      "direct": false,
+      "derpRegionId": 17,
+      "derpRegionCode": "lax"
+    },
+    "iphone_requests": [
+      {
+        "at": "2026-10-02T07:10:34.665525+00:00",
+        "status": 200,
+        "path": "/version"
+      },
+      {
+        "at": "2026-10-02T07:10:34.665978+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/logs"
+      },
+      {
+        "at": "2026-10-02T07:10:34.666093+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/logs"
+      },
+      {
+        "at": "2026-10-02T07:10:37.729533+00:00",
+        "status": 200,
+        "path": "/api/usage"
+      },
+      {
+        "at": "2026-10-02T07:10:40.010278+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/metrics"
+      },
+      {
+        "at": "2026-10-02T07:10:40.011048+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/logs"
+      },
+      {
+        "at": "2026-10-02T07:10:40.011477+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/metrics"
+      },
+      {
+        "at": "2026-10-02T07:10:40.011734+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/metrics"
+      },
+      {
+        "at": "2026-10-02T07:10:40.011787+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/logs"
+      },
+      {
+        "at": "2026-10-02T07:10:43.195649+00:00",
+        "status": 200,
+        "path": "/api/sessions/sess-1790563075662/bootstrap"
+      },
+      {
+        "at": "2026-10-02T07:10:55.195224+00:00",
+        "status": 200,
+        "path": "/api/telemetry/v1/logs"
+      },
+      {
+        "at": "2026-10-02T07:10:56.850927+00:00",
+        "status": 200,
+        "path": "/version"
+      },
+      {
+        "at": "2026-10-02T07:10:56.851845+00:00",
+        "status": 200,
+        "path": "/"
+      },
+      {
+        "at": "2026-10-02T07:10:56.859265+00:00",
+        "status": 200,
+        "path": "/api/usage"
+      },
+      {
+        "at": "2026-10-02T07:10:56.891049+00:00",
+        "status": 200,
+        "path": "/api/plugins"
+      },
+      {
+        "at": "2026-10-02T07:10:58.448078+00:00",
+        "status": 200,
+        "path": "/api/sync/dataset"
+      },
+      {
+        "at": "2026-10-02T07:10:58.448496+00:00",
+        "status": 200,
+        "path": "/api/auth/me"
+      },
+      {
+        "at": "2026-10-02T07:10:59.130374+00:00",
+        "status": 101,
+        "path": "/ws"
+      }
+    ],
+    "cowboy_controller_pid_unchanged": 683531,
+    "cowboy_workers_restarted": false
+  }
+}
