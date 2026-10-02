@@ -134,7 +134,8 @@ SDK tools while keeping subscription authentication on the Agent Machine. Build
 the actual immutable adapter, then run
 `just execution-worker-conformance <claude-input.json> <new-receipt.json>` with
 `provider: "claude-code"`, exact native/executor digests and the packaged
-launcher. Require all 25 checks, including runtime context replacement, image
+launcher. Require all 26 checks, including native concurrent searches, runtime
+context replacement, image
 and large-output locators, real compaction and subsequent cold resume,
 interruption, uncertain-operation retention and zero-inference readiness
 failure. Do not update the builder's exact native-version guard from a registry

@@ -1,0 +1,92 @@
+{
+  "schema": "cowboy.claude-concurrency-rollout/v1",
+  "accepted": true,
+  "source_revision": "72d7848ca6957ff86d20c25676d1b6491b626f8a",
+  "machine": "ovh",
+  "previous_installation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.2.0",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:d00b06d70fc102df9844c0aac6def5294f268d63c4e3a0afd8e48421d61c6b3a",
+    "installation_revision": "installation-83ea0d6722aed7d304584723675274183bf0988b8723ba25521fed77faa7ed1c",
+    "contract_fingerprint": "sha256:b490fcde243b5247f3efe5254f940a7315cafea3cbe1b53a7937d3fa1e998f9e",
+    "state": "active",
+    "rollback_generation_digest": "sha256:051263cb77807d62913ed0054116851778fd482d22cc605eb965146a49ff5ebe",
+    "active_session_leases": 0,
+    "auth_generation": 50,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "active_installation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.2.1",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:449b92180f08638223d95ef2ba1084e9996eca497cfb0422cc484fe462de8db5",
+    "installation_revision": "installation-5d60052995d00cc5c60bff3027e1a93b5d5686ed23da97e7d8e0e4635ec99e13",
+    "contract_fingerprint": "sha256:7132bc761b47bb7305f7e43b69e655b2895bc1bb760f754e36af3d6a120483a8",
+    "state": "active",
+    "rollback_generation_digest": "sha256:d00b06d70fc102df9844c0aac6def5294f268d63c4e3a0afd8e48421d61c6b3a",
+    "active_session_leases": 0,
+    "auth_generation": 50,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "operation": {
+    "evidence_schema": 2,
+    "machine_receipt": {
+      "state": "applied",
+      "revision": "installation-5d60052995d00cc5c60bff3027e1a93b5d5686ed23da97e7d8e0e4635ec99e13"
+    },
+    "operation_id": "ovh-claude-3-2-1-parallel-tools-20261002",
+    "phase": "completed",
+    "problem": null,
+    "attention_from": null,
+    "plugin_kind": "agent_provider",
+    "plugin_version": "3.2.1",
+    "generation_digest": "sha256:449b92180f08638223d95ef2ba1084e9996eca497cfb0422cc484fe462de8db5",
+    "created_at_ms": 1790903929687,
+    "updated_at_ms": 1790904131312
+  },
+  "requires_reconciliation": false,
+  "reconciliation_performed": true,
+  "installation_replayed": false,
+  "native_cli_version": "2.1.287",
+  "component_release": "3.35.0",
+  "package_digest": "sha256:600727632d3d352bff904313fb6a0f03a30b3f0e4cb7c96e3469576db4c19468",
+  "continuity": {
+    "controller_restarted": false,
+    "controller_pid": 3523838,
+    "ovh_machine_and_existing_worker_units_unchanged": true,
+    "authentication_generation_retained": 50
+  },
+  "verification": {
+    "full_just_check": "passed",
+    "final_provider_check": "passed",
+    "claude_unit_tests": 15,
+    "native_worker_checks": 26,
+    "generation_coexistence": "passed",
+    "catalog_reader_roles": 3,
+    "public_urls": 5,
+    "public_bytes": 307998050
+  },
+  "evidence_sha256": {
+    "docs/experiments/claude-concurrency-catalog-2026-10-02.json": "sha256:9d554b8edcf7a08491b98220649cad4850011e85decdf93080df40aa824fb525",
+    "docs/experiments/claude-concurrency-generations-2026-10-02.json": "sha256:623b8d9d6fd312d847c804a52ae1c4f4a217ffbcc13cdfa0bef799aa0f803d79",
+    "docs/experiments/claude-concurrency-publication-2026-10-02.json": "sha256:1206601433ac1b200979a41c77c01a379161bf76af1941910269fc9e809438c9",
+    "docs/experiments/claude-concurrency-worker-2026-10-02.json": "sha256:41680398d7a93dc54dfec6e24c9806135b06285503f5809791a4616211c8b935"
+  },
+  "not_checked": [
+    "real_subscription_inference",
+    "cross_host_latency",
+    "model_token_and_turn_savings",
+    "macos_native_execution",
+    "physical_device_ui"
+  ],
+  "remaining_limits": [
+    "whole_file_transfer",
+    "non_atomic_external_writer_conflict_check",
+    "startup_guidance_snapshot",
+    "native_mutating_tools_remain_sequential",
+    "existing_session_execution_placement_unchanged"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "accepted": true,
+  "checks": [
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/600727632d3d352bff904313fb6a0f03a30b3f0e4cb7c96e3469576db4c19468/claude-code.cowboy-plugin",
+      "digest": "sha256:600727632d3d352bff904313fb6a0f03a30b3f0e4cb7c96e3469576db4c19468",
+      "bytes": 17297
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111/claude.tar.gz",
+      "digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+      "bytes": 109421707
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/8f85c6e6c49c191372172ebb400f1100f249480d78170d4452378d29fb38c56e/claude-agent-acp.tar.gz",
+      "digest": "sha256:8f85c6e6c49c191372172ebb400f1100f249480d78170d4452378d29fb38c56e",
+      "bytes": 52046190
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278/claude.tar.gz",
+      "digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+      "bytes": 99617644
+    },
+    {
+      "url": "https://cowboy.stormbird.xyz/plugin-artifacts/1b2e2f7d4f3557730c6de8daa07dbff036c76e9748ea14eb4312a38da6f50267/claude-agent-acp.tar.gz",
+      "digest": "sha256:1b2e2f7d4f3557730c6de8daa07dbff036c76e9748ea14eb4312a38da6f50267",
+      "bytes": 46895212
+    }
+  ],
+  "bytes": 307998050
+}

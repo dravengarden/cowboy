@@ -3,10 +3,11 @@
 Status: Codex native remote execution activated, 2026-10-02. Its runtime and
 existing authentication remain on OVH; Hawk and Falcon provide execution. See
 the [production receipt](releases/native-execution-rollout-2026-10-02.json).
-Claude Code Plugin 3.2.0 (native CLI 2.1.287) is also installed and active on
+Claude Code Plugin 3.2.1 (native CLI 2.1.287) is also installed and active on
 OVH, with target context and file/process tools. Its verification and limits are
 recorded in the
-[Claude rollout](releases/claude-native-execution-2026-10-02.md). Core binding
+[Claude rollout](releases/claude-native-execution-2026-10-02.md) and
+[read-only concurrency rollout](releases/claude-tool-concurrency-2026-10-02.md). Core binding
 readers were deployed on 2026-10-01. The implementation adds explicit creation
 admission, a target-owned keeper, authenticated routing and a native Provider
 bridge. Eighteen native-turn checks pass, including a lost actual start receipt,
