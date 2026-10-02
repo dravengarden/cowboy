@@ -135,6 +135,12 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.36.0 records app-shell 1.1.18 for the already-committed update
+countdown and uniform thin download indicator (`c601ecdb`, `6303fa48`). Those
+changes had not updated the component source record. No Plugin depends on this
+component, so all Plugin pins and minimum tested versions remain unchanged.
+Claude 3.3.0 is an independent Plugin release against its unchanged 3.35.0 pin.
+
 Scoped release 3.33.0 records provider-runtime 1.1.9: Claude Code 2.1.286,
 Codex CLI 0.159.3, Codex ACP 2.1.0 and Grok 1.0.46. All six Agent Plugins
 advance independently because they pin that shared runtime component; Gemini
