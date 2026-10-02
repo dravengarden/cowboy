@@ -1,0 +1,142 @@
+{
+  "schema": "cowboy.slow-mobile-send-release/v1",
+  "recorded_at": "2026-10-02T06:26:57.993174+00:00",
+  "source_revision": "24e01e25c02a75bb7d99e61fd79658bf48623f94",
+  "observed": {
+    "client_local_persist_ms": [
+      87,
+      56
+    ],
+    "client_confirmation_ms": [
+      30431,
+      33064
+    ],
+    "previous_confirmation_timeout_ms": 10000,
+    "previous_transcript_timeout_ms": 8000,
+    "note": "Two iOS sends confirmed after the old deadline. Historical transcript timeout causality was reproduced with synthetic slow HTTP; old production builds did not record transcript bootstrap duration."
+  },
+  "behavior": {
+    "unconfirmed_check_ms": 10000,
+    "confirmation_deadline_ms": 60000,
+    "transcript_timeout_ms": 30000,
+    "recovery": "Refresh authoritative session state; probe a quiet drained socket and recover through the same durable message ID. No resend while held failed; explicit retry remains available.",
+    "telemetry": "Bounded duration/timeout/attempt and socket buffer diagnostics; no authored content."
+  },
+  "validation": {
+    "web_tests_passed": 1982,
+    "checks": [
+      "TypeScript typecheck",
+      "Oxlint"
+    ],
+    "browser": [
+      {
+        "bundle": "/tmp/cowboy-slow-send-fixture-final",
+        "digest": "82c8688cbd1eb34f0056a7b9aa314221e92518807a5cf22caec55617cb7d667d",
+        "scenario": "slow-mobile",
+        "discoveries": 1,
+        "bootstraps": 2,
+        "attempts": 1,
+        "deliveries": 1,
+        "result": {
+          "ok": true,
+          "samples": [
+            "slow transcript completes",
+            "no premature 10-second failure",
+            "late echo retires local copy"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-slow-send-fixture-final",
+        "digest": "82c8688cbd1eb34f0056a7b9aa314221e92518807a5cf22caec55617cb7d667d",
+        "scenario": "lost-send",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 2,
+        "deliveries": 1,
+        "result": {
+          "ok": true,
+          "samples": [
+            "quiet half-open socket checked early",
+            "same durable message replayed",
+            "one authoritative echo"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-slow-send-fixture",
+        "digest": "5c27145b968583e8975d42c6b709a7f6614895ffe4c02bd6a3c74af9631e7d2c",
+        "scenario": "transcript-recovery",
+        "discoveries": 1,
+        "bootstraps": 4,
+        "attempts": 1,
+        "deliveries": 0,
+        "result": {
+          "ok": true,
+          "samples": [
+            "replica paint",
+            "503 retry",
+            "empty 200 not acknowledgement",
+            "automatic recovery",
+            "no duplicates",
+            "caption cleared"
+          ]
+        }
+      }
+    ],
+    "physical_device": "not_checked"
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790922376295631916-24e01e25c02a",
+    "revision": "24e01e25c02a75bb7d99e61fd79658bf48623f94",
+    "published": true,
+    "release": "/nix/store/5whx9dd80pj1lx4bf9vydjzw77hz637f-cowboy-web-release",
+    "previousRelease": "/nix/store/v456cg9zrhq5372xhvsym3cxyn9pxa98-cowboy-web-release",
+    "activeRelease": "/nix/store/5whx9dd80pj1lx4bf9vydjzw77hz637f-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T06:26:16.295631916Z",
+    "recordedAt": "2026-10-02T06:26:16.33782376Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "b84828169832cee2f8cd40c00043bdfb"
+    },
+    "service_worker": "cowboy-v1796",
+    "spa_bytes_match_active_web": true,
+    "controller_pid_unchanged": 683531,
+    "machines": {
+      "hawk": {
+        "connected": true,
+        "status": "online",
+        "active_acp_generation": "worker-2801f50d44994e96b2b4",
+        "workspace_revision": "projects-0410346496a2ec677f145e3407b49beb",
+        "workspace_ids_sha256": "1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40",
+        "workspace_owner": "cowboy"
+      },
+      "falcon": {
+        "connected": true,
+        "status": "online",
+        "active_acp_generation": "worker-2801f50d44994e96b2b4",
+        "workspace_revision": "projects-fb5ed67ef8d427de4f98215fb35ed027",
+        "workspace_ids_sha256": "ff963bc4a9f47f42abfa5dd6f74b107eb5d6fd840ce945ea717e42b4678281e9",
+        "workspace_owner": "cowboy"
+      },
+      "ovh": {
+        "connected": true,
+        "status": "online",
+        "active_acp_generation": "worker-2801f50d44994e96b2b4",
+        "workspace_revision": "projects-56793cc33b39a3be5f8dea28871f2a6a",
+        "workspace_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "workspace_owner": "cowboy"
+      }
+    }
+  }
+}
