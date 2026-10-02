@@ -11,6 +11,7 @@ import { activateDraft, openSession, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
+import { optimisticQuestionKey } from "./explore/optimisticPages.ts";
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -28,6 +29,15 @@ function Probe() {
       loading: false,
       connected: snapshot.connected,
       historyPaging: "page",
+      ...(scenario.startsWith("failed-recovery") ? {
+        liveTail: false,
+        visibleItemKeys: new Set([
+          ...(snapshot.optimisticMessages.get("fixture-session") ?? [])
+            .filter((row) => row.text === "new working prompt")
+            .map(optimisticQuestionKey),
+          ...(snapshot.timelines.get("fixture-session") ?? []).map((event) => String(event.seq)),
+        ]),
+      } : {}),
     });
     return scenario === "continuity" ? transcript : createElement("div", null,
       createElement(SessionObligationBadge, { sessionId: "fixture-session" }),
@@ -134,8 +144,18 @@ export async function run() {
       await until(() => snapshot.optimisticMessages.get(session)?.some((row) => row.status === "failed") === true, "failed older send retained");
       const oldCmid = snapshot.optimisticMessages.get(session)![0]!.cmid;
       await until(() => document.querySelector('[aria-label="1 message needs attention"]') !== null, "failure badge paints");
+      let heldBubbleDisappeared = false;
+      const heldBubbleObserver = new MutationObserver(() => {
+        if (document.querySelector(`[data-key="opt-${oldCmid}"]`) === null) heldBubbleDisappeared = true;
+      });
+      heldBubbleObserver.observe(document.body, { childList: true, subtree: true });
       await submitPrompt(session, "new working prompt");
+      await until(() => document.querySelector(`[data-key="opt-${oldCmid}"]`) !== null &&
+        document.body.textContent?.includes("new working prompt") === true,
+        "older held bubble remains visible beside a newer page's pending prompt");
       await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("new working prompt"), "new user echo");
+      heldBubbleObserver.disconnect();
+      if (heldBubbleDisappeared) throw new Error("changing pages briefly hid the older unconfirmed message");
       if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid)) throw new Error("older send retired before agent progress");
       if (scenario === "failed-recovery-no-work") {
         await until(() => snapshot.timelines.get(session)?.some((event) => event.kind === "turn_end") === true, "turn ends before work");

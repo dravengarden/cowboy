@@ -245,7 +245,7 @@ Deno.test("page roots and delivery bubbles use one shared optimistic key", async
   );
   assertEquals(
     transcript.includes("visibleItemKeys.has(optimisticQuestionKey(message))"),
-    true,
+    false,
   );
   assertEquals(
     transcript.includes("pendingMessages.length"),

@@ -4235,14 +4235,9 @@ export function Transcript({
   // skeleton whenever that window was empty or still loading.
   const optimisticMsgs = useMemo(
     () => {
-      const fromStore = !visibleItemKeys || liveTail
-        ? pendingMessages
-        : (() => {
-          const matched = pendingMessages.filter((message) =>
-            visibleItemKeys.has(optimisticQuestionKey(message))
-          );
-          return matched.length > 0 ? matched : pendingMessages;
-        })();
+      // The outbox is a delivery obligation, independent of the page being
+      // read. A matching newer prompt must never hide an older held send.
+      const fromStore = pendingMessages;
       const merged = retainUnpresentedOptimistic(
         lingeringOptimisticRef.current.messages,
         fromStore,
