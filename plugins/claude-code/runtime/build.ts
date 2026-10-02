@@ -66,6 +66,7 @@ try {
     const sources = [
       "launch.mjs",
       "connection.mjs",
+      "mod-bridge.mjs",
       "tools.mjs",
       "context-mod.js",
     ];

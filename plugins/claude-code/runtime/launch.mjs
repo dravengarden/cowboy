@@ -11,18 +11,16 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ALIASES, bindingKey, WorkspaceTools } from "./tools.mjs";
+import {
+  bindingKey,
+  DESCRIPTIONS,
+  NATIVE_TOOLS,
+  WorkspaceTools,
+} from "./tools.mjs";
+import { startModBridge } from "./mod-bridge.mjs";
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
-const server = "cowboy_execution";
 const forbiddenTools = [
-  ...Object.keys(ALIASES),
-  "Read",
-  "Write",
-  "Edit",
-  "Glob",
-  "Grep",
-  "NotebookEdit",
   "Agent",
   "Task",
   "Skill",
@@ -157,7 +155,7 @@ export function nativeArguments(args, plugin) {
     "--permission-mode",
     "bypassPermissions",
     "--tools",
-    "TodoWrite,AskUserQuestion",
+    [...NATIVE_TOOLS, "TodoWrite", "AskUserQuestion"].join(","),
     "--disallowedTools",
     [...disallowed].join(","),
     "--setting-sources",
@@ -196,9 +194,8 @@ export function initializeRequest(frame) {
     ...frame,
     request: {
       subtype: "initialize",
-      sdkMcpServers: [server],
-      sdkMcpServerConfigs: { [server]: { timeout: 660000 } },
-      toolAliases: ALIASES,
+      sdkMcpServers: [],
+      toolAliases: {},
       excludeDynamicSections: true,
       skills: [],
       ...(Array.isArray(frame.request.supportedDialogKinds)
@@ -336,25 +333,6 @@ async function bridge(child, tools, context) {
   const output = (async () => {
     for await (const frame of frames(child.stdout)) {
       if (
-        frame.type === "control_request" &&
-        frame.request?.subtype === "mcp_message" &&
-        frame.request.server_name === server
-      ) {
-        // Do not hold the output pump behind a long command: it must continue to
-        // carry interrupts, status and other SDK control traffic.
-        tools.message(frame.request.message).then((response) =>
-          send(child.stdin, {
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: frame.request_id,
-              response: response ? { mcp_response: response } : {},
-            },
-          })
-        ).catch(() => child.kill("SIGTERM"));
-        continue;
-      }
-      if (
         stage === "initialize" && frame.type === "control_response" &&
         frame.response.request_id === initial?.request_id
       ) {
@@ -444,7 +422,7 @@ async function native(args) {
     throw new Error("Invalid private execution directory");
   }
   const stage = await mkdtemp(join(root, "native-"));
-  let child, connection;
+  let child, connection, modBridge;
   try {
     connection = await Connection.open(descriptor);
     const tools = new WorkspaceTools(
@@ -454,6 +432,10 @@ async function native(args) {
     );
     await tools.load();
     const context = await tools.context();
+    modBridge = await startModBridge(tools);
+    context.socketPath = modBridge.socketPath;
+    context.bridgeToken = modBridge.token;
+    context.descriptions = DESCRIPTIONS;
     const plugin = join(stage, "plugin");
     await mkdir(join(plugin, ".claude-plugin"), { recursive: true });
     await mkdir(join(plugin, "hooks"));
@@ -478,17 +460,20 @@ async function native(args) {
       ...process.env,
       COWBOY_CLAUDE_CONTEXT: contextPath,
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-      // Disable ordinary implicit file attachments. This flag alone does NOT
-      // stop post-compaction Read snapshots; non-reserved file-tool names in
-      // tools.mjs also avoid that separate native local-read path.
+      // Native tool bodies never run for project operations. Keep implicit
+      // attachments and local checkpoints disabled; Mods projects target context.
       CLAUDE_CODE_DISABLE_ATTACHMENTS: "1",
       CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_TELEMETRY: "1",
+      DISABLE_ERROR_REPORTING: "1",
       DISABLE_AUTOUPDATER: "1",
       CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: "1",
       DISABLE_FILE_CHECKPOINTING: "1",
-      MAX_MCP_OUTPUT_TOKENS: "100000",
     };
+    // Mods' HTTP API also applies this flag to Unix sockets. Keep individual
+    // telemetry/error-reporting/update switches disabled while allowing the
+    // private execution socket. Never change the user's persisted settings.
+    delete environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
     child = spawn(executable, nativeArguments(args, plugin), {
@@ -515,6 +500,7 @@ async function native(args) {
   } finally {
     child?.kill("SIGTERM");
     connection?.close();
+    await modBridge?.close();
     await rm(stage, { recursive: true, force: true });
   }
 }

@@ -4,16 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { TOOLS, WorkspaceTools } from "./tools.mjs";
-
-test("only target reads and searches advertise native parallel execution", () => {
-  assert.deepEqual(
-    TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) =>
-      tool.name
-    ),
-    ["read", "glob", "grep"],
-  );
-});
+import { TASK_OUTPUT_PREFIX, WorkspaceTools } from "./tools.mjs";
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-claude-tools-"));
@@ -116,6 +107,70 @@ test("quoted paths, CRLF, Unicode and literal replacement strings retain their b
     files.get("/target with space/" + path).toString(),
     "\uFEFF🐎 $& $` $'\r\nnext\r\n",
   );
+});
+
+test("native file results expose target paths and exact diffs, including EOF changes", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set("/target with space/file", Buffer.from("before"));
+  const read = await tools.nativeCall("Read", { file_path: "file" });
+  assert.equal(read.result.file.filePath, "/target with space/file");
+  assert.equal(read.result.file.content, "before");
+  const edit = await tools.nativeCall("Edit", {
+    file_path: "file",
+    old_string: "before",
+    new_string: "after\n",
+  });
+  assert.deepEqual(edit.result.structuredPatch, [{
+    oldStart: 1,
+    oldLines: 1,
+    newStart: 1,
+    newLines: 1,
+    lines: ["-before", "\\ No newline at end of file", "+after"],
+  }]);
+  files.set("/target with space/file", Buffer.from("external"));
+  const refused = await tools.nativeCall("Write", {
+    file_path: "file",
+    content: "lost",
+  });
+  assert.match(refused.deny, /changed/);
+  assert.equal(files.get("/target with space/file").toString(), "external");
+});
+
+test("native Read task handles retain output cursors across cold resume", async (t) => {
+  const { tools, connection, binding, state } = await fixture(t);
+  const id = "00000000-0000-0000-0000-000000000001";
+  tools.state.jobs[id] = { afterSeq: null, exited: false };
+  await tools.save();
+  const resumed = new WorkspaceTools(connection, binding, state);
+  await resumed.load();
+  const cursors = [];
+  connection.call = async (method, params) => {
+    assert.equal(method, "process/read");
+    cursors.push(params.afterSeq);
+    return {
+      chunks: params.afterSeq === null
+        ? [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("done").toString("base64"),
+        }]
+        : [],
+      closed: true,
+      exited: true,
+      exitCode: 0,
+    };
+  };
+  const path = TASK_OUTPUT_PREFIX + id;
+  const first = await resumed.nativeCall("Read", { file_path: path });
+  assert.equal(first.result.file.content, "done\nExit code: 0");
+  const second = await resumed.nativeCall("Read", { file_path: path });
+  assert.equal(second.result.file.content, "Exit code: 0");
+  assert.deepEqual(cursors, [null, 1]);
+  const unknown = await resumed.nativeCall("Read", {
+    file_path: TASK_OUTPUT_PREFIX + "foreign",
+  });
+  assert.match(unknown.deny, /does not belong/);
+  assert.equal(cursors.length, 2);
 });
 
 test("ambiguous edits and foreign task ids have no effects", async (t) => {

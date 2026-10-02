@@ -38,10 +38,12 @@ class ScriptedApi(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, steps):
+    def __init__(self, steps, *, native_titles=False):
         self.steps = steps
         self.requests = []
         self.token_requests = []
+        self.title_requests = []
+        self.native_titles = native_titles
         self.failure = None
         super().__init__(("127.0.0.1", 0), ApiHandler)
         self.thread = threading.Thread(target=self.serve_forever, daemon=True)
@@ -73,11 +75,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             require(self.path.split("?")[0] == "/v1/messages", f"unexpected API endpoint {self.path.split('?')[0][:256]}")
             index = len(self.server.requests)
-            self.server.requests.append(request)
-            require(index <= len(self.server.steps), "unexpected extra native API request")
-            content = self.server.steps[index] if index < len(self.server.steps) else [
-                {"type": "text", "text": "fixture complete"},
-            ]
+            is_title = self.server.native_titles and not request.get("tools") and any(
+                block.get("type") == "text" and block.get("text", "").startswith("You are naming a coding session so the user can pick it out")
+                for block in request.get("system", []) if isinstance(block, dict))
+            if is_title:
+                self.server.title_requests.append(request)
+                content = [{"type": "text", "text": '{"title":"Fixture session"}'}]
+            else:
+                self.server.requests.append(request)
+                require(index <= len(self.server.steps), "unexpected extra native API request")
+                content = self.server.steps[index] if index < len(self.server.steps) else [
+                    {"type": "text", "text": "fixture complete"},
+                ]
             if callable(content):
                 content = content(self.server.requests)
             reason = "tool_use" if any(block["type"] == "tool_use" for block in content) else "end_turn"
@@ -174,14 +183,14 @@ class WorkspaceFixture:
 
 class Claude:
     def __init__(self, binary, environment, runtime, fixture, *, aliases=True, resume=None,
-                 custom_system_prompt=False, extra_arguments=(), model="claude-sonnet-4-6"):
+                 custom_system_prompt=False, extra_arguments=(), model="claude-sonnet-4-6", bound_native=False):
         self.fixture = fixture
         self.frames = queue.Queue(maxsize=1000)
         self.messages = []
         self.stderr = tempfile.TemporaryFile()
         arguments = [binary, "--print", "--input-format", "stream-json", "--output-format", "stream-json",
                      "--verbose", "--permission-mode", "bypassPermissions", "--tools", "",
-                     "--disallowedTools", ",".join(DISALLOWED), "--setting-sources", "",
+                     "--disallowedTools", "Agent,Task,Skill" if bound_native else ",".join(DISALLOWED), "--setting-sources", "",
                      "--strict-mcp-config", "--model", model, *extra_arguments]
         if resume:
             arguments.extend(["--resume", resume])

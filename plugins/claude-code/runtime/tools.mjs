@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
-const text = (value) => ({
+const text = (value, native) => ({
+  ...(native === undefined ? {} : { native }),
   content: [{ type: "text", text: value }],
   isError: false,
 });
@@ -21,133 +22,34 @@ export function bindingKey(binding) {
       : value;
   return hash(JSON.stringify(canonical(binding)));
 }
-const string = { type: "string" };
-const integer = { type: "integer", minimum: 0 };
-const boolean = { type: "boolean" };
-function definition(name, description, properties, required) {
-  return {
-    name: name.toLowerCase(),
-    description,
-    // Claude dispatches custom tools sequentially unless their MCP definition
-    // declares read-only behavior. Never make this claim for arbitrary Bash.
-    annotations: { readOnlyHint: ["Read", "Glob", "Grep"].includes(name) },
-    // Native Claude otherwise persists some text results to its runtime home.
-    // Our own bounds stay below this documented per-tool inline threshold.
-    _meta: { "anthropic/maxResultSizeChars": 400000 },
-    inputSchema: {
-      type: "object",
-      properties,
-      required,
-      additionalProperties: false,
-    },
-  };
-}
-
-export const TOOLS = [
-  definition(
-    "Bash",
-    "Run a Bash command in the current workspace. Commands start in the project directory; use cd within a command when needed. Waits up to timeout milliseconds (default 120000, maximum 600000); commands still running return a task_id. Use TaskOutput to observe completion or TaskStop to cancel.",
-    {
-      command: string,
-      description: string,
-      timeout: integer,
-      run_in_background: boolean,
-      dangerouslyDisableSandbox: boolean,
-    },
-    ["command"],
-  ),
-  definition(
-    "Read",
-    "Read a file before editing it. Text is returned with line numbers (offset starts at 1). PNG, JPEG, GIF and WebP images are returned as images.",
-    { file_path: string, offset: integer, limit: integer, pages: string },
-    ["file_path"],
-  ),
-  definition(
-    "Write",
-    "Write UTF-8 content. Existing files must first be read; changes since that read cause a conflict. Creates missing parent directories.",
-    { file_path: string, content: string },
-    ["file_path", "content"],
-  ),
-  definition(
-    "Edit",
-    "Replace an exact string in a file previously read. Unless replace_all is true the match must be unique. A changed file requires a fresh ReadFile.",
-    {
-      file_path: string,
-      old_string: string,
-      new_string: string,
-      replace_all: boolean,
-    },
-    ["file_path", "old_string", "new_string"],
-  ),
-  definition(
-    "Glob",
-    "Find files matching a glob, relative to path or the current workspace.",
-    { pattern: string, path: string },
-    ["pattern"],
-  ),
-  definition(
-    "Grep",
-    "Search file contents with ripgrep. output_mode is content, files_with_matches (default), or count. Supports regex, glob, type, context and pagination.",
-    {
-      pattern: string,
-      path: string,
-      glob: string,
-      type: string,
-      output_mode: { enum: ["content", "files_with_matches", "count"] },
-      "-i": boolean,
-      "-n": boolean,
-      "-A": integer,
-      "-B": integer,
-      "-C": integer,
-      context: integer,
-      multiline: boolean,
-      head_limit: integer,
-      offset: integer,
-    },
-    ["pattern"],
-  ),
-  definition(
-    "NotebookEdit",
-    "Edit a Jupyter notebook previously read. cell_id identifies an existing cell; insert without cell_id appends a cell. edit_mode defaults to replace.",
-    {
-      notebook_path: string,
-      cell_id: string,
-      new_source: string,
-      cell_type: { enum: ["code", "markdown"] },
-      edit_mode: { enum: ["replace", "insert", "delete"] },
-    },
-    ["notebook_path", "new_source"],
-  ),
-  definition(
-    "TaskOutput",
-    "Read retained output of a Bash task. block waits up to timeout milliseconds. Output is returned once per cursor; task_id survives a resumed session.",
-    { task_id: string, block: boolean, timeout: integer },
-    ["task_id"],
-  ),
-  definition(
-    "TaskStop",
-    "Terminate a Bash task and observe its exit. Use the task_id returned by Bash.",
-    { task_id: string, shell_id: string },
-    [],
-  ),
+export const NATIVE_TOOLS = [
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "Glob",
+  "Grep",
+  "NotebookEdit",
+  "TaskStop",
 ];
-// Reserved native Read/Edit/Write names participate in Claude's post-compaction
-// local file rereads, even when SDK aliases replaced their tool implementation.
-// Separate public names avoid that implicit local IO while retaining familiar
-// schemas and exactly one model-visible call per ordinary operation.
-export const ALIASES = Object.fromEntries(
-  Object.entries({
-    Bash: "bash",
-    ReadFile: "read",
-    WriteFile: "write",
-    EditFile: "edit",
-    GlobFiles: "glob",
-    GrepFiles: "grep",
-    EditNotebook: "notebookedit",
-    TaskOutput: "taskoutput",
-    TaskStop: "taskstop",
-  }).map(([name, tool]) => [name, `mcp__cowboy_execution__${tool}`]),
-);
+export const TASK_OUTPUT_PREFIX = "cowboy-task://";
+export const DESCRIPTIONS = {
+  Bash:
+    "Run Bash in the current workspace. Starts in the project directory; use cd within a command when needed. Waits up to timeout milliseconds (default 120000, maximum 600000). A running command returns a task id and cowboy-task:// output handle: use Read on that handle to wait for output, or TaskStop to cancel.",
+  Read:
+    "Read a workspace file before editing it. Text has line numbers; offset starts at 1. Supports PNG, JPEG, GIF and WebP. A cowboy-task:// handle reads new retained command output and waits up to 10 seconds; handles survive resume. Use a target utility for PDFs.",
+  Write:
+    "Write UTF-8 content. Existing files must first be read; changes since that read cause a conflict. Creates missing parent directories.",
+  Edit:
+    "Replace an exact string in a previously read file. Unless replace_all is true the match must be unique. A changed file requires another Read.",
+  Glob: "Find matching files relative to path or the current workspace.",
+  Grep:
+    "Search workspace files with ripgrep. Supports regex, glob, file type, context, pagination, and content/files_with_matches/count output modes.",
+  NotebookEdit:
+    "Edit a previously read Jupyter notebook. cell_id selects an existing cell; insert without cell_id adds the first cell. Metadata is retained.",
+  TaskStop:
+    "Terminate a Bash command and observe its exit using the returned task_id. Handles survive resume.",
+};
 
 function checkedString(value, name, max = MAX_FILE) {
   if (
@@ -173,6 +75,46 @@ function decode(bytes) {
 function missing(error) {
   return error.remote &&
     /No such file|not found|NotFound/i.test(JSON.stringify(error.remote));
+}
+
+// One bounded, exact hunk for native diff presentation. Large originals are
+// omitted using the native schema's explicit null/empty-patch convention.
+function patch(before, after) {
+  if (before === null || before === after) return [];
+  const old = before.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const next = after.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  let start = 0;
+  while (
+    start < Math.min(old.length, next.length) && old[start] === next[start]
+  ) start++;
+  let end = 0;
+  while (
+    end < Math.min(old.length, next.length) - start &&
+    old.at(-end - 1) === next.at(-end - 1)
+  ) end++;
+  const from = Math.max(0, start - 3);
+  const oldTo = Math.min(old.length, old.length - end + 3);
+  const newTo = Math.min(next.length, next.length - end + 3);
+  const render = (lines, prefix) =>
+    lines.flatMap((line) =>
+      line.endsWith("\n")
+        ? [prefix + line.slice(0, -1)]
+        : [prefix + line, "\\ No newline at end of file"]
+    );
+  const lines = [
+    ...render(old.slice(from, start), " "),
+    ...render(old.slice(start, old.length - end), "-"),
+    ...render(next.slice(start, next.length - end), "+"),
+    ...render(next.slice(next.length - end, newTo), " "),
+  ];
+  if (Buffer.byteLength(lines.join("\n")) > MAX_OUTPUT) return [];
+  return [{
+    oldStart: from + 1,
+    oldLines: oldTo - from,
+    newStart: from + 1,
+    newLines: newTo - from,
+    lines,
+  }];
 }
 
 export class WorkspaceTools {
@@ -420,7 +362,7 @@ export class WorkspaceTools {
         ? `Target Git status at session start:\n${git.output}`
         : "The target is not a Git repository.",
       instructions:
-        "Use ReadFile, EditFile, WriteFile, GlobFiles, GrepFiles and EditNotebook for files; Bash for commands; TaskOutput and TaskStop for processes. Only these tools, questions and to-dos are available. Project hooks, skills, native agents and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
+        "Use Read, Edit, Write, Glob, Grep and NotebookEdit for files; Bash for commands; Read with a cowboy-task:// output handle and TaskStop for retained processes. After compaction, use Read for file contents you need again. Only these tools, questions and to-dos are available. Project hooks, skills, native agents and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
         instructions,
     };
   }
@@ -452,17 +394,23 @@ export class WorkspaceTools {
   async invoke(name, args) {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
+      const timeout = bounded(args.timeout, 120000, 1, 600000);
       const id = await this.start([this.shell, "-c", command]);
       if (args.run_in_background) {
-        return text(JSON.stringify({ task_id: id, running: true }));
+        return text(
+          JSON.stringify({ task_id: id, running: true }),
+          this.bashResult({
+            output: "",
+            task_id: id,
+            exited: false,
+            closed: false,
+          }),
+        );
       }
       this.foreground.add(id);
       try {
-        return text(
-          JSON.stringify(
-            await this.collect(id, bounded(args.timeout, 120000, 1, 600000)),
-          ),
-        );
+        const result = await this.collect(id, timeout);
+        return text(JSON.stringify(result), this.bashResult(result));
       } finally {
         this.foreground.delete(id);
       }
@@ -480,7 +428,14 @@ export class WorkspaceTools {
         : args.block === false
         ? 1
         : bounded(args.timeout, 10000, 1, 120000);
-      return text(JSON.stringify(await this.collect(id, timeout)));
+      const result = await this.collect(id, timeout);
+      return text(JSON.stringify(result), {
+        message: result.closed
+          ? "Command stopped."
+          : "Termination requested; inspect its output handle.",
+        task_id: id,
+        task_type: "local_bash",
+      });
     }
     if (name === "glob" || name === "grep") {
       const path = args.path === undefined ? this.cwd : this.path(args.path);
@@ -514,17 +469,42 @@ export class WorkspaceTools {
         argv.push("--regexp", pattern);
       }
       argv.push("--", path);
+      const started = Date.now();
       const result = await this.command(argv);
       if (result.exitCode !== 0 && result.exitCode !== 1) {
         throw new Error(result.output.slice(0, 4096) || "Search failed");
       }
       const offset = bounded(args.offset, 0, 0, 1000000);
       const limit = bounded(args.head_limit, 200, 0, 10000) || 10000;
+      const lines = result.output.replace(/\n$/, "").split("\n").filter((
+        line,
+      ) => line.length > 0);
+      const selected = lines.slice(offset, offset + limit);
+      const truncated = lines.length > offset + limit || result.output_limit;
+      const output = selected.join("\n") +
+        (truncated
+          ? "\n[More results available; narrow the search or change offset.]"
+          : "");
+      const mode = args.output_mode ?? "files_with_matches";
       return text(
-        result.output.split("\n").slice(offset, offset + limit).join("\n") +
-          (result.output.split("\n").length > offset + limit
-            ? "\n[More results available; narrow the search or change offset.]"
-            : ""),
+        output,
+        name === "glob"
+          ? {
+            durationMs: Date.now() - started,
+            numFiles: selected.length,
+            filenames: selected,
+            truncated,
+          }
+          : {
+            mode,
+            numFiles: mode === "files_with_matches" ? selected.length : 0,
+            filenames: mode === "files_with_matches" ? selected : [],
+            ...(mode === "files_with_matches"
+              ? {}
+              : { content: output, numLines: selected.length }),
+            appliedLimit: limit,
+            appliedOffset: offset,
+          },
       );
     }
     if (!["read", "write", "edit", "notebookedit"].includes(name)) {
@@ -557,6 +537,14 @@ export class WorkspaceTools {
             data: bytes.toString("base64"),
           }, { type: "text", text: `Image source in workspace: ${path}` }],
           isError: false,
+          native: {
+            type: "image",
+            file: {
+              base64: bytes.toString("base64"),
+              type: mimeType,
+              originalSize: bytes.length,
+            },
+          },
         });
       }
       if (
@@ -568,14 +556,28 @@ export class WorkspaceTools {
       }
       const offset = bounded(args.offset, 1, 1, 10000000) - 1;
       const limit = bounded(args.limit, 2000, 1, 10000);
-      const result = decode(bytes).split("\n").slice(offset, offset + limit)
-        .map((line, index) => `${offset + index + 1}\t${line}`).join("\n");
+      const lines = decode(bytes).split("\n");
+      const selected = lines.slice(offset, offset + limit);
+      const result = selected.map((line, index) =>
+        `${offset + index + 1}\t${line}`
+      ).join("\n");
       if (Buffer.byteLength(result) > MAX_OUTPUT) {
         throw new Error(
           "Selected lines exceed output limit; request a smaller range",
         );
       }
-      return await remember(text(result));
+      return await remember(
+        text(result, {
+          type: "text",
+          file: {
+            filePath: path,
+            content: selected.join("\n"),
+            numLines: selected.length,
+            startLine: offset + 1,
+            totalLines: lines.length,
+          },
+        }),
+      );
     }
     if (bytes && this.state.reads[path] !== hash(bytes)) {
       throw new Error(
@@ -583,6 +585,7 @@ export class WorkspaceTools {
       );
     }
     let content;
+    let notebookResult;
     if (name === "write") content = checkedString(args.content, "content");
     else if (name === "edit") {
       const original = decode(bytes);
@@ -607,12 +610,30 @@ export class WorkspaceTools {
       const notebook = JSON.parse(decode(bytes));
       if (!Array.isArray(notebook.cells)) throw new Error("Invalid notebook");
       const mode = args.edit_mode ?? "replace";
+      if (
+        args.cell_type !== undefined &&
+        !["code", "markdown"].includes(args.cell_type)
+      ) {
+        throw new Error("Invalid notebook cell type");
+      }
+      if (mode === "insert" && args.cell_type === undefined) {
+        throw new Error("Inserting a cell requires cell_type");
+      }
       const index = args.cell_id === undefined
         ? -1
         : notebook.cells.findIndex((cell) => cell.id === args.cell_id);
       if (index < 0 && (mode !== "insert" || args.cell_id !== undefined)) {
         throw new Error("Notebook cell not found");
       }
+      notebookResult = {
+        new_source: args.new_source,
+        cell_id: args.cell_id,
+        cell_type: args.cell_type ?? notebook.cells[index]?.cell_type ?? "code",
+        language: notebook.metadata?.language_info?.name ?? "",
+        edit_mode: mode,
+        notebook_path: path,
+        original_file: decode(bytes),
+      };
       const source = checkedString(args.new_source, "new_source").match(
         /[^\n]*\n|[^\n]+$/g,
       ) ?? [];
@@ -620,7 +641,7 @@ export class WorkspaceTools {
       else if (mode === "insert") {
         const cell_type = args.cell_type ?? "code";
         notebook.cells.splice(
-          index < 0 ? notebook.cells.length : index + 1,
+          index + 1,
           0,
           {
             id: randomUUID().slice(0, 8),
@@ -632,8 +653,18 @@ export class WorkspaceTools {
               : {}),
           },
         );
-      } else if (mode === "replace") notebook.cells[index].source = source;
-      else throw new Error("Invalid notebook edit mode");
+      } else if (mode === "replace") {
+        const cell = notebook.cells[index];
+        cell.source = source;
+        cell.cell_type = args.cell_type ?? cell.cell_type;
+        if (cell.cell_type === "code") {
+          cell.outputs = [];
+          cell.execution_count = null;
+        } else {
+          delete cell.outputs;
+          delete cell.execution_count;
+        }
+      } else throw new Error("Invalid notebook edit mode");
       content = JSON.stringify(notebook, null, 1) + "\n";
     }
     if (Buffer.byteLength(content) > MAX_FILE) {
@@ -651,7 +682,81 @@ export class WorkspaceTools {
     });
     this.state.reads[path] = hash(content);
     await this.save();
-    return text(`Updated ${path}`);
+    const originalFile = bytes && bytes.length <= MAX_OUTPUT
+      ? decode(bytes)
+      : null;
+    const native = name === "write"
+      ? {
+        type: bytes ? "update" : "create",
+        filePath: path,
+        content,
+        originalFile,
+        structuredPatch: patch(originalFile, content),
+      }
+      : name === "edit"
+      ? {
+        filePath: path,
+        oldString: args.old_string,
+        newString: args.new_string,
+        originalFile,
+        structuredPatch: patch(originalFile, content),
+        userModified: false,
+        replaceAll: args.replace_all === true,
+      }
+      : { ...notebookResult, updated_file: content };
+    return text(`Updated ${path}`, native);
+  }
+
+  bashResult(result) {
+    const progress = result.closed
+      ? `Exit code: ${result.exitCode}`
+      : `Command is still running. Task id: ${result.task_id}\nRead output: ${TASK_OUTPUT_PREFIX}${result.task_id}`;
+    return {
+      stdout: result.output +
+        (result.output && !result.output.endsWith("\n") ? "\n" : "") +
+        progress +
+        (result.output_limit
+          ? `\n[Output limit reached; read ${TASK_OUTPUT_PREFIX}${result.task_id} for more.]`
+          : ""),
+      stderr: "",
+      interrupted: false,
+    };
+  }
+
+  async nativeCall(name, args) {
+    if (!NATIVE_TOOLS.includes(name)) {
+      return { deny: "Tool is not available in this execution environment" };
+    }
+    if (name === "Read" && args.file_path?.startsWith(TASK_OUTPUT_PREFIX)) {
+      const id = args.file_path.slice(TASK_OUTPUT_PREFIX.length);
+      const result = await this.call("taskoutput", {
+        task_id: id,
+        timeout: 10000,
+      });
+      if (result.isError) return { deny: result.content[0].text };
+      const output = this.bashResult(JSON.parse(result.content[0].text)).stdout;
+      return {
+        result: {
+          type: "text",
+          file: {
+            filePath: args.file_path,
+            content: output,
+            numLines: output.split("\n").length,
+            startLine: 1,
+            totalLines: output.split("\n").length,
+          },
+        },
+      };
+    }
+    const result = await this.call(name.toLowerCase(), args);
+    if (result.isError) return { deny: result.content[0].text };
+    if (!result.native) {
+      return {
+        deny:
+          "Target result unavailable; inspect state before repeating a mutation",
+      };
+    }
+    return { result: result.native };
   }
 
   async cancelForeground() {
@@ -660,28 +765,5 @@ export class WorkspaceTools {
         this.connection.call("process/terminate", { processId })
       ),
     );
-  }
-
-  async message(message) {
-    let result;
-    if (message.method === "initialize") {
-      result = {
-        protocolVersion: message.params.protocolVersion,
-        capabilities: { tools: {} },
-        serverInfo: { name: "cowboy-execution", version: "1" },
-      };
-    } else if (message.method === "tools/list") result = { tools: TOOLS };
-    else if (message.method === "tools/call") {
-      result = await this.call(
-        message.params.name,
-        message.params.arguments ?? {},
-      );
-    } else if (message.method.startsWith("notifications/")) return null;
-    else {return {
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32601, message: "Unsupported execution method" },
-      };}
-    return { jsonrpc: "2.0", id: message.id, result };
   }
 }

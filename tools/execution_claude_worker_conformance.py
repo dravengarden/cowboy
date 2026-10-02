@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import random
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -26,9 +27,7 @@ from plugin_runtime_conformance import closed_environment
 
 
 def tool(name, arguments):
-    alias = {"Read": "ReadFile", "Write": "WriteFile", "Edit": "EditFile", "Glob": "GlobFiles",
-             "Grep": "GrepFiles", "NotebookEdit": "EditNotebook"}.get(name, name)
-    return native_tool(alias, arguments)
+    return native_tool(name, arguments)
 
 
 def outputs(request):
@@ -40,17 +39,23 @@ def outputs(request):
                     yield block
 
 
-def stop_background(requests):
+def background_id(requests):
     for block in reversed(list(outputs(requests[-1]))):
-        for item in block.get("content", []) if isinstance(block.get("content"), list) else []:
+        for item in block.get("content", []) if isinstance(block.get("content"), list) else [{"type": "text", "text": block.get("content", "")}]:
             if item.get("type") == "text":
-                try:
-                    result = json.loads(item["text"])
-                except ValueError:
-                    continue
-                if result.get("task_id"):
-                    return tool("TaskStop", {"task_id": result["task_id"]})
+                handle = re.search(r"cowboy-task://([a-f0-9-]{36})", item["text"])
+                if handle:
+                    return handle[1]
+    print("background output diagnostic:", [json.dumps(block)[:450] for block in outputs(requests[-1])])
     raise ProbeFailure("background tool did not return a handle")
+
+
+def stop_background(requests):
+    return tool("TaskStop", {"task_id": background_id(requests)})
+
+
+def read_background(requests):
+    return tool("Read", {"file_path": "cowboy-task://" + background_id(requests)})
 
 
 def main():
@@ -76,6 +81,11 @@ def main():
     (args.target / "pixel.png").write_bytes(pixel)
     random_text = "".join(random.Random(7).choices("abcdefghijklmnopqrstuvwxyz0123456789", k=58000))
     (args.target / "large.txt").write_text(random_text)
+    (args.target / "book.ipynb").write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {"preserve": True},
+        "cells": [{"id": "cell", "cell_type": "code", "metadata": {}, "source": ["before"],
+                   "outputs": [], "execution_count": None}],
+    }))
     quoted = "quoted '\" $() 中文 🐎.txt"
     content = "target after '\" $() 中文 🐎\r\n"
     def conflict(_requests):
@@ -89,11 +99,14 @@ def main():
         tool("Read", {"file_path": quoted}), conflict,
         tool("Read", {"file_path": "pixel.png"}),
         tool("Read", {"file_path": "large.txt"}),
+        tool("Read", {"file_path": "book.ipynb"}),
+        tool("NotebookEdit", {"notebook_path": "book.ipynb", "cell_id": "cell", "new_source": "print('target')\n"}),
         tool("Glob", {"pattern": "*.txt"}),
         tool("Grep", {"pattern": "target after", "output_mode": "content"}),
         tool("Bash", {"command": "printf background_started >> jobs.txt; while :; do sleep 1; printf tick >> jobs.txt; done", "run_in_background": True}),
+        read_background,
         stop_background,
-    ])
+    ], native_titles=True)
     environment = closed_environment(args.runtime.parent / "claude-home")
     environment.update({
         "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{api.server_port}",
@@ -106,13 +119,17 @@ def main():
     })
     fixture = WorkspaceFixture(args.target)
     def native(resume=None):
-        return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume)
+        return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume, bound_native=True)
     def context_checked(requests):
-        for request in api.token_requests:
+        for request in [*api.token_requests, *api.title_requests]:
             require(str(args.runtime) not in json.dumps(request) and
                     str(args.runtime.parent / "claude-home") not in json.dumps(request),
-                    "token counting leaked runtime context")
-        for request in requests:
+                    "auxiliary request leaked runtime context")
+        for index, request in enumerate(requests):
+            names = {definition["name"] for definition in request.get("tools", [])}
+            require(not any(name.startswith("mcp__") for name in names), "MCP tool definitions remain advertised")
+            require(not names or {"Read", "Edit", "Write", "Bash", "Glob", "Grep", "NotebookEdit", "TaskStop"} <= names,
+                    "native execution tools missing")
             encoded = json.dumps(request)
             exposed = next((path for path in [str(args.runtime), str(args.runtime.parent / "claude-home")]
                             if path in encoded), None)
@@ -122,6 +139,8 @@ def main():
             require(str(args.runtime) not in encoded and str(args.runtime.parent / "claude-home") not in encoded and
                     "RUNTIME_CLAUDE_GUIDANCE" not in encoded and
                     "RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in encoded, "runtime context reached model")
+            if "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" not in encoded:
+                print("target guidance diagnostic:", index, json.dumps({"system": request.get("system"), "tools": sorted(names), "messages": request.get("messages", [])[:1]})[:3500])
             require(str(args.target) in encoded and "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" in encoded and
                     "TARGET_GUIDANCE_MUST_REACH_MODEL" in encoded, "target guidance missing")
         require(not fixture.calls, "test client unexpectedly supplied target tools")
@@ -144,6 +163,9 @@ def main():
         require((args.target / "fixture.txt").read_bytes() == content.encode(), "target edit bytes changed")
         require((args.target / "once.txt").read_text() == "once", "command did not execute exactly once")
         require((args.target / quoted).read_text() == "external change\n", "stale edit overwrote external change")
+        book = json.loads((args.target / "book.ipynb").read_text())
+        require(book["metadata"] == {"preserve": True} and book["cells"][0]["source"] == ["print('target')\n"],
+                "native notebook edit lost target metadata or content")
         errors = [block for block in outputs(api.requests[-1]) if block.get("is_error")]
         require(len(errors) == 1, f"expected only the edit conflict; received {len(errors)} tool errors")
         require((args.runtime / "fixture.txt").read_text() == "runtime remains untouched\n" and
@@ -151,8 +173,7 @@ def main():
         jobs = (args.target / "jobs.txt").read_text()
         require(jobs.count("background_started") == 1, "background start replayed")
         stopped = list(outputs(api.requests[-1]))[-1]
-        state = json.loads(stopped["content"][0]["text"])
-        require(state["closed"] and state["exited"], "background cancellation did not settle")
+        require("Command stopped." in json.dumps(stopped), "background cancellation did not settle")
         time.sleep(1.2)
         require((args.target / "jobs.txt").read_text() == jobs, "background descendants survived cancellation")
         images = [item for block in outputs(api.requests[-1]) if isinstance(block.get("content"), list) for item in block["content"]
@@ -160,15 +181,16 @@ def main():
         require(images and base64.b64decode(images[0]["source"]["data"]) == pixel, "target image bytes changed")
         require(any(random_text in json.dumps(request) for request in api.requests),
                 "large tool result spilled or was truncated before reaching the model")
-        checks.extend(["module_readiness_uses_no_model_request", "native_aliases_use_target_files_and_processes",
+        checks.extend(["module_readiness_uses_no_model_request", "native_tools_use_target_files_and_processes_without_mcp",
                        "runtime_context_and_guidance_are_replaced", "unicode_quotes_crlf_bytes_preserved",
                        "stale_edit_is_refused", "target_image_enters_model_context", "background_cancel_settles",
                        "bounded_large_read_stays_in_target_tool_result",
+                       "native_notebook_edit_preserves_metadata", "native_read_observes_retained_task_output",
                        "lost_start_receipt_and_transport_outage_do_not_replay"])
         api.steps.extend([[], tool("Bash", {"command": "printf retained_started >> retained.txt; while :; do sleep 1; printf tick >> retained.txt; done", "run_in_background": True})])
         client.prompt(timeout=90)
         client.close(); client = None
-        api.steps.extend([[], stop_background, tool("Edit", {"file_path": "fixture.txt", "old_string": "target after", "new_string": "target resumed"}),
+        api.steps.extend([[], read_background, stop_background, tool("Edit", {"file_path": "fixture.txt", "old_string": "target after", "new_string": "target resumed"}),
                           tool("Bash", {"command": "cat fixture.txt; cat once.txt"})])
         previous = len(api.requests)
         client = native(session)
@@ -197,7 +219,7 @@ def main():
         checks.append("cold_resume_after_compaction_has_no_runtime_file_locators")
         # Each search reads a FIFO. Its writer supplies content only after BOTH
         # readers have opened their pipes: sequential native/facade dispatch
-        # cannot pass. This exercises the actual readOnlyHint and target route.
+        # cannot pass. This exercises native read-only scheduling and the target route.
         parallel = []
         pipes = [args.target / f"parallel-{name}.fifo" for name in ["a", "b"]]
         for pipe in pipes:
@@ -258,10 +280,11 @@ def main():
         checks.append("native_interrupt_stops_foreground_target_process")
         client.close(); client = None
         native_requests = len(api.requests)
+        title_requests = len(api.title_requests)
         api.close()
 
         # Drive the actual bundled ACP adapter, not just its private CLI shim.
-        api = ScriptedApi([tool("Bash", {"command": "cat fixture.txt; printf acp_once >> acp-once.txt"})])
+        api = ScriptedApi([tool("Bash", {"command": "cat fixture.txt; printf acp_once >> acp-once.txt"})], native_titles=True)
         environment["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{api.server_port}"
         class Acp(Executor):
             def send(self, message):
@@ -309,12 +332,12 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
             failed = Claude(str(broken / "bin/cowboy-configured-cli"), environment, args.runtime, fixture,
-                            extra_arguments=extra)
+                            extra_arguments=extra, bound_native=True)
             try:
                 try:
                     failed.ready()
@@ -331,12 +354,28 @@ def main():
             finally:
                 failed.close()
         checks.extend(["broken_module_refused_before_model_request", "bare_mode_refused_without_changing_authentication"])
+        shutil.copyfile(launcher.parent / "context-mod.js", broken / "app/context-mod.js")
+        source = (launcher.parent / "tools.mjs").read_text()
+        for label, injected in [("malformed_result", 'return { result: {} };'), ("bridge_error", "throw new Error('fixture lost result');")]:
+            (broken / "app/tools.mjs").write_text(source.replace("async nativeCall(name, args) {", "async nativeCall(name, args) {\n" + injected))
+            api.steps.extend([[], tool("Bash", {"command": "printf forbidden_local_effect > forbidden-local.txt"})])
+            failed = Claude(str(broken / "bin/cowboy-configured-cli"), environment, args.runtime, fixture, bound_native=True)
+            try:
+                failed.ready()
+                failed.prompt(timeout=90)
+                require(not (args.runtime / "forbidden-local.txt").exists() and not (args.target / "forbidden-local.txt").exists(),
+                        label + " ran a native tool body")
+                require(any(block.get("is_error") for block in outputs(api.requests[-1])), label + " did not return a tool error")
+            finally:
+                failed.close()
+            checks.append(label + "_denies_without_native_fallback")
         receipt = {
             "schema": "cowboy.claude-execution-worker-conformance/v1", "accepted": False, "checks": checks,
             "claude_version": inputs["claude_version"], "claude_sha256": inputs["claude_sha256"],
             "executor_sha256": inputs["sha256"], "executor_version": inputs["version"],
             "packaged_launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
             "scripted_api_requests": native_requests + len(api.requests),
+            "native_title_requests": title_requests + len(api.title_requests),
             "production_credentials": False, "production_activation": False,
             "not_checked": ["real_subscription_inference", "cross_host_latency", "native_subagents_and_project_hooks"],
         }

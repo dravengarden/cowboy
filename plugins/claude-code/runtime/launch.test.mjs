@@ -5,7 +5,7 @@ import {
   initializeRequest,
   nativeArguments,
 } from "./launch.mjs";
-import { ALIASES } from "./tools.mjs";
+import { NATIVE_TOOLS } from "./tools.mjs";
 
 test("bound launch preserves model and resume while replacing local execution surfaces", () => {
   const args = nativeArguments([
@@ -29,7 +29,10 @@ test("bound launch preserves model and resume while replacing local execution su
     "--resume",
     "native-session",
   ]);
-  assert.equal(args[args.indexOf("--tools") + 1], "TodoWrite,AskUserQuestion");
+  assert.equal(
+    args[args.indexOf("--tools") + 1],
+    [...NATIVE_TOOLS, "TodoWrite", "AskUserQuestion"].join(","),
+  );
   assert.equal(args[args.indexOf("--setting-sources") + 1], "");
   assert.equal(args.filter((arg) => arg === "--plugin-dir").length, 1);
   assert.equal(args[args.indexOf("--plugin-dir") + 1], "/private-owned-plugin");
@@ -101,7 +104,7 @@ test("configuration can change effort but cannot replace execution or reopen loc
   );
 });
 
-test("SDK initialization cannot override the bound tool aliases or install local hooks", () => {
+test("SDK initialization cannot override the bound native tools or install local hooks", () => {
   const frame = {
     type: "control_request",
     request_id: "request",
@@ -118,9 +121,8 @@ test("SDK initialization cannot override the bound tool aliases or install local
   assert.equal(result.request_id, "request");
   assert.deepEqual(result.request, {
     subtype: "initialize",
-    sdkMcpServers: ["cowboy_execution"],
-    toolAliases: ALIASES,
-    sdkMcpServerConfigs: { cowboy_execution: { timeout: 660000 } },
+    sdkMcpServers: [],
+    toolAliases: {},
     excludeDynamicSections: true,
     skills: [],
   });
