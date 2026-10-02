@@ -45,7 +45,11 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     const target = [
       ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
     ]
-      .find((element) => element.textContent?.trim() === text);
+      .find((element) =>
+        element.textContent?.trim() === text ||
+        element.querySelector(".MuiTypography-root")?.textContent?.trim() ===
+          text
+      );
     if (!target) throw new Error(`Missing menu item: ${text}`);
     return target;
   }
@@ -78,60 +82,61 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     click('[role="menuitem"]', "hawk");
     await settle();
     click('[role="menuitem"]', "columbus");
-    await closed();
-    check(
-      selections[0] === "parent-id",
-      "Clicking a project with children selects its own opaque identity",
-    );
-    check(
-      !document.querySelector('[role="menu"]'),
-      "Parent selection closes the picker",
-    );
-    click('[role="combobox"]');
-    await settle();
-    click('[role="menuitem"]', "hawk");
-    await settle();
-    const browse = document.querySelector<HTMLElement>(
-      '[aria-label="Browse subdirectories of hawk/columbus"]',
-    );
-    check(browse, "A selectable parent has a separate browse action");
-    const parentBounds = item("columbus").getBoundingClientRect();
-    const browseBounds = browse.getBoundingClientRect();
-    check(
-      browseBounds.width >= 44 && browseBounds.height >= 44 &&
-        browseBounds.left >= parentBounds.right &&
-        Math.abs(browseBounds.top - parentBounds.top) < 1,
-      `Browse action has its own same-row touch target: ${
-        JSON.stringify({ parentBounds, browseBounds })
-      }`,
-    );
-    flushSync(() => browse.click());
     await settle();
     check(
-      selections.slice().length === 1,
-      "Browsing children must not change the selected project",
+      selections.at(-1) === "parent-id",
+      "Expanding selects the registered parent",
+    );
+    check(
+      document.querySelector('[role="menu"]') && item("cowboy"),
+      "Parent expands and leaves picker open",
+    );
+    const parent = document.querySelector<HTMLElement>(
+      '[data-current-directory="true"]',
+    );
+    check(
+      parent?.textContent?.includes("Current directory"),
+      "Current parent has an explicit caption",
+    );
+    check(
+      parseFloat(getComputedStyle(parent!).borderTopWidth) > 0,
+      "Current parent has a distinct outlined surface",
+    );
+    check(
+      parent!.getBoundingClientRect().bottom <
+        item("cowboy").getBoundingClientRect().top,
+      "Current parent is separated from children",
+    );
+    const count = selections.length;
+    flushSync(() => parent!.click());
+    await settle();
+    check(
+      document.querySelector('[role="menu"]') &&
+        selections.at(-1) === "parent-id",
+      "Selecting current parent keeps the menu open",
     );
     click('[role="menuitem"]', "cowboy");
     await closed();
     check(
-      selections[1] === "child-id",
-      "Child project selects its own identity",
+      selections.at(-1) === "child-id",
+      "Child selection closes the picker",
     );
     click('[role="combobox"]');
     await settle();
     click('[role="menuitem"]', "hawk");
     await settle();
     flushSync(() => {
-      const parent = item("columbus");
-      parent.focus();
-      parent.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      const row = item("columbus");
+      row.focus();
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
       );
     });
     await settle();
     check(
-      selections.length === 2 && item("cowboy"),
-      "Right arrow browses without selecting",
+      document.querySelector('[role="menu"]') && item("cowboy") &&
+        selections.at(-1) === "parent-id",
+      "Keyboard Enter expands and selects the parent",
     );
     flushSync(() =>
       item("cowboy").dispatchEvent(
@@ -139,25 +144,26 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       )
     );
     await settle();
-    flushSync(() => {
-      const parent = item("columbus");
-      parent.focus();
-      parent.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-      );
-    });
-    await closed();
-    check(
-      selections[2] === "parent-id",
-      "Enter selects the parent after keyboard browsing",
+    flushSync(() =>
+      item("columbus").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      )
     );
+    await settle();
+    check(
+      item("cowboy") && selections.at(-1) === "parent-id",
+      "Right arrow follows parent expansion semantics",
+    );
+    check(selections.length > count, "Parent reentry updates selection");
+    click('[role="menuitem"]', "cowboy");
+    await closed();
     click('[role="combobox"]');
     await settle();
     click('input[type="checkbox"]');
     await settle();
     click('[role="menuitem"]', "hawk/columbus/cowboy");
     await closed();
-    check(selections[3] === "child-id", "Flat mode selects the full path");
+    check(selections.at(-1) === "child-id", "Flat mode selects the full path");
     click('[role="combobox"]');
     await settle();
     check(
@@ -171,10 +177,10 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     );
     return [
       "default hierarchy",
-      "parent name selects itself",
-      "separate 44px browse action preserves selection",
-      "child selects itself",
-      "keyboard browse and parent selection",
+      "parent expands and is selected by default",
+      "current parent has a distinct outlined surface",
+      "parent remains open and child selection closes",
+      "keyboard expansion selects the parent",
       "flat full paths",
       "saved preference",
     ];

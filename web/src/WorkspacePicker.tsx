@@ -17,6 +17,7 @@ import {
   Check,
   ChevronRight,
   ExpandMore,
+  FolderOpenOutlined,
   FolderOutlined,
   Search,
 } from "@mui/icons-material";
@@ -53,6 +54,10 @@ export function WorkspacePicker(
   const query = search.trim().toLocaleLowerCase();
   const grouped = hierarchical && hasGroups && !query;
   const navigate = (next: string[]): void => {
+    const destination = workspaceBranch(root, next);
+    if (destination.entries.length === 1) {
+      onChange(destination.entries[0]!.value);
+    }
     setPath(next);
     requestAnimationFrame(() => {
       document.querySelector<HTMLElement>(
@@ -68,11 +73,17 @@ export function WorkspacePicker(
     entry: WorkspaceEntry,
     label = entry.label,
     browsePath?: string[],
+    currentParent = false,
   ): React.JSX.Element => (
     <MenuItem
       key={entry.value}
       selected={entry.value === value}
-      onClick={() => choose(entry.value)}
+      data-current-directory={currentParent || undefined}
+      onClick={() => {
+        if (browsePath) navigate(browsePath);
+        else if (currentParent) onChange(entry.value);
+        else choose(entry.value);
+      }}
       onKeyDown={(event) => {
         if (event.key === "ArrowRight" && browsePath) {
           event.preventDefault();
@@ -80,17 +91,43 @@ export function WorkspacePicker(
         }
       }}
       sx={{
-        gridColumn: browsePath ? "1" : "1 / -1",
+        gridColumn: "1 / -1",
         minHeight: 44,
         gap: 1.25,
         borderRadius: 1.5,
         whiteSpace: "normal",
         overflowWrap: "anywhere",
+        ...(currentParent
+          ? {
+            border: 1,
+            borderColor: "divider",
+            bgcolor: "action.hover",
+            mb: 1,
+            "&.Mui-selected": { bgcolor: "action.selected" },
+          }
+          : {}),
       }}
     >
-      <FolderOutlined fontSize="small" sx={{ color: "text.secondary" }} />
-      <Box sx={{ flex: 1, minWidth: 0 }}>{label}</Box>
+      {currentParent
+        ? <FolderOpenOutlined fontSize="small" color="primary" />
+        : <FolderOutlined fontSize="small" sx={{ color: "text.secondary" }} />}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography
+          component="span"
+          sx={{ fontWeight: currentParent ? 600 : 400 }}
+        >
+          {label}
+        </Typography>
+        {currentParent && (
+          <Typography variant="caption" display="block" color="text.secondary">
+            Current directory
+          </Typography>
+        )}
+      </Box>
       {entry.value === value && <Check fontSize="small" color="primary" />}
+      {browsePath && (
+        <ChevronRight fontSize="small" sx={{ color: "text.secondary" }} />
+      )}
     </MenuItem>
   );
   return (
@@ -268,7 +305,7 @@ export function WorkspacePicker(
             overflowY: "auto",
             minHeight: 0,
             display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) 44px",
+            gridTemplateColumns: "minmax(0, 1fr)",
             gridAutoRows: "minmax(44px, auto)",
           }}
           onKeyDown={(event) => {
@@ -281,7 +318,9 @@ export function WorkspacePicker(
         >
           {grouped
             ? [
-              ...branch.entries.map((entry) => entryRow(entry, branch.label)),
+              ...branch.entries.map((entry) =>
+                entryRow(entry, branch.label, undefined, true)
+              ),
               ...[...branch.children.values()].flatMap((child) => {
                 if (child.entries.length === 1) {
                   const hasChildren = child.children.size > 0;
@@ -291,30 +330,6 @@ export function WorkspacePicker(
                       child.label,
                       hasChildren ? child.path : undefined,
                     ),
-                    ...(hasChildren
-                      ? [
-                        <MenuItem
-                          key={`browse:${JSON.stringify(child.path)}`}
-                          aria-label={`Browse ${
-                            label === "Project"
-                              ? "subprojects"
-                              : "subdirectories"
-                          } of ${child.path.join("/")}`}
-                          onClick={() => navigate(child.path)}
-                          sx={{
-                            minHeight: 44,
-                            px: 0,
-                            justifyContent: "center",
-                            borderRadius: 1.5,
-                          }}
-                        >
-                          <ChevronRight
-                            fontSize="small"
-                            sx={{ color: "text.secondary" }}
-                          />
-                        </MenuItem>,
-                      ]
-                      : []),
                   ];
                 }
                 return [
