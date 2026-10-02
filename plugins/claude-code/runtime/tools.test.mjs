@@ -208,3 +208,101 @@ test("a failed read does not authorize overwriting an unread file", async (t) =>
     Buffer.from([0xff, 0xfe, 0]),
   );
 });
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => resolve = done);
+  return { promise, resolve };
+}
+
+test("independent reads proceed while same-file edits wait for their read", {
+  timeout: 2000,
+}, async (t) => {
+  const { tools, files, connection } = await fixture(t);
+  files.set("/target with space/a", Buffer.from("before"));
+  files.set("/target with space/b", Buffer.from("independent"));
+  const entered = deferred();
+  const release = deferred();
+  const original = connection.call.bind(connection);
+  connection.call = async (method, params) => {
+    if (method === "fs/readFile" && fileURLToPath(params.path).endsWith("/a")) {
+      entered.resolve();
+      await release.promise;
+    }
+    return original(method, params);
+  };
+  const read = tools.call("read", { file_path: "a" });
+  await entered.promise;
+  const edit = tools.call("edit", {
+    file_path: "./a",
+    old_string: "before",
+    new_string: "after",
+  });
+  const other = await tools.call("read", { file_path: "b" });
+  assert.equal(other.isError, false);
+  assert.equal(files.get("/target with space/a").toString(), "before");
+  release.resolve();
+  assert.equal((await read).isError, false);
+  assert.equal((await edit).isError, false);
+  assert.equal(files.get("/target with space/a").toString(), "after");
+});
+
+test(
+  "TaskStop terminates a collecting Bash without blocking independent files",
+  {
+    timeout: 2000,
+  },
+  async (t) => {
+    const { tools, files, connection } = await fixture(t);
+    tools.shell = "/bin/bash";
+    files.set("/target with space/file", Buffer.from("available"));
+    const collecting = deferred();
+    const terminated = deferred();
+    const original = connection.call.bind(connection);
+    let task;
+    const cursors = [];
+    connection.call = async (method, params) => {
+      if (method === "process/start") {
+        task = params.processId;
+        return { processId: task };
+      }
+      if (method === "process/terminate") {
+        assert.equal(params.processId, task);
+        terminated.resolve();
+        return {};
+      }
+      if (method === "process/read") {
+        cursors.push(params.afterSeq);
+        collecting.resolve();
+        await terminated.promise;
+        return {
+          chunks: params.afterSeq === null
+            ? [{
+              seq: 1,
+              stream: "stdout",
+              chunk: Buffer.from("done").toString("base64"),
+            }]
+            : [],
+          exited: true,
+          closed: true,
+          exitCode: 143,
+        };
+      }
+      return original(method, params);
+    };
+    const bash = tools.call("bash", { command: "sleep 120" });
+    await collecting.promise;
+    assert.equal(
+      (await tools.call("read", { file_path: "file" })).isError,
+      false,
+    );
+    const stop = tools.call("taskstop", { task_id: task });
+    const [finished, stopped] = await Promise.all([bash, stop]);
+    assert.equal(finished.isError, false);
+    assert.equal(stopped.isError, false);
+    assert.equal(JSON.parse(finished.content[0].text).output, "done");
+    assert.equal(JSON.parse(stopped.content[0].text).output, "");
+    assert.deepEqual(cursors, [null, 1]);
+    assert.equal(tools.operations.size, 0);
+  },
+);

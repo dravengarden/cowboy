@@ -193,6 +193,23 @@ def main():
         client.prompt(timeout=90)
         context_checked(api.requests)
         checks.append("cold_resume_after_compaction_has_no_runtime_file_locators")
+        # Both commands must start before either finishes. A global facade
+        # queue deadlocks this barrier; the native dispatcher and target must
+        # actually overlap, rather than just accepting two tool-use blocks.
+        parallel = []
+        for own, other in [("a", "b"), ("b", "a")]:
+            parallel.extend(tool("Bash", {"command":
+                f"printf started > parallel-{own}.txt; "
+                f"for i in $(seq 1 100); do "
+                f"if test -f parallel-{other}.txt; then printf complete >> parallel-{own}.txt; exit 0; fi; "
+                "sleep 0.1; done; exit 1"}))
+        api.steps.extend([[], parallel])
+        client.prompt(timeout=90)
+        for name in ["a", "b"]:
+            require((args.target / f"parallel-{name}.txt").read_text() == "startedcomplete",
+                    "independent native commands did not overlap")
+        context_checked(api.requests)
+        checks.append("independent_native_commands_execute_concurrently")
         api.steps.extend([[], tool("Bash", {"command": "printf foreground_started >> foreground.txt; while :; do sleep 1; printf tick >> foreground.txt; done", "timeout": 600000})])
         messages_before = len(client.messages)
         client.send({"type": "user", "message": {"role": "user", "content": "Run the foreground cancellation fixture."},

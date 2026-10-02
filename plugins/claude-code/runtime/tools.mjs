@@ -185,7 +185,7 @@ export class WorkspaceTools {
       jobs: {},
     };
     this.foreground = new Set();
-    this.queue = Promise.resolve();
+    this.operations = new Map();
     this.saves = Promise.resolve();
   }
 
@@ -280,7 +280,27 @@ export class WorkspaceTools {
     return processId;
   }
 
-  async collect(processId, timeout) {
+  ordered(key, operation) {
+    const previous = this.operations.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(operation);
+    this.operations.set(key, current);
+    const cleanup = () => {
+      if (this.operations.get(key) === current) this.operations.delete(key);
+    };
+    current.then(cleanup, cleanup);
+    return current;
+  }
+
+  collect(processId, timeout) {
+    // Each task has one output cursor. Other tasks and file operations do not
+    // wait behind this collection; cancellation submits terminate immediately.
+    return this.ordered(
+      `task:${processId}`,
+      () => this.collectOutput(processId, timeout),
+    );
+  }
+
+  async collectOutput(processId, timeout) {
     const job = this.state.jobs[processId];
     if (!job) throw new Error("Task does not belong to this session");
     const chunks = [];
@@ -402,11 +422,17 @@ export class WorkspaceTools {
     };
   }
 
-  // Serialize mutations and read stamps. Independent native model calls can
-  // arrive together; a read/edit pair must not race this facade's own writes.
+  // Preserve read/edit order for the same path without serializing independent
+  // files, searches or commands. Bash can modify arbitrary files, just like an
+  // external writer; read stamps detect those changes before a later edit.
   call(name, args) {
-    const operation = this.queue.then(() => this.invoke(name, args));
-    this.queue = operation.catch(() => {});
+    const operation = Promise.resolve().then(() => {
+      if (["read", "write", "edit", "notebookedit"].includes(name)) {
+        const path = this.path(args.file_path ?? args.notebook_path);
+        return this.ordered(`file:${path}`, () => this.invoke(name, args));
+      }
+      return this.invoke(name, args);
+    });
     return operation.catch((error) => ({
       content: [{
         type: "text",
