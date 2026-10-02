@@ -1,0 +1,65 @@
+{
+  "schema": "cowboy.remote-session-badge-state-release/v1",
+  "recorded_at": "2026-10-02T12:49:03.493622+00:00",
+  "source_revision": "b43adccfac95165c7a501931c00d9fe402988e01",
+  "validation": {
+    "web_tests_passed": 1989,
+    "checks": [
+      "Deno check",
+      "TypeScript",
+      "Oxlint",
+      "component consistency"
+    ],
+    "browser": {
+      "ok": true,
+      "suite": "project-placement",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "f37e9f09f30f42a7723cbc20808ec3c5a9caf0c60b57656ec8a2c83b6403582f",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "project before installed AI",
+        "runtime without mirror directories",
+        "Codex and Claude selectable after live occupancy projection",
+        "compact selected AI icon and label share one row",
+        "long AI labels fit mobile and desktop fields",
+        "cross-target readiness isolation",
+        "late reply ignored",
+        "failure without local fallback",
+        "selection survives inventory refresh",
+        "unavailable OVH requires explicit alternative selection",
+        "remote session badge identifies target and isolates touch activation"
+      ],
+      "physical_device": "not_checked"
+    }
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790945313473422083-b43adccfac95",
+    "revision": "b43adccfac95165c7a501931c00d9fe402988e01",
+    "published": true,
+    "release": "/nix/store/8svnhaw43d10q645yzcrkknss6llcsmi-cowboy-web-release",
+    "previousRelease": "/nix/store/szg8vhfkalgwc71dzj1n99vqci4c8hn3-cowboy-web-release",
+    "activeRelease": "/nix/store/8svnhaw43d10q645yzcrkknss6llcsmi-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T12:48:33.473422083Z",
+    "recordedAt": "2026-10-02T12:48:33.51895137Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": "5cb3357c612921ae8cfa42a6e4a1ac39",
+    "service_worker": "cowboy-v1801",
+    "service_worker_cache_control": "no-store",
+    "service_worker_bytes_match_active_web": true,
+    "controller_pid": 683531,
+    "controller_start_monotonic": 350518645102,
+    "controller_unchanged": true
+  },
+  "limitation": "The two stored OVH bindings already identify Hawk. The screenshot root cause and physical browser adoption are not established; this release fixes the demonstrated unavailable-executor badge loss."
+}
