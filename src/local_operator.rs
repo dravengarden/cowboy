@@ -197,6 +197,58 @@ enum OperatorCommand {
     Unfreeze,
     /// List trusted published Plugin releases.
     Catalog,
+    /// List enrolled Machines and their inventories.
+    Machines,
+    /// Read Machine runtime policies and the preferred AI Machine.
+    ProjectPolicies,
+    /// Adopt current bootstrap projects into Cowboy without changing their roots.
+    ProjectAdopt {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        revision: String,
+    },
+    /// List the Machine-owned project registry and its CAS revision.
+    Projects {
+        #[arg(long)]
+        machine: String,
+    },
+    /// Discover candidate roots without registering them.
+    ProjectDiscover {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        root: String,
+    },
+    /// Register a directory or rename an existing project. Paths are validated on the target.
+    ProjectRegister {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        path: String,
+    },
+    /// Remove a new-session entry; never delete files or change existing sessions.
+    ProjectRemove {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        revision: String,
+        #[arg(long)]
+        id: String,
+    },
+    /// Apply a reviewed JSON policy update with an expected_revision.
+    SetProjectPolicy {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
     /// Refresh the signed Catalog through the running Controller.
     RefreshCatalog,
     /// Read the registered Machine's installed Plugin inventory.
@@ -371,6 +423,64 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
     let (method, segments, body, operation) = match args.command {
         OperatorCommand::Status => (reqwest::Method::GET, vec!["status".into()], None, None),
         OperatorCommand::Catalog => (reqwest::Method::GET, vec!["plugins".into()], None, None),
+        OperatorCommand::Machines => (reqwest::Method::GET, vec!["machines".into()], None, None),
+        OperatorCommand::ProjectPolicies => (
+            reqwest::Method::GET,
+            vec!["project-policies".into()],
+            None,
+            None,
+        ),
+        OperatorCommand::ProjectAdopt { machine, revision } => (
+            reqwest::Method::POST,
+            vec!["machines".into(), machine, "projects".into()],
+            Some(json!({"action":"adopt", "expected_revision":revision})),
+            None,
+        ),
+        OperatorCommand::Projects { machine } => (
+            reqwest::Method::GET,
+            vec!["machines".into(), machine, "projects".into()],
+            None,
+            None,
+        ),
+        OperatorCommand::ProjectDiscover { machine, root } => (
+            reqwest::Method::POST,
+            vec!["machines".into(), machine, "projects".into()],
+            Some(json!({"action":"discover","root":root})),
+            None,
+        ),
+        OperatorCommand::ProjectRegister {
+            machine,
+            revision,
+            id,
+            name,
+            path,
+        } => (
+            reqwest::Method::POST,
+            vec!["machines".into(), machine, "projects".into()],
+            Some(
+                json!({"action":"upsert","expected_revision":revision,"project":{"id":id,"display_name":name,"canonical_path":path}}),
+            ),
+            None,
+        ),
+        OperatorCommand::ProjectRemove {
+            machine,
+            revision,
+            id,
+        } => (
+            reqwest::Method::POST,
+            vec!["machines".into(), machine, "projects".into()],
+            Some(json!({"action":"remove","expected_revision":revision,"id":id})),
+            None,
+        ),
+        OperatorCommand::SetProjectPolicy { machine, file } => {
+            let value: serde_json::Value = serde_json::from_slice(&std::fs::read(file)?)?;
+            (
+                reqwest::Method::PUT,
+                vec!["machines".into(), machine, "project-policy".into()],
+                Some(value),
+                None,
+            )
+        }
         OperatorCommand::RefreshCatalog => (
             reqwest::Method::POST,
             vec!["plugins".into(), "refresh".into()],

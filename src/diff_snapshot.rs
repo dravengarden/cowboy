@@ -286,6 +286,7 @@ mod tests {
                 }]),
                 workspace_identities: None,
                 workspace_revision: None,
+                workspace_owner: None,
                 observed_at_ms: 0,
             },
         );

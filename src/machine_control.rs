@@ -19,6 +19,8 @@ mod code_buffer_sync;
 mod execution;
 mod installation;
 pub(crate) mod local_roots;
+#[cfg(test)]
+mod projects_tests;
 mod session_reads;
 mod site;
 mod telemetry_export;
@@ -858,6 +860,39 @@ impl MachineControl {
                 ticket,
             },
         ))
+    }
+
+    pub(crate) async fn project_request(
+        &self,
+        machine_id: &str,
+        request: crate::machine_protocol::projects::Request,
+    ) -> Result<serde_json::Value, String> {
+        let request_id = self.request_id("projects")?;
+        let connection = self.operation_connection(machine_id)?;
+        let (rx, _guard) = self.begin_request(
+            machine_id,
+            &request_id,
+            MachineCommand::Projects {
+                request_id: request_id.clone(),
+                service_id: self.service.as_str().into(),
+                machine_id: machine_id.into(),
+                request,
+            },
+            ReplyKind::Adapter,
+            Some(RequestBinding::Connection(&connection)),
+        )?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), rx).await;
+        if !self.is_current(&connection) {
+            return Err(
+                "Project Machine reconnected; reload the registry before retrying a change".into(),
+            );
+        }
+        match result {
+            Ok(Ok(Reply::Adapter(result))) => result.map_err(String::from),
+            _ => Err(
+                "Project request interrupted; reload the registry before retrying a change".into(),
+            ),
+        }
     }
 
     pub async fn adapter_request(

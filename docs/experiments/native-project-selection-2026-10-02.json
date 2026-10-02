@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "suite": "project-placement",
+  "browser": "Mozilla Firefox 151.0.1",
+  "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+  "fixture_sha256": "c6fc3da41b663e76422cef547a7ddb1ebada34638d6670c2e742408f7f9f7ef5",
+  "isolation": "fresh profile / private loopback namespace / no credentials",
+  "tests": [
+    "project before installed AI",
+    "runtime without mirror directories",
+    "cross-target readiness isolation",
+    "late reply ignored",
+    "failure without local fallback",
+    "selection survives inventory refresh",
+    "unavailable OVH requires explicit alternative selection"
+  ],
+  "physical_device": "not_checked"
+}

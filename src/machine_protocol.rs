@@ -15,12 +15,14 @@ pub mod installation_revision;
 pub mod plugin_install;
 pub mod plugin_recovery;
 pub mod plugin_step;
+pub mod projects;
 pub mod telemetry_binding;
 pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 23;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 24;
+pub const PROJECT_REGISTRY_PROTOCOL_VERSION: u16 = 24;
 pub const EXECUTION_ENVIRONMENT_PROTOCOL_VERSION: u16 = 23;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
@@ -206,9 +208,11 @@ pub struct MachineHello {
     /// Machine-owned identity of the object behind each advertised root.
     #[serde(default)]
     pub workspace_identities: Vec<WorkspaceRootIdentity>,
-    /// Immutable host-configuration revision that produced `workspaces`.
+    /// Revision of the owner that produced `workspaces` (host or Cowboy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_owner: Option<projects::Owner>,
     /// Scheduling envelope declared by the stable host. Active usage is
     /// controller-derived so a reconnect cannot under-report existing
     /// session leases.
@@ -371,6 +375,8 @@ pub struct MachineSummary {
     pub workspaces: Vec<MachineWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_owner: Option<projects::Owner>,
     #[serde(default)]
     pub components: Vec<ComponentInventory>,
     #[serde(default)]
@@ -904,6 +910,13 @@ pub enum MachineCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace_incarnation: Option<String>,
     },
+    /// Closed core project registry operations; never forwarded to a Plugin.
+    Projects {
+        request_id: String,
+        service_id: String,
+        machine_id: String,
+        request: projects::Request,
+    },
     CodeBufferSync {
         request_id: String,
         request: Box<code_buffer_sync::Request>,
@@ -938,6 +951,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::Projects { .. } => PROJECT_REGISTRY_PROTOCOL_VERSION,
             Self::Execution { .. } => EXECUTION_ENVIRONMENT_PROTOCOL_VERSION,
             // Only a carried root identity needs the newer Machine. Ordinary
             // adapter traffic keeps its original floor below.
@@ -1148,6 +1162,8 @@ pub enum MachineEvent {
         workspace_identities: Option<Vec<WorkspaceRootIdentity>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace_revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_owner: Option<projects::Owner>,
         observed_at_ms: i64,
     },
     #[serde(alias = "provider_inventory")]
@@ -1489,6 +1505,7 @@ mod tests {
             MachineEvent::Inventory {
                 workspaces: None,
                 workspace_revision: None,
+                workspace_owner: None,
                 ..
             }
         ));
@@ -1584,6 +1601,7 @@ mod tests {
             workspaces: Vec::new(),
             workspace_identities: Vec::new(),
             workspace_revision: None,
+            workspace_owner: None,
             capacity: MachineCapacity::default(),
         };
         let proof = challenge_proof_v1("id", "nonce", 42, &hello);
@@ -1737,6 +1755,7 @@ mod tests {
                 workspaces: Vec::new(),
                 workspace_identities: Vec::new(),
                 workspace_revision: None,
+                workspace_owner: None,
                 capacity: MachineCapacity::default(),
             },
         };

@@ -82,6 +82,7 @@ use plugin_install::api_machine_plugin_install;
 mod plugin_history;
 mod plugin_uninstall;
 mod product_continuation;
+mod projects;
 mod provider_auth_sync;
 mod sync_dataset;
 mod telemetry_binding;
@@ -267,7 +268,7 @@ struct AppState {
     code_cache: crate::code_cache::CodeCache,
     code_buffers: Arc<code_buffers::Owners>,
     code_navigation_admission: bool,
-    execution_runtime_machine: Option<String>,
+    project_placement: crate::project_placement::Store,
     execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
     execution_closures: Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
     /// Machines permitted to have their Code reads executed on the
@@ -649,6 +650,11 @@ impl MachineSnapshots {
                     fingerprint: machine.fingerprint,
                     workspaces,
                     workspace_revision,
+                    workspace_owner: machine
+                        .inventory
+                        .get("workspace_owner")
+                        .cloned()
+                        .and_then(|v| serde_json::from_value(v).ok()),
                     components,
                     plugins,
                     provider_contracts,
@@ -1653,7 +1659,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             code_buffers: Arc::default(),
             code_navigation_admission: args.code_navigation_admission
                 == crate::cli::CodeNavigationAdmission::Candidate,
-            execution_runtime_machine: args.execution_runtime_machine,
+            project_placement: crate::project_placement::Store::new(
+                &args.data_dir,
+                args.execution_runtime_machine,
+            )?,
             execution_preparations: parking_lot::Mutex::default(),
             execution_closures: Arc::default(),
             colocated_machines: args.colocated_machines.iter().cloned().collect(),
@@ -4620,6 +4629,16 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if matches!(path, "/api/sessions" | "/api/execution-sessions") && method == Method::POST {
         return RouteAuth::ProductOperator;
+    }
+    if matches!(path, "/api/project-policies" | "/api/project-placements")
+        || (path.starts_with("/api/machines/")
+            && (path.ends_with("/projects") || path.ends_with("/project-policy")))
+    {
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            RouteAuth::Product
+        } else {
+            RouteAuth::ProductOperator
+        };
     }
     if path == "/api/sessions/reconcile-project" {
         return RouteAuth::AdminOperator;
@@ -9477,6 +9496,10 @@ async fn serve_axum(
         )
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
+        .route("/api/project-policies", get(projects::policies))
+        .route("/api/project-placements", get(projects::placements))
+        .route("/api/machines/{id}/projects", get(projects::list).post(projects::request))
+        .route("/api/machines/{id}/project-policy", put(projects::update_policy))
         .route("/api/web-push/config", get(api_web_push_config))
         .route(
             "/api/web-push/subscription",
@@ -11144,6 +11167,7 @@ struct MachineDeploymentHealthResponse {
     active_acp_generation: Option<String>,
     workspace_revision: Option<String>,
     workspace_ids_sha256: Option<String>,
+    workspace_owner: Option<crate::machine_protocol::projects::Owner>,
 }
 
 fn machine_workspace_ids_sha256(inventory: &serde_json::Value) -> Option<String> {
@@ -11212,6 +11236,11 @@ async fn api_machine_deployment_health(
         // candidate workspace manifest, without exposing private paths or
         // project names on the public deployment-health surface.
         workspace_ids_sha256: machine_workspace_ids_sha256(&machine.inventory),
+        workspace_owner: machine
+            .inventory
+            .get("workspace_owner")
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok()),
     })
     .into_response()
 }
@@ -13663,6 +13692,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         "plugin_contracts": &hello.plugin_contracts,
         "workspaces": &hello.workspaces,
         "workspace_revision": &hello.workspace_revision,
+        "workspace_owner": &hello.workspace_owner,
         "capacity": &hello.capacity,
     });
     if let Err(error) = store
@@ -13744,6 +13774,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             workspaces: Some(hello.workspaces.clone()),
             workspace_identities: Some(hello.workspace_identities.clone()),
             workspace_revision: hello.workspace_revision.clone(),
+            workspace_owner: hello.workspace_owner,
             observed_at_ms: now_ms(),
         },
     );
@@ -13854,6 +13885,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut current_workspaces = hello.workspaces.clone();
     let mut current_workspace_identities = hello.workspace_identities.clone();
     let mut current_workspace_revision = hello.workspace_revision.clone();
+    let mut current_workspace_owner = hello.workspace_owner;
     let mut current_providers = hello.plugins.clone();
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -13991,10 +14023,14 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         workspaces,
                         workspace_identities,
                         workspace_revision,
+                        workspace_owner,
                         ..
                     },
             } => {
                 current_components = components;
+                if workspaces.is_some() {
+                    current_workspace_owner = workspace_owner;
+                }
                 apply_workspace_inventory(
                     &mut current_workspaces,
                     &mut current_workspace_identities,
@@ -14010,6 +14046,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         workspaces: Some(current_workspaces.clone()),
                         workspace_identities: Some(current_workspace_identities.clone()),
                         workspace_revision: current_workspace_revision.clone(),
+                        workspace_owner: current_workspace_owner,
                         observed_at_ms: now_ms(),
                     },
                 );
@@ -14020,6 +14057,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     "plugin_contracts": &hello.plugin_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
+                    "workspace_owner": &current_workspace_owner,
                     "capacity": &hello.capacity,
                 });
                 let result = store
@@ -14053,6 +14091,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     "plugin_contracts": &hello.plugin_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
+                    "workspace_owner": &current_workspace_owner,
                     "capacity": &hello.capacity,
                 });
                 let result = store
@@ -14937,6 +14976,17 @@ async fn api_new_session(
             .into_response();
     }
     if req.machine_id != "local" {
+        if !state
+            .project_placement
+            .snapshot()
+            .allows(&req.machine_id, &req.machine_id)
+        {
+            return (
+                StatusCode::CONFLICT,
+                "Machine policy does not permit a local AI session on this project Machine",
+            )
+                .into_response();
+        }
         let Some(store) = state.store.as_ref() else {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -21315,6 +21365,19 @@ mod product_auth_api_tests {
 
     #[test]
     fn classify_route_table_matches_capability_matrix() {
+        for path in [
+            "/api/project-policies",
+            "/api/project-placements",
+            "/api/machines/hawk/projects",
+        ] {
+            assert_eq!(classify_route(&Method::GET, path), RouteAuth::Product);
+        }
+        for (method, path) in [
+            (Method::POST, "/api/machines/hawk/projects"),
+            (Method::PUT, "/api/machines/ovh/project-policy"),
+        ] {
+            assert_eq!(classify_route(&method, path), RouteAuth::ProductOperator);
+        }
         assert_eq!(classify_route(&Method::GET, "/healthz"), RouteAuth::Public);
         assert_eq!(classify_route(&Method::GET, "/ws"), RouteAuth::Product);
         assert_eq!(

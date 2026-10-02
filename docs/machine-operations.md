@@ -35,6 +35,13 @@ proof. Cleanup is further confined to the session's Machine-owned worktree and
 requires Cargo's cache markers. Source files and unmarked same-name directories
 are preserved.
 
+## Native projects
+
+Cowboy manages project registration, bounded discovery and AI placement in
+Settings → Machines. The [native project contract](native-projects.md) describes
+the Machine-owned registry, Service policies and host Operator commands. Host
+workspace configuration is bootstrap input until the first Cowboy project edit.
+
 ## Bootstrap
 
 The initial host binary is installed out of band. Later payload updates use the

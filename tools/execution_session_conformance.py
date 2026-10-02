@@ -319,6 +319,33 @@ def main():
             require(status in (200, 201, 202, 204), f"fixture installation failed: {status} {result}")
             wait(lambda: "execution-fixture" in call("GET", "/api/execution-environments?runtime_machine_id=runtime&machine_id=target")[1].get("providers", []), "installed Provider readiness")
             checks.append("signed_fixture_installed_through_public_operator_lifecycle")
+            if inputs.get("native_projects"):
+                require(call("GET", "/api/project-policies", anonymous=True)[0] == 401, "anonymous policy read admitted")
+                status, policies = call("GET", "/api/project-policies")
+                require(status == 200, "project policies unavailable")
+                policy = {"agent_mode": "remote", "hosts_projects": False, "remote_targets": ["target"]}
+                update = {"expected_revision": policies["revision"], "policy": policy, "preferred": True}
+                endpoint = "/api/machines/runtime/project-policy"
+                require(call("PUT", endpoint, update, anonymous=True)[0] == 401, "anonymous policy mutation admitted")
+                require(call("PUT", endpoint, update)[0] == 200, "remote-only policy refused")
+                require(call("PUT", endpoint, update)[0] == 409, "stale policy overwrote current policy")
+                require(call("POST", "/api/sessions", {"provider": "execution-fixture", "machine_id": "runtime", "cwd": "fixture", "origin": "web"})[0] == 409, "remote-only policy bypassed through local API")
+                for machine in ("runtime", "target"):
+                    endpoint = f"/api/machines/{machine}/projects"
+                    status, registry = call("GET", endpoint)
+                    require(status == 200 and len(registry["projects"]) == 1, "bootstrap project missing")
+                    if machine == "runtime":
+                        edit = {"action": "remove", "expected_revision": registry["revision"], "id": "fixture"}
+                    else:
+                        project = dict(registry["projects"][0], display_name="display/only/not/routing")
+                        edit = {"action": "upsert", "expected_revision": registry["revision"], "project": project}
+                    require(call("POST", endpoint, edit, anonymous=True)[0] == 401, "anonymous project mutation admitted")
+                    require(call("POST", endpoint, edit)[0] == 200, "project edit refused")
+                    require(call("POST", endpoint, edit)[0] == 409, "stale project mutation accepted")
+                    require(call("GET", f"/api/machines/{machine}/deployment-health")[1].get("workspace_owner") == "cowboy", "host health lost the native project owner")
+                status, placement = call("GET", "/api/project-placements?machine_id=target")
+                require(status == 200 and {"runtime_machine_id": "runtime", "provider": "execution-fixture", "mode": "remote"} in placement["placements"], "native AI placement missing without runtime mirror roots")
+                checks.extend(["native_project_registry_cas_and_operator_authorization", "remote_only_policy_enforced_by_legacy_and_native_creation", "placement_needs_no_runtime_project_or_directory_mapping"])
             request = {"provider": "execution-fixture", "runtime_machine_id": "runtime", "machine_id": "target", "cwd": "fixture", "initial_prompt": "Run one fixture command"}
             require(call("POST", "/api/execution-sessions", request, anonymous=True)[0] == 401, "anonymous session admitted")
             require(call("POST", "/api/execution-sessions", dict(request, machine_id="runtime"))[0] == 409, "local fallback admitted")
@@ -341,6 +368,13 @@ def main():
             require(not (Path(meta["cwd"]) / "route.txt").exists(), "runtime file was changed")
             require(not (root / "target-source/route.txt").exists(), "stable source was changed")
             checks.extend(["public_creation_persists_exact_binding_and_isolated_target_worktree", "worker_tools_cross_both_enrolled_machine_connections", "runtime_and_stable_source_remain_unchanged"])
+            if inputs.get("native_projects"):
+                endpoint = "/api/machines/target/projects"
+                registry = call("GET", endpoint)[1]
+                require(call("POST", endpoint, {"action": "remove", "expected_revision": registry["revision"], "id": "fixture"})[0] == 200, "project removal refused")
+                require(cwd.is_dir() and (root / "target-source").is_dir(), "removing project deleted files")
+                require(call("POST", "/api/execution-sessions", request)[0] == 409, "removed project admitted a new session")
+                checks.append("project_removal_retires_new_admission_and_preserves_bound_session_and_files")
             first_effect = effects.read_bytes()
             controller.terminate()
             controller.wait(timeout=20)
@@ -373,6 +407,10 @@ def main():
             wait(lambda: not connected("target"), "target disconnect")
             machines["target"] = (start("target-restored", target_command), target_command)
             wait(lambda: connected("target"), "target reconnect")
+            if inputs.get("native_projects"):
+                require(call("GET", "/api/machines/target/projects")[1]["projects"] == [], "bootstrap projects resurrected after restart")
+                require(call("GET", "/api/project-policies")[1]["machines"]["runtime"]["agent_mode"] == "remote", "runtime policy lost after restart")
+                checks.append("native_project_registry_and_policy_survive_machine_and_controller_restart")
             require(info()["execution_binding"] == binding, "target restart changed execution binding")
             require(effects.read_bytes() == first_effect * 2, "target restart replayed a command")
             require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Run after target restart"})[0] == 202, "reattached prompt refused")

@@ -28,6 +28,7 @@ use crate::machine_protocol::{
 mod auth_watch;
 pub(crate) mod execution;
 mod installation;
+mod projects;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
 pub(crate) mod telemetry_recovery;
@@ -75,6 +76,7 @@ const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
 /// replacing a root's object changes no trusted path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceSnapshot {
+    owner: crate::machine_protocol::projects::Owner,
     revision: Option<String>,
     workspaces: Vec<MachineWorkspace>,
 }
@@ -92,21 +94,32 @@ struct WorkspaceFile {
 
 struct WorkspaceConfig {
     path: PathBuf,
+    managed_path: Option<PathBuf>,
     fallback: Vec<String>,
     identities: workspace_identity::SharedRootIdentities,
     updates: tokio::sync::watch::Sender<WorkspaceSnapshot>,
 }
 
 impl WorkspaceConfig {
-    fn new(path: PathBuf, fallback: Vec<String>) -> anyhow::Result<Self> {
-        let snapshot = load_workspace_snapshot(&path, &fallback)?;
-        let (updates, _) = tokio::sync::watch::channel(snapshot);
-        Ok(Self {
+    fn new(
+        path: PathBuf,
+        fallback: Vec<String>,
+        managed_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
+        let (updates, _) = tokio::sync::watch::channel(WorkspaceSnapshot {
+            owner: crate::machine_protocol::projects::Owner::Host,
+            revision: None,
+            workspaces: vec![],
+        });
+        let config = Self {
             path,
+            managed_path,
             fallback,
             identities: workspace_identity::SharedRootIdentities::default(),
             updates,
-        })
+        };
+        config.reload()?;
+        Ok(config)
     }
 
     /// The adapter path verifies against the same registry that minted the
@@ -143,7 +156,7 @@ impl WorkspaceConfig {
         // and adapter verification. Watch delivery may coalesce A -> B -> A;
         // the owner must still end A's original identity at B.
         let mut identities = self.identities.lock();
-        let snapshot = load_workspace_snapshot(&self.path, &self.fallback)?;
+        let snapshot = self.load_snapshot()?;
         self.updates.send_if_modified(|current| {
             if *current == snapshot {
                 false
@@ -440,6 +453,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let workspaces = Arc::new(WorkspaceConfig::new(
         args.workspace_config,
         args.workspaces,
+        Some(args.state_dir.join("projects.json")),
     )?);
     let file_token = args
         .enrollment_token_file
@@ -1028,6 +1042,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         workspace_identities,
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
+        workspace_owner: Some(workspace_snapshot.owner),
         capacity: config.capacity.clone(),
     };
     let proof = if proof_version >= 3 {
@@ -2045,6 +2060,58 @@ fn handle_machine_command(
                 });
             });
         }
+        MachineCommand::Projects {
+            request_id,
+            service_id: requested_service,
+            machine_id: requested_machine,
+            request,
+        } => {
+            if service_id.as_deref() != Some(requested_service.as_str())
+                || machine_id != requested_machine
+            {
+                let _ = events.send(MachineEvent::AdapterResponse {
+                    request_id,
+                    accepted: false,
+                    payload: None,
+                    detail: Some("Project request site mismatch".into()),
+                    refusal: None,
+                });
+                return;
+            }
+            tokio::spawn(async move {
+                let mutation = matches!(
+                    request,
+                    crate::machine_protocol::projects::Request::Upsert { .. }
+                        | crate::machine_protocol::projects::Request::Remove { .. }
+                        | crate::machine_protocol::projects::Request::Adopt { .. }
+                );
+                let registry = Arc::clone(&workspaces);
+                let result = tokio::task::spawn_blocking(move || registry.project_request(request))
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .and_then(std::convert::identity);
+                if mutation && result.is_ok() {
+                    let components =
+                        collect_inventory(&components, zed_adapter_socket.as_deref()).await;
+                    let (snapshot, identities) = workspaces.advertisement();
+                    let _ = events.send(MachineEvent::Inventory {
+                        components,
+                        workspace_identities: Some(identities),
+                        workspaces: Some(snapshot.workspaces),
+                        workspace_revision: snapshot.revision,
+                        workspace_owner: Some(snapshot.owner),
+                        observed_at_ms: unix_ms(),
+                    });
+                }
+                let _ = events.send(MachineEvent::AdapterResponse {
+                    request_id,
+                    accepted: result.is_ok(),
+                    payload: result.as_ref().ok().cloned(),
+                    detail: result.err().map(|error| format!("{error:#}")),
+                    refusal: None,
+                });
+            });
+        }
         MachineCommand::RefreshInventory { request_id } => {
             tokio::spawn(async move {
                 let components =
@@ -2057,6 +2124,7 @@ fn handle_machine_command(
                         workspace_identities: Some(workspace_identities),
                         workspaces: Some(snapshot.workspaces.clone()),
                         workspace_revision: snapshot.revision.clone(),
+                        workspace_owner: Some(snapshot.owner),
                         observed_at_ms: unix_ms(),
                     });
                     let _ = events.send(MachineEvent::PluginInventory {
@@ -2423,6 +2491,7 @@ fn handle_machine_command(
                     workspaces: None,
                     workspace_identities: None,
                     workspace_revision: None,
+                    workspace_owner: None,
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {
@@ -2730,6 +2799,7 @@ async fn reconcile_components(
             workspaces: None,
             workspace_identities: None,
             workspace_revision: None,
+            workspace_owner: None,
             observed_at_ms: unix_ms(),
         },
         MachineEvent::CommandResult {
@@ -3143,6 +3213,7 @@ async fn run_login(
             workspaces: None,
             workspace_identities: None,
             workspace_revision: None,
+            workspace_owner: None,
             observed_at_ms: unix_ms(),
         });
     }
@@ -3227,6 +3298,7 @@ async fn run_secret_input_login(
             workspaces: None,
             workspace_identities: None,
             workspace_revision: None,
+            workspace_owner: None,
             observed_at_ms: unix_ms(),
         });
     }
@@ -3282,6 +3354,7 @@ fn load_workspace_snapshot(path: &Path, fallback: &[String]) -> anyhow::Result<W
         workspace.display_name = name;
     }
     Ok(WorkspaceSnapshot {
+        owner: crate::machine_protocol::projects::Owner::Host,
         revision,
         workspaces,
     })
@@ -4221,7 +4294,7 @@ mod tests {
             .expect("write workspace config");
         };
         write_config(1, "revision-one", &first);
-        let config = WorkspaceConfig::new(path.clone(), Vec::new()).expect("initial config");
+        let config = WorkspaceConfig::new(path.clone(), Vec::new(), None).expect("initial config");
         let updates = config.subscribe();
         assert_eq!(
             config.snapshot().workspaces[0].canonical_path,
@@ -4324,7 +4397,7 @@ mod workspace_identity_tests {
             ],
         ] {
             write_configuration(&file, &original, "original");
-            let config = WorkspaceConfig::new(file.clone(), vec![]).unwrap();
+            let config = WorkspaceConfig::new(file.clone(), vec![], None).unwrap();
             let mut subscriber = config.subscribe();
             let (snapshot, first) = config.advertisement();
             let main = first
@@ -4391,7 +4464,7 @@ mod workspace_identity_tests {
         let file = root.path().join("workspaces.json");
         let roots = vec![format!("main={}", root.path().display())];
         write_configuration(&file, &roots, "first");
-        let config = WorkspaceConfig::new(file.clone(), vec![]).unwrap();
+        let config = WorkspaceConfig::new(file.clone(), vec![], None).unwrap();
         let (_, first) = config.advertisement();
         write_configuration(&file, &roots, "second");
         config.reload().unwrap();
@@ -4413,6 +4486,7 @@ mod workspace_identity_tests {
         let config = WorkspaceConfig::new(
             parent.path().join("absent-configuration.json"),
             vec![format!("main={}", root.display())],
+            None,
         )
         .expect("configuration");
         let updates = config.subscribe();
@@ -4443,7 +4517,7 @@ mod workspace_identity_tests {
             document(&format!("\"main={}\"", root.display()), "one"),
         )
         .expect("write");
-        let changed = WorkspaceConfig::new(file.clone(), Vec::new()).expect("configuration");
+        let changed = WorkspaceConfig::new(file.clone(), Vec::new(), None).expect("configuration");
         let changed_updates = changed.subscribe();
         changed.reload().expect("reload");
         assert!(!changed_updates.has_changed().expect("channel"));
@@ -4469,6 +4543,7 @@ mod workspace_identity_tests {
         let config = WorkspaceConfig::new(
             parent.path().join("absent-configuration.json"),
             vec![format!("main={}", root.display())],
+            None,
         )
         .expect("configuration");
         config.reload().expect("reload");

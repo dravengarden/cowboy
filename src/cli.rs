@@ -393,9 +393,8 @@ pub struct ServeArgs {
     )]
     pub code_navigation_admission: CodeNavigationAdmission,
 
-    /// Admit separately placed execution sessions, with this enrolled Machine
-    /// as the default Agent runtime. Enable only after active, recovery and
-    /// bootstrap Controllers understand durable execution bindings.
+    /// Bootstrap preferred Agent Machine, used only until Cowboy's native
+    /// project-placement policy is saved. Machine policy controls admission.
     #[arg(long, env = "COWBOY_EXECUTION_RUNTIME_MACHINE")]
     pub execution_runtime_machine: Option<String>,
 

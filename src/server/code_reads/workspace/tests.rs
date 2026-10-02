@@ -73,6 +73,7 @@ impl Fixture {
                 workspaces: Some(workspaces.clone()),
                 workspace_identities: None,
                 workspace_revision: None,
+                workspace_owner: None,
                 observed_at_ms: 0,
             },
         );
@@ -130,6 +131,7 @@ async fn workspace_read_scope_never_adopts_an_identical_replacement_connection()
             workspaces: Some(vec![workspace()]),
             workspace_identities: None,
             workspace_revision: None,
+            workspace_owner: None,
             observed_at_ms: 0,
         },
     );

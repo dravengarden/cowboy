@@ -1,0 +1,236 @@
+/** Production selection hook and picker, synthetic HTTP in an isolated browser. */
+import { StrictMode, useLayoutEffect } from "react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
+import type { MachineSummary } from "./protocol";
+import { useProjectPlacement } from "./useProjectPlacement";
+import { WorkspacePicker } from "./WorkspacePicker";
+import { managementEntryFixture } from "./providerManagement.fixture";
+import { resetProviderCatalog } from "./providerCatalogRegistry";
+
+export async function runProjectPlacementBrowserConformance(): Promise<
+  string[]
+> {
+  const originalFetch = globalThis.fetch;
+  const entry = managementEntryFixture("codex");
+  entry.publisher = entry.manifest.publisher;
+  const machines = ["hawk", "falcon", "ovh"].map((id) => ({
+    id,
+    display_name: id,
+    platform: "linux",
+    architecture: "x86_64",
+    status: "online",
+    components: [],
+    capacity: { max_sessions: 8, draining: false },
+    active_sessions: 0,
+    local: id === "hawk",
+    connected: true,
+    schedulable: true,
+    workspaces: id === "ovh" ? [] : [{
+      id: "stable-id",
+      display_name: "columbus/cowboy",
+      canonical_path: "/unrelated directory ' 中文",
+    }],
+    plugins: id !== "falcon"
+      ? [{
+        plugin_id: "codex",
+        plugin_kind: "agent_provider",
+        plugin_version: entry.provider_version,
+        generation_digest: entry.artifact_digest,
+        contract_fingerprint: entry.contract_fingerprint,
+        state: "active",
+        materialization_state: "current",
+        replica_state: "current",
+        active_session_leases: 0,
+      }]
+      : [],
+  } as MachineSummary));
+  let pendingFalcon: ((value: Response) => void) | undefined;
+  const ready = (machine: string) => ({
+    machine_id: machine,
+    default_runtime_machine_id: "ovh",
+    placements: [
+      {
+        runtime_machine_id: "ovh",
+        provider: "codex",
+        mode: "remote",
+      },
+      ...(machine === "hawk"
+        ? [{ runtime_machine_id: "hawk", provider: "codex", mode: "local" }]
+        : []),
+    ],
+  });
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/plugins") {
+      return Promise.resolve(
+        Response.json({
+          providers: [entry],
+          authentications: [],
+          authentication_executors: [],
+        }),
+      );
+    }
+    if (url === "/api/project-policies") {
+      return Promise.resolve(
+        Response.json({
+          schema: 1,
+          revision: "r1",
+          default_runtime_machine_id: "ovh",
+          machines: {
+            ovh: {
+              agent_mode: "remote",
+              hosts_projects: false,
+              remote_targets: ["hawk", "falcon"],
+            },
+          },
+        }),
+      );
+    }
+    if (url.endsWith("machine_id=hawk")) {
+      return Promise.resolve(Response.json(ready("hawk")));
+    }
+    if (url.endsWith("machine_id=falcon")) {
+      return new Promise<Response>((resolve) => {
+        pendingFalcon = resolve;
+      });
+    }
+    throw new Error(`Unexpected fixture request: ${url}`);
+  }) as typeof fetch;
+  resetProviderCatalog();
+  const container = document.createElement("div");
+  container.style.width = "360px";
+  document.body.append(container);
+  const root = createRoot(container);
+  let current: ReturnType<typeof useProjectPlacement> | undefined;
+  function Harness({ inventory }: { inventory: MachineSummary[] }) {
+    const placement = useProjectPlacement(true, inventory);
+    useLayoutEffect(() => {
+      current = placement;
+    });
+    return (
+      <WorkspacePicker
+        label="Project"
+        entries={placement.projects}
+        value={placement.project?.value ?? ""}
+        onChange={placement.selectProject}
+      />
+    );
+  }
+  const render = (inventory = machines): void =>
+    flushSync(() =>
+      root.render(
+        <StrictMode>
+          <Harness inventory={inventory} />
+        </StrictMode>,
+      )
+    );
+  const wait = async (
+    predicate: () => unknown,
+    label: string,
+  ): Promise<void> => {
+    for (let attempt = 0; attempt < 160; attempt++) {
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`${label}: ${current?.error ?? "timeout"}`);
+  };
+  const check = (value: unknown, label: string): void => {
+    if (!value) throw new Error(label);
+  };
+  try {
+    render();
+    await wait(() => current?.ready, "initial readiness");
+    check(
+      current?.machineId === "hawk" && current.runtimeMachineId === "ovh" &&
+        current.separate,
+      "AI and project Machines must be independent",
+    );
+    check(
+      current?.projects.length === 2 && current.installations.length === 2,
+      "runtime needs no mirror project",
+    );
+    check(
+      container.querySelector("label")?.textContent === "Project",
+      "project presentation",
+    );
+    flushSync(() =>
+      current!.selectProject(JSON.stringify(["falcon", "stable-id"]))
+    );
+    await wait(
+      () => pendingFalcon && current?.machineId === "falcon",
+      "switch to Falcon",
+    );
+    check(
+      !current?.ready && current?.runtimeMachineId === "",
+      "old readiness must not cross project selection",
+    );
+    const lateFalcon = pendingFalcon!;
+    flushSync(() =>
+      current!.selectProject(JSON.stringify(["hawk", "stable-id"]))
+    );
+    await wait(() => current?.ready, "return to Hawk");
+    lateFalcon(Response.json(ready("falcon")));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    check(
+      current?.machineId === "hawk" && current.ready,
+      "late target response must be ignored",
+    );
+    pendingFalcon = undefined;
+    flushSync(() =>
+      current!.selectProject(JSON.stringify(["falcon", "stable-id"]))
+    );
+    await wait(() => pendingFalcon, "Falcon readiness request");
+    pendingFalcon!(new Response("target unavailable", { status: 503 }));
+    await wait(() => current?.error, "target error");
+    check(
+      !current?.ready && current?.machineId === "falcon",
+      "target error cannot fall back to Hawk or OVH",
+    );
+    render(
+      machines.map((machine) => ({
+        ...machine,
+        workspaces: [...machine.workspaces],
+      })),
+    );
+    check(
+      current?.machineId === "falcon",
+      "inventory refresh preserves project selection",
+    );
+    render(
+      machines.map((m) => m.id === "ovh" ? { ...m, schedulable: false } : m),
+    );
+    flushSync(() =>
+      current!.selectProject(JSON.stringify(["hawk", "stable-id"]))
+    );
+    await wait(
+      () => current?.installations.some((i) => i.runtime_machine_id === "hawk"),
+      "available local alternative",
+    );
+    check(
+      !current?.ready && !current?.installation,
+      "unavailable preferred runtime cannot silently select local AI",
+    );
+    flushSync(() =>
+      current!.selectInstallation(JSON.stringify(["hawk", "codex"]))
+    );
+    check(
+      current?.ready && !current.separate,
+      "explicit local installation selection remains available",
+    );
+    return [
+      "project before installed AI",
+      "runtime without mirror directories",
+      "cross-target readiness isolation",
+      "late reply ignored",
+      "failure without local fallback",
+      "selection survives inventory refresh",
+      "unavailable OVH requires explicit alternative selection",
+    ];
+  } finally {
+    flushSync(() => root.unmount());
+    resetProviderCatalog();
+    container.remove();
+    globalThis.fetch = originalFetch;
+  }
+}

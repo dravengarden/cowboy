@@ -1,5 +1,6 @@
 import { WorkspacePicker } from "./WorkspacePicker";
-import { useExecutionPlacement } from "./useExecutionPlacement";
+import { useProjectPlacement } from "./useProjectPlacement";
+import { MachineProjects } from "./MachineProjects";
 import {
     Fragment,
     forwardRef,
@@ -117,7 +118,6 @@ import {
     sessionOverviewSections,
 } from "./sessionOverview";
 import {
-    joinProviderInstallations,
     useProviderCatalog,
 } from "./providerCatalog";
 import { sessionProviderAuthShortcut } from "./providerAuthShortcut";
@@ -223,7 +223,6 @@ import {
     MachineProviderManagement,
     ProviderAuthenticationManagement,
 } from "./ProviderManagement";
-import { projectAgentPluginInventory } from "@cowboy/provider-ui";
 import { machinePresencePresentation } from "./machinePresence";
 import { machineCommandResultPresentation } from "./machineCommandResult";
 import {
@@ -280,8 +279,6 @@ import {
     setActiveSessionId,
     useActiveSessionId,
 } from "./controlPlane";
-import { defaultNewSessionProvider } from "./newSessionProvider";
-import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 import { resolveActiveSession } from "./sessionSelection";
 import { useBootPresentation } from "./useBootPresentation";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
@@ -2164,62 +2161,25 @@ function NewSessionDialog({
     onCreated: (session: SessionMeta) => void;
 }): React.JSX.Element {
     const keyboardOpen = useKeyboardOpen();
-    const [provider, setProvider] = useState<string>("");
-    const [machineId, setMachineId] = useState<string>("");
     const machines = useStoreSelector((snapshot) => snapshot.machines);
-    const selectedMachine = machines.find((machine) => machine.id === machineId);
-    const placement = useExecutionPlacement(open, machineId, JSON.stringify(
-        machines.map((machine) => [machine.id, machine.schedulable, machine.plugins]),
-    ));
-    const runtimeMachine = machines.find((machine) => machine.id === placement.runtimeMachineId);
-    const machineProviders = useMemo(
-        () => projectAgentPluginInventory(runtimeMachine?.plugins ?? []),
-        [runtimeMachine?.plugins],
-    );
-    const { catalog: providerCatalog } = useProviderCatalog(open);
-    const providerRows = useMemo(
-        () => joinProviderInstallations(providerCatalog?.providers ?? [], machineProviders),
-        [machineProviders, providerCatalog],
-    );
-    const providerEntries = useMemo(
-        () =>
-            providerRows.flatMap((row) => {
-                const entry = row.installedEntry ?? row.latestEntry;
-                return entry ? [entry] : [];
-            }),
-        [providerRows],
-    );
+    const placement = useProjectPlacement(open, machines);
+    const machineId = placement.machineId;
+    const cwd = placement.project?.projectId ?? "";
+    const provider = placement.installation?.provider ?? "";
     const desktop = useSurfaceProfile().kind === "desktop";
-    const [cwd, setCwd] = useState<string>("");
-    const [workItemId, setWorkItemId] = useState<string>("");
+    const [workItemId, setWorkItemId] = useState("");
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState("");
-    // Workspace identity and ordering are owned by the selected Machine.
-    const [workspaces, setWorkspaces] = useState<readonly WorkspaceChoice[]>([]);
-    const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
-    const selectedProviderEntry = providerEntries.find((entry) => entry.provider_id === provider);
-    const selectedInstalledProvider = machineProviders.find((entry) => entry.provider_id === provider);
-    const providerAvailable = (candidate: string): boolean => {
-        const row = providerRows.find((value) => value.providerId === candidate);
-        const entry = row?.installedEntry;
-        const installed = row?.installed;
-        return Boolean(
-            selectedMachine?.schedulable && runtimeMachine?.schedulable && entry && installed &&
-            (!placement.separate || placement.providers.includes(candidate)) &&
-            (!entry.manifest.authentication.required || installed.materialization_state === "current"),
-        );
-    };
-    useEffect(() => {
-        if (!providerAvailable(provider)) {
-            const availableProviderIds = providerEntries
-                .map((entry) => entry.provider_id)
-                .filter(providerAvailable);
-            setProvider(defaultNewSessionProvider(availableProviderIds));
-        }
-    }, [machineId, machines, machineProviders, provider, providerEntries, placement.separate, placement.providers]);
-    const selectedWorkItem = selectedWorkspace?.active_work_items.find(
-        (item) => item.id === workItemId,
-    );
+    const selectedWorkspace: WorkspaceChoice | undefined = placement.project ? {
+        value: placement.project.projectId,
+        label: placement.project.name,
+        help: machines.find((m) => m.id === machineId)?.workspaces.find((w) => w.id === cwd)?.canonical_path ?? "",
+        active_work_items: [],
+    } : undefined;
+    const selectedProviderEntry = placement.installation?.entry;
+    const selectedInstalledProvider = placement.installation?.installed;
+    const providerAvailable = (candidate: string): boolean => Boolean(candidate && placement.ready && candidate === provider);
+    const selectedWorkItem = selectedWorkspace?.active_work_items.find((item) => item.id === workItemId);
     // Editable session title. Empty on Create → renameSession no-ops → the
     // daemon's default + first-prompt auto-title apply. RESET to a fresh default
     // on every open (below): the sheet stays mounted, so this state would
@@ -2239,8 +2199,6 @@ function NewSessionDialog({
     useEffect(() => {
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
-        setProvider("");
-        setMachineId("");
         setWorkItemId("");
         setCreating(false);
         setCreateError("");
@@ -2250,31 +2208,6 @@ function NewSessionDialog({
         }, 120);
         return () => globalThis.clearTimeout(t);
     }, [open]);
-    useEffect(() => {
-        if (!open) return;
-        if (machines.length === 0) return;
-        setMachineId((current) =>
-            machines.some((machine) => machine.id === current)
-                ? current
-                : machines.find((machine) => machine.local && machine.schedulable)?.id ||
-                    machines.find((machine) => machine.schedulable)?.id || machines[0]!.id
-        );
-    }, [machines, open]);
-    useEffect(() => {
-        if (!open) return;
-        if (machineId) {
-            const machine = machines.find((candidate) => candidate.id === machineId);
-            const choices: WorkspaceChoice[] = (machine?.workspaces ?? []).map((workspace) => ({
-                value: workspace.id,
-                label: workspace.display_name,
-                help: workspace.canonical_path,
-                active_work_items: [],
-            }));
-            setWorkspaces(choices);
-            setCwd(defaultNewSessionWorkspace(choices)?.value ?? "");
-            setWorkItemId("");
-        }
-    }, [open, machineId, machines]);
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     const create = (): void => {
@@ -2413,104 +2346,42 @@ function NewSessionDialog({
                     placeholder="Name this session"
                     helperText="Clear to auto-name from the first message"
                 />
-                {machines.length > 1 ? (
-                    <TextField
-                        select
-                        label={placement.enabled ? "Execution environment" : "Machine"}
-                        value={machineId}
-                        onChange={(e): void => setMachineId(e.target.value)}
-                        helperText={placement.enabled ? "Files and commands stay in this environment" : "Sessions stay on the selected machine"}
-                    >
-                        {machines.map((machine) => (
-                            <MenuItem
-                                key={machine.id}
-                                value={machine.id}
-                                disabled={!machine.schedulable}
-                            >
-                                {machine.display_name}{machine.local ? " · This machine" : ""}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                ) : null}
                 <WorkspacePicker
-                    entries={workspaces}
-                    value={cwd}
+                    label="Project"
+                    entries={placement.projects}
+                    value={placement.project?.value ?? ""}
                     onChange={(value): void => {
-                        setCwd(value);
+                        placement.selectProject(value);
                         setWorkItemId("");
                     }}
                 />
-                {placement.enabled ? (
-                    <TextField
-                        select
-                        label="Agent runtime"
-                        value={placement.runtimeMachineId}
-                        onChange={(e): void => placement.setRuntimeMachineId(e.target.value)}
-                        helperText="Agent connection and account stay on this machine"
-                    >
-                        {machines.map((machine) => (
-                            <MenuItem key={machine.id} value={machine.id} disabled={!machine.schedulable}>
-                                {machine.display_name}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                ) : null}
                 <TextField
                     select
-                    label="Agent / model provider"
-                    value={provider}
-                    onChange={(e): void => setProvider(e.target.value)}
-                    helperText="The selected runtime is scoped to this session"
-                    SelectProps={{
-                        renderValue: (value): string => {
-                            const entry = providerEntries.find((candidate) => candidate.provider_id === String(value));
-                            return entry ? `${entry.manifest.display.name} · ${entry.manifest.display.vendor}` : "No Provider available";
-                        },
-                    }}
+                    label="AI installation"
+                    value={placement.installation?.value ?? ""}
+                    onChange={(event): void => placement.selectInstallation(event.target.value)}
+                    helperText={placement.loading ? "Checking available AI installations…" : placement.installation
+                        ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
+                        : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
+                        : "No ready AI installation can use this project. Check Machines in Settings."}
                 >
-                    {providerEntries.map((entry) => {
-                        const p = entry.provider_id;
-                        const available = providerAvailable(entry.provider_id);
-                        return (
-                            <MenuItem
-                                key={p}
-                                value={p}
-                                disabled={!available}
-                                sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}
-                            >
-                                <ListItemIcon sx={{ width: 36, minWidth: 36, justifyContent: "center" }}>
-                                    <ProviderIcon
-                                        provider={p}
-                                        providerVersion={entry.provider_version}
-                                        providerDigest={entry.artifact_digest ?? undefined}
-                                        fontSize="small"
-                                    />
-                                </ListItemIcon>
-                                <Box sx={{ flex: 1, minWidth: 0 }}>
-                                    <Typography variant="body1">
-                                        {entry.manifest.display.name}
-                                    </Typography>
-                                    <Typography
-                                        variant="body2"
-                                        color="text.secondary"
-                                        sx={{ lineHeight: 1.35, overflowWrap: "anywhere" }}
-                                    >
-                                        {entry.manifest.display.vendor} · {entry.manifest.display.summary}
-                                    </Typography>
-                                    {!available ? (
-                                        <Typography
-                                            variant="caption"
-                                            color="text.secondary"
-                                            sx={{ display: "block", mt: 0.25 }}
-                                        >
-                                            {placement.separate ? "Unavailable for this runtime and environment" : "Unavailable on this machine"}
-                                        </Typography>
-                                    ) : null}
-                                </Box>
-                            </MenuItem>
-                        );
-                    })}
+                    {placement.installations.map((installation) => (
+                        <MenuItem key={installation.value} value={installation.value} sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}>
+                            <ListItemIcon sx={{ width: 36, minWidth: 36, justifyContent: "center" }}>
+                                <ProviderIcon provider={installation.provider} providerVersion={installation.entry.provider_version} providerDigest={installation.entry.artifact_digest ?? undefined} fontSize="small" />
+                            </ListItemIcon>
+                            <Box>
+                                <Typography>{installation.label}</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    {installation.mode === "remote" ? "Remote" : "Local"} · {installation.entry.manifest.display.vendor}
+                                </Typography>
+                            </Box>
+                        </MenuItem>
+                    ))}
                 </TextField>
+                <Typography variant="caption" color="text.secondary">
+                    Git projects open in a session worktree. Other directories are shared in place.
+                </Typography>
                 {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
                     <TextField
                         select
@@ -5388,9 +5259,6 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                 const projectWorkspaces = machine.workspaces.filter((workspace) =>
                     workspace.id !== "home" && workspace.id !== "columbus"
                 );
-                const rootWorkspaces = machine.workspaces.filter((workspace) =>
-                    workspace.id === "home" || workspace.id === "columbus"
-                );
                 const visibleComponents = machine.components.filter((component) =>
                     component.state !== "missing" ||
                     component.id.kind === "zed_server" ||
@@ -5526,25 +5394,7 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                             </Stack>
                             {open && (
                                 <Stack spacing={1.25} sx={{ pt: 0.25 }}>
-                                    <Stack spacing={0.75}>
-                                        <Typography variant="overline" color="text.secondary">Projects</Typography>
-                                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                            {projectWorkspaces.map((workspace) => (
-                                                <Chip
-                                                    key={workspace.id}
-                                                    size="small"
-                                                    variant="outlined"
-                                                    label={workspace.display_name}
-                                                    title={workspace.canonical_path}
-                                                />
-                                            ))}
-                                        </Stack>
-                                        {rootWorkspaces.length > 0 && (
-                                            <Typography variant="caption" color="text.secondary">
-                                                Roots: {rootWorkspaces.map((workspace) => workspace.display_name).join(" · ")}
-                                            </Typography>
-                                        )}
-                                    </Stack>
+                                    <MachineProjects machine={machine} machines={machines} />
                                     {componentSections.map((section) => (
                                         <Stack key={section.label} spacing={0.75}>
                                             <Typography variant="overline" color="text.secondary">{section.label}</Typography>

@@ -28,11 +28,14 @@ import {
 
 const preferenceKey = "cowboy.workspaceHierarchy";
 
-export function WorkspacePicker({ entries, value, onChange }: {
-  entries: readonly WorkspaceEntry[];
-  value: string;
-  onChange: (value: string) => void;
-}): React.JSX.Element {
+export function WorkspacePicker(
+  { entries, value, onChange, label = "Working directory" }: {
+    label?: string;
+    entries: readonly WorkspaceEntry[];
+    value: string;
+    onChange: (value: string) => void;
+  },
+): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -85,7 +88,7 @@ export function WorkspacePicker({ entries, value, onChange }: {
   return (
     <>
       <TextField
-        label="Working directory"
+        label={label}
         value={selected?.label ?? ""}
         helperText={selected?.help ?? ""}
         slotProps={{
@@ -138,7 +141,9 @@ export function WorkspacePicker({ entries, value, onChange }: {
         <Stack sx={{ p: 1.5, pb: 0.5, gap: 0.5, flexShrink: 0 }}>
           <TextField
             size="small"
-            label="Search directories"
+            label={label === "Project"
+              ? "Search projects"
+              : "Search directories"}
             slotProps={{
               input: {
                 startAdornment: (
@@ -162,7 +167,9 @@ export function WorkspacePicker({ entries, value, onChange }: {
           />
           {hasGroups && (
             <FormControlLabel
-              label="Group by directory"
+              label={label === "Project"
+                ? "Group projects"
+                : "Group by directory"}
               sx={{
                 m: 0,
                 alignSelf: "flex-start",
@@ -301,9 +308,10 @@ export function WorkspacePicker({ entries, value, onChange }: {
               entry.label.toLocaleLowerCase().includes(query)
             ).map((entry) => entryRow(entry))}
         </MenuList>
-        {query && !entries.some((entry) =>
-          entry.label.toLocaleLowerCase().includes(query)
-        ) &&
+        {query &&
+          !entries.some((entry) =>
+            entry.label.toLocaleLowerCase().includes(query)
+          ) &&
           (
             <Typography sx={{ p: 2 }} color="text.secondary">
               No matching directories

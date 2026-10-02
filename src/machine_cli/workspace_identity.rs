@@ -295,7 +295,7 @@ mod tests {
     }
 
     /// Device and inode numbers are reused: without the retained handle this
-    /// exact sequence hands a recreated directory the old inode number, and
+    /// sequence can hand a recreated directory the old inode number, and
     /// the fence would silently pass.
     #[test]
     fn the_retained_handle_is_what_makes_inode_comparison_sound() {
@@ -303,7 +303,6 @@ mod tests {
         let parent = tempfile::tempdir().expect("temp");
         let path = parent.path().join("root");
         std::fs::create_dir(&path).expect("create");
-        let original = std::fs::metadata(&path).expect("stat").ino();
         // Unpinned: the kernel is free to hand back the same inode number.
         std::fs::remove_dir(&path).expect("remove");
         std::fs::create_dir(&path).expect("recreate");
@@ -320,7 +319,8 @@ mod tests {
             pinned, unpinned,
             "the tracked handle must reserve {unpinned}"
         );
-        assert!(original == unpinned || pinned != original);
+        // The earlier unpinned inode may legitimately be reused here. Only
+        // the inode retained by RootIdentities is reserved by this contract.
     }
 
     #[test]

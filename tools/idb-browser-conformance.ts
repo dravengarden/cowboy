@@ -13,12 +13,14 @@ if (
   suite !== "review-document-refresh" && suite !== "review-diff" &&
   suite !== "review-destination" && suite !== "review-recovery" &&
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
-  suite !== "workspace-picker"
+  suite !== "workspace-picker" && suite !== "project-placement"
 ) {
   throw new Error("unknown suite");
 }
 const entry = suite === "idb"
   ? "runIdbBrowserConformance"
+  : suite === "project-placement"
+  ? "runProjectPlacementBrowserConformance"
   : suite === "workspace-picker"
   ? "runWorkspacePickerBrowserConformance"
   : suite === "sheet-keyboard"
@@ -168,7 +170,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "workspace-picker"
+      (suite === "project-placement"
+        ? 7
+        : suite === "workspace-picker"
         ? 5
         : suite === "sheet-keyboard"
         ? 3

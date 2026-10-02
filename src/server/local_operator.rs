@@ -76,6 +76,30 @@ async fn install(
     plugin_install::confirmed_install(state, machine, plugin, request, approval).await
 }
 
+async fn project_request(
+    State(state): State<Arc<AppState>>,
+    Path(machine): Path<String>,
+    Extension(grant): Extension<Arc<Grant>>,
+    Json(request): Json<crate::machine_protocol::projects::Request>,
+) -> Response {
+    if !grant.current() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    projects::request(State(state), Path(machine), Json(request)).await
+}
+
+async fn project_policy(
+    State(state): State<Arc<AppState>>,
+    Path(machine): Path<String>,
+    Extension(grant): Extension<Arc<Grant>>,
+    Json(request): Json<projects::PolicyUpdate>,
+) -> Response {
+    if !grant.current() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    projects::update_policy(State(state), Path(machine), Json(request)).await
+}
+
 async fn reconcile_install(
     State(state): State<Arc<AppState>>,
     Path((machine, plugin, operation)): Path<(String, String, String)>,
@@ -193,6 +217,16 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
         .route("/v1/machines", get(api_machines))
         .route("/v1/machines/{id}/plugins", get(api_machine_plugins))
         .route("/v1/machines/{id}/refresh", post(api_machine_refresh))
+        .route("/v1/project-policies", get(projects::policies))
+        .route("/v1/project-placements", get(projects::placements))
+        .route(
+            "/v1/machines/{id}/projects",
+            get(projects::list).post(project_request),
+        )
+        .route(
+            "/v1/machines/{id}/project-policy",
+            axum::routing::put(project_policy),
+        )
         .route("/v1/machines/{id}/plugins/{plugin}/install", post(install))
         .route(
             "/v1/machines/{id}/plugins/{plugin}/uninstall-plan",

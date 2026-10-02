@@ -40,6 +40,7 @@ export interface MachineSummary {
     canonical_path: string;
   }[];
   workspace_revision?: string | null;
+  workspace_owner?: "host" | "cowboy" | null;
   components: readonly {
     id: { kind: string; slot?: string };
     state: string;

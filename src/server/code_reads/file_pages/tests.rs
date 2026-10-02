@@ -151,6 +151,7 @@ fn workspace_scope(machine: &str, workspace: &str, cwd: &str) -> CodeReadScope {
             }]),
             workspace_identities: None,
             workspace_revision: None,
+            workspace_owner: None,
             observed_at_ms: 0,
         },
     );

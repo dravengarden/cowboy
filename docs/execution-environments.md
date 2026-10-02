@@ -66,7 +66,7 @@ against a different target.
 | Codex environment protocol and Claude tool translation                          | Respective Agent Provider                           | Existing signed Agent Plugins                |
 | Code, Review, resource views and target health                                  | Cowboy core and their existing capability consumers | Existing Web, Controller and Code boundaries |
 | Physical placement and provisioned logical interfaces                           | Columbus / Stormbird                                | Machine-owned infrastructure configuration   |
-| Logical project aliases                                                         | Matrix configuration                                | Data consumed by workspace resolution        |
+| Project identities, display groups and runtime policy                           | Cowboy core                                         | Native Machine registry and Service policy    |
 
 Do not add a separately installed SSH Plugin for these native Machines. Do not
 put arbitrary process execution into `workspace_extension`: that contract is
@@ -147,10 +147,10 @@ Unknown or malformed bindings refuse runtime start, adoption, configuration
 replay and native event projection. Recognized bindings additionally require the
 session's exact signed Provider generation to accept the executor digest and
 protocol. A bound worker requires runtime wire 2; old worker fallback is
-refused. Creation is separately admitted with
-`COWBOY_EXECUTION_RUNTIME_MACHINE`, naming the default Agent runtime. The
-default is closed. Actual active/recovery/cold readers must be established
-before enabling it.
+refused. New-session placement follows Cowboy’s native Machine policy.
+`COWBOY_EXECUTION_RUNTIME_MACHINE` supplies only the bootstrap preference; the
+saved policy becomes authoritative. Active/recovery/cold execution readers
+remain a prerequisite for compatible deployment.
 
 `POST /api/execution-sessions` persists a non-runnable preparation before
 allocating the target worktree. Target preparation is session-owned and reuses
@@ -181,28 +181,19 @@ Consumers use the same core resolver:
 - Deleting a session never treats a target source root as disposable runtime
   state. Uncommitted task files survive disconnects and component upgrades.
 
-The New Session surface separates Agent runtime from execution environment. For
-this deployment the runtime defaults to OVH. Selecting a logical project
-resolves its target and prepares the environment before the first model turn.
-Show a compact `Agent: OVH · Environment: Hawk` distinction in session details.
-Provider readiness depends on OVH; file and command readiness depends on Hawk.
+The New Session surface selects Project, then an installed AI such as
+`Claude · OVH`. Cowboy derives Local/Remote from their Machines and checks the
+exact installation against the target executor. The compact summary states
+where AI runs and where files/commands execute. Both creation APIs enforce the
+Service policy. See [native projects](native-projects.md) for registration,
+discovery, host-policy persistence, Operator commands and Matrix migration.
 
-Matrix entries become configuration references to advertised target workspaces,
-not directory names parsed as routing instructions. For example,
-`hawk/columbus/cowboy` selects a stable workspace identity; its concrete target
-worktree is allocated for that session. Stormbird/Columbus keep ownership of the
-logical interface and its physical route. The Agent receives the target's native
-cwd, shell, OS and project guidance, but needs no SSH host, address, key,
-transfer command or routing argument in ordinary tool calls.
-
-In New Session, select the execution environment/project before the Agent
-Provider. Keep runtime placement in a separate advanced control, defaulting to
-OVH for this installation. Provider choices come from OVH's installed, ready
-releases and are filtered by execution compatibility with the selected target;
-they must not accidentally come from Hawk's installed Agent list. A later
-Recommended-preset or configuration refresh changes preferences, not placement.
-Loading a newer Provider must also validate the existing execution contract,
-without replacing the target, worktree or remote jobs.
+Projects are registered on their actual Machine; presentation labels do not
+encode routes or depend on an OVH directory layout. Stormbird/Columbus own
+network reachability. The Agent receives target cwd, shell, OS and guidance,
+and ordinary tools need no SSH host, transfer command or routing argument.
+Recommended/configuration refresh changes preferences, not existing placement.
+Loading a newer Provider still validates the existing execution contract.
 
 Bind once per session initially. A later environment-switch operation must fence
 in-flight tools, retain the origin of existing jobs, replace project guidance

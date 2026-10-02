@@ -100,6 +100,8 @@ mod oidc;
 mod operation_budget;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod otlp;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod owned_json;
 #[cfg(feature = "full")]
 mod passkey;
 #[cfg(feature = "full")]
@@ -130,6 +132,8 @@ mod plugin_runtime_args;
 mod plugin_storage;
 #[cfg(feature = "full")]
 mod product_auth;
+#[cfg(feature = "full")]
+mod project_placement;
 #[cfg(feature = "full")]
 mod prompt_origin;
 #[cfg(feature = "full")]

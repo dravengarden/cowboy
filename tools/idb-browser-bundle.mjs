@@ -13,7 +13,7 @@ if (
   suite !== "review-document-refresh" && suite !== "review-diff" &&
   suite !== "review-destination" && suite !== "review-recovery" &&
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
-  suite !== "workspace-picker"
+  suite !== "workspace-picker" && suite !== "project-placement"
 ) {
   throw new Error("unknown suite");
 }
@@ -34,7 +34,8 @@ await build({
         suite === "review-code" || suite === "review-document-refresh" ||
         suite === "review-diff" || suite === "review-destination" ||
         suite === "review-recovery" || suite === "workspace-extensions" ||
-        suite === "sheet-keyboard" || suite === "workspace-picker"
+        suite === "sheet-keyboard" || suite === "workspace-picker" ||
+        suite === "project-placement"
         ? "development"
         : "production",
     ),
@@ -76,7 +77,9 @@ await build({
       : {}),
     lib: {
       entry: new URL(
-        suite === "workspace-picker"
+        suite === "project-placement"
+          ? "../web/src/projectPlacementBrowserConformance.tsx"
+          : suite === "workspace-picker"
           ? "../web/src/workspacePickerBrowserConformance.tsx"
           : suite === "sheet-keyboard"
           ? "../web/src/coverKeyboardBrowserConformance.tsx"

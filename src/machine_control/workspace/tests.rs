@@ -58,6 +58,7 @@ fn observe_owned(
             workspaces: roots,
             workspace_identities: identities,
             workspace_revision: Some("config-revision".into()),
+            workspace_owner: None,
             observed_at_ms: 0,
         },
     );

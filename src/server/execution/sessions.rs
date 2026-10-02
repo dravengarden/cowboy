@@ -33,7 +33,10 @@ async fn call(state: &AppState, machine_id: &str, action: Action) -> Result<Resp
         .await
 }
 
-async fn executor(state: &AppState, machine: &str) -> Result<ExecutorInventory, String> {
+pub(in crate::server) async fn executor(
+    state: &AppState,
+    machine: &str,
+) -> Result<ExecutorInventory, String> {
     match call(state, machine, Action::Inventory).await? {
         Response::Inventory {
             executor: Some(executor),
@@ -42,7 +45,7 @@ async fn executor(state: &AppState, machine: &str) -> Result<ExecutorInventory, 
     }
 }
 
-fn accepts(
+pub(in crate::server) fn accepts(
     behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
     executor: &ExecutorInventory,
 ) -> bool {
@@ -52,7 +55,7 @@ fn accepts(
         .is_some_and(|contract| contract.accepts(executor.protocol, &executor.digest))
 }
 
-fn providers(machine: &crate::store::MachineRecord) -> Vec<PluginInventory> {
+pub(in crate::server) fn providers(machine: &crate::store::MachineRecord) -> Vec<PluginInventory> {
     machine
         .inventory
         .get("plugins")
@@ -72,10 +75,13 @@ pub(in crate::server) async fn availability(
     State(state): State<Arc<AppState>>,
     Query(query): Query<AvailabilityQuery>,
 ) -> axum::response::Response {
-    let Some(default) = state.execution_runtime_machine.as_deref() else {
-        return Json(json!({"enabled":false})).into_response();
-    };
-    let runtime = query.runtime_machine_id.as_deref().unwrap_or(default);
+    let policy = state.project_placement.snapshot();
+    let default = policy.default_runtime_machine_id.as_deref();
+    let runtime = query
+        .runtime_machine_id
+        .as_deref()
+        .or(default)
+        .unwrap_or("");
     let Some(target) = query.machine_id.as_deref() else {
         return Json(json!({"enabled":true,"default_runtime_machine_id":default})).into_response();
     };
@@ -90,7 +96,8 @@ pub(in crate::server) async fn availability(
         .iter()
         .any(|machine| machine.id == target && !machine.revoked);
     let mut compatible = Vec::new();
-    if target_registered
+    if policy.allows(runtime, target)
+        && target_registered
         && state.runtime_router.connected(runtime)
         && let Some(machine) = machine
         && let Ok(executor) = executor(&state, target).await
@@ -140,13 +147,6 @@ pub(in crate::server) async fn create(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if state.execution_runtime_machine.is_none() {
-        return (
-            StatusCode::CONFLICT,
-            "Separate execution environments are not enabled on this Controller",
-        )
-            .into_response();
-    }
     match create_checked(&state, &authenticated, request).await {
         Ok(meta) => (StatusCode::CREATED, Json(json!({
             "session_id":meta.id, "provider_version":meta.provider_version,
@@ -163,6 +163,13 @@ async fn create_checked(
     authenticated: &AuthenticatedProductRequest,
     request: CreateRequest,
 ) -> Result<crate::core::SessionMeta, String> {
+    if !state
+        .project_placement
+        .snapshot()
+        .allows(&request.runtime_machine_id, &request.machine_id)
+    {
+        return Err("Machine policy does not permit this runtime and project placement".into());
+    }
     if request.runtime_machine_id == request.machine_id
         || request.runtime_machine_id == "local"
         || request.machine_id == "local"
@@ -315,9 +322,6 @@ pub(in crate::server) fn start_recovery(state: &Arc<AppState>) {
             };
             if *state.shutdown.borrow() {
                 return;
-            }
-            if state.execution_runtime_machine.is_none() {
-                continue;
             }
             for meta in state.hub.session_list() {
                 if meta

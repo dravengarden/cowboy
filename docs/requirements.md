@@ -56,6 +56,13 @@ the numbered [architecture chapters](architecture/00-overview.md).
 | Provider authentication | Cowboy Service: `(cowboy_service_id, provider_id)` |
 | Authentication replica | Derived Machine copy: `(machine_id, provider_id, auth_generation)` |
 | Session runtime | `(session_id, machine_id, provider_id, provider_generation_digest)` |
+| Project | Target Machine: `(machine_id, project_id)`, with independent display name and real directory |
+| AI placement policy | Cowboy Service: permitted Local/Remote placement per Machine and preferred runtime |
+
+The [native project contract](native-projects.md) owns registration, discovery
+and new-session selection. Machine protocol 24 adds closed project management;
+the execution transport and Provider lifecycle remain their existing owners.
+Matrix and host-directory naming are not dependencies of remote placement.
 
 An authentication replica is not a Machine login. It is a versioned projection
 of the Cowboy Service's authoritative Provider authentication state.

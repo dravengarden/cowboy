@@ -82,6 +82,7 @@ fn summary(connected: bool, components: Vec<ComponentInventory>) -> MachineSumma
         fingerprint: None,
         workspaces: Vec::new(),
         workspace_revision: None,
+        workspace_owner: None,
         components,
         plugins: Vec::new(),
         provider_contracts: None,
