@@ -1,0 +1,179 @@
+{
+  "schema": "cowboy.claude-mods-rollout/v1",
+  "accepted": true,
+  "source_revision": "9cb8fa07fed5c8339b40f7f795f06964fd65d9f7",
+  "machine": "ovh",
+  "previous_installation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.2.1",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:449b92180f08638223d95ef2ba1084e9996eca497cfb0422cc484fe462de8db5",
+    "installation_revision": "installation-5d60052995d00cc5c60bff3027e1a93b5d5686ed23da97e7d8e0e4635ec99e13",
+    "contract_fingerprint": "sha256:7132bc761b47bb7305f7e43b69e655b2895bc1bb760f754e36af3d6a120483a8",
+    "state": "active",
+    "rollback_generation_digest": "sha256:d00b06d70fc102df9844c0aac6def5294f268d63c4e3a0afd8e48421d61c6b3a",
+    "active_session_leases": 0,
+    "auth_generation": 51,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "active_installation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.3.0",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:82f07338f73ed62cbf7a1c239019a82757a34f324093114f40eb87bd515017c3",
+    "installation_revision": "installation-29e1b6af54c6449b0201659a06f6959bd7b17d2c776f64c735c3ceea432f087c",
+    "contract_fingerprint": "sha256:edcbda1e03ebc7781a8ee622e069d57486f2fd7ec20f3646965920d1cd3399e2",
+    "state": "active",
+    "rollback_generation_digest": "sha256:449b92180f08638223d95ef2ba1084e9996eca497cfb0422cc484fe462de8db5",
+    "active_session_leases": 0,
+    "auth_generation": 51,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "operation": {
+    "evidence_schema": 2,
+    "machine_receipt": {
+      "state": "applied",
+      "revision": "installation-29e1b6af54c6449b0201659a06f6959bd7b17d2c776f64c735c3ceea432f087c"
+    },
+    "operation_id": "ovh-claude-3-3-0-mods-cached-20261002",
+    "phase": "completed",
+    "problem": null,
+    "attention_from": null,
+    "plugin_kind": "agent_provider",
+    "plugin_version": "3.3.0",
+    "generation_digest": "sha256:82f07338f73ed62cbf7a1c239019a82757a34f324093114f40eb87bd515017c3",
+    "created_at_ms": 1790941078264,
+    "updated_at_ms": 1790941283559
+  },
+  "requires_reconciliation": false,
+  "reconciliation": {
+    "schema": 1,
+    "operation_id": "ovh-claude-3-3-0-mods-cached-20261002",
+    "phase": "completed",
+    "machine_receipt": {
+      "state": "applied",
+      "revision": "installation-29e1b6af54c6449b0201659a06f6959bd7b17d2c776f64c735c3ceea432f087c"
+    },
+    "reconciliation_performed": true
+  },
+  "installation_replayed": false,
+  "previous_attempt": {
+    "operation": {
+      "evidence_schema": 2,
+      "machine_receipt": {
+        "state": "unknown",
+        "phase": "staging",
+        "reason": "expired"
+      },
+      "operation_id": "ovh-claude-3-3-0-mods-20261002",
+      "phase": "needs_attention",
+      "problem": "unknown_machine_outcome",
+      "attention_from": "installing",
+      "plugin_kind": "agent_provider",
+      "plugin_version": "3.3.0",
+      "generation_digest": "sha256:82f07338f73ed62cbf7a1c239019a82757a34f324093114f40eb87bd515017c3",
+      "created_at_ms": 1790939951552,
+      "updated_at_ms": 1790940435777
+    },
+    "receipt_observation": {
+      "operation_id": "ovh-claude-3-3-0-mods-20261002",
+      "receipt_recorded": true,
+      "requires_reconciliation": true,
+      "installation_replayed": false
+    },
+    "staging_resolution": {
+      "schema": 1,
+      "operation_id": "ovh-claude-3-3-0-mods-20261002",
+      "phase": "needs_attention",
+      "machine_receipt": {
+        "state": "unknown",
+        "phase": "staging",
+        "reason": "expired"
+      },
+      "reconciliation_performed": true,
+      "staging_failure_resolved": true,
+      "resolution_id": "install-staging-bbdb8ab0aab60564839fe18c0c1d2511a1894cc57836c51fca18b76d521384ee",
+      "resolved_at_ms": 1790940791191
+    }
+  },
+  "verified_cache_import": {
+    "cached": true,
+    "sha256": "sha256:d5c8a4f1c620f6c4bd6b8ff26b4bbf61f7733600ca4712429ee3b954c288b452",
+    "bytes": 52054085,
+    "installed": false
+  },
+  "native_cli_version": "2.1.287",
+  "acp_version": "0.84.0",
+  "agent_sdk_version": "0.3.284",
+  "component_release": "3.35.0",
+  "package_digest": "sha256:3a0d1504542d0d4ec432fb5c872c5c79147db483c662b292a0d151dac13004a9",
+  "authentication_contract_fingerprint": "sha256:ceb8d6e09bd5d375f085435d23a52c63976cdf165f07a8b6946484207af4ede7",
+  "production_signing": {
+    "publisher": "cowboy-first-party",
+    "public_key_fingerprint": "SHA256:a/VJzmHD/94vMVQMNZTktSR9P3apkkKnnWzXrtn02hg",
+    "independent_verification": "passed"
+  },
+  "continuity": {
+    "controller": {
+      "ActiveEnterTimestampMonotonic": "350525319272",
+      "MainPID": "683531"
+    },
+    "controller_restarted": false,
+    "healthz": "ok",
+    "ovh_machine_and_existing_worker_units_unchanged": true,
+    "units": {
+      "cowboy-machine-svc-4e4d5154f3df9aa109d7d841dd925fd7.service": {
+        "ActiveEnterTimestampMonotonic": "187928091908",
+        "MainPID": "394847"
+      },
+      "cowboy-worker-249e8a0dc9cb-sess-1790913572900.service": {
+        "ActiveEnterTimestampMonotonic": "196491415280",
+        "MainPID": "424968"
+      },
+      "cowboy-worker-249e8a0dc9cb-sess-1790913572901.service": {
+        "ActiveEnterTimestampMonotonic": "200994317991",
+        "MainPID": "446438"
+      }
+    },
+    "authentication_generation_retained": 51,
+    "sibling_installations_unchanged": true
+  },
+  "verification": {
+    "plugin_check": "passed",
+    "full_just_check": "passed",
+    "final_provider_check": "passed",
+    "native_unit_tests": 19,
+    "native_worker_checks": 30,
+    "generation_coexistence": "passed",
+    "catalog_reader_roles": 3,
+    "previous_controller_reader": "passed",
+    "public_urls": 5,
+    "public_bytes": 308006129
+  },
+  "evidence_sha256": {
+    "docs/experiments/claude-mods-catalog-2026-10-02.json": "sha256:6e6956ddf6fa1172f266baeb15c07787f6594be0a18ab32f7c2e2dd9750bbc82",
+    "docs/experiments/claude-mods-generations-2026-10-02.json": "sha256:3e9433e5eccb6578e5a296a2f5166dc25a871838c01f5894f0a19b6cbf695f5b",
+    "docs/experiments/claude-mods-previous-controller-2026-10-02.json": "sha256:032e65865817e8225ba9d05ac35d3f3dd94f26a96cd7ac17d18004f171d24a69",
+    "docs/experiments/claude-mods-publication-2026-10-02.json": "sha256:86036d9ec5af2d1a16f37ef4cbff0c30f946f4b64c1d9e9e365911a3e95a5127",
+    "docs/experiments/claude-mods-worker-2026-10-02.json": "sha256:954f2a04c5f75f9d241fa3e9f113205cf29df913f8078ef192d44751a711e17b"
+  },
+  "not_checked": [
+    "real_subscription_inference",
+    "cross_host_latency",
+    "model_token_and_turn_savings",
+    "macos_native_execution",
+    "physical_device_ui"
+  ],
+  "remaining_limits": [
+    "not_process_wide_filesystem_isolation",
+    "native_subagents_and_project_hooks_outside_lane",
+    "implicit_file_attachments_suppressed",
+    "plan_files_and_pdf_extraction_outside_lane",
+    "whole_file_transfer",
+    "non_atomic_external_writer_conflict_check",
+    "startup_guidance_snapshot",
+    "existing_session_generation_and_placement_unchanged"
+  ]
+}
