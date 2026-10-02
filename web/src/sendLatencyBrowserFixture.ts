@@ -1,22 +1,25 @@
 // Real product store, IndexedDB and WebSocket; synthetic content and delays only.
 // oxlint-disable promise/avoid-new
 import { createElement } from "react";
+import type { ClientSnapshot, LocalPersistence } from "@cowboy/state-sync";
 import { createRoot } from "react-dom/client";
 import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
-import { productSyncDatabase } from "./productSyncDatabase.ts";
+import { productSyncDatabase, type ProductSyncScope } from "./productSyncDatabase.ts";
 import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
 import { Transcript } from "./Transcript.tsx";
 import { activateDraft, openSession, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
+import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 let snapshot: ReturnType<typeof useStore>;
 function Probe() {
   snapshot = useStore();
-  if (new URL(location.href).searchParams.get("scenario") === "continuity") {
-    return createElement(Transcript, {
+  const scenario = new URL(location.href).searchParams.get("scenario") ?? "";
+  if (scenario === "continuity" || scenario.startsWith("failed-recovery")) {
+    const transcript = createElement(Transcript, {
       sessionId: "fixture-session",
       timeline: snapshot.timelines.get("fixture-session") ?? [],
       status: "running",
@@ -26,6 +29,10 @@ function Probe() {
       connected: snapshot.connected,
       historyPaging: "page",
     });
+    return scenario === "continuity" ? transcript : createElement("div", null,
+      createElement(SessionObligationBadge, { sessionId: "fixture-session" }),
+      createElement("div", { id: "recovery-drafts" }, ...(snapshot.drafts.get("fixture-session") ?? []).map((row) =>
+        createElement("div", { key: row.id }, `${row.text}:${row.attachments.length}`))), transcript);
   }
   return createElement(TranscriptCachedCaption, {
     sessionId: "fixture-session",
@@ -77,6 +84,16 @@ export async function run() {
     const { runClientUpdateFixture } = await import("./clientUpdateBrowserFixture.tsx");
     return await runClientUpdateFixture();
   }
+  if (scenario === "failed-recovery-storage-error") {
+    const outbox = productSyncDatabase.outbox.bind(productSyncDatabase);
+    productSyncDatabase.outbox = <T>(scope: ProductSyncScope): LocalPersistence<ClientSnapshot<T>> => {
+      const persistence = outbox<T>(scope);
+      return { ...persistence, save: async (value) => {
+        if (JSON.stringify(value).includes('"name":"addDraft"')) throw new Error("Synthetic draft recovery save failure");
+        await persistence.save(value);
+      } };
+    };
+  }
   bindProductSyncPrincipal("fixture-user");
   const queues = productSyncDatabase.queueSessions.bind(productSyncDatabase);
   productSyncDatabase.queueSessions = async () => {
@@ -107,6 +124,36 @@ export async function run() {
     samples.push({ kind, milliseconds: performance.now() - began });
   };
   try {
+    if (scenario.startsWith("failed-recovery")) {
+      openSession(session);
+      await until(() => snapshot?.connected && snapshot.hydrated.has(session), "connected session");
+      const data = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+      const image: Attachment = { id: "old-shot", name: "old.gif", isImage: true, mimeType: "image/gif",
+        previewUrl: `data:image/gif;base64,${data}`, block: { type: "image", data, mimeType: "image/gif" } };
+      await submitPrompt(session, "older unconfirmed caption", [image]);
+      await until(() => snapshot.optimisticMessages.get(session)?.some((row) => row.status === "failed") === true, "failed older send retained");
+      const oldCmid = snapshot.optimisticMessages.get(session)![0]!.cmid;
+      await until(() => document.querySelector('[aria-label="1 message needs attention"]') !== null, "failure badge paints");
+      await submitPrompt(session, "new working prompt");
+      await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("new working prompt"), "new user echo");
+      if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid)) throw new Error("older send retired before agent progress");
+      if (scenario === "failed-recovery-no-work") {
+        await until(() => snapshot.timelines.get(session)?.some((event) => event.kind === "turn_end") === true, "turn ends before work");
+        if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid && row.status === "failed") || (snapshot.drafts.get(session) ?? []).length !== 0) throw new Error("a turn without work retired the failed message");
+        return ["receipt and user echo without agent work preserve the held message"];
+      }
+      await until(() => document.body.textContent?.includes("Agent is working again") === true, "actual resumed work");
+      if (scenario === "failed-recovery-storage-error") {
+        await delay(300);
+        if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid && row.status === "failed")) throw new Error("failed draft save lost the source message");
+        return ["draft save failure preserves the original held message and image"];
+      }
+      await until(() => (snapshot.optimisticMessages.get(session) ?? []).length === 0, "old bottom error retired");
+      await until(() => document.querySelector('[aria-label="1 message needs attention"]') === null, "attention badge clears");
+      await until(() => snapshot.drafts.get(session)?.some((row) => row.text === "older unconfirmed caption" && row.attachments.length === 1 && row.status === undefined) === true, "old content saved as acknowledged draft");
+      if (!await retained("older unconfirmed caption")) throw new Error("recovered draft not durable");
+      return ["new prompt must start agent work before old errors clear", "caption and image retained as a durable draft", "old delivery never resubmitted"];
+    }
     if (scenario === "continuity") {
       openSession(session);
       await until(() => document.querySelector('[data-key="1"] img') !== null, "earlier image paints");

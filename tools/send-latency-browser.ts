@@ -11,12 +11,13 @@ const slowMobile = args.includes("--slow-mobile");
 const draftSend = args.includes("--draft-send");
 const continuity = args.includes("--continuity");
 const updateSettings = args.includes("--update-settings");
+const failedRecovery = args.includes("--failed-recovery");
 const bundles = args.filter((argument) =>
   argument !== "--queued" && argument !== "--metadata" &&
   argument !== "--local" &&
   argument !== "--safety" && argument !== "--transcript-recovery" &&
   argument !== "--slow-mobile" &&
-    argument !== "--draft-send" && argument !== "--continuity" && argument !== "--update-settings"
+    argument !== "--draft-send" && argument !== "--continuity" && argument !== "--update-settings" && argument !== "--failed-recovery"
 );
 if (
   !browser?.startsWith("/nix/store/") ||
@@ -50,6 +51,8 @@ const session = {
 const cases = bundles.flatMap((bundle) =>
   (slowMobile
     ? ["slow-mobile", "lost-send"]
+    : failedRecovery
+    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work"]
     : updateSettings
     ? ["update-settings"]
     : continuity
@@ -81,6 +84,8 @@ for (const { bundle, scenario } of cases) {
   let metadataMutations = 0;
   let seq = 0;
   let attempts = 0;
+  const recoveryCase = scenario.startsWith("failed-recovery");
+  const recoveredDrafts: Record<string, unknown>[] = [];
   let lostSend = false;
   let recoveredTransport = false;
   let datasetId = descriptor.dataset_id;
@@ -186,6 +191,12 @@ for (const { bundle, scenario } of cases) {
         };
         socket.onmessage = async (event) => {
           const message = JSON.parse(event.data);
+          if (recoveryCase && message.type === "add_draft") {
+            recoveredDrafts.push({ id: "recovered-draft", cmid: message.cmid, text: message.text, content: message.content });
+            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: 3,
+              value: { queue: [], drafts: recoveredDrafts }, confirmed: [message.cmid] }));
+            return;
+          }
           if (message.type === "connection_probe") {
             if (scenario === "lost-send" && lostSend && deliveries === 0) {
               recoveredTransport = true;
@@ -248,6 +259,16 @@ for (const { bundle, scenario } of cases) {
           if (seen.has(message.cmid)) return;
           seen.add(message.cmid);
           deliveries++;
+          if (recoveryCase && deliveries === 1) {
+            socket.send(JSON.stringify({ type: "command_result", session_id: session.id, cmid: message.cmid,
+              outcome: "rejected", message: "Synthetic older send failure" }));
+            return;
+          }
+          if (recoveryCase) {
+            // The receipt may precede the echo and drop the pending mutation.
+            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: 2,
+              value: { queue: [], drafts: [] }, confirmed: [message.cmid] }));
+          }
           if (local) {
             socket.send(JSON.stringify({
               type: "sync_patch",
@@ -289,14 +310,22 @@ for (const { bundle, scenario } of cases) {
               content: { type: "text", text: message.text },
             },
           };
+          history.push(echo);
+          socket.send(JSON.stringify({ type: "event", envelope: echo }));
+          if (recoveryCase && scenario !== "failed-recovery-no-work") {
+            await delay(700);
+            const work = { session_id: session.id, seq: ++seq, kind: "update",
+              update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Agent is working again" } } };
+            history.push(work);
+            socket.send(JSON.stringify({ type: "event", envelope: work }));
+          }
           const end = {
             session_id: session.id,
             seq: ++seq,
             kind: "turn_end",
             stop_reason: "EndTurn",
           };
-          history.push(echo, end);
-          socket.send(JSON.stringify({ type: "event", envelope: echo }));
+          history.push(end);
           socket.send(JSON.stringify({ type: "event", envelope: end }));
         };
         socket.onclose = () => sockets.delete(socket);
@@ -442,6 +471,8 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
       deliveries !==
         (metadata || updateSettings
           ? 0
+          : failedRecovery
+          ? 2
           : continuity
           ? 4
           : local || draftSend || slowMobile

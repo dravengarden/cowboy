@@ -345,6 +345,16 @@ Queued rows add the authored time ("Written 14:02 · sends when online").
 composer) and Discard. `rejected` rows show the server reason and the
 actions that fit it (see the conflict catalog).
 
+When a newer locally authored prompt is echoed and starts actual agent work,
+older failed prompt/queue creations from that device are saved as drafts before
+their retry obligations and bottom-of-transcript failure bubbles are retired.
+Text and attachments survive; the older content is never submitted automatically.
+A delivery receipt alone, another device’s prompt, or a turn that fails before
+work does not trigger recovery. If the draft cannot be saved durably, the original
+held message and attention badge remain available. Historical runtime errors stay
+at their original transcript position; a recovered turn clears its stale session
+error notification.
+
 **Sessions drawer.** Connection state is app-level, not per session, so the
 floating pill hides while the drawer is open and the drawer carries its own
 inline line at the top of the list: "Reconnecting… · list from 3 min ago",

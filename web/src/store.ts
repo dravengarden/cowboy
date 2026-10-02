@@ -1668,6 +1668,7 @@ function handle(msg: Outbound): void {
     }
     case "event": {
       const env = msg.envelope;
+      if (!containsSeq(state.timelines.get(env.session_id) ?? [], env.seq)) observeRecoveredSend(env);
       if (env.kind === "update") {
         if (env.update.sessionUpdate === "user_message_chunk") telemetryOperations.userEcho(env.session_id, env.cmid);
         if (env.update.sessionUpdate === "agent_message_chunk") telemetryOperations.firstOutput(env.session_id);
@@ -3489,6 +3490,71 @@ const suppressedInFlight = new Set<string>();
 // Transcript overlays whose tagged user echo arrived but could not replace them
 // yet. The turn's first agent work retires them (see the `event` reducer).
 const echoedOptimisticCmids = new Set<string>();
+// A new, locally authored prompt must actually start agent work before an
+// earlier failed send is moved out of the live delivery area.
+const recoveryAfterPrompt = new Map<string, readonly string[]>();
+const olderFailedByNewCmid = new Map<string, readonly string[]>();
+const recoveringFailedSends = new Set<string>();
+const CHAT_CREATION_MUTATORS = new Set(["submitPrompt", "addQueue", "frontQueue", "forceQueue"]);
+
+function observeRecoveredSend(env: Envelope): void {
+  if (env.kind === "update" && env.update.sessionUpdate === "user_message_chunk") {
+    if (env.cmid === undefined) return;
+    const pending = qClients.get(env.session_id)?.pending() ?? [];
+    const index = pending.findIndex((mutation) => mutation.id === env.cmid ||
+      (mutation.args as { row?: QueuedMessage }).row?.cmid === env.cmid);
+    const captured = olderFailedByNewCmid.get(env.cmid);
+    olderFailedByNewCmid.delete(env.cmid);
+    const localBubble = state.optimisticMessages.get(env.session_id)?.some((row) => row.cmid === env.cmid);
+    // Other devices' prompts cannot resolve this device's failed sends.
+    if (index < 0 && captured === undefined && !localBubble) {
+      recoveryAfterPrompt.delete(env.session_id);
+      return;
+    }
+    const older = captured ?? pending.slice(0, Math.max(0, index)).filter((mutation) =>
+      CHAT_CREATION_MUTATORS.has(mutation.name) && qStatus.get(mutation.id) === "failed"
+    ).map((mutation) => mutation.id);
+    recoveryAfterPrompt.set(env.session_id, older);
+    return;
+  }
+  const older = recoveryAfterPrompt.get(env.session_id);
+  if (older === undefined) return;
+  const working = env.kind === "permission_request" ||
+    (env.kind === "update" && env.update.sessionUpdate !== "user_message_chunk" &&
+      isTurnActivityUpdate(env.update.sessionUpdate) && env.update.sessionUpdate !== "context_cleared");
+  if (working) {
+    recoveryAfterPrompt.delete(env.session_id);
+    if (state.lastError?.sessionId === env.session_id) {
+      const next = { ...state };
+      delete next.lastError;
+      setState(next);
+    }
+    for (const id of older) {
+      void saveRecoveredSendAsDraft(env.session_id, id).catch(() => {
+        reportClientLog("warn", "failed_send_recovery_deferred", "Earlier unconfirmed message remains available", { session_id: env.session_id });
+      });
+    }
+  } else if (env.kind === "turn_end" || (env.kind === "lifecycle" &&
+    (env.status === "crashed" || env.status === "interrupted"))) recoveryAfterPrompt.delete(env.session_id);
+}
+
+async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<void> {
+  const key = `${sessionId}:${id}`;
+  if (recoveringFailedSends.has(key)) return;
+  const pending = qClients.get(sessionId)?.pending().find((mutation) => mutation.id === id);
+  const row = (pending?.args as { row?: QueuedMessage } | undefined)?.row;
+  if (pending === undefined || row === undefined || qStatus.get(id) !== "failed") return;
+  recoveringFailedSends.add(key);
+  try {
+    // Save first, then retire the old retry obligation. This never submits the
+    // old content to the agent and a storage failure leaves the source intact.
+    const cmid = `recovery-${id}`;
+    const existing = qClients.get(sessionId)?.get().drafts.some((draft) => draft.cmid === cmid);
+    if (!existing) await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer", cmid });
+    await discardQueued(sessionId, id);
+    if (row.cmid !== undefined) patchMessage(sessionId, row.cmid, "drop");
+  } finally { recoveringFailedSends.delete(key); }
+}
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
   const args = m.args as { id?: string; row?: QueuedMessage };
@@ -4062,6 +4128,12 @@ async function qAdd(
   const mode = opts.mode ?? "back";
   const origin = opts.origin ?? "composer";
   const cmid = opts.cmid ?? newCmid();
+  if (target === "transcript" || target === "queue") {
+    const older = (qClients.get(sessionId)?.pending() ?? []).filter((mutation) =>
+      CHAT_CREATION_MUTATORS.has(mutation.name) && qStatus.get(mutation.id) === "failed"
+    ).map((mutation) => mutation.id);
+    if (older.length > 0) olderFailedByNewCmid.set(cmid, older);
+  }
   if (target === "transcript") rememberSendImagePreviews(cmid, attachments, text);
   const row: QueuedMessage = {
     id: `opt-${cmid}`,
@@ -4107,6 +4179,7 @@ async function qAdd(
     // and network readiness remain independent of this durability barrier.
     await mutateQueueDurably(sessionId, mutator, { row }, cmid);
   } catch (error) {
+    olderFailedByNewCmid.delete(cmid);
     qStatus.delete(cmid);
     // The sync client rolls back its mutation, but commitQueue deliberately
     // retains transcript overlays until an echo arrives. No echo can arrive
@@ -4214,6 +4287,7 @@ async function discardQueueMutationDurably(sessionId: string, cmid: string): Pro
 
 export async function discardQueued(sessionId: string, cmid: string): Promise<void> {
   await discardQueueMutationDurably(sessionId, cmid);
+  olderFailedByNewCmid.delete(cmid);
   clearOptTimers(cmid);
   qStatus.delete(cmid);
   forgetDeliveryFailure(cmid);
