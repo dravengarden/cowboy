@@ -8,14 +8,17 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
 import { projectMachineOccupancy } from "./machineState";
+import { AiInstallationPicker } from "./AiInstallationPicker";
 
 export async function runProjectPlacementBrowserConformance(): Promise<
   string[]
 > {
   const originalFetch = globalThis.fetch;
   const entry = managementEntryFixture("codex");
+  entry.manifest.display.name = "Codex";
   entry.publisher = entry.manifest.publisher;
   const claude = managementEntryFixture("claude-code");
+  claude.manifest.display.name = "Claude Code";
   claude.publisher = claude.manifest.publisher;
   const entries = [entry, claude];
   const machines = ["hawk", "falcon", "ovh"].map((id) => ({
@@ -104,6 +107,9 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   resetProviderCatalog();
   const container = document.createElement("div");
   container.style.width = "360px";
+  container.style.display = "flex";
+  container.style.flexDirection = "column";
+  container.style.gap = "16px";
   document.body.append(container);
   const root = createRoot(container);
   let current: ReturnType<typeof useProjectPlacement> | undefined;
@@ -118,12 +124,20 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       current = placement;
     });
     return (
-      <WorkspacePicker
-        label="Project"
-        entries={placement.projects}
-        value={placement.project?.value ?? ""}
-        onChange={placement.selectProject}
-      />
+      <>
+        <WorkspacePicker
+          label="Project"
+          entries={placement.projects}
+          value={placement.project?.value ?? ""}
+          onChange={placement.selectProject}
+        />
+        <AiInstallationPicker
+          installations={placement.installations}
+          value={placement.installation?.value ?? ""}
+          onChange={placement.selectInstallation}
+          helperText="Remote · AI on OVH · Files and commands on Hawk"
+        />
+      </>
     );
   }
   const render = (inventory = machines): void =>
@@ -159,9 +173,79 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       current?.projects.length === 2 && current.installations.length === 3,
       "runtime needs no mirror project",
     );
+    const field = () =>
+      container.querySelector<HTMLElement>(
+        '.MuiSelect-select[role="combobox"]',
+      )!;
+    const checkAlignment = (): void => {
+      const icon = field().querySelector<SVGElement>('[role="img"]')!;
+      const name = field().querySelector<HTMLElement>("[title]")!;
+      check(icon && name, "selected installation has an icon and label");
+      const a = icon.getBoundingClientRect();
+      const b = name.getBoundingClientRect();
+      const input = container.querySelector('[role="combobox"]')!.closest(
+        ".MuiInputBase-root",
+      )!.getBoundingClientRect();
+      check(
+        a.right < b.left &&
+          Math.abs((a.top + a.bottom) - (b.top + b.bottom)) < 2,
+        "selected icon and label share one horizontal row",
+      );
+      check(
+        Math.abs(
+          field().closest(".MuiInputBase-root")!.getBoundingClientRect()
+            .height - input.height,
+        ) < 2,
+        "closed AI field is as compact as the project field",
+      );
+      check(
+        b.right <= field().getBoundingClientRect().right,
+        "selected text stays inside the field",
+      );
+    };
+    checkAlignment();
+    for (const width of [320, 375, 720]) {
+      container.style.width = `${width}px`;
+      render(
+        machines.map((m) =>
+          m.id === "ovh"
+            ? { ...m, display_name: `OVH ${"long-machine-name".repeat(10)}` }
+            : m
+        ),
+      );
+      checkAlignment();
+      const name = field().querySelector<HTMLElement>("[title]")!;
+      check(
+        name.scrollWidth > name.clientWidth &&
+          getComputedStyle(name).textOverflow === "ellipsis",
+        "long selected names truncate within mobile and desktop widths",
+      );
+    }
+    container.style.width = "360px";
+    render();
     flushSync(() =>
-      current!.selectInstallation(JSON.stringify(["ovh", "claude-code"]))
+      field().dispatchEvent(
+        new MouseEvent("mousedown", { button: 0, bubbles: true }),
+      )
     );
+    await wait(
+      () => document.querySelector('[role="option"]'),
+      "AI menu opens",
+    );
+    const claudeOption = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ]
+      .find((option) => option.textContent?.includes("Claude Code · ovh"))!;
+    check(
+      claudeOption?.textContent?.includes("Remote"),
+      "AI menu retains mode detail",
+    );
+    flushSync(() => claudeOption.click());
+    await wait(
+      () => !document.querySelector('[role="listbox"]'),
+      "AI menu closes",
+    );
+    checkAlignment();
     check(
       current?.ready && current.runtimeMachineId === "ovh" &&
         current.separate &&
@@ -240,6 +324,8 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       "project before installed AI",
       "runtime without mirror directories",
       "Codex and Claude selectable after live occupancy projection",
+      "compact selected AI icon and label share one row",
+      "long AI labels fit mobile and desktop fields",
       "cross-target readiness isolation",
       "late reply ignored",
       "failure without local fallback",

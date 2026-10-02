@@ -67,12 +67,20 @@ export function WorkspacePicker(
   const entryRow = (
     entry: WorkspaceEntry,
     label = entry.label,
+    browsePath?: string[],
   ): React.JSX.Element => (
     <MenuItem
       key={entry.value}
       selected={entry.value === value}
       onClick={() => choose(entry.value)}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowRight" && browsePath) {
+          event.preventDefault();
+          navigate(browsePath);
+        }
+      }}
       sx={{
+        gridColumn: browsePath ? "1" : "1 / -1",
         minHeight: 44,
         gap: 1.25,
         borderRadius: 1.5,
@@ -196,7 +204,9 @@ export function WorkspacePicker(
           )}
           {grouped && branch.path.length > 0 && (
             <Breadcrumbs
-              aria-label="Directory path"
+              aria-label={label === "Project"
+                ? "Project path"
+                : "Directory path"}
               separator={
                 <ChevronRight sx={{ fontSize: 16, color: "text.secondary" }} />
               }
@@ -217,7 +227,7 @@ export function WorkspacePicker(
               }}
             >
               <Button size="small" onClick={() => navigate([])}>
-                All directories
+                {label === "Project" ? "All projects" : "All directories"}
               </Button>
               {branch.path.map((part, index) =>
                 index === branch.path.length - 1
@@ -251,8 +261,16 @@ export function WorkspacePicker(
         </Stack>
         <MenuList
           id="workspace-picker-menu"
-          aria-label="Working directories"
-          sx={{ px: 0.75, pb: 0.75, overflowY: "auto", minHeight: 0 }}
+          aria-label={label === "Project" ? "Projects" : "Working directories"}
+          sx={{
+            px: 0.75,
+            pb: 0.75,
+            overflowY: "auto",
+            minHeight: 0,
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) 44px",
+            gridAutoRows: "minmax(44px, auto)",
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.stopPropagation();
             if (event.key === "ArrowLeft" && grouped && branch.path.length) {
@@ -262,48 +280,81 @@ export function WorkspacePicker(
           }}
         >
           {grouped
-            ? (
-              <>
-                {branch.entries.map((entry) =>
-                  entryRow(entry, `Select this directory · ${entry.label}`)
-                )}
-                {[...branch.children.values()].map((child) =>
-                  child.children.size > 0 || child.entries.length !== 1
-                    ? (
-                      <MenuItem
-                        key={JSON.stringify(child.path)}
-                        onClick={() => navigate(child.path)}
-                        onKeyDown={(event) => {
-                          if (event.key === "ArrowRight") {
-                            event.preventDefault();
-                            navigate(child.path);
-                          }
-                        }}
-                        sx={{ minHeight: 44, gap: 1.25, borderRadius: 1.5 }}
-                      >
-                        <FolderOutlined
-                          fontSize="small"
-                          sx={{ color: "text.secondary" }}
-                        />
-                        <Box
+            ? [
+              ...branch.entries.map((entry) => entryRow(entry, branch.label)),
+              ...[...branch.children.values()].flatMap((child) => {
+                if (child.entries.length === 1) {
+                  const hasChildren = child.children.size > 0;
+                  return [
+                    entryRow(
+                      child.entries[0]!,
+                      child.label,
+                      hasChildren ? child.path : undefined,
+                    ),
+                    ...(hasChildren
+                      ? [
+                        <MenuItem
+                          key={`browse:${JSON.stringify(child.path)}`}
+                          aria-label={`Browse ${
+                            label === "Project"
+                              ? "subprojects"
+                              : "subdirectories"
+                          } of ${child.path.join("/")}`}
+                          onClick={() => navigate(child.path)}
                           sx={{
-                            flex: 1,
-                            overflowWrap: "anywhere",
-                            whiteSpace: "normal",
+                            minHeight: 44,
+                            px: 0,
+                            justifyContent: "center",
+                            borderRadius: 1.5,
                           }}
                         >
-                          {child.label}
-                        </Box>
-                        <ChevronRight
-                          fontSize="small"
-                          sx={{ color: "text.secondary" }}
-                        />
-                      </MenuItem>
-                    )
-                    : entryRow(child.entries[0]!, child.label)
-                )}
-              </>
-            )
+                          <ChevronRight
+                            fontSize="small"
+                            sx={{ color: "text.secondary" }}
+                          />
+                        </MenuItem>,
+                      ]
+                      : []),
+                  ];
+                }
+                return [
+                  <MenuItem
+                    key={`group:${JSON.stringify(child.path)}`}
+                    onClick={() => navigate(child.path)}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight") {
+                        event.preventDefault();
+                        navigate(child.path);
+                      }
+                    }}
+                    sx={{
+                      gridColumn: "1 / -1",
+                      minHeight: 44,
+                      gap: 1.25,
+                      borderRadius: 1.5,
+                    }}
+                  >
+                    <FolderOutlined
+                      fontSize="small"
+                      sx={{ color: "text.secondary" }}
+                    />
+                    <Box
+                      sx={{
+                        flex: 1,
+                        overflowWrap: "anywhere",
+                        whiteSpace: "normal",
+                      }}
+                    >
+                      {child.label}
+                    </Box>
+                    <ChevronRight
+                      fontSize="small"
+                      sx={{ color: "text.secondary" }}
+                    />
+                  </MenuItem>,
+                ];
+              }),
+            ]
             : entries.filter((entry) =>
               entry.label.toLocaleLowerCase().includes(query)
             ).map((entry) => entryRow(entry))}

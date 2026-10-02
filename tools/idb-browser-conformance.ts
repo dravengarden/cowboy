@@ -171,9 +171,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
       (suite === "project-placement"
-        ? 8
+        ? 10
         : suite === "workspace-picker"
-        ? 5
+        ? 7
         : suite === "sheet-keyboard"
         ? 3
         : suite === "workspace-extensions"

@@ -1,4 +1,5 @@
 import { WorkspacePicker } from "./WorkspacePicker";
+import { AiInstallationPicker } from "./AiInstallationPicker";
 import { useProjectPlacement } from "./useProjectPlacement";
 import { MachineProjects } from "./MachineProjects";
 import {
@@ -2355,30 +2356,15 @@ function NewSessionDialog({
                         setWorkItemId("");
                     }}
                 />
-                <TextField
-                    select
-                    label="AI installation"
+                <AiInstallationPicker
+                    installations={placement.installations}
                     value={placement.installation?.value ?? ""}
-                    onChange={(event): void => placement.selectInstallation(event.target.value)}
+                    onChange={placement.selectInstallation}
                     helperText={placement.loading ? "Checking available AI installations…" : placement.installation
                         ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
                         : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
                         : "No ready AI installation can use this project. Check Machines in Settings."}
-                >
-                    {placement.installations.map((installation) => (
-                        <MenuItem key={installation.value} value={installation.value} sx={{ alignItems: "center", py: 1, whiteSpace: "normal" }}>
-                            <ListItemIcon sx={{ width: 36, minWidth: 36, justifyContent: "center" }}>
-                                <ProviderIcon provider={installation.provider} providerVersion={installation.entry.provider_version} providerDigest={installation.entry.artifact_digest ?? undefined} fontSize="small" />
-                            </ListItemIcon>
-                            <Box>
-                                <Typography>{installation.label}</Typography>
-                                <Typography variant="caption" color="text.secondary">
-                                    {installation.mode === "remote" ? "Remote" : "Local"} · {installation.entry.manifest.display.vendor}
-                                </Typography>
-                            </Box>
-                        </MenuItem>
-                    ))}
-                </TextField>
+                />
                 <Typography variant="caption" color="text.secondary">
                     Git projects open in a session worktree. Other directories are shared in place.
                 </Typography>

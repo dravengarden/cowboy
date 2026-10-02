@@ -12,6 +12,13 @@ when they match. Remote candidates additionally require the exact Provider
 generation to accept the target executor. Missing connectivity, installation,
 authentication or executor compatibility never falls back to local execution.
 
+Clicking a registered parent such as `Hawk / columbus` selects that project
+directly. Its separate right-hand chevron browses child projects without
+changing the selection. Groups with no registered project only browse. Keyboard
+Right/Left browses levels; Enter selects the focused project. The closed AI
+field shows one icon and name on a single row, while its menu retains mode and
+vendor details.
+
 Machine `schedulable` reports connected AI runtime capacity, independent of
 whether that Machine hosts projects. Both Controller snapshots and browser
 session-occupancy projection preserve this distinction. An AI-only Machine with
