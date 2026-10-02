@@ -137,10 +137,10 @@ Deno.test("the download starts on detection, not on the idle gate", () => {
 
 Deno.test("both surfaces update themselves, and both offer to be pressed", () => {
   assert(bannerSource.includes("useAutoUpdate(store, {"));
-  // Desktop keeps its dwell-free policy; the phone earns a foreground minute.
+  // Both surfaces use the same configured mode and countdown.
   assert(!bannerSource.includes("minVisibleMs: "));
-  assert(mobileSource.includes("minVisibleMs: MOBILE_UPDATE_DWELL_MS"));
-  assert(mobileSource.includes("const MOBILE_UPDATE_DWELL_MS = 60_000;"));
+  assert(mobileSource.includes('automatic: settings.mode === "automatic"'));
+  assert(mobileSource.includes("countdownSecs: settings.countdownSecs"));
   assert(mobileSource.includes("onClick={update.requestUpdate}"));
   assert(bannerSource.includes("onClick={update.requestUpdate}"));
   // The control is never withheld while the bits are still coming: a press

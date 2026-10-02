@@ -40,7 +40,6 @@ import {
 import {
   tickUpdateCountdown,
   updateAllowed,
-  type UpdateCountdown,
   type UpdatePhase,
   updateReloadsNow,
 } from "./update-policy.ts";
@@ -371,6 +370,8 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
 const DEFAULT_UPDATE_COUNTDOWN_SECS = 3;
 
 export interface AutoUpdateOptions {
+  /** False keeps background downloads but requires a press to apply. */
+  readonly automatic?: boolean;
   /** Seconds the countdown runs before the update is applied. Default 3. */
   readonly countdownSecs?: number;
   /** Whether the surface is idle enough to be replaced right now. Default: always idle. */
@@ -432,6 +433,7 @@ const IDLE_DOWNLOAD: DownloadState = { result: undefined, done: 0, total: 0, str
 export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions = {}): AutoUpdateState {
   const {
     countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS,
+    automatic = true,
     canApplyUpdate,
     minVisibleMs = 0,
     retryMs = UPDATE_RETRY_MS,
@@ -445,7 +447,9 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
   const [attempt, setAttempt] = useState(0);
   const [requested, setRequested] = useState(false);
   const [reloading, setReloading] = useState(false);
-  const [countdown, setCountdown] = useState<UpdateCountdown>({ secs: countdownSecs, held: false });
+  const [countdownState, setCountdown] = useState({ secs: countdownSecs, held: false, duration: countdownSecs });
+  const countdown = countdownState.duration === countdownSecs
+    ? countdownState : { secs: countdownSecs, held: false, duration: countdownSecs };
   const [visibleSince, setVisibleSince] = useState(() => Date.now());
   // Re-arms the one-second check even when the countdown itself did not move. A held
   // countdown rewinds to the same value, so without this the effect's dependencies
@@ -516,8 +520,8 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
   // seconds it shows are the whole remaining wait and never strand the user on
   // "0s" while a download catches up.
   useEffect(() => {
-    if (!pending || !downloaded || reloading) {
-      setCountdown({ secs: countdownSecs, held: false });
+    if (!pending || !downloaded || reloading || !automatic) {
+      setCountdown({ secs: countdownSecs, held: !automatic, duration: countdownSecs });
       return undefined;
     }
     // 3 means three real seconds: show 3, 2, 1, then swap as the counter reaches
@@ -529,7 +533,7 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
         visible: globalThis.document?.visibilityState !== "hidden",
         visibleForMs: Date.now() - visibleSince,
       }, minVisibleMs);
-      setCountdown((current) => tickUpdateCountdown(current, allowed, countdownSecs));
+      setCountdown({ ...tickUpdateCountdown(countdown, allowed, countdownSecs), duration: countdownSecs });
       setRecheck((value) => value + 1);
     }, 1000);
     return () => clearTimeout(t);
@@ -540,6 +544,7 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
     countdown.secs,
     recheck,
     countdownSecs,
+    automatic,
     canApplyUpdate,
     minVisibleMs,
     visibleSince,
@@ -549,15 +554,15 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
   // `updateReloadsNow`): the countdown ran out, or the user asked.
   useEffect(() => {
     const result = download.result;
-    if (!pending || reloading || result === undefined || result === "failed") return undefined;
-    if (!updateReloadsNow({ downloaded: true, requested, countedDown: countdown.secs <= 0 })) {
+    if (!pending || reloading || !downloaded || result === undefined) return undefined;
+    if (!updateReloadsNow({ downloaded: true, requested, countedDown: automatic && countdown.secs <= 0 })) {
       return undefined;
     }
     setReloading(true);
     beforeReload?.();
     void store.reloadIntoUpdate(result);
     return undefined;
-  }, [pending, reloading, download.result, requested, countdown.secs, store, beforeReload]);
+  }, [pending, reloading, downloaded, download.result, requested, countdown.secs, automatic, store, beforeReload]);
 
   const requestUpdate = useCallback((): void => {
     if (!pending || reloading || download.result === "abandoned") return;
@@ -597,7 +602,7 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
     streamed: download.streamed,
     requested,
     secs: countdown.secs,
-    held: countdown.held,
+    held: !automatic || countdown.held,
     requestUpdate,
   };
 }
@@ -696,6 +701,7 @@ export function UpdateActionPill({ action }: { readonly action: string }): React
 }
 
 export interface ConnectionBannerProps {
+  readonly automatic?: boolean;
   readonly store: ConnectionStore;
   /** Seconds the update bar counts down before reloading. Default 3. */
   readonly countdownSecs?: number;
@@ -724,7 +730,7 @@ export interface ConnectionBannerProps {
 // it is the one that may be pressed — a full-width target needs no aim, and
 // pressing it only brings forward a reload that was coming anyway.
 export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
-  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, kinds, canApplyUpdate, beforeReload } = props;
+  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, automatic = true, kinds, canApplyUpdate, beforeReload } = props;
   const rawBanner = store.useConnectionBanner();
   const banner = rawBanner !== undefined && kinds !== undefined && !kinds.includes(rawBanner.kind)
     ? undefined
@@ -733,6 +739,7 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   // idle and rewinds whenever they are not, then the page reloads itself.
   const update = useAutoUpdate(store, {
     countdownSecs,
+    automatic,
     canApplyUpdate,
     beforeReload,
     enabled: kinds === undefined || kinds.includes("update"),

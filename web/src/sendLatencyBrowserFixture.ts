@@ -73,6 +73,10 @@ async function retained(text: string): Promise<boolean> {
 export async function run() {
   const scenario = new URL(location.href).searchParams.get("scenario") ??
     "timing";
+  if (scenario === "update-settings") {
+    const { runClientUpdateFixture } = await import("./clientUpdateBrowserFixture.tsx");
+    return await runClientUpdateFixture();
+  }
   bindProductSyncPrincipal("fixture-user");
   const queues = productSyncDatabase.queueSessions.bind(productSyncDatabase);
   productSyncDatabase.queueSessions = async () => {

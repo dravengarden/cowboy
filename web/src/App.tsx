@@ -95,6 +95,8 @@ import {
 import { WorkspaceExtensionsButton } from "./extensions/WorkspaceExtensionsButton";
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { AppIconSettings } from "./AppIconSettings";
+import { ClientUpdateSettings } from "./ClientUpdateSettings";
+import { useClientUpdateSettings } from "./clientUpdateSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
 import { KEYBOARD_INSET_CHANGED_EVENT, useKeyboardOpen } from "./keyboardInset";
@@ -2595,6 +2597,7 @@ export function App({
     // Load the signed Provider catalog once at the app boundary so every
     // presentation helper reads the same dynamic identity registry.
     const { catalog: providerCatalog } = useProviderCatalog();
+    const clientUpdateSettings = useClientUpdateSettings();
     const desktopWorkspace = useOptionalDesktopWorkspace();
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
@@ -3349,15 +3352,16 @@ export function App({
             {/* The connection state is shared; so is the update policy. Both
                 surfaces download the deployed build at once, fill the bar with
                 it, and reload on their own after a countdown once the user is
-                idle; the phone additionally waits out a foreground minute
-                (MobileConnectionBanner) so a resume never reloads at once. On
-                both, pressing the bar only brings that reload forward. */}
+                idle. Device settings select automatic countdown or manual
+                application; zero explicitly applies immediately after download. */}
             {surface === "desktop" && (
                 <>
                     {/* Connectivity lives in the status line; the banner keeps
                         only the update decision and never reloads mid-work. */}
                     <ConnectionBanner
                         store={controlPlaneConnection}
+                        automatic={clientUpdateSettings.mode === "automatic"}
+                        countdownSecs={clientUpdateSettings.countdownSecs}
                         kinds={["update"]}
                         canApplyUpdate={canApplyUpdateNow}
                         beforeReload={markDesktopUpdateSwapping}
@@ -4878,6 +4882,7 @@ function DesktopSettingsContent({
         >
             <DesktopPanel label="Appearance">
                 <Box sx={{ p: 1.5 }}><AppIconSettings /></Box>
+                <ClientUpdateSettings />
                 <DesktopSettingsRow shortcut="T" shortcutAvailable={shortcutsAvailable} label="Theme" description="Follow the system or pin a palette">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
                         {(["system", "light", "dark"] as const).map((mode) => (
@@ -6344,6 +6349,7 @@ function SettingsShell({
                 >
                 <Stack spacing={2}>
                 <AppIconSettings />
+                <ClientUpdateSettings />
                 <Stack
                     direction="row"
                     alignItems="center"

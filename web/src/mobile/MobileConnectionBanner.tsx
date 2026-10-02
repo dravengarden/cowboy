@@ -11,6 +11,7 @@ import {
 } from "@cowboy/app-shell";
 import { confirmationHaptic } from "../haptic";
 import { canApplyUpdateNow } from "../store";
+import { useClientUpdateSettings } from "../clientUpdateSettings";
 import { markUpdateSwapping } from "../updateAttempt";
 import {
   fetchReadyCowboyVersion,
@@ -31,32 +32,26 @@ import {
  * control on a phone reads as broken, and it would make the user watch a
  * progress bar for permission to say what they already decided.
  *
- * Nothing waits on that press. Left alone, the page still reloads on the first
- * real pause: no composer text, no running turn, nothing in flight, and a full
- * minute of foreground since the app was last resumed (`useAutoUpdate` owns
- * that policy), and an update that never finds its pause is applied by the next
- * launch anyway.
+ * The device preference selects a countdown or a manual press. Positive
+ * countdowns wait for a real pause; zero explicitly applies as soon as the
+ * complete download is ready. Both products use the same preference.
  *
  * Connectivity itself is not a banner here: the sync status pill
  * (`MobileSyncPill`) presents outages, reconnects and queued work.
  */
 
-// A resumed PWA restores its frozen page. Reloading in the seconds after
-// someone opened the app reads as a crash, so the automatic update waits out a
-// minute of uninterrupted foreground first. A press is exempt: the user is
-// looking at the control they just touched.
-const MOBILE_UPDATE_DWELL_MS = 60_000;
-
 export function MobileConnectionBanner(
   { store }: { readonly store: ConnectionStore },
 ): React.JSX.Element | null {
   const rawBanner = store.useConnectionBanner();
+  const settings = useClientUpdateSettings();
   const banner = rawBanner?.kind === "update" ? rawBanner : undefined;
   const isUpdate = banner?.kind === "update";
   const [readyVersion, setReadyVersion] = useState<string>();
   const update = useAutoUpdate(store, {
     canApplyUpdate: canApplyUpdateNow,
-    minVisibleMs: MOBILE_UPDATE_DWELL_MS,
+    automatic: settings.mode === "automatic",
+    countdownSecs: settings.countdownSecs,
     beforeReload: useCallback((): void => {
       markUpdateSwapping(globalThis.localStorage, readyVersion ?? "unknown", Date.now());
     }, [readyVersion]),

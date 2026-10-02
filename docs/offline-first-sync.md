@@ -376,8 +376,9 @@ update banner no longer counts down while the user is composing; it fills with
 the download instead, and pressing it takes the update at once.
 
 **Update policy (both products).** A deployed build is applied by the client
-itself. No surface ever *requires* a control to be found: every rule below runs
-for a user who never presses anything.
+itself by default. Settings → Appearance → Web updates selects automatic
+countdown or click-to-update. The mode and delay are device-local persisted
+preferences shared by Desktop and Mobile; the default is automatic, 3 seconds.
 
 The download and the swap are separate. The bits are fetched the moment a
 deploy is detected, ungated — what interrupts someone is the reload, never the
@@ -386,16 +387,17 @@ fills with the real count and only promotes the shell once the whole boot
 closure is cached. Nothing replaces a running build before its replacement is
 here; no intent waives that.
 
-The swap is then taken by whichever road arrives first. Automatically: an
+The swap is then taken by whichever road arrives first. For positive countdowns, an
 update is never applied while any of these hold — composer text or attachments
 present, IME composition active, a row in `saving`/`sending`, a running turn in
 the active session, or a focused editor — and when all clear, both products
-apply after a visible 3 s countdown that starts only once the bits are here. A
+apply after the configured countdown that starts only once the bits are here. A
 busy moment rewinds it to its start rather than freezing it, and the check
-re-arms every second so the reload lands on the first real pause. Mobile
-requires 60 s of uninterrupted foreground on top of that, counted again from
-every resume, because an installed PWA restores a frozen page and an immediate
-reload reads as a crash.
+re-arms every second so the reload lands on the first real pause. A configured
+delay of 0 explicitly applies immediately after the complete download, even
+when the idle gate is closed. Manual mode still downloads in the background
+but never applies without a press. Changing mode or delay takes effect for an
+already-pending update; positive delay changes restart the full countdown.
 
 While a download nobody asked for is running, the surface is a 3 px
 translucent line at the top edge of the app, under the system clearance, with

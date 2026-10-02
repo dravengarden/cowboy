@@ -10,12 +10,13 @@ const recovery = args.includes("--transcript-recovery");
 const slowMobile = args.includes("--slow-mobile");
 const draftSend = args.includes("--draft-send");
 const continuity = args.includes("--continuity");
+const updateSettings = args.includes("--update-settings");
 const bundles = args.filter((argument) =>
   argument !== "--queued" && argument !== "--metadata" &&
   argument !== "--local" &&
   argument !== "--safety" && argument !== "--transcript-recovery" &&
   argument !== "--slow-mobile" &&
-    argument !== "--draft-send" && argument !== "--continuity"
+    argument !== "--draft-send" && argument !== "--continuity" && argument !== "--update-settings"
 );
 if (
   !browser?.startsWith("/nix/store/") ||
@@ -49,6 +50,8 @@ const session = {
 const cases = bundles.flatMap((bundle) =>
   (slowMobile
     ? ["slow-mobile", "lost-send"]
+    : updateSettings
+    ? ["update-settings"]
     : continuity
     ? ["continuity"]
     : draftSend
@@ -437,7 +440,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
     if (
       !(result as { ok?: boolean }).ok ||
       deliveries !==
-        (metadata
+        (metadata || updateSettings
           ? 0
           : continuity
           ? 4
@@ -446,7 +449,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
           : safety || recovery
           ? 0
           : 17) ||
-      attempts < 1
+      (!updateSettings && attempts < 1)
     ) {
       throw new Error("send fixture failed");
     }
