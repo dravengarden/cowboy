@@ -1,0 +1,65 @@
+{
+  "schema": "cowboy.thin-download-release/v1",
+  "recorded_at": "2026-10-02T09:07:13.047797+00:00",
+  "source_revision": "6303fa481377edfa693c75391be0ec9e0d6fe840",
+  "behavior": {
+    "downloading": "3px thin progress line for background, requested, and retry downloads on both products",
+    "decision": "Shared phase-only presentation policy; a requested download no longer promotes to the full banner.",
+    "ready": "Existing countdown and manual update settings remain in effect.",
+    "safe_area": "Download lines sit below the system top clearance.",
+    "intent": "A press remains remembered through the download."
+  },
+  "validation": {
+    "web_tests_passed": 1988,
+    "checks": [
+      "TypeScript typecheck",
+      "Oxlint",
+      "git diff --check"
+    ],
+    "physical_iphone_checked": false
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790932003702900765-6303fa481377",
+    "revision": "6303fa481377edfa693c75391be0ec9e0d6fe840",
+    "published": true,
+    "release": "/nix/store/6bbk5raid781vrhvdnx2rklsa3h6w6jw-cowboy-web-release",
+    "previousRelease": "/nix/store/cgpq86lqiaysbbslfalvv2wmcqdvj4fz-cowboy-web-release",
+    "activeRelease": "/nix/store/6bbk5raid781vrhvdnx2rklsa3h6w6jw-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T09:06:43.702900765Z",
+    "recordedAt": "2026-10-02T09:06:43.742794442Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "034b387825170d2312eb7f31cb696c08"
+    },
+    "service_worker": "cowboy-v1799",
+    "spa_matches_active_release": true,
+    "spa_cache_control": null,
+    "service_worker_cache_control": null,
+    "controller_pid_unchanged": 683531,
+    "machine_pid_unchanged": 205038,
+    "machines": {
+      "hawk": {
+        "connected": true,
+        "status": "online"
+      },
+      "ovh": {
+        "connected": true,
+        "status": "online"
+      },
+      "falcon": {
+        "connected": true,
+        "status": "online"
+      }
+    }
+  }
+}
