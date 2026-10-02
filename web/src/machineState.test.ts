@@ -72,6 +72,39 @@ Deno.test("Machine occupancy follows the pushed session lifecycle", () => {
   );
 });
 
+Deno.test("AI Machines without projects retain runtime capacity and its admission limits", () => {
+  const runtime: MachineSummary = {
+    ...machine(),
+    id: "ovh",
+    local: false,
+    workspaces: [],
+    // A browser can receive the old Controller projection during a rollout.
+    schedulable: false,
+  };
+  const available = projectMachineOccupancy([runtime], [session("busy")]);
+  assertEquals(available[0]?.schedulable, true);
+  assertEquals(available[0]?.active_sessions, 0);
+  const full = projectMachineOccupancy(available, [session("busy", "ovh")]);
+  assertEquals(full[0]?.schedulable, false);
+  assertEquals(full[0]?.active_sessions, 1);
+  assertEquals(
+    projectMachineOccupancy(full, [session("exited", "ovh")])[0]?.schedulable,
+    true,
+  );
+  for (
+    const unavailable of [
+      { ...runtime, connected: false },
+      { ...runtime, capacity: { ...runtime.capacity, draining: true } },
+      { ...runtime, capacity: { ...runtime.capacity, max_sessions: 0 } },
+    ]
+  ) {
+    assertEquals(
+      projectMachineOccupancy([unavailable], [])[0]?.schedulable,
+      false,
+    );
+  }
+});
+
 Deno.test("Machine snapshots reject stale live frames but accept reconnect resyncs", () => {
   assertEquals(acceptsMachineSnapshot(0, false, 0, false), true);
   assertEquals(acceptsMachineSnapshot(8, true, 7, false), false);

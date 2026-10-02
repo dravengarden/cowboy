@@ -32,6 +32,7 @@ export interface MachineSummary {
   status: MachinePresence;
   local: boolean;
   connected: boolean;
+  // AI runtime capacity; project ownership and Provider readiness are separate.
   schedulable: boolean;
   fingerprint?: string | null;
   workspaces: readonly {

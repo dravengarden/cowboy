@@ -345,6 +345,10 @@ def main():
                     require(call("GET", f"/api/machines/{machine}/deployment-health")[1].get("workspace_owner") == "cowboy", "host health lost the native project owner")
                 status, placement = call("GET", "/api/project-placements?machine_id=target")
                 require(status == 200 and {"runtime_machine_id": "runtime", "provider": "execution-fixture", "mode": "remote"} in placement["placements"], "native AI placement missing without runtime mirror roots")
+                status, inventory = call("GET", "/api/machines")
+                runtime = next(m for m in inventory if m["id"] == "runtime")
+                require(status == 200 and runtime["connected"] and runtime["workspaces"] == [] and runtime["schedulable"], "AI Machine without projects was filtered out of browser scheduling")
+                checks.append("runtime_without_projects_is_schedulable_in_browser_machine_inventory")
                 checks.extend(["native_project_registry_cas_and_operator_authorization", "remote_only_policy_enforced_by_legacy_and_native_creation", "placement_needs_no_runtime_project_or_directory_mapping"])
             request = {"provider": "execution-fixture", "runtime_machine_id": "runtime", "machine_id": "target", "cwd": "fixture", "initial_prompt": "Run one fixture command"}
             require(call("POST", "/api/execution-sessions", request, anonymous=True)[0] == 401, "anonymous session admitted")

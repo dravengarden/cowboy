@@ -7,6 +7,7 @@ import { useProjectPlacement } from "./useProjectPlacement";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
+import { projectMachineOccupancy } from "./machineState";
 
 export async function runProjectPlacementBrowserConformance(): Promise<
   string[]
@@ -14,6 +15,9 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   const originalFetch = globalThis.fetch;
   const entry = managementEntryFixture("codex");
   entry.publisher = entry.manifest.publisher;
+  const claude = managementEntryFixture("claude-code");
+  claude.publisher = claude.manifest.publisher;
+  const entries = [entry, claude];
   const machines = ["hawk", "falcon", "ovh"].map((id) => ({
     id,
     display_name: id,
@@ -25,15 +29,15 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     active_sessions: 0,
     local: id === "hawk",
     connected: true,
-    schedulable: true,
+    schedulable: id !== "ovh",
     workspaces: id === "ovh" ? [] : [{
       id: "stable-id",
       display_name: "columbus/cowboy",
       canonical_path: "/unrelated directory ' 中文",
     }],
     plugins: id !== "falcon"
-      ? [{
-        plugin_id: "codex",
+      ? (id === "ovh" ? entries : [entry]).map((entry) => ({
+        plugin_id: entry.provider_id,
         plugin_kind: "agent_provider",
         plugin_version: entry.provider_version,
         generation_digest: entry.artifact_digest,
@@ -42,7 +46,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
         materialization_state: "current",
         replica_state: "current",
         active_session_leases: 0,
-      }]
+      }))
       : [],
   } as MachineSummary));
   let pendingFalcon: ((value: Response) => void) | undefined;
@@ -50,11 +54,11 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     machine_id: machine,
     default_runtime_machine_id: "ovh",
     placements: [
-      {
+      ...entries.map((entry) => ({
         runtime_machine_id: "ovh",
-        provider: "codex",
+        provider: entry.provider_id,
         mode: "remote",
-      },
+      })),
       ...(machine === "hawk"
         ? [{ runtime_machine_id: "hawk", provider: "codex", mode: "local" }]
         : []),
@@ -65,7 +69,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     if (url === "/api/plugins") {
       return Promise.resolve(
         Response.json({
-          providers: [entry],
+          providers: entries,
           authentications: [],
           authentication_executors: [],
         }),
@@ -104,7 +108,12 @@ export async function runProjectPlacementBrowserConformance(): Promise<
   const root = createRoot(container);
   let current: ReturnType<typeof useProjectPlacement> | undefined;
   function Harness({ inventory }: { inventory: MachineSummary[] }) {
-    const placement = useProjectPlacement(true, inventory);
+    // Exercise the same session-derived projection that store.ts applies to
+    // HTTP and WebSocket inventories before the New Session picker reads them.
+    const placement = useProjectPlacement(
+      true,
+      projectMachineOccupancy(inventory, []),
+    );
     useLayoutEffect(() => {
       current = placement;
     });
@@ -147,8 +156,17 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       "AI and project Machines must be independent",
     );
     check(
-      current?.projects.length === 2 && current.installations.length === 2,
+      current?.projects.length === 2 && current.installations.length === 3,
       "runtime needs no mirror project",
+    );
+    flushSync(() =>
+      current!.selectInstallation(JSON.stringify(["ovh", "claude-code"]))
+    );
+    check(
+      current?.ready && current.runtimeMachineId === "ovh" &&
+        current.separate &&
+        current.installation?.provider === "claude-code",
+      "Claude remains selectable on an AI Machine without projects",
     );
     check(
       container.querySelector("label")?.textContent === "Project",
@@ -198,7 +216,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       "inventory refresh preserves project selection",
     );
     render(
-      machines.map((m) => m.id === "ovh" ? { ...m, schedulable: false } : m),
+      machines.map((m) => m.id === "ovh" ? { ...m, connected: false } : m),
     );
     flushSync(() =>
       current!.selectProject(JSON.stringify(["hawk", "stable-id"]))
@@ -221,6 +239,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     return [
       "project before installed AI",
       "runtime without mirror directories",
+      "Codex and Claude selectable after live occupancy projection",
       "cross-target readiness isolation",
       "late reply ignored",
       "failure without local fallback",

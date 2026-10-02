@@ -624,10 +624,10 @@ impl MachineSnapshots {
                     component.automatic && pending_updates.contains(&component.id)
                 });
                 let connected = self.runtime_router.connected(&machine.id);
-                let schedulable = connected
-                    && !workspaces.is_empty()
-                    && !capacity.draining
-                    && active_sessions < capacity.max_sessions;
+                // Projects belong to the execution target; an AI-only Machine
+                // can accept Remote sessions with an empty project registry.
+                let schedulable =
+                    connected && !capacity.draining && active_sessions < capacity.max_sessions;
                 let health = project_machine_health(
                     &machine.status,
                     connected,

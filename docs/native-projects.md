@@ -12,6 +12,11 @@ when they match. Remote candidates additionally require the exact Provider
 generation to accept the target executor. Missing connectivity, installation,
 authentication or executor compatibility never falls back to local execution.
 
+Machine `schedulable` reports connected AI runtime capacity, independent of
+whether that Machine hosts projects. Both Controller snapshots and browser
+session-occupancy projection preserve this distinction. An AI-only Machine with
+an empty registry remains available; offline, draining and full runtimes do not.
+
 The existing signed Codex and Claude Plugins keep their native runtime and
 authentication on the AI Machine. The target Machine owns the worktree and
 execution keeper. No separate remote Plugin is installed. Cowboy creates its

@@ -45,7 +45,8 @@ export function projectMachineOccupancy(
   const projected = machines.map((machine) => {
     const load = sessionLoads.get(machine.id);
     const activeSessions = load?.active ?? 0;
-    const schedulable = machine.connected && machine.workspaces.length > 0 &&
+    // AI runtime capacity is independent of the target's project registry.
+    const schedulable = machine.connected &&
       !machine.capacity.draining &&
       activeSessions < machine.capacity.max_sessions;
     let componentsChanged = false;

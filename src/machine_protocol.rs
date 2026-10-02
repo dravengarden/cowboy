@@ -367,6 +367,8 @@ pub struct MachineSummary {
     pub status: String,
     pub local: bool,
     pub connected: bool,
+    /// Connected AI runtime with free session capacity. Project ownership and
+    /// Provider compatibility are checked separately by session placement.
     pub schedulable: bool,
     pub health: MachineHealth,
     #[serde(default, skip_serializing_if = "Option::is_none")]
