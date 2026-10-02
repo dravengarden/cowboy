@@ -104,10 +104,10 @@ export function MobileConnectionBanner(
   const label = mobileUpdateAnnouncement(copy);
   const share = updateFillShare(update.phase, update.progress);
 
-  // A download nobody asked for is a line at the top edge of the app, under the
+  // Every download is a line at the top edge of the app, under the
   // system clearance so the status bar cannot cover it, and nothing else. It
   // carries no words, takes no space anyone was using, and answers no touch.
-  if (updateShowsHairline(update.phase, update.requested)) {
+  if (updateShowsHairline(update.phase)) {
     return (
       <Box
         aria-hidden

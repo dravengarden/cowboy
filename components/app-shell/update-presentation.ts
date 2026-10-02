@@ -63,16 +63,15 @@ export function updateFillSx(
 
 /** Whether the update presents as a hairline rather than as the full bar.
  *
- *  A download nobody asked for is not news. It is also not actionable: the
+ *  A download is not actionable until its bits are ready: the
  *  bits arrive at the speed of the network, and a bar of text that the user
  *  can only watch is a slab of screen taken for nothing. So the unrequested
- *  download is a line at the top edge and nothing else, and the bar — the
+ *  download is always a line at the top edge and nothing else, and the bar — the
  *  words, the version, the press — arrives with the thing it is announcing.
  *
- *  A download the user *did* ask for is the exception. They pressed something;
- *  answering with a hairline would read as the press having been dropped. */
-export function updateShowsHairline(phase: UpdatePhase, requested: boolean): boolean {
-  return phase === "downloading" && !requested;
+ *  A press or retry retains its update intent without changing the line's size. */
+export function updateShowsHairline(phase: UpdatePhase): boolean {
+  return phase === "downloading";
 }
 
 /** The hairline's own fill, over its own fainter track. Thin and translucent:

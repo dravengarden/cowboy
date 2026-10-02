@@ -761,15 +761,14 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   const label = copy.action === undefined ? copy.text : `${copy.text}. ${copy.action}`;
   const isUpdate = banner.kind === "update";
 
-  // A download nobody asked for is a hairline at the top edge and nothing
-  // else: it is not news, and it is not actionable until the bits are here.
-  if (isUpdate && updateShowsHairline(update.phase, update.requested)) {
+  // All downloads share the hairline, including requested updates and retries.
+  if (isUpdate && updateShowsHairline(update.phase)) {
     return (
       <Box
         aria-hidden
         sx={(theme) => ({
           position: "fixed",
-          top: 0,
+          top: "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
           left: 0,
           right: 0,
           height: 3,

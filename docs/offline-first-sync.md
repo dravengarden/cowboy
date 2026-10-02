@@ -399,13 +399,12 @@ when the idle gate is closed. Manual mode still downloads in the background
 but never applies without a press. Changing mode or delay takes effect for an
 already-pending update; positive delay changes restart the full countdown.
 
-While a download nobody asked for is running, the surface is a 3 px
+While any download is running, the surface is a 3 px
 translucent line at the top edge of the app, under the system clearance, with
 no words and no touch target. It is not news and it is not actionable: the bits
 arrive at the speed of the network. The bar — the words, the version, the press
-— appears with the thing it announces. A download the user *did* ask for keeps
-the bar, because answering a press with a hairline reads as the press having
-been dropped.
+— appears with the thing it announces. A user-requested download or retry uses
+the same thin line; its retained intent still applies the build when ready.
 
 The bar states what happened and draws what pressing it does as an outlined
 pill, rather than phrasing the whole thing as an imperative sentence: a

@@ -157,17 +157,14 @@ Deno.test("the page asks for progress rather than assuming it", () => {
   assert(bannerSource.includes(`{ type: "cowboy.refresh-shell", progress: true, retry }`));
 });
 
-Deno.test("a download nobody asked for stays a hairline", () => {
+Deno.test("all downloads stay a hairline until ready, regardless of update intent", () => {
   // It is not news and it is not actionable: the bits arrive at the speed of
   // the network, and a slab of text the user can only watch is screen taken
   // for nothing.
-  assertEquals(updateShowsHairline("downloading", false), true);
-  // Unless they pressed. Answering a press with a hairline reads as the press
-  // having been dropped.
-  assertEquals(updateShowsHairline("downloading", true), false);
+  assertEquals(updateShowsHairline("downloading"), true);
   // Everything else is the bar: it arrives with the thing it announces.
   for (const phase of ["ready", "reloading", "failed", "rejected"] as const) {
-    assertEquals(updateShowsHairline(phase, false), false);
+    assertEquals(updateShowsHairline(phase), false);
   }
 });
 
