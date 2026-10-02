@@ -108,3 +108,36 @@ identity-independent grouping, and the real enrolled-session fixture with
 `native_projects: true`. The fixture uses a signed scripted Agent and no model
 requests; it tests transport and lifecycle, not subscription inference or WAN
 latency.
+
+## Production activation, 2026-10-02
+
+Cowboy `89bf4b72` is active on the Controller, Web, and Hawk/Falcon/OVH
+Machines. Columbus `6a145781` supplies the accepted Hawk/Falcon cold readers
+and OVH's versioned host override and shared guidance. The
+[release receipt](experiments/native-projects-release-2026-10-02.json) records
+the component transactions, actual recovery artifacts, tests and final policy.
+
+Cowboy owns 30 available Hawk projects and 25 Falcon projects, grouped under
+`columbus/...` and `suger/...`. Target validation found four absent Hawk
+bootstrap directories and nine absent Falcon directories, including Matrix;
+their new-session entries were retired without deleting files. OVH advertises
+zero projects and is the preferred Remote-only AI Machine, permitted to target
+Hawk and Falcon. Both targets report ready `Codex · OVH` and `Claude · OVH`
+installations. Existing Provider packages and subscription authentication were
+retained. No new model request was made for release acceptance.
+
+The OVH maintenance retained all three original worker processes at acceptance.
+Historical Matrix directories and sessions keep their original ownership;
+start a new session to use native Project placement. Hard-reload the PWA for
+the new picker; a WebSocket reconnect alone retains the previous JavaScript.
+Project registration and Machine mode settings now live under Settings →
+Machines → Details → AI and projects.
+
+All 13 native-session checks passed for the standalone release, actual Hawk
+cold outputs and actual Falcon cold Machine. The Firefox picker fixture passed
+seven checks; the Rust, Web, PostgreSQL, populated reader and startup gates
+also passed. Deployment observation caught an OVH heartbeat timeout followed
+by automatic reconnection of the unchanged Machine process. Its cause was not
+established in this change. The final readiness checks passed, but this receipt
+does not establish long-duration connection stability, production model
+inference, physical iPhone behavior or WAN/token/turn parity.

@@ -1,0 +1,1128 @@
+{
+  "schema": "cowboy.native-projects-release/v1",
+  "cowboy_revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+  "columbus_revision": "6a145781cc9a367fb7eab640107f8b3c51de4715",
+  "components": [
+    {
+      "machine": "hawk",
+      "lane": "controller",
+      "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+      "transaction": "1790908789750967417-89bf4b720fb7",
+      "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+      "outcome": "succeeded",
+      "published": true,
+      "recordedAt": "2026-10-02T02:40:04.197619662Z"
+    },
+    {
+      "machine": "hawk",
+      "lane": "machine",
+      "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+      "transaction": "1790908850252980862-89bf4b720fb7",
+      "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+      "workerGeneration": "worker-2801f50d44994e96b2b4",
+      "outcome": "succeeded",
+      "published": true,
+      "recordedAt": "2026-10-02T02:40:57.990841244Z"
+    },
+    {
+      "machine": "falcon",
+      "lane": "machine",
+      "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+      "transaction": "1790909102034226857-89bf4b720fb7",
+      "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+      "workerGeneration": "worker-2801f50d44994e96b2b4",
+      "outcome": "succeeded",
+      "published": true,
+      "recordedAt": "2026-10-02T02:45:08.644297596Z"
+    },
+    {
+      "machine": "hawk",
+      "lane": "web",
+      "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+      "transaction": "1790911865425381926-89bf4b720fb7",
+      "release": "/nix/store/cpff2jdgwfzh5i1lsss6v4107divglj8-cowboy-web-release",
+      "outcome": "succeeded",
+      "published": true,
+      "recordedAt": "2026-10-02T03:31:05.480686887Z"
+    }
+  ],
+  "host_recovery_floors": {
+    "hawk": {
+      "revision": "6a145781cc9a367fb7eab640107f8b3c51de4715",
+      "transaction": "1790910427575613726-6a145781cc9a",
+      "activeClosure": "/nix/store/lbf9d3jzz1b7chzgfpwq03qf3l5p9r7c-nixos-system-hawk-26.05.20260731.5b4f72e",
+      "outcome": "succeeded",
+      "published": true,
+      "newFailedUnits": []
+    },
+    "falcon": {
+      "revision": "6a145781cc9a367fb7eab640107f8b3c51de4715",
+      "transaction": "1790910527494920638-6a145781cc9a",
+      "activeClosure": "/nix/store/9fyn2s6wrhhb76dab3n7gsn0kryx2niv-nixos-system-falcon-26.05.20260714.8eeec93",
+      "outcome": "succeeded",
+      "published": true,
+      "newFailedUnits": []
+    }
+  },
+  "ovh": {
+    "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+    "accepted_at": 1790910207,
+    "worker_generation": "worker-2801f50d44994e96b2b4",
+    "configuration_sha256": "6fa9a5c4c6334fc44f8bc1c1ced1b3c5c5dc360d74207700040c83a1312b1bd2",
+    "original_workers_preserved_until_host_start": true,
+    "workers_retained_at_acceptance": 3,
+    "receipt_directory": "/var/lib/columbus/ovh-cowboy-projects-20261002",
+    "normal_containment": "control-group",
+    "rollback_timer": "inactive",
+    "guidance": {
+      "schema": "columbus.agent-guidance-upgrade/v1",
+      "previous": "/var/lib/columbus/agent-guidance/94dac27599a8e13a23230a971f25af5f6d42bfe2",
+      "current": "/var/lib/columbus/agent-guidance/6a145781cc9a367fb7eab640107f8b3c51de4715",
+      "source_revision": "6a145781cc9a367fb7eab640107f8b3c51de4715",
+      "sha256": "65b37fa70b0c71d34d25902214775cbc066ec9e13e9ef097ba063704f74cf700",
+      "entrypoints": [
+        "/home/ubuntu/AGENTS.md",
+        "/home/ubuntu/.codex/AGENTS.md",
+        "/home/ubuntu/.claude/CLAUDE.md"
+      ],
+      "all_entrypoints_match": true,
+      "provider_runtime_homes_modified": false,
+      "service_restart": false
+    }
+  },
+  "projects": {
+    "hawk": {
+      "managed": true,
+      "revision": "projects-0410346496a2ec677f145e3407b49beb",
+      "count": 30
+    },
+    "falcon": {
+      "managed": true,
+      "revision": "projects-fb5ed67ef8d427de4f98215fb35ed027",
+      "count": 25
+    },
+    "ovh": {
+      "managed": true,
+      "revision": "projects-56793cc33b39a3be5f8dea28871f2a6a",
+      "count": 0
+    }
+  },
+  "placement_policy": {
+    "schema": 1,
+    "revision": "placement-07d8498e3f415fff3785a5a8431d59b5",
+    "default_runtime_machine_id": "ovh",
+    "machines": {
+      "ovh": {
+        "agent_mode": "remote",
+        "hosts_projects": false,
+        "remote_targets": [
+          "hawk",
+          "falcon"
+        ]
+      }
+    }
+  },
+  "production_readiness": {
+    "hawk": {
+      "machine_id": "hawk",
+      "default_runtime_machine_id": "ovh",
+      "placements": [
+        {
+          "runtime_machine_id": "hawk",
+          "provider": "claude-deepseek",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "hawk",
+          "provider": "codex",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "hawk",
+          "provider": "codex-deepseek",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "hawk",
+          "provider": "grok",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "ovh",
+          "provider": "claude-code",
+          "mode": "remote"
+        },
+        {
+          "runtime_machine_id": "ovh",
+          "provider": "codex",
+          "mode": "remote"
+        }
+      ]
+    },
+    "falcon": {
+      "machine_id": "falcon",
+      "default_runtime_machine_id": "ovh",
+      "placements": [
+        {
+          "runtime_machine_id": "falcon",
+          "provider": "claude-deepseek",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "falcon",
+          "provider": "codex",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "falcon",
+          "provider": "codex-deepseek",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "falcon",
+          "provider": "grok",
+          "mode": "local"
+        },
+        {
+          "runtime_machine_id": "hawk",
+          "provider": "codex",
+          "mode": "remote"
+        },
+        {
+          "runtime_machine_id": "ovh",
+          "provider": "claude-code",
+          "mode": "remote"
+        },
+        {
+          "runtime_machine_id": "ovh",
+          "provider": "codex",
+          "mode": "remote"
+        }
+      ]
+    },
+    "hawk_health": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-2801f50d44994e96b2b4",
+      "workspace_revision": "projects-0410346496a2ec677f145e3407b49beb",
+      "workspace_ids_sha256": "1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40",
+      "workspace_owner": "cowboy"
+    },
+    "falcon_health": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-2801f50d44994e96b2b4",
+      "workspace_revision": "projects-fb5ed67ef8d427de4f98215fb35ed027",
+      "workspace_ids_sha256": "ff963bc4a9f47f42abfa5dd6f74b107eb5d6fd840ce945ea717e42b4678281e9",
+      "workspace_owner": "cowboy"
+    },
+    "ovh_health": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-2801f50d44994e96b2b4",
+      "workspace_revision": "projects-56793cc33b39a3be5f8dea28871f2a6a",
+      "workspace_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "workspace_owner": "cowboy"
+    }
+  },
+  "browser": {
+    "ok": true,
+    "suite": "project-placement",
+    "browser": "Mozilla Firefox 151.0.1",
+    "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+    "fixture_sha256": "c6fc3da41b663e76422cef547a7ddb1ebada34638d6670c2e742408f7f9f7ef5",
+    "isolation": "fresh profile / private loopback namespace / no credentials",
+    "tests": [
+      "project before installed AI",
+      "runtime without mirror directories",
+      "cross-target readiness isolation",
+      "late reply ignored",
+      "failure without local fallback",
+      "selection survives inventory refresh",
+      "unavailable OVH requires explicit alternative selection"
+    ],
+    "physical_device": "not_checked"
+  },
+  "immutable_checks": {
+    "telemetry-readers": {
+      "accepted": true,
+      "checks": 96,
+      "receipt_sha256": "631366d471ef729d2da15b3f91f0f510683228c0afae9c4c5eec06e247e7e8aa",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "active",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "rollback",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "cold",
+          "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+          "executable": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147",
+          "executable_chain": [
+            {
+              "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+              "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "active",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "rollback",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "cold",
+          "release": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release",
+          "executable": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+          "source": {
+            "bootstrap": true,
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "269fde7d0d4a260463d378dc1856e7a6a56024683e364938cca1da53d6b6b9ce",
+          "executable_sha256": "e61e056ff64cb485c1b283f2d22363d2e2895561b2a0497443bd4832bf5df183",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+              "sha256": "e61e056ff64cb485c1b283f2d22363d2e2895561b2a0497443bd4832bf5df183"
+            },
+            {
+              "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "c2473b1cf0fb1bdccffd2d91256721b57ed4cca355d2e7078c1688f6712a4ccf"
+            },
+            {
+              "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "f0fffc8789340abe3dcd99241f861ddc942c5ee8573b6f3d539fa42ddd6f0b5e"
+            }
+          ]
+        }
+      ]
+    },
+    "telemetry-startup": {
+      "accepted": true,
+      "checks": 78,
+      "receipt_sha256": "19ee45f46bdfcab052f0249c18b60b1ab3430f3da2e742ec708c0a10c25c55e3",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "active",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "rollback",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "cold",
+          "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+          "executable": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147",
+          "executable_chain": [
+            {
+              "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+              "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+            }
+          ]
+        }
+      ]
+    },
+    "install-readers": {
+      "accepted": true,
+      "checks": 174,
+      "receipt_sha256": "a13c0c126c75d413dcd649b100149f84b1366566bd17e2e89932107bbea3f7a1",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "active",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "rollback",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "cold",
+          "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+          "executable": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147",
+          "executable_chain": [
+            {
+              "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+              "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+            }
+          ]
+        }
+      ]
+    },
+    "machine-install-readers": {
+      "accepted": true,
+      "checks": 84,
+      "receipt_sha256": "162de9b76e1a45519e2ba1add471c0a273d887c55b3583ec6d48180a5462fd13",
+      "artifacts": [
+        {
+          "lane": "machine",
+          "role": "active",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "rollback",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "cold",
+          "release": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release",
+          "executable": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+          "source": {
+            "bootstrap": true,
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "269fde7d0d4a260463d378dc1856e7a6a56024683e364938cca1da53d6b6b9ce",
+          "executable_sha256": "e61e056ff64cb485c1b283f2d22363d2e2895561b2a0497443bd4832bf5df183",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+              "sha256": "e61e056ff64cb485c1b283f2d22363d2e2895561b2a0497443bd4832bf5df183"
+            },
+            {
+              "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "c2473b1cf0fb1bdccffd2d91256721b57ed4cca355d2e7078c1688f6712a4ccf"
+            },
+            {
+              "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "f0fffc8789340abe3dcd99241f861ddc942c5ee8573b6f3d539fa42ddd6f0b5e"
+            }
+          ]
+        }
+      ]
+    },
+    "falcon-machine-readers": {
+      "accepted": true,
+      "checks": 84,
+      "receipt_sha256": "243cc47ebcafebb6ed4107a1c59230c645008dd6207c636093e11ffa8adbca1f",
+      "artifacts": [
+        {
+          "lane": "machine",
+          "role": "active",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "rollback",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "cold",
+          "release": "/nix/store/rzh3yvgbanczjpdx5cpwdlayrm5wfh99-cowboy-machine-bootstrap-release",
+          "executable": "/nix/store/rzh3yvgbanczjpdx5cpwdlayrm5wfh99-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+          "source": {
+            "bootstrap": true,
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "269fde7d0d4a260463d378dc1856e7a6a56024683e364938cca1da53d6b6b9ce",
+          "executable_sha256": "2ae89f9bc5dc5315405e55c8e33bffd529cddc7a45603e6371e0ff03e0e04c6e",
+          "executable_chain": [
+            {
+              "path": "/nix/store/rzh3yvgbanczjpdx5cpwdlayrm5wfh99-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+              "sha256": "2ae89f9bc5dc5315405e55c8e33bffd529cddc7a45603e6371e0ff03e0e04c6e"
+            },
+            {
+              "path": "/nix/store/mrwxj8wds1c96bcia0xmz3c1wvjgw1m9-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "5eb0b1342679e3d0a05d1e346b2fd299d8f0c4793df5410f7e4ee388aa7dce01"
+            },
+            {
+              "path": "/nix/store/mrwxj8wds1c96bcia0xmz3c1wvjgw1m9-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "09fef2838c47de290ae4af29d6d76c8056837b1e0e528e37db3b017de24c21b4"
+            }
+          ]
+        }
+      ]
+    },
+    "post-host-readers": {
+      "accepted": true,
+      "checks": 96,
+      "receipt_sha256": "e6950d3cd9b37645eb0574abe00873890d412778b8c52ef13b4800c75bc5309d",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "active",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "rollback",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "cold",
+          "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+          "executable": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147",
+          "executable_chain": [
+            {
+              "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+              "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "active",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "rollback",
+          "release": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+          "executable": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "1f078a756958a673a909fae58ebe2b8f584f0693af1cb22da06cb17c9082b6fc",
+          "executable_sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "b2b9508380b69f391685febb56a3abad7417fbe13c92ce95b5a89c8d5e53f405"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+            },
+            {
+              "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "c9b3d9363322b28f9270aa5175650a2dbdd6744658dce7b0fc6ff44db55066cb"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "cold",
+          "release": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release",
+          "executable": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+          "source": {
+            "bootstrap": true,
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1,
+            "workerGeneration": "worker-2801f50d44994e96b2b4"
+          },
+          "source_sha256": "269fde7d0d4a260463d378dc1856e7a6a56024683e364938cca1da53d6b6b9ce",
+          "executable_sha256": "e61e056ff64cb485c1b283f2d22363d2e2895561b2a0497443bd4832bf5df183",
+          "executable_chain": [
+            {
+              "path": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-machine",
+              "sha256": "e61e056ff64cb485c1b283f2d22363d2e2895561b2a0497443bd4832bf5df183"
+            },
+            {
+              "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "c2473b1cf0fb1bdccffd2d91256721b57ed4cca355d2e7078c1688f6712a4ccf"
+            },
+            {
+              "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "f0fffc8789340abe3dcd99241f861ddc942c5ee8573b6f3d539fa42ddd6f0b5e"
+            }
+          ]
+        }
+      ]
+    },
+    "post-host-startup": {
+      "accepted": true,
+      "checks": 78,
+      "receipt_sha256": "f91d82cdcbe72dc0a283740e987fd96f5caa163972c2ef24e563bb5ce8d54d27",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "active",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "rollback",
+          "release": "/nix/store/pj3hd0zm9rjwz0fsmxz3a5q8zv7vbspq-cowboy-controller-release",
+          "executable": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9",
+          "executable_chain": [
+            {
+              "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+              "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+            }
+          ]
+        },
+        {
+          "lane": "controller",
+          "role": "cold",
+          "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+          "executable": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "schema": 1
+          },
+          "source_sha256": "e9ab5131d47f16bc69b33c817696fe43dce223c6e9017c3f5cea86f11cc3a232",
+          "executable_sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147",
+          "executable_chain": [
+            {
+              "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+              "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+            }
+          ]
+        }
+      ]
+    },
+    "conformance-receipt": {
+      "accepted": true,
+      "checks": 13,
+      "receipt_sha256": "5f797cfb53cc9bcd8d4c7ffcf80c531f9c0bf6e79987d84b0d24bd293901c8e1",
+      "artifacts": {
+        "controller": {
+          "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy",
+          "sha256": "d71c1e210fb48d5aba95cf2fa583ee1402773b445d728c97d6adf13e3550a8f9"
+        },
+        "machine": {
+          "path": "/nix/store/hvw26x2i8fwd83pnc0swa2bn9bwk1rmn-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "261644e6bd55ed4f81bb6db82bc31fa77cfced50282f57a83c7384f6f4945060"
+        },
+        "worker": {
+          "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy-acp-worker",
+          "sha256": "875f5f59d6ab9defa6355cb1e9b4731ca629c1f8690297ed2519a7c8e8c148df"
+        },
+        "keeper": {
+          "path": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release/bin/cowboy-execution-host",
+          "sha256": "18627b55fe7b2b8d6621018f5ddc4d73e68e103f7d56cbaa33e4872343ce98bf"
+        },
+        "pack": {
+          "path": "/nix/store/3rif8pnaik4vifdjzsr1lla37lvhf00w-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack",
+          "sha256": "a1924647f223371b742d4b8f8bc531bcbfc75fdcfcaf6bdc3c3b635254f1511b"
+        },
+        "native_cli": {
+          "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+          "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        }
+      }
+    },
+    "cold-conformance-receipt": {
+      "accepted": true,
+      "checks": 13,
+      "receipt_sha256": "2a45d9b49148b6087216963769eba66153e687277567ac45591fac4ce45ee3ff",
+      "artifacts": {
+        "controller": {
+          "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+        },
+        "machine": {
+          "path": "/nix/store/nxsybm8ppsd2gg8ws4z6baf8cw0mf1b4-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "c2473b1cf0fb1bdccffd2d91256721b57ed4cca355d2e7078c1688f6712a4ccf"
+        },
+        "worker": {
+          "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy-acp-worker",
+          "sha256": "875f5f59d6ab9defa6355cb1e9b4731ca629c1f8690297ed2519a7c8e8c148df"
+        },
+        "keeper": {
+          "path": "/nix/store/1x37ksrkhj2ddagzy53cnwqz6pi35als-cowboy-machine-bootstrap-release/bin/cowboy-execution-host",
+          "sha256": "8d341e7373934e144b5ce1dde967932a4f434cf19f5b699aeb8fa341aa48e75d"
+        },
+        "pack": {
+          "path": "/nix/store/3rif8pnaik4vifdjzsr1lla37lvhf00w-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack",
+          "sha256": "a1924647f223371b742d4b8f8bc531bcbfc75fdcfcaf6bdc3c3b635254f1511b"
+        },
+        "native_cli": {
+          "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+          "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        }
+      }
+    },
+    "falcon-cold-conformance-receipt": {
+      "accepted": true,
+      "checks": 13,
+      "receipt_sha256": "3a399f4b7016ef2f43f99c5dc0d640af869e0ab328f8342876759438f3b45a1f",
+      "artifacts": {
+        "controller": {
+          "path": "/nix/store/90v7ibjpmmg0zcynm5yq84bn07k5fr0d-cowboy-0.1.0/bin/cowboy",
+          "sha256": "876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+        },
+        "machine": {
+          "path": "/nix/store/mrwxj8wds1c96bcia0xmz3c1wvjgw1m9-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "5eb0b1342679e3d0a05d1e346b2fd299d8f0c4793df5410f7e4ee388aa7dce01"
+        },
+        "worker": {
+          "path": "/nix/store/l0y2xz6lqlf72rqj96xna0qqv7yjyh8n-cowboy-0.1.0/bin/cowboy-acp-worker",
+          "sha256": "875f5f59d6ab9defa6355cb1e9b4731ca629c1f8690297ed2519a7c8e8c148df"
+        },
+        "keeper": {
+          "path": "/nix/store/rzh3yvgbanczjpdx5cpwdlayrm5wfh99-cowboy-machine-bootstrap-release/bin/cowboy-execution-host",
+          "sha256": "2f09af33c02c5eaae10b205cad4e196546e9121edd40364d00565a14085edd35"
+        },
+        "pack": {
+          "path": "/nix/store/3rif8pnaik4vifdjzsr1lla37lvhf00w-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack",
+          "sha256": "a1924647f223371b742d4b8f8bc531bcbfc75fdcfcaf6bdc3c3b635254f1511b"
+        },
+        "native_cli": {
+          "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+          "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        }
+      }
+    }
+  },
+  "operational_observations": [
+    {
+      "kind": "retired_unavailable_bootstrap_directories",
+      "hawk": 4,
+      "falcon": 9,
+      "includes_matrix_entries": true,
+      "files_removed": false,
+      "sessions_rebound": false
+    },
+    {
+      "kind": "convergence_timer_refused_during_owned_maintenance_freeze",
+      "freeze_removed": true,
+      "expected_failed_unit_state_reset": true,
+      "effects_replayed": false
+    },
+    {
+      "kind": "ovh_heartbeat_timeout",
+      "controller_observed_disconnect": "2026-10-02T03:11:04Z",
+      "controller_observed_reconnect": "2026-10-02T03:25:43Z",
+      "machine_pid_unchanged": true,
+      "automatic_reconnect": true,
+      "cause": "not_established",
+      "network_policy_changed_by_this_feature": false
+    }
+  ],
+  "service_worker": "cowboy-v1791",
+  "not_checked": [
+    "production_subscription_inference",
+    "WAN_latency_or_token_and_turn_parity",
+    "physical_iPhone_UI",
+    "long_duration_remote_connection_stability"
+  ]
+}
