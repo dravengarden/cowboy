@@ -1,5 +1,37 @@
 import type { SessionMeta } from "./protocol";
 
+function machineLabel(id: string): string {
+  return id.toLowerCase() === "ovh"
+    ? "OVH"
+    : id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** Never infer a target from a legacy Matrix path or a session title. */
+export function sessionMachinePresentation(session: SessionMeta) {
+  const runtime = session.machine_id?.trim() || "local";
+  const execution = sessionExecution(session);
+  const target = execution.machineId;
+  const remote =
+    (execution.state === "ready" || execution.state === "preparing") &&
+    !!target && target !== runtime;
+  return {
+    visible: remote || runtime !== "local",
+    remote,
+    label: remote
+      ? `${machineLabel(runtime)} → ${machineLabel(target!)}`
+      : runtime,
+    description: remote
+      ? `Remote · AI runtime: ${machineLabel(runtime)} · Files and commands: ${
+        machineLabel(target!)
+      }`
+      : execution.state === "unavailable"
+      ? `AI runtime: ${
+        machineLabel(runtime)
+      } · Execution environment unavailable`
+      : `Machine: ${machineLabel(runtime)}`,
+  };
+}
+
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>

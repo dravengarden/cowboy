@@ -9,6 +9,8 @@ import { managementEntryFixture } from "./providerManagement.fixture";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
 import { projectMachineOccupancy } from "./machineState";
 import { AiInstallationPicker } from "./AiInstallationPicker";
+import { SessionMachineBadge } from "./SessionMachineBadge";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 export async function runProjectPlacementBrowserConformance(): Promise<
   string[]
@@ -320,6 +322,70 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       current?.ready && !current.separate,
       "explicit local installation selection remains available",
     );
+    let picked = 0;
+    let inspected = 0;
+    function SessionRow() {
+      const tap = useReliableTouchTap<HTMLDivElement>(() => picked++);
+      return (
+        <div role="button" {...tap}>
+          <SessionMachineBadge
+            session={{
+              id: "remote",
+              provider: "claude-code",
+              machine_id: "ovh",
+              cwd: "/runtime",
+              title: "Claude",
+              status: "running",
+              execution_binding: {
+                schema: 1,
+                runtime: { machine_id: "ovh", cwd: "/runtime" },
+                environment: { machine_id: "hawk", protocol: 1 },
+                workspace: { cwd: "/target" },
+              },
+            }}
+            onInfo={() => inspected++}
+          />
+        </div>
+      );
+    }
+    flushSync(() => root.render(<SessionRow />));
+    const badge = container.querySelector<HTMLElement>(".MuiChip-root")!;
+    check(
+      badge.textContent === "OVH → Hawk",
+      "remote badge labels both Machines",
+    );
+    for (const type of ["pointerdown", "pointerup"]) {
+      badge.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          pointerId: 1,
+          pointerType: "touch",
+          isPrimary: true,
+          clientX: 10,
+          clientY: 10,
+        }),
+      );
+    }
+    badge.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    check(
+      inspected === 1 && picked === 0,
+      "touch opens details once without selecting the row",
+    );
+    badge.focus();
+    badge.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: " " }),
+    );
+    badge.dispatchEvent(
+      new KeyboardEvent("keyup", { bubbles: true, key: " " }),
+    );
+    check(
+      inspected === 2 && picked === 0,
+      "keyboard click opens details without selecting the row",
+    );
+    check(
+      getComputedStyle(badge).boxShadow === "none",
+      "badge remains paint-only on the swipe surface",
+    );
     return [
       "project before installed AI",
       "runtime without mirror directories",
@@ -331,6 +397,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       "failure without local fallback",
       "selection survives inventory refresh",
       "unavailable OVH requires explicit alternative selection",
+      "remote session badge identifies target and isolates touch activation",
     ];
   } finally {
     flushSync(() => root.unmount());

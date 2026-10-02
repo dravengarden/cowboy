@@ -2,6 +2,10 @@ import { originLabel, type SessionMeta, type Status } from "./protocol";
 import { providerName } from "./providerPresentation";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { sessionProjectLabel } from "./sessionProject";
+import {
+  sessionExecution,
+  sessionMachinePresentation,
+} from "./sessionExecution";
 
 /** `/api/sessions/:id/info` — flattened `SessionMeta` plus live in-memory counts. */
 export interface SessionInfoPayload extends SessionMeta {
@@ -50,9 +54,24 @@ export function sessionOverviewSections(
   if (info.system) identity.push({ label: "Kind", value: "System" });
   identity.push(
     { label: "Provider", value: sessionOverviewProvider(info) },
-    { label: "Machine", value: info.machine_id?.trim() || "local" },
-    { label: "Origin", value: originLabel(info.origin) },
   );
+  const execution = sessionExecution(info);
+  if (sessionMachinePresentation(info).remote) {
+    identity.push(
+      { label: "Mode", value: "Remote" },
+      { label: "AI runtime", value: info.machine_id?.trim() || "local" },
+      { label: "Files and commands", value: execution.machineId! },
+    );
+  } else {
+    identity.push({
+      label: "Machine",
+      value: info.machine_id?.trim() || "local",
+    });
+    if (execution.state === "unavailable") {
+      identity.push({ label: "Execution", value: "Environment unavailable" });
+    }
+  }
+  identity.push({ label: "Origin", value: originLabel(info.origin) });
 
   const workspace: SessionOverviewRow[] = [
     { label: "Project", value: sessionProjectLabel(info) ?? "Not recorded" },
@@ -113,13 +132,14 @@ function sessionOverviewProvider(info: SessionMeta): string {
 
 function sessionOverviewPaths(info: SessionMeta): SessionOverviewRow[] {
   const checkout = info.workspace_source_path?.trim();
-  if (checkout && checkout !== info.cwd) {
+  const cwd = sessionExecution(info).cwd;
+  if (checkout && checkout !== cwd) {
     return [
       { label: "Checkout", value: checkout },
-      { label: "Worktree", value: info.cwd },
+      { label: "Worktree", value: cwd },
     ];
   }
-  return [{ label: "Directory", value: info.cwd }];
+  return [{ label: "Directory", value: cwd }];
 }
 
 function sessionOverviewContext(info: SessionMeta): string {

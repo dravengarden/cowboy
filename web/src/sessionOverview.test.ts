@@ -32,6 +32,31 @@ function rowMap(
   );
 }
 
+Deno.test("remote overview separates AI runtime from target and uses the target worktree", () => {
+  const payload = info({
+    machine_id: "ovh",
+    cwd: "/runtime",
+    workspace_source_path: "/home/draven/columbus",
+    execution_binding: {
+      schema: 1,
+      runtime: { machine_id: "ovh", cwd: "/runtime" },
+      environment: { machine_id: "hawk", protocol: 1 },
+      workspace: { cwd: "/target/worktree" },
+    },
+  });
+  const rows = rowMap(payload);
+  assertEquals(rows.Mode, "Remote");
+  assertEquals(rows["AI runtime"], "ovh");
+  assertEquals(rows["Files and commands"], "hawk");
+  assertEquals(rows.Worktree, "/target/worktree");
+  assertEquals(rows.Checkout, "/home/draven/columbus");
+  assertEquals(rows.Machine, undefined);
+  const invalid = rowMap({ ...payload, execution_binding: null });
+  assertEquals(invalid.Mode, undefined);
+  assertEquals(invalid.Execution, "Environment unavailable");
+  assertEquals(invalid.Worktree, "Execution environment unavailable");
+});
+
 Deno.test("session overview fills identity workspace activity and id", () => {
   const rows = rowMap(info({
     machine_id: "hawk",

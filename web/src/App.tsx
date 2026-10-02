@@ -107,6 +107,7 @@ import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedba
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
+import { SessionMachineBadge } from "./SessionMachineBadge";
 import { PICK_SESSION_EVENT, pickSessionDetail } from "./sessionPickRequest";
 import {
     SessionCacheGlyph,
@@ -1474,23 +1475,10 @@ function SessionList({
                                             }}
                                         />
                                     )}
-                                    {(s.machine_id ?? "local") !== "local" && (
-                                        <Chip
-                                            size="small"
-                                            label={s.machine_id}
-                                            variant="outlined"
-                                            sx={{
-                                                height: "1.5rem",
-                                                maxWidth: "8rem",
-                                                fontSize: "0.75rem",
-                                                "& .MuiChip-label": {
-                                                    px: "0.625rem",
-                                                    overflow: "hidden",
-                                                    textOverflow: "ellipsis",
-                                                },
-                                            }}
-                                        />
-                                    )}
+                                    <SessionMachineBadge
+                                        session={s}
+                                        onInfo={() => onRequestInfo(s)}
+                                    />
                                     <SessionProjectionBadge sessionId={s.id} />
                                     <ScheduleBadge meta={s} />
                                     <SessionObligationBadge sessionId={s.id} />
