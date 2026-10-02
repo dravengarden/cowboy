@@ -1,0 +1,168 @@
+{
+  "schema": "cowboy.send-continuity-release/v1",
+  "recorded_at": "2026-10-02T07:37:33.143353+00:00",
+  "source_revision": "38cb44444235ca7762f715170268c138f1fc0294",
+  "cause": "Any pending send hid the last human row without matching its delivery identity, removing earlier pictures or text until acknowledgement.",
+  "behavior": {
+    "identity": "Only matching cmid echoes replace local messages; independent sends never merge by adjacency or matching text.",
+    "multipart": "Retain the local bubble until images, files and authored text are renderable; preserve identity across an empty first block and unpainted lifecycle frames.",
+    "previews": "Reuse local image previews in document order after confirmation.",
+    "snapshot": "A partial snapshot cannot retire a local send before its visible content is ready.",
+    "existing_states": [
+      "durable local save",
+      "waiting for connection",
+      "sending",
+      "queued",
+      "failed with retry/return/discard",
+      "confirmed"
+    ],
+    "composer_editor_changed": false
+  },
+  "validation": {
+    "web_tests_passed": 1987,
+    "checks": [
+      "TypeScript typecheck",
+      "Oxlint",
+      "git diff --check"
+    ],
+    "browser": [
+      {
+        "bundle": "/tmp/cowboy-send-continuity-release-browser",
+        "digest": "4fa4633d7aab873603cb1a11de8cb6653db8898d0744e457373abb518677dde8",
+        "scenario": "continuity",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 4,
+        "result": {
+          "ok": true,
+          "samples": [
+            "earlier image node retained through four sends",
+            "text, two images with caption, and file stay visible through delayed multipart echoes"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-send-continuity-release-browser",
+        "digest": "4fa4633d7aab873603cb1a11de8cb6653db8898d0744e457373abb518677dde8",
+        "scenario": "draft-send",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 1,
+        "result": {
+          "ok": true,
+          "samples": [
+            "two-image draft retained until complete echo",
+            "Sending cleared on exact operation identity"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-send-continuity-release-local-browser",
+        "digest": "aaca5a46ffe42d2df7b05c482308c6d5dc5f19ec00344743ef12a98fc5bf2eda",
+        "scenario": "queued",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 1,
+        "result": {
+          "ok": true,
+          "samples": [
+            {
+              "kind": "bubble-before-restoration",
+              "milliseconds": 6
+            },
+            {
+              "kind": "receipt-retains-bubble-until-echo"
+            },
+            {
+              "kind": "draft-add-edit-schedule-cancel-before-save"
+            },
+            {
+              "kind": "failed-save-rolls-back-without-sending"
+            }
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-send-continuity-release-browser",
+        "digest": "4fa4633d7aab873603cb1a11de8cb6653db8898d0744e457373abb518677dde8",
+        "scenario": "changed-dataset",
+        "discoveries": 2,
+        "bootstraps": 0,
+        "attempts": 2,
+        "deliveries": 0,
+        "result": {
+          "ok": true,
+          "samples": [
+            "changed dataset rejected",
+            "ABA owner remained sealed",
+            "durable prompt retained"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-send-continuity-release-browser",
+        "digest": "4fa4633d7aab873603cb1a11de8cb6653db8898d0744e457373abb518677dde8",
+        "scenario": "missing-protocol",
+        "discoveries": 2,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 0,
+        "result": {
+          "ok": true,
+          "samples": [
+            "unnegotiated socket rejected",
+            "durable prompt retained"
+          ]
+        }
+      }
+    ],
+    "physical_iphone_checked": false
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790926614474105630-38cb44444235",
+    "revision": "38cb44444235ca7762f715170268c138f1fc0294",
+    "published": true,
+    "release": "/nix/store/ql3pg5z3hx8zww93cw2020nir1309b04-cowboy-web-release",
+    "previousRelease": "/nix/store/5whx9dd80pj1lx4bf9vydjzw77hz637f-cowboy-web-release",
+    "activeRelease": "/nix/store/ql3pg5z3hx8zww93cw2020nir1309b04-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T07:36:54.47410563Z",
+    "recordedAt": "2026-10-02T07:36:54.523296611Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "25e949348ee6e073c9d010281b7e22bc"
+    },
+    "service_worker": "cowboy-v1797",
+    "spa_matches_active_release": true,
+    "spa_cache_control": null,
+    "service_worker_cache_control": null,
+    "controller_pid_unchanged": 683531,
+    "machine_pid_unchanged": 205038,
+    "machines": {
+      "hawk": {
+        "connected": true,
+        "status": "online"
+      },
+      "ovh": {
+        "connected": true,
+        "status": "online"
+      },
+      "falcon": {
+        "connected": true,
+        "status": "online"
+      }
+    }
+  }
+}
