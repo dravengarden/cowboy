@@ -1,0 +1,58 @@
+{
+  "schema": "cowboy.parent-project-expansion-release/v1",
+  "recorded_at": "2026-10-02T05:47:44.790417+00:00",
+  "source_revision": "a52a46493212255bda6e88f30061a919e2012524",
+  "behavior": "Entering a registered parent selects it, expands children and retains the open menu. The current parent has a separate outlined surface, open-folder icon, bold name and caption. Leaf selection closes the menu.",
+  "validation": {
+    "web_tests_passed": 1980,
+    "browser": {
+      "ok": true,
+      "suite": "workspace-picker",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "0dc1f41cd72b03b84825c3c2f54d773f24c460de1069e7d63fd50fb7ca294edc",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "default hierarchy",
+        "parent expands and is selected by default",
+        "current parent has a distinct outlined surface",
+        "parent remains open and child selection closes",
+        "keyboard expansion selects the parent",
+        "flat full paths",
+        "saved preference"
+      ],
+      "physical_device": "not_checked"
+    },
+    "checks": [
+      "Deno check",
+      "TypeScript typecheck",
+      "Oxlint"
+    ]
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790920028984549485-a52a46493212",
+    "revision": "a52a46493212255bda6e88f30061a919e2012524",
+    "published": true,
+    "release": "/nix/store/h0z5nf63j2wxjwcbshamyl89ihv4mzqc-cowboy-web-release",
+    "previousRelease": "/nix/store/6mh0c7mz540p1mxbbnq1x06cpx1kglcc-cowboy-web-release",
+    "activeRelease": "/nix/store/h0z5nf63j2wxjwcbshamyl89ihv4mzqc-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T05:47:08.984549485Z",
+    "recordedAt": "2026-10-02T05:47:09.022310714Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "b40ec038cb9072205f10b84f5f0bb1f5"
+    },
+    "service_worker": "cowboy-v1794",
+    "spa_bytes_match_active_web": true
+  }
+}
