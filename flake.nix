@@ -146,6 +146,7 @@
           ./src/machine_plugins.rs
           ./src/machine_plugins
           ./src/operation_budget.rs
+          ./src/owned_json.rs
           ./src/telemetry_plugin.rs
           ./src/telemetry_plugin/writer_admission.rs
           ./src/telemetry_plugin/writer_admission
@@ -555,6 +556,7 @@
         test -e ${machine-src}/src/machine_plugins/operations/installations.rs
         test -e ${machine-src}/src/machine_plugins/operations/lease.rs
         test -e ${machine-src}/src/operation_budget.rs
+        test -e ${machine-src}/src/owned_json.rs
         test -e ${machine-src}/src/machine_protocol/plugin_step.rs
         test -e ${machine-src}/src/machine_protocol/plugin_recovery.rs
         test -e ${machine-src}/src/machine_protocol/installation_revision.rs
