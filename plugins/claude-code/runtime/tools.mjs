@@ -28,6 +28,9 @@ function definition(name, description, properties, required) {
   return {
     name: name.toLowerCase(),
     description,
+    // Claude dispatches custom tools sequentially unless their MCP definition
+    // declares read-only behavior. Never make this claim for arbitrary Bash.
+    annotations: { readOnlyHint: ["Read", "Glob", "Grep"].includes(name) },
     // Native Claude otherwise persists some text results to its runtime home.
     // Our own bounds stay below this documented per-tool inline threshold.
     _meta: { "anthropic/maxResultSizeChars": 400000 },

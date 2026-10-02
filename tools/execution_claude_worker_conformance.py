@@ -7,6 +7,7 @@ responses. It never reads subscription state or sends a real inference request.
 """
 import argparse
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 import shutil
 import socket
 import struct
+import threading
 import time
 import zlib
 
@@ -193,23 +195,49 @@ def main():
         client.prompt(timeout=90)
         context_checked(api.requests)
         checks.append("cold_resume_after_compaction_has_no_runtime_file_locators")
-        # Both commands must start before either finishes. A global facade
-        # queue deadlocks this barrier; the native dispatcher and target must
-        # actually overlap, rather than just accepting two tool-use blocks.
+        # Each search reads a FIFO. Its writer supplies content only after BOTH
+        # readers have opened their pipes: sequential native/facade dispatch
+        # cannot pass. This exercises the actual readOnlyHint and target route.
         parallel = []
-        for own, other in [("a", "b"), ("b", "a")]:
-            parallel.extend(tool("Bash", {"command":
-                f"printf started > parallel-{own}.txt; "
-                f"for i in $(seq 1 100); do "
-                f"if test -f parallel-{other}.txt; then printf complete >> parallel-{own}.txt; exit 0; fi; "
-                "sleep 0.1; done; exit 1"}))
+        pipes = [args.target / f"parallel-{name}.fifo" for name in ["a", "b"]]
+        for pipe in pipes:
+            os.mkfifo(pipe)
+            parallel.extend(tool("Grep", {"path": str(pipe), "pattern": "parallel_read_complete",
+                                          "output_mode": "content"}))
+        overlap = []
+        def feed_pipes():
+            opened = {}
+            deadline = time.monotonic() + 8
+            try:
+                while len(opened) < len(pipes) and time.monotonic() < deadline:
+                    for pipe in pipes:
+                        if pipe in opened:
+                            continue
+                        try:
+                            opened[pipe] = os.open(pipe, os.O_WRONLY | os.O_NONBLOCK)
+                        except OSError as error:
+                            if error.errno != errno.ENXIO:
+                                raise
+                    time.sleep(0.01)
+                if len(opened) == len(pipes):
+                    overlap.append(True)
+                    for descriptor in opened.values():
+                        os.write(descriptor, b"parallel_read_complete\n")
+            finally:
+                for descriptor in opened.values():
+                    os.close(descriptor)
+        writer = threading.Thread(target=feed_pipes, daemon=True)
+        writer.start()
         api.steps.extend([[], parallel])
         client.prompt(timeout=90)
-        for name in ["a", "b"]:
-            require((args.target / f"parallel-{name}.txt").read_text() == "startedcomplete",
-                    "independent native commands did not overlap")
+        writer.join(timeout=10)
+        require(overlap == [True], "independent native searches did not overlap")
+        results = [json.dumps(block) for block in outputs(api.requests[-1])
+                   if block.get("tool_use_id") in {call["id"] for call in parallel}]
+        require(len(results) == 2 and all("parallel_read_complete" in result for result in results),
+                "parallel searches did not return their target contents")
         context_checked(api.requests)
-        checks.append("independent_native_commands_execute_concurrently")
+        checks.append("independent_native_searches_execute_concurrently")
         api.steps.extend([[], tool("Bash", {"command": "printf foreground_started >> foreground.txt; while :; do sleep 1; printf tick >> foreground.txt; done", "timeout": 600000})])
         messages_before = len(client.messages)
         client.send({"type": "user", "message": {"role": "user", "content": "Run the foreground cancellation fixture."},

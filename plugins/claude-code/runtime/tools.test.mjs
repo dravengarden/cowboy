@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { WorkspaceTools } from "./tools.mjs";
+import { TOOLS, WorkspaceTools } from "./tools.mjs";
+
+test("only target reads and searches advertise native parallel execution", () => {
+  assert.deepEqual(
+    TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) =>
+      tool.name
+    ),
+    ["read", "glob", "grep"],
+  );
+});
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-claude-tools-"));
