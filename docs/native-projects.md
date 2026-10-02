@@ -146,3 +146,14 @@ by automatic reconnection of the unchanged Machine process. Its cause was not
 established in this change. The final readiness checks passed, but this receipt
 does not establish long-duration connection stability, production model
 inference, physical iPhone behavior or WAN/token/turn parity.
+
+The same-day picker follow-up, Cowboy `09338043`, fixes the Controller and
+browser occupancy projections that still required an AI Machine to host local
+projects. The earlier picker fixture bypassed that occupancy projection and
+missed the production failure. Its replacement exercises both Codex and Claude
+through the real projection; the enrolled-session fixture now checks the actual
+browser Machine inventory after removing every runtime project. Controller and
+Web (`cowboy-v1792`) activation succeeded, with OVH online, schedulable and still
+hosting zero projects. The existing Machine generation and project registries
+were retained. The [follow-up receipt](experiments/ovh-ai-picker-release-2026-10-02.json)
+records the failing old behavior, passing regressions, and live Provider joins.
