@@ -1,0 +1,64 @@
+{
+  "schema": "cowboy.remote-session-tag-release/v1",
+  "recorded_at": "2026-10-02T06:02:29.420930+00:00",
+  "source_revision": "c060f0874f5fb31aa9e4d78700d3860f7bdfa0c9",
+  "behavior": "Native remote sessions display runtime → target machine, including preparation. A tinted badge opens the existing info sheet without selecting the session. Details identify the AI runtime, files/commands machine and target worktree. Legacy Matrix paths are not used to infer targets.",
+  "validation": {
+    "web_tests_passed": 1982,
+    "checks": [
+      "Deno check",
+      "TypeScript typecheck",
+      "Oxlint"
+    ],
+    "browser": {
+      "ok": true,
+      "suite": "project-placement",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "a91ba53f188d9939f2ad759e63916f550ef8481c8562d1c54ff814d4fd906188",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "project before installed AI",
+        "runtime without mirror directories",
+        "Codex and Claude selectable after live occupancy projection",
+        "compact selected AI icon and label share one row",
+        "long AI labels fit mobile and desktop fields",
+        "cross-target readiness isolation",
+        "late reply ignored",
+        "failure without local fallback",
+        "selection survives inventory refresh",
+        "unavailable OVH requires explicit alternative selection",
+        "remote session badge identifies target and isolates touch activation"
+      ],
+      "physical_device": "not_checked"
+    }
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790920928277565918-c060f0874f5f",
+    "revision": "c060f0874f5fb31aa9e4d78700d3860f7bdfa0c9",
+    "published": true,
+    "release": "/nix/store/v456cg9zrhq5372xhvsym3cxyn9pxa98-cowboy-web-release",
+    "previousRelease": "/nix/store/h0z5nf63j2wxjwcbshamyl89ihv4mzqc-cowboy-web-release",
+    "activeRelease": "/nix/store/v456cg9zrhq5372xhvsym3cxyn9pxa98-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T06:02:08.277565918Z",
+    "recordedAt": "2026-10-02T06:02:08.339601536Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "7b73a44fb328c10409fb4a6ecea6ffba"
+    },
+    "service_worker": "cowboy-v1795",
+    "service_worker_cache_control": "no-store",
+    "spa_bytes_match_active_web": true,
+    "controller_pid_unchanged": 683531
+  }
+}
