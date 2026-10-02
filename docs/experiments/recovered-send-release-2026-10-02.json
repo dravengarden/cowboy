@@ -1,0 +1,112 @@
+{
+  "schema": "cowboy.recovered-send-release/v1",
+  "recorded_at": "2026-10-02T09:34:59.295566+00:00",
+  "source_revision": "cf4ce3b367712e34987d3371e8bd9988c46d7f44",
+  "behavior": {
+    "trigger": "A newer locally authored prompt is echoed and produces actual agent activity.",
+    "recovery": "Durably retain older failed prompt and queue creations as drafts before retiring their attention obligations and live failure bubbles.",
+    "safety": "Never resend older content automatically; storage failures retain the original held message. A receipt or echo alone is insufficient."
+  },
+  "validation": {
+    "web_tests_passed": 1988,
+    "checks": [
+      "TypeScript typecheck",
+      "Oxlint",
+      "git diff --check"
+    ],
+    "browser": [
+      {
+        "bundle": "/tmp/cowboy-recovered-send-browser",
+        "digest": "87721a3f5b8759e7ce1788794d88d303b843d11b3133d7c907fae097464359cf",
+        "scenario": "failed-recovery",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 2,
+        "result": {
+          "ok": true,
+          "samples": [
+            "new prompt must start agent work before old errors clear",
+            "caption and image retained as a durable draft",
+            "old delivery never resubmitted"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-recovered-send-browser",
+        "digest": "87721a3f5b8759e7ce1788794d88d303b843d11b3133d7c907fae097464359cf",
+        "scenario": "failed-recovery-storage-error",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 2,
+        "result": {
+          "ok": true,
+          "samples": [
+            "draft save failure preserves the original held message and image"
+          ]
+        }
+      },
+      {
+        "bundle": "/tmp/cowboy-recovered-send-browser",
+        "digest": "87721a3f5b8759e7ce1788794d88d303b843d11b3133d7c907fae097464359cf",
+        "scenario": "failed-recovery-no-work",
+        "discoveries": 1,
+        "bootstraps": 0,
+        "attempts": 1,
+        "deliveries": 2,
+        "result": {
+          "ok": true,
+          "samples": [
+            "receipt and user echo without agent work preserve the held message"
+          ]
+        }
+      }
+    ],
+    "physical_iphone_checked": false
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790933656012434621-cf4ce3b36771",
+    "revision": "cf4ce3b367712e34987d3371e8bd9988c46d7f44",
+    "published": true,
+    "release": "/nix/store/szg8vhfkalgwc71dzj1n99vqci4c8hn3-cowboy-web-release",
+    "previousRelease": "/nix/store/6bbk5raid781vrhvdnx2rklsa3h6w6jw-cowboy-web-release",
+    "activeRelease": "/nix/store/szg8vhfkalgwc71dzj1n99vqci4c8hn3-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T09:34:16.012434621Z",
+    "recordedAt": "2026-10-02T09:34:16.058795129Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "e7ddd7cd0e1203c250cb6278cefb879f"
+    },
+    "service_worker": "cowboy-v1800",
+    "spa_matches_active_release": true,
+    "spa_cache_control": "no-store",
+    "service_worker_cache_control": "no-store",
+    "controller_pid_unchanged": 683531,
+    "machine_pid_unchanged": 205038,
+    "machines": {
+      "hawk": {
+        "connected": true,
+        "status": "online"
+      },
+      "ovh": {
+        "connected": true,
+        "status": "online"
+      },
+      "falcon": {
+        "connected": true,
+        "status": "online"
+      }
+    }
+  }
+}
