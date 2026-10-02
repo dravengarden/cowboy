@@ -1,0 +1,96 @@
+{
+  "schema": "cowboy.client-update-settings-release/v1",
+  "recorded_at": "2026-10-02T08:47:42.011796+00:00",
+  "source_revision": "c601ecdb223ca46bf18376e407d76cf0e3faef12",
+  "behavior": {
+    "settings_location": "Appearance / Web updates",
+    "scope": "device-local persisted preference shared by Desktop and Mobile",
+    "default_mode": "automatic",
+    "default_seconds": 3,
+    "delay_range_seconds": [
+      0,
+      3600
+    ],
+    "zero": "apply immediately once the complete download is ready, bypassing the idle gate",
+    "positive_delay": "count down while idle and rewind when busy",
+    "manual": "download in the background and apply only after a press",
+    "live_changes": "mode and delay affect an already-pending update",
+    "mobile_foreground_dwell_removed": true,
+    "rejected_builds": "never automatically reload a rejected or abandoned build"
+  },
+  "validation": {
+    "web_tests_passed": 1988,
+    "checks": [
+      "TypeScript typecheck",
+      "Oxlint",
+      "git diff --check"
+    ],
+    "browser": [
+      {
+        "bundle": "/tmp/cowboy-update-settings-release-browser",
+        "digest": "372a7cb0f3395ba59941d1e7b3d2aefe5f88bfb2623e40a881a9297af8e0247f",
+        "scenario": "update-settings",
+        "discoveries": 0,
+        "bootstraps": 0,
+        "attempts": 0,
+        "deliveries": 0,
+        "result": {
+          "ok": true,
+          "samples": [
+            "manual",
+            "zero",
+            "three",
+            "change-delay",
+            "rejected-zero",
+            "switch-manual"
+          ]
+        }
+      }
+    ],
+    "physical_iphone_checked": false
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790930826975717295-c601ecdb223c",
+    "revision": "c601ecdb223ca46bf18376e407d76cf0e3faef12",
+    "published": true,
+    "release": "/nix/store/cgpq86lqiaysbbslfalvv2wmcqdvj4fz-cowboy-web-release",
+    "previousRelease": "/nix/store/ql3pg5z3hx8zww93cw2020nir1309b04-cowboy-web-release",
+    "activeRelease": "/nix/store/cgpq86lqiaysbbslfalvv2wmcqdvj4fz-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T08:47:06.975717295Z",
+    "recordedAt": "2026-10-02T08:47:07.021225139Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "9bf9dc111cdd244f70802c0f1eda5879"
+    },
+    "service_worker": "cowboy-v1798",
+    "spa_matches_active_release": true,
+    "spa_cache_control": null,
+    "service_worker_cache_control": null,
+    "controller_pid_unchanged": 683531,
+    "machine_pid_unchanged": 205038,
+    "machines": {
+      "hawk": {
+        "connected": true,
+        "status": "online"
+      },
+      "ovh": {
+        "connected": true,
+        "status": "online"
+      },
+      "falcon": {
+        "connected": true,
+        "status": "online"
+      }
+    }
+  }
+}
