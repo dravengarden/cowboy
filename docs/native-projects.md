@@ -164,3 +164,7 @@ Web (`cowboy-v1792`) activation succeeded, with OVH online, schedulable and stil
 hosting zero projects. The existing Machine generation and project registries
 were retained. The [follow-up receipt](experiments/ovh-ai-picker-release-2026-10-02.json)
 records the failing old behavior, passing regressions, and live Provider joins.
+
+Web `612aaf14` (`cowboy-v1793`) adds the compact AI selection and direct parent
+project selection described above. Its [activation receipt](experiments/session-picker-ui-release-2026-10-02.json)
+records 17 browser checks, 1,980 Web tests and the unchanged Controller process.

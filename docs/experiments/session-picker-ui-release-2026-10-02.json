@@ -1,0 +1,96 @@
+{
+  "schema": "cowboy.session-picker-ui-release/v1",
+  "recorded_at": "2026-10-02T05:40:26.445926+00:00",
+  "source_revision": "612aaf14a2c68c125b8247bca3a792a4404aa216",
+  "changes": [
+    "Closed AI field renders its installed icon and name in one compact row; menu retains mode and vendor details.",
+    "Clicking a registered parent selects itself; a separate 44px arrow browses children without changing selection; keyboard navigation preserved."
+  ],
+  "validation": {
+    "web_tests": {
+      "passed": 1980,
+      "failed": 0
+    },
+    "checks": [
+      "Deno check",
+      "TypeScript typecheck",
+      "Oxlint (existing warnings)",
+      "targeted formatting"
+    ],
+    "ai_browser": {
+      "ok": true,
+      "suite": "project-placement",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "4c1fd696d397862f61d94cba35ea92de4ba97084a0a3afa897fa751adc25da76",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "project before installed AI",
+        "runtime without mirror directories",
+        "Codex and Claude selectable after live occupancy projection",
+        "compact selected AI icon and label share one row",
+        "long AI labels fit mobile and desktop fields",
+        "cross-target readiness isolation",
+        "late reply ignored",
+        "failure without local fallback",
+        "selection survives inventory refresh",
+        "unavailable OVH requires explicit alternative selection"
+      ],
+      "physical_device": "not_checked"
+    },
+    "hierarchy_browser": {
+      "ok": true,
+      "suite": "workspace-picker",
+      "browser": "Mozilla Firefox 151.0.1",
+      "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+      "fixture_sha256": "f77e4783b228335460909e1cf5176865f3101cef549b75eaa579d561f975da31",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "default hierarchy",
+        "parent name selects itself",
+        "separate 44px browse action preserves selection",
+        "child selects itself",
+        "keyboard browse and parent selection",
+        "flat full paths",
+        "saved preference"
+      ],
+      "physical_device": "not_checked"
+    }
+  },
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790919573118417949-612aaf14a2c6",
+    "revision": "612aaf14a2c68c125b8247bca3a792a4404aa216",
+    "published": true,
+    "release": "/nix/store/6mh0c7mz540p1mxbbnq1x06cpx1kglcc-cowboy-web-release",
+    "previousRelease": "/nix/store/n409n2ilwgyh9xa11mdxxb7jid4k3dl3-cowboy-web-release",
+    "activeRelease": "/nix/store/6mh0c7mz540p1mxbbnq1x06cpx1kglcc-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-02T05:39:33.118417949Z",
+    "recordedAt": "2026-10-02T05:39:33.173349156Z",
+    "recovered": false
+  },
+  "production": {
+    "healthz": "ok",
+    "version": {
+      "version": "6667c5c6250a72e6a09ab9afd9f7c54c"
+    },
+    "service_worker": "cowboy-v1793",
+    "sw_cache_control": "no-store",
+    "spa_bytes_match_active_web": true,
+    "app_asset": "App-CVteuL32.js",
+    "controller_unchanged": true,
+    "controller": [
+      "ActiveEnterTimestamp=Fri 2026-10-02 11:59:33 CST",
+      "MainPID=683531"
+    ]
+  },
+  "not_checked": [
+    "physical iPhone layout and touch input"
+  ]
+}
