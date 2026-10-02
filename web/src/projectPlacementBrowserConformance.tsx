@@ -324,7 +324,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     );
     let picked = 0;
     let inspected = 0;
-    function SessionRow() {
+    function SessionRow({ cwd = "/runtime" }: { cwd?: string }) {
       const tap = useReliableTouchTap<HTMLDivElement>(() => picked++);
       return (
         <div role="button" {...tap}>
@@ -333,7 +333,7 @@ export async function runProjectPlacementBrowserConformance(): Promise<
               id: "remote",
               provider: "claude-code",
               machine_id: "ovh",
-              cwd: "/runtime",
+              cwd,
               title: "Claude",
               status: "running",
               execution_binding: {
@@ -385,6 +385,16 @@ export async function runProjectPlacementBrowserConformance(): Promise<
     check(
       getComputedStyle(badge).boxShadow === "none",
       "badge remains paint-only on the swipe surface",
+    );
+    flushSync(() => root.render(<SessionRow cwd="/changed-runtime" />));
+    const unavailableBadge = container.querySelector<HTMLElement>(
+      ".MuiChip-root",
+    )!;
+    check(
+      unavailableBadge.textContent === "OVH → Hawk" &&
+        unavailableBadge.getAttribute("aria-label")?.includes("unavailable") &&
+        unavailableBadge.querySelector("svg") !== null,
+      "unavailable executor retains the target badge with a visible warning",
     );
     return [
       "project before installed AI",

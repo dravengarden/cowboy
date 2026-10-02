@@ -111,3 +111,38 @@ Deno.test("machine badges distinguish native remote targets without guessing leg
     false,
   );
 });
+
+Deno.test("remote route remains visible when executor validation fails", () => {
+  const binding = {
+    schema: 1,
+    runtime: { machine_id: "ovh", cwd: "/previous-runtime" },
+    environment: { machine_id: "hawk", protocol: 1 },
+    workspace: { cwd: "/target" },
+  };
+  for (const provider of ["codex", "claude-code"]) {
+    const meta = { ...session, provider, execution_binding: binding };
+    assertEquals(sessionExecution(meta).state, "unavailable");
+    const badge = sessionMachinePresentation(meta);
+    assertEquals(badge.label, "OVH → Hawk");
+    assertEquals(badge.remote, true);
+    assertEquals(badge.unavailable, true);
+    assertEquals(
+      badge.description,
+      "Remote · AI runtime: OVH · Files and commands: Hawk · Execution environment unavailable",
+    );
+  }
+  for (
+    const invalid of [
+      { ...binding, schema: 2 },
+      { ...binding, runtime: { machine_id: "other", cwd: session.cwd } },
+      { ...binding, environment: { machine_id: "", protocol: 1 } },
+      null,
+    ]
+  ) {
+    assertEquals(
+      sessionMachinePresentation({ ...session, execution_binding: invalid })
+        .remote,
+      false,
+    );
+  }
+});

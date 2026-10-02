@@ -10,20 +10,32 @@ function machineLabel(id: string): string {
 export function sessionMachinePresentation(session: SessionMeta) {
   const runtime = session.machine_id?.trim() || "local";
   const execution = sessionExecution(session);
-  const target = execution.machineId;
-  const remote =
-    (execution.state === "ready" || execution.state === "preparing") &&
-    !!target && target !== runtime;
+  // The persisted route describes where the files belong even when its
+  // executor is unavailable. Keep launch validation in sessionExecution;
+  // an unavailable executor must not make a remote session look local.
+  const binding = object(session.execution_binding);
+  const boundRuntime = object(binding?.runtime);
+  const environment = object(binding?.environment);
+  const target = binding?.schema === 1 &&
+      boundRuntime?.machine_id === session.machine_id
+    ? binding.phase === "preparing"
+      ? binding.machine_id
+      : environment?.machine_id
+    : undefined;
+  const remote = typeof target === "string" && !!target.trim() &&
+    target !== runtime;
+  const unavailable = execution.state === "unavailable";
   return {
     visible: remote || runtime !== "local",
     remote,
+    unavailable,
     label: remote
-      ? `${machineLabel(runtime)} → ${machineLabel(target!)}`
+      ? `${machineLabel(runtime)} → ${machineLabel(target as string)}`
       : runtime,
     description: remote
       ? `Remote · AI runtime: ${machineLabel(runtime)} · Files and commands: ${
-        machineLabel(target!)
-      }`
+        machineLabel(target as string)
+      }${unavailable ? " · Execution environment unavailable" : ""}`
       : execution.state === "unavailable"
       ? `AI runtime: ${
         machineLabel(runtime)

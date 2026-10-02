@@ -1,4 +1,5 @@
 import Chip from "@mui/material/Chip";
+import WarningAmberOutlined from "@mui/icons-material/WarningAmberOutlined";
 import { alpha } from "@mui/material/styles";
 import type { SessionMeta } from "./protocol";
 import { sessionMachinePresentation } from "./sessionExecution";
@@ -18,7 +19,12 @@ export function SessionMachineBadge({ session, onInfo }: {
       title={machine.description}
       aria-label={machine.description}
       variant="outlined"
-      color={machine.remote ? "primary" : "default"}
+      color={machine.unavailable
+        ? "warning"
+        : machine.remote
+        ? "primary"
+        : "default"}
+      icon={machine.unavailable ? <WarningAmberOutlined /> : undefined}
       onPointerDown={tap.onPointerDown}
       onPointerMove={tap.onPointerMove}
       onPointerUp={tap.onPointerUp}
