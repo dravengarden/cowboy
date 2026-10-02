@@ -107,6 +107,27 @@ export async function run() {
       () => snapshot?.connected && snapshot.sessionsLoaded,
       "initial connection",
     );
+    if (scenario === "lost-send") {
+      openSession(session);
+      await submitPrompt(session, "retained through half-open socket");
+      await until(
+        () => (snapshot.optimisticMessages.get(session) ?? []).length === 0,
+        "early connection check replays durable message",
+        25_000,
+      );
+      const echoes = (snapshot.timelines.get(session) ?? []).filter((event) =>
+        event.kind === "update" &&
+        event.update.sessionUpdate === "user_message_chunk"
+      );
+      if (echoes.length !== 1) {
+        throw new Error("lost send recovery duplicated or lost the prompt");
+      }
+      return [
+        "quiet half-open socket checked early",
+        "same durable message replayed",
+        "one authoritative echo",
+      ];
+    }
     if (scenario === "draft-send") {
       openSession(session);
       await until(
@@ -150,7 +171,7 @@ export async function run() {
         "Sending cleared on exact operation identity",
       ];
     }
-    if (scenario === "transcript-recovery") {
+    if (scenario === "transcript-recovery" || scenario === "slow-mobile") {
       await productSyncDatabase.cache({
         kind: "session",
         session,
@@ -174,6 +195,32 @@ export async function run() {
         () => snapshot.transcriptSources.get(session)?.source === "replica",
         "cached paint",
       );
+      if (scenario === "slow-mobile") {
+        await submitPrompt(session, "slow mobile prompt");
+        await delay(11_000);
+        const outgoing = snapshot.optimisticMessages.get(session) ?? [];
+        if (outgoing.length !== 1 || outgoing[0]?.status !== "sending") {
+          throw new Error("slow confirmation was prematurely marked failed");
+        }
+        await until(
+          () => snapshot.transcriptSources.get(session)?.source === "live",
+          "12-second bootstrap completes without repeated abortion",
+          8_000,
+        );
+        if (document.querySelector("[data-transcript-cached-caption]")) {
+          throw new Error("slow bootstrap left the cached sync caption stuck");
+        }
+        await until(
+          () => (snapshot.optimisticMessages.get(session) ?? []).length === 0,
+          "33-second authoritative echo retires the retained prompt",
+          28_000,
+        );
+        return [
+          "slow transcript completes",
+          "no premature 10-second failure",
+          "late echo retires local copy",
+        ];
+      }
       await until(
         () => snapshot.transcriptSources.get(session)?.syncState === "retrying",
         "failed bootstrap retries cached tail",

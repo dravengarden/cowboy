@@ -7,11 +7,13 @@ const metadata = args.includes("--metadata");
 const local = args.includes("--local") || metadata || queued;
 const safety = args.includes("--safety");
 const recovery = args.includes("--transcript-recovery");
+const slowMobile = args.includes("--slow-mobile");
 const draftSend = args.includes("--draft-send");
 const bundles = args.filter((argument) =>
   argument !== "--queued" && argument !== "--metadata" &&
   argument !== "--local" &&
   argument !== "--safety" && argument !== "--transcript-recovery" &&
+  argument !== "--slow-mobile" &&
   argument !== "--draft-send"
 );
 if (
@@ -44,7 +46,9 @@ const session = {
   updated_at_ms: 0,
 };
 const cases = bundles.flatMap((bundle) =>
-  (draftSend
+  (slowMobile
+    ? ["slow-mobile", "lost-send"]
+    : draftSend
     ? ["draft-send"]
     : metadata
     ? ["metadata"]
@@ -71,6 +75,8 @@ for (const { bundle, scenario } of cases) {
   let metadataMutations = 0;
   let seq = 0;
   let attempts = 0;
+  let lostSend = false;
+  let recoveredTransport = false;
   let datasetId = descriptor.dataset_id;
   const seen = new Set<string>();
   const history: Record<string, unknown>[] = [];
@@ -159,6 +165,20 @@ for (const { bundle, scenario } of cases) {
         };
         socket.onmessage = async (event) => {
           const message = JSON.parse(event.data);
+          if (message.type === "connection_probe") {
+            if (scenario === "lost-send" && lostSend && deliveries === 0) {
+              recoveredTransport = true;
+              socket.close();
+              return;
+            }
+            socket.send(
+              JSON.stringify({
+                type: "connection_probe",
+                nonce: message.nonce,
+              }),
+            );
+            return;
+          }
           if (draftSend && message.type === "activate_draft") {
             if (
               typeof message.cmid !== "string" || message.cmid === draft.cmid
@@ -200,6 +220,10 @@ for (const { bundle, scenario } of cases) {
           if (message.type !== "submit") {
             return;
           }
+          if (scenario === "lost-send" && !recoveredTransport) {
+            lostSend = true;
+            return;
+          }
           if (seen.has(message.cmid)) return;
           seen.add(message.cmid);
           deliveries++;
@@ -212,7 +236,7 @@ for (const { bundle, scenario } of cases) {
               confirmed: [message.cmid],
             }));
           }
-          await delay(local ? 800 : 40);
+          await delay(scenario === "slow-mobile" ? 33_000 : local ? 800 : 40);
           const echo = {
             session_id: session.id,
             seq: ++seq,
@@ -237,6 +261,10 @@ for (const { bundle, scenario } of cases) {
         return response;
       }
       if (url.pathname.endsWith("/bootstrap")) {
+        if (scenario === "slow-mobile") {
+          bootstraps++;
+          await delay(12_000);
+        }
         if (recovery) {
           bootstraps++;
           await delay(150);
@@ -370,10 +398,21 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
     if (
       !(result as { ok?: boolean }).ok ||
       deliveries !==
-        (metadata ? 0 : local || draftSend ? 1 : safety || recovery ? 0 : 17) ||
+        (metadata
+          ? 0
+          : local || draftSend || slowMobile
+          ? 1
+          : safety || recovery
+          ? 0
+          : 17) ||
       attempts < 1
     ) {
       throw new Error("send fixture failed");
+    }
+    if (scenario === "lost-send" && attempts !== 2) {
+      throw new Error(
+        "lost send must recover through exactly one replacement socket",
+      );
     }
   } finally {
     clearTimeout(deadline);

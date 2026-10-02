@@ -1871,7 +1871,8 @@ async function hydrateSession(
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, 8000);
+  }, 30_000);
+  const startedAt = performance.now();
   const configOptionsRevisionAtRequestStart =
     configOptionsRevisions.get(sessionId) ?? 0;
   const promise = (async (): Promise<void> => {
@@ -1902,9 +1903,18 @@ async function hydrateSession(
       // HTTP 200 is not a source acknowledgement: creation can still be racing,
       // or another terminal may have removed it. Bound retries in both cases.
       retryableFailure = needsDraftSource(sessionId);
+      reportClientLog("info", "transcript_sync_completed", "Session transcript snapshot received", {
+        session_id: sessionId, duration_ms: performance.now() - startedAt, retry_attempt: retryAttempt,
+      });
     } catch (error) {
       retryableFailure = timedOut || !controller.signal.aborted;
-      if (retryableFailure) console.warn("session bootstrap failed", error);
+      if (retryableFailure) {
+        console.warn("session bootstrap failed", error);
+        reportClientLog("warn", "transcript_sync_failed", "Session transcript synchronization needs retry", {
+          session_id: sessionId, timed_out: timedOut,
+          duration_ms: performance.now() - startedAt, retry_attempt: retryAttempt,
+        });
+      }
     } finally {
       clearTimeout(timeout);
       if (sessionHydrations.get(sessionId)?.controller === controller) {
@@ -2445,8 +2455,11 @@ function isConnected(): boolean {
 // (the transcript isn't a small-value sync state). Both share the timer/status
 // machinery below.
 
-/** No daemon echo by here → treat the send as failed (WS dropped mid-flight). */
-const SEND_TIMEOUT_MS = 10_000;
+// Native remote image prompts can take 30–33s to produce an authoritative echo.
+// Check an unconfirmed send early, but keep a bounded minute for slow transport
+// and provider echo. A deadline still means unconfirmed, never proven lost.
+const SEND_TIMEOUT_MS = 60_000;
+const SEND_CHECK_MS = 10_000;
 
 function newCmid(): string {
   return `c-${newUuid()}`;
@@ -3909,7 +3922,11 @@ function armQTimers(
   clearOptTimers(mutationId);
   const statusIds = deliveryStatusIds(mutationId, echoCmid);
   optTimers.set(mutationId, {
+    check: setTimeout(() => checkUnconfirmedDelivery(sessionId, mutationId), SEND_CHECK_MS),
     fail: setTimeout(() => {
+      reportClientLog("warn", "delivery_confirmation_timeout", "Outgoing message remains unconfirmed; local copy retained", {
+        session_id: sessionId, mutation_id: mutationId, timeout_ms: SEND_TIMEOUT_MS,
+      });
       failDelivery(sessionId, statusIds);
       clearOptTimers(mutationId);
     }, SEND_TIMEOUT_MS),
@@ -4376,9 +4393,28 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
 
 // cmid → its pending/timeout timers, so reconcile/retry can clear them. Shared
 // by the chat overlay AND the queue path (`armQTimers`).
-const optTimers = new Map<string, { fail?: ReturnType<typeof setTimeout> }>();
+const optTimers = new Map<string, {
+  check?: ReturnType<typeof setTimeout>;
+  fail?: ReturnType<typeof setTimeout>;
+}>();
+
+/** A snapshot can recover an acknowledgement missed on the live stream. Probe
+ * a quiet socket too, so a mobile half-open connection replays the same durable
+ * id before the send is held as failed. Never close a socket still uploading. */
+function checkUnconfirmedDelivery(sessionId: string, cmid: string): void {
+  const bufferedBytes = socket?.bufferedAmount ?? 0;
+  reportClientLog("warn", "delivery_confirmation_delayed", "Checking an unconfirmed outgoing message", {
+    session_id: sessionId, mutation_id: cmid, buffered_bytes: bufferedBytes,
+    connected: isConnected(),
+  });
+  void hydrateSession(sessionId);
+  if (bufferedBytes === 0 && Date.now() - lastMessageAt >= SEND_CHECK_MS) {
+    recoverSocket("delivery_unconfirmed");
+  }
+}
 function clearOptTimers(cmid: string): void {
   const t = optTimers.get(cmid);
+  if (t?.check) clearTimeout(t.check);
   if (t?.fail) clearTimeout(t.fail);
   optTimers.delete(cmid);
 }
@@ -4400,6 +4436,7 @@ function patchMessage(sessionId: string, cmid: string, patch: ((m: QueuedMessage
 function armMsgTimers(sessionId: string, cmid: string): void {
   clearOptTimers(cmid);
   optTimers.set(cmid, {
+    check: setTimeout(() => checkUnconfirmedDelivery(sessionId, cmid), SEND_CHECK_MS),
     fail: setTimeout(() => {
       patchMessage(sessionId, cmid, (m) => (m.status === "failed" ? m : { ...m, status: "failed" }));
       clearOptTimers(cmid);
