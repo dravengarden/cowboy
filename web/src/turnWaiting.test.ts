@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   hasOpenTool,
   hasUnresolvedPermission,
+  isCurrentTurnStreamingItem,
   isTurnActivityUpdate,
   QUIET_BADGE_MIN,
   quietMinutes,
@@ -9,6 +10,106 @@ import {
   WAITING_ELAPSED_VISIBLE_SECONDS,
   waitingActivityLabel,
 } from "./turnWaiting.ts";
+import { derive } from "./derive.ts";
+import type { Envelope } from "./protocol.ts";
+
+Deno.test("Sending never revives a completed assistant bubble before the user echo", () => {
+  const completed: Envelope[] = [
+    {
+      session_id: "s",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Done" },
+      },
+    },
+    { session_id: "s", seq: 2, kind: "turn_end", stop_reason: "end_turn" },
+  ];
+  const previous = derive(completed).at(-1);
+  assertEquals(previous?.kind, "message");
+  assertEquals(isCurrentTurnStreamingItem(true, previous, completed), false);
+  const timeline: Envelope[] = [...completed, {
+    session_id: "s",
+    seq: 3,
+    kind: "lifecycle",
+    status: "busy",
+    detail: null,
+  }];
+  assertEquals(isCurrentTurnStreamingItem(true, previous, timeline), false);
+  for (
+    const content of [{ type: "text", text: "Next" }, {
+      type: "image",
+      data: "AA==",
+      mimeType: "image/png",
+    }]
+  ) {
+    const echoed: Envelope[] = [...timeline, {
+      session_id: "s",
+      seq: 4,
+      kind: "update",
+      update: { sessionUpdate: "user_message_chunk", content },
+    }];
+    assertEquals(isCurrentTurnStreamingItem(true, previous, echoed), false);
+    assertEquals(
+      isCurrentTurnStreamingItem(true, derive(echoed).at(-1), echoed),
+      false,
+    );
+    const responding: Envelope[] = [...echoed, {
+      session_id: "s",
+      seq: 5,
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "New reply" },
+      },
+    }];
+    const reply = derive(responding).at(-1);
+    assertEquals(isCurrentTurnStreamingItem(true, reply, responding), true);
+    assertEquals(isCurrentTurnStreamingItem(false, reply, responding), false);
+    for (const stop_reason of ["end_turn", "cancelled", "error: failed"]) {
+      assertEquals(
+        isCurrentTurnStreamingItem(true, reply, [...responding, {
+          session_id: "s",
+          seq: 6,
+          kind: "turn_end",
+          stop_reason,
+        }]),
+        false,
+      );
+    }
+  }
+});
+
+Deno.test("thoughts and retained history respect canonical turn boundaries", () => {
+  const thought = { key: "10", kind: "thought" };
+  const busy: Envelope = {
+    session_id: "s",
+    seq: 9,
+    kind: "lifecycle",
+    status: "busy",
+    detail: null,
+  };
+  assertEquals(isCurrentTurnStreamingItem(true, thought, [busy]), true);
+  assertEquals(
+    isCurrentTurnStreamingItem(true, thought, [{ ...busy, seq: 11 }]),
+    false,
+  );
+  assertEquals(
+    isCurrentTurnStreamingItem(true, thought, [{
+      session_id: "s",
+      seq: 11,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "Next" },
+      },
+    }]),
+    false,
+  );
+  assertEquals(isCurrentTurnStreamingItem(true, thought, []), true);
+  assertEquals(isCurrentTurnStreamingItem(true, undefined, []), false);
+});
 
 Deno.test("agent wait activity names the provider immediately", () => {
   assertEquals(waitingActivityLabel("Grok", 0), "Waiting for Grok…");

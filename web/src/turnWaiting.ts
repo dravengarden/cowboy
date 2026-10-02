@@ -1,4 +1,37 @@
+import type { Envelope } from "./protocol";
+
 export const WAITING_ELAPSED_VISIBLE_SECONDS = 5;
+
+/** Busy can precede the new user echo. Never revive an older reply's caret.
+ * Read canonical boundaries even when the rendered timeline is catching up. */
+export function isCurrentTurnStreamingItem(
+  working: boolean,
+  item: { key: string; kind: string; role?: string } | undefined,
+  timeline: readonly Envelope[],
+): boolean {
+  if (
+    !working || !item ||
+    !(item.kind === "thought" ||
+      (item.kind === "message" && item.role === "assistant"))
+  ) return false;
+  const seq = Number(item.key);
+  if (!Number.isSafeInteger(seq)) return false;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const event = timeline[i]!;
+    // Older events cannot close this row's turn. Avoid scanning old history
+    // on every streamed chunk.
+    if (event.seq < seq) return true;
+    if (event.kind === "turn_end" || event.kind === "lifecycle") {
+      return seq > event.seq;
+    }
+    // A new prompt is also a boundary when its lifecycle event was not retained.
+    if (
+      event.kind === "update" &&
+      event.update.sessionUpdate === "user_message_chunk"
+    ) return seq > event.seq;
+  }
+  return true;
+}
 
 /** After this many whole minutes of no turn activity on a Busy turn, show the
  *  count-up "still waiting" badge. Live terminal deltas are activity. A silent

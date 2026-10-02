@@ -72,6 +72,7 @@ import { ProviderRuntimeSurface } from "./ProviderSurface";
 import { ProviderThoughtSteps } from "./ProviderTranscript";
 import {
   hasUnresolvedPermission,
+  isCurrentTurnStreamingItem,
   quietMinutes,
   shouldShowQuietBadge,
   waitingActivityLabel,
@@ -3659,14 +3660,15 @@ export function Transcript({
   const lastSig = itemProgressSignature(lastItem, items.length);
   const waitingOnHuman = hasUnresolvedPermission(items);
   const quietMin = useQuietMinutes(sessionId, lastSig, working, waitingOnHuman);
-  // The last item is "streaming" if the agent is working AND it's an
-  // assistant message or a thought (both grow chunk by chunk). Tool calls
-  // have their own in_progress visual.
-  const lastIsStreamingAssistant = working &&
-    !!lastItem &&
-    ((lastItem.kind === "message" && lastItem.role === "assistant") ||
-      lastItem.kind === "thought");
-  const streamingRowKey = lastIsStreamingAssistant ? lastItem.key : null;
+  // Busy alone cannot make a completed reply stream again while the next
+  // prompt is Sending. Use canonical turn boundaries, including while the
+  // presented rows are catching up after a drawer gesture.
+  const lastIsStreamingAssistant = isCurrentTurnStreamingItem(
+    working,
+    lastItem,
+    timeline,
+  );
+  const streamingRowKey = lastIsStreamingAssistant ? lastItem?.key ?? null : null;
   const compacting = working && isCompactingTail(timeline);
   const showLiveCompactionRequest = working &&
     isCompactionRequestTail(timeline);
