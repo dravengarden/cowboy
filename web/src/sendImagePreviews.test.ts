@@ -171,3 +171,36 @@ Deno.test("confirmed image rows keep the send preview instead of the artifact UR
     "/api/artifacts/other.jpg",
   );
 });
+
+Deno.test("an adjacent send cannot supply the missing image of an earlier echo", () => {
+  assertEquals(promptEchoReadyToReplaceOptimistic(imageMessage, [
+    envelope(1, "text", "c1"),
+    envelope(2, "image", "c2"),
+  ]), false);
+});
+
+Deno.test("image-first captions and files remain on the local bubble until all content is present", () => {
+  const message = { cmid: "c1", text: "caption", attachments: [{ isImage: true }, { isImage: false }] };
+  const image = envelope(1, "image", "c1");
+  const caption = envelope(3, "text");
+  const file: Envelope = {
+    session_id: "s1", seq: 4, kind: "update",
+    update: { sessionUpdate: "user_message_chunk", content: { type: "resource_link", uri: "file:///notes.txt", name: "notes.txt" } },
+  };
+  const busy: Envelope = { session_id: "s1", seq: 2, kind: "lifecycle", status: "busy", detail: null };
+  assertEquals(promptEchoReadyToReplaceOptimistic(message, [image]), false);
+  assertEquals(promptEchoReadyToReplaceOptimistic(message, [image, busy, caption]), false);
+  assertEquals(promptEchoReadyToReplaceOptimistic(message, [image, busy, caption, file]), true);
+});
+
+Deno.test("confirmed previews follow inline document order instead of attachment tray order", () => {
+  const image = (id: string, data: string) => ({
+    id, name: `${id}.png`, mimeType: "image/png", isImage: true,
+    previewUrl: `data:image/png;base64,${data}`,
+    block: { type: "image" as const, data, mimeType: "image/png" },
+  });
+  rememberSendImagePreviews("reordered", [image("first", "YQ=="), image("second", "Yg==")],
+    "![second](cowboy-att:second) caption ![first](cowboy-att:first)");
+  assertEquals(confirmedImageSrc("/artifact/1", "reordered", 0), "data:image/png;base64,Yg==");
+  assertEquals(confirmedImageSrc("/artifact/2", "reordered", 1), "data:image/png;base64,YQ==");
+});

@@ -728,3 +728,41 @@ Deno.test("a sent file is its own chunk, not a paperclip glued to the prompt", (
     throw new Error("the prompt text must stay separate from the file");
   }
 });
+
+Deno.test("consecutive submissions have distinct identities even without agent output between them", () => {
+  const events: Envelope[] = ["first", "second", "third"].map((cmid, i) => ({
+    session_id: "s1", seq: i + 1, kind: "update", cmid,
+    update: {
+      sessionUpdate: "user_message_chunk",
+      promptOrigin: { actor: "human", source: "composer" },
+      content: { type: "text", text: "same text" },
+    },
+  }));
+  const messages = derive(events).filter((item) => item.kind === "message");
+  if (messages.length !== 3 || messages.some((message, i) => message.cmid !== events[i]?.cmid)) {
+    throw new Error("independent sends must not merge or match by text");
+  }
+});
+
+Deno.test("unrenderable first block keeps its identity across status frames and image continuation", () => {
+  const events: Envelope[] = [
+    { session_id: "s1", seq: 1, kind: "update", cmid: "previous",
+      update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human", source: "composer" }, content: { type: "image", url: "/api/artifacts/previous.png" } } },
+    { session_id: "s1", seq: 2, kind: "update", cmid: "new",
+      update: { sessionUpdate: "user_message_chunk", content: { type: "image" } } },
+    { session_id: "s1", seq: 3, kind: "lifecycle", status: "busy", detail: null },
+    { session_id: "s1", seq: 4, kind: "update",
+      update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human", source: "composer" }, content: { type: "image", url: "/api/artifacts/new.png" } } },
+    { session_id: "s1", seq: 5, kind: "update",
+      update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human", source: "composer" }, content: { type: "text", text: "new caption" } } },
+  ];
+  for (let length = 1; length <= events.length; length++) {
+    const messages = derive(events.slice(0, length)).filter((item) => item.kind === "message");
+    if (messages[0]?.cmid !== "previous" || messages[0].chunks.length !== 1) {
+      throw new Error("earlier image must remain unchanged throughout submission");
+    }
+    if (length >= 4 && messages[1]?.cmid !== "new") {
+      throw new Error("renderable continuation must inherit the exact submission identity");
+    }
+  }
+});

@@ -1,6 +1,7 @@
-import { type Attachment, isLoadablePreviewUrl } from "./attachments";
+import { type Attachment, attachmentDisplayParts, isLoadablePreviewUrl, stripImageTokens } from "./attachments";
 import type { Envelope } from "./protocol";
 import { isTurnActivityUpdate } from "./turnWaiting";
+import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 
 const previewsByCmid = new Map<string, string[]>();
 
@@ -9,8 +10,12 @@ const previewsByCmid = new Map<string, string[]>();
 export function rememberSendImagePreviews(
   cmid: string,
   attachments: readonly Attachment[],
+  text = "",
 ): void {
-  const urls = attachments.flatMap((attachment) =>
+  const ordered = attachmentDisplayParts(text, attachments).flatMap((part) =>
+    part.type === "attachment" ? [part.attachment] : []
+  );
+  const urls = ordered.flatMap((attachment) =>
     attachment.isImage && isLoadablePreviewUrl(attachment.previewUrl)
       ? [attachment.previewUrl]
       : []
@@ -63,6 +68,7 @@ function userMessageChunkContent(
   env: Envelope,
 ): {
   type?: string;
+  text?: string;
   data?: unknown;
   url?: unknown;
   source?: { data?: unknown; url?: unknown };
@@ -71,6 +77,7 @@ function userMessageChunkContent(
   if (env.update.sessionUpdate !== "user_message_chunk") return undefined;
   return env.update.content as {
     type?: string;
+    text?: string;
     data?: unknown;
     url?: unknown;
     source?: { data?: unknown; url?: unknown };
@@ -103,6 +110,7 @@ export function isRenderableUserMessageChunk(env: Envelope): boolean {
 export function promptEchoReadyToReplaceOptimistic(
   message: {
     cmid?: string;
+    text?: string;
     attachments?: readonly { isImage?: boolean }[];
   },
   timeline: readonly Envelope[],
@@ -114,16 +122,30 @@ export function promptEchoReadyToReplaceOptimistic(
   const needed = (message.attachments ?? []).filter((attachment) =>
     attachment.isImage
   ).length;
+  const neededFiles = (message.attachments ?? []).filter((attachment) =>
+    attachment.isImage === false
+  ).length;
+  const neededText = stripImageTokens(message.text ?? "").replace(/\s/g, "").length;
   let images = 0;
+  let files = 0;
+  let textLength = 0;
   let renderable = false;
   for (let index = start; index < timeline.length; index += 1) {
     const env = timeline[index]!;
+    // A subsequent send's image is not completion of this prompt.
+    if (env.cmid !== undefined && env.cmid !== cmid) break;
     const type = userMessageChunkType(env);
-    if (type === undefined) break;
+    if (type === undefined) {
+      if (env.kind === "lifecycle" && !shouldPaintTranscriptLifecycle(env.status)) continue;
+      if (env.kind === "update" && !isTurnActivityUpdate(env.update.sessionUpdate)) continue;
+      break;
+    }
     if (isRenderableUserMessageChunk(env)) renderable = true;
     if (type === "image" && isRenderableUserMessageChunk(env)) images += 1;
+    if (type === "resource" || type === "resource_link") files += 1;
+    if (type === "text") textLength += (userMessageChunkContent(env)?.text ?? "").replace(/\s/g, "").length;
   }
-  return renderable && images >= needed;
+  return renderable && images >= needed && files >= neededFiles && textLength >= neededText;
 }
 
 /** The daemon echoes every block of a prompt before the provider starts that

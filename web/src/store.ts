@@ -1601,14 +1601,19 @@ function handle(msg: Outbound): void {
             beforeSeq: msg.events[0]?.seq ?? null,
           });
       const confirmedCmids = new Set(
-        msg.events.flatMap((event) => event.cmid === undefined ? [] : [event.cmid]),
+        msg.events.flatMap((event) => {
+          if (event.cmid === undefined) return [];
+          const local = state.optimisticMessages.get(msg.session_id)?.find((row) => row.cmid === event.cmid);
+          return local !== undefined && !promptEchoReadyToReplaceOptimistic(local, timelines.get(msg.session_id) ?? [])
+            ? [] : [event.cmid];
+        }),
       );
       const optimisticMessages = confirmedCmids.size === 0
         ? state.optimisticMessages
-        : reconcileOptimistic(
+        : reconcileReadyOptimistic(
           state.optimisticMessages,
           msg.session_id,
-          confirmedCmids,
+          timelines.get(msg.session_id) ?? [],
         );
       setState({
         ...state,
@@ -3872,7 +3877,7 @@ function commitQueue(sessionId: string): void {
       continue;
     }
     if (row.cmid !== undefined) {
-      rememberSendImagePreviews(row.cmid, row.attachments);
+      rememberSendImagePreviews(row.cmid, row.attachments, row.text);
     }
     bubbles.push(withDelivery(
       row,
@@ -4057,7 +4062,7 @@ async function qAdd(
   const mode = opts.mode ?? "back";
   const origin = opts.origin ?? "composer";
   const cmid = opts.cmid ?? newCmid();
-  if (target === "transcript") rememberSendImagePreviews(cmid, attachments);
+  if (target === "transcript") rememberSendImagePreviews(cmid, attachments, text);
   const row: QueuedMessage = {
     id: `opt-${cmid}`,
     text,
@@ -4371,7 +4376,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
         next.drafts.some((item) => item.cmid === row.cmid) ||
         bubbles.some((item) => item.cmid === row.cmid) ||
         promptEchoReadyToReplaceOptimistic(row, state.timelines.get(sessionId) ?? [])) continue;
-      if (row.cmid !== undefined) rememberSendImagePreviews(row.cmid, row.attachments);
+      if (row.cmid !== undefined) rememberSendImagePreviews(row.cmid, row.attachments, row.text);
       bubbles.push(withDelivery(row, "sending"));
     }
     if (bubbles.length) optimisticMessages.set(sessionId, bubbles);

@@ -88,7 +88,7 @@ Deno.test("mdlive leaves cowboy-att images for the inline widget instead of hidi
 
 Deno.test("confirmed user rows stay hidden while the optimistic image bubble is up", () => {
   assert(transcript.includes("optimisticCmids.has(item.cmid)"));
-  assert(transcript.includes("overlayHidesTailHumanKey"));
+  assertEquals(transcript.includes("overlayHidesTailHumanKey"), false);
   assert(transcript.includes("applySendImagePreviews(chunks, cmid)"));
   assert(transcript.includes("retainUnpresentedOptimistic("));
   assert(transcript.includes("presentedTimeline !== timeline,"));
@@ -131,7 +131,7 @@ Deno.test("local content paints and reveals before the durable transport barrier
       add.indexOf("await mutateQueueDurably"),
   );
   assert(add.indexOf("await mutateQueueDurably") >= 0);
-  assert(add.includes("rememberSendImagePreviews(cmid, attachments)"));
+  assert(add.includes("rememberSendImagePreviews(cmid, attachments, text)"));
 
   const activateStart = store.indexOf("export async function activateDraft(");
   const activateEnd = store.indexOf(

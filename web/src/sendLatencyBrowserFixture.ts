@@ -5,14 +5,28 @@ import { createRoot } from "react-dom/client";
 import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSyncDatabase } from "./productSyncDatabase.ts";
 import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
+import { Transcript } from "./Transcript.tsx";
 import { activateDraft, openSession, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
+import type { Attachment } from "./attachments.ts";
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 let snapshot: ReturnType<typeof useStore>;
 function Probe() {
   snapshot = useStore();
+  if (new URL(location.href).searchParams.get("scenario") === "continuity") {
+    return createElement(Transcript, {
+      sessionId: "fixture-session",
+      timeline: snapshot.timelines.get("fixture-session") ?? [],
+      status: "running",
+      provider: "codex",
+      cwd: "/synthetic",
+      loading: false,
+      connected: snapshot.connected,
+      historyPaging: "page",
+    });
+  }
   return createElement(TranscriptCachedCaption, {
     sessionId: "fixture-session",
   });
@@ -89,6 +103,56 @@ export async function run() {
     samples.push({ kind, milliseconds: performance.now() - began });
   };
   try {
+    if (scenario === "continuity") {
+      openSession(session);
+      await until(() => document.querySelector('[data-key="1"] img') !== null, "earlier image paints");
+      const previous = document.querySelector('[data-key="1"]')!;
+      const failures: string[] = [];
+      let currentText = "";
+      let currentImages = 0;
+      const check = () => {
+        if (!previous.isConnected || document.querySelector('[data-key="1"]') !== previous) {
+          failures.push("previous image removed or remounted");
+        }
+        if (currentText && !document.body.textContent?.includes(currentText)) failures.push("current caption disappeared");
+        if (document.querySelectorAll("img").length < 1 + currentImages) failures.push("current attachments disappeared");
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(document.getElementById("root")!, { childList: true, subtree: true });
+      try {
+        const data = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        const image: Attachment = { id: "shot", name: "shot.gif", isImage: true, mimeType: "image/gif", previewUrl: `data:image/gif;base64,${data}`, block: { type: "image", data, mimeType: "image/gif" } };
+        const file: Attachment = { id: "file", name: "notes.txt", isImage: false, mimeType: "text/plain", block: { type: "resource_link", uri: "file:///notes.txt", name: "notes.txt" } };
+        const cases: [string, Attachment[]][] = [
+          ["first new text", []], ["second new text", []],
+          ["two image caption", [image, { ...image, id: "shot2", name: "shot2.gif" }]],
+          ["file caption", [file]],
+        ];
+        for (const [text, attachments] of cases) {
+          currentText = "";
+          currentImages = 0;
+          const previousImageCount = document.querySelectorAll("img").length - 1;
+          await submitPrompt(session, text, attachments);
+          await until(() => document.body.textContent?.includes(text) === true, "local send immediately visible");
+          currentText = text;
+          currentImages = previousImageCount + attachments.filter((attachment) => attachment.isImage).length;
+          const untilEcho = performance.now() + 500;
+          while (performance.now() < untilEcho) {
+            check();
+            if (!document.body.textContent?.includes(text)) failures.push("new text disappeared before echo");
+            await delay(10);
+          }
+          await until(() => (snapshot.optimisticMessages.get(session) ?? []).length === 0, "echo replaces local copy");
+          await delay(50);
+          check();
+          if (!document.body.textContent?.includes(text)) failures.push("new text missing after echo");
+        }
+      } finally {
+        observer.disconnect();
+      }
+      if (failures.length) throw new Error(failures.join(", "));
+      return ["earlier image node retained through four sends", "text, two images with caption, and file stay visible through delayed multipart echoes"];
+    }
     if (scenario === "missing-protocol") {
       await until(() => snapshot !== undefined, "mounted product subscriber");
       const text = `retained-${crypto.randomUUID()}`;

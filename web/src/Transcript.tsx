@@ -4266,14 +4266,9 @@ export function Transcript({
     }
     return ids;
   }, [optimisticMsgs]);
-  // Overlay is the painted send. Hide the newest human row even when that
-  // confirmed twin has no cmid (first tagged envelope did not create the item).
-  const overlayHidesTailHumanKey = optimisticMsgs.length === 0
-    ? undefined
-    : [...items].reverse().find((item) =>
-      item.kind === "message" && item.role === "user" &&
-      isHumanPrompt(item.origin)
-    )?.key;
+  // Only the matching echo is replaced by a local send. The last human row
+  // may be an earlier picture, a different device's send, or another pending
+  // prompt; its position is never evidence of delivery identity.
   const blockingTranscriptRestore = shouldShowBlockingTranscriptRestore(
     loading,
     items.length,
@@ -5732,11 +5727,8 @@ export function Transcript({
                     !shouldPaintTranscriptLifecycle(item.status)) &&
                   !(item.kind === "message" &&
                     item.role === "user" &&
-                    (
-                      (item.cmid !== undefined &&
-                        optimisticCmids.has(item.cmid)) ||
-                      item.key === overlayHidesTailHumanKey
-                    ))
+                    item.cmid !== undefined &&
+                    optimisticCmids.has(item.cmid))
                 )
                 .map((item) => (
                   <Box

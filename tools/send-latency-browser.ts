@@ -9,12 +9,13 @@ const safety = args.includes("--safety");
 const recovery = args.includes("--transcript-recovery");
 const slowMobile = args.includes("--slow-mobile");
 const draftSend = args.includes("--draft-send");
+const continuity = args.includes("--continuity");
 const bundles = args.filter((argument) =>
   argument !== "--queued" && argument !== "--metadata" &&
   argument !== "--local" &&
   argument !== "--safety" && argument !== "--transcript-recovery" &&
   argument !== "--slow-mobile" &&
-  argument !== "--draft-send"
+    argument !== "--draft-send" && argument !== "--continuity"
 );
 if (
   !browser?.startsWith("/nix/store/") ||
@@ -48,6 +49,8 @@ const session = {
 const cases = bundles.flatMap((bundle) =>
   (slowMobile
     ? ["slow-mobile", "lost-send"]
+    : continuity
+    ? ["continuity"]
     : draftSend
     ? ["draft-send"]
     : metadata
@@ -80,6 +83,18 @@ for (const { bundle, scenario } of cases) {
   let datasetId = descriptor.dataset_id;
   const seen = new Set<string>();
   const history: Record<string, unknown>[] = [];
+  if (continuity) {
+    history.push({
+      session_id: session.id, seq: ++seq, kind: "update", cmid: "previous",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "image", url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" },
+      },
+    }, {
+      session_id: session.id, seq: ++seq, kind: "turn_end", stop_reason: "EndTurn",
+    });
+  }
   const image = { type: "image", mimeType: "image/png", data: "c2hvdA==" };
   const draft = {
     id: "fixture-draft",
@@ -98,7 +113,7 @@ for (const { bundle, scenario } of cases) {
           headers: { "Content-Type": "text/javascript" },
         });
       }
-      if (local && /^\/[a-zA-Z0-9_-]+\.js$/.test(url.pathname)) {
+      if (/^\/[a-zA-Z0-9_-]+\.js$/.test(url.pathname)) {
         try {
           return new Response(
             await Deno.readTextFile(`${bundle}${url.pathname}`),
@@ -121,6 +136,9 @@ for (const { bundle, scenario } of cases) {
         request.method === "POST" && url.pathname === "/fixture/switch-dataset"
       ) {
         datasetId = `dataset-${"b".repeat(64)}`;
+        // A replacement service closes the previous transport. An online
+        // event alone probes a healthy socket rather than tearing it down.
+        for (const socket of sockets) socket.close(4000, "fixture service replaced");
         return new Response("ok");
       }
       if (
@@ -236,7 +254,28 @@ for (const { bundle, scenario } of cases) {
               confirmed: [message.cmid],
             }));
           }
-          await delay(scenario === "slow-mobile" ? 33_000 : local ? 800 : 40);
+          await delay(scenario === "slow-mobile" ? 33_000 : continuity ? 1500 : local ? 800 : 40);
+          if (continuity) {
+            const blocks = message.content?.length ? message.content : [{ type: "text", text: message.text }];
+            for (const [index, content] of blocks.entries()) {
+              const echo = {
+                session_id: session.id, seq: ++seq, kind: "update",
+                ...(index === 0 ? { cmid: message.cmid } : {}),
+                update: {
+                  sessionUpdate: "user_message_chunk",
+                  promptOrigin: { actor: "human", source: "composer" },
+                  content,
+                },
+              };
+              history.push(echo);
+              socket.send(JSON.stringify({ type: "event", envelope: echo }));
+              await delay(150);
+            }
+            const end = { session_id: session.id, seq: ++seq, kind: "turn_end", stop_reason: "EndTurn" };
+            history.push(end);
+            socket.send(JSON.stringify({ type: "event", envelope: end }));
+            return;
+          }
           const echo = {
             session_id: session.id,
             seq: ++seq,
@@ -400,6 +439,8 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
       deliveries !==
         (metadata
           ? 0
+          : continuity
+          ? 4
           : local || draftSend || slowMobile
           ? 1
           : safety || recovery

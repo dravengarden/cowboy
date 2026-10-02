@@ -7,6 +7,7 @@ import { stripImageTokens } from "./attachments";
 import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
+import { isTurnActivityUpdate } from "./turnWaiting";
 import {
   isHumanPrompt,
   isInternalRuntimePrompt,
@@ -371,9 +372,18 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   } | null = null;
   let lastHumanUser: Extract<RenderItem, { kind: "message" }> | undefined;
   let promptReplayOffset = 0;
+  // The tagged first block may be unrenderable. Keep its delivery identity
+  // until a visible block arrives, including across non-painted lifecycle frames.
+  let userCmid: string | undefined;
 
   for (const env of timeline) {
-    if (envelopeEndsMessage(env)) cursor = null;
+    if (env.kind === "update" &&
+      env.update.sessionUpdate !== "user_message_chunk" &&
+      isTurnActivityUpdate(env.update.sessionUpdate)) userCmid = undefined;
+    if (envelopeEndsMessage(env)) {
+      cursor = null;
+      userCmid = undefined;
+    }
 
     switch (env.kind) {
       case "update": {
@@ -382,10 +392,13 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           case "agent_message_chunk":
           case "user_message_chunk": {
             const role = u.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
+            if (role === "assistant") userCmid = undefined;
+            else if (env.cmid !== undefined) userCmid = env.cmid;
             const chunk = chunkOf(u);
             if (!chunk) break;
             if (
               role === "user" &&
+              env.cmid === undefined &&
               isUnoriginatedPromptReplay(u, chunk, lastHumanUser, promptReplayOffset)
             ) {
               promptReplayOffset += 1;
@@ -395,7 +408,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             const messageId = typeof u.messageId === "string" ? u.messageId : undefined;
             if (
               cursor?.kind === "message" && cursor.role === role &&
-              cursor.messageId === messageId && last?.kind === "message"
+              cursor.messageId === messageId && last?.kind === "message" &&
+              (role !== "user" || last.cmid === userCmid)
             ) {
               pushChunk(last, chunk);
             } else {
@@ -407,8 +421,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 chunks: [chunk],
                 key: String(env.seq),
                 origin,
-                ...(role === "user" && env.cmid !== undefined
-                  ? { cmid: env.cmid }
+                ...(role === "user" && userCmid !== undefined
+                  ? { cmid: userCmid }
                   : {}),
               });
               cursor = { kind: "message", role, ...(messageId ? { messageId } : {}) };
