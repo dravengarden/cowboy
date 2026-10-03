@@ -712,7 +712,12 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
         assert!(command_frame(command, &mut Record::default()).is_err());
     }
     assert!(Record::default().reply("unrequested").is_err());
-    for protocol in [18, 19, 20, 23] {
+    for protocol in [
+        18,
+        19,
+        20,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION + 1,
+    ] {
         assert!(
             handshake(
                 MachineFrame::Welcome {
@@ -727,9 +732,9 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
             .is_err()
         );
     }
-    // Both negotiations reach the product checks; only the receipt decides
-    // which one may be accepted.
-    for protocol in [21, 22] {
+    // Supported negotiations reach the product checks; only the receipt
+    // decides which one may be accepted.
+    for protocol in 21..=crate::machine_protocol::MACHINE_PROTOCOL_VERSION {
         let mut record = Record::default();
         handshake(
             MachineFrame::Welcome {
