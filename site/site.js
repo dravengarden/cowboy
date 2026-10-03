@@ -160,6 +160,18 @@ const zhMessages = {
   "capabilities.sessions": "Sessions",
   "capabilities.sessionsBody": "暂停、恢复、重连、排序",
   "ecosystem.eyebrow": "插件生态",
+  "execution.eyebrow": "本地与远端执行",
+  "execution.title.ai": "AI 在一台 Machine 上。",
+  "execution.title.work": "工作在另一台上。",
+  "execution.choose": "先选择项目，再选择 AI",
+  "execution.chooseBody":
+    "按 Machine 和目录浏览项目，再选择已安装的 AI。Cowboy 根据 AI 和项目所在的机器自动判断 Local 或 Remote。",
+  "execution.provider": "每个 Provider 一个 Plugin",
+  "execution.providerBody":
+    "Codex 和 Claude Code 各自通过现有 Plugin 支持两种模式。Remote 模式下，AI runtime 和认证留在一台 Machine；文件、命令和任务进程由项目所在的 Machine 执行。",
+  "execution.target": "始终使用同一个绑定目标",
+  "execution.targetBody":
+    "Agent 工具、Code、Review、Git 和上传使用同一台项目 Machine。Cowboy 负责路由、重连和取消。目标不可用时，不会静默切换到运行 AI 的机器执行。",
   "ecosystem.title.main": "插件不是附加项。",
   "ecosystem.title.emphasis": "它们就是产品边界。",
   "ecosystem.intro":
