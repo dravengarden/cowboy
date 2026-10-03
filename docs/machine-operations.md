@@ -64,8 +64,9 @@ failing digest. See
 [Machine component convergence](machine-component-convergence.md). A record
 without `automatic` stays a per-component action in Machines settings.
 
-The platform bootstrap bundle contains `cowboy`, `cowboy-machine`, and
-`cowboy-machine-install`. Build all three from the repository root with
+The platform bootstrap bundle contains `cowboy`, `cowboy-machine`,
+`cowboy-machine-install`, `cowboy-code-adapter`, and `cowboy-acp-worker`.
+Build all five from the repository root with
 `just build-machine-bootstrap`; release packaging must keep them together.
 The `cowboy` bootstrap binary exposes only `register` and `identity`, while the
 other two commands install the user service/LaunchAgent, a stable launcher, a
@@ -213,9 +214,43 @@ cowboy-machine-install \
   --workspace cowboy=/path/to/cowboy \
   --workspace columbus=/path/to/columbus \
   --max-sessions 8 \
+  --plugin-operation-admission \
   --enrollment-token "$ONE_TIME_TOKEN" \
   --artifact-public-key /path/to/component-publisher.pub
 ```
+
+For an already enrolled Machine, pass `--refresh` instead of
+`--enrollment-token`. Supply its existing Controller URL, Service id, state
+directory (especially for legacy installations), workspace list and other
+desired launcher options. Refresh verifies the Controller's Service identity,
+the saved origin, private-key presence and enrolled Machine id before writing.
+Legacy installations without `service-origin` use the matching installed
+launcher's explicit Service/origin/state arguments as their binding. Refresh
+keeps that launcher's name, background-service label and socket paths, so it
+does not create a second Machine service or move detached-worker sockets.
+It neither enrolls again nor replaces the private key or enrollment-token file.
+`--plugin-operation-admission` opts the Machine into Service-authorized Plugin
+operations; it remains disabled when omitted.
+
+```sh
+cowboy-machine-install \
+  --refresh --no-start \
+  --controller-url https://cowboy.example \
+  --service-id svc-0123456789abcdef0123456789abcdef \
+  --state-dir /Users/me/.local/state/cowboy-machine \
+  --workspace cowboy=/path/to/cowboy \
+  --plugin-operation-admission
+```
+
+`--no-start` stages the launcher, user-service definition and bootstrap bundle.
+Omitting it restarts the user service, so use the Machine maintenance boundary
+after checking active sessions. All launcher options must be supplied again;
+refresh does not parse or carry forward options from an older shell script.
+Bootstrap files are atomically replaced, avoiding in-place writes to running
+executables. Signed commands under `components/commands` retain precedence and
+are updated through their existing activation path. The worker is built with
+default features separately from the lightweight Machine host and included in
+both the CLI bundle and the native macOS manager bundle.
 
 The equivalent host options are Service-scoped. Each Cowboy Service has an
 independent Machine identity, component and Plugin generations, authentication
