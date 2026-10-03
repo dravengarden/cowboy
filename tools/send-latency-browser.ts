@@ -472,7 +472,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
         (metadata || updateSettings
           ? 0
           : failedRecovery
-          ? scenario.startsWith("failed-recovery-review") ? 1 : 2
+          ? scenario.endsWith("storage-error") || scenario === "failed-recovery-no-work" ? 1 : 2
           : continuity
           ? 4
           : local || draftSend || slowMobile

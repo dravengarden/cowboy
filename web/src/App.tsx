@@ -1,4 +1,5 @@
 import { WorkspacePicker } from "./WorkspacePicker";
+import { PriorSendDecisionSheet } from "./HeldMessagesSheet";
 import { AiInstallationPicker } from "./AiInstallationPicker";
 import { useProjectPlacement } from "./useProjectPlacement";
 import { MachineProjects } from "./MachineProjects";
@@ -3356,6 +3357,7 @@ export function App({
                 }),
             }}
         >
+            <PriorSendDecisionSheet />
             {/* The connection state is shared; so is the update policy. Both
                 surfaces download the deployed build at once, fill the bar with
                 it, and reload on their own after a countdown once the user is

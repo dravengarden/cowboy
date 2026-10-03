@@ -1,6 +1,5 @@
 import CloudOffOutlined from "@mui/icons-material/CloudOffOutlined";
 import CloudUploadOutlined from "@mui/icons-material/CloudUploadOutlined";
-import ErrorOutline from "@mui/icons-material/ErrorOutline";
 import {
   Box,
   ButtonBase,
@@ -15,7 +14,6 @@ import {
   useSyncStatus,
 } from "./store";
 import { requestSyncSheet } from "./syncSheetRequest";
-import { HeldMessagesSheet } from "./HeldMessagesSheet";
 import {
   relativeAge,
   SYNC_PRESENTATION_DEBOUNCE_MS,
@@ -28,73 +26,31 @@ import {
 // element here sits on the Mobile swipe path, so it is paint-only: no
 // transform, no shadow, no work on finger-down.
 
-/** How many rows of a session still wait to send, or need the user's decision. */
+/** Pending offline sends only; held messages are handled at the next send. */
 export function SessionObligationBadge(
   { sessionId }: { sessionId: string },
 ): React.JSX.Element | null {
-  const { pending, held } = useSessionObligations(sessionId);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const total = pending + held;
-  if (total === 0 && !reviewOpen) return null;
-  const attention = held > 0;
-  const label = attention
-    ? `${String(held)} ${
-      held === 1 ? "message needs" : "messages need"
-    } attention`
-    : `${String(pending)} ${
-      pending === 1 ? "message waits" : "messages wait"
-    } to send`;
+  const { pending } = useSessionObligations(sessionId);
+  if (pending === 0) return null;
+  const label = `${pending} ${
+    pending === 1 ? "message waits" : "messages wait"
+  } to send`;
   return (
-    <Box
-      component="span"
-      sx={{ display: "contents" }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      {total > 0 && (
-        <Tooltip title={`${label} · Review`} enterDelay={300}>
-          <ButtonBase
-            disableRipple
-            aria-label={label}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (attention) setReviewOpen(true);
-              else requestSyncSheet();
-            }}
-            sx={{
-              display: "inline-flex",
-              minWidth: 44,
-              height: 24,
-              // Keep row geometry stable while extending the hit area to 44px.
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                inset: "-10px 0",
-              },
-              alignItems: "center",
-              gap: 0.25,
-              flexShrink: 0,
-              color: attention ? "warning.main" : "info.main",
-            }}
-          >
-            {attention
-              ? <ErrorOutline sx={{ fontSize: 15 }} />
-              : <CloudUploadOutlined sx={{ fontSize: 15 }} />}
-            <Typography
-              variant="caption"
-              sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
-            >
-              {attention ? `${held} unconfirmed · Review` : total}
-            </Typography>
-          </ButtonBase>
-        </Tooltip>
-      )}
-      {reviewOpen && (
-        <HeldMessagesSheet
-          sessionId={sessionId}
-          onClose={() => setReviewOpen(false)}
-        />
-      )}
-    </Box>
+    <Tooltip title={label}>
+      <Box
+        role="img"
+        aria-label={label}
+        sx={{
+          display: "inline-flex",
+          gap: 0.25,
+          alignItems: "center",
+          color: "info.main",
+        }}
+      >
+        <CloudUploadOutlined sx={{ fontSize: 15 }} />
+        <Typography variant="caption">{pending}</Typography>
+      </Box>
+    </Tooltip>
   );
 }
 
