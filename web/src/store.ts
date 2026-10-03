@@ -2877,6 +2877,24 @@ export async function saveHeldDeliveryAsDraft(sessionId: string, id: string): Pr
   await saveRecoveredSendAsDraft(sessionId, id);
 }
 
+export function hasPendingPriorSends(sessionId: string, ids: readonly string[]): boolean {
+  return (qClients.get(sessionId)?.pending() ?? []).some((mutation) => ids.includes(mutation.id));
+}
+
+/** Every authored send waits for the same decision before changing its source. */
+async function prepareAuthoredSend(sessionId: string, sourceCmid?: string): Promise<void> {
+  await durableQueue(sessionId);
+  for (;;) {
+    const older = (qClients.get(sessionId)?.pending() ?? []).filter((mutation) => {
+      const row = (mutation.args as { row?: QueuedMessage }).row;
+      return row !== undefined && qStatus.get(mutation.id) === "failed" &&
+        (sourceCmid === undefined || (mutation.id !== sourceCmid && row.cmid !== sourceCmid));
+    }).map((mutation) => mutation.id);
+    if (older.length === 0) return;
+    await requestPriorSendDecision(sessionId, older);
+  }
+}
+
 function outboxSummary(): SyncStatusInput["outbox"] {
   let pending = 0;
   let held = 0;
@@ -4156,17 +4174,14 @@ async function qAdd(
     origin?: DeliveryOrigin;
     schedule?: DraftSchedule;
     cmid?: string;
+    sourceCmid?: string;
   } = {},
 ): Promise<void> {
   const mode = opts.mode ?? "back";
   const origin = opts.origin ?? "composer";
   const cmid = opts.cmid ?? newCmid();
   if (target === "transcript" || target === "queue") {
-    await durableQueue(sessionId);
-    const older = (qClients.get(sessionId)?.pending() ?? []).filter((mutation) =>
-      (mutation.args as { row?: QueuedMessage }).row !== undefined && qStatus.get(mutation.id) === "failed"
-    ).map((mutation) => mutation.id);
-    if (older.length > 0) await requestPriorSendDecision(sessionId, older);
+    await prepareAuthoredSend(sessionId, opts.sourceCmid);
   }
   if (target === "transcript") rememberSendImagePreviews(cmid, attachments, text);
   const row: QueuedMessage = {
@@ -4646,8 +4661,9 @@ function optimisticMessage(
   text: string,
   attachments: Attachment[],
   origin: DeliveryOrigin = "composer",
+  sourceCmid?: string,
 ): Promise<void> {
-  return qAdd("transcript", sessionId, text, attachments, { origin });
+  return qAdd("transcript", sessionId, text, attachments, { origin, ...(sourceCmid !== undefined ? { sourceCmid } : {}) });
 }
 
 // Tell the daemon the user opened/selected `id` so it revives that session's
@@ -4823,12 +4839,13 @@ async function editPendingRow(
 }
 
 export async function requestSendQueued(sessionId: string, id: string): Promise<void> {
+  await prepareAuthoredSend(sessionId, findQueued(sessionId, id)?.cmid);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
   if (target.kind === "local") {
     if (destinationForPrompt(isConnected(), sessionDispatchable(sessionId), true) === "transcript") {
-      await optimisticMessage(sessionId, row.text, row.attachments, "queue");
+      await optimisticMessage(sessionId, row.text, row.attachments, "queue", row.cmid);
       await discardQueued(sessionId, target.cmid);
       return;
     }
@@ -4873,11 +4890,12 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
 // next. The daemon promotes it and cancels the in-flight turn (or just sends it
 // if the session is already idle).
 export async function forcePushQueued(sessionId: string, id: string): Promise<void> {
+  await prepareAuthoredSend(sessionId, findQueued(sessionId, id)?.cmid);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
   if (target.kind === "local") {
-    await qAdd("queue", sessionId, row.text, row.attachments, { mode: "force", origin: "queue" });
+    await qAdd("queue", sessionId, row.text, row.attachments, { mode: "force", origin: "queue", ...(row.cmid !== undefined ? { sourceCmid: row.cmid } : {}) });
     await discardQueued(sessionId, target.cmid);
     return;
   }
@@ -5047,6 +5065,7 @@ export function clearDrafts(sessionId: string): Promise<void> {
 // Activate a draft: the daemon submits it (send-or-queue) and removes it from
 // drafts.
 export async function activateDraft(sessionId: string, id: string): Promise<void> {
+  await prepareAuthoredSend(sessionId, findDraft(sessionId, id)?.cmid);
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const dest = destinationForPrompt(
