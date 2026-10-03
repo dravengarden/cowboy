@@ -3,6 +3,8 @@
 Research and first interoperability probe, 2026-10-03. Option 1 is deployed;
 Option 2 is a proposed product mode with a working isolated transport probe.
 No production WireGuard interface, route, firewall rule or peer was installed.
+The scope is LAN reachability and a statically configured WireGuard data plane;
+Cowboy does not own a VPN control plane.
 
 ## Rust implementation
 
@@ -58,69 +60,103 @@ The tools directory must contain `wg`, `wireguard-go`, `ip` and `ping`; the
 receipt pins the Nix tools closure used here. The script refuses an ordinary
 host user namespace or a populated network namespace.
 
-## Proposed configuration and integration
+## LAN scope and ownership
 
-These are design fields, **not currently accepted Cowboy options**:
+Assume each device can directly reach the server's UDP listener on the LAN.
+Static peer configurations are sufficient: each endpoint retains its private
+key and receives the other endpoint's public key through a trusted channel.
+The operator supplies tunnel addresses and narrow AllowedIPs. No discovery,
+automatic enrollment, address allocator, NAT hole punching, relay, mesh routing
+or central peer inventory is required in Cowboy. Standard `wg`/`wg-quick` can
+configure this data plane. [WireGuard configuration](https://www.wireguard.com/quickstart/).
+
+LAN reachability alone does not encrypt traffic. Option 1 remains the HTTPS
+application with mandatory device authentication; Option 2 carries that same
+application over a private WireGuard interface. WireGuard peer keys are separate
+from the existing P-256/Ed25519 application identities. Removing a VPN peer and
+revoking an application session are separate administrative operations.
+
+| Concern | Owner |
+| --- | --- |
+| LAN reachability, UDP firewall access and stable endpoint | Host/network administration |
+| Peer public keys, static tunnel addresses and AllowedIPs | Operator-owned WireGuard profiles |
+| Existing system tunnel, routes and peer removal | OS WireGuard tools or an external VPN client |
+| Optional integrated tunnel startup/shutdown | A small local Cowboy network helper, if needed |
+| HTTPS, account/device checks and HTTP/WebSocket service | Existing Cowboy application |
+
+## Two ways to supply the tunnel
+
+**Existing system WireGuard:** the operator brings up the tunnel and points
+Cowboy clients at the reachable HTTPS service hostname or IP. Cowboy needs no
+WireGuard cryptographic library or new application transport protocol in this
+case. This is the simplest initial deployment path and also works for Browser/PWA
+with an external VPN client.
+
+**Integrated userspace WireGuard:** if Cowboy should bring up the tunnel itself,
+GotaTun is the preferred Rust candidate. Accept a local static profile and manage
+only its local lifecycle; do not introduce central registration or allocation.
+GotaTun supports configuration through standard WireGuard UAPI/tools. Linux
+interface creation still needs appropriate network privileges even though the
+cryptographic engine runs in userspace. Keep the Controller unprivileged and
+place privileged interface operations in a separately supervised helper.
+[Upstream configuration and privileges](https://github.com/mullvad/gotatun).
+
+Helper activation is a separate maintenance boundary; Controller/Web releases
+must not silently replace the resident Machine or routes. An integrated private
+mode should report tunnel failure rather than automatically switching to a
+public endpoint.
+
+## Static profile proposal
+
+These are design fields for an optional integrated client, **not currently
+accepted Cowboy options**. Existing system tunnels use their normal WireGuard
+configuration instead:
 
 ```toml
-transport = "wireguard" # alternative: "https" (Option 1)
-
 [wireguard]
-endpoint = "gateway.example.com:51820" # IPv4 or [IPv6]:port also valid
-server_public_key = "<pinned WireGuard public key>"
+endpoint = "192.168.1.20:51820" # hostname or [IPv6]:port also valid
+server_public_key = "<operator-supplied pinned WireGuard public key>"
 private_key_file = "<device-owned private key file>"
 tunnel_address = "10.77.0.10/32"
 allowed_ips = ["10.77.0.1/32"]
 service_origin = "https://cowboy.example.com"
 ```
 
-`endpoint` locates the public UDP listener. The pinned public key identifies the
-server, independently of DNS or its current IP. `tunnel_address` is the private
-overlay address. `service_origin` names the HTTPS application inside that
-overlay. Endpoint DNS refresh and roaming must retain the same pinned identity.
-Changing a DNS record must never enroll a different server key.
+`endpoint` locates the LAN UDP listener; it can be a host or IP. The pinned
+public key identifies the peer independently of DNS. `tunnel_address` is the
+separate private overlay address. `service_origin` is the HTTPS application
+reachable over that overlay, with normal certificate and hostname/IP validation.
+A stable service hostname can resolve to the tunnel address while the UDP
+endpoint uses the physical LAN address. DNS changes must not change peer trust.
 
-The initial topology should be a reachable server hub and outbound device
-peers, with only the Cowboy service prefix routed through the tunnel. Each
-device generates a separate WireGuard key locally; the server stores its public
-key and exact assigned address. Keep WireGuard keys distinct from the existing
-P-256/Ed25519 application identities. Use authenticated enrollment to deliver the
-server key and register the device key; never infer trust from a first UDP
-response. Device revocation removes both its application authority and its VPN
-peer. Persist allocation and revocation before acknowledging either operation.
-
-Keep the Controller unprivileged. A separately supervised network helper should
-own TUN creation, bounded route/firewall updates, key files and peer lifecycle.
-The existing HTTPS proxy and HTTP/WebSocket application can then operate over
-the private interface. Network-helper deployment is its own maintenance boundary;
-Controller/Web releases must not silently replace the resident Machine or routes.
-Tunnel failure must stay visible rather than falling back to public transport.
+The server's operator-owned profile contains each allowed device's public key
+and exact tunnel source address, for example `10.77.0.10/32`. Route only the
+Cowboy service address initially; internet forwarding is unnecessary for this
+scope. Public-key distribution, address changes and peer removal remain explicit
+profile updates through host/network administration.
 
 For Browser/PWA, retain HTTPS and Option 1's account/device checks inside the
 tunnel. WebCrypto requires a secure context, and a browser cannot install a
-system WireGuard interface. The two product modes therefore mean public HTTPS
-or a private WireGuard network carrying the same HTTPS service. An IP endpoint
-for WireGuard does not require an IP-based HTTPS origin; using a stable service
-hostname keeps certificate validation straightforward. [WebCrypto secure context](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/subtle).
+system WireGuard interface. [WebCrypto secure context](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/subtle).
 
-Desktop clients need a network helper or an installed WireGuard client. Native
-mobile integration needs the platform VPN lifecycle, including iOS packet-tunnel
-extensions and Android VpnService; compiling a Rust library does not provide
-those lifecycle/permission layers. A configured external VPN client can supply
-the tunnel to the current PWA first. [Apple packet tunnels](https://developer.apple.com/documentation/networkextension/nepackettunnelprovider),
+An integrated native mobile client still needs the platform VPN lifecycle,
+including iOS packet-tunnel extensions and Android VpnService. Compiling a Rust
+library does not supply those permissions or lifecycle layers; an external VPN
+client avoids adding them to Cowboy initially.
+[Apple packet tunnels](https://developer.apple.com/documentation/networkextension/nepackettunnelprovider),
 [Android VpnService](https://developer.android.com/reference/android/net/VpnService).
 
-## Work remaining before product activation
+## Research conclusion and remaining validation
 
-Implement explicit mode validation, authenticated pairing and revocation,
-durable peer/address inventory, the isolated helper's IPC contract, platform
-install/uninstall and recovery receipts, route conflict detection and private
-service exposure. Then test reconnects, DNS/address changes, UDP loss/blocking,
-MTU and large artifact transfers, sleep/wake, device revocation during live
-WebSockets, and helper/server restarts. UDP reachability still matters: WireGuard
-does not supply a relay or general NAT traversal control plane. Persistent
-keepalive can maintain an existing NAT mapping. [WireGuard configuration](https://www.wireguard.com/quickstart/).
+A static LAN WireGuard data plane is feasible without a Cowboy control plane.
+The eight isolated interoperability checks already use this topology and static
+peer configuration. They establish Linux transport feasibility, not an integrated
+Cowboy server/client release, mobile readiness or production performance.
 
-The current probe establishes Linux interoperability and feasibility. It does
-not establish mobile readiness, production performance, a complete enrollment
-protocol, or a self-healing multi-site VPN network.
+Before implementing an integrated helper, first validate the real Cowboy
+HTTPS/WebSocket service over an externally configured LAN tunnel. Check hostname
+and certificate handling, reconnects, UDP blocking, MTU/large artifact transfers,
+sleep/wake and operator removal of a peer during a live session. If integrated
+startup is still needed, define the local profile/helper interface, route-conflict
+checks, platform permissions and cleanup/recovery behavior. Enrollment protocols,
+central inventories and a self-healing multi-site VPN remain outside this scope.

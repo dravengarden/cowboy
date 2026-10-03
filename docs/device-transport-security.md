@@ -80,13 +80,18 @@ gates remain part of release verification.
 
 ## Option 2 boundary
 
-A future self-managed WireGuard mode should be an explicit transport choice,
-with a public UDP `endpoint = host-or-IP:port`, a pinned peer public key and a
-separate tunnel address. DNS/IP routes packets; it does not identify the peer.
-WireGuard keys remain separate from browser/CLI account keys. Enrollment,
-revocation, address allocation, route ownership and host service lifecycle need
-their own protocol and receipts. The present release does not implement that
-network or promise browser access without a native VPN client.
+Option 2 is scoped to a statically configured WireGuard data plane on a LAN
+where devices can reach the server UDP listener. Its endpoint can be a hostname
+or IP; a pinned peer public key identifies the server. WireGuard keys remain
+separate from browser/CLI account keys, and HTTPS/device authentication remain
+mandatory inside the tunnel.
+
+Network administration owns peer profiles, address assignment, routes and VPN
+peer removal. Cowboy does not own discovery, central enrollment, NAT traversal,
+relays or a peer/address control plane. An existing system tunnel can supply
+connectivity without a new Cowboy transport implementation; an optional Rust
+helper would manage only a local static tunnel's lifecycle. The present release
+does not implement that helper or promise browser access without a VPN client.
 
 The initial Rust implementation comparison, configuration proposal and successful
 isolated interoperability probe are recorded in
