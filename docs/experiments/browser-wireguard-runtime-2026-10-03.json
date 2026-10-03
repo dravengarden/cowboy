@@ -1,0 +1,104 @@
+{
+  "client": {
+    "accepted": 200,
+    "address_rejected": 0,
+    "buffered": 0,
+    "dropped": 1,
+    "error": "",
+    "handshakes_received": 3,
+    "handshakes_sent": 4,
+    "lastReceiver": 1125389308,
+    "leak": false,
+    "network_packets": 207,
+    "rejected": 0
+  },
+  "measurements": {
+    "droppedHandshakeRecoveryMs": 5142,
+    "firstHandshakeAndRoundTripMs": 62,
+    "fixtureRoundTripMedianMs": 31,
+    "rekeyObservationMs": 115663,
+    "sequentialPayloadBytes": 64182,
+    "sequentialPayloadRoundTripsMs": 3916,
+    "wasmWorkerStartupMs": 8
+  },
+  "ok": true,
+  "rejectionEvidence": {
+    "serverReplay": {
+      "accepted": 3,
+      "address_rejected": 0,
+      "buffered": 0,
+      "dropped": 0,
+      "error": "DuplicateCounter",
+      "handshakes_received": 1,
+      "handshakes_sent": 1,
+      "lastReceiver": 701616404,
+      "leak": false,
+      "network_packets": 4,
+      "rejected": 1
+    },
+    "wrongServerPin": {
+      "accepted": 0,
+      "address_rejected": 0,
+      "error": "InvalidMac",
+      "handshakes_received": 0,
+      "handshakes_sent": 0,
+      "network_packets": 0,
+      "rejected": 1
+    }
+  },
+  "server": {
+    "peer": {
+      "accepted": 200,
+      "address_rejected": 0,
+      "error": "",
+      "handshakes_received": 3,
+      "handshakes_sent": 0,
+      "network_packets": 203,
+      "rejected": 0
+    },
+    "revoked_packets": 1
+  },
+  "tests": [
+    "WASM worker uses browser CSPRNG and completes WireGuard handshake over verified WSS",
+    "Valid IPv4/UDP payload round trip through browser and native Rust engines",
+    "Server-initiated encrypted payload reaches the browser",
+    "Replayed client ciphertext rejected; subsequent fresh traffic succeeds",
+    "Replayed server ciphertext rejected in WASM; subsequent fresh traffic succeeds",
+    "Modified authentication tag rejected; original packet with same counter still accepted",
+    "Authenticated packet with unauthorized inner source rejected by peer address policy",
+    "WSS reconnect and explicit resume reset establish a fresh working WireGuard session",
+    "Removing peer invalidates established traffic; explicit reauthorization recovers",
+    "Server enforces configured device public key",
+    "Browser enforces server public-key pin; correct pin restores communication",
+    "Real WireGuard timer retransmits a deliberately dropped handshake",
+    "Sixty-four 1 KB payloads survive encrypted transport without corruption",
+    "Unmodified default rekey timer establishes a new session while payloads keep flowing",
+    "WSS binary messages carry WireGuard ciphertext without application plaintext marker"
+  ],
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0",
+  "date": "2026-10-03",
+  "engine": "GotaTun 0.9.2 with experimental WASM clocks",
+  "browser": "151.0.1",
+  "tls": "certificate verification enabled; disposable CA trusted only in disposable Firefox profile",
+  "isolation": "private user/network namespace; only loopback; no TUN, host routes or production credentials",
+  "wasmBytes": 305226,
+  "wasmSha256": "57eb1d0d1c7e635ff842aae19a03e6cd03e3a7773dcba897c565d27cc3094fbb",
+  "nativeSha256": "168b414595b7e7801c08692efd437376c69907cbde89347a594b94ca75b045f3",
+  "sourceFilesSha256": {
+    "Cargo.lock": "fca2c625ed75dc2f8d04439f1f28de809ff00c5e18d54dbde1c54e0abf9ec597",
+    "Cargo.toml": "5d826278fe991ff02c00bd844b0f2ff3ca1abf286535560b505c69a9a7bbc440",
+    "build.py": "1eea36f10b6f9f81f9559a8839c5bd8d79c7050062c342953355a546df06d25b",
+    "fixture.js": "2451214a63e574d9471bd10fe62dbcd8491ab86df21b0b8d43d0f039cd675c7a",
+    "gotatun-wasm.patch": "2bf56b7714d7d5ea83c96b6cb2b18aa545fe1c64cfbb7dbc25319d67ea0a4b27",
+    "run.py": "951397f60d1481b57165e3a804274ed54e571ca3033b148c1355eca3b6dba3a7",
+    "src/lib.rs": "da78fd047008c06da9d6971a189b2c59439957fe3e0053a4afc4a19344999c47",
+    "src/server.rs": "75a997c623e004e9341fa0e48f322ef72f4f1689635674028bc552c52a4d5816",
+    "worker.js": "992cecd805a75ed051975e82e1f4e6bf54f18d213fefa8e2b41c9c6ddf149ae6"
+  },
+  "limitations": [
+    "IPv4/UDP fixture payloads, not Cowboy HTTP/WebSocket application integration",
+    "loopback measurements include test-harness polling; not LAN throughput benchmarks",
+    "explicit pause/resume path, not a physical-device OS suspension test",
+    "Firefox only; Safari/PWA acceptance outstanding"
+  ]
+}
