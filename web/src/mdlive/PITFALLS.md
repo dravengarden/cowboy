@@ -1046,6 +1046,13 @@ here says otherwise.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
+2026-10-03: the Clear composer trigger and its non-modal Cancel/Clear all
+buttons need both pointer-down and mouse-down focus prevention, matching the
+expand control. iOS 26.5 WebKit still delivered a compatibility mouse-down after
+the prevented pointer event during the Option 1 image regression run; the native
+textarea blurred and the keyboard closed. Keep the Popper and editor mounted;
+prevent the follow-up focus transfer as well. This does not change pitfall #69.
+
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
 fullscreen editor:
 

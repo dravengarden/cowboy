@@ -3241,6 +3241,7 @@ export function ComposerWorkspace({
                         disabled={!clearable}
                         sx={TOOLBAR_ICON_BTN}
                         onPointerDown={(event): void => event.preventDefault()}
+                        onMouseDown={(event): void => event.preventDefault()}
                         onClick={(event): void =>
                           setClearComposerAnchor(event.currentTarget)}
                       >
@@ -3313,6 +3314,7 @@ export function ComposerWorkspace({
                   size="small"
                   color="inherit"
                   onPointerDown={(event): void => event.preventDefault()}
+                  onMouseDown={(event): void => event.preventDefault()}
                   onClick={(): void => setClearComposerAnchor(null)}
                   sx={{ textTransform: "none" }}
                 >
@@ -3323,6 +3325,7 @@ export function ComposerWorkspace({
                   variant="contained"
                   color="error"
                   onPointerDown={(event): void => event.preventDefault()}
+                  onMouseDown={(event): void => event.preventDefault()}
                   onClick={(): void => {
                     importantHaptic();
                     clearComposer();
