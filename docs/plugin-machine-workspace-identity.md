@@ -104,13 +104,13 @@ Explicitly not closed by this slice, and still open in the
 
 - Session read routes whose cwd is a session worktree rather than an advertised
   root. Those keep only the existing Controller observation fence.
-- Controller-local (colocated) execution. The Controller executes those reads
-  itself and still has no continuous root fence of its own.
+- Controller-local (colocated) execution is covered by the later separate
+  [local root fence](plugin-local-root-identity.md).
 - General graph contracts, state-dataset identity and reader/writer leases,
   security-domain epochs, independently authorized post-effect restoration,
   native-generation acceptance and supported-device acceptance.
-- Machine activation. This changes the Machine wire protocol to 22; the
-  resident Machine keeps protocol 21 until a separate maintenance boundary.
+- The original slice introduced wire protocol 22. Hawk's later October 2
+  protocol-24 Machine [adopted the fence](releases/plugin-root-identity-adoption-2026-10-03.md).
   Against a protocol-21 Machine the Controller behaves exactly as before.
 
 ## Acceptance
@@ -121,4 +121,5 @@ retained-handle proof, the complete quality gate, two v12/32-check connected
 chains plus one against the published artifact, the production Controller's
 recorded HTTP 200 for a replaced root, 24 browser cases and actual
 Catalog/host floors before and after activation. Only the Controller is
-activated; the resident protocol-21 Machine is unchanged.
+activated by that task; the resident protocol-21 Machine was unchanged then.
+The later Hawk adoption receipt is distinct from that isolated acceptance.

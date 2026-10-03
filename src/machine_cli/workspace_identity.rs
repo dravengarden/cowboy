@@ -137,12 +137,25 @@ impl RootIdentities {
         workspaces: &[MachineWorkspace],
     ) -> Vec<WorkspaceRootIdentity> {
         let mut advertised = Vec::with_capacity(workspaces.len());
-        let mut live = HashMap::with_capacity(workspaces.len());
+        let mut live: HashMap<PathBuf, TrackedRoot> =
+            HashMap::with_capacity(workspaces.len().min(MAX_TRACKED_ROOTS));
         for workspace in workspaces {
             let path = PathBuf::from(&workspace.canonical_path);
+            // Several configured IDs may name one root. Observe it once per
+            // advertisement and carry the same retained identity for every
+            // alias; removing it from the old map twice would mint a second
+            // identity and immediately invalidate the first alias.
+            if let Some(tracked) = live.get(&path) {
+                advertised.push(WorkspaceRootIdentity {
+                    workspace_id: workspace.id.clone(),
+                    incarnation: tracked.incarnation.clone(),
+                });
+                continue;
+            }
             if live.len() >= MAX_TRACKED_ROOTS {
                 tracing::warn!("advertised workspace root budget exceeded");
-                break;
+                // Later aliases of admitted roots need no additional handle.
+                continue;
             }
             let Some((handle, object)) = observe(&path) else {
                 continue;
@@ -428,5 +441,75 @@ mod tests {
             assert!(entry.is_well_formed());
             assert_eq!(entry.incarnation.len(), 32);
         }
+    }
+
+    #[test]
+    fn aliases_share_one_current_identity_across_advertisements_and_replacement() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("root");
+        std::fs::create_dir(&path).unwrap();
+        let roots = [workspace("a", &path), workspace("b", &path)];
+        let mut identities = RootIdentities::default();
+        let first = identities.observe_roots(&roots);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].incarnation, first[1].incarnation);
+        for root in &first {
+            identities
+                .verify(path.to_str().unwrap(), &root.incarnation)
+                .unwrap();
+        }
+        assert_eq!(identities.observe_roots(&roots), first);
+        assert_eq!(identities.roots.len(), 1);
+
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(
+            identities
+                .verify(path.to_str().unwrap(), &first[0].incarnation)
+                .is_err()
+        );
+        let replacement = identities.observe_roots(&roots);
+        assert_eq!(replacement[0].incarnation, replacement[1].incarnation);
+        assert_ne!(replacement[0].incarnation, first[0].incarnation);
+        assert_eq!(identities.observe_roots(&roots), replacement);
+
+        // Removing one configured alias still retires the shared identity,
+        // even without advertising the intermediate configuration.
+        identities.retain_configuration(&roots, &roots[..1]);
+        assert!(
+            identities
+                .verify(path.to_str().unwrap(), &replacement[0].incarnation)
+                .is_err()
+        );
+        let returned = identities.observe_roots(&roots);
+        assert_eq!(returned[0].incarnation, returned[1].incarnation);
+        assert_ne!(returned[0].incarnation, replacement[0].incarnation);
+    }
+
+    #[test]
+    fn handle_budget_counts_objects_and_keeps_aliases_after_overflow() {
+        let parent = tempfile::tempdir().unwrap();
+        let mut roots = Vec::new();
+        for index in 0..=MAX_TRACKED_ROOTS {
+            let path = parent.path().join(index.to_string());
+            std::fs::create_dir(&path).unwrap();
+            roots.push(workspace(&index.to_string(), &path));
+        }
+        roots.push(workspace("alias", Path::new(&roots[0].canonical_path)));
+        let mut identities = RootIdentities::default();
+        let advertised = identities.observe_roots(&roots);
+        assert_eq!(identities.roots.len(), MAX_TRACKED_ROOTS);
+        assert_eq!(advertised.len(), MAX_TRACKED_ROOTS + 1);
+        assert_eq!(advertised.last().unwrap().workspace_id, "alias");
+        assert_eq!(
+            advertised.last().unwrap().incarnation,
+            advertised[0].incarnation
+        );
+        assert!(
+            identities
+                .verify(&roots[MAX_TRACKED_ROOTS].canonical_path, "unminted")
+                .is_err()
+        );
+        assert_eq!(identities.observe_roots(&roots), advertised);
     }
 }
