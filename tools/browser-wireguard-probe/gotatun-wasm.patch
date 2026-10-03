@@ -1,0 +1,34 @@
+--- upstream/Cargo.toml
++++ experimental/Cargo.toml
+@@ -282,3 +282,6 @@
+     "user",
+ ]
+ default-features = false
++
++[target.'cfg(target_arch = "wasm32")'.dependencies.web-time]
++version = "=1.1.0"
+--- upstream/src/sleepyinstant/mod.rs
++++ experimental/src/sleepyinstant/mod.rs
+@@ -89,3 +89,7 @@
+         assert!(start.elapsed() >= sleep_time);
+     }
+ }
++
++// Research-only browser clock adapter.
++#[cfg(target_arch = "wasm32")]
++use web_time as inner;
+--- upstream/src/noise/handshake.rs
++++ experimental/src/noise/handshake.rs
+@@ -24,7 +24,11 @@
+ use chacha20poly1305::XChaCha20Poly1305;
+ use constant_time_eq::constant_time_eq_n;
+ use std::convert::TryInto;
+-use std::time::{Duration, SystemTime};
++use std::time::Duration;
++#[cfg(not(target_arch = "wasm32"))]
++use std::time::SystemTime;
++#[cfg(target_arch = "wasm32")]
++use web_time::SystemTime;
+ use zerocopy::IntoBytes;
+ 
+ #[cfg(feature = "mock_instant")]

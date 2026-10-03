@@ -6,7 +6,8 @@ No production WireGuard interface, route, firewall rule or peer was installed.
 The scope is LAN reachability and a statically configured WireGuard data plane;
 Cowboy does not own a VPN control plane. The native probe below does not constrain
 PWA clients to an installed VPN: the follow-up [browser userspace research](browser-wireguard-transport.md)
-explores WireGuard inside WASM over a direct browser-compatible carrier.
+now includes a working browser WASM peer over a direct WSS carrier, with
+15 isolated runtime checks.
 
 ## Rust implementation
 
@@ -163,10 +164,10 @@ The eight isolated interoperability checks already use this topology and static
 peer configuration. They establish Linux transport feasibility, not an integrated
 Cowboy server/client release, mobile readiness or production performance.
 
-The PWA goal now takes priority over native helper integration: first validate
-an actual browser WASM tunnel through a same-server carrier, then bridge Cowboy's
-API and live session protocol into it. The native probe remains useful reference
+A browser WASM peer now passes 15 runtime checks over a same-server WSS carrier.
+The next step is bridging Cowboy's API and live session protocol into that
+application-local tunnel. The native probe remains useful reference
 interop evidence but does not exercise that path. The [browser research](browser-wireguard-transport.md)
-records upstream examples, Rust compilation checks, integration boundaries and
-the next experiment. Discovery, NAT traversal and a multi-site control plane
+records upstream examples, Rust compilation and browser runtime checks,
+integration boundaries and the next application experiment. Discovery, NAT traversal and a multi-site control plane
 remain outside the scope.

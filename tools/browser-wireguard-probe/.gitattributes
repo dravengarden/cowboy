@@ -1,0 +1,2 @@
+# Unified diff context represents an empty source line with a single space.
+gotatun-wasm.patch whitespace=-blank-at-eol

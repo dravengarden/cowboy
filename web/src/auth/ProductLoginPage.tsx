@@ -24,6 +24,7 @@ import { PluginSlot } from "../pluginHost/PluginSlot";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 import { NativeAuthenticationBrowserOpenError } from "../openExternal";
 import { loginMethodLabel } from "./productReauthMethods";
+import { ExternalSignInButton } from "./ExternalSignInButton";
 import { SegmentedPill } from "../SegmentedPill";
 
 export type OidcLoginContext = {
@@ -34,6 +35,8 @@ export type OidcLoginContext = {
   busy: boolean;
   onStart: () => void;
   onCancel: () => void;
+  onRedirectBusy?: (busy: boolean) => void;
+  onRedirectError?: (error: string | null) => void;
 };
 
 type PasswordLoginContext = {
@@ -183,7 +186,9 @@ export function ProductLoginPage({
   };
 
   const submitProvider = (): void => {
-    if (busy || !selectedProvider || !useNativeProviderFlow) return;
+    if (
+      busy || providerAbort.current || !selectedProvider || !useNativeProviderFlow
+    ) return;
     const abort = new AbortController();
     providerAbort.current = abort;
     setBusy(true);
@@ -218,6 +223,8 @@ export function ProductLoginPage({
       busy,
       onStart: submitProvider,
       onCancel: () => providerAbort.current?.abort(),
+      onRedirectBusy: setBusy,
+      onRedirectError: setError,
     }
     : passwordMode !== null
     ? {
@@ -310,7 +317,7 @@ export function ProductLoginPage({
         <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
           <Box
             component="img"
-            src="/cowboy-app-icon-192-v6.png"
+            src="/cowboy-app-icon-192-v10.png"
             alt=""
             width={36}
             height={36}
@@ -380,7 +387,7 @@ export function ProductLoginPage({
             )}
           </>
         )}
-        {error && <Alert severity="error">{error}</Alert>}
+        {error && <Alert severity="error" role="alert">{error}</Alert>}
         {!setupRequired && loginMethods.length > 1 && (
           <SegmentedPill
             value={method}
@@ -388,7 +395,10 @@ export function ProductLoginPage({
               value: loginMethod.id,
               label: loginMethod.label,
             }))}
-            onChange={setMethod}
+            onChange={(value) => {
+              setMethod(value);
+              setError(null);
+            }}
             disabled={busy}
             fullWidth
             aria-label="Sign-in method"
@@ -455,7 +465,7 @@ export function LoginMethodFallback(
   if (context.kind === "oidc") {
     return (
       <Stack spacing={1.25}>
-        <Button
+        <ExternalSignInButton
           type="button"
           href={context.native ? undefined : context.startUrl}
           onClick={context.native ? context.onStart : undefined}
@@ -463,7 +473,9 @@ export function LoginMethodFallback(
           size="large"
           fullWidth
           disableElevation
-          disabled={context.native && context.busy}
+          busy={context.busy}
+          onRedirectBusy={context.onRedirectBusy}
+          onRedirectError={context.onRedirectError}
           endIcon={context.native && context.busy
             ? undefined
             : <ArrowForwardRounded />}
@@ -472,7 +484,7 @@ export function LoginMethodFallback(
           {context.native && context.busy
             ? "Waiting for approval…"
             : context.buttonLabel}
-        </Button>
+        </ExternalSignInButton>
         {context.native && context.busy && (
           <Button
             type="button"
@@ -558,7 +570,9 @@ export function LoginMethodFallback(
         size="large"
         fullWidth
         disableElevation
-        disabled={context.busy || !context.canSubmit}
+        loading={context.busy}
+        aria-busy={context.busy}
+        disabled={!context.canSubmit}
         sx={loginActionSx}
       >
         {context.submitLabel}

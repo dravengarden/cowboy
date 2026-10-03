@@ -13,7 +13,8 @@ if (
   suite !== "review-document-refresh" && suite !== "review-diff" &&
   suite !== "review-destination" && suite !== "review-recovery" &&
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
-  suite !== "workspace-picker" && suite !== "project-placement"
+  suite !== "workspace-picker" && suite !== "project-placement" &&
+  suite !== "sign-in"
 ) {
   throw new Error("unknown suite");
 }
@@ -77,7 +78,9 @@ await build({
       : {}),
     lib: {
       entry: new URL(
-        suite === "project-placement"
+        suite === "sign-in"
+          ? "../web/src/auth/signInBrowserConformance.tsx"
+          : suite === "project-placement"
           ? "../web/src/projectPlacementBrowserConformance.tsx"
           : suite === "workspace-picker"
           ? "../web/src/workspacePickerBrowserConformance.tsx"
