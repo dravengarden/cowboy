@@ -3191,6 +3191,8 @@ pub(crate) use tests::dispatch_trace_fixture;
 mod tests {
     use super::*;
 
+    mod deletion_process;
+
     #[test]
     fn process_probe_refuses_to_treat_permission_failure_as_exit() {
         assert!(observed_group_exists(Ok(()), 2));

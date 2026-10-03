@@ -71,8 +71,9 @@ receipt. Cross-generation recovery and failed-transaction repair selection are
 still unadmitted for Machine.
 
 Older host activators and portable updater recovery remain outside this finite
-guard. Exact executable crash/reopen/failure acceptance is also still open.
-Production writing therefore remains disabled. Release metadata is a build-owned
+guard. An independently supplied old/new release-executable matrix is also
+still open. Disposable test-executable process crash/reopen/failure fixtures
+now pass; production writing remains disabled. Release metadata is a build-owned
 claim, not authorization.
 
 ## Evidence boundary
@@ -81,8 +82,21 @@ Source fixtures close and reopen the journal, and restart in-process broker
 owners over real Unix IPC. They confirm pre-Welcome worker refusal, old launch
 refusal, terminal reset refusal, failure without Stop or registry effects,
 read-only compatibility, owner mismatch, bounded input and exclusive ownership.
-They are not an independently supplied old/new executable matrix, an OS-process
-crash or power-loss simulation, supported-device acceptance or native resume.
+Additional fixtures launch disposable broker OS processes from the freshly
+compiled test executable. They SIGKILL at staging, file-sync, rename and
+directory-sync boundaries, then reopen from a fresh reader process over real
+Unix IPC. Pre-rename staging is never replayed; published terminal records
+fence workers before Welcome and reject both ordinary and adoption-only
+launches. An acknowledged deletion survives writer and subsequent reader
+SIGKILL. Foreign logical owners and invalid committed storage refuse startup;
+a storage failure refuses the ACK and further admission in its existing owner.
+Every child is killed or exits and is reaped. All checkpoint hooks and child
+entry points are test-only.
+
+These fixtures are not an independently supplied old/new release-executable
+matrix, power-loss simulation, supported-device acceptance or native resume.
+Visibility after rename and SIGKILL is not proof of power-loss durability or
+a successful deletion ACK.
 Continuous Session incarnation, worktree ownership and general state leases
 remain separate from this finite terminal-deletion dataset.
 
@@ -98,3 +112,7 @@ The [reader-floor release](releases/plugin-session-deletion-floor-2026-10-03.md)
 records the root-owned persistent floor, actual undeclared-artifact refusal and
 bounded same-generation recovery fixtures. Older recovery authorities and
 writer acceptance remain separate.
+
+The [process-crash acceptance](experiments/plugin-session-deletion-process-2026-10-03.md)
+records the disposable process matrix, source gates and remaining release
+boundaries. It changes no production writer or deployment admission.

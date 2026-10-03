@@ -27,6 +27,15 @@ struct Record {
     deleted: Vec<String>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum WriteCheckpoint {
+    Staged,
+    FileSynced,
+    Renamed,
+    DirectorySynced,
+}
+
 pub(super) struct Journal {
     root: PathBuf,
     root_handle: File,
@@ -35,6 +44,8 @@ pub(super) struct Journal {
     deleted: HashSet<String>,
     writer_enabled: bool,
     poisoned: bool,
+    #[cfg(test)]
+    checkpoint: Option<Box<dyn Fn(WriteCheckpoint) + Send>>,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -124,6 +135,8 @@ impl Journal {
             deleted,
             writer_enabled,
             poisoned: false,
+            #[cfg(test)]
+            checkpoint: None,
         };
         journal.check()?;
         Ok(journal)
@@ -131,6 +144,18 @@ impl Journal {
 
     pub(super) fn deleted(&self) -> &HashSet<String> {
         &self.deleted
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_checkpoint(&mut self, checkpoint: impl Fn(WriteCheckpoint) + Send + 'static) {
+        self.checkpoint = Some(Box::new(checkpoint));
+    }
+
+    #[cfg(test)]
+    fn checkpoint(&self, stage: WriteCheckpoint) {
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint(stage);
+        }
     }
 
     pub(super) fn writer_enabled(&self) -> bool {
@@ -194,10 +219,18 @@ impl Journal {
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(&pending)?;
             file.write_all(&bytes)?;
+            #[cfg(test)]
+            self.checkpoint(WriteCheckpoint::Staged);
             file.sync_all()?;
+            #[cfg(test)]
+            self.checkpoint(WriteCheckpoint::FileSynced);
             self.check()?;
             std::fs::rename(&pending, self.root.join("deletions.json"))?;
+            #[cfg(test)]
+            self.checkpoint(WriteCheckpoint::Renamed);
             self.root_handle.sync_all()?;
+            #[cfg(test)]
+            self.checkpoint(WriteCheckpoint::DirectorySynced);
             self.check()?;
             Ok(())
         })();
