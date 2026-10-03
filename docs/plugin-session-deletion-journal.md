@@ -102,9 +102,13 @@ when the recovered revision changes. The
 passed its gates and clean Hawk build, but host activation was initially refused
 before switching by two unrelated failed OVH observation units. Authorized
 successor-revision observations subsequently passed 21/21 samples on each host.
-An obsolete JMS probe with removed test inputs still blocks activation; its
-retirement remains pending. The candidate is not installed, the previous owner
-remains active, and no failed unit was cleared to bypass preflight.
+An obsolete JMS probe with removed test inputs was separately archived and
+retired with explicit user authorization; no JMS network acceptance is claimed.
+Owner source `e516fc8c` then activated successfully on Hawk with passing health
+checks. Machine and Controller PIDs stayed unchanged; 16 of 17 worker/keeper
+PIDs were retained, with the remaining exited stale worker recycled by the
+existing broker on session revive. The host transaction's ordinary failed-unit
+refusal policy remains unchanged. Production deletion writing remains disabled.
 
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state

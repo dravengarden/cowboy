@@ -22,7 +22,7 @@ Existing Controller, Web and Machine reopen and recovery receipt tests pass
 with generated-format IDs. Production component receipt IDs were inspected and
 already satisfy the rule. No malformed production record was seeded.
 
-## Candidate built; activation blocked
+## Candidate build and initial activation refusal
 
 The clean committed source integrates fresh Columbus main and the active host
 revision. The owning Hawk build produced
@@ -43,10 +43,9 @@ This exercised the built candidate, not an installed owner update.
 Both were unrelated transient observation units. The host contract refuses
 unchanged failed units and prohibits clearing failure state to pass preflight.
 They were left intact. The previous successful host receipt and installed owner
-remain unchanged at source `3520f6821760ad97461290e720d0b517c145dc05`; this change
-has **not shipped**. After the observation task resolves its failures, rerun
-the owning activation with fresh remote/provenance checks. Rebuild if main has
-advanced beyond the candidate.
+remained unchanged at source `3520f6821760ad97461290e720d0b517c145dc05`; this
+change had **not shipped at that point**. The later repair and successful
+activation are recorded below.
 
 ## Observation repair follow-up
 
@@ -63,22 +62,26 @@ multiplexed connection's broken pipe. Both completed with 21/21 passing samples
 and exit 0. Their temporary command overrides were then removed. No daemon,
 overlay configuration, authentication material or Cowboy component was changed.
 
-A further unrelated failed unit now blocks activation:
+A further unrelated failed unit then blocked activation:
 `hawk-jms-family-probe-20261003.service`. Its original probe build omitted
 `with_utls` and could not create the isolated reality engine. The original task
 had already rebuilt the binary with the tag; rerunning that repaired binary
 then failed because the original experiment's token file had been removed.
 No token or provider credentials were copied or recreated. This does not
-establish a successful JMS network probe. Retirement of this obsolete task was
-requested separately and remains pending; its failed state has not been cleared.
-The Cowboy owner candidate remains uninstalled, with the previous successful
-host receipt unchanged. The evidence includes both original observation failures
-and all 42 successful successor samples.
+establish a successful JMS network probe. Retirement was requested separately.
+After explicit user confirmation, the unit definition, failure journal and
+retirement receipt were archived under
+`/var/lib/columbus/retired-probes/cowboy-transaction-identity-20261003`.
+The task was stopped and its failed state reset as an authorized retirement of
+an obsolete diagnostic unit. No replacement token was created and no JMS network
+acceptance is claimed. The ordinary host transaction's refusal policy was not
+changed. Evidence retains the original failures, retirement authorization and
+all 42 successful successor observation samples.
 
 The recursive built-unit comparison records `mandb.service` and system-path
 references in AccountsService, D-Bus and polkit drop-ins, plus the user D-Bus
-drop-in. Cowboy and worker unit definitions are unchanged. Since preflight
-refused, none of these candidate changes were activated.
+drop-in. Cowboy and worker unit definitions are unchanged. The initial preflight
+refusal activated none of these changes.
 
 Samples at `2026-10-03T14:13:20.117Z` and `2026-10-03T14:16:46.438Z` retained
 all 13 ACP worker and four execution keeper PIDs. Machine PID `1928418` and
@@ -89,8 +92,42 @@ generation `worker-6ede7a91cc8b8b3402d4`. Deletion state remained only `.lock`.
 These observations establish refusal continuity, not successful release or
 full generation/native-resume acceptance.
 
+## Successful owner activation
+
+After a fresh remote/provenance check, the same clean committed closure activated
+through `machines/justfile`. Transaction `1791039734507287815-e516fc8c33ee`
+recorded success at `2026-10-03T23:02:17+08:00`, with published source
+`e516fc8c33ee88fe87b596b4776ce86845687cd9`. All required health checks passed and
+no new failed units were recorded. The installed activator matches the candidate
+path and SHA-256 above. Its public command rejects an invalid repair ID before
+dispatch, leaving the Machine profile, receipt and floor unchanged and creating
+no component journal.
+
+The host receipt lists only `mandb.service` among top-level changed unit files
+and no explicit restart requests. The recursive comparison and switch journal
+also record system-path drop-in effects: AccountsService stopped/started,
+polkit restarted, D-Bus reloaded and the NixOS user activation units restarted.
+The top-level receipt list is not a complete account of process changes.
+
+Final samples at `2026-10-03T15:02:02.210Z` and
+`2026-10-03T15:02:41.553Z` retained 16 of 17 original worker/keeper PIDs.
+Machine PID `1928418` and Controller PID `486493` stayed unchanged. Worker
+`sess-1789954176239` changed from PID `3899663` to `2984204`: at
+`15:02:21.012147Z` the broker logged an exited, stale
+`worker-2801f50d44994e96b2b4` worker before session revive, then started the
+existing current generation `worker-6ede7a91cc8b8b3402d4`. This records the worker
+transition; it does not prove native resume acceptance or unchanged worker PIDs.
+
+Machine component receipt and floor bytes stayed unchanged; deletion state
+remained only `.lock`. Host switching rewrote `/run/cowboy-web` from a direct
+store target to the component-profile target, but both resolve to the same
+`qia373a79gqz8mrq50fzv4mk95s4hw33` Web release. HTTPS health/version/SPA/SW and
+deployment-health returned 200, HTML/SW kept `no-store`, SPA version
+`798bda6db1a3a8958a6102125058e8e2` stayed unchanged, and Machine remained online
+with the existing current generation.
+
 The [machine-readable evidence](../experiments/plugin-transaction-identity-2026-10-03.json)
-retains candidate hashes, blocker states, unchanged host receipt, recursive unit
-comparison and process samples. Cross-generation recovery and production
-deletion writing remain closed; old independent tool authority and portable
-reader admission remain open work.
+retains both activation attempts, probe retirement, successful host receipt,
+recursive unit comparison, switch journal and actual process changes.
+Cross-generation recovery and production deletion writing remain closed;
+old independent tool authority and portable reader admission remain open work.
