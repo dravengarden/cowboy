@@ -27,3 +27,6 @@ worktree authority or establish a general Session state lease. Machine restart
 still reconstructs declarations from Controller and surviving worker records;
 continuous Machine-owned Session/worktree identity remains open. Filesystem
 read observations remain the separate [protocol-25 contract](plugin-session-root-observations.md).
+
+The [published Machine release and bounded continuity evidence](releases/plugin-session-snapshot-placement-2026-10-03.md)
+record adoption separately from the remaining lifecycle work.
