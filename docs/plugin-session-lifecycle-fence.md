@@ -34,3 +34,6 @@ The [worker snapshot fence](plugin-session-snapshot-placement.md) independently
 protects declarations against worker observations, and the
 [Session filesystem observation](plugin-session-root-observations.md) supplies
 physical identities for buffered reads, not general worktree authority.
+
+The [published Machine release](releases/plugin-session-lifecycle-fence-2026-10-03.md)
+records source validation and bounded production continuity separately.
