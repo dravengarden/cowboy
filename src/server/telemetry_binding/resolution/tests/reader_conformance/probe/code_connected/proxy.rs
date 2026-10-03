@@ -464,7 +464,10 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
             protocol,
             desired_components,
             ..
-        } if !from_machine && desired_components.is_empty() && (21..=22).contains(&protocol) => {
+        } if !from_machine
+            && desired_components.is_empty()
+            && (21..=crate::machine_protocol::MACHINE_PROTOCOL_VERSION).contains(&protocol) =>
+        {
             record.counts.connections += 1;
             record.counts.protocols.push(protocol);
         }

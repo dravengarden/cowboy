@@ -294,9 +294,11 @@ async fn immutable_connected_code_buffers() -> Result<()> {
         && receipt.cleanup
         && receipt.checks.len() == 36
         && !receipt.wire.protocols.is_empty()
-        && receipt.wire.protocols.iter().all(|protocol| {
-            *protocol == crate::machine_protocol::CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION
-        });
+        && receipt
+            .wire
+            .protocols
+            .iter()
+            .all(|protocol| *protocol == crate::machine_protocol::MACHINE_PROTOCOL_VERSION);
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,
