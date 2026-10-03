@@ -494,6 +494,10 @@
         cat >"$out/etc/cowboy-release/source.json" <<'EOF'
         ${builtins.toJSON ((release-source "machine" bootstrap) // {
           workerGeneration = cowboy.workerGeneration;
+          sessionDeletionJournal = {
+            readerSchema = 1;
+            writerSchema = 0;
+          };
         })}
         EOF
       '';
