@@ -7,11 +7,12 @@ import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSyncDatabase, type ProductSyncScope } from "./productSyncDatabase.ts";
 import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
 import { Transcript } from "./Transcript.tsx";
-import { activateDraft, addDraft, openSession, submitPrompt, useStore } from "./store.ts";
+import { activateDraft, addDraft, forcePushQueued, openSession, requestSendQueued, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet.tsx";
+import { subscribePriorSendDecision } from "./priorSendDecision.ts";
 import { optimisticQuestionKey } from "./explore/optimisticPages.ts";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 
@@ -155,13 +156,29 @@ export async function run() {
         await until(() => snapshot.drafts.get(session)?.some((row) => row.text === "new working prompt" && row.status === undefined) === true, "new draft acknowledged");
         nextDraft = snapshot.drafts.get(session)!.find((row) => row.text === "new working prompt")!.id;
       }
+      const queued = scenario === "failed-recovery-queue" || scenario === "failed-recovery-force";
+      if (queued) {
+        await fetch("/fixture/seed-queue", { method: "POST" });
+        await until(() => snapshot.queues.get(session)?.some((row) => row.id === "queued-new") === true, "queue source acknowledged");
+      }
       let cancelled = false;
-      const nextSend = (nextDraft ? activateDraft(session, nextDraft) : submitPrompt(session, "new working prompt")).catch((error) => {
+      const nextSend = (queued
+        ? scenario === "failed-recovery-force" ? forcePushQueued(session, "queued-new") : requestSendQueued(session, "queued-new")
+        : nextDraft ? activateDraft(session, nextDraft) : submitPrompt(session, "new working prompt")).catch((error) => {
         if (error.name !== "AbortError") throw error;
         cancelled = true;
       });
       await until(() => document.body.textContent?.includes("Previous message unconfirmed") === true,
         "sending a new message asks how to resolve the earlier send");
+      let concurrentSend = Promise.resolve();
+      if (scenario === "failed-recovery-concurrent") {
+        let secondWaiting = false;
+        const unsubscribe = subscribePriorSendDecision(() => { secondWaiting = true; });
+        try {
+          concurrentSend = submitPrompt(session, "second concurrent prompt");
+          await until(() => secondWaiting, "second send waits on the same obligation");
+        } finally { unsubscribe(); }
+      }
       const decision = document.querySelector('[role="dialog"]')!;
       if (!decision || decision.textContent?.includes("cowboy-att:")) throw new Error("decision exposes internal attachment syntax");
       const metricsBefore = await (await fetch("/fixture/metrics")).json();
@@ -193,10 +210,18 @@ export async function run() {
         return ["failed archive preserves the original message and blocks the new send"];
       }
       await nextSend;
+      if (scenario === "failed-recovery-concurrent") {
+        await until(() => document.body.textContent?.includes("Previous message unconfirmed") !== true,
+          "second concurrent decision must not inherit Saving state");
+        await concurrentSend;
+        await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("second concurrent prompt"), "both distinct sends resume once");
+      }
       await until(() => snapshot.drafts.get(session)?.some((row) => row.text === oldText && row.attachments.length === 1) === true,
         "ignored original preserved with image in drafts");
       await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("new working prompt"), "new message sent after decision");
       if (!await retained("older unconfirmed caption")) throw new Error("ignored message not durable");
+      if (snapshot.drafts.get(session)?.filter((row) => row.text === oldText).length !== 1) throw new Error("old message archived more than once");
+      if (queued && snapshot.queues.get(session)?.some((row) => row.id === "queued-new")) throw new Error("sent source remains queued");
       if (document.querySelector('[data-held-message-notice]')) throw new Error("permanent warning remains");
       return ["decision happens before sending", "ignore keeps old text and images in drafts", "new message sent once without persistent warning"];
     }

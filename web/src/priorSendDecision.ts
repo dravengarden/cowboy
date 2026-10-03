@@ -1,4 +1,5 @@
 export interface PriorSendDecision {
+  readonly id: number;
   readonly sessionId: string;
   readonly ids: readonly string[];
   readonly resolve: () => void;
@@ -6,6 +7,7 @@ export interface PriorSendDecision {
 }
 const listeners = new Set<() => void>();
 let requests: PriorSendDecision[] = [];
+let nextRequestId = 0;
 export const currentPriorSendDecision = (): PriorSendDecision | null =>
   requests[0] ?? null;
 export function subscribePriorSendDecision(listener: () => void): () => void {
@@ -24,7 +26,13 @@ export function requestPriorSendDecision(
     );
   }
   return new Promise((resolve, reject) => {
-    requests = [...requests, { sessionId, ids, resolve, reject }];
+    requests = [...requests, {
+      id: ++nextRequestId,
+      sessionId,
+      ids,
+      resolve,
+      reject,
+    }];
     listeners.forEach((listener) => listener());
   });
 }

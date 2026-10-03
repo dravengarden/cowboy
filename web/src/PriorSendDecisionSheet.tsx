@@ -25,9 +25,7 @@ export function PriorSendDecisionSheet(): React.JSX.Element | null {
     currentPriorSendDecision,
     () => null,
   );
-  return request
-    ? <Decision key={request.ids.join(":")} request={request} />
-    : null;
+  return request ? <Decision key={request.id} request={request} /> : null;
 }
 
 function Decision(
