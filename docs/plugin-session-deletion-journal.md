@@ -110,6 +110,16 @@ PIDs were retained, with the remaining exited stale worker recycled by the
 existing broker on session revive. The host transaction's ordinary failed-unit
 refusal policy remains unchanged. Production deletion writing remains disabled.
 
+The owner journal also admits only its eight written phases. Missing, null,
+unknown and receipt-only terminal phases refuse before automatic recovery can
+rewrite intent or mutate the profile. `recovery-selected` requires the
+Controller or Machine lane and a nonempty explicit target/revision, so loss of
+a selected target cannot revive the implicit predecessor. Existing valid
+commit and rollback replay remain unchanged. The
+[journal phase release](releases/plugin-journal-phase-2026-10-03.md) records
+three-lane rejection/reopen fixtures and successful Hawk owner activation at
+Columbus source `193565d0`; no invalid production phase was seeded.
+
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state
 outright; compatible portable recovery readers remain unadmitted. A finite
