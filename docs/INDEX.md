@@ -117,6 +117,9 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
+  silent credential renewal, independent device keys, and revocation boundaries
+
 - [`releases/usage-execution-2026-10-01.md`](releases/usage-execution-2026-10-01.md) — Account usage placement release, production pins and remaining OVH Anthropic timeout
 - [`releases/anthropic-usage-timeout-2026-10-01.md`](releases/anthropic-usage-timeout-2026-10-01.md) — OVH preparation root cause, host-only repair and three real account queries
 - [`releases/matrix-workspaces-2026-10-01.md`](releases/matrix-workspaces-2026-10-01.md) — Hierarchical picker, mapped remote tasks, latency samples and accepted releases

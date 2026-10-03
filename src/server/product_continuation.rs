@@ -144,6 +144,19 @@ impl ProductContinuation {
                 token_hash,
                 identity,
             } => {
+                if !identity.is_automation()
+                    && !store
+                        .list_user_devices_for_user(&identity.user_id)
+                        .await
+                        .is_ok_and(|devices| {
+                            devices.iter().any(|device| {
+                                device.id == identity.device_id && device.revoked_at_ms.is_none()
+                            })
+                        })
+                {
+                    auth.device_access.revoke_device(&identity.device_id);
+                    return None;
+                }
                 if !auth
                     .device_access
                     .token_hash_still_valid(token_hash, identity, auth_now_ms())

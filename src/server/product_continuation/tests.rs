@@ -292,6 +292,9 @@ async fn device_and_automation_reads_do_not_replay_the_original_proof() {
         let key = crate::client_auth::new_signing_key().unwrap();
         let public = crate::client_auth::public_key_to_base64(&key);
         let device = "d".repeat(32);
+        if !automation {
+            crate::server::persist_fixture_device(&h.store, &h.user.id, &device, &public).await;
+        }
         let (token, _) = if automation {
             h.devices.issue_automation(
                 &device,
@@ -359,6 +362,19 @@ async fn device_and_automation_reads_do_not_replay_the_original_proof() {
             h.authentication.automation.enabled = false;
             assert!(captured.current(h.auth()).await.is_none());
             h.authentication.automation.enabled = true;
+        } else {
+            // A different process can revoke durable authority without clearing
+            // this process's still-live token map.
+            h.store
+                .revoke_user_device(&device, auth_now_ms())
+                .await
+                .unwrap();
+            assert!(h.devices.token_still_valid(
+                &token,
+                &verified.device_identity.clone().unwrap(),
+                auth_now_ms()
+            ));
+            assert!(captured.current(h.auth()).await.is_none());
         }
         h.devices.revoke_access_token(&token);
         assert!(captured.current(h.auth()).await.is_none());
