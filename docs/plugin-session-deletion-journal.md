@@ -54,10 +54,26 @@ already-healthy predecessor and Git-pinned candidate paths. Corrupt or dangling
 entries cannot be treated as absent state. Empty reader namespaces remain
 compatible with a legacy fallback; pending files are not committed evidence.
 
-This finite guard does not yet supply the durable component-owner reader floor
-needed before the first write, fence older host activators/portable updater
-recovery, or admit independent Machine recovery. Production writing therefore
-remains disabled. Release metadata is a build-owned claim, not authorization.
+The component owner now persists a root-owned reader floor after retaining an
+already accepted compatible fallback. It syncs that floor before profile
+mutation. The floor binds the Machine, dataset path and exact reader anchor;
+an empty or missing user-owned dataset no longer admits a legacy reader.
+Malformed or mismatched owner state fails closed. The first reader-only
+transition from a legacy artifact remains possible; the next activation
+anchors that accepted reader. No historical deletion records are reconstructed.
+
+Explicit Machine recovery is limited to a declared compatible reader in the
+candidate's exact worker generation. The independently accepted target must
+pass remote/active/candidate ancestry, is retained through interruption, and
+is revalidated before restoration. A missing or changed target cannot select
+the legacy predecessor. Its actual revision and generation enter the recovery
+receipt. Cross-generation recovery and failed-transaction repair selection are
+still unadmitted for Machine.
+
+Older host activators and portable updater recovery remain outside this finite
+guard. Exact executable crash/reopen/failure acceptance is also still open.
+Production writing therefore remains disabled. Release metadata is a build-owned
+claim, not authorization.
 
 ## Evidence boundary
 
