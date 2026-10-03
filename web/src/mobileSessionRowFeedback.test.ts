@@ -7,9 +7,9 @@ const rowStart = appSource.indexOf("const ReliableListItemButton");
 const rowEnd = appSource.indexOf("function SessionList", rowStart);
 const rowSource = appSource.slice(rowStart, rowEnd);
 
-Deno.test("session rows show the user-selected directory", () => {
+Deno.test("session rows show compact project context", () => {
   assertEquals(
-    /secondary=\{[\s\S]*?\{sessionDisplayDirectory\(s\)\}/.test(appSource),
+    /secondary=\{[\s\S]*?\{sessionListProjectLabel\(s\)\}/.test(appSource),
     true,
   );
 });
