@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
+mod bootstrap_probe;
+
 // Service IDs already consume 36 bytes. Compact socket basenames leave room
 // for ordinary Linux/macOS home paths without moving private runtime state.
 const MACHINE_SOCKET: &str = "run/m";
@@ -124,13 +126,14 @@ pub async fn register(
     };
     validate_socket_paths(&state_dir)?;
     crate::session_deletion_admission::require_empty_portable_namespace(&state_dir)?;
-    bind_service_origin(&state_dir, &controller_url)?;
     let host = machine_host_binary(None);
     anyhow::ensure!(
         host.is_file(),
         "cowboy-machine was not found next to this cowboy binary ({host}). Install both on this computer, then run register again.",
         host = host.display()
     );
+    bootstrap_probe::check(&host)?;
+    bind_service_origin(&state_dir, &controller_url)?;
     let identity = crate::machine_auth::MachineIdentity::load_or_create(&state_dir)?;
     let fingerprint = crate::machine_auth::fingerprint(identity.public_key())?;
     let machine_id = machine_id
@@ -303,6 +306,7 @@ fn prepare_install_at(args: &InstallArgs, home: &Path) -> Result<(PathBuf, PathB
             path.display()
         );
     }
+    bootstrap_probe::check(&source)?;
     bind_service_origin(&state, &normalize_controller_url(&args.controller_url)?)?;
     let config = home
         .join(".config/cowboy-machine/services")
@@ -803,6 +807,8 @@ mod tests {
         for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
             std::fs::write(bundle.join(name), name).unwrap();
         }
+        std::fs::write(bundle.join("cowboy-machine"), "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false}'\n").unwrap();
+        set_mode(&bundle.join("cowboy-machine"), 0o755).unwrap();
         std::fs::write(state.join("identity_ed25519"), "existing private key").unwrap();
         std::fs::write(state.join("machine-id"), "mac").unwrap();
         std::fs::write(state.join("service-origin"), "https://cowboy.example\n").unwrap();
@@ -859,6 +865,48 @@ mod tests {
         wrong.machine_id = None;
         wrong.controller_url = "https://other.example".to_owned();
         assert!(prepare_install_at(&wrong, root.path()).is_err());
+    }
+
+    #[test]
+    fn incompatible_bootstrap_preserves_the_existing_installation() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let state = root.path().join("state");
+        let bundle = root.path().join("bundle");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(state.join("bootstrap")).unwrap();
+        for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
+            std::fs::write(bundle.join(name), "candidate").unwrap();
+            std::fs::write(state.join("bootstrap").join(name), "retained").unwrap();
+        }
+        std::fs::write(bundle.join("cowboy-machine"), "#!/bin/sh\nexit 2\n").unwrap();
+        set_mode(&bundle.join("cowboy-machine"), 0o755).unwrap();
+        for (name, bytes) in [
+            ("identity_ed25519", "retained identity"),
+            ("machine-id", "fixture"),
+            ("service-origin", "https://cowboy.example"),
+            ("enrollment-token", "retained token"),
+        ] {
+            std::fs::write(state.join(name), bytes).unwrap();
+        }
+        let args = refresh_args(&state, &bundle.join("cowboy-machine"));
+        let error = prepare_install_at(&args, root.path()).unwrap_err();
+        assert!(error.to_string().contains("bootstrap must support"));
+        for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
+            assert_eq!(
+                std::fs::read(state.join("bootstrap").join(name)).unwrap(),
+                b"retained"
+            );
+        }
+        assert_eq!(
+            std::fs::read(state.join("identity_ed25519")).unwrap(),
+            b"retained identity"
+        );
+        assert_eq!(
+            std::fs::read(state.join("enrollment-token")).unwrap(),
+            b"retained token"
+        );
+        assert!(!root.path().join(".local/bin").exists());
+        assert!(!root.path().join(".config").exists());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt as _;
 use std::process::Command;
 
 const SERVICE: &str = "svc-0123456789abcdef0123456789abcdef";
@@ -21,6 +22,17 @@ fn refresh_cli_preserves_a_legacy_install_and_rejects_wrong_service() {
         for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
             std::fs::write(bundle.join(name), name).unwrap();
         }
+        let native = env!("CARGO_BIN_EXE_cowboy-machine").replace('\'', "'\\''");
+        std::fs::write(
+            bundle.join("cowboy-machine"),
+            format!("#!/bin/sh\nexec '{native}' \"$@\"\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            bundle.join("cowboy-machine"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         std::fs::write(state.join("identity_ed25519"), "existing key").unwrap();
         std::fs::write(state.join("machine-id"), "mac").unwrap();
         std::fs::write(state.join("enrollment-token"), "untouched token").unwrap();

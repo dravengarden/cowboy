@@ -98,6 +98,18 @@ namespace retains existing behavior. Committed files, directories and dangling
 symlinks all refuse; invalid namespace entries and inspection errors do not
 become empty state.
 
+Before replacing a bootstrap, the current installer probes the caller-selected
+executable with a cleared environment and temporary HOME/XDG/state. Empty state
+must report the exact read-only guard result without creating state; a synthetic
+committed entry must return the specific refusal without changing that entry
+or opening stores. Each probe has a five-second deadline and bounded parsed
+output. A pending probe is killed as its own process group and reaped on exit.
+Install/refresh check before copying payloads or changing configuration;
+register also checks before binding local origin or creating identity. This
+prevents a new guarded launcher from being paired silently with an old bootstrap.
+It is a compatibility check of caller-selected installation code, not a sandbox
+or signed reader/recovery admission.
+
 Rejected Welcome reconciliation no longer requests a host restart. This keeps
 a refused candidate from repeatedly exiting its healthy resident reader.
 These are bounded refusal checks, not a portable reader declaration, persistent
@@ -163,3 +175,6 @@ records the exact release revisions, native and launcher digests, isolated
 
 The [portable refusal release](releases/plugin-session-deletion-portable-2026-10-03.md)
 records the source guard, executable launcher tests and Machine release receipt.
+
+The [bootstrap compatibility release](releases/plugin-bootstrap-guard-2026-10-03.md)
+records pre-copy probe checks and exact old/new installer refresh controls.

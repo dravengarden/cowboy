@@ -142,6 +142,7 @@
           ./src/machine_auth.rs
           ./src/machine_components.rs
           ./src/machine_install.rs
+          ./src/machine_install
           ./src/session_deletion_admission.rs
           ./src/machine_protocol.rs
           ./src/machine_protocol
@@ -572,6 +573,7 @@
         test -e ${machine-src}/src/session_workspace.rs
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
+        test -e ${machine-src}/src/machine_install/bootstrap_probe.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
         test -x ${cowboy}/bin/cowboy-codex-app-server
