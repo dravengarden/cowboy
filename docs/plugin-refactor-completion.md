@@ -578,8 +578,20 @@ continuation caches now preserve that route through reconnection. Its
 [accepted Controller-only rollout](releases/plugin-session-read-routes-2026-09-19.md)
 includes an old-artifact negative test, two v7/20-check actual-process runs,
 complete integrated gates and activation retaining all 16 original workers.
-This is not Machine-owned filesystem identity, a state lease, native adoption
-or independent recovery; the broader exits below remain open.
+That initial rollout did not supply Machine-owned filesystem identity, a state
+lease, native adoption or independent recovery.
+
+[Machine-owned Session filesystem observations](plugin-session-root-observations.md)
+now add a private protocol-25 directory incarnation to buffered filesystem/Git
+reads after original product authorization. Retained directory handles prevent
+inode reuse, bounded eviction/configuration retirement ends old observations,
+and original-connection verification covers cached, conditional and error
+responses. The [October 3 rollout](releases/plugin-session-root-observations-2026-10-03.md)
+passes an actual old-artifact 304 negative and 38 connected checks, then activates
+Controller and Machine separately with all 14 workers and two execution keepers
+retained across each activation. This is finite physical read observation;
+continuous Session/worktree ownership, security domains, state leases, native
+adoption and recovery remain open.
 
 [Controller-owned identity for locally executed reads](plugin-local-root-identity.md)
 states the other half of the same rule: the party that touches the filesystem
@@ -685,7 +697,7 @@ record exact accepted artifacts and bounded production continuity observations.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
-| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Advertised-root and accepted-configuration identity are adopted by Hawk's October 2 protocol-24 Machine; the colocated Controller root fence is active. Machine-owned session-worktree identity remains open | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |
+| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Advertised-root and accepted-configuration identity are adopted by Hawk's October 2 protocol-24 Machine; the colocated Controller root fence is active. Protocol-25 Session filesystem read observations are adopted; continuous Session/worktree ownership remains open | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
 | P4 / Code consumer | The [Review destination reader](plugin-review-owned-destinations.md) connects explicit navigation, original-target handoff, independently owned native-text display and passive Settings recovery. The [native input candidate](plugin-native-input-bounds.md) bounds single inputs; the [whole-query candidate](plugin-native-navigation-budgets.md) adds aggregate pre-acquisition location/target budgets, original-worktree-only opens and typed refusal. [Single-use Open](plugin-native-open-once.md) removes implicit replay and fences unobserved acquisition; [native close confirmation](plugin-native-close-confirmation.md) verifies original-peer removal. Global retained-history/background-effect limits and independent acceptance of the deployed Machine/exact native pair remain open | Actual deployed consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; aggregate native lifetime/resource limits and supported-client native acceptance |

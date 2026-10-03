@@ -1,0 +1,140 @@
+{
+  "schema": "cowboy.session-root-release-equivalence/v1",
+  "normalizations": [
+    "own release path only",
+    "source.json revision only"
+  ],
+  "lanes": [
+    {
+      "lane": "controller",
+      "gated_release": "/nix/store/vdsz7ax0i4vk6nbgpq2cawqrhd99a3z3-cowboy-controller-release",
+      "adoption_release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+      "gated_source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "controller",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "3bd443de03760f1e56eeada9ff5694e0c952bee8",
+        "schema": 1
+      },
+      "adoption_source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "controller",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+        "schema": 1
+      },
+      "normalized_entries": {
+        "bin/cowboy": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "e7c6ae535bf9aaa2ff0c24b0b695d6ed7766933631cb219fa5936469379f7513"
+        },
+        "bin/cowboy-plugin-js": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "e0c5bb1e6aa33e45c363949b00aaaeb412d45b482f0ad679c09c36ecf68a60df"
+        },
+        "etc/cowboy-release/source.json": {
+          "kind": "file",
+          "mode": 292,
+          "normalized_sha256": "a90daaff376d9b51ee0742d258d94e73d488ea243a8683d50d5a0e2b870f1257"
+        }
+      },
+      "equivalent": true
+    },
+    {
+      "lane": "machine",
+      "gated_release": "/nix/store/fdpyy64na2fz1b2w4jgh60miz6w4x241-cowboy-machine-release",
+      "adoption_release": "/nix/store/4nk5169wyvcaip82x7lkmw3nn4svhm8j-cowboy-machine-release",
+      "gated_source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "3bd443de03760f1e56eeada9ff5694e0c952bee8",
+        "schema": 1,
+        "workerGeneration": "worker-eed1d8105af00846771d"
+      },
+      "adoption_source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+        "schema": 1,
+        "workerGeneration": "worker-eed1d8105af00846771d"
+      },
+      "normalized_entries": {
+        "bin/cowboy-zed-adapter": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "966b307a6e356281abd39ec8c80827f22689d548a17911e21bfb369d99c08bb6"
+        },
+        "bin/cowboy-execution-host": {
+          "kind": "file",
+          "mode": 365,
+          "normalized_sha256": "1768b796e70f01632a37d6ae237bc01aafb23b3336adfbca153881bea88693ae"
+        },
+        "bin/cowboy": {
+          "kind": "file",
+          "mode": 365,
+          "normalized_sha256": "d7070adcddd6ed61bbff11a4070519a50cc9b0f3534214d9a660d2531d6f527e"
+        },
+        "bin/cowboy-acp-worker": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "ca626d9f7e115eb01ef1b7bd1019f11175855557d5c4b92f58dd2b448633a59a"
+        },
+        "bin/cowboy-codex-app-server": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "52d86ff7690b6e7bffb5ace68d6b7e0fc036f25b1c83061e7ed9c27588ccac23"
+        },
+        "bin/cowboy-zed-server": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "143a41a69242da567374c238d6dcba6abd8434f926558ea9e775637a45cc0821"
+        },
+        "bin/cowboy-machine": {
+          "kind": "file",
+          "mode": 365,
+          "normalized_sha256": "449536d2990481ae553e957d745412c5665d83d879adc0208effe9bad0927dae"
+        },
+        "bin/cowboy-code-adapter": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "ea11399fe730f32aebcc64a411f86cb6cc57bf87f417868ed9690e950fa84c7d"
+        },
+        "bin/cowboy-plugin-js": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "e0c5bb1e6aa33e45c363949b00aaaeb412d45b482f0ad679c09c36ecf68a60df"
+        },
+        "bin/cowboy-machine-install": {
+          "kind": "file",
+          "mode": 365,
+          "normalized_sha256": "b69a1224a714e3b0a13d94c6936dd6aab79faf22cefb4ba294ae63ade978ab22"
+        },
+        "bin/.cowboy-wrapped": {
+          "kind": "file",
+          "mode": 365,
+          "normalized_sha256": "8a9b94ba1808848b378f363067c46fdd9ad1962d0752c603deb5cdf715be6d70"
+        },
+        "libexec/cowboy-machine": {
+          "kind": "symlink",
+          "mode": 511,
+          "normalized_sha256": "d2358450203f607de2983f3370d55ba166609a8f998fc7c37c341e1a3a9c370e"
+        },
+        "etc/cowboy-release/source.json": {
+          "kind": "file",
+          "mode": 292,
+          "normalized_sha256": "22d1e42c006ac0f5cf970cf84bb1b746e387e4374e67fcabaaf485ead5432b83"
+        }
+      },
+      "equivalent": true
+    }
+  ],
+  "accepted": true
+}

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "machine": "hawk",
+  "component": "cowboy",
+  "lane": "controller",
+  "transaction": "1791001934470292057-7e3c2cd5848b",
+  "revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+  "published": true,
+  "release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+  "previousRelease": "/nix/store/f2cdh9yn4dm4k1krvv7wkblfwcpjhhiz-cowboy-controller-release",
+  "activeRelease": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+  "outcome": "succeeded",
+  "phase": "committed",
+  "maintenance": false,
+  "startedAt": "2026-10-03T04:32:14.470292057Z",
+  "recordedAt": "2026-10-03T04:32:32.062067431Z",
+  "recovered": false
+}
