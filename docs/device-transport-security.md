@@ -80,18 +80,20 @@ gates remain part of release verification.
 
 ## Option 2 boundary
 
-Option 2 is scoped to a statically configured WireGuard data plane on a LAN
-where devices can reach the server UDP listener. Its endpoint can be a hostname
-or IP; a pinned peer public key identifies the server. WireGuard keys remain
-separate from browser/CLI account keys, and HTTPS/device authentication remain
-mandatory inside the tunnel.
+Option 2 is scoped to a statically configured WireGuard data plane on a LAN.
+Native peers can use UDP; a browser-local WASM peer needs WSS or WebTransport
+carried directly to the Cowboy server. A host/IP locates the endpoint, while a
+pinned public key identifies the peer. WireGuard keys remain separate from
+browser/CLI account keys. HTTPS remains necessary for PWA delivery and its outer
+carrier, and application account/device checks must survive transport changes.
 
-Network administration owns peer profiles, address assignment, routes and VPN
-peer removal. Cowboy does not own discovery, central enrollment, NAT traversal,
-relays or a peer/address control plane. An existing system tunnel can supply
-connectivity without a new Cowboy transport implementation; an optional Rust
-helper would manage only a local static tunnel's lifecycle. The present release
-does not implement that helper or promise browser access without a VPN client.
+Cowboy does not own discovery, NAT traversal, relays across multiple hosts or a
+central peer/address control plane. Each endpoint still needs a local peer
+configuration and trusted public-key provisioning. Existing system WireGuard
+can supply connectivity, but an installed VPN is not a prerequisite for the
+proposed browser-local design. Neither native helper nor browser tunnel is part
+of the present release. See [browser userspace WireGuard](browser-wireguard-transport.md)
+for the updated PWA scope and integration requirements.
 
 The initial Rust implementation comparison, configuration proposal and successful
 isolated interoperability probe are recorded in
