@@ -1,5 +1,6 @@
 // Build before and after from the owning checkout, retaining both artifacts.
 import { build } from "../web/node_modules/vite/dist/node/index.js";
+import { readFileSync, writeFileSync } from "node:fs";
 const outDir = process.argv[2];
 if (!outDir?.startsWith("/")) {
   throw new Error("absolute output directory required");
@@ -46,3 +47,11 @@ await build({
     },
   },
 });
+if (process.argv[3] === "--device-ui") {
+  const source = readFileSync(new URL("../web/index.html", import.meta.url), "utf8");
+  const styles = source.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+  writeFileSync(`${outDir}/index.html`, `<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<style>${styles}</style><link rel="stylesheet" href="cowboy-web.css"><div id="root"></div>
+<script type="module">import {run} from './fixture.js'; run().catch(e => document.body.textContent=String(e));</script>`);
+}
