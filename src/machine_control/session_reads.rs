@@ -21,6 +21,7 @@ pub(crate) struct SessionReadScope {
     /// route unequal to the current one, so cached representations, `ETags` and
     /// page/diff continuations keyed by it stop answering.
     local: LocalRoot,
+    remote_root: Option<String>,
 }
 
 impl PartialEq for SessionReadScope {
@@ -28,6 +29,7 @@ impl PartialEq for SessionReadScope {
         Arc::ptr_eq(&self.owner, &other.owner)
             && self.session == other.session
             && self.local == other.local
+            && self.remote_root == other.remote_root
             && match (&self.connection, &other.connection) {
                 (None, None) => true,
                 (Some(left), Some(right)) => left.same(right),
@@ -41,6 +43,7 @@ impl Hash for SessionReadScope {
         Arc::as_ptr(&self.owner).hash(state);
         self.session.hash(state);
         self.local.hash(state);
+        self.remote_root.hash(state);
         self.connection
             .as_ref()
             .map(|connection| Arc::as_ptr(&connection.0))
@@ -59,6 +62,7 @@ impl SessionReadScope {
 
     pub(crate) fn string_bytes(&self) -> usize {
         self.session.string_bytes()
+            + self.remote_root.as_ref().map_or(0, String::len)
             + self.connection.as_ref().map_or(0, |connection| {
                 connection.0.machine_id.len() + connection.0.epoch.len()
             })
@@ -96,7 +100,88 @@ impl MachineControl {
             session,
             connection,
             local,
+            remote_root: None,
         })
+    }
+
+    /// Called only after original HTTP credential and Session visibility checks.
+    /// Older Machines retain their explicitly legacy read path; negotiation
+    /// cannot make them claim the new filesystem observation.
+    pub(crate) async fn observe_session_read_root(
+        &self,
+        scope: &mut SessionReadScope,
+    ) -> Result<(), String> {
+        if self.session_read_is_colocated(scope)? {
+            return Ok(());
+        }
+        let connection = scope.connection().ok_or("Session route unavailable")?;
+        let supported = {
+            let live = self.live.read();
+            if !live.is_current(connection) {
+                return Err("Session route ended".into());
+            }
+            live.connections[&connection.0.machine_id].protocol
+                >= crate::machine_protocol::session_code::PROTOCOL_VERSION
+        };
+        if !supported {
+            return Ok(());
+        }
+        let value = self
+            .session_root_request(
+                connection,
+                crate::machine_protocol::session_code::Request::Observe {
+                    root: scope.session.cwd().into(),
+                },
+            )
+            .await?;
+        let incarnation = value
+            .get("incarnation")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .ok_or("invalid Session root observation")?;
+        scope.remote_root = Some(incarnation.into());
+        Ok(())
+    }
+
+    async fn session_root_request(
+        &self,
+        connection: &ConnectionToken,
+        request: crate::machine_protocol::session_code::Request,
+    ) -> Result<serde_json::Value, String> {
+        let payload = serde_json::to_value(request).map_err(|_| "Session root encoding failed")?;
+        // Stat/verification have a short bounded wait, not the Code I/O budget.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.adapter_request_on_connection(
+                connection,
+                crate::machine_protocol::session_code::ADAPTER,
+                payload,
+            ),
+        )
+        .await
+        .map_err(|_| "Session root observation timed out".to_owned())?
+    }
+
+    pub(crate) async fn session_read_root_is_current(&self, scope: &SessionReadScope) -> bool {
+        if !self.session_read_scope_is_current(scope) {
+            return false;
+        }
+        let Some(incarnation) = &scope.remote_root else {
+            return true;
+        };
+        let Some(connection) = scope.connection() else {
+            return false;
+        };
+        self.session_root_request(
+            connection,
+            crate::machine_protocol::session_code::Request::Verify {
+                root: scope.session.cwd().into(),
+                incarnation: incarnation.clone(),
+            },
+        )
+        .await
+        .is_ok_and(|value| value.get("current") == Some(&serde_json::Value::Bool(true)))
+            && self.session_read_scope_is_current(scope)
     }
 
     pub(crate) fn session_read_scope_is_current(&self, scope: &SessionReadScope) -> bool {
@@ -148,14 +233,29 @@ impl MachineControl {
         let connection = scope
             .connection()
             .ok_or_else(|| "Session read route unavailable".to_owned())?;
-        let request = serde_json::to_value(CodeAdapterRequest {
-            root: scope.session.cwd().into(),
-            operation,
-        })
-        .map_err(|_| "Session Code request encoding failed".to_owned())?;
+        let (adapter, request) = if let Some(incarnation) = &scope.remote_root {
+            (
+                crate::machine_protocol::session_code::ADAPTER,
+                serde_json::to_value(crate::machine_protocol::session_code::Request::Read {
+                    root: scope.session.cwd().into(),
+                    incarnation: incarnation.clone(),
+                    operation: serde_json::to_value(operation)
+                        .map_err(|_| "Session Code encoding failed")?,
+                }),
+            )
+        } else {
+            (
+                "code",
+                serde_json::to_value(CodeAdapterRequest {
+                    root: scope.session.cwd().into(),
+                    operation,
+                }),
+            )
+        };
+        let request = request.map_err(|_| "Session Code request encoding failed".to_owned())?;
         // Atomic original-connection enqueue and post-await validation are
         // shared with the other finite readers. No lookup by Machine name.
-        self.adapter_request_on_connection(connection, "code", request)
+        self.adapter_request_on_connection(connection, adapter, request)
             .await
             .map(Some)
     }

@@ -14,7 +14,7 @@ pub(super) async fn lost_reply(
         command,
         "readBufferLease" | "codeSyncQuery" | "codeNavigationQuery"
     ))?;
-    let mut reader = Http::new(pair.address)?;
+    let mut reader = Http::secured(pair.address)?;
     reader.login(password).await?;
     let original = std::mem::replace(&mut pair.http, reader);
     let mut expected = pair.proxy.counts()?.commands;

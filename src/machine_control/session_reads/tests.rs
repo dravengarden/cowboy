@@ -321,3 +321,133 @@ async fn an_unobservable_local_root_resolves_but_never_executes_locally() {
     std::fs::create_dir(&absent).expect("create");
     assert!(!control.session_read_scope_is_current(&scope));
 }
+
+fn reply(
+    control: &MachineControl,
+    connection: &ConnectionToken,
+    request_id: String,
+    payload: serde_json::Value,
+) {
+    control.record_remote(
+        connection,
+        MachineEvent::AdapterResponse {
+            request_id,
+            accepted: true,
+            payload: Some(payload),
+            detail: None,
+            refusal: None,
+        },
+    );
+}
+
+#[tokio::test]
+async fn remote_root_observation_binds_cache_and_dispatch_to_original_machine() {
+    let control = MachineControl::default();
+    let (tx, mut commands) = mpsc::unbounded_channel();
+    let connection = control.install("machine".into(), "epoch".into(), false, 25, tx);
+    let logical = session("machine");
+    let mut original = scope(&control, &logical);
+    let bare = original.clone();
+    let mut observe = Box::pin(control.observe_session_read_root(&mut original));
+    let command = tokio::select! {
+        result = &mut observe => panic!("unexpected observation: {result:?}"),
+        command = commands.recv() => command.unwrap(),
+    };
+    let MachineCommand::AdapterRequest {
+        request_id,
+        adapter,
+        payload,
+        workspace_incarnation,
+    } = command
+    else {
+        panic!("wrong command")
+    };
+    assert_eq!(adapter, crate::machine_protocol::session_code::ADAPTER);
+    assert_eq!(
+        payload,
+        serde_json::json!({"action": "observe", "root": logical.cwd()})
+    );
+    assert!(workspace_incarnation.is_none());
+    let nonce = "a".repeat(32);
+    reply(
+        &control,
+        &connection,
+        request_id,
+        serde_json::json!({"incarnation": nonce}),
+    );
+    observe.await.unwrap();
+    assert_ne!(original, bare);
+    assert_eq!(original.string_bytes(), bare.string_bytes() + 32);
+    let mut request = Box::pin(control.code_request_in_session(&original, CodeOperation::Manifest));
+    let command = tokio::select! {
+        result = &mut request => panic!("unexpected read: {result:?}"),
+        command = commands.recv() => command.unwrap(),
+    };
+    let MachineCommand::AdapterRequest {
+        request_id,
+        adapter,
+        payload,
+        workspace_incarnation,
+    } = command
+    else {
+        panic!("wrong command")
+    };
+    assert_eq!(adapter, crate::machine_protocol::session_code::ADAPTER);
+    assert_eq!(
+        payload,
+        serde_json::json!({"action": "read", "root": logical.cwd(), "incarnation": nonce, "operation": {"type": "manifest"}})
+    );
+    assert!(workspace_incarnation.is_none());
+    reply(
+        &control,
+        &connection,
+        request_id,
+        serde_json::json!({"original": true}),
+    );
+    assert!(request.await.is_ok());
+    let mut verify = Box::pin(control.session_read_root_is_current(&original));
+    let command = tokio::select! {
+        result = &mut verify => panic!("unexpected verification: {result:?}"),
+        command = commands.recv() => command.unwrap(),
+    };
+    let MachineCommand::AdapterRequest {
+        request_id,
+        payload,
+        ..
+    } = command
+    else {
+        panic!("wrong command")
+    };
+    assert_eq!(
+        payload,
+        serde_json::json!({"action": "verify", "root": logical.cwd(), "incarnation": nonce})
+    );
+    reply(
+        &control,
+        &connection,
+        request_id,
+        serde_json::json!({"current": true}),
+    );
+    let (replacement_tx, mut replacement_commands) = mpsc::unbounded_channel();
+    control.install("machine".into(), "epoch".into(), false, 25, replacement_tx);
+    assert!(!verify.await);
+    assert!(replacement_commands.try_recv().is_err());
+    assert!(control.live.read().pending.is_empty());
+}
+
+#[tokio::test]
+async fn legacy_remote_and_colocated_roots_never_claim_machine_observations() {
+    for colocated in [false, true] {
+        let control = MachineControl::default();
+        let (_, mut commands) = connect(&control, "machine", colocated);
+        let mut original = scope(&control, &session("machine"));
+        let bare = original.clone();
+        control
+            .observe_session_read_root(&mut original)
+            .await
+            .unwrap();
+        assert_eq!(original, bare);
+        assert!(control.session_read_root_is_current(&original).await);
+        assert!(commands.try_recv().is_err());
+    }
+}

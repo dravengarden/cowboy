@@ -97,6 +97,7 @@ struct WorkspaceConfig {
     managed_path: Option<PathBuf>,
     fallback: Vec<String>,
     identities: workspace_identity::SharedRootIdentities,
+    session_identities: workspace_identity::SharedSessionRootIdentities,
     updates: tokio::sync::watch::Sender<WorkspaceSnapshot>,
 }
 
@@ -116,6 +117,7 @@ impl WorkspaceConfig {
             managed_path,
             fallback,
             identities: workspace_identity::SharedRootIdentities::default(),
+            session_identities: workspace_identity::SharedSessionRootIdentities::default(),
             updates,
         };
         config.reload()?;
@@ -162,6 +164,11 @@ impl WorkspaceConfig {
                 false
             } else {
                 identities.retain_configuration(&current.workspaces, &snapshot.workspaces);
+                if current.workspaces != snapshot.workspaces {
+                    self.session_identities
+                        .lock()
+                        .retain_configuration(&current.workspaces, &snapshot.workspaces);
+                }
                 current.clone_from(&snapshot);
                 true
             }
@@ -2366,6 +2373,8 @@ fn handle_machine_command(
                     // The live registry, not the advertised snapshot: the root
                     // may have been replaced since the last advertisement.
                     root_identities: workspaces.identities(),
+                    session_identities: Arc::clone(&workspaces.session_identities),
+                    session_workspaces: Arc::clone(&workspaces),
                     workspace_incarnation,
                     events,
                 },
@@ -2537,6 +2546,8 @@ struct AdapterRequestContext {
     worktree_root: PathBuf,
     workspaces: Vec<MachineWorkspace>,
     root_identities: workspace_identity::SharedRootIdentities,
+    session_identities: workspace_identity::SharedSessionRootIdentities,
+    session_workspaces: Arc<WorkspaceConfig>,
     workspace_incarnation: Option<String>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
 }
@@ -2561,6 +2572,8 @@ async fn run_adapter_request(
         worktree_root,
         workspaces,
         root_identities,
+        session_identities,
+        session_workspaces,
         workspace_incarnation,
         events,
     } = context;
@@ -2591,7 +2604,48 @@ async fn run_adapter_request(
         });
         return;
     }
+    // Session envelopes are consumed by the Machine, never forwarded to
+    // Plugin/native adapters. Apply core Code's trusted-root admission first.
+    let mut session_read = None;
     let result = async {
+        let payload = if adapter == crate::machine_protocol::session_code::ADAPTER {
+            use crate::machine_protocol::session_code::Request;
+            anyhow::ensure!(workspace_incarnation.is_none(), "mixed root identities");
+            let request: Request = serde_json::from_value(payload)
+                .context("invalid Session Code request")?;
+            let root = match &request {
+                Request::Observe { root } | Request::Verify { root, .. } | Request::Read { root, .. } => root,
+            };
+            anyhow::ensure!(root.len() <= 4096 && Path::new(root).is_absolute(), "invalid Session root");
+            let canonical = PathBuf::from(root).canonicalize()?;
+            // Serialize admission/minting with configuration retirement. An
+            // enqueued request cannot revive a withdrawn configuration snapshot.
+            let _configuration = root_identities.lock();
+            let live_workspaces = session_workspaces.snapshot().workspaces;
+            anyhow::ensure!(workspace_path_allowed(&canonical, &live_workspaces, &worktree_root), "Session root is not trusted");
+            match &request {
+                Request::Verify { incarnation, .. } | Request::Read { incarnation, .. } => {
+                    anyhow::ensure!(incarnation.len() == 32 && incarnation.bytes().all(|b| b.is_ascii_hexdigit()), "invalid Session root identity");
+                }
+                Request::Observe { .. } => {}
+            }
+            match request {
+                Request::Observe { root } => {
+                    return Ok(serde_json::json!({"incarnation": session_identities.lock().observe(&root)?}));
+                }
+                Request::Verify { root, incarnation } => {
+                    return Ok(serde_json::json!({"current": session_identities.lock().verify(&root, &incarnation)}));
+                }
+                Request::Read { root, incarnation, operation } => {
+                    anyhow::ensure!(session_identities.lock().verify(&root, &incarnation), "Session root changed");
+                    session_read = Some((root.clone(), incarnation));
+                    let mut operation = operation.as_object().context("invalid Code operation")?.clone();
+                    anyhow::ensure!(!operation.contains_key("root"), "operation cannot replace Session root");
+                    operation.insert("root".into(), serde_json::Value::String(root));
+                    serde_json::Value::Object(operation)
+                }
+            }
+        } else { payload };
         if adapter == "provider-cache-status" {
             let request: ProviderCacheStatusRequest = serde_json::from_value(payload)
                 .context("decoding Provider cache status request")?;
@@ -2654,7 +2708,7 @@ async fn run_adapter_request(
             }
             return serde_json::to_value(response).context("encoding extension response");
         }
-        if adapter != "code" {
+        if adapter != "code" && adapter != crate::machine_protocol::session_code::ADAPTER {
             let legacy = (adapter == "zed")
                 .then_some(zed_adapter_socket.as_deref())
                 .flatten();
@@ -2691,6 +2745,15 @@ async fn run_adapter_request(
         Ok(response.get("value").cloned().unwrap_or(response))
     }
     .await;
+    let result = if let Some((root, incarnation)) = session_read {
+        if session_identities.lock().verify(&root, &incarnation) {
+            result
+        } else {
+            Err(anyhow::anyhow!("Session root changed"))
+        }
+    } else {
+        result
+    };
     let event = match result {
         Ok(payload) => MachineEvent::AdapterResponse {
             request_id,

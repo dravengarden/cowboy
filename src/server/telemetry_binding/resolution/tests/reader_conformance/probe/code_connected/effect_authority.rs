@@ -10,7 +10,7 @@ async fn held_logout(
     method: Method,
     command: &'static str,
 ) -> Result<(), Failure> {
-    let mut reader = Http::new(pair.address)?;
+    let mut reader = Http::secured(pair.address)?;
     reader.login(password).await?;
     let original = std::mem::replace(&mut pair.http, reader);
     let body = (method != Method::GET).then(|| json!({}));

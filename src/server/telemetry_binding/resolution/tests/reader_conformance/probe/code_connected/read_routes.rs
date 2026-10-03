@@ -68,7 +68,7 @@ pub(super) async fn refused(pair: &Pair<'_>, continuation: &str) -> Result<(), F
 /// through the product API, then deliver the original correlated reply. The
 /// retained main login and native owners are independent and must remain usable.
 pub(super) async fn authorization(pair: &mut Pair<'_>, password: &str) -> Result<(), Failure> {
-    let mut reader = Http::new(pair.address)?;
+    let mut reader = Http::secured(pair.address)?;
     reader.login(password).await?;
     // Keep the observed HTTP client on Pair until this check succeeds so a
     // negative receipt records the actual denied/incorrect read, not an older

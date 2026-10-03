@@ -16,12 +16,13 @@ pub mod plugin_install;
 pub mod plugin_recovery;
 pub mod plugin_step;
 pub mod projects;
+pub(crate) mod session_code;
 pub mod telemetry_binding;
 pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 24;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 25;
 pub const PROJECT_REGISTRY_PROTOCOL_VERSION: u16 = 24;
 pub const EXECUTION_ENVIRONMENT_PROTOCOL_VERSION: u16 = 23;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
@@ -951,8 +952,11 @@ impl MachineCommand {
     /// sends a Service-auth or Provider-lifecycle message an older peer could
     /// deserialize incorrectly.
     #[must_use]
-    pub const fn minimum_protocol(&self) -> u16 {
+    pub fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::AdapterRequest { adapter, .. } if adapter == session_code::ADAPTER => {
+                session_code::PROTOCOL_VERSION
+            }
             Self::Projects { .. } => PROJECT_REGISTRY_PROTOCOL_VERSION,
             Self::Execution { .. } => EXECUTION_ENVIRONMENT_PROTOCOL_VERSION,
             // Only a carried root identity needs the newer Machine. Ordinary

@@ -121,7 +121,7 @@ pub(super) async fn prepare(pair: &Pair<'_>) -> Result<Prepared, Failure> {
     exercise::reads(pair, &resource, ORIGINAL, false).await?;
     change_content(pair.root)?;
     let path = format!("{}/synchronizations", exercise::endpoint(&resource));
-    Http::new(pair.address)?
+    Http::secured(pair.address)?
         .denied(Method::POST, &path, Some(request()))
         .await?;
     let shared = pair.http.call(Method::POST, &path, Some(request())).await?;
@@ -136,7 +136,7 @@ pub(super) async fn prepare(pair: &Pair<'_>) -> Result<Prepared, Failure> {
     check(released["state"] == "released")?;
     let value = pair.http.post(&path, request()).await?;
     let operation = snapshot(&value, &resource, "prepared")?;
-    Http::new(pair.address)?
+    Http::secured(pair.address)?
         .denied(Method::PUT, &endpoint(&operation), Some(json!({})))
         .await?;
     fenced(pair, &resource).await?;

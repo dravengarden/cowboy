@@ -171,6 +171,10 @@ pub(super) async fn seed(
     let store =
         crate::store::Store::connect(&database(root), root.join("controller/artifacts")).await?;
     store.insert_session(&session).await?;
+    let mut root_session = session.clone();
+    root_session.id = session_root::SESSION.into();
+    root_session.cwd = root.join(root_identity::ROOT).display().to_string();
+    store.insert_session(&root_session).await?;
     *stage = "seed_execution_bindings";
     seed_execution_bindings(root, &store, &session).await?;
     Ok(Seeded {

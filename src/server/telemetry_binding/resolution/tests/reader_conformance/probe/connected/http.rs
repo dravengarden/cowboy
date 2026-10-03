@@ -7,6 +7,7 @@ pub(in super::super) struct Http {
     client: Client,
     cookie: Option<String>,
     cookie_name: &'static str,
+    device: Option<Arc<p256::ecdsa::SigningKey>>,
     last: parking_lot::Mutex<Option<HttpObservation>>,
 }
 
@@ -106,6 +107,7 @@ impl Http {
             base: format!("http://{address}"),
             cookie: None,
             cookie_name: "cowboy_user=",
+            device: None,
             last: parking_lot::Mutex::new(None),
             client: Client::builder()
                 .no_proxy()
@@ -117,12 +119,61 @@ impl Http {
         })
     }
 
+    /// Opt-in device-bound browser fixture over the same-host TLS-proxy boundary.
+    pub fn secured(address: std::net::SocketAddr) -> Result<Self, Failure> {
+        Self::secured_with_timeout(address, Duration::from_secs(60))
+    }
+
+    pub fn secured_with_timeout(
+        address: std::net::SocketAddr,
+        timeout: Duration,
+    ) -> Result<Self, Failure> {
+        let mut http = Self::with_timeout(address, timeout)?;
+        http.device = Some(Arc::new(p256::ecdsa::SigningKey::random(
+            &mut rand::rngs::OsRng,
+        )));
+        Ok(http)
+    }
+
+    async fn device_proof(&self, method: &Method, path: &str) -> Result<Option<String>, Failure> {
+        let Some(device) = &self.device else {
+            return Ok(None);
+        };
+        // Read a real boot challenge each time, including after Controller
+        // restart. No cached epoch or copied credential can substitute for it.
+        let challenge: Value = self
+            .client
+            .get(format!(
+                "{}{}",
+                self.base,
+                crate::browser_device::CHALLENGE_PATH
+            ))
+            .header("x-forwarded-proto", "https")
+            .send()
+            .await
+            .map_err(|_| Failure::WrongObservation)?
+            .json()
+            .await
+            .map_err(|_| Failure::WrongObservation)?;
+        let epoch = challenge["epoch"]
+            .as_str()
+            .ok_or(Failure::WrongObservation)?;
+        Ok(Some(crate::browser_device::tests::sign(
+            device,
+            epoch,
+            method.as_str(),
+            path,
+            crate::server::auth_now_ms(),
+        )))
+    }
+
     /// Carry the real fixture cookie across a stopped-state copy and new port.
     /// A login response is the only source; it never enters a receipt or log.
     pub fn at(&self, address: std::net::SocketAddr) -> Result<Self, Failure> {
         let mut next = Self::new(address)?;
         next.cookie = Some(self.cookie.clone().ok_or(Failure::Setup)?);
         next.cookie_name = self.cookie_name;
+        next.device = self.device.clone();
         Ok(next)
     }
 
@@ -132,6 +183,16 @@ impl Http {
         path: &str,
         body: Option<Value>,
     ) -> Result<Reply, Failure> {
+        self.call_conditional(method, path, body, None).await
+    }
+
+    pub async fn call_conditional(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        if_none_match: Option<&str>,
+    ) -> Result<Reply, Failure> {
         let max_bytes = response_limit(&method, path, body.as_ref());
         let core_file = core_file_read(&method, path);
         let started = std::time::Instant::now();
@@ -140,10 +201,19 @@ impl Http {
             elapsed_ms: 0,
             result: HttpResult::Transport,
         });
-        let mut request = self
-            .client
-            .request(method, format!("{}{path}", self.base))
-            .header(header::ORIGIN, &self.base);
+        let proof = self.device_proof(&method, path).await?;
+        let mut request = self.client.request(method, format!("{}{path}", self.base));
+        if let Some(proof) = proof {
+            request = request
+                .header("x-forwarded-proto", "https")
+                .header(header::ORIGIN, "https://cowboy.example")
+                .header(crate::browser_device::HEADER, proof);
+        } else {
+            request = request.header(header::ORIGIN, &self.base);
+        }
+        if let Some(value) = if_none_match {
+            request = request.header(header::IF_NONE_MATCH, value);
+        }
         if let Some(cookie) = &self.cookie {
             request = request.header(header::COOKIE, cookie);
         }

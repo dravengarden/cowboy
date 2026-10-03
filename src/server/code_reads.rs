@@ -85,6 +85,15 @@ impl Authority {
         if !code_context_is_current(&self.owner, id, scope).await {
             return Err(Denial::Context);
         }
+        if let CodeReadScope::Session(scope) = scope
+            && !self
+                .owner
+                .machine_control
+                .session_read_root_is_current(scope)
+                .await
+        {
+            return Err(Denial::Context);
+        }
         let owner = match scope {
             CodeReadScope::Session(scope) => scope.session().owner_user_id(),
             // Preserve the existing authenticated shared-workspace read policy.
@@ -118,9 +127,24 @@ pub(super) async fn scoped<F: Future<Output = Response>>(
     id: &str,
     read: impl FnOnce(ResolvedCodeContext) -> F,
 ) -> Response {
-    let Some(context) = resolve_code_context(&authority.owner, id).await else {
+    let Some(mut context) = resolve_code_context(&authority.owner, id).await else {
         return Denial::Visibility.into_response();
     };
+    // No remote root observation before original product authorization. Bind
+    // the resulting identity before any cache lookup or read continuation.
+    if let Err(denial) = authority.current(id, &context.scope).await {
+        return denial.into_response();
+    }
+    if let CodeReadScope::Session(scope) = &mut context.scope
+        && authority
+            .owner
+            .machine_control
+            .observe_session_read_root(scope)
+            .await
+            .is_err()
+    {
+        return Denial::Context.into_response();
+    }
     let scope = context.scope.clone();
     guarded_response(|| authority.current(id, &scope), || read(context)).await
 }

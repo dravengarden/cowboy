@@ -79,3 +79,11 @@ principal authority (now separately checked at finite boundaries by
 [buffered read authority](plugin-code-read-authority.md)), a state reader/writer lease, atomic HTTP delivery or
 independent post-effect recovery. Those broader exits remain in the
 [completion ledger](plugin-refactor-completion.md).
+
+## Protocol 25 filesystem extension
+
+[Machine-owned Session root observations](plugin-session-root-observations.md)
+add an independently minted physical cwd identity to buffered filesystem/Git
+reads after product authorization. The original logical Session/connection
+binding remains in force. This extension does not change the native Zed query
+or ownership contract and does not close general Session lifecycle identity.

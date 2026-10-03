@@ -50,7 +50,7 @@ pub(super) async fn authorization(
         let before = pair.proxy.counts()?.commands;
         let first = pair.http.get(&path).await?;
         check(first["apiVersion"] == 1 && first["path"] == FILE && first[field].is_array())?;
-        let mut reader = Http::new(pair.address)?;
+        let mut reader = Http::secured(pair.address)?;
         reader.login(password).await?;
         // Preserve the failing HTTP client on Pair for exact negative evidence.
         let original = std::mem::replace(&mut pair.http, reader);

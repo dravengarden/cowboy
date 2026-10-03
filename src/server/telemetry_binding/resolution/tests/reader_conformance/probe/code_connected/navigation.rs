@@ -179,7 +179,7 @@ pub(super) async fn prepare(
     .await
     .map_err(|_| Failure::Timeout)?;
     let path = format!("{}/navigations", exercise::endpoint(&source));
-    Http::new(pair.address)?.denied(Method::POST, &path, Some(json!({"content":content(SOURCE),"position":{"row":0,"column":3},"query":"definition"}))).await?;
+    Http::secured(pair.address)?.denied(Method::POST, &path, Some(json!({"content":content(SOURCE),"position":{"row":0,"column":3},"query":"definition"}))).await?;
     let mut groups = Vec::new();
     let mut selected = 0;
     for query in [

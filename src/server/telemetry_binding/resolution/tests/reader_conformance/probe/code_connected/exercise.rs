@@ -137,6 +137,7 @@ pub(super) async fn run(
     checks.push("held_real_core_file_reply_is_discarded_after_original_cookie_logout");
 
     root_identity::run(pair, stage, checks).await?;
+    session_root::run(pair, stage, checks).await?;
 
     *stage = "cancelled_open";
     let first = prepare(pair).await?;

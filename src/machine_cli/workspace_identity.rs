@@ -65,6 +65,7 @@ struct TrackedRoot {
     _handle: std::fs::File,
     object: ObservedObject,
     incarnation: String,
+    admitted_path: PathBuf,
 }
 
 /// Process-local and never persisted. A restarted Machine mints fresh
@@ -104,6 +105,95 @@ fn mint() -> anyhow::Result<String> {
         value.push_str(&format!("{byte:02x}"));
     }
     Ok(value)
+}
+
+/// Independently observed Session cwd objects. These are not advertised
+/// workspace identities or Session ownership grants. FIFO eviction ends an
+/// observation; re-admission always mints a new value. Retaining handles bounds
+/// both inode reuse and descriptor consumption during long-lived Machines.
+#[derive(Debug, Default)]
+pub(super) struct SessionRootIdentities {
+    roots: HashMap<PathBuf, TrackedRoot>,
+    order: std::collections::VecDeque<PathBuf>,
+}
+
+pub(super) type SharedSessionRootIdentities = Arc<parking_lot::Mutex<SessionRootIdentities>>;
+
+impl SessionRootIdentities {
+    pub(super) fn retain_configuration(
+        &mut self,
+        previous: &[MachineWorkspace],
+        next: &[MachineWorkspace],
+    ) {
+        self.roots.retain(|_, tracked| {
+            !previous.iter().any(|old| {
+                tracked.admitted_path.starts_with(&old.canonical_path)
+                    && !next
+                        .iter()
+                        .any(|new| new.id == old.id && new.canonical_path == old.canonical_path)
+            })
+        });
+        self.order.retain(|path| self.roots.contains_key(path));
+    }
+
+    pub(super) fn observe(&mut self, root: &str) -> anyhow::Result<String> {
+        let path = PathBuf::from(root);
+        anyhow::ensure!(
+            path.is_absolute() && root.len() <= 4096,
+            "invalid Session root"
+        );
+        let admitted_path = path.canonicalize().ok();
+        let observed = admitted_path
+            .as_ref()
+            .and_then(|_| observe(&path))
+            .filter(|(_, object)| object.directory);
+        let Some((handle, object)) = observed else {
+            self.roots.remove(&path);
+            self.order.retain(|entry| entry != &path);
+            anyhow::bail!("Session root is unavailable");
+        };
+        if let Some(tracked) = self.roots.get(&path)
+            && tracked.object == object
+        {
+            return Ok(tracked.incarnation.clone());
+        }
+        self.roots.remove(&path);
+        self.order.retain(|entry| entry != &path);
+        let incarnation = mint()?;
+        if self.roots.len() >= MAX_TRACKED_ROOTS
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.roots.remove(&oldest);
+        }
+        self.order.push_back(path.clone());
+        self.roots.insert(
+            path,
+            TrackedRoot {
+                _handle: handle,
+                object,
+                incarnation: incarnation.clone(),
+                admitted_path: admitted_path.expect("observable canonical root"),
+            },
+        );
+        Ok(incarnation)
+    }
+
+    pub(super) fn verify(&mut self, root: &str, incarnation: &str) -> bool {
+        let path = PathBuf::from(root);
+        let Some(tracked) = self.roots.get(&path) else {
+            return false;
+        };
+        // A stale caller must not retire a newer observation.
+        if tracked.incarnation != incarnation {
+            return false;
+        }
+        if observe(&path).is_some_and(|(_, object)| object == tracked.object && object.directory) {
+            return true;
+        }
+        self.roots.remove(&path);
+        self.order.retain(|entry| entry != &path);
+        false
+    }
 }
 
 impl RootIdentities {
@@ -174,6 +264,7 @@ impl RootIdentities {
                         _handle: handle,
                         object,
                         incarnation,
+                        admitted_path: path.clone(),
                     },
                     Err(error) => {
                         tracing::warn!(
@@ -244,6 +335,100 @@ impl RootIdentities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_roots_are_pinned_and_replacement_never_revives_old_observations() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("cwd");
+        std::fs::create_dir(&path).unwrap();
+        let root = path.to_str().unwrap();
+        let mut identities = SessionRootIdentities::default();
+        let first = identities.observe(root).unwrap();
+        assert_eq!(identities.observe(root).unwrap(), first);
+        std::fs::write(path.join("file"), "content").unwrap();
+        assert!(identities.verify(root, &first));
+        std::fs::rename(&path, parent.path().join("original")).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(!identities.verify(root, &first));
+        let second = identities.observe(root).unwrap();
+        assert_ne!(first, second);
+        assert!(!identities.verify(root, &first));
+        assert!(identities.verify(root, &second));
+        // Even moving the original object back cannot revive a retired token.
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(parent.path().join("original"), &path).unwrap();
+        assert!(!identities.verify(root, &second));
+        assert!(!identities.verify(root, &first));
+        assert_ne!(identities.observe(root).unwrap(), first);
+    }
+
+    #[test]
+    fn session_root_eviction_is_bounded_and_old_tokens_cannot_retire_new_ones() {
+        let parent = tempfile::tempdir().unwrap();
+        let mut identities = SessionRootIdentities::default();
+        let mut observed = Vec::new();
+        for index in 0..=MAX_TRACKED_ROOTS {
+            let path = parent.path().join(index.to_string());
+            std::fs::create_dir(&path).unwrap();
+            let root = path.to_str().unwrap().to_owned();
+            let token = identities.observe(&root).unwrap();
+            observed.push((root, token));
+        }
+        assert_eq!(identities.roots.len(), MAX_TRACKED_ROOTS);
+        assert_eq!(identities.order.len(), MAX_TRACKED_ROOTS);
+        assert!(!identities.verify(&observed[0].0, &observed[0].1));
+        assert!(identities.verify(&observed[1].0, &observed[1].1));
+        let renewed = identities.observe(&observed[0].0).unwrap();
+        assert_ne!(renewed, observed[0].1);
+        assert!(!identities.verify(&observed[0].0, &observed[0].1));
+        assert!(identities.verify(&observed[0].0, &renewed));
+        assert!(identities.observe("relative").is_err());
+        assert!(
+            identities
+                .observe(parent.path().join("absent").to_str().unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn session_configuration_aba_retires_only_roots_under_withdrawn_configuration() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let mut identities = SessionRootIdentities::default();
+        let a = first.path().to_str().unwrap();
+        let b = second.path().to_str().unwrap();
+        let original = identities.observe(a).unwrap();
+        let independent = identities.observe(b).unwrap();
+        let both = [workspace("a", first.path()), workspace("b", second.path())];
+        identities.retain_configuration(&both, &both[1..]);
+        // No intermediate observation is needed to retire A's old token.
+        identities.retain_configuration(&both[1..], &both);
+        assert!(!identities.verify(a, &original));
+        assert!(identities.verify(b, &independent));
+        assert_ne!(identities.observe(a).unwrap(), original);
+        assert_eq!(identities.order.len(), identities.roots.len());
+    }
+
+    #[test]
+    fn session_configuration_retirement_uses_the_original_symlink_target() {
+        let parent = tempfile::tempdir().unwrap();
+        let original = parent.path().join("original");
+        let other = parent.path().join("other");
+        let alias = parent.path().join("alias");
+        std::fs::create_dir(&original).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&original, &alias).unwrap();
+        let mut identities = SessionRootIdentities::default();
+        let root = alias.to_str().unwrap();
+        let first = identities.observe(root).unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&other, &alias).unwrap();
+        identities.retain_configuration(&[workspace("original", &original)], &[]);
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&original, &alias).unwrap();
+        assert!(!identities.verify(root, &first));
+        assert_ne!(identities.observe(root).unwrap(), first);
+    }
 
     fn workspace(id: &str, path: &Path) -> MachineWorkspace {
         MachineWorkspace {

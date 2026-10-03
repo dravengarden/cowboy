@@ -16,6 +16,7 @@ mod navigation;
 mod proxy;
 mod read_routes;
 mod root_identity;
+mod session_root;
 mod synchronization;
 
 const SESSION: &str = "sess-901";
@@ -115,6 +116,7 @@ impl Pair<'_> {
     async fn start_controller(&mut self) -> Result<(), Failure> {
         let mut command = configured_command(&self.artifacts[0], self.root, self.address);
         command
+            .env("COWBOY_PUBLIC_ORIGIN", "https://cowboy.example")
             .arg("--product-auth-enabled")
             .arg("true")
             .arg("--core-security-config")
@@ -255,7 +257,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v16",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v17",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -292,7 +294,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     // carries Machine-owned root identities on every observed connection.
     receipt.accepted = result.is_ok()
         && receipt.cleanup
-        && receipt.checks.len() == 36
+        && receipt.checks.len() == 38
         && !receipt.wire.protocols.is_empty()
         && receipt
             .wire
@@ -340,7 +342,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         controller: None,
         machine: None,
         proxy: relay,
-        http: Http::with_timeout(address, Duration::from_secs(100))?,
+        http: Http::secured_with_timeout(address, Duration::from_secs(100))?,
         colocated_permission: false,
         machine_local: false,
     };

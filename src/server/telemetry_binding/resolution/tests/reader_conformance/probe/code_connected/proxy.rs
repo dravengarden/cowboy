@@ -18,6 +18,8 @@ pub(super) struct Counts {
     /// the exact current protocol.
     pub protocols: Vec<u16>,
     pub commands: BTreeMap<String, u32>,
+    pub session_root_observations: u32,
+    pub session_root_verifications: u32,
     pub replies: u32,
     pub held_replies: u32,
     pub discarded_replies: u32,
@@ -60,7 +62,11 @@ impl Record {
     fn command(&mut self, id: String, kind: &str) -> Result<(), Failure> {
         check(self.pending.len() < 32 && !self.pending.contains_key(&id))?;
         self.pending.insert(id, kind.into());
-        *self.counts.commands.entry(kind.into()).or_default() += 1;
+        match kind {
+            "sessionRootObserve" => self.counts.session_root_observations += 1,
+            "sessionRootVerify" => self.counts.session_root_verifications += 1,
+            _ => *self.counts.commands.entry(kind.into()).or_default() += 1,
+        }
         Ok(())
     }
     fn reply(&mut self, id: &str) -> Result<Option<Gate>, Failure> {
@@ -207,6 +213,7 @@ impl Proxy {
                     "codeNavigationDestination",
                     "codeNavigationRelease",
                     "coreSwapFile",
+                    "coreSessionFile",
                     "coreColocatedFile",
                 ]
                 .contains(&kind),
@@ -350,6 +357,52 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                     && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
             }))?;
             let carried = workspace_incarnation.is_some();
+            let payload = if adapter == crate::machine_protocol::session_code::ADAPTER {
+                check(!carried)?;
+                let request: crate::machine_protocol::session_code::Request =
+                    serde_json::from_value(payload).map_err(|_| Failure::WrongObservation)?;
+                use crate::machine_protocol::session_code::Request;
+                let root = match &request {
+                    Request::Observe { root }
+                    | Request::Verify { root, .. }
+                    | Request::Read { root, .. } => root,
+                };
+                check(
+                    Path::new(root).is_absolute()
+                        && (root.ends_with("/workspace") || root.ends_with(root_identity::ROOT)),
+                )?;
+                match request {
+                    Request::Observe { .. } => {
+                        return record.command(request_id, "sessionRootObserve");
+                    }
+                    Request::Verify { incarnation, .. } => {
+                        check(
+                            incarnation.len() == 32
+                                && incarnation.bytes().all(|b| b.is_ascii_hexdigit()),
+                        )?;
+                        return record.command(request_id, "sessionRootVerify");
+                    }
+                    Request::Read {
+                        root,
+                        incarnation,
+                        operation,
+                    } => {
+                        check(
+                            incarnation.len() == 32
+                                && incarnation.bytes().all(|b| b.is_ascii_hexdigit()),
+                        )?;
+                        let mut operation = operation
+                            .as_object()
+                            .ok_or(Failure::WrongObservation)?
+                            .clone();
+                        check(!operation.contains_key("root"))?;
+                        operation.insert("root".into(), Value::String(root));
+                        Value::Object(operation)
+                    }
+                }
+            } else {
+                payload
+            };
             let kind = if adapter == "zed" {
                 let kind = payload["type"].as_str().ok_or(Failure::WrongObservation)?;
                 if language_reads::COMMANDS.contains(&kind) {
@@ -378,7 +431,9 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                 kind
             } else {
                 // Core file/manifest reader only. Never Agent/runtime commands.
-                check(adapter == "code")?;
+                check(
+                    adapter == "code" || adapter == crate::machine_protocol::session_code::ADAPTER,
+                )?;
                 let request: crate::code_adapter::CodeAdapterRequest =
                     serde_json::from_value(payload.clone())
                         .map_err(|_| Failure::WrongObservation)?;
@@ -388,6 +443,12 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                         if path == read_routes::FILE =>
                     {
                         "coreFile"
+                    }
+                    crate::code_adapter::CodeOperation::File { path, .. }
+                        if path == session_root::FILE
+                            && request.root.ends_with(root_identity::ROOT) =>
+                    {
+                        "coreSessionFile"
                     }
                     // The separate advertised root used only for the
                     // Machine-owned root identity check.

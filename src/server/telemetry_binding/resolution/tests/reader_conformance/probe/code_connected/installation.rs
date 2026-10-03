@@ -12,7 +12,7 @@ pub(super) async fn run(pair: &Pair<'_>, request: &Value) -> Result<(), Failure>
         before["operations"] == json!([])
     );
     check(before["admission_enabled"] == true && before["operations"] == json!([]))?;
-    let anonymous = Http::new(pair.address)?;
+    let anonymous = Http::secured(pair.address)?;
     let denied = anonymous
         .call(Method::POST, &endpoint, Some(request.clone()))
         .await?;
