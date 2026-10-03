@@ -145,8 +145,17 @@ export async function run() {
       await until(() => snapshot.optimisticMessages.get(session)?.some((row) => row.status === "failed") === true, "failed older send retained");
       const oldCmid = snapshot.optimisticMessages.get(session)![0]!.cmid;
       await until(() => document.querySelector('[aria-label="1 message needs attention"]') !== null, "failure badge paints");
-      const badge = document.querySelector<HTMLElement>('[aria-label="1 message needs attention"]')!;
-      badge.click();
+      if (!document.querySelector('[aria-label="1 message needs attention"]')?.textContent?.includes("unconfirmed · Review"))
+        throw new Error("session warning hides its meaning or action");
+      await until(() => document.querySelector('[data-held-message-notice]')?.textContent?.includes("Kept on this device") === true,
+        "unconfirmed message explanation is visible without clicking the warning");
+      const notice = document.querySelector('[data-held-message-notice]')!;
+      const scroller = document.querySelector('[data-transcript-session]')!;
+      if (scroller.contains(notice)) throw new Error("held notice can scroll away with older messages");
+      const review = scenario.startsWith("failed-recovery-review")
+        ? document.querySelector<HTMLElement>('[aria-label="Review unconfirmed messages"]')!
+        : document.querySelector<HTMLElement>('[aria-label="1 message needs attention"]')!;
+      review.click();
       await until(() => document.body.textContent?.includes("Unconfirmed messages") === true,
         "badge opens message review");
       await until(() => document.body.textContent?.includes("1 attachment kept with this message") === true,
@@ -164,6 +173,7 @@ export async function run() {
         }
         await until(() => document.querySelector('[aria-label="1 message needs attention"]') === null,
           "saving to drafts clears the session warning");
+        if (document.querySelector('[data-held-message-notice]')) throw new Error("resolved message keeps the transcript warning visible");
         await until(() => snapshot.drafts.get(session)?.some((row) =>
           row.text === "older unconfirmed caption" && row.attachments.length === 1 && row.status === undefined) === true,
           "manual review saves the caption and image as an acknowledged draft");

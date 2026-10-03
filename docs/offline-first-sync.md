@@ -355,8 +355,11 @@ held message and attention badge remain available. Historical runtime errors sta
 at their original transcript position; a recovered turn clears its stale session
 error notification.
 
-The Sessions drawer's held-message count opens a per-session review sheet on
-this device. It shows the retained text and attachment count and offers Retry
+The Sessions drawer labels held deliveries explicitly as "unconfirmed · Review"
+below the directory. The opened transcript shows a persistent explanation and
+Review button outside the scrolling and paged history, so users do not have to
+infer the meaning of an icon or find an older failed bubble. Either entry opens
+a per-session review sheet on this device. It shows the retained text and attachment count and offers Retry
 or Save to drafts for held prompt/queue creations. Saving retires the original
 retry obligation only after the draft is durable, and never sends that content
 to the Agent. Failure retains the original message and badge. Closing the sheet

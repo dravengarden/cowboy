@@ -6,7 +6,63 @@ import {
   retryQueued,
   saveHeldDeliveryAsDraft,
   useHeldDeliveries,
+  useSessionObligations,
 } from "./store";
+
+/** Visible explanation outside transcript paging and scrolling. */
+export function HeldMessagesNotice(
+  { sessionId }: { sessionId: string },
+): React.JSX.Element | null {
+  const { held } = useSessionObligations(sessionId);
+  const [open, setOpen] = useState(false);
+  if (held === 0 && !open) return null;
+  return (
+    <>
+      {held > 0 && (
+        <Stack
+          data-held-message-notice
+          role="status"
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{
+            px: 1.5,
+            py: 0.5,
+            flexShrink: 0,
+            bgcolor: "action.hover",
+            borderBottom: 1,
+            borderColor: "divider",
+          }}
+        >
+          <Stack sx={{ minWidth: 0, flex: 1 }}>
+            <Typography
+              variant="body2"
+              sx={{ color: "warning.main", fontWeight: 600 }}
+            >
+              {held} {held === 1 ? "message is" : "messages are"} unconfirmed
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Kept on this device. Review to retry or save to drafts.
+            </Typography>
+          </Stack>
+          <Button
+            sx={{ minHeight: 44, flexShrink: 0 }}
+            onClick={() => setOpen(true)}
+            aria-label="Review unconfirmed messages"
+          >
+            Review
+          </Button>
+        </Stack>
+      )}
+      {open && (
+        <HeldMessagesSheet
+          sessionId={sessionId}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
 
 /** Review the local retry obligations without navigating away from a session. */
 export function HeldMessagesSheet({ sessionId, onClose }: {
@@ -41,8 +97,7 @@ export function HeldMessagesSheet({ sessionId, onClose }: {
         <Typography variant="body2" color="text.secondary">
           These messages are kept on this device because delivery was not
           confirmed. A connected session does not confirm an earlier message.
-          Retry sending, or save a message to drafts to keep it for
-          later.
+          Retry sending, or save a message to drafts to keep it for later.
         </Typography>
         {error && <Alert severity="error">{error}</Alert>}
         {rows.length === 0 && (

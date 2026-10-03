@@ -1483,14 +1483,21 @@ function SessionList({
                                     />
                                     <SessionProjectionBadge sessionId={s.id} />
                                     <ScheduleBadge meta={s} />
-                                    <SessionObligationBadge sessionId={s.id} />
                                     <SessionCacheGlyph sessionId={s.id} active={s.id === activeId} />
                                 </Stack>
                             }
-                            secondary={sessionDisplayDirectory(s)}
+                            secondary={
+                                <Stack alignItems="flex-start" sx={{ minWidth: 0 }}>
+                                    <Typography variant="caption" noWrap sx={{ maxWidth: "100%" }}>
+                                        {sessionDisplayDirectory(s)}
+                                    </Typography>
+                                    <SessionObligationBadge sessionId={s.id} />
+                                </Stack>
+                            }
                             slotProps={{
                                 primary: { component: "div" },
                                 secondary: {
+                                    component: "div",
                                     noWrap: true,
                                     variant: "caption",
                                 },

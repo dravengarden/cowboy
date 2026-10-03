@@ -83,7 +83,7 @@ export function SessionObligationBadge(
               variant="caption"
               sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
             >
-              {total}
+              {attention ? `${held} unconfirmed · Review` : total}
             </Typography>
           </ButtonBase>
         </Tooltip>
