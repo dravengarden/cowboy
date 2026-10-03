@@ -45,7 +45,7 @@ earlier source replacement that merely makes the second probe refuse.
 The exact previous installer from
 `/nix/store/dkyb2js19cj4q1blm5sd6hb09jvaaf5s-cowboy-machine-release`
 (source `f1cf02dca1938636d5b435fd6fdb45fb18dc7aa1`, installer SHA-256
-`f65898e3a631387df07a5e9e88b28a4ac4716dc157ec4c4c10ea9f4569bf385`)
+`f65898e3a631387df07a5e9e88b28a4ac4716dc157ec4c4c10ea9f456a9bf385`)
 was run against this strengthened fixture as an expected-failure control. Its
 refresh returned success, but installed the overwritten host bytes rather than
 the accepted capture; the hash assertion failed. No production installation was
@@ -57,11 +57,54 @@ installer, plus the independent old/new candidate artifacts:
 ```sh
 COWBOY_TEST_OLD_MACHINE_RELEASE=/nix/store/n6b8rxna00v77pyqkyk9658xcwnqnh61-cowboy-machine-release \
 COWBOY_TEST_NEW_MACHINE_RELEASE=/nix/store/ypqs95ri4mv39bqx9lhknn2zcz4yrn3k-cowboy-machine-release \
-COWBOY_TEST_INSTALLER_RELEASE=/nix/store/<accepted-snapshot-release>-cowboy-machine-release \
+COWBOY_TEST_INSTALLER_RELEASE=/nix/store/kmzcf9rd46kn79kk2mw914xvsvn4j618-cowboy-machine-release \
 cargo test --locked --all-features --test bootstrap_refresh_releases -- --ignored --nocapture
 ```
 
-Run from the repository root in its pinned Nix shell. Immutable build, exact
-packaged acceptance and owning Machine activation receipts are added after the
-clean committed release passes those steps. This is not portable signed reader
-admission, cross-generation recovery, writer acceptance or power-loss evidence.
+Run from the repository root in its pinned Nix shell. This is not portable signed
+reader admission, cross-generation recovery, writer acceptance or power-loss
+evidence.
+
+## Release receipt
+
+Published source is `646c1a6846eb61b16d3643a512cf8b05599a63ef`. The clean
+committed immutable build produced:
+
+- `/nix/store/kmzcf9rd46kn79kk2mw914xvsvn4j618-cowboy-machine-release`.
+- `/nix/store/m68375b7azglw5s2qp8k9w79sn08yx04-cowboy-source-boundary`.
+
+The default-feature package required by this bundle passed 1,315 unit tests
+with 24 ignored and its enabled three-test integration target. The exact
+packaged installer passed the expanded matrix: two legacy candidate refusals,
+two guarded upgrades, two retained captures after original-path replacement,
+two terminal launch refusals, and two independent old-installer negative
+controls. The tested installer SHA-256 is
+`76be38d8b446b8a4134ba203acf02db875ebfdc6c01aff0b85b2b42a63294b3b`.
+
+Machine-only transaction `1791027185685751410-646c1a6846eb` committed
+successfully, published and without recovery at
+`2026-10-03T11:33:16.330349956Z`. Its previous release is
+`/nix/store/dkyb2js19cj4q1blm5sd6hb09jvaaf5s-cowboy-machine-release`.
+Desired generation remained `worker-6ede7a91cc8b8b3402d4`; deployment-health
+reported the same generation, connected and online.
+
+Bounded samples at `2026-10-03T11:27:46.524Z` and
+`2026-10-03T11:33:36.149Z` retained every original PID across 13 ACP workers
+and four execution keepers. Machine PID changed from `1285097` to `1928418`;
+Controller PID remained `486493`. Web profile and root-owned reader-floor
+bytes were unchanged. HTTPS health/version/SPA/SW/deployment-health returned
+200; HTML/SW retained `no-store` and the separately released SPA version was
+unchanged. These samples do not establish full worker replacement or native
+resume.
+
+The resident reader reported zero deleted Sessions and `writer_enabled=false`
+at `2026-10-03T11:33:05.780036Z`. Production deletion state still contained
+only `.lock`; no terminal record was seeded or migrated. Newly deleted
+production Sessions remain process-local. This task activated no Controller,
+Web, host configuration, portable device or iOS release. Installed portable
+launchers are not automatically rewritten by publishing a new Hawk bundle.
+
+The [machine-readable acceptance](../experiments/plugin-bootstrap-snapshot-2026-10-03.json)
+retains before/after receipts, native and installer digests, exact packaged
+matrix identity and the expected-failure predecessor control. Independent old
+installer/activator authority and production writer admission remain open.
