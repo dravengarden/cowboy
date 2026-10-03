@@ -41,6 +41,7 @@ class MatrixFixture:
         if not self.enabled:
             return []
         from execution_environment_probe import require
-        require("MATRIX_REMOTE_PROOF" in json.dumps(requests), "Matrix recall missing from native requests")
+        require(requests and "MATRIX_REMOTE_PROOF" in json.dumps(requests[0]),
+                "Automatic Matrix recall missing before the first native tool call")
         require(bool(self.store.status()["jobs"]), "Native remote turn was not captured")
         return ["matrix_memory_uses_runtime_service_with_bound_target_scope", "matrix_remote_turns_are_durably_captured"]

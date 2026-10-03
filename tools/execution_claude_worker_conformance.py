@@ -285,6 +285,7 @@ def main():
         client.close(); client = None
         native_requests = len(api.requests)
         title_requests = len(api.title_requests)
+        memory.accept(api.requests)
         api.close()
 
         # Drive the actual bundled ACP adapter, not just its private CLI shim.

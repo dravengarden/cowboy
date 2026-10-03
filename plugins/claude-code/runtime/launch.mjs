@@ -20,6 +20,7 @@ import {
 import { startModBridge } from "./mod-bridge.mjs";
 import {
   claudeObservation,
+  claudePrompt,
   localMemoryNative,
   MATRIX_TOOLS,
   MatrixClient,
@@ -335,7 +336,16 @@ async function bridge(child, tools, context, memory) {
             "This command is unavailable in an execution session",
           );
         }
-        if (memory && prompt.trim() && !command) await memory.begin(prompt);
+        if (memory && prompt.trim() && !command) {
+          const recalled = await memory.begin(claudePrompt(frame));
+          const content = frame.message.content;
+          frame.message.content = [
+            { type: "text", text: recalled },
+            ...(typeof content === "string"
+              ? [{ type: "text", text: content }]
+              : content),
+          ];
+        }
       }
       await send(child.stdin, frame);
     }
@@ -468,7 +478,7 @@ async function native(args) {
       };
     }
     const context = await tools.context();
-    modBridge = await startModBridge(tools, { memory });
+    modBridge = await startModBridge(tools);
     context.socketPath = modBridge.socketPath;
     context.bridgeToken = modBridge.token;
     context.descriptions = DESCRIPTIONS;
