@@ -52,7 +52,7 @@ const cases = bundles.flatMap((bundle) =>
   (slowMobile
     ? ["slow-mobile", "lost-send"]
     : failedRecovery
-    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error", "failed-recovery-late-confirmation"]
+    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error", "failed-recovery-late-confirmation", "failed-recovery-concurrent", "failed-recovery-queue", "failed-recovery-force"]
     : updateSettings
     ? ["update-settings"]
     : continuity
@@ -86,6 +86,7 @@ for (const { bundle, scenario } of cases) {
   let attempts = 0;
   const recoveryCase = scenario.startsWith("failed-recovery");
   const recoveredDrafts: Record<string, unknown>[] = [];
+  const recoveryQueued: Record<string, unknown>[] = [];
   let recoveryQueueVersion = 2;
   let failedCmid: string | undefined;
   let failedBlocks: Record<string, unknown>[] = [];
@@ -136,9 +137,16 @@ for (const { bundle, scenario } of cases) {
           return new Response("missing fixture chunk", { status: 404 });
         }
       }
+      if (request.method === "POST" && url.pathname === "/fixture/seed-queue") {
+        recoveryQueued.push({ id: "queued-new", cmid: "queued-source", text: "new working prompt",
+          content: [{ type: "text", text: "new working prompt" }] });
+        for (const socket of sockets) socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`,
+          version: ++recoveryQueueVersion, value: { queue: recoveryQueued, drafts: recoveredDrafts }, confirmed: [] }));
+        return new Response("ok");
+      }
       if (request.method === "POST" && url.pathname === "/fixture/confirm-old") {
         for (const socket of sockets) socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: ++recoveryQueueVersion,
-          value: { queue: [], drafts: recoveredDrafts }, confirmed: [failedCmid] }));
+          value: { queue: recoveryQueued, drafts: recoveredDrafts }, confirmed: [failedCmid] }));
         for (const [index, content] of failedBlocks.entries()) {
           const echo = { session_id: session.id, seq: ++seq, kind: "update", ...(index === 0 ? { cmid: failedCmid } : {}),
             update: { sessionUpdate: "user_message_chunk", content } };
@@ -208,7 +216,7 @@ for (const { bundle, scenario } of cases) {
           if (recoveryCase && message.type === "add_draft") {
             recoveredDrafts.push({ id: `recovered-draft-${recoveredDrafts.length}`, cmid: message.cmid, text: message.text, content: message.content });
             socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: ++recoveryQueueVersion,
-              value: { queue: [], drafts: recoveredDrafts }, confirmed: [message.cmid] }));
+              value: { queue: recoveryQueued, drafts: recoveredDrafts }, confirmed: [message.cmid] }));
             return;
           }
           if (message.type === "connection_probe") {
@@ -262,6 +270,13 @@ for (const { bundle, scenario } of cases) {
             }
             return;
           }
+          if (recoveryCase && (message.type === "request_send_queued" || message.type === "force_push_queued")) {
+            const index = recoveryQueued.findIndex((row) => row.id === message.id);
+            const source = recoveryQueued[index];
+            if (!source) throw new Error("queue source missing in fixture");
+            recoveryQueued.splice(index, 1);
+            message = { ...message, type: "submit", cmid: source.cmid, text: source.text, content: source.content };
+          }
           if (recoveryCase && message.type === "activate_draft") {
             const index = recoveredDrafts.findIndex((row) => row.id === message.id);
             const source = recoveredDrafts[index];
@@ -290,7 +305,7 @@ for (const { bundle, scenario } of cases) {
           if (recoveryCase) {
             // The receipt may precede the echo and drop the pending mutation.
             socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: ++recoveryQueueVersion,
-              value: { queue: [], drafts: recoveredDrafts }, confirmed: [message.cmid] }));
+              value: { queue: recoveryQueued, drafts: recoveredDrafts }, confirmed: [message.cmid] }));
           }
           if (local) {
             socket.send(JSON.stringify({
@@ -499,7 +514,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
         (metadata || updateSettings
           ? 0
           : failedRecovery
-          ? scenario.endsWith("storage-error") || scenario === "failed-recovery-no-work" ? 1 : 2
+          ? scenario.endsWith("storage-error") || scenario === "failed-recovery-no-work" ? 1 : scenario === "failed-recovery-concurrent" ? 3 : 2
           : continuity
           ? 4
           : local || draftSend || slowMobile
