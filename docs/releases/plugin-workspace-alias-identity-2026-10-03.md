@@ -12,7 +12,7 @@ distinct root is refused. Removal of a configured alias retains the preceding
 conservative configuration-retirement rule. Controller scopes stay independent
 per workspace ID. See the [contract](../plugin-workspace-configuration-identity.md).
 
-## Immutable candidate
+## Initial immutable candidate
 
 - Product source: `d309b088b8d1ec4e0ea188154f4502cd20ff22b1`.
 - Machine: `/nix/store/ykgz2cpqxl4yb37mrdv13v4vk05i3998-cowboy-machine-release`.
@@ -54,7 +54,8 @@ The pinned-shell complete gate passed formatting, lint, dependencies,
 composition, toolchain, feature and type checks, 1,719 main Rust tests,
 425 standalone Machine tests, 31 core-adapter tests and 126 private-adapter
 tests. Mainline installer integration subsequently passed its ten targeted
-Machine tests. Web lint/types and all 1,993 tests pass after frozen installation;
+Machine tests. The final merged source also passes all 428 standalone Machine
+tests and the actual installer CLI integration test. Web lint/types and all 1,993 tests pass after frozen installation;
 all 22 isolated PostgreSQL tests pass.
 Web, Controller and private-adapter local release builds complete successfully;
 the clean immutable Machine and adapter Nix outputs also build successfully.
@@ -68,12 +69,38 @@ Frozen installation and assertion updates resolve those failures. The remaining
 gate phases are resumed explicitly, rather than reporting the earlier failed
 `just check-compact` invocation as successful.
 
-## Activation boundary
+## Production adoption
 
-No production component was activated by this task. The candidate requires a
-separate resident Machine maintenance transaction under `AGENTS.md`; it is not
-a Controller or Web deployment. Hawk's preceding October 2 root-object and
-configuration-retirement adoption is recorded [separately](plugin-root-identity-adoption-2026-10-03.md).
+The activator refused the initial candidate at its fresh-main preflight before
+any transaction. The task integrated the parallel installer updates and rebuilt
+from clean published main. A final documentation-only main update changes only
+the release provenance envelope, retaining the payload and worker generation.
+
+- Activated source: `18dc97a10db94bbda229227e30312f750e0881db`.
+- Release: `/nix/store/nakjm0zavlfm0x9jz9sbminncv9lhihy-cowboy-machine-release`.
+- Worker generation: `worker-eed1d8105af00846771d`; protocol 24.
+- [Final exact-artifact acceptance](../experiments/plugin-workspace-alias-production-2026-10-03.json):
+  all 36 checks pass in 294.27 seconds, five configured connections at protocol
+  24, successful cleanup, no failure. This uses the same Controller/native pair
+  as the preceding positive and negative.
+- Command: `cowboy-release-activate --maintenance /nix/store/nakjm0zavlfm0x9jz9sbminncv9lhihy-cowboy-machine-release`.
+- [Actual component receipt](../experiments/plugin-workspace-alias-activation-2026-10-03.json):
+  transaction `1790992895189397758-18dc97a10db9`, `outcome: succeeded`,
+  `phase: committed`, `maintenance: true`, `published: true`, recorded at
+  `2026-10-03T02:01:44.372702247Z`.
+- The root activation unit exits successfully. Machine PID `1223771` is running
+  from the new profile; its journal records authenticated Controller connection
+  at protocol 24 at `2026-10-03T02:01:43.897857Z`.
+- [Before/after continuity](../experiments/plugin-workspace-alias-continuity-2026-10-03.json):
+  all 14 worker and two execution-keeper units retain their exact PIDs and
+  running states. Controller PID remains `683531`.
+- `/healthz` returns `ok`. `/version` and the SPA index ETag remain
+  `96074902b838fd51981ae1c8e63b5cb7`; the index and service worker return HTTP
+  200 with `Cache-Control: no-store`. The Web profile is unchanged.
+
+This is the separate resident Machine maintenance transaction under `AGENTS.md`.
+Hawk's preceding October 2 root-object and configuration-retirement adoption is
+recorded [separately](plugin-root-identity-adoption-2026-10-03.md).
 
 This fixes alias continuity for advertised roots. It does not close
 Machine-owned Session worktree identity, security-domain identity, general state
