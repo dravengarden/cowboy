@@ -5,6 +5,19 @@ export function sessionDisplayDirectory(session: SessionMeta): string {
   return session.workspace_source_path?.trim() || session.cwd;
 }
 
+/** Compact list context; old caller-owned directories have no workspace metadata. */
+export function sessionListProjectLabel(session: SessionMeta): string {
+  const project = sessionProjectLabel(session);
+  if (project) return project;
+
+  const directory = sessionDisplayDirectory(session).trim().replace(/\/+$/, "");
+  // A generated session directory identifies the task, not its source project.
+  if (/\/cowboy-machine\/worktrees(?:\/|$)/.test(directory)) {
+    return "Project not recorded";
+  }
+  return directory.split("/").at(-1) || "Project not recorded";
+}
+
 /** Stable project checkout for repository chrome; never substitute a session worktree. */
 export function sessionProjectDirectory(
   session: SessionMeta | undefined,

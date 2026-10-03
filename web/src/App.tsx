@@ -109,7 +109,7 @@ import {
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
-import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
+import { sessionListProjectLabel, sessionProjectLabel } from "./sessionProject";
 import { SessionMachineBadge } from "./SessionMachineBadge";
 import { PICK_SESSION_EVENT, pickSessionDetail } from "./sessionPickRequest";
 import {
@@ -1490,7 +1490,7 @@ function SessionList({
                             secondary={
                                 <Stack alignItems="flex-start" sx={{ minWidth: 0 }}>
                                     <Typography variant="caption" noWrap sx={{ maxWidth: "100%" }}>
-                                        {sessionDisplayDirectory(s)}
+                                        {sessionListProjectLabel(s)}
                                     </Typography>
                                     <SessionObligationBadge sessionId={s.id} />
                                 </Stack>

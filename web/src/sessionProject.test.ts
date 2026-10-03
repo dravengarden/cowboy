@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import type { SessionMeta } from "./protocol";
 import {
   sessionDisplayDirectory,
+  sessionListProjectLabel,
   sessionProjectDirectory,
   sessionProjectLabel,
 } from "./sessionProject";
@@ -25,6 +26,39 @@ Deno.test("session project prefers persisted workspace display name", () => {
       workspace_source_path: "/home/draven/columbus/projects/cowboy",
     })),
     "Cowboy",
+  );
+});
+
+Deno.test("session list uses project identity across machine worktrees", () => {
+  assertEquals(
+    sessionListProjectLabel(session({
+      workspace_name: "Cowboy",
+      cwd: "/home/draven/.local/state/cowboy-machine/worktrees/sess-1",
+    })),
+    "Cowboy",
+  );
+  assertEquals(
+    sessionListProjectLabel(session({ workspace_id: "columbus" })),
+    "columbus",
+  );
+});
+
+Deno.test("legacy session list context is compact and does not expose generated task ids", () => {
+  for (const name of ["columbus", "suger"]) {
+    assertEquals(
+      sessionListProjectLabel(session({ cwd: `/home/draven/${name}/` })),
+      name,
+    );
+  }
+  assertEquals(
+    sessionListProjectLabel(session({
+      cwd: "/home/draven/.local/state/cowboy-machine/worktrees/sess-1",
+    })),
+    "Project not recorded",
+  );
+  assertEquals(
+    sessionListProjectLabel(session({ cwd: "/" })),
+    "Project not recorded",
   );
 });
 
