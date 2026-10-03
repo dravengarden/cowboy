@@ -1,0 +1,546 @@
+{
+  "schema": 1,
+  "scope": "reader-first Machine Session deletion component compatibility guard",
+  "sources": {
+    "declaration": "dd05752740bbeee8056d1da1edb86dea86b2a30b",
+    "integrated_cowboy": "ae00cdc884de0cad92f303731ce52541a837efc5",
+    "columbus_owner": "1e6672372cc00b6a037b4e92efa9a9a381904115"
+  },
+  "host_receipt": {
+    "activeClosure": "/nix/store/xmc1jyy5vsgsx9wf523vyb07lqbj6yck-nixos-system-hawk-26.05.20260731.5b4f72e",
+    "changedUnits": {
+      "system": [
+        "mandb.service"
+      ],
+      "user": []
+    },
+    "closure": "/nix/store/xmc1jyy5vsgsx9wf523vyb07lqbj6yck-nixos-system-hawk-26.05.20260731.5b4f72e",
+    "explicitRestarts": {
+      "completedSystem": [],
+      "completedUser": [],
+      "requestedSystem": [],
+      "requestedUser": []
+    },
+    "healthChecks": {
+      "failed": [],
+      "passed": [
+        "claude-deepseek",
+        "codex-deepseek",
+        "cowboy",
+        "time-sync"
+      ],
+      "skipped": [
+        "blackpearl-hawk-research",
+        "carrack-hawk-batch",
+        "carrack-hawk-catalog-sync",
+        "carrack-hawk-materializer",
+        "lan0-networkd",
+        "victoriatraces",
+        "vmalert"
+      ]
+    },
+    "machine": "hawk",
+    "newFailedUnits": [],
+    "outcome": "succeeded",
+    "persistentOverrides": {
+      "rejected": []
+    },
+    "previousClosure": "/nix/store/fckv1l9bqbjnlyk63l3id3r3i342yjnv-nixos-system-hawk-26.05.20260731.5b4f72e",
+    "published": true,
+    "recordedAt": "2026-10-03T16:01:32+08:00",
+    "retainedProcessPids": {
+      "after": {
+        "system": {},
+        "user": {}
+      },
+      "before": {
+        "system": {},
+        "user": {}
+      },
+      "violations": []
+    },
+    "retainedProcesses": {
+      "system": [],
+      "user": []
+    },
+    "revision": "1e6672372cc00b6a037b4e92efa9a9a381904115",
+    "runtimeOverrides": {
+      "cleared": [],
+      "planned": [],
+      "restored": []
+    },
+    "schema": 3,
+    "transaction": "1791014489736216136-1e6672372cc0"
+  },
+  "machine_receipt": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "machine",
+    "transaction": "1791014541293399326-ae00cdc884de",
+    "revision": "ae00cdc884de0cad92f303731ce52541a837efc5",
+    "workerGeneration": "worker-44e379c40a139cd05cc7",
+    "published": true,
+    "release": "/nix/store/vb8kp467y6lmwsa4h6ga5fv0ygf2rkpc-cowboy-machine-release",
+    "previousRelease": "/nix/store/f24jdxk9c6lcr15b40ws9iixhbflpmvf-cowboy-machine-release",
+    "activeRelease": "/nix/store/vb8kp467y6lmwsa4h6ga5fv0ygf2rkpc-cowboy-machine-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": true,
+    "startedAt": "2026-10-03T08:02:21.293399326Z",
+    "recordedAt": "2026-10-03T08:02:34.640476318Z",
+    "recovered": false
+  },
+  "release_manifest": {
+    "component": "cowboy",
+    "dirty": false,
+    "lane": "machine",
+    "repository": "git@github.com:dravengarden/cowboy.git",
+    "revision": "ae00cdc884de0cad92f303731ce52541a837efc5",
+    "schema": 1,
+    "sessionDeletionJournal": {
+      "readerSchema": 1,
+      "writerSchema": 0
+    },
+    "workerGeneration": "worker-44e379c40a139cd05cc7"
+  },
+  "installed_activator": "/nix/store/xq5gkazafjqwk40nzcxyn7vr4srx228s-columbus-machine-activate-1da44eb/bin/cowboy-release-activate",
+  "samples": {
+    "before": {
+      "captured_at": "2026-10-03T07:56:52.682216+00:00",
+      "observation": {
+        "workers": {
+          "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service": {
+            "Id": "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3493936"
+          },
+          "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service": {
+            "Id": "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "893458"
+          },
+          "cowboy-execution-f42fb11bbba6a2418f4eb3c68f4a47ae.service": {
+            "Id": "cowboy-execution-f42fb11bbba6a2418f4eb3c68f4a47ae.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "855113"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3899663"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "26419"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3655432"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "679001"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1994894"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "680813"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1636964"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1244207"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2202727"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2399564"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1545916"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1522427"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2818900"
+          }
+        },
+        "controller": {
+          "Id": "cowboy.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "1998362"
+        },
+        "machine": {
+          "Id": "cowboy-machine.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3409731"
+        },
+        "http": {
+          "/healthz": {
+            "status": 200,
+            "cache_control": null,
+            "body": "ok"
+          },
+          "/version": {
+            "status": 200,
+            "cache_control": null,
+            "body": {
+              "version": "1027d6ec677b82888789522db411aa0b"
+            }
+          },
+          "/": {
+            "status": 200,
+            "cache_control": "no-store"
+          },
+          "/sw.js": {
+            "status": 200,
+            "cache_control": "no-store"
+          }
+        }
+      }
+    },
+    "after_host": {
+      "captured_at": "2026-10-03T08:02:07.413084+00:00",
+      "observation": {
+        "workers": {
+          "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service": {
+            "Id": "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3493936"
+          },
+          "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service": {
+            "Id": "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "893458"
+          },
+          "cowboy-execution-f42fb11bbba6a2418f4eb3c68f4a47ae.service": {
+            "Id": "cowboy-execution-f42fb11bbba6a2418f4eb3c68f4a47ae.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "855113"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3899663"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "26419"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3655432"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "679001"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1994894"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "680813"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1636964"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1244207"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2202727"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2399564"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1545916"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1522427"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2818900"
+          }
+        },
+        "controller": {
+          "Id": "cowboy.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "1998362"
+        },
+        "machine": {
+          "Id": "cowboy-machine.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3409731"
+        },
+        "http": {
+          "/healthz": {
+            "status": 200,
+            "cache_control": null,
+            "body": "ok"
+          },
+          "/version": {
+            "status": 200,
+            "cache_control": null,
+            "body": {
+              "version": "1027d6ec677b82888789522db411aa0b"
+            }
+          },
+          "/": {
+            "status": 200,
+            "cache_control": "no-store"
+          },
+          "/sw.js": {
+            "status": 200,
+            "cache_control": "no-store"
+          }
+        }
+      }
+    },
+    "after_machine": {
+      "captured_at": "2026-10-03T08:02:55.292610+00:00",
+      "observation": {
+        "workers": {
+          "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service": {
+            "Id": "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3493936"
+          },
+          "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service": {
+            "Id": "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "893458"
+          },
+          "cowboy-execution-f42fb11bbba6a2418f4eb3c68f4a47ae.service": {
+            "Id": "cowboy-execution-f42fb11bbba6a2418f4eb3c68f4a47ae.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "855113"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3899663"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "26419"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "3655432"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "679001"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1994894"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "680813"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1636964"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1244207"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2202727"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2399564"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1545916"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1522427"
+          },
+          "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service": {
+            "Id": "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "2818900"
+          }
+        },
+        "controller": {
+          "Id": "cowboy.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "1998362"
+        },
+        "machine": {
+          "Id": "cowboy-machine.service",
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3759060"
+        },
+        "http": {
+          "/healthz": {
+            "status": 200,
+            "cache_control": null,
+            "body": "ok"
+          },
+          "/version": {
+            "status": 200,
+            "cache_control": null,
+            "body": {
+              "version": "1027d6ec677b82888789522db411aa0b"
+            }
+          },
+          "/": {
+            "status": 200,
+            "cache_control": "no-store"
+          },
+          "/sw.js": {
+            "status": 200,
+            "cache_control": "no-store"
+          }
+        }
+      }
+    }
+  },
+  "machine_deployment_health": {
+    "connected": true,
+    "status": "online",
+    "active_acp_generation": "worker-44e379c40a139cd05cc7",
+    "workspace_revision": "projects-0410346496a2ec677f145e3407b49beb",
+    "workspace_ids_sha256": "1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40",
+    "workspace_owner": "cowboy"
+  },
+  "journal_observation": "2026-10-03T08:02:21.421937Z INFO Session deletion journal reader ready deleted_sessions=0 writer_enabled=false",
+  "namespace_entries": [
+    ".lock"
+  ],
+  "continuity": {
+    "original_units": 16,
+    "changed_original_units": [],
+    "additional_units": [],
+    "controller_pid_unchanged": true
+  },
+  "limits": [
+    "No production deletion record seeded or written",
+    "No OS-process crash, power-loss or independently supplied old/new executable matrix",
+    "No native resume or full worker replacement claim",
+    "Old host activators, portable updater recovery and independent Machine recovery remain outside this guard",
+    "Durable owner reader floor and writer admission remain open"
+  ]
+}

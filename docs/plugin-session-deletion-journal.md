@@ -73,3 +73,7 @@ remain separate from this finite terminal-deletion dataset.
 The [Hawk reader release](releases/plugin-session-deletion-reader-2026-10-03.md)
 records exact source/build gates, writer-disabled observation and bounded
 production continuity separately from writer admission.
+
+The [component compatibility release](releases/plugin-session-deletion-compatibility-2026-10-03.md)
+records the installed Hawk owner guard, declared reader envelope and live
+generation/continuity observations separately from the remaining writer gate.
