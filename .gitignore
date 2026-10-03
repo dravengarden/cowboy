@@ -8,6 +8,7 @@ tools/do-memory-mock/node_modules/
 web/dist/
 /site-dist/
 dist/plugins/
+dist/matrix-acceptance/
 dist/provider-runtime-cache/
 dist/native-plugin-conformance/
 dist/native-shell/

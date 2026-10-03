@@ -24,6 +24,7 @@ import zlib
 from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFixture, tool as native_tool
 from execution_environment_probe import Executor, ProbeFailure, require
 from plugin_runtime_conformance import closed_environment
+from matrix_execution_fixture import MatrixFixture
 
 
 def tool(name, arguments):
@@ -118,6 +119,9 @@ def main():
         "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
     })
     fixture = WorkspaceFixture(args.target)
+    memory = MatrixFixture(inputs, args.runtime.parent, args.descriptor, "claude", environment)
+    if memory.enabled:
+        api.steps.insert(0, tool("mcp__matrix__memory_get", {"id": memory.id}))
     def native(resume=None):
         return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume, bound_native=True)
     def context_checked(requests):
@@ -127,7 +131,7 @@ def main():
                     "auxiliary request leaked runtime context")
         for index, request in enumerate(requests):
             names = {definition["name"] for definition in request.get("tools", [])}
-            require(not any(name.startswith("mcp__") for name in names), "MCP tool definitions remain advertised")
+            require(not any(name.startswith("mcp__") and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget"}) for name in names), "Unowned MCP tool definitions remain advertised")
             require(not names or {"Read", "Edit", "Write", "Bash", "Glob", "Grep", "NotebookEdit", "TaskStop"} <= names,
                     "native execution tools missing")
             encoded = json.dumps(request)
@@ -332,7 +336,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
@@ -369,6 +373,7 @@ def main():
             finally:
                 failed.close()
             checks.append(label + "_denies_without_native_fallback")
+        checks.extend(memory.accept(api.requests))
         receipt = {
             "schema": "cowboy.claude-execution-worker-conformance/v1", "accepted": False, "checks": checks,
             "claude_version": inputs["claude_version"], "claude_sha256": inputs["claude_sha256"],

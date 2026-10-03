@@ -27,8 +27,11 @@ async function instructions($, event) {
   return {
     blocks: [
       ...event.blocks.filter((block) => block.name === "currentDate"),
-      { name: "claudeMd", text: context?.instructions ?? unavailable },
-      ...(memory ? [{ name: "matrixMemory", text: memory }] : []),
+      {
+        name: "claudeMd",
+        text: (context?.instructions ?? unavailable) +
+          (memory ? "\n\n" + memory : ""),
+      },
     ],
     instructionFiles: [],
   };

@@ -20,11 +20,12 @@ import zlib
 from execution_environment_codex_turn_probe import Api, command, final
 from execution_environment_probe import Executor, ProbeFailure, require
 from plugin_runtime_conformance import closed_environment
+from matrix_execution_fixture import MatrixFixture
 
 
-def complete_turn(client, thread):
+def complete_turn(client, thread, prompt="Run the fixture."):
     result = client.request("turn/start", {"threadId": thread, "input": [{
-        "type": "text", "text": "Run the fixture.", "text_elements": [],
+        "type": "text", "text": prompt, "text_elements": [],
     }]})
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
@@ -89,6 +90,9 @@ def main():
         "COWBOY_EXECUTION_DESCRIPTOR": str(args.descriptor),
     })
     home = Path(environment["CODEX_HOME"])
+    memory = MatrixFixture(inputs, args.runtime.parent, args.descriptor, "codex", environment)
+    if memory.enabled:
+        api.steps.insert(0, {"type": "custom_tool_call", "call_id": "fixture-memory", "namespace": "functions", "name": "exec", "input": "text(await tools.mcp__matrix__memory_get(" + json.dumps({"id": memory.id}) + "));"})
     home.mkdir()
     (home / "config.toml").write_text(
         'model = "gpt-6-astra"\nmodel_provider = "cowboy_fixture"\n'
@@ -196,6 +200,7 @@ def main():
             require("TARGET_GUIDANCE_MUST_REACH_MODEL" in json.dumps(api.requests[-2]), "packaged ACP lost target instructions")
             require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(api.requests), "packaged ACP leaked runtime guidance")
             checks.extend(["packaged_acp_native_spawn_routes_target_tools", "packaged_acp_cold_load_preserves_binding_history_and_effects"])
+        checks.extend(memory.accept(api.requests))
         receipt = {
             "schema": "cowboy.execution-worker-conformance/v1", "accepted": False, "checks": checks,
             "native_sha256": hashlib.sha256(args.native_cli.read_bytes()).hexdigest(),
