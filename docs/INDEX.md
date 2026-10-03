@@ -80,6 +80,7 @@ primary phone/desktop product path.
 - [`releases/plugin-session-deletion-compatibility-2026-10-03.md`](releases/plugin-session-deletion-compatibility-2026-10-03.md) — Immutable reader declarations and component activation/rollback admission
 - [`releases/plugin-session-deletion-floor-2026-10-03.md`](releases/plugin-session-deletion-floor-2026-10-03.md) — Root-owned durable reader floor, live undeclared-artifact refusal and same-generation recovery fixtures
 - [`experiments/plugin-session-deletion-process-2026-10-03.md`](experiments/plugin-session-deletion-process-2026-10-03.md) — Disposable broker SIGKILL/reopen and storage-failure acceptance; production writer stays disabled
+- [`experiments/plugin-session-deletion-releases-2026-10-03.md`](experiments/plugin-session-deletion-releases-2026-10-03.md) — Exact immutable old/new reader releases, 31-process upgrade/rollback/refusal matrix and native ELF digests
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags

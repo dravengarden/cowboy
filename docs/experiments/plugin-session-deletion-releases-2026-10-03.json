@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "observedAt": "2026-10-03T09:33:46Z",
+  "kind": "isolated-immutable-reader-pair-acceptance",
+  "platform": "x86_64-linux",
+  "harness": {
+    "path": "tests/session_deletion_releases.rs",
+    "gitBlob": "30d0a5d2145c546b7d749a622dbe96111ebeee63",
+    "parentRevision": "8b2675ae987a1c06144ba5edb92477581151bd36",
+    "test": "immutable_reader_upgrade_rollback_and_refusal_matrix"
+  },
+  "old": {
+    "release": "/nix/store/vb8kp467y6lmwsa4h6ga5fv0ygf2rkpc-cowboy-machine-release",
+    "revision": "ae00cdc884de0cad92f303731ce52541a837efc5",
+    "readerSchema": 1,
+    "writerSchema": 0,
+    "native": "/nix/store/0ibpapv3yjhhcg24arv728yamvx5vk8w-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+    "nativeSha256": "afc5ec0806a8690b1ec34932b5c28b50bcca049a72b5432a7e1653dcc24f3041",
+    "releaseLauncherSha256": "4167ddbf4fff53610942634bdbfefef880cfd2bbf2e4ec42992b6955291fd143",
+    "packagedLauncherSha256": "99f94ca124fd33e5039897390a69244ac125b538cf07824a235306226b71a9c2"
+  },
+  "new": {
+    "release": "/nix/store/n6b8rxna00v77pyqkyk9658xcwnqnh61-cowboy-machine-release",
+    "revision": "38453c13456bddb4261572ab270354e47b2ffc0e",
+    "readerSchema": 1,
+    "writerSchema": 0,
+    "native": "/nix/store/d7vmjixg24jbfb8d0yhhv6gwdsffi9lv-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+    "nativeSha256": "aa77267063a5c416ae34415261c0876ab9298c401935ebb7e481b6088a51705e",
+    "releaseLauncherSha256": "e37972c43479a4afaea57d88b81ad3ac88bac56534137fc49dff4979fc83794d",
+    "packagedLauncherSha256": "5b1ca9f7d48be29e9fce2c9c8ea7183201264b0812f503857966f0be58eac5c6"
+  },
+  "result": {
+    "passed": true,
+    "machineProcesses": 31,
+    "sigkillReaped": 11,
+    "startupRefusals": 20,
+    "terminalReaderOrder": ["old", "new", "old"],
+    "terminalEnsureRefusals": 6,
+    "terminalWorkerPreWelcomeRefusals": 3,
+    "volatileDeletesAcknowledged": 4,
+    "volatileWorkerRefusalsBeforeRestart": 4,
+    "volatileWorkerWelcomesAfterRestart": 4,
+    "productionActivation": false,
+    "productionWriterAdmission": false,
+    "syntheticCommittedInput": true
+  },
+  "checks": {
+    "exactOptInMatrix": "passed",
+    "clippyAllTargetsAllFeaturesDenyWarnings": "passed",
+    "cargoFmtCheck": "passed",
+    "gitDiffCheck": "passed"
+  },
+  "remaining": [
+    "production-writer-release-acceptance",
+    "older-host-activator-admission",
+    "portable-updater-recovery-admission",
+    "general-machine-recovery-admission",
+    "power-loss-acceptance",
+    "continuous-session-incarnation-and-worktree-ownership"
+  ]
+}
