@@ -523,12 +523,13 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         execution_config,
         matches!(args.spawn_mode, CliSpawnMode::SystemdUser),
     )?);
+    let deletion_service_id = args.service_id.clone();
     let controller = controller_loop(ControllerConfig {
         execution,
         controller_url,
         service_id: args.service_id,
         plugin_operation_admission: args.plugin_operation_admission,
-        machine_id,
+        machine_id: machine_id.clone(),
         display_name,
         identity,
         runtime_socket,
@@ -560,7 +561,14 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         args.state_dir.join("zed"),
     );
     tokio::try_join!(
-        crate::machine_broker::run(broker),
+        crate::machine_broker::run_with_deletion_reader(
+            broker,
+            args.state_dir.join("session-deletions"),
+            crate::machine_broker::deletions::Owner {
+                machine_id,
+                service_id: deletion_service_id,
+            },
+        ),
         controller,
         provider_usage_listener,
         code_adapter,
