@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-03",
+  "source": {
+    "component": "cowboy",
+    "dirty": false,
+    "lane": "controller",
+    "repository": "git@github.com:dravengarden/cowboy.git",
+    "revision": "d7afd50537804f2694024def90058ba5a56345d5",
+    "schema": 1
+  },
+  "artifact": "/nix/store/mc4fz609mimm1k8c74h574mxy5sm2pjq-cowboy-controller-release",
+  "cli_sha256": "712dce7447a9040fb20678e4176c76f957fed3b73468ab3b27df256cce6ee0b5",
+  "scope": "Qualified CLI-only invocation from immutable project Nix artifact; Controller and resident Machine activation not performed.",
+  "validation": {
+    "complete_gate": "just check-compact passed after integration",
+    "focused_preparation_test": "passed; retained failures visible but cannot decode as runnable bindings",
+    "native_review": "no actionable defects after preparation and dependency-audit corrections",
+    "dependency_audit": "declared workspace members and separate Zed adapter; experimental path-patched Cargo.lock unchanged"
+  },
+  "live_tests": [
+    {
+      "provider": "claude-code",
+      "model": "sonnet",
+      "session": "sess-1791001940457",
+      "assistant_marker_verified": true,
+      "stop_reason": "end_turn",
+      "seconds": 2.0029704570770264,
+      "runtime_machine": "ovh",
+      "project_machine": "hawk",
+      "temporary_session_deleted": true
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-luna",
+      "session": "sess-1791001940458",
+      "assistant_marker_verified": true,
+      "stop_reason": "end_turn",
+      "seconds": 3.544215440750122,
+      "runtime_machine": "ovh",
+      "project_machine": "hawk",
+      "temporary_session_deleted": true
+    }
+  ],
+  "cleanup": {
+    "temporary_sessions_deleted": true,
+    "machines_deleted": false,
+    "credentials_copied": false,
+    "controller_restarted": false,
+    "machine_restarted": false
+  }
+}
