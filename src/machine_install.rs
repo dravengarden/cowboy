@@ -123,6 +123,7 @@ pub async fn register(
         None => crate::service_identity::service_state_dir(&home, &service_id)?,
     };
     validate_socket_paths(&state_dir)?;
+    crate::session_deletion_admission::require_empty_portable_namespace(&state_dir)?;
     bind_service_origin(&state_dir, &controller_url)?;
     let host = machine_host_binary(None);
     anyhow::ensure!(
@@ -281,6 +282,7 @@ fn prepare_install_at(args: &InstallArgs, home: &Path) -> Result<(PathBuf, PathB
         Ok,
     )?;
     validate_socket_paths(&state)?;
+    crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
     let installed = if args.refresh {
         installed_launcher(args, &state, home)?
     } else {
@@ -564,6 +566,15 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         command.extend(["--workspace".to_owned(), workspace.clone()]);
     }
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
+    // The installer-owned bootstrap is the guard, even when an active signed
+    // host is selected later. An older bootstrap lacking the diagnostic fails
+    // closed. This refuses terminal state; it does not admit a reader release.
+    let _ = writeln!(
+        script,
+        "{} --check-portable-session-deletion --state-dir {} >/dev/null",
+        shell_quote(&state.join("bootstrap/cowboy-machine").display().to_string()),
+        shell_quote(&state.display().to_string())
+    );
     let _ = writeln!(
         script,
         "PATH={}:{}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
@@ -752,6 +763,34 @@ mod tests {
             source.to_str().unwrap(),
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn terminal_journal_refuses_refresh_before_bootstrap_or_launcher_changes() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let state = root.path().join("state");
+        std::fs::create_dir_all(state.join("session-deletions")).unwrap();
+        std::fs::create_dir_all(state.join("bootstrap")).unwrap();
+        std::fs::write(state.join("session-deletions/deletions.json"), "{}").unwrap();
+        std::fs::write(state.join("bootstrap/cowboy-machine"), "retained host").unwrap();
+        std::fs::write(state.join("identity_ed25519"), "retained identity").unwrap();
+        let args = refresh_args(&state, &root.path().join("missing-source"));
+        let error = prepare_install_at(&args, root.path()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("portable Session deletion reader admission")
+        );
+        assert_eq!(
+            std::fs::read(state.join("bootstrap/cowboy-machine")).unwrap(),
+            b"retained host"
+        );
+        assert_eq!(
+            std::fs::read(state.join("identity_ed25519")).unwrap(),
+            b"retained identity"
+        );
+        assert!(!root.path().join(".local/bin").exists());
+        assert!(!state.join("service-origin").exists());
     }
 
     #[test]

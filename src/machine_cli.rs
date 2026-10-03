@@ -217,7 +217,7 @@ pub struct Args {
     #[arg(
         long,
         env = "COWBOY_MACHINE_CONTROLLER_URL",
-        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact", "complete_absent_uninstall"]
+        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact", "complete_absent_uninstall", "check_portable_session_deletion"]
     )]
     controller_url: Option<String>,
     /// Stable identity of the Cowboy Service that owns this local namespace.
@@ -261,6 +261,10 @@ pub struct Args {
     /// This does not check runtime identity, destination policy or readiness.
     #[arg(long, conflicts_with = "provider_usage_status")]
     check_telemetry_writer_policy: bool,
+    /// Read-only guard used by portable launchers before host selection.
+    /// A committed terminal journal has no admitted portable recovery reader.
+    #[arg(long, conflicts_with_all = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact", "complete_absent_uninstall"])]
+    check_portable_session_deletion: bool,
     /// Machine-local ingestion socket for provider gateways.
     #[arg(
         long,
@@ -350,6 +354,11 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
 }
 
 async fn run_args(args: Args) -> anyhow::Result<()> {
+    if args.check_portable_session_deletion {
+        crate::session_deletion_admission::require_empty_portable_namespace(&args.state_dir)?;
+        println!("{}", serde_json::json!({"admitted": true, "writer": false}));
+        return Ok(());
+    }
     if let Some(operation) = &args.complete_absent_uninstall {
         let result = crate::machine_plugins::complete_absent_uninstall(
             &args.state_dir,
@@ -1094,6 +1103,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             Arc::clone(&config.components),
         )
         .await;
+        let restart_host = accepted_component_restart(restart_host, &events);
         for event in events {
             send_frame(&mut socket, &MachineFrame::Event { event }).await?;
         }
@@ -2440,13 +2450,11 @@ fn handle_machine_command(
                         })
                 });
                 let result = reconcile_components(request_id, desired, components).await;
-                let accepted = result.iter().any(|event| {
-                    matches!(event, MachineEvent::CommandResult { accepted: true, .. })
-                });
+                let restart_host = accepted_component_restart(restart_host, &result);
                 for event in result {
                     let _ = events.send(event);
                 }
-                if restart_host && accepted {
+                if restart_host {
                     // The service manager owns host replacement. Payload
                     // processes and state survive; exit only after the result
                     // has had a chance to reach the controller.
@@ -2545,6 +2553,13 @@ fn component_requires_host_restart(kind: &ComponentKind) -> bool {
             | ComponentKind::ProviderCli
             | ComponentKind::ManagedNode
     )
+}
+
+fn accepted_component_restart(requested: bool, events: &[MachineEvent]) -> bool {
+    requested
+        && events
+            .iter()
+            .any(|event| matches!(event, MachineEvent::CommandResult { accepted: true, .. }))
 }
 
 struct AdapterRequestContext {
@@ -3641,6 +3656,30 @@ mod tests {
     };
 
     use crate::runtime_wire::{CoreCommand, Frame, StartSession};
+
+    #[tokio::test]
+    async fn refused_welcome_host_reconcile_does_not_request_restart() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::create_dir(state.path().join("session-deletions")).unwrap();
+        std::fs::write(state.path().join("session-deletions/deletions.json"), "{}").unwrap();
+        let store = std::sync::Arc::new(
+            ComponentStore::new(state.path().join("components"), None, "fixture".into()).unwrap(),
+        );
+        let desired = serde_json::from_value(serde_json::json!({
+            "id": {"kind": "machine_host", "slot": ""},
+            "version": "fixture", "generation": "fixture",
+            "artifact_url": "http://127.0.0.1:1/never-fetched",
+            "digest": "fixture", "artifact_format": "raw", "automatic": false
+        }))
+        .unwrap();
+        let events = super::reconcile_components("welcome".into(), vec![desired], store).await;
+        assert!(
+            matches!(&events[..], [crate::machine_protocol::MachineEvent::CommandResult {
+            accepted: false, detail: Some(detail), ..
+        }] if detail.contains("portable Session deletion reader admission"))
+        );
+        assert!(!super::accepted_component_restart(true, &events));
+    }
 
     fn detected_cli_args(plugin_id: &str) -> String {
         crate::plugin_runtime_args::path_detect()

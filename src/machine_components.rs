@@ -47,6 +47,7 @@ impl ComponentStore {
     }
 
     pub async fn reconcile(&self, desired: DesiredComponent) -> anyhow::Result<ComponentInventory> {
+        self.check_session_deletion_host_selection(&desired)?;
         let publisher_key = self
             .publisher_key
             .as_deref()
@@ -75,6 +76,7 @@ impl ComponentStore {
         if !crate::machine_auth::verify(publisher_key, &proof, signature)? {
             bail!("component signature is invalid");
         }
+        self.check_session_deletion_host_selection(&desired)?;
         let slot = component_slot(&desired);
         let generation = self
             .root
@@ -103,6 +105,7 @@ impl ComponentStore {
             bail!("automatic component activation requires a health probe");
         }
         if let Some(probe) = &desired.probe {
+            self.check_session_deletion_host_selection(&desired)?;
             let timeout = probe.timeout_ms.clamp(100, 120_000);
             let mut child = spawn_staged_probe(&executable, &generation, &probe.args).await?;
             let status =
@@ -119,6 +122,7 @@ impl ComponentStore {
                 bail!("staged component health probe exited with {status}");
             }
         }
+        self.check_session_deletion_host_selection(&desired)?;
         let active = self.root.join("active").join(&slot);
         let prior_generation = std::fs::read_link(&active).ok();
         let rollback_generation = prior_generation.as_ref().and_then(|target| {
@@ -158,6 +162,20 @@ impl ComponentStore {
             update: None,
             superseded_by: None,
         })
+    }
+
+    fn check_session_deletion_host_selection(
+        &self,
+        desired: &DesiredComponent,
+    ) -> anyhow::Result<()> {
+        if desired.id.kind == crate::machine_protocol::ComponentKind::MachineHost {
+            crate::session_deletion_admission::require_empty_portable_namespace(
+                self.root
+                    .parent()
+                    .context("component store has no Machine state parent")?,
+            )?;
+        }
+        Ok(())
     }
 
     pub fn active(&self) -> anyhow::Result<Vec<(DesiredComponent, PathBuf)>> {
@@ -444,6 +462,78 @@ mod tests {
 
     static TEST_ID: AtomicU64 = AtomicU64::new(1);
 
+    #[tokio::test]
+    async fn terminal_journal_refuses_host_fetch_without_mutating_component_links() {
+        let state = tempfile::tempdir().unwrap();
+        let store =
+            ComponentStore::new(state.path().join("components"), None, "fixture".into()).unwrap();
+        std::fs::create_dir(state.path().join("session-deletions")).unwrap();
+        std::fs::write(state.path().join("session-deletions/deletions.json"), "{}").unwrap();
+        let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+        let mut desired = signed_component(
+            &identity,
+            "http://127.0.0.1:1/never-fetched".into(),
+            b"host",
+            "v1",
+        );
+        desired.id.kind = ComponentKind::MachineHost;
+        desired.id.slot.clear();
+        let error = store.reconcile(desired).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("portable Session deletion reader admission")
+        );
+        for name in ["active", "rollback", "commands", "payloads"] {
+            assert_eq!(std::fs::read_dir(store.root.join(name)).unwrap().count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn host_probe_creating_a_terminal_journal_cannot_publish_its_candidate() {
+        let state = tempfile::tempdir_in("/tmp").unwrap();
+        let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+        let public_key = state.path().join("publisher.pub");
+        std::fs::write(&public_key, identity.public_key()).unwrap();
+        let store = ComponentStore::new(
+            state.path().join("components"),
+            Some(&public_key),
+            "fixture".into(),
+        )
+        .unwrap();
+        let journal = state.path().join("session-deletions");
+        std::fs::create_dir(&journal).unwrap();
+        let bytes = format!(
+            "#!/bin/sh\nprintf '{{}}' > '{}/deletions.json'\n",
+            journal.display()
+        )
+        .into_bytes();
+        let mut desired = signed_component(&identity, serve_once(&bytes).await, &bytes, "v1");
+        desired.id.kind = ComponentKind::MachineHost;
+        desired.id.slot.clear();
+        desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+        let error = store.reconcile(desired).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("portable Session deletion reader admission")
+        );
+        assert_eq!(
+            std::fs::read(journal.join("deletions.json")).unwrap(),
+            b"{}"
+        );
+        for name in ["active", "rollback", "commands"] {
+            assert_eq!(std::fs::read_dir(store.root.join(name)).unwrap().count(), 0);
+        }
+        // Verified staging may remain; refusal is not rollback of probe effects.
+        assert_eq!(
+            std::fs::read_dir(store.root.join("payloads"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn provider_cli_and_adapter_commands_never_collide() {
         let component = |kind, slot: &str| DesiredComponent {
@@ -508,6 +598,10 @@ mod tests {
             "worker-bootstrap".to_owned(),
         )
         .expect("store");
+
+        // Terminal state restricts Machine host selection, not unrelated payloads.
+        std::fs::create_dir(root.join("session-deletions")).unwrap();
+        std::fs::write(root.join("session-deletions/deletions.json"), "{}").unwrap();
 
         const FIRST: &[u8] = b"#!/bin/sh\nexit 0\n# first\n";
         const SECOND: &[u8] = b"#!/bin/sh\nexit 0\n# second\n";
@@ -651,7 +745,8 @@ mod tests {
         desired
     }
 
-    async fn serve_once(body: &'static [u8]) -> String {
+    async fn serve_once(body: &[u8]) -> String {
+        let body = body.to_vec();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener");
@@ -665,7 +760,7 @@ mod tests {
                 body.len()
             );
             stream.write_all(header.as_bytes()).await.expect("header");
-            stream.write_all(body).await.expect("body");
+            stream.write_all(&body).await.expect("body");
         });
         format!("http://{address}/artifact")
     }

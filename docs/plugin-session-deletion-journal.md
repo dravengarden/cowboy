@@ -70,12 +70,40 @@ the legacy predecessor. Its actual revision and generation enter the recovery
 receipt. Cross-generation recovery and failed-transaction repair selection are
 still unadmitted for Machine.
 
-Older host activators and portable updater recovery remain outside this finite
-guard. A finite independently supplied old/new declared-reader release pair
+Older host activators and older portable installers/launchers remain outside
+this finite guard. Updated portable paths refuse committed terminal state
+outright; compatible portable recovery readers remain unadmitted. A finite
+independently supplied old/new declared-reader release pair
 and disposable test-executable process crash/reopen/failure fixtures now pass.
 Writer-release acceptance and the remaining recovery authorities are still
 open; production writing remains disabled. Release metadata is a build-owned
 claim, not authorization.
+
+## Portable refusal gate
+
+Portable component declarations do not bind a Session deletion reader schema.
+Until that reader/recovery authority is supplied, a Machine-host reconcile
+refuses any committed deletion entry before fetching a payload, before probing
+it and before publishing active/rollback/command links. Other component kinds
+retain their existing admission. A probe-created record refuses publication;
+verified staging and probe effects are not rolled back.
+
+Installation and refresh check the same gate before changing bootstrap payloads,
+identity or launcher configuration. Newly generated launchers run the
+installer-owned bootstrap's `--check-portable-session-deletion` diagnostic
+before selecting active or bootstrap hosts. The diagnostic only inspects
+namespace entries; it opens no Machine stores or Controller connection. A
+bootstrap without this diagnostic fails closed. A healthy empty or staging-only
+namespace retains existing behavior. Committed files, directories and dangling
+symlinks all refuse; invalid namespace entries and inspection errors do not
+become empty state.
+
+Rejected Welcome reconciliation no longer requests a host restart. This keeps
+a refused candidate from repeatedly exiting its healthy resident reader.
+These are bounded refusal checks, not a portable reader declaration, persistent
+floor, signed recovery selection, atomic writer transaction or power-loss
+acceptance. Older installers can still replace their own launcher; this slice
+does not fence that independent authority. The production writer remains off.
 
 ## Evidence boundary
 
@@ -132,3 +160,6 @@ boundaries. It changes no production writer or deployment admission.
 The [immutable reader-pair acceptance](experiments/plugin-session-deletion-releases-2026-10-03.md)
 records the exact release revisions, native and launcher digests, isolated
 31-process matrix and remaining writer/host recovery boundaries.
+
+The [portable refusal release](releases/plugin-session-deletion-portable-2026-10-03.md)
+records the source guard, executable launcher tests and Machine release receipt.

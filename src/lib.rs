@@ -168,6 +168,8 @@ mod scheduler;
 mod server;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod service_identity;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod session_deletion_admission;
 #[cfg(feature = "full")]
 mod session_folders;
 #[cfg(feature = "machine-host")]
