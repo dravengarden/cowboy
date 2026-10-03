@@ -423,6 +423,9 @@ impl RemoteRuntime {
     ) -> String {
         let command_id = self.next_id("cmd");
         let turn_id = self.next_turn_id();
+        // The echo would otherwise carry every image back across the Machine
+        // link, holding the prompt on "Sending…" while the turn already runs.
+        let echo_artifacts = self.shared.hub.store_prompt_images(&content);
         self.queue(
             command_id.clone(),
             CoreCommand::Prompt {
@@ -432,6 +435,7 @@ impl RemoteRuntime {
                 content,
                 cmid,
                 trace,
+                echo_artifacts,
             },
         );
         command_id
@@ -2718,6 +2722,7 @@ mod tests {
             turn_id: "turn-1".to_owned(),
             content: vec![serde_json::json!({"type": "text", "text": "continue"})],
             cmid: Some("retry-1".to_owned()),
+            echo_artifacts: false,
         };
         for mut commands in [
             vec![prompt.clone(), stop.clone()],
@@ -3408,6 +3413,7 @@ mod tests {
                 turn_id: "t".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "keep me"})],
                 cmid: Some("m".to_owned()),
+                echo_artifacts: false,
             }),
             Some("failed".to_owned()),
         );
@@ -3588,6 +3594,7 @@ mod tests {
                 turn_id: "turn-in-transit".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "first"})],
                 cmid: None,
+                echo_artifacts: false,
             },
         );
         let mut idle = snapshot("s");

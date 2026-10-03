@@ -1758,6 +1758,20 @@ impl Hub {
         *self.inner.artifacts.lock() = Some(artifacts);
     }
 
+    /// Store a prompt's large images ahead of dispatch. `true` lets a remote
+    /// worker echo them by digest, which [`Self::push_tagged`] resolves.
+    pub fn store_prompt_images(&self, content: &[serde_json::Value]) -> bool {
+        let Some(artifacts) = self.inner.artifacts.lock().clone() else {
+            return false;
+        };
+        artifacts
+            .store_prompt_images(content)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "prompt images stay inline in the echo");
+                false
+            })
+    }
+
     #[must_use]
     pub fn memory_stats(&self) -> HubMemoryStats {
         let sessions = self.inner.sessions.lock();

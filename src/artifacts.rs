@@ -12,6 +12,61 @@ use sha2::{Digest as _, Sha256};
 
 static ARTIFACT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Inline image payloads below this encoded size stay in the event row.
+const INLINE_IMAGE_LIMIT_BYTES: usize = 32 * 1024;
+
+/// Replaces `data` on a worker's prompt echo image when Cowboy stored those
+/// exact bytes before dispatch (`CoreCommand::Prompt::echo_artifacts`). The
+/// Controller resolves it to the artifact URL before the event is recorded.
+pub const ECHO_ARTIFACT_FIELD: &str = "artifactSha256";
+
+/// Content digest of an inline image payload large enough to be externalized.
+#[must_use]
+pub fn large_image_digest(encoded: &str) -> Option<String> {
+    if encoded.len() < INLINE_IMAGE_LIMIT_BYTES {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    Some(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+/// Swap the bytes of a prompt-echo image for their digest when the digest is
+/// one Cowboy stored before dispatch. Other updates are left untouched.
+pub fn reference_echoed_image(update: &mut serde_json::Value, stored: &[String]) {
+    if stored.is_empty()
+        || update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            != Some("user_message_chunk")
+    {
+        return;
+    }
+    let Some(content) = update
+        .get_mut("content")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    if content.get("type").and_then(serde_json::Value::as_str) != Some("image") {
+        return;
+    }
+    let Some(digest) = content
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .and_then(large_image_digest)
+        .filter(|digest| stored.contains(digest))
+    else {
+        return;
+    };
+    content.remove("data");
+    content.insert(
+        ECHO_ARTIFACT_FIELD.to_owned(),
+        serde_json::Value::String(digest),
+    );
+}
+
 #[derive(Clone)]
 pub struct ArtifactStore {
     root: PathBuf,
@@ -60,10 +115,31 @@ impl ArtifactStore {
         Ok(())
     }
 
+    /// Store a prompt's large inline images before it is dispatched to a
+    /// worker, so the worker may echo them by digest instead of returning the
+    /// bytes over the Machine link. Returns whether any image was stored.
+    pub fn store_prompt_images(&self, content: &[serde_json::Value]) -> Result<bool> {
+        let mut stored = false;
+        for block in content {
+            if block.get("type").and_then(serde_json::Value::as_str) != Some("image") {
+                continue;
+            }
+            let Some(data) = block.get("data").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let mime = block
+                .get("mimeType")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("image/png");
+            stored |= self.put(data, mime)?.is_some();
+        }
+        Ok(stored)
+    }
+
     fn put(&self, encoded: &str, mime: &str) -> Result<Option<String>> {
         // Small icons cost more as separate HTTP requests; externalize only
         // payloads large enough to materially affect JSONB/WS history.
-        if encoded.len() < 32 * 1024 {
+        if encoded.len() < INLINE_IMAGE_LIMIT_BYTES {
             return Ok(None);
         }
         let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
@@ -82,11 +158,7 @@ impl ArtifactStore {
             // reuses it. The event row is committed after this method returns;
             // the GC grace period therefore also protects that in-flight
             // reference from a concurrent sweep.
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .and_then(|file| file.set_modified(SystemTime::now()))
-                .with_context(|| format!("refreshing artifact {}", path.display()))?;
+            refresh_age(&path)?;
         } else {
             let temp = self.root.join(format!(
                 ".{name}.{}.{}.tmp",
@@ -188,13 +260,46 @@ fn externalize_object(
     mime: &str,
 ) -> Result<()> {
     let Some(data) = object.get("data").and_then(serde_json::Value::as_str) else {
-        return Ok(());
+        return resolve_echo_reference(store, object, mime);
     };
     if let Some(url) = store.put(data, mime)? {
         object.remove("data");
         object.insert("url".to_owned(), serde_json::Value::String(url));
     }
     Ok(())
+}
+
+fn resolve_echo_reference(
+    store: &ArtifactStore,
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    mime: &str,
+) -> Result<()> {
+    let Some(digest) = object
+        .get(ECHO_ARTIFACT_FIELD)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(());
+    };
+    let name = format!("{digest}.{}", extension_for_mime(mime));
+    let Some(path) = store.path(&name) else {
+        tracing::warn!(artifact = %name, "echoed image reference has no stored artifact");
+        return Ok(());
+    };
+    refresh_age(&path)?;
+    object.remove(ECHO_ARTIFACT_FIELD);
+    object.insert(
+        "url".to_owned(),
+        serde_json::Value::String(format!("/api/artifacts/{name}")),
+    );
+    Ok(())
+}
+
+fn refresh_age(path: &std::path::Path) -> Result<()> {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(SystemTime::now()))
+        .with_context(|| format!("refreshing artifact {}", path.display()))
 }
 
 fn extension_for_mime(mime: &str) -> &'static str {
@@ -223,6 +328,43 @@ mod tests {
         let url = value["url"].as_str().unwrap();
         assert_eq!(std::path::Path::new(url).extension().unwrap(), "jpg");
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prompt_echo_reference_resolves_to_the_inline_artifact_url() {
+        let root =
+            std::env::temp_dir().join(format!("cowboy-artifact-echo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = ArtifactStore::new(root.clone()).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(vec![9_u8; 40_000]);
+        let image = serde_json::json!({"type":"image","data":data,"mimeType":"image/jpeg"});
+        let small = serde_json::json!({"type":"image","data":"c2hvdA==","mimeType":"image/png"});
+        assert!(
+            !store
+                .store_prompt_images(std::slice::from_ref(&small))
+                .unwrap()
+        );
+        assert!(store.store_prompt_images(&[image.clone(), small]).unwrap());
+
+        let mut inline = image.clone();
+        store.externalize_images(&mut inline).unwrap();
+        let digest = large_image_digest(&data).unwrap();
+        let mut echo = serde_json::json!({"sessionUpdate":"user_message_chunk","content":image});
+        reference_echoed_image(&mut echo, std::slice::from_ref(&digest));
+        assert!(echo["content"].get("data").is_none());
+        store.externalize_images(&mut echo).unwrap();
+        assert_eq!(echo["content"], inline);
+
+        let unknown = "b".repeat(64);
+        let mut missing = serde_json::json!({
+            "type":"image","mimeType":"image/jpeg",ECHO_ARTIFACT_FIELD:unknown,
+        });
+        store.externalize_images(&mut missing).unwrap();
+        assert!(
+            missing.get("url").is_none(),
+            "an unknown digest is never resolved"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

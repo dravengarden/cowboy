@@ -292,6 +292,69 @@ struct TokenResponse {
     id_token: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CardeaDeviceIdentity {
+    schema: String,
+    subject_id: String,
+    client_id: String,
+    pub grant_id: String,
+    pub public_key: String,
+    grant_public_key: String,
+    generation: u64,
+    authenticated_at: u64,
+    pub expires_at: u64,
+    grant_expires_at: u64,
+}
+impl CardeaDeviceIdentity {
+    fn validate(&self, client: &str, subject: &str, key: &str, now: u64) -> Result<()> {
+        anyhow::ensure!(
+            self.schema == "dravengarden.cardea.device-identity/v1"
+                && self.client_id == client
+                && self.subject_id == subject
+                && self.public_key == key
+                && self.grant_id.len() == 36
+                && self.grant_id.bytes().enumerate().all(
+                    |(i, b)| if [8, 13, 18, 23].contains(&i) {
+                        b == b'-'
+                    } else {
+                        b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+                    }
+                )
+                && self.authenticated_at > 0
+                && self.authenticated_at <= now.saturating_add(60)
+                && self.expires_at > now
+                && self.expires_at <= now.saturating_add(360)
+                && self.expires_at <= self.grant_expires_at
+                && self.grant_expires_at <= self.authenticated_at.saturating_add(365 * 86400),
+            "invalid Cardea device identity"
+        );
+        crate::client_auth::decode_public_key(&self.grant_public_key)?;
+        let _ = self.generation;
+        Ok(())
+    }
+}
+async fn bounded_device_json(mut response: reqwest::Response) -> Result<serde_json::Value> {
+    anyhow::ensure!(
+        response.status().is_success()
+            && response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.split(';').next() == Some("application/json")),
+        "Cardea device exchange rejected"
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        anyhow::ensure!(
+            bytes.len() + chunk.len() <= MAX_TOKEN_RESPONSE_BYTES,
+            "Cardea device response is too large"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedIdentity {
     pub issuer: String,
@@ -448,6 +511,92 @@ impl JsonWebKeySet {
 }
 
 impl OidcProvider {
+    #[cfg(test)]
+    pub(crate) fn cardea_device_fixture(origin: &str) -> Self {
+        let signing = SigningKey::from_bytes(&[7; 32]);
+        let mut provider = tests::provider_with_pinned_key(&signing);
+        provider.issuer = origin.into();
+        provider.token_endpoint = format!("{origin}/oauth2/token");
+        provider.client_authentication = RuntimeClientAuthentication::PrivateKeyJwtEd25519 {
+            key_id: "fixture".into(),
+            signing_seed: [7; 32],
+        };
+        provider
+    }
+    /// The reserved Cardea provider owns this versioned identity extension.
+    /// Product account mapping and permissions remain Cowboy-owned.
+    pub(crate) fn cardea_device_configuration(&self) -> Result<serde_json::Value> {
+        anyhow::ensure!(
+            self.id == "cardea"
+                && matches!(
+                    self.client_authentication,
+                    RuntimeClientAuthentication::PrivateKeyJwtEd25519 { .. }
+                ),
+            "Cardea device identity is unavailable"
+        );
+        let origin = Url::parse(&self.issuer)?;
+        anyhow::ensure!(
+            origin.path() == "/" && origin.query().is_none() && origin.fragment().is_none(),
+            "Cardea issuer must be an origin"
+        );
+        Ok(
+            serde_json::json!({"schema":"dravengarden.cowboy.cardea-device-configuration/v1", "issuer":origin.origin().ascii_serialization(), "client_id":self.client_id}),
+        )
+    }
+
+    pub(crate) async fn exchange_cardea_device(
+        &self,
+        token: &str,
+        assertion: &str,
+        expected_key: &str,
+    ) -> Result<CardeaDeviceIdentity> {
+        self.cardea_device_configuration()?;
+        anyhow::ensure!(
+            token.len() <= 128 && assertion.len() <= 8192,
+            "invalid device evidence"
+        );
+        crate::client_auth::decode_public_key(expected_key)?;
+        let now = now_seconds()?;
+        let mut form = vec![
+            ("grant_type".into(), "client_credentials".into()),
+            ("client_id".into(), self.client_id.clone()),
+        ];
+        self.append_client_authentication(&mut form, &self.token_endpoint, now)?;
+        let response = self
+            .http
+            .post(&self.token_endpoint)
+            .form(&form)
+            .send()
+            .await?;
+        let value = bounded_device_json(response).await?;
+        anyhow::ensure!(
+            value["token_type"]
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case("Bearer")),
+            "invalid consumer token type"
+        );
+        let access = value["access_token"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 8192)
+            .context("invalid consumer token")?;
+        let endpoint = format!(
+            "{}/v1/device-grant-exchanges",
+            self.issuer.trim_end_matches('/')
+        );
+        let response = self
+            .http
+            .post(endpoint)
+            .bearer_auth(access)
+            .json(&serde_json::json!({"access_token":token,"assertion":assertion}))
+            .send()
+            .await?;
+        let identity: CardeaDeviceIdentity =
+            serde_json::from_value(bounded_device_json(response).await?)?;
+        // Validate against receipt time, after both HTTP exchanges. A small
+        // issuer clock allowance never expands Cowboy's own five-minute cap.
+        identity.validate(&self.client_id, &self.subject, expected_key, now_seconds()?)?;
+        Ok(identity)
+    }
     pub fn load(path: &Path) -> Result<Self> {
         let document: ProviderDocument = crate::auth_plugins::decode_private_json(
             &read_protected_file(path)?,
@@ -1649,10 +1798,15 @@ fn client_assertion(
     assertion_id: &str,
     now: u64,
 ) -> Option<String> {
+    #[cfg(test)]
+    let fixture_endpoint = Url::parse(token_endpoint)
+        .is_ok_and(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
+    #[cfg(not(test))]
+    let fixture_endpoint = false;
     if !valid_oidc_token(key_id, 255)
         || !valid_oidc_token(client_id, 255)
         || !valid_identifier(assertion_id)
-        || exact_https_url(token_endpoint).is_err()
+        || (exact_https_url(token_endpoint).is_err() && !fixture_endpoint)
     {
         return None;
     }
@@ -2035,7 +2189,7 @@ mod tests {
         }
     }
 
-    fn provider_with_pinned_key(signing: &SigningKey) -> OidcProvider {
+    pub(super) fn provider_with_pinned_key(signing: &SigningKey) -> OidcProvider {
         let _ = rustls::crypto::ring::default_provider().install_default();
         OidcProvider {
             id: "cardea".to_owned(),
@@ -2072,6 +2226,52 @@ mod tests {
                 .build()
                 .unwrap(),
         }
+    }
+
+    #[test]
+    fn cardea_identity_rejects_audience_subject_binding_and_deadline_mismatch() {
+        let public = crate::client_auth::public_key_to_base64(&SigningKey::from_bytes(&[8; 32]));
+        let mut value = serde_json::json!({
+            "schema":"dravengarden.cardea.device-identity/v1", "subject_id":"draven",
+            "client_id":"cowboy-production", "grant_id":"01234567-89ab-4cde-8fab-0123456789ab",
+            "public_key":public,"grant_public_key":public,"generation":0,
+            "authenticated_at":1000,"expires_at":1300,"grant_expires_at":31537000,
+        });
+        let identity: super::CardeaDeviceIdentity = serde_json::from_value(value.clone()).unwrap();
+        assert!(
+            identity
+                .validate("cowboy-production", "draven", &public, 1001)
+                .is_ok()
+        );
+        assert!(
+            identity
+                .validate("other-client", "draven", &public, 1001)
+                .is_err()
+        );
+        assert!(
+            identity
+                .validate("cowboy-production", "other-subject", &public, 1001)
+                .is_err()
+        );
+        assert!(
+            identity
+                .validate("cowboy-production", "draven", "wrong-key", 1001)
+                .is_err()
+        );
+        assert!(
+            identity
+                .validate("cowboy-production", "draven", &public, 1300)
+                .is_err()
+        );
+        value["expires_at"] = serde_json::json!(2000);
+        let expanded: super::CardeaDeviceIdentity = serde_json::from_value(value).unwrap();
+        assert!(
+            expanded
+                .validate("cowboy-production", "draven", &public, 1001)
+                .is_err()
+        );
+        let other = provider_with_pinned_key(&SigningKey::from_bytes(&[8; 32]));
+        assert!(other.cardea_device_configuration().is_err()); // Client secret is not accepted.
     }
 
     fn sign_logout_token(signing: &SigningKey, claims: serde_json::Value) -> String {

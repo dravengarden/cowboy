@@ -396,6 +396,32 @@ impl DeviceAccessSessions {
         )
     }
 
+    pub(crate) fn issue_identity_device(
+        &self,
+        device_id: &str,
+        user_id: &str,
+        public_key: &str,
+        now_ms: i64,
+        expires_at_ms: i64,
+    ) -> Result<(String, i64)> {
+        let ttl = expires_at_ms.saturating_sub(now_ms);
+        ensure!(
+            (1..=300_000).contains(&ttl),
+            "identity evidence lifetime is invalid"
+        );
+        self.issue_bounded(
+            device_id,
+            user_id,
+            public_key,
+            now_ms,
+            ttl,
+            ACCESS_TOKEN_PREFIX,
+            "human",
+            "cli",
+            Vec::new(),
+        )
+    }
+
     pub fn issue_automation(
         &self,
         credential_id: &str,

@@ -70,6 +70,7 @@ impl ClientAuthentication {
             access_expires_at_ms: now_ms() + 600_000,
             refresh_token: "unused".to_owned(),
             refresh_expires_at_ms: now_ms() + 600_000,
+            cardea_profile: None,
         }));
         Self(Arc::new(manager))
     }
@@ -105,6 +106,52 @@ impl ClientAuthentication {
     pub(crate) async fn ensure_login(&self) -> Result<()> {
         self.0.ensure_login().await
     }
+    pub(crate) async fn ensure_cardea_login(&self, profile: &str) -> Result<()> {
+        ensure!(
+            !profile.is_empty()
+                && profile.len() <= 64
+                && profile.bytes().all(|b| b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || matches!(b, b'.' | b'_' | b'-')),
+            "invalid Cardea profile"
+        );
+        let _lock = acquire_credential_lock(&self.0.lock_path).await?;
+        let mut stored = if let Some(stored) = load_credential(&self.0.credential_path)? {
+            ensure!(
+                stored.origin == self.0.base_url.as_str()
+                    && stored.cardea_profile.as_deref() == Some(profile),
+                "existing credentials use a different login; use a separate --auth-state-dir"
+            );
+            stored
+        } else {
+            let key = crate::client_auth::new_signing_key()?;
+            let stored = StoredDeviceCredential {
+                version: CREDENTIAL_VERSION,
+                origin: self.0.base_url.to_string(),
+                name: self.0.device_name.clone(),
+                device_id: String::new(),
+                private_key: crate::client_auth::signing_key_to_base64(&key),
+                access_token: String::new(),
+                access_expires_at_ms: 0,
+                refresh_token: String::new(),
+                refresh_expires_at_ms: 0,
+                cardea_profile: Some(profile.into()),
+            };
+            // Keep the product key through interrupted approval or exchange.
+            save_credential(&self.0.credential_path, &stored)?;
+            stored
+        };
+        // Explicit login may bind a newly human-approved grant after expiry.
+        // Automatic refresh below must retain its existing product device ID.
+        stored.device_id.clear();
+        stored.access_token.clear();
+        stored.access_expires_at_ms = 0;
+        save_credential(&self.0.credential_path, &stored)?;
+        stored = self.0.authorize_with_cardea(&stored, true).await?;
+        save_credential(&self.0.credential_path, &stored)?;
+        *self.0.cached.write().await = Some(stored);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +166,8 @@ struct StoredDeviceCredential {
     access_expires_at_ms: i64,
     refresh_token: String,
     refresh_expires_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cardea_profile: Option<String>,
 }
 
 #[derive(Debug)]
@@ -128,6 +177,7 @@ pub(crate) struct DeviceCredentialManager {
     credential_path: PathBuf,
     lock_path: PathBuf,
     http: reqwest::Client,
+    cardea_binary: PathBuf,
     cached: RwLock<Option<StoredDeviceCredential>>,
 }
 
@@ -146,6 +196,7 @@ impl DeviceCredentialManager {
             device_name,
             credential_path,
             lock_path,
+            cardea_binary: PathBuf::from("cardea"),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
@@ -235,18 +286,21 @@ impl DeviceCredentialManager {
             "The Service must require device authentication"
         );
 
-        let credential = if let Some(stored) = stored
-            && stored.version == CREDENTIAL_VERSION
-            && stored.origin == self.base_url.as_str()
-            && stored.refresh_expires_at_ms > now_ms()
-        {
-            match self.refresh(&stored).await? {
-                RefreshOutcome::Credential(credential) => credential,
-                RefreshOutcome::Reauthorize => self.authorize_in_browser().await?,
-            }
-        } else {
-            self.authorize_in_browser().await?
-        };
+        let credential =
+            if let Some(stored) = stored.as_ref().filter(|s| s.cardea_profile.is_some()) {
+                self.authorize_with_cardea(stored, false).await?
+            } else if let Some(stored) = stored
+                && stored.version == CREDENTIAL_VERSION
+                && stored.origin == self.base_url.as_str()
+                && stored.refresh_expires_at_ms > now_ms()
+            {
+                match self.refresh(&stored).await? {
+                    RefreshOutcome::Credential(credential) => credential,
+                    RefreshOutcome::Reauthorize => self.authorize_in_browser().await?,
+                }
+            } else {
+                self.authorize_in_browser().await?
+            };
         save_credential(&self.credential_path, &credential)?;
         *self.cached.write().await = Some(credential.clone());
         Ok(credential)
@@ -320,7 +374,149 @@ impl DeviceCredentialManager {
             access_expires_at_ms: tokens.access_expires_at_ms,
             refresh_token: tokens.refresh_token,
             refresh_expires_at_ms: tokens.refresh_expires_at_ms,
+            cardea_profile: None,
         }))
+    }
+
+    async fn authorize_with_cardea(
+        &self,
+        stored: &StoredDeviceCredential,
+        login: bool,
+    ) -> Result<StoredDeviceCredential> {
+        let profile = stored
+            .cardea_profile
+            .as_deref()
+            .context("missing Cardea profile")?;
+        ensure!(
+            stored.version == CREDENTIAL_VERSION && stored.origin == self.base_url.as_str(),
+            "invalid local Cardea credential"
+        );
+        let endpoint = self.base_url.join("api/auth/device/cardea")?;
+        let response = self.http.get(endpoint.clone()).send().await?;
+        let config = bounded_auth_json(response).await?;
+        ensure!(
+            config["schema"] == "dravengarden.cowboy.cardea-device-configuration/v1",
+            "unsupported Cardea device configuration"
+        );
+        let issuer = config["issuer"].as_str().context("missing Cardea issuer")?;
+        let issuer_url = Url::parse(issuer)?;
+        ensure!(
+            issuer_url.scheme() == "https" && issuer_url.origin().ascii_serialization() == issuer,
+            "invalid Cardea issuer"
+        );
+        let client = config["client_id"]
+            .as_str()
+            .filter(|v| !v.is_empty() && v.len() <= 128)
+            .context("missing Cardea client")?;
+        if login {
+            let status = tokio::process::Command::new(&self.cardea_binary)
+                .args([
+                    "--origin",
+                    issuer,
+                    "--profile",
+                    profile,
+                    "auth",
+                    "login",
+                    "--client",
+                    client,
+                    "--label",
+                    &stored.name,
+                    "--wait",
+                    "600",
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::inherit())
+                .status()
+                .await
+                .context("Cardea binary is required on this machine; run cardea --help")?;
+            ensure!(
+                status.success(),
+                "Cardea registration failed; retry the same login command"
+            );
+        }
+        let key = crate::client_auth::signing_key_from_base64(&stored.private_key)?;
+        let public = crate::client_auth::public_key_to_base64(&key);
+        let evidence_path = self.credential_path.with_extension("cardea-evidence.json");
+        match std::fs::remove_file(&evidence_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        let status = tokio::process::Command::new(&self.cardea_binary)
+            .args([
+                "--origin",
+                issuer,
+                "--profile",
+                profile,
+                "auth",
+                "credential",
+                "--binding-key",
+                &public,
+                "--output-file",
+            ])
+            .arg(&evidence_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .await
+            .context("Cardea binary is required to refresh this device login")?;
+        ensure!(
+            status.success(),
+            "Cardea identity refresh failed; check cardea auth status; rerun cowboy login --cardea-profile when reapproval is needed"
+        );
+        let evidence = (|| -> Result<serde_json::Value> {
+            let mut file = private_open_options().read(true).open(&evidence_path)?;
+            assert_private_file(&file, &evidence_path)?;
+            ensure!(
+                file.metadata()?.len() <= MAX_CREDENTIAL_BYTES,
+                "oversized Cardea evidence"
+            );
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok(serde_json::from_slice(&bytes)?)
+        })();
+        std::fs::remove_file(&evidence_path)?;
+        let evidence = evidence?;
+        ensure!(
+            evidence["schema"] == "dravengarden.cardea.device-identity-credential/v1"
+                && evidence["issuer"] == issuer
+                && evidence["client_id"] == client,
+            "invalid Cardea identity evidence"
+        );
+        let response = self.http.post(endpoint).json(&serde_json::json!({
+            "name":stored.name,"public_key":public,"access_token":evidence["access_token"],"assertion":evidence["assertion"],
+        })).send().await?;
+        let response = bounded_auth_json(response).await?;
+        let device_id = response["device_id"]
+            .as_str()
+            .context("missing Cowboy device ID")?;
+        let token = response["access_token"]
+            .as_str()
+            .context("missing Cowboy access token")?;
+        let expiry = response["access_expires_at_ms"]
+            .as_i64()
+            .context("missing Cowboy expiry")?;
+        ensure!(
+            response["schema"] == "dravengarden.cowboy.cardea-device-token/v1"
+                && crate::client_auth::valid_device_id(device_id)
+                && token.starts_with("cow_access_")
+                && expiry > now_ms()
+                && expiry <= now_ms() + 300_000
+                && (stored.device_id.is_empty() || stored.device_id == device_id),
+            "invalid Cowboy device response"
+        );
+        Ok(StoredDeviceCredential {
+            version: CREDENTIAL_VERSION,
+            origin: stored.origin.clone(),
+            name: stored.name.clone(),
+            device_id: device_id.into(),
+            private_key: stored.private_key.clone(),
+            access_token: token.into(),
+            access_expires_at_ms: expiry,
+            refresh_token: String::new(),
+            refresh_expires_at_ms: 0,
+            cardea_profile: stored.cardea_profile.clone(),
+        })
     }
 
     async fn authorize_in_browser(&self) -> Result<StoredDeviceCredential> {
@@ -393,6 +589,7 @@ impl DeviceCredentialManager {
             access_expires_at_ms: tokens.access_expires_at_ms,
             refresh_token: tokens.refresh_token,
             refresh_expires_at_ms: tokens.refresh_expires_at_ms,
+            cardea_profile: None,
         })
     }
 
@@ -639,6 +836,23 @@ fn load_credential(path: &Path) -> Result<Option<StoredDeviceCredential>> {
         .map(Some)
 }
 
+async fn bounded_auth_json(mut response: reqwest::Response) -> Result<serde_json::Value> {
+    ensure!(
+        response.status().is_success(),
+        "device authentication returned HTTP {}",
+        response.status()
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        ensure!(
+            bytes.len() + chunk.len() <= MAX_CREDENTIAL_BYTES as usize,
+            "oversized authentication response"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 fn save_credential(path: &Path, credential: &StoredDeviceCredential) -> Result<()> {
     let parent = path
         .parent()
@@ -706,6 +920,82 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cardea_broker_refresh_preserves_product_key_and_never_falls_back_to_browser() {
+        use axum::{Json, Router, routing::get};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let key = crate::client_auth::new_signing_key().unwrap();
+        let public = crate::client_auth::public_key_to_base64(&key);
+        let expected = public.clone();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let exchanges = calls.clone();
+        let app = Router::new()
+            .route("/api/auth/status",get(|| async {Json(serde_json::json!({"me":{"auth_enabled":true}}))}))
+            .route("/api/auth/device/cardea",get(|| async {Json(serde_json::json!({
+                "schema":"dravengarden.cowboy.cardea-device-configuration/v1", "issuer":"https://cardea.example", "client_id":"cowboy-production",
+            }))}).post(move |Json(value):Json<serde_json::Value>| {
+                let expected=expected.clone(); let exchanges=exchanges.clone();
+                async move {
+                    assert_eq!(value["public_key"],expected);
+                    assert_eq!(value["access_token"],"identity-fixture");
+                    let generation=exchanges.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+                    Json(serde_json::json!({"schema":"dravengarden.cowboy.cardea-device-token/v1",
+                        "device_id":"a".repeat(32),"access_token":format!("cow_access_fixture_{generation}"),"access_expires_at_ms":now_ms()+240000,
+                    }))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let dir = std::env::temp_dir().join(format!(
+            "cowboy-cardea-broker-{}",
+            crate::client_auth::new_code_verifier().unwrap()
+        ));
+        prepare_private_directory(&dir).unwrap();
+        let script = dir.join("mock-cardea");
+        let evidence = serde_json::json!({"schema":"dravengarden.cardea.device-identity-credential/v1","issuer":"https://cardea.example","client_id":"cowboy-production","access_token":"identity-fixture","assertion":"proof-fixture"});
+        std::fs::write(&script,format!("#!/bin/sh\numask 077\nwhile [ $# -gt 0 ]; do\ncase \"$1\" in\n--binding-key) shift; [ \"$1\" = '{public}' ] || exit 2;;\n--output-file) shift; output=\"$1\";;\nesac\nshift\ndone\nprintf '%s' '{evidence}' > \"$output\"\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut manager =
+            DeviceCredentialManager::new(base.clone(), Some(dir.clone()), Some("Hawk".into()))
+                .unwrap();
+        manager.cardea_binary = script;
+        let mut stored = StoredDeviceCredential {
+            version: CREDENTIAL_VERSION,
+            origin: base.to_string(),
+            name: "Hawk".into(),
+            device_id: String::new(),
+            private_key: crate::client_auth::signing_key_to_base64(&key),
+            access_token: String::new(),
+            access_expires_at_ms: 0,
+            refresh_token: String::new(),
+            refresh_expires_at_ms: 0,
+            cardea_profile: Some("cowboy".into()),
+        };
+        save_credential(&manager.credential_path, &stored).unwrap();
+        let first = manager.ensure_credential(None).await.unwrap();
+        assert_eq!(first.private_key, stored.private_key);
+        assert!(first.refresh_token.is_empty());
+        stored = first.clone();
+        stored.access_expires_at_ms = 0;
+        save_credential(&manager.credential_path, &stored).unwrap();
+        *manager.cached.write().await = None;
+        let refreshed = manager.ensure_credential(None).await.unwrap();
+        assert_eq!(refreshed.private_key, first.private_key);
+        assert_eq!(refreshed.device_id, first.device_id);
+        assert_ne!(refreshed.access_token, first.access_token);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(
+            !manager
+                .credential_path
+                .with_extension("cardea-evidence.json")
+                .exists()
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     use base64::Engine as _;
 
     struct LoginFixture {
@@ -779,6 +1069,7 @@ mod tests {
                 access_expires_at_ms: now_ms() + 120_000,
                 refresh_token: "refresh-fixture".to_owned(),
                 refresh_expires_at_ms: now_ms() + 240_000,
+                cardea_profile: None,
             },
         )
         .unwrap();
@@ -915,6 +1206,7 @@ mod tests {
             access_expires_at_ms: now_ms() + 60_000,
             refresh_token: "cow_refresh_example".to_owned(),
             refresh_expires_at_ms: now_ms() + 120_000,
+            cardea_profile: None,
         };
         assert!(credential_access_is_usable(&credential, None));
         assert!(!credential_access_is_usable(

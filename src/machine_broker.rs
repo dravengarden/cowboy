@@ -2913,6 +2913,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             content,
             cmid,
             trace,
+            echo_artifacts,
         } => broker.route_prompt(
             &session_id,
             WorkerCommand::Prompt {
@@ -2921,6 +2922,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 content,
                 cmid,
                 trace,
+                echo_artifacts,
             },
         ),
         CoreCommand::Cancel {
@@ -3188,6 +3190,8 @@ pub(crate) use tests::dispatch_trace_fixture;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod deletion_process;
 
     #[test]
     fn process_probe_refuses_to_treat_permission_failure_as_exit() {
@@ -3622,6 +3626,7 @@ mod tests {
             turn_id: "turn-2".to_owned(),
             content: vec![serde_json::json!({"type": "text", "text": "next"})],
             cmid: None,
+            echo_artifacts: false,
         };
         broker.route_prompt("sess-1", prompt.clone());
         broker.route_prompt("sess-1", prompt);
@@ -4852,6 +4857,7 @@ mod tests {
                 turn_id: "turn-1".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "next"})],
                 cmid: None,
+                echo_artifacts: false,
             },
         );
         let snapshots = broker.snapshots();

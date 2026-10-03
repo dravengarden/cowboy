@@ -3295,6 +3295,10 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             get(api_auth_device_authorization_events),
         )
         .route("/api/auth/device/exchange", post(api_auth_device_exchange))
+        .route(
+            "/api/auth/device/cardea",
+            get(api_auth_cardea_device_configuration).post(api_auth_cardea_device_exchange),
+        )
         .route("/api/auth/device/refresh", post(api_auth_device_refresh))
         .route("/api/auth/sessions", get(api_auth_list_sessions))
         .route("/api/auth/sessions/{id}", delete(api_auth_delete_session))
@@ -4589,6 +4593,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             | "/api/auth/device/authorizations/inspect"
             | "/api/auth/device/authorizations/events"
             | "/api/auth/device/exchange"
+            | "/api/auth/device/cardea"
             | "/api/auth/device/refresh"
     ) {
         return RouteAuth::Public;
@@ -4965,6 +4970,16 @@ async fn resolve_product_api_request_principal(
             return Ok(None);
         };
         if !identity.is_automation() {
+            let active = store
+                .list_user_devices_for_user(&identity.user_id)
+                .await
+                .map_err(|_| ())?
+                .into_iter()
+                .any(|device| device.id == identity.device_id && device.revoked_at_ms.is_none());
+            if !active {
+                state.device_access.revoke_device(&identity.device_id);
+                return Ok(None);
+            }
             let store = store.clone();
             let device_id = identity.device_id.clone();
             tokio::spawn(async move {
@@ -8580,6 +8595,197 @@ async fn handle_device_authorization_events(mut socket: WebSocket, state: Produc
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+async fn persist_fixture_device(store: &Store, user: &str, device: &str, public: &str) {
+    let now = auth_now_ms();
+    store
+        .insert_user_device(
+            &crate::store::ProductDevice {
+                id: device.into(),
+                user_id: user.into(),
+                name: "fixture".into(),
+                public_key: public.into(),
+                created_at_ms: now,
+                last_used_at_ms: Some(now),
+                revoked_at_ms: None,
+            },
+            &crate::store::ProductDeviceRefreshToken {
+                token_hash: format!("fixture-{device}"),
+                device_id: device.into(),
+                family_id: device.into(),
+                created_at_ms: now,
+                expires_at_ms: now + 60000,
+                used_at_ms: None,
+                revoked_at_ms: Some(now),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+async fn api_auth_cardea_device_configuration(State(state): State<ProductAuthState>) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(provider) = state.product_authentication.provider("cardea") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match provider.cardea_device_configuration() {
+        Ok(configuration) => Json(configuration).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CardeaDeviceExchangeRequest {
+    name: String,
+    public_key: String,
+    access_token: String,
+    assertion: String,
+}
+async fn api_auth_cardea_device_exchange(
+    State(state): State<ProductAuthState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<CardeaDeviceExchangeRequest>,
+) -> Response {
+    if !state.product_auth_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(provider) = state.product_authentication.provider("cardea") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let source_ip = crate::product_auth::client_ip(&headers, peer);
+    apply_rate_limit(&state, "cardea-device-exchange", &source_ip.to_string()).await;
+    if request.name.is_empty()
+        || request.name.chars().count() > 80
+        || request
+            .name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>'))
+        || crate::client_auth::decode_public_key(&request.public_key).is_err()
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let user = match store.user_by_username(provider.account()).await {
+        Ok(Some(user)) if user.disabled_at_ms.is_none() => user,
+        Ok(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let identity = match provider
+        .exchange_cardea_device(
+            &request.access_token,
+            &request.assertion,
+            &request.public_key,
+        )
+        .await
+    {
+        Ok(identity) => identity,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    // One stable Cowboy device per Cardea grant; refresh cannot bypass local
+    // device revocation or allocate a new capacity slot on every request.
+    let configuration = match provider.cardea_device_configuration() {
+        Ok(v) => v,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let id = crate::admin::hex_sha256(
+        serde_json::to_vec(&serde_json::json!([
+            "cardea-device/v1",
+            configuration["issuer"],
+            configuration["client_id"],
+            identity.grant_id,
+        ]))
+        .unwrap()
+        .as_slice(),
+    )[..32]
+        .to_owned();
+    let devices = match store.list_user_devices_for_user(&user.id).await {
+        Ok(devices) => devices,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let now = auth_now_ms();
+    if let Some(device) = devices.iter().find(|d| d.id == id) {
+        if device.public_key != identity.public_key {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    } else {
+        let device = crate::store::ProductDevice {
+            id: id.clone(),
+            user_id: user.id.clone(),
+            name: request.name,
+            public_key: identity.public_key.clone(),
+            created_at_ms: now,
+            last_used_at_ms: Some(now),
+            revoked_at_ms: None,
+        };
+        // Admission owns capacity and its transactional lock. No product
+        // refresh bearer is returned: subsequent mints recheck Cardea.
+        let secret = match crate::client_auth::new_refresh_token() {
+            Ok(v) => v,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let refresh = crate::store::ProductDeviceRefreshToken {
+            token_hash: crate::admin::hex_sha256(secret.as_bytes()),
+            device_id: id.clone(),
+            family_id: id.clone(),
+            created_at_ms: now,
+            expires_at_ms: now + 1,
+            used_at_ms: None,
+            revoked_at_ms: Some(now),
+        };
+        match store
+            .admit_user_device(
+                &device,
+                &refresh,
+                state
+                    .product_authentication
+                    .capacity
+                    .authorized_clients_per_user,
+                state.product_authentication.capacity.enforcement
+                    == crate::auth_plugins::CapacityEnforcement::Enforce,
+            )
+            .await
+        {
+            Ok(crate::store::ProductDeviceAdmission::Admitted { .. }) => {}
+            Ok(crate::store::ProductDeviceAdmission::CapacityFull { .. }) => {
+                return StatusCode::CONFLICT.into_response();
+            }
+            // A revoked device keeps its primary key: insertion fails closed.
+            // Concurrent first admissions can safely retry with fresh evidence.
+            Err(_) => return StatusCode::CONFLICT.into_response(),
+        }
+    }
+    let deadline = match i64::try_from(identity.expires_at)
+        .ok()
+        .and_then(|t| t.checked_mul(1000))
+    {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    }
+    .min(now.saturating_add(300_000));
+    match state.device_access.issue_identity_device(
+        &id,
+        &user.id,
+        &identity.public_key,
+        now,
+        deadline,
+    ) {
+        Ok((token, expiry)) => no_store_json(
+            StatusCode::OK,
+            serde_json::json!({
+                "schema":"dravengarden.cowboy.cardea-device-token/v1", "device_id":id,
+                "access_token":token, "access_expires_at_ms":expiry,
+            }),
+        ),
+        Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
@@ -18321,6 +18527,19 @@ async fn principal_still_valid(
         {
             return false;
         }
+        if !identity.is_automation()
+            && !store
+                .list_user_devices_for_user(&identity.user_id)
+                .await
+                .is_ok_and(|devices| {
+                    devices.iter().any(|device| {
+                        device.id == identity.device_id && device.revoked_at_ms.is_none()
+                    })
+                })
+        {
+            state.device_access.revoke_device(&identity.device_id);
+            return false;
+        }
         match store.user_by_id(&identity.user_id).await {
             Ok(Some(user)) if user.disabled_at_ms.is_none() => {
                 Some(product_principal(&state.hub, &user))
@@ -20951,10 +21170,11 @@ mod product_auth_api_tests {
     async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity() {
         let (store, root) = test_store().await;
         let user = me_test_user(&store, false).await;
-        let state = auth_state(Hub::new(), Some(store));
+        let state = auth_state(Hub::new(), Some(store.clone()));
         let key = crate::client_auth::new_signing_key().unwrap();
         let public = crate::client_auth::public_key_to_base64(&key);
         let device = "dddddddddddddddddddddddddddddddd";
+        persist_fixture_device(&store, &user.id, device, &public).await;
         let (token, _) = state
             .device_access
             .issue(device, &user.id, &public, auth_now_ms())
@@ -21142,6 +21362,149 @@ mod product_auth_api_tests {
         server.abort();
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cardea_device_exchange_reuses_capacity_and_cannot_revive_local_revocation() {
+        install_rustls();
+        let key = crate::client_auth::new_signing_key().unwrap();
+        let public = crate::client_auth::public_key_to_base64(&key);
+        let identity_public = public.clone();
+        let mock = Router::new()
+            .route("/oauth2/token", post(|| async { Json(serde_json::json!({"token_type":"Bearer","access_token":"consumer-fixture"})) }))
+            .route("/v1/device-grant-exchanges", post(move |headers: HeaderMap, Json(value): Json<serde_json::Value>| {
+                let public = identity_public.clone();
+                async move {
+                    assert_eq!(headers[header::AUTHORIZATION], "Bearer consumer-fixture");
+                    assert_eq!(value["access_token"], "identity-fixture");
+                    let now = auth_now_ms() as u64 / 1000;
+                    Json(serde_json::json!({
+                        "schema":"dravengarden.cardea.device-identity/v1","subject_id":"draven",
+                        "client_id":"cowboy-production","grant_id":"01234567-89ab-4cde-8fab-0123456789ab",
+                        "public_key":public,"grant_public_key":public,"generation":0,
+                        "authenticated_at":now,"expires_at":now+300,"grant_expires_at":now+365*86400,
+                    }))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let mock_server = tokio::spawn(async move {
+            axum::serve(listener, mock).await.unwrap();
+        });
+        let (store, root) = test_store().await;
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "a".repeat(32),
+            username: "draven".into(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.into(),
+            password_hash: crate::product_auth::hash_password("Correct-horse-bat1").unwrap(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let mut state = auth_state(Hub::new(), Some(store.clone()));
+        crate::oidc::OidcProvider::cardea_device_fixture(&issuer)
+            .exchange_cardea_device("identity-fixture", "signed-fixture", &public)
+            .await
+            .unwrap();
+        state.product_authentication = Arc::new(
+            crate::auth_plugins::ProductAuthentication::test_default(Some(Arc::new(
+                crate::oidc::OidcProvider::cardea_device_fixture(&issuer),
+            ))),
+        );
+        let device_access = state.device_access.clone();
+        let (base, server) = spawn_auth(state).await;
+        let endpoint = format!("{base}/api/auth/device/cardea");
+        let configuration = reqwest::get(&endpoint)
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(configuration["issuer"], issuer);
+        let request = serde_json::json!({"name":"Hawk CLI","public_key":public,"access_token":"identity-fixture","assertion":"signed-fixture"});
+        let http = reqwest::Client::new();
+        let response = http.post(&endpoint).json(&request).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let first = response.json::<serde_json::Value>().await.unwrap();
+        assert!(first["access_expires_at_ms"].as_i64().unwrap() <= auth_now_ms() + 300_000);
+        assert!(first.get("refresh_token").is_none());
+        let response = http.post(&endpoint).json(&request).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let second = response.json::<serde_json::Value>().await.unwrap();
+        assert_eq!(first["device_id"], second["device_id"]);
+        assert_eq!(
+            store
+                .list_user_devices_for_user(&user.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let wrong = crate::client_auth::public_key_to_base64(
+            &crate::client_auth::new_signing_key().unwrap(),
+        );
+        let mut mismatched = request.clone();
+        mismatched["public_key"] = serde_json::json!(wrong);
+        assert_eq!(
+            http.post(&endpoint)
+                .json(&mismatched)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let id = first["device_id"].as_str().unwrap();
+        store.revoke_user_device(id, auth_now_ms()).await.unwrap();
+        // Model a mint racing after durable revocation: resource admission must
+        // reject it even when the process-local access map contains the token.
+        let (late_token, _) = device_access
+            .issue(id, &user.id, &public, auth_now_ms())
+            .unwrap();
+        let mut protected = http
+            .get(format!("{base}/api/auth/me"))
+            .bearer_auth(&late_token);
+        for (name, value) in crate::client_auth::signed_proof_headers(
+            &key,
+            id,
+            &late_token,
+            "GET",
+            "/api/auth/me",
+            auth_now_ms(),
+        )
+        .unwrap()
+        {
+            protected = protected.header(name, value);
+        }
+        assert_eq!(
+            protected.send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            http.post(&endpoint)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert!(
+            store
+                .list_user_devices_for_user(&user.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        server.abort();
+        mock_server.abort();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
