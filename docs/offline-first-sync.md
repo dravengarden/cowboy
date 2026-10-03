@@ -245,7 +245,8 @@ type SyncPhase =
   | "connecting"      // socket opening or backoff wait; retryAt
   | "waiting"         // client_capacity waiting/channel_limit; position
   | "degraded"        // socket open, heartbeat older than 30 s or repeated fetch failures
-  | "offline"         // navigator offline, or attempts >= 2 without success
+  | "offline"         // navigator offline: this device has no network
+  | "unreachable"     // network up, but attempts >= 2 without reaching the server
   | "auth_required"   // 4001 or 401; local data preserved
   | "fenced";         // dataset changed; reload required
 
@@ -390,9 +391,21 @@ They do not raise the Mobile connection pill or add another session-list badge.
 
 **Status line segment.** Always present, next to connection and worker state:
 `● Live`, `◌ Reconnecting · 4 s`, `⏳ Waiting for a seat (2nd)`,
-`⊘ Offline · 2 queued`, `⚠ 1 needs attention`. Tooltip carries last synced
-time and the retry countdown. Click opens the command palette filtered to
+`⊘ Offline · 2 queued`, `⊘ Can't reach Cowboy`, `⚠ 1 needs attention`, led
+by a dot in the phase tone. Tooltip carries last synced time and the retry
+countdown. Region hints yield width before this segment does, so a narrow
+window never clips the connection state. Click opens the command palette filtered to
 `Reconnect now`, `Retry held sends`, `Reload app`, `Update now`.
+
+**Connection notice.** The status line alone was too quiet: a lasting outage
+went unnoticed until a send sat waiting. Once `offline`, `unreachable`,
+`degraded` or `waiting` outlasts the presentation debounce, a tinted strip
+sits at the top of the prompt pane, where the eyes are when writing. It says
+whether the device or the server is the thing to check, the retry countdown,
+the last sync age and what happens to queued messages, with Retry now; on
+recovery it flashes "Reconnected" and leaves. A short `connecting` blip stays
+in the status line only. While the server is not live the send button and its
+shortcut hint read "Queue", because that is what a send does.
 
 **Banners.** Only sign-in required, dataset changed, and update ready. The
 update banner no longer counts down while the user is composing; it fills with
@@ -492,7 +505,8 @@ no cached predecessor falls through to the ordinary forward recovery.
 | `connecting` | Reconnecting… | Retrying in 4 s. Your messages will send automatically. |
 | `waiting` | Waiting for a seat (2nd) | Another client holds this account's active seat. |
 | `degraded` | Connection unstable | Last heard from Cowboy 45 s ago. |
-| `offline` | Offline · 2 queued | Last synced 3 min ago. Everything you write is saved on this device. |
+| `offline` | Offline · 2 queued | This device is offline; check its network. Last synced 3 min ago. Everything you write is saved on this device. |
+| `unreachable` | Can't reach Cowboy · 2 queued | The network is up but the Cowboy server is not answering; check the VPN or the server. Last synced 3 min ago. Everything you write is saved on this device. |
 | `auth_required` | Sign in to sync | 3 queued messages will send after you sign in. |
 | `fenced` | Reload required | This device was signed in as a different account. |
 | reconnect flash | Synced | |
