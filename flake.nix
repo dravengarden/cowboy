@@ -134,6 +134,7 @@
           ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
           ./src/machine_broker.rs
+          ./src/machine_broker
           ./src/machine_code_plugins.rs
           ./src/machine_code_plugins
           ./src/machine_cli.rs
@@ -564,6 +565,7 @@
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
+        test -e ${machine-src}/src/machine_broker/deletions.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
         test -x ${cowboy}/bin/cowboy-codex-app-server
