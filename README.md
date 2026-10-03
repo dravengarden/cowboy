@@ -105,15 +105,17 @@ just build
 Start a local Hub with SQLite persistence:
 
 ```sh
-./target/release/cowboy serve \
+COWBOY_PUBLIC_ORIGIN=https://cowboy.example ./target/release/cowboy serve \
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 
-Open <http://127.0.0.1:3333>. Product login is off by default for local
-development. SQLite is the zero-operations store; PostgreSQL implements the
-same Store API for larger deployments.
+Put a same-host TLS reverse proxy in front of `127.0.0.1:3333`, then open your
+configured HTTPS origin. Product login and device proofs are mandatory.
+See [transport security](docs/device-transport-security.md) for proxy setup and
+device enrollment. SQLite is the zero-operations store; PostgreSQL implements
+the same Store API for larger deployments.
 
-Omit the database URL for an in-memory development store. Use
+The Controller requires a database for durable device bindings. Use
 `cowboy store-copy --source postgresql://… --destination sqlite:///…` for a
 fail-closed production migration into a new SQLite file.
 

@@ -122,6 +122,7 @@ function startWorker(): Worker {
     },
   };
   const self = {
+    CowboyDeviceProof: { install() {} },
     location: { origin: ORIGIN },
     addEventListener: (type: string, listener: (event: unknown) => void) =>
       listeners.set(type, listener),
@@ -134,7 +135,7 @@ function startWorker(): Worker {
     fetched.push(url);
     return worker.network(url);
   };
-  new Function("self", "caches", "fetch", source)(self, caches, fetchFake);
+  new Function("self", "caches", "fetch", "importScripts", source)(self, caches, fetchFake, () => {});
   return worker;
 }
 

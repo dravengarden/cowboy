@@ -33,13 +33,22 @@ public final class URLSessionHTTPTransport: ServiceHTTPTransport, @unchecked Sen
     private let redirectDelegate = RedirectRejectingSessionDelegate()
     private let sessionLock = NSLock()
     private var storedSession: URLSession?
+    private let deviceProof = DeviceProof()
 
     public init(session: URLSession? = nil) {
         providedSession = session
     }
 
     public func send(_ request: URLRequest) async throws -> ServiceHTTPResponse {
-        let (data, response) = try await session().data(for: request)
+        let session = session()
+        let signed = try await deviceProof.sign(request, session: session)
+        var (data, response) = try await session.data(for: signed)
+        if let rejection = response as? HTTPURLResponse,
+           rejection.statusCode == 401,
+           rejection.value(forHTTPHeaderField: "x-cowboy-device-proof") == "required" {
+            let refreshed = try await deviceProof.sign(request, session: session, refresh: true)
+            (data, response) = try await session.data(for: refreshed)
+        }
         guard let response = response as? HTTPURLResponse else {
             throw CowboyServiceClientError.invalidResponse
         }
@@ -117,7 +126,7 @@ public enum CowboyServiceClientError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidControllerURL:
-            "Enter a valid HTTPS Cowboy Service URL. Loopback HTTP is allowed for development."
+            "Enter a valid HTTPS Cowboy Service URL."
         case .invalidResponse:
             "Cowboy Service returned an invalid response."
         case .invalidAuthenticationCallback:

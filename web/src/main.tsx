@@ -33,6 +33,9 @@ import {
 } from "./updateAttempt";
 import { initializeAppIcons } from "./appIcons";
 import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
+import { installBrowserDevice } from "./browserDevice";
+
+installBrowserDevice();
 
 // How long a freshly swapped-in build has to stay up before it counts as
 // started. Long enough to cover the gates, the lazy surface chunk and its

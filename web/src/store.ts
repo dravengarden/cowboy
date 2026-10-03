@@ -1,4 +1,5 @@
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
+import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
 // Single WebSocket store shared by the whole app. cowboy is the source of
 // truth; this store just accumulates what it pushes. Exposed via
 // useSyncExternalStore so any component re-renders on change.
@@ -2168,9 +2169,9 @@ function openSocket(): void {
   // actual Service and authenticated principal. An HTTP preflight repeats that
   // check and adds a round trip to every foreground recovery. No command is
   // sent until that protocol is selected and bootstrap_complete arrives.
-  void Promise.resolve().then(() => syncDatabase.ready()).then((dataset) => {
+  void Promise.resolve().then(() => syncDatabase.ready()).then(async (dataset) => {
+    await openBoundSocket(dataset);
     openingDataset = false;
-    openBoundSocket(dataset);
   }).catch((error) => {
     openingDataset = false;
     if (!productSessionAbandoned && !productSessionPausedForAuth) {
@@ -2186,7 +2187,7 @@ function openSocket(): void {
   });
 }
 
-function openBoundSocket(dataset: SyncDataset): void {
+async function openBoundSocket(dataset: SyncDataset): Promise<void> {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
   // A reconnect can be triggered by several independent recovery paths
   // (backoff timer, foreground watchdog, connect guard). Never let them create
@@ -2218,7 +2219,10 @@ function openBoundSocket(dataset: SyncDataset): void {
     client_kind: interactiveClientKind(),
     dataset: dataset.dataset_id,
   });
-  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?${params.toString()}`, PRODUCT_SYNC_SUBPROTOCOL);
+  const socketUrl = `${proto}//${globalThis.location.host}/ws?${params.toString()}`;
+  const deviceProtocol = await browserDeviceProtocol(socketUrl);
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
+  const ws = new WebSocket(socketUrl, [PRODUCT_SYNC_SUBPROTOCOL, deviceProtocol]);
   socket = ws;
   socketReady = false;
   let openedAt: number | undefined;
@@ -2345,6 +2349,7 @@ function openBoundSocket(dataset: SyncDataset): void {
     }
   };
   ws.onclose = (event): void => {
+    resetBrowserDeviceChallenge();
     clearTimeout(bootstrapGuard);
     connectionSpan?.end("error");
     clearTimeout(connectGuard);

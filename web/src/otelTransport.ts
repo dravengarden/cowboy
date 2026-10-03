@@ -115,6 +115,7 @@ export class OtlpTransport {
           headers: { "content-type": "application/x-protobuf" },
           body: batch.body,
           signal: controller.signal,
+          keepalive: true,
         });
         responded = true;
         if (response.status === 200) {
@@ -169,9 +170,12 @@ export class OtlpTransport {
   }
 
   beacon(
-    send: (url: string, body: Blob) => boolean = (url, body) =>
-      navigator.sendBeacon(url, body),
+    send?: (url: string, body: Blob) => boolean,
   ): void {
+    if (!send) {
+      void this.flush();
+      return;
+    }
     if (this.stopped || this.active) return;
     this.prune();
     let sent = 0;

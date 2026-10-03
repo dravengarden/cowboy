@@ -271,12 +271,11 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_WEB_ROOT", default_value = "web/dist")]
     pub web_root: PathBuf,
 
-    /// Require product-account authentication for the PWA, WebSocket, and
-    /// product APIs. Disabled keeps the legacy single-user local surface open.
+    /// Product authentication is mandatory. The legacy false value is rejected.
     #[arg(
         long,
         env = "COWBOY_PRODUCT_AUTH_ENABLED",
-        default_value_t = false,
+        default_value_t = true,
         action = clap::ArgAction::Set
     )]
     pub product_auth_enabled: bool,
@@ -855,12 +854,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "full")]
-    fn serve_product_auth_is_an_explicit_toggle_and_defaults_off() {
+    fn serve_product_auth_defaults_on() {
         let cli = Cli::try_parse_from(["cowboy", "serve"]).unwrap();
         let Command::Serve(args) = cli.command else {
             panic!("expected serve command");
         };
-        assert!(!args.product_auth_enabled);
+        assert!(args.product_auth_enabled);
 
         let cli =
             Cli::try_parse_from(["cowboy", "serve", "--product-auth-enabled", "true"]).unwrap();

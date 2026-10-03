@@ -102,12 +102,14 @@ just build
 使用 SQLite 持久化启动本地 Hub：
 
 ```sh
-./target/release/cowboy serve \
+COWBOY_PUBLIC_ORIGIN=https://cowboy.example ./target/release/cowboy serve \
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 
-打开 <http://127.0.0.1:3333>。本地开发默认关闭产品登录。SQLite 是零运维的
-存储方案；规模更大的部署可以通过同一个 Store API 使用 PostgreSQL。
+在同一台主机上配置 TLS 反向代理，转发到 `127.0.0.1:3333`，然后打开配置的
+HTTPS 地址。产品登录和设备签名认证均为必选；参见[通信安全](docs/device-transport-security.md)。
+Controller 需要数据库持久化设备绑定。SQLite 是零运维的存储方案；规模更大的部署
+可以通过同一个 Store API 使用 PostgreSQL。
 
 如需加入另一台 Linux 或 macOS 主机，请运行
 <code>just build-machine-bootstrap</code> 构建目标平台的 bootstrap。在 Cowboy 中

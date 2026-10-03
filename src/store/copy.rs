@@ -35,6 +35,7 @@ const TABLES: &[&str] = &[
     "provider_usage_events",
     "provider_usage_producers",
     "user_sessions",
+    "browser_device_bindings",
     "user_api_tokens",
     "user_passkeys",
     "admin_passkeys",

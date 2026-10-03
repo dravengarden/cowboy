@@ -24,6 +24,7 @@ import {
 import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { type Attachment, isLoadablePreviewUrl } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
+import { setProtectedImageSource } from "./protectedImage";
 import {
   imageDeletionRange,
   inlineImagePasteInsertion,
@@ -32,6 +33,7 @@ import {
 } from "./inlineImageSelection";
 
 const registry = new Map<string, Attachment>();
+const imageLifetimes = new WeakMap<HTMLElement, () => void>();
 
 // Bridge from the (non-React) image widget to the host's selection popover. The
 // host (Composer) registers a handler; a tap on an inline image calls it with the
@@ -110,7 +112,7 @@ class InlineImageWidget extends WidgetType {
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
         : "cm-inline-image";
-      img.src = att.previewUrl;
+      imageLifetimes.set(widget, setProtectedImageSource(img, att.previewUrl));
       img.alt = att.name;
       img.draggable = false;
       if (readOnly) {
@@ -183,6 +185,10 @@ class InlineImageWidget extends WidgetType {
   // IME, and line-break events stay on the source `.cm-line`.
   override ignoreEvent(event: Event): boolean {
     return event.type === "mousedown" || event.type === "click";
+  }
+  override destroy(dom: HTMLElement): void {
+    imageLifetimes.get(dom)?.();
+    imageLifetimes.delete(dom);
   }
 }
 

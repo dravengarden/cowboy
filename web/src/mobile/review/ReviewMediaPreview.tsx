@@ -1,3 +1,4 @@
+import { ProtectedImage } from "../../ProtectedImage";
 import { Box, CircularProgress, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { reviewMediaUrl, type ReviewPreviewKind } from "./reviewPreview";
@@ -49,7 +50,7 @@ export function ReviewMediaPreview({
     >
       {!loaded && <CircularProgress size={24} sx={{ position: "absolute" }} />}
       <Box
-        component="img"
+        component={ProtectedImage}
         src={src}
         alt={name}
         onLoad={() => setLoaded(true)}

@@ -204,6 +204,7 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
         base_url,
         authentication,
         http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .context("building ACP HTTP client")?,
         state,
@@ -703,10 +704,7 @@ impl Bridge {
                 .apply_reqwest(self.http.post(url.clone()).json(&body))
                 .map_err(|error| error.to_string())?;
             let response = request.send().await.map_err(|error| error.to_string())?;
-            if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                && !self.authentication.is_legacy()
-                && attempts == 1
-            {
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempts == 1 {
                 rejected_access = Some(authorization.bearer.unwrap_or_default());
                 continue;
             }
@@ -714,9 +712,6 @@ impl Bridge {
         };
         if !response.status().is_success() {
             let status = response.status();
-            if is_fatal_auth_status(status.as_u16()) && self.authentication.is_legacy() {
-                exit_on_daemon_auth_rejection("cowboy daemon rejected the legacy user token");
-            }
             let body = response.text().await.unwrap_or_default();
             return Err(format!("cowboy session creation failed ({status}): {body}"));
         }
@@ -1014,10 +1009,7 @@ impl Bridge {
                     .apply_reqwest(self.http.get(url.clone()))
                     .map_err(|error| error.to_string())?;
                 let response = request.send().await.map_err(|error| error.to_string())?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                    && !self.authentication.is_legacy()
-                    && attempts == 1
-                {
+                if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempts == 1 {
                     rejected_access = Some(authorization.bearer.unwrap_or_default());
                     continue;
                 }
@@ -1025,9 +1017,6 @@ impl Bridge {
             };
             if !response.status().is_success() {
                 let status = response.status();
-                if is_fatal_auth_status(status.as_u16()) && self.authentication.is_legacy() {
-                    exit_on_daemon_auth_rejection("cowboy daemon rejected the legacy user token");
-                }
                 return Err(format!("history request failed with {status}"));
             }
             let page = response
@@ -1153,11 +1142,7 @@ impl Bridge {
             }
             match connect_async(request).await {
                 Ok((socket, _)) => break socket,
-                Err(error)
-                    if websocket_auth_rejected(&error)
-                        && !self.authentication.is_legacy()
-                        && attempts == 1 =>
-                {
+                Err(error) if websocket_auth_rejected(&error) && attempts == 1 => {
                     rejected_access = Some(authorization.bearer.unwrap_or_default());
                 }
                 Err(error) if websocket_auth_rejected(&error) => {
@@ -1759,11 +1744,6 @@ fn daemon_auth_rejected(error: &anyhow::Error) -> bool {
     })
 }
 
-fn exit_on_daemon_auth_rejection(context: &str) -> ! {
-    tracing::error!("{}", daemon_auth_rejection_message(context));
-    std::process::exit(1);
-}
-
 fn websocket_url(base: &Url) -> anyhow::Result<Url> {
     let mut url = base.join("ws")?;
     let scheme = if base.scheme() == "https" {
@@ -1877,13 +1857,9 @@ mod tests {
             provider: Arc::from("grok"),
             machine: Arc::from("ovh"),
             workspace: None,
-            authentication: crate::client_auth_client::ClientAuthentication::new(
+            authentication: crate::client_auth_client::ClientAuthentication::fixture(
                 base_url.clone(),
-                Some("cow_test_fixture"),
-                None,
-                None,
-            )
-            .unwrap(),
+            ),
             base_url,
             http: reqwest::Client::new(),
             state: Arc::new(Mutex::new(BridgeState::default())),

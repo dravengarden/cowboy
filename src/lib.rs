@@ -19,6 +19,8 @@ mod agent_sink;
 mod artifacts;
 #[cfg(feature = "full")]
 mod auth_plugins;
+#[cfg(feature = "full")]
+mod browser_device;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod cgroup;
 #[cfg(any(feature = "full", feature = "machine-host"))]

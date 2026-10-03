@@ -1,3 +1,4 @@
+import { ProtectedImage } from "./ProtectedImage";
 // Paged transcript. One row per canonical `RenderItem`; every row remains in
 // normal layout so native scroll anchoring can track streamed markdown / code
 // blocks / images as they grow.
@@ -232,7 +233,8 @@ import {
   getTranscriptViewport,
   saveTranscriptViewport,
 } from "./transcriptViewportStore";
-import { FloatingActionIsland, ImageLightbox } from "@cowboy/app-shell";
+import { FloatingActionIsland } from "@cowboy/app-shell";
+import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";
@@ -1178,7 +1180,7 @@ function TranscriptImage(
         sx={{ maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX, my: 0.5, mx: "auto" }}
       >
         <Box
-          component="img"
+          component={ProtectedImage}
           src={src}
           alt={alt}
           loading={src.startsWith("data:") || src.startsWith("blob:")

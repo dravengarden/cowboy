@@ -1,4 +1,5 @@
 import { dirname, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -107,6 +108,16 @@ export default defineConfig({
     ],
   },
   plugins: [
+    {
+      name: "cowboy-device-proof-worker",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "device-proof.js",
+          source: readFileSync(resolve(webRoot, "device-proof.js"), "utf8"),
+        });
+      },
+    },
     react(),
     {
       // The service worker promotes a freshly deployed shell only after the

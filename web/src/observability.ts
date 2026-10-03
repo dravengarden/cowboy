@@ -158,7 +158,7 @@ async function flushOtel(): Promise<void> {
   await otel.transport.flush();
 }
 
-async function flushIncidents(): Promise<void> {
+async function flushIncidents(keepalive = false): Promise<void> {
   if (flushing) return;
   const batch = takeBatch();
   if (!batch) return;
@@ -172,6 +172,7 @@ async function flushIncidents(): Promise<void> {
       headers: { "content-type": "application/json" },
       body: batch.body,
       signal: controller.signal,
+      keepalive,
     });
     queue.settle(batch, !response.ok && retryTelemetryStatus(response.status));
   } catch {
@@ -188,18 +189,8 @@ function beaconFlush(): void {
   // visibilitychange normally collects before pagehide. This final async
   // collection is best effort; WebKit may freeze before it resolves.
   if (otel && !signedOut) void otel.collect().then(() => otel?.transport.beacon());
-  if (flushing) return;
-  const batch = takeBatch();
-  if (!batch) return;
-  try {
-    const accepted = globalThis.navigator.sendBeacon(
-      "/api/observability/batches",
-      new Blob([batch.body], { type: "application/json" }),
-    );
-    queue.settle(batch, !accepted);
-  } catch {
-    queue.settle(batch, true);
-  }
+  // fetch permits the mandatory device proof; sendBeacon has no headers.
+  void flushIncidents(true);
 }
 
 function installPerformanceObservers(): void {

@@ -10,6 +10,7 @@
 //! Machine connections use one-time enrollment plus an OpenSSH Ed25519
 //! challenge before WebSocket protocol negotiation.
 
+mod secure_transport;
 mod session_provider_updates;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1007,6 +1008,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
+    anyhow::ensure!(
+        args.product_auth_enabled,
+        "Device authentication is mandatory; authentication cannot be disabled"
+    );
     plugin_catalog.initialize()?;
     let plugin_dir =
         crate::plugin_dir::PluginDir::open(&args.data_dir).context("opening plugin directory")?;
@@ -9401,6 +9406,13 @@ async fn serve_axum(
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
+    let secure_transport = Arc::new(secure_transport::SecureTransport::new(
+        state
+            .store
+            .clone()
+            .context("Device authentication requires durable storage")?,
+        state.public_origins.as_ref().clone(),
+    )?);
     execution::sessions::start_recovery(&state);
     let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir.clone()));
     let setup_needed = match state.store.as_ref() {
@@ -9717,6 +9729,7 @@ async fn serve_axum(
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), enforce_product_api))
         .merge(product_auth_router(auth_state))
+        .layer(middleware::from_fn_with_state(secure_transport, secure_transport::enforce))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 
@@ -20647,6 +20660,129 @@ mod product_auth_api_tests {
 
     fn origin_for(base: &str) -> String {
         base.trim_end_matches('/').to_owned()
+    }
+
+    #[tokio::test]
+    async fn mandatory_transport_binds_real_password_sessions_and_honors_logout() {
+        install_rustls();
+        let (store, root) = test_store().await;
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "a".repeat(32),
+            username: "owner".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: crate::product_auth::hash_password("Correct-horse-bat1").unwrap(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let mut state = auth_state(Hub::new(), Some(store.clone()));
+        state.public_origins = Arc::new(vec!["https://cowboy.example".to_owned()]);
+        let transport = Arc::new(
+            secure_transport::SecureTransport::new(
+                store.clone(),
+                state.public_origins.as_ref().clone(),
+            )
+            .unwrap(),
+        );
+        let app = product_auth_router(state).layer(middleware::from_fn_with_state(
+            transport,
+            secure_transport::enforce,
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let http = reqwest::Client::new();
+        let challenge: serde_json::Value = http
+            .get(format!("{base}/api/auth/browser/challenge"))
+            .header("x-forwarded-proto", "https")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let request = |method: Method, path: &str, cookie: Option<&str>| {
+            let proof = crate::browser_device::tests::sign(
+                &key,
+                challenge["epoch"].as_str().unwrap(),
+                method.as_str(),
+                path,
+                auth_now_ms(),
+            );
+            let mut request = http
+                .request(method, format!("{base}{path}"))
+                .header("x-forwarded-proto", "https")
+                .header(header::ORIGIN, "https://cowboy.example")
+                .header(crate::browser_device::HEADER, proof);
+            if let Some(cookie) = cookie {
+                request = request.header(header::COOKIE, cookie);
+            }
+            request
+        };
+        let login = request(Method::POST, "/api/auth/login", None)
+            .json(&serde_json::json!({"account": "owner", "password": "Correct-horse-bat1"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = cookie_header(&set_cookie(&login, USER_SESSION_COOKIE).unwrap());
+        assert_eq!(
+            request(Method::GET, "/api/auth/me", Some(&cookie))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            http.get(format!("{base}/api/auth/me"))
+                .header("x-forwarded-proto", "https")
+                .header(header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(Method::POST, "/api/auth/logout", Some(&cookie))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(Method::GET, "/api/auth/me", Some(&cookie))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        // A refresh bearer is owned by the existing Ed25519 refresh handler,
+        // which must still see it and reject an invalid credential itself.
+        let refresh = http
+            .post(format!("{base}/api/auth/device/refresh"))
+            .header("x-forwarded-proto", "https")
+            .bearer_auth("cow_refresh_fixture")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refresh.status(), StatusCode::UNAUTHORIZED);
+        assert!(!refresh.headers().contains_key("x-cowboy-device-proof"));
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     async fn post_json(

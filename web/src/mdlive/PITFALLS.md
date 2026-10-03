@@ -90,6 +90,15 @@ here says otherwise.
 
 ## Known pitfalls (symptom → cause → fix → status)
 
+- **Mandatory device proofs and protected image bytes (Option 1).** API image
+  resources load through the authenticated fetch owner, then a lifetime-owned
+  object URL paints the existing native image element. Local data/blob previews
+  still paint immediately. `inlineImages` releases the fetch and URL when its
+  widget is destroyed; its existing load/scroll handler, source ranges,
+  zero-size Vim probe, pointer handling and IME ownership stay intact. React
+  previews and the shared lightbox receive the same host image component.
+  This is a resource-authentication change, not a caret repair; #69 remains open.
+
 0. **Desktop Vim block cursor disappears on the text line immediately before a
    block image.** The logical CM6 selection is correct; the failure is in
    `@replit/codemirror-vim`'s cursor measurement. At EOL it walks into the next

@@ -8,10 +8,11 @@ their roles. Whoever operates the Cowboy instance remains inside the trust
 boundary: the Service already commands Machines to run agents and already
 stores plaintext transcripts.
 
-Accounts are required on `/` and product APIs when
-`COWBOY_PRODUCT_AUTH_ENABLED=true`. A deliberate `false` value restores the
-trusted-network synthetic local owner without weakening the separate admin
-plane. The published HTTPS origin in the URL bar is the Web trust source.
+Accounts and device proofs are required on `/` and protected product APIs.
+`COWBOY_PRODUCT_AUTH_ENABLED` defaults to `true`; `false` is rejected at startup.
+The published HTTPS origin in the URL bar is the Web trust source.
+See [mandatory transport security](../device-transport-security.md) for device
+keys, enrollment, TLS termination and upgrade behavior.
 `/admin` stays a separate identity plane and cookie. This stage is
 **single-user**: first-run on `/` proves the host setup code, then creates the
 only user (and the matching admin owner). Extra users, invites, and open
@@ -300,13 +301,12 @@ Admin routes are listed in [Admin](14-admin.md). Settings redaction is
 
 ## PWA gate
 
-Product login is guarded by the controller feature flag
-`--product-auth-enabled <true|false>` / `COWBOY_PRODUCT_AUTH_ENABLED`. It
-defaults to `false`: the controller exposes a synthetic local owner, keeps the
-PWA and product APIs available without a cookie, and leaves the separate admin
-authentication plane intact. Set it to `true` only when the complete login
-stack is ready and deploy Web plus controller together. Keeping the flag is an
-intentional emergency rollback and trusted-intranet mode, not a UI-only switch.
+Product login and sender-constrained requests are mandatory. The historical
+`--product-auth-enabled` / `COWBOY_PRODUCT_AUTH_ENABLED` setting accepts `true`
+only when starting the Controller. There is no production authentication-off
+fallback. Deploy Web and Controller together; an existing unbound browser
+session must log in again to register its local key. The login gate remains
+provider-independent.
 
 Cardea is independently optional. The provider file uses schema
 `dravengarden.cowboy.cardea-oidc/v1` and pins `issuer`, `client_id`,

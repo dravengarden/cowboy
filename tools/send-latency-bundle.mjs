@@ -34,7 +34,9 @@ await build({
     emptyOutDir: false,
     minify: true,
     lib: {
-      entry: new URL(process.argv[3] === "--metadata"
+      entry: new URL(process.argv[3] === "--device-ui"
+        ? "../web/src/deviceUiFixture.tsx"
+        : process.argv[3] === "--metadata"
         ? "../web/src/metadataLatencyBrowserFixture.tsx"
         : process.argv[3] === "--local"
         ? "../web/src/localLatencyBrowserFixture.tsx"

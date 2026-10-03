@@ -375,7 +375,11 @@ for (const { bundle, scenario } of cases) {
       }
       if (url.pathname === "/") {
         return new Response(
-          `<!doctype html><div id="root"></div><script type="module">
+          `<!doctype html><div id="root"></div><script>
+// This HTTP fixture owns transport/authentication; real proofs run separately
+// in device-browser-conformance against HTTPS and the Rust verifier.
+globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };
+</script><script type="module">
 let result; try { const { run } = await import('/fixture.js'); result = { ok: true, samples: await run() }; }
 catch (error) { result = { ok: false, error: String(error) }; }
 await fetch('/report', { method: 'POST', body: JSON.stringify(result) });

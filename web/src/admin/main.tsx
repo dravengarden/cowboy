@@ -4,6 +4,9 @@ import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "../AppErrorBoundary";
 import { useThemeMode } from "../theme";
 import { AdminApp } from "./AdminApp";
+import { installBrowserDevice } from "../browserDevice";
+
+installBrowserDevice();
 
 function Root(): React.JSX.Element {
   const { theme } = useThemeMode();

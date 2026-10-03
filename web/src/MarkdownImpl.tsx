@@ -1,3 +1,4 @@
+import { ProtectedImage } from "./ProtectedImage";
 // Markdown renderer used by message bubbles. GitHub-Flavored Markdown
 // (tables, strikethrough, task lists) + syntax-highlighted code fences via
 // `react-syntax-highlighter` (Prism Light + per-language async loading).
@@ -34,7 +35,7 @@ import remarkFrontmatter from "remark-frontmatter";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { ImageLightbox } from "@cowboy/app-shell";
+import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { copyText } from "./clipboard";
 import { headingSlug } from "./mobile/review/reviewLinkTarget";
@@ -677,7 +678,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
       if (!url || url.startsWith("cowboy-att:")) return null;
       return (
         <Box
-          component="img"
+          component={ProtectedImage}
           src={url}
           alt={alt ?? ""}
           loading="lazy"

@@ -8,7 +8,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
@@ -28,10 +27,7 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const MAX_CREDENTIAL_BYTES: u64 = 64 * 1_024;
 
 #[derive(Clone)]
-pub(crate) enum ClientAuthentication {
-    Legacy(Arc<str>),
-    Device(Arc<DeviceCredentialManager>),
-}
+pub(crate) struct ClientAuthentication(Arc<DeviceCredentialManager>);
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClientRequestAuthorization {
@@ -55,23 +51,40 @@ impl ClientRequestAuthorization {
 }
 
 impl ClientAuthentication {
+    #[cfg(test)]
+    pub(crate) fn fixture(base_url: Url) -> Self {
+        let key = crate::client_auth::new_signing_key().unwrap();
+        let mut manager = DeviceCredentialManager::new(
+            base_url.clone(),
+            Some(std::env::temp_dir().join("cowboy-auth-fixture-unused")),
+            None,
+        )
+        .unwrap();
+        manager.cached = RwLock::new(Some(StoredDeviceCredential {
+            version: CREDENTIAL_VERSION,
+            origin: base_url.to_string(),
+            name: "fixture".to_owned(),
+            device_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            private_key: crate::client_auth::signing_key_to_base64(&key),
+            access_token: "cow_access_fixture".to_owned(),
+            access_expires_at_ms: now_ms() + 600_000,
+            refresh_token: "unused".to_owned(),
+            refresh_expires_at_ms: now_ms() + 600_000,
+        }));
+        Self(Arc::new(manager))
+    }
     pub(crate) fn new(
         base_url: Url,
         legacy_token: Option<&str>,
         state_dir: Option<PathBuf>,
         device_name: Option<String>,
     ) -> Result<Self> {
-        if let Some(token) = legacy_token {
-            let token = token.trim();
-            ensure!(!token.is_empty(), "legacy user token cannot be empty");
-            ensure!(
-                token.starts_with(crate::product_auth::API_TOKEN_SECRET_PREFIX),
-                "legacy user token must start with {}",
-                crate::product_auth::API_TOKEN_SECRET_PREFIX
+        if legacy_token.is_some() {
+            anyhow::bail!(
+                "Bearer-only credentials are retired; use cowboy login for device authentication"
             );
-            return Ok(Self::Legacy(Arc::from(token)));
         }
-        Ok(Self::Device(Arc::new(DeviceCredentialManager::new(
+        Ok(Self(Arc::new(DeviceCredentialManager::new(
             base_url,
             state_dir,
             device_name,
@@ -84,28 +97,13 @@ impl ClientAuthentication {
         path_and_query: &str,
         rejected_access_token: Option<&str>,
     ) -> Result<ClientRequestAuthorization> {
-        match self {
-            Self::Legacy(token) => Ok(ClientRequestAuthorization {
-                bearer: Some(token.to_string()),
-                proof_headers: Vec::new(),
-            }),
-            Self::Device(manager) => {
-                manager
-                    .authorize(method, path_and_query, rejected_access_token)
-                    .await
-            }
-        }
-    }
-
-    pub(crate) const fn is_legacy(&self) -> bool {
-        matches!(self, Self::Legacy(_))
+        self.0
+            .authorize(method, path_and_query, rejected_access_token)
+            .await
     }
 
     pub(crate) async fn ensure_login(&self) -> Result<()> {
-        match self {
-            Self::Legacy(_) => Ok(()),
-            Self::Device(manager) => manager.ensure_login().await,
-        }
+        self.0.ensure_login().await
     }
 }
 
@@ -131,7 +129,6 @@ pub(crate) struct DeviceCredentialManager {
     lock_path: PathBuf,
     http: reqwest::Client,
     cached: RwLock<Option<StoredDeviceCredential>>,
-    local_mode: AtomicBool,
 }
 
 impl DeviceCredentialManager {
@@ -151,10 +148,10 @@ impl DeviceCredentialManager {
             lock_path,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .context("building Cowboy device-auth HTTP client")?,
             cached: RwLock::new(None),
-            local_mode: AtomicBool::new(false),
         })
     }
 
@@ -165,10 +162,6 @@ impl DeviceCredentialManager {
             let authorization = self
                 .authorize(&Method::GET, url.path(), rejected_access.as_deref())
                 .await?;
-            if authorization.bearer.is_none() {
-                // The live policy check explicitly selected local auth-off mode.
-                return Ok(());
-            }
             let response = authorization
                 .apply_reqwest(self.http.get(url.clone()))?
                 .header(reqwest::header::CACHE_CONTROL, "no-cache")
@@ -201,14 +194,7 @@ impl DeviceCredentialManager {
             path_and_query.starts_with('/') && !path_and_query.contains(['\r', '\n']),
             "request path is invalid"
         );
-        let CredentialOutcome::Credential(credential) =
-            self.ensure_credential(rejected_access_token).await?
-        else {
-            return Ok(ClientRequestAuthorization {
-                bearer: None,
-                proof_headers: Vec::new(),
-            });
-        };
+        let credential = self.ensure_credential(rejected_access_token).await?;
         let signing_key = crate::client_auth::signing_key_from_base64(&credential.private_key)?;
         let proof_headers = crate::client_auth::signed_proof_headers(
             &signing_key,
@@ -227,17 +213,11 @@ impl DeviceCredentialManager {
     async fn ensure_credential(
         &self,
         rejected_access_token: Option<&str>,
-    ) -> Result<CredentialOutcome> {
-        if self.local_mode.load(Ordering::Acquire) {
-            if rejected_access_token.is_none() {
-                return Ok(CredentialOutcome::Local);
-            }
-            self.local_mode.store(false, Ordering::Release);
-        }
+    ) -> Result<StoredDeviceCredential> {
         if let Some(cached) = self.cached.read().await.clone()
             && credential_access_is_usable(&cached, rejected_access_token)
         {
-            return Ok(CredentialOutcome::Credential(cached));
+            return Ok(cached);
         }
 
         let _lock = acquire_credential_lock(&self.lock_path).await?;
@@ -247,14 +227,13 @@ impl DeviceCredentialManager {
             && credential_access_is_usable(stored, rejected_access_token)
         {
             *self.cached.write().await = Some(stored.clone());
-            return Ok(CredentialOutcome::Credential(stored.clone()));
+            return Ok(stored.clone());
         }
 
-        if self.product_auth_disabled().await? {
-            self.local_mode.store(true, Ordering::Release);
-            *self.cached.write().await = None;
-            return Ok(CredentialOutcome::Local);
-        }
+        ensure!(
+            !self.product_auth_disabled().await?,
+            "The Service must require device authentication"
+        );
 
         let credential = if let Some(stored) = stored
             && stored.version == CREDENTIAL_VERSION
@@ -270,7 +249,7 @@ impl DeviceCredentialManager {
         };
         save_credential(&self.credential_path, &credential)?;
         *self.cached.write().await = Some(credential.clone());
-        Ok(CredentialOutcome::Credential(credential))
+        Ok(credential)
     }
 
     async fn product_auth_disabled(&self) -> Result<bool> {
@@ -483,11 +462,6 @@ impl DeviceCredentialManager {
 enum RefreshOutcome {
     Credential(StoredDeviceCredential),
     Reauthorize,
-}
-
-enum CredentialOutcome {
-    Local,
-    Credential(StoredDeviceCredential),
 }
 
 fn credential_access_is_usable(
@@ -857,7 +831,7 @@ mod tests {
     #[tokio::test]
     async fn login_checks_cached_access_and_recovers_controller_restart() {
         let fixture = login_fixture(true, StatusCode::OK).await;
-        let authentication = ClientAuthentication::Device(fixture.manager.clone());
+        let authentication = ClientAuthentication(fixture.manager.clone());
         authentication.ensure_login().await.unwrap();
         assert_eq!(*fixture.requests.lock().unwrap(), ["me", "refresh", "me"]);
         let stored = load_credential(&fixture.manager.credential_path)
@@ -880,13 +854,13 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
         ] {
             let fixture = login_fixture(true, status).await;
-            let authentication = ClientAuthentication::Device(fixture.manager.clone());
+            let authentication = ClientAuthentication(fixture.manager.clone());
             assert!(authentication.ensure_login().await.is_err());
             assert_eq!(*fixture.requests.lock().unwrap(), ["me", "refresh", "me"]);
         }
         for status in [StatusCode::FORBIDDEN, StatusCode::SERVICE_UNAVAILABLE] {
             let fixture = login_fixture(false, status).await;
-            let authentication = ClientAuthentication::Device(fixture.manager.clone());
+            let authentication = ClientAuthentication(fixture.manager.clone());
             assert!(authentication.ensure_login().await.is_err());
             assert_eq!(*fixture.requests.lock().unwrap(), ["me"]);
         }
@@ -950,7 +924,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_auth_off_uses_local_access_without_creating_a_credential() {
+    async fn auth_off_service_is_rejected_without_creating_a_credential() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -985,18 +959,13 @@ mod tests {
             Some("Test client".to_owned()),
         )
         .unwrap();
-        let authorization = authentication
-            .authorize(&Method::GET, "/ws", None)
-            .await
-            .unwrap();
-        assert!(authorization.bearer.is_none());
-        assert!(authorization.proof_headers.is_empty());
-        authentication.ensure_login().await.unwrap();
-        assert_eq!(
-            std::fs::read_dir(&state_dir).unwrap().count(),
-            1,
-            "only the process lock should exist in auth-off mode"
+        assert!(
+            authentication
+                .authorize(&Method::GET, "/ws", None)
+                .await
+                .is_err()
         );
+        assert!(authentication.ensure_login().await.is_err());
 
         server.abort();
         let _ = std::fs::remove_dir_all(state_dir);

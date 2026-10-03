@@ -1,3 +1,4 @@
+import { ProtectedImage } from "./ProtectedImage";
 import {
   lazy,
   memo,
@@ -3767,7 +3768,7 @@ function AttachmentPreviews({
           {a.isImage && a.previewUrl && !failedIds.has(a.id)
             ? (
               <Box
-                component="img"
+                component={ProtectedImage}
                 src={a.previewUrl}
                 alt={a.name}
                 onError={(): void =>
@@ -3855,7 +3856,7 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
           ? (
             <Box
               key={a.id}
-              component="img"
+              component={ProtectedImage}
               src={a.previewUrl}
               alt={a.name}
               data-pending-content-action="attachment-preview"
