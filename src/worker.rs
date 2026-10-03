@@ -4,7 +4,7 @@
 //! connects *out* to Machine broker, so Cowboy and Machine broker may restart while the worker
 //! keeps an in-flight prompt and pending permission responders alive.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,6 +61,9 @@ struct Shared {
     telemetry: Mutex<crate::worker_telemetry::WorkerTelemetry>,
     notify: mpsc::UnboundedSender<()>,
     seen_commands: Mutex<HashSet<String>>,
+    /// Digests of prompt images Cowboy stored before dispatch, newest last.
+    /// Their echoes travel by reference instead of carrying the bytes back.
+    echo_artifacts: Mutex<VecDeque<String>>,
     workspace_path: PathBuf,
     workspace_identity: Option<WorkspaceIdentity>,
     execution: Option<Arc<crate::worker_execution::Client>>,
@@ -182,6 +185,25 @@ impl Shared {
     fn unmark_command(&self, command_id: &str) {
         self.seen_commands.lock().remove(command_id);
     }
+
+    fn remember_echo_artifacts(&self, content: &[serde_json::Value]) {
+        const RETAINED: usize = 32;
+        let digests = content.iter().filter_map(|block| {
+            (block.get("type").and_then(serde_json::Value::as_str) == Some("image"))
+                .then(|| block.get("data").and_then(serde_json::Value::as_str))
+                .flatten()
+                .and_then(crate::artifacts::large_image_digest)
+        });
+        let mut stored = self.echo_artifacts.lock();
+        for digest in digests {
+            if !stored.contains(&digest) {
+                stored.push_back(digest);
+            }
+        }
+        while stored.len() > RETAINED {
+            stored.pop_front();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -202,7 +224,12 @@ impl RemoteSink {
 
     fn emit_event(&self, event: Event, cmid: Option<String>) {
         let runtime = match event {
-            Event::Update { update } => RuntimeEvent::Update { update, cmid },
+            Event::Update { mut update } => {
+                let mut stored = self.shared.echo_artifacts.lock();
+                crate::artifacts::reference_echoed_image(&mut update, stored.make_contiguous());
+                drop(stored);
+                RuntimeEvent::Update { update, cmid }
+            }
             Event::PermissionRequest {
                 request_id,
                 tool_call,
@@ -473,6 +500,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         telemetry: Mutex::default(),
         notify: notify_tx,
         seen_commands: Mutex::new(HashSet::new()),
+        echo_artifacts: Mutex::new(VecDeque::new()),
         workspace_path: args.cwd.clone(),
         workspace_identity: expected_workspace_identity,
         execution: endpoint
@@ -755,6 +783,7 @@ fn handle_command(
                 content,
                 cmid,
                 trace,
+                echo_artifacts,
             } => {
                 if !shared.workspace_is_current() {
                     let message = format!(
@@ -769,6 +798,9 @@ fn handle_command(
                 }
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
+                }
+                if echo_artifacts {
+                    shared.remember_echo_artifacts(&content);
                 }
                 let blocks: Vec<ContentBlock> = content
                     .into_iter()
@@ -1131,6 +1163,7 @@ mod tests {
                 telemetry: Mutex::default(),
                 notify: tx,
                 seen_commands: Mutex::new(HashSet::new()),
+                echo_artifacts: Mutex::new(VecDeque::new()),
                 workspace_path,
                 workspace_identity: expected_workspace_identity,
                 execution: None,
@@ -1360,6 +1393,7 @@ mod tests {
                 turn_id: "turn-1".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "hello"})],
                 cmid: None,
+                echo_artifacts: false,
             },
         );
 
@@ -1372,6 +1406,65 @@ mod tests {
             shared.outbox.lock().get(&1),
             Some(RuntimeEvent::TurnStarted { turn_id, .. }) if turn_id == "turn-1"
         ));
+    }
+
+    #[test]
+    fn prompt_echo_references_images_the_controller_already_stored() {
+        use base64::Engine as _;
+
+        let (shared, _notify) = shared();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let image = |byte: u8| {
+            serde_json::json!({
+                "type": "image",
+                "mimeType": "image/jpeg",
+                "data": base64::engine::general_purpose::STANDARD.encode(vec![byte; 40_000]),
+            })
+        };
+        handle_command(
+            &shared,
+            &mut Some(tx),
+            WorkerCommand::Prompt {
+                command_id: "cmd-1".to_owned(),
+                trace: None,
+                turn_id: "turn-1".to_owned(),
+                content: vec![image(1)],
+                cmid: Some("c-1".to_owned()),
+                echo_artifacts: true,
+            },
+        );
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        let echo = |content: serde_json::Value| Event::Update {
+            update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": content}),
+        };
+        sink.push_tagged("sess-1", echo(image(1)), Some("c-1".to_owned()));
+        sink.push_tagged("sess-1", echo(image(2)), None);
+        sink.push(
+            "sess-1",
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "tool_call_update", "content": image(1)}),
+            },
+        );
+
+        let contents: Vec<serde_json::Value> = shared
+            .outbox
+            .lock()
+            .values()
+            .filter_map(|event| match event {
+                RuntimeEvent::Update { update, .. } => Some(update["content"].clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(contents.len(), 3);
+        assert!(contents[0].get("data").is_none());
+        assert_eq!(
+            contents[0][crate::artifacts::ECHO_ARTIFACT_FIELD],
+            crate::artifacts::large_image_digest(image(1)["data"].as_str().unwrap()).unwrap()
+        );
+        assert_eq!(contents[1], image(2), "an unstored image stays inline");
+        assert_eq!(contents[2], image(1), "only prompt echoes are referenced");
     }
 
     #[test]

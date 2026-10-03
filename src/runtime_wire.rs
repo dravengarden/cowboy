@@ -265,6 +265,11 @@ pub enum CoreCommand {
             deserialize_with = "crate::runtime_trace::deserialize_carrier"
         )]
         trace: Option<crate::runtime_trace::TraceCarrier>,
+        /// Cowboy stored this prompt's large images before dispatch, so the
+        /// worker may echo them by content digest instead of returning the
+        /// bytes. Absent from older Controllers, which keeps the inline echo.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        echo_artifacts: bool,
     },
     Cancel {
         session_id: String,
@@ -336,6 +341,11 @@ pub enum WorkerCommand {
             deserialize_with = "crate::runtime_trace::deserialize_carrier"
         )]
         trace: Option<crate::runtime_trace::TraceCarrier>,
+        /// Cowboy stored this prompt's large images before dispatch, so the
+        /// worker may echo them by content digest instead of returning the
+        /// bytes. Absent from older Controllers, which keeps the inline echo.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        echo_artifacts: bool,
     },
     Cancel {
         command_id: String,
@@ -717,6 +727,30 @@ mod tests {
             decoded.resumable_agent_session_id().as_deref(),
             Some("thread-1")
         );
+    }
+
+    #[test]
+    fn echo_artifacts_is_an_additive_prompt_opt_in() {
+        let legacy = serde_json::json!({"command":"prompt","command_id":"c","turn_id":"t","content":[],"cmid":"m"});
+        let decoded: WorkerCommand = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(
+            decoded,
+            WorkerCommand::Prompt {
+                echo_artifacts: false,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+        let mut opted = legacy;
+        opted["echo_artifacts"] = serde_json::json!(true);
+        let decoded: WorkerCommand = serde_json::from_value(opted).unwrap();
+        assert!(matches!(
+            decoded,
+            WorkerCommand::Prompt {
+                echo_artifacts: true,
+                ..
+            }
+        ));
     }
 
     #[test]
