@@ -60,6 +60,7 @@ pub struct InstallArgs {
 }
 
 pub fn run() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = InstallArgs::parse();
     install(args)
 }
