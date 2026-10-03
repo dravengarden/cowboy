@@ -89,7 +89,7 @@ primary phone/desktop product path.
 - [`releases/plugin-transaction-identity-2026-10-03.md`](releases/plugin-transaction-identity-2026-10-03.md) — Durable transaction ID validation and verified owner activation after observation repair and authorized probe retirement
 - [`releases/plugin-journal-phase-2026-10-03.md`](releases/plugin-journal-phase-2026-10-03.md) — Closed journal phase admission and explicit selected-target authority before automatic recovery
 - [`releases/plugin-maintenance-authority-2026-10-04.md`](releases/plugin-maintenance-authority-2026-10-04.md) — Durable maintenance authority validation for journals and receipts before recovery acceptance
-- [`releases/plugin-store-root-2026-10-04.md`](releases/plugin-store-root-2026-10-04.md) — Canonical durable release roots; built candidate awaits resolution of unrelated Stormbird rollout failures
+- [`releases/plugin-store-root-2026-10-04.md`](releases/plugin-store-root-2026-10-04.md) — Canonical durable release roots and verified owner activation after authorized terminal-task retirement
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
