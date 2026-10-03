@@ -60,6 +60,7 @@ pub struct InstallArgs {
 }
 
 pub fn run() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = InstallArgs::parse();
     install(args)
 }
@@ -527,11 +528,6 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         state.display().to_string(),
         "--workspace-config".to_owned(),
         state.join("config/workspaces.json").display().to_string(),
-        "--worker-command".to_owned(),
-        state
-            .join("bootstrap/cowboy-acp-worker")
-            .display()
-            .to_string(),
         "--socket".to_owned(),
         state.join(MACHINE_SOCKET).display().to_string(),
         "--provider-usage-socket".to_owned(),
@@ -570,8 +566,9 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
     let _ = writeln!(
         script,
-        "PATH={}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
-        shell_quote(&state.join("components/commands").display().to_string())
+        "PATH={}:{}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
+        shell_quote(&state.join("components/commands").display().to_string()),
+        shell_quote(&state.join("bootstrap").display().to_string())
     );
     for detect in crate::plugin_runtime_args::path_detect() {
         let cmd = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD");
@@ -887,7 +884,7 @@ mod tests {
         assert!(script.contains("--enrollment-token-file"));
         assert!(script.contains("--machine-id"));
         assert!(script.contains("--plugin-operation-admission"));
-        assert!(script.contains("bootstrap/cowboy-acp-worker"));
+        assert!(script.contains("'/state/bootstrap':"));
         assert!(script.contains("COWBOY_ACP_GROK_CMD"));
         assert!(script.contains("--experimental-memory --rules"));
         assert!(script.contains("Read and follow the closest AGENTS.md"));
