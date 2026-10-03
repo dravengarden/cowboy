@@ -7,6 +7,7 @@ use reqwest::{Method, StatusCode};
 /// A second advertised root, separate from the Session fixture workspace so
 /// replacing it disturbs no native owner, worktree or installed Plugin.
 pub(super) const ROOT: &str = "identity-root";
+pub(super) const ALIAS: &str = "identity-alias";
 pub(super) const FILE: &str = "identity.txt";
 const TEXT: &str = "machine owned root identity\n";
 
@@ -16,12 +17,12 @@ pub(super) fn seed(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn path() -> String {
-    format!("/api/code/sessions/workspace::{MACHINE}::{ROOT}/file?path={FILE}")
+fn path(id: &str) -> String {
+    format!("/api/code/sessions/workspace::{MACHINE}::{id}/file?path={FILE}")
 }
 
-async fn read(pair: &Pair<'_>) -> Result<(), Failure> {
-    let value = pair.http.get(&path()).await?;
+async fn read(pair: &Pair<'_>, id: &str) -> Result<(), Failure> {
+    let value = pair.http.get(&path(id)).await?;
     check(value["apiVersion"] == 1 && value["path"] == FILE)?;
     check(value["text"] == TEXT && value["truncated"] == false)?;
     check(value["nextCursor"].is_null() && value["size"] == TEXT.len())
@@ -49,8 +50,9 @@ pub(super) async fn run(
     // The Session fixture route is independent of this advertised root and
     // must not dispatch or be fenced by anything below.
     let session_reads = pair.proxy.counts()?.commands.get("coreFile").copied();
-    read(pair).await?;
-    check(dispatched(pair)? == 1)?;
+    read(pair, ROOT).await?;
+    read(pair, ALIAS).await?;
+    check(dispatched(pair)? == 2)?;
 
     let root = pair.root.join(ROOT);
     std::fs::remove_dir_all(&root).map_err(|_| Failure::Setup)?;
@@ -60,17 +62,17 @@ pub(super) async fn run(
     // No inventory refresh has happened: the Controller still holds its old
     // observation and dispatches once. The Machine owns the identity and must
     // refuse before reading the replacement object.
-    let replaced = pair.http.call(Method::GET, &path(), None).await?;
+    let replaced = pair.http.call(Method::GET, &path(ROOT), None).await?;
     check(replaced.status == StatusCode::GONE && replaced.no_store)?;
     check(!replaced.has_etag && replaced.value.is_null())?;
-    check(dispatched(pair)? == 2)?;
+    check(dispatched(pair)? == 3)?;
 
     // That refusal ended the Controller observation, so cached bytes, ETags
     // and conditional replies for the old root are unreachable too, with no
     // further dispatch. This is an ended observation, not a rollback.
-    let ended = pair.http.call(Method::GET, &path(), None).await?;
+    let ended = pair.http.call(Method::GET, &path(ROOT), None).await?;
     check(ended.status == StatusCode::NOT_FOUND && ended.value.is_null())?;
-    check(dispatched(pair)? == 2)?;
+    check(dispatched(pair)? == 3)?;
 
     // An explicit inventory refresh re-observes the live root and mints a new
     // identity. A fence is not a permanent loss of the configured root.
@@ -85,9 +87,11 @@ pub(super) async fn run(
     // The Machine sends its inventory before acknowledging the command on the
     // same ordered connection, so no polling is needed or permitted here.
     check(refreshed.status == StatusCode::OK)?;
-    read(pair).await?;
-    check(dispatched(pair)? == 3)?;
+    read(pair, ROOT).await?;
+    read(pair, ALIAS).await?;
+    check(dispatched(pair)? == 5)?;
     check(pair.proxy.counts()?.commands.get("coreFile").copied() == session_reads)?;
     checks.push("machine_owned_root_identity_refuses_a_replaced_advertised_root");
+    checks.push("machine_owned_root_aliases_are_readable_before_and_after_replacement");
     Ok(())
 }
