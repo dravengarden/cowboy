@@ -1,5 +1,11 @@
 # Browser userspace WireGuard for Cowboy
 
+**Roadmap status, 2026-10-03:** implementation is deferred in favor of completing
+Option 1. [Security priorities and open questions](secure-connectivity-design.md)
+govern further work. The candidate paths below are research, not an approved
+product design. In particular, this experiment loads its PWA code over trusted
+HTTPS; it does not solve first load, installation or updates without HTTPS.
+
 Research date: 2026-10-03. Scope: the PWA owns its Cowboy tunnel without an
 installed VPN client, on an already reachable LAN. The browser/native datagram experiment now passes; no production integration
 or activation is included. This updates the PWA conclusion in the
@@ -126,7 +132,7 @@ Explicit pause/reset/resume is covered; physical-device background suspension,
 Safari/PWA acceptance, persistent keys and a userspace TCP/TLS stack are still
 outstanding.
 
-## Proposed Cowboy path
+## Candidate Cowboy path — deferred
 
 ```mermaid
 flowchart LR
@@ -202,15 +208,18 @@ that origin. An outer proxy that only forwards packets need not decrypt the WG
 payload, but a proxy also controlling application delivery has a different trust
 position.
 
-## Next application integration experiment
+## Deferred application integration experiment
 
-Extend the isolated fixture with a userspace TCP stack and a narrowly scoped
-adapter for one real Cowboy API request and one live session. Preserve the
+Resume only after the roadmap's bootstrap/trust and platform design is reviewed.
+A possible later experiment would extend the isolated fixture with a userspace
+TCP stack and a narrowly scoped adapter for one real Cowboy API request and one
+live session. Preserve the
 account/device proof and explicitly test the HttpOnly-cookie-to-tunnel binding,
 request cancellation, expiration and revocation. Do not route arbitrary LAN
 services or add network discovery to this experiment.
 
-Then measure application bundle/startup cost, large-transfer backpressure and
-packet-loss behavior, and run Safari/PWA alongside desktop browsers. The current
+That later work would also measure application bundle/startup cost,
+large-transfer backpressure and packet-loss behavior, and run Safari/PWA
+alongside desktop browsers. The current
 browser/native data-plane result supports this work; full Cowboy transport and
 mobile readiness have not been established.
