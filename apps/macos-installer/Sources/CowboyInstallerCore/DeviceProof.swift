@@ -19,6 +19,11 @@ actor DeviceProof {
     }
     private var keys: [String: P256.Signing.PrivateKey] = [:]
     private var challenges: [String: (epoch: String, offset: Int64)] = [:]
+    private let keyLoader: @Sendable (String) throws -> P256.Signing.PrivateKey
+
+    init(keyLoader: @escaping @Sendable (String) throws -> P256.Signing.PrivateKey = DeviceProof.keychainIdentity) {
+        self.keyLoader = keyLoader
+    }
 
     func sign(_ request: URLRequest, session: URLSession, refresh: Bool = false) async throws -> URLRequest {
         guard let url = request.url, url.path.hasPrefix("/api/") else { return request }
@@ -68,6 +73,12 @@ actor DeviceProof {
 
     private func identity(_ origin: String) throws -> P256.Signing.PrivateKey {
         if let key = keys[origin] { return key }
+        let key = try keyLoader(origin)
+        keys[origin] = key
+        return key
+    }
+
+    private static func keychainIdentity(_ origin: String) throws -> P256.Signing.PrivateKey {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "xyz.stormbird.cowboy.manager.device",
@@ -79,9 +90,7 @@ actor DeviceProof {
         var stored: CFTypeRef?
         let status = SecItemCopyMatching(lookup as CFDictionary, &stored)
         if status == errSecSuccess, let data = stored as? Data {
-            let key = try P256.Signing.PrivateKey(rawRepresentation: data)
-            keys[origin] = key
-            return key
+            return try P256.Signing.PrivateKey(rawRepresentation: data)
         }
         guard status == errSecItemNotFound else { throw ServiceCredentialStoreError.keychain(status) }
         let key = P256.Signing.PrivateKey()
@@ -89,9 +98,8 @@ actor DeviceProof {
         insert[kSecValueData as String] = key.rawRepresentation
         insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let added = SecItemAdd(insert as CFDictionary, nil)
-        if added == errSecDuplicateItem { return try identity(origin) }
+        if added == errSecDuplicateItem { return try keychainIdentity(origin) }
         guard added == errSecSuccess else { throw ServiceCredentialStoreError.keychain(added) }
-        keys[origin] = key
         return key
     }
 

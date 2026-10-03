@@ -1,7 +1,6 @@
 @testable import CowboyInstallerCore
 import CryptoKit
 import Foundation
-import Security
 import Testing
 
 private final class ChallengeProtocol: URLProtocol, @unchecked Sendable {
@@ -42,25 +41,20 @@ struct DeviceProofTests {
     }
 
     @Test
-    func signaturesBindTheWireTargetAndSurviveReopeningTheDevice() async throws {
+    func signaturesBindTheWireTargetAndRefreshWithoutRotatingTheKey() async throws {
         let origin = "https://proof-\(UUID().uuidString.lowercased()).invalid"
-        defer {
-            // Delete only this test's unique Keychain item, including on failure.
-            SecItemDelete([
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "xyz.stormbird.cowboy.manager.device",
-                kSecAttrAccount as String: origin,
-            ] as CFDictionary)
-        }
+        // Protocol tests must not read, unlock, or alter a developer's Keychain.
+        let fixtureKey = P256.Signing.PrivateKey()
+        let loadKey: @Sendable (String) throws -> P256.Signing.PrivateKey = { _ in fixtureKey }
         let session = session()
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: URL(string: origin + ":443/api/path%20with%20spaces?q=a%2Fb&x=%E4%BD%A0")!)
         request.httpMethod = "POST"
-        let signer = DeviceProof()
+        let signer = DeviceProof(keyLoader: loadKey)
         let first = try proof(await signer.sign(request, session: session))
         let second = try proof(await signer.sign(request, session: session))
         let refreshed = try proof(await signer.sign(request, session: session, refresh: true))
-        let reopened = try proof(await DeviceProof().sign(request, session: session))
+        let reopened = try proof(await DeviceProof(keyLoader: loadKey).sign(request, session: session))
         #expect(first["origin"] as? String == origin)
         #expect(first["key"] as? String == reopened["key"] as? String)
         #expect(first["epoch"] as? String == second["epoch"] as? String)
