@@ -40,13 +40,40 @@ This exercised the built candidate, not an installed owner update.
 - `ovh-falcon-current403-observe-20261003.service` was already failed.
 - `ovh-hawk-current409-observe-20261003.service` was already failed.
 
-Both are unrelated transient observation units. The host contract refuses
+Both were unrelated transient observation units. The host contract refuses
 unchanged failed units and prohibits clearing failure state to pass preflight.
 They were left intact. The previous successful host receipt and installed owner
 remain unchanged at source `3520f6821760ad97461290e720d0b517c145dc05`; this change
 has **not shipped**. After the observation task resolves its failures, rerun
 the owning activation with fresh remote/provenance checks. Rebuild if main has
 advanced beyond the candidate.
+
+## Observation repair follow-up
+
+After explicit authorization to handle the two observation failures, their
+original samples showed that all connectivity, Cowboy inventory and HTTPS
+checks had passed. They failed because Hawk/Falcon's expected revisions
+409/403 were superseded by 410/404 while the observation was running; neither
+daemon restarted. The original failures were retained rather than rewritten
+as successful acceptance of the older revisions.
+
+The same transient units ran the full 21-sample, 300-second observation against
+current revisions 410/404, with fresh SSH connections avoiding the original
+multiplexed connection's broken pipe. Both completed with 21/21 passing samples
+and exit 0. Their temporary command overrides were then removed. No daemon,
+overlay configuration, authentication material or Cowboy component was changed.
+
+A further unrelated failed unit now blocks activation:
+`hawk-jms-family-probe-20261003.service`. Its original probe build omitted
+`with_utls` and could not create the isolated reality engine. The original task
+had already rebuilt the binary with the tag; rerunning that repaired binary
+then failed because the original experiment's token file had been removed.
+No token or provider credentials were copied or recreated. This does not
+establish a successful JMS network probe. Retirement of this obsolete task was
+requested separately and remains pending; its failed state has not been cleared.
+The Cowboy owner candidate remains uninstalled, with the previous successful
+host receipt unchanged. The evidence includes both original observation failures
+and all 42 successful successor samples.
 
 The recursive built-unit comparison records `mandb.service` and system-path
 references in AccountsService, D-Bus and polkit drop-ins, plus the user D-Bus

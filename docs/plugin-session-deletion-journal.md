@@ -99,10 +99,12 @@ Missing, null, empty and malformed IDs refuse before recovery effects or
 history filenames can use them. Compatible recovery keeps the original ID even
 when the recovered revision changes. The
 [transaction identity candidate](releases/plugin-transaction-identity-2026-10-03.md)
-passed its gates and clean Hawk build, but host activation was refused before
-switching by two unrelated failed OVH observation units. It is not installed;
-the previous owner remains active, and no failed unit was cleared to bypass
-preflight.
+passed its gates and clean Hawk build, but host activation was initially refused
+before switching by two unrelated failed OVH observation units. Authorized
+successor-revision observations subsequently passed 21/21 samples on each host.
+An obsolete JMS probe with removed test inputs still blocks activation; its
+retirement remains pending. The candidate is not installed, the previous owner
+remains active, and no failed unit was cleared to bypass preflight.
 
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state

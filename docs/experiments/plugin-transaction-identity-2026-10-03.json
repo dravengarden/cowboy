@@ -520,5 +520,1516 @@
     "deletionWriterEnabled": false,
     "crossGenerationRecoveryAdmitted": false,
     "continuity": "bounded PID observations; no generation rollout/native resume acceptance"
+  },
+  "observerRepair": {
+    "observedAt": "2026-10-03T14:43:49.633901+00:00",
+    "scriptSha256": "a6341a7b728ccbdfc27d80697c4fd97bdc2fec6db0e0144b280558bfebd3aee3",
+    "records": [
+      {
+        "unit": "ovh-hawk-current409-observe-20261003.service",
+        "originalExpectedRevision": 409,
+        "newExpectedRevision": 410,
+        "originalFailure": {
+          "sample": 12,
+          "elapsed": 180.0,
+          "revision": 410,
+          "connected": true,
+          "control_current": true,
+          "same_daemon": true,
+          "machine_states": [
+            {
+              "id": "falcon",
+              "status": "online",
+              "connected": true
+            },
+            {
+              "id": "hawk",
+              "status": "online",
+              "connected": true
+            },
+            {
+              "id": "macbook-air",
+              "status": "online",
+              "connected": true
+            },
+            {
+              "id": "ovh",
+              "status": "online",
+              "connected": true
+            }
+          ],
+          "cowboy_online": true,
+          "mac_https_ok": true,
+          "pass": false
+        },
+        "repair": "rerun full observation against successor revision; preserve original failure; no reset-failed",
+        "accepted": {
+          "cohort": "hawk",
+          "revision": 410,
+          "samples": 21,
+          "seconds": 300.643,
+          "failed": 0,
+          "daemon_not_restarted": true
+        },
+        "samples": [
+          {
+            "sample": 0,
+            "elapsed": 0.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 1,
+            "elapsed": 15.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 2,
+            "elapsed": 30.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 3,
+            "elapsed": 45.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 4,
+            "elapsed": 60.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 5,
+            "elapsed": 75.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 6,
+            "elapsed": 90.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 7,
+            "elapsed": 105.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 8,
+            "elapsed": 120.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 9,
+            "elapsed": 135.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 10,
+            "elapsed": 150.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 11,
+            "elapsed": 165.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 12,
+            "elapsed": 180.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 13,
+            "elapsed": 195.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 14,
+            "elapsed": 210.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 15,
+            "elapsed": 225.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 16,
+            "elapsed": 240.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 17,
+            "elapsed": 255.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 18,
+            "elapsed": 270.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 19,
+            "elapsed": 285.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 20,
+            "elapsed": 300.0,
+            "revision": 410,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          }
+        ],
+        "runtimeOverride": "[Service]\nExecStart=\nExecStart=/run/current-system/sw/bin/python3 /tmp/cowboy-transaction-identity-observer-repair/observe.py hawk 410\n"
+      },
+      {
+        "unit": "ovh-falcon-current403-observe-20261003.service",
+        "originalExpectedRevision": 403,
+        "newExpectedRevision": 404,
+        "originalFailure": {
+          "sample": 13,
+          "elapsed": 195.0,
+          "revision": 404,
+          "connected": true,
+          "control_current": true,
+          "same_daemon": true,
+          "machine_states": [
+            {
+              "id": "falcon",
+              "status": "online",
+              "connected": true
+            },
+            {
+              "id": "hawk",
+              "status": "online",
+              "connected": true
+            },
+            {
+              "id": "macbook-air",
+              "status": "online",
+              "connected": true
+            },
+            {
+              "id": "ovh",
+              "status": "online",
+              "connected": true
+            }
+          ],
+          "cowboy_online": true,
+          "mac_https_ok": true,
+          "pass": false
+        },
+        "repair": "rerun full observation against successor revision; preserve original failure; no reset-failed",
+        "accepted": {
+          "cohort": "falcon",
+          "revision": 404,
+          "samples": 21,
+          "seconds": 300.652,
+          "failed": 0,
+          "daemon_not_restarted": true
+        },
+        "samples": [
+          {
+            "sample": 0,
+            "elapsed": 0.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 1,
+            "elapsed": 15.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 2,
+            "elapsed": 30.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 3,
+            "elapsed": 45.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 4,
+            "elapsed": 60.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 5,
+            "elapsed": 75.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 6,
+            "elapsed": 90.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 7,
+            "elapsed": 105.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 8,
+            "elapsed": 120.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 9,
+            "elapsed": 135.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 10,
+            "elapsed": 150.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 11,
+            "elapsed": 165.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 12,
+            "elapsed": 180.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 13,
+            "elapsed": 195.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 14,
+            "elapsed": 210.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 15,
+            "elapsed": 225.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 16,
+            "elapsed": 240.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 17,
+            "elapsed": 255.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 18,
+            "elapsed": 270.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 19,
+            "elapsed": 285.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          },
+          {
+            "sample": 20,
+            "elapsed": 300.0,
+            "revision": 404,
+            "connected": true,
+            "control_current": true,
+            "same_daemon": true,
+            "machine_states": [
+              {
+                "id": "falcon",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "hawk",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "macbook-air",
+                "status": "online",
+                "connected": true
+              },
+              {
+                "id": "ovh",
+                "status": "online",
+                "connected": true
+              }
+            ],
+            "cowboy_online": true,
+            "mac_https_ok": true,
+            "pass": true
+          }
+        ],
+        "runtimeOverride": "[Service]\nExecStart=\nExecStart=/run/current-system/sw/bin/python3 /tmp/cowboy-transaction-identity-observer-repair/observe.py falcon 404\n"
+      }
+    ],
+    "runtimeOverridesRemoved": true
+  },
+  "remainingBlocker": {
+    "unit": "hawk-jms-family-probe-20261003.service",
+    "initialFailure": "isolated engine creation: with_utls absent from initial binary",
+    "currentBinaryAlreadyRebuiltByOriginalTask": true,
+    "rerunFailure": "token read failed; original experiment token absent",
+    "probeNetworkAcceptanceEstablished": false,
+    "retirementAuthorized": false,
+    "retirementPerformed": false,
+    "candidateActivationRetried": false
+  },
+  "jmsProbeInvestigation": {
+    "unit": "hawk-jms-family-probe-20261003.service",
+    "originalFailure": "isolated engine create failed: reality requires with_utls",
+    "originalExitStatus": 2,
+    "currentBinarySha256": "8f4e1b083b5f72ab6f6b773011444bab42563c01a63885728fc0a6415965bd5e",
+    "binaryModifiedAt": "2026-10-03T14:35:56.765620+00:00",
+    "repair": "restart with current binary already rebuilt by probe owner with with_utls; inspect result rows separately from process exit status"
   }
 }
