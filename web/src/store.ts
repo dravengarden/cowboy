@@ -51,8 +51,11 @@ import {
   deliveryStallMs,
   destinationForPrompt,
   homeForOrigin,
+  lateEchoRetiresRecoveryDraft,
+  recoveryDraftCmid,
   retryDeliveryAttempt,
   statusAfterExplicitSend,
+  unconfirmedSendDisposition,
 } from "./localFirstDelivery.ts";
 import {
   type DraftActivation,
@@ -154,7 +157,7 @@ export interface ErrorNotice {
   sessionId?: string;
   message: string;
   /** Snackbar severity — defaults to "error" when absent. */
-  severity?: "error" | "warning";
+  severity?: "error" | "warning" | "info";
 }
 
 /// Top-of-app connection / version banner — the app-shell component instance
@@ -1991,7 +1994,7 @@ export function retrySessionHydration(sessionId: string): Promise<void> {
  * messages use. `severity` defaults to "error"; pass "warning" for recoverable
  * conditions (e.g. a persisted focus session that no longer exists on reload).
  */
-export function notify(message: string, severity: "error" | "warning" = "error"): void {
+export function notify(message: string, severity: "error" | "warning" | "info" = "error"): void {
   errorSeq += 1;
   console.warn("cowboy notice:", message);
   setState({ ...state, lastError: { seq: errorSeq, message, severity } });
@@ -3543,11 +3546,15 @@ const echoedOptimisticCmids = new Set<string>();
 const recoveryAfterPrompt = new Map<string, readonly string[]>();
 const olderFailedByNewCmid = new Map<string, readonly string[]>();
 const recoveringFailedSends = new Set<string>();
+// Transcript sends parked in drafts after their deadline, by original cmid, so
+// a late echo can retire the duplicate draft. Tab-local: a reload forgets it.
+const parkedSends = new Map<string, { draftCmid: string; text: string; attachments: number }>();
 const CHAT_CREATION_MUTATORS = new Set(["submitPrompt", "addQueue", "frontQueue", "forceQueue"]);
 
 function observeRecoveredSend(env: Envelope): void {
   if (env.kind === "update" && env.update.sessionUpdate === "user_message_chunk") {
     if (env.cmid === undefined) return;
+    retireParkedDraftOnEcho(env.session_id, env.cmid);
     const pending = qClients.get(env.session_id)?.pending() ?? [];
     const index = pending.findIndex((mutation) => mutation.id === env.cmid ||
       (mutation.args as { row?: QueuedMessage }).row?.cmid === env.cmid);
@@ -3586,22 +3593,59 @@ function observeRecoveredSend(env: Envelope): void {
     (env.status === "crashed" || env.status === "interrupted"))) recoveryAfterPrompt.delete(env.session_id);
 }
 
-async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<void> {
+async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<boolean> {
   const key = `${sessionId}:${id}`;
-  if (recoveringFailedSends.has(key)) return;
+  if (recoveringFailedSends.has(key)) return false;
   const pending = qClients.get(sessionId)?.pending().find((mutation) => mutation.id === id);
   const row = (pending?.args as { row?: QueuedMessage } | undefined)?.row;
-  if (pending === undefined || row === undefined || qStatus.get(id) !== "failed") return;
+  if (pending === undefined || row === undefined || qStatus.get(id) !== "failed") return false;
   recoveringFailedSends.add(key);
   try {
     // Save first, then retire the old retry obligation. This never submits the
     // old content to the agent and a storage failure leaves the source intact.
-    const cmid = `recovery-${id}`;
+    const cmid = recoveryDraftCmid(id);
     const existing = qClients.get(sessionId)?.get().drafts.some((draft) => draft.cmid === cmid);
     if (!existing) await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer", cmid });
     await discardQueued(sessionId, id);
-    if (row.cmid !== undefined) patchMessage(sessionId, row.cmid, "drop");
+    if (row.cmid !== undefined) {
+      patchMessage(sessionId, row.cmid, "drop");
+      parkedSends.set(row.cmid, { draftCmid: cmid, text: row.text, attachments: row.attachments.length });
+    }
+    return true;
   } finally { recoveringFailedSends.delete(key); }
+}
+
+/** Park a send whose deadline ended in this session's drafts when its
+ * disposition says so; anything else keeps the held red row. A failed park
+ * leaves the held row in place, so the content is never lost. */
+function parkUnconfirmedSend(sessionId: string, id: string, phase: DeliveryStatus): void {
+  const mutation = qClients.get(sessionId)?.pending().find((m) => m.id === id);
+  if (mutation === undefined) return;
+  const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
+  const refused = qFailure.has(id) || (echoCmid !== undefined && qFailure.has(echoCmid));
+  if (unconfirmedSendDisposition({ mutation: mutation.name, phase, refused }) !== "draft") return;
+  void saveRecoveredSendAsDraft(sessionId, id).then((parked) => {
+    if (!parked) return;
+    reportClientLog("info", "unconfirmed_send_parked", "Unconfirmed message saved to drafts", {
+      session_id: sessionId, mutation_id: id, phase,
+    });
+    notify("Message wasn't delivered. Saved to drafts.", "info");
+  }).catch((error: unknown) => {
+    reportClientLog("warn", "unconfirmed_send_park_failed", error, { session_id: sessionId, mutation_id: id });
+  });
+}
+
+/** A parked send that the agent echoes after all did arrive; drop its draft
+ * unless the user already changed it. */
+function retireParkedDraftOnEcho(sessionId: string, cmid: string): void {
+  const parked = parkedSends.get(cmid);
+  if (parked === undefined) return;
+  parkedSends.delete(cmid);
+  const draft = qClients.get(sessionId)?.get().drafts.find((row) => row.cmid === parked.draftCmid);
+  if (draft === undefined || !lateEchoRetiresRecoveryDraft(parked, draft)) return;
+  void removeDraft(sessionId, draft.id).catch((error: unknown) => {
+    reportClientLog("warn", "parked_draft_retire_failed", error, { session_id: sessionId, mutation_id: cmid });
+  });
 }
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
@@ -3831,6 +3875,10 @@ function restoreQueue(sessionId: string): Promise<void> {
     if (productSessionAbandoned) return;
     forgetSettledHeld(sessionId, held);
     commitQueue(sessionId);
+    // A Hub refusal reason is not persisted, so a held prompt restored from an
+    // earlier page is parked in drafts like a fresh timeout. Not awaited: the
+    // draft write itself waits for this restore to finish.
+    for (const id of held) parkUnconfirmedSend(sessionId, id, "failed");
     if (socketReady) store.resend();
   });
   qRestores.set(sessionId, restore);
@@ -4008,7 +4056,8 @@ function commitQueue(sessionId: string): void {
 }
 
 /** The one way an unconfirmed row reaches its terminal, escapable phase: red
- * chrome with Retry / Return / Discard. Both watchdogs end here. */
+ * chrome with Retry / Return / Discard. Both watchdogs end here; a transcript
+ * prompt is then parked in drafts by `parkUnconfirmedSend`. */
 function failDelivery(sessionId: string, statusIds: readonly string[]): void {
   let changed = false;
   for (const id of statusIds) {
@@ -4048,6 +4097,7 @@ function armQTimers(
       });
       failDelivery(sessionId, statusIds);
       clearOptTimers(mutationId);
+      parkUnconfirmedSend(sessionId, mutationId, "sending");
     }, SEND_TIMEOUT_MS),
   });
 }
@@ -4157,6 +4207,7 @@ function resolveStalledDelivery(
     if (qStatus.get(mutationId) !== phase) return;
   }
   failDelivery(sessionId, statusIds);
+  parkUnconfirmedSend(sessionId, mutationId, phase);
 }
 
 /** Optimistic add to drafts or queue: mutate (id = cmid, so the server echo
