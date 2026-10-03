@@ -8,7 +8,12 @@ export type SyncPhase =
   | "connecting"
   | "waiting"
   | "degraded"
+  // This device has no network at all.
   | "offline"
+  // The network is up but the Cowboy server does not answer (VPN or overlay
+  // down, service stopped). Named apart from `offline` so the copy sends the
+  // user to the right thing to check.
+  | "unreachable"
   | "auth_required"
   | "fenced";
 
@@ -75,7 +80,8 @@ export function deriveSyncPhase(input: SyncStatusInput): SyncPhase {
   if (input.capacity === "waiting" || input.capacity === "channel_limit") {
     return "waiting";
   }
-  if (!input.online || input.attempts >= SYNC_OFFLINE_ATTEMPTS) return "offline";
+  if (!input.online) return "offline";
+  if (input.attempts >= SYNC_OFFLINE_ATTEMPTS) return "unreachable";
   return "connecting";
 }
 
@@ -91,7 +97,9 @@ export function deriveSyncStatus(
     since,
     outbox: input.outbox,
     updateReady: input.updateReady,
-    ...(input.retryAt !== undefined && phase === "connecting" ? { retryAt: input.retryAt } : {}),
+    ...(input.retryAt !== undefined && (phase === "connecting" || phase === "unreachable")
+      ? { retryAt: input.retryAt }
+      : {}),
     ...(input.position !== undefined && phase === "waiting" ? { position: input.position } : {}),
     ...(input.lastLiveAt !== undefined ? { lastLiveAt: input.lastLiveAt } : {}),
   };
@@ -160,6 +168,10 @@ export function syncStatusLabel(status: SyncStatus, now: number): string | null 
       return status.outbox.pending > 0
         ? `Offline · ${countLabel(status.outbox.pending, "queued", "queued")}`
         : "Offline";
+    case "unreachable":
+      return status.outbox.pending > 0
+        ? `Can't reach Cowboy · ${countLabel(status.outbox.pending, "queued", "queued")}`
+        : "Can't reach Cowboy";
     case "auth_required":
       return "Sign in to sync";
     case "fenced":
@@ -185,7 +197,9 @@ export function syncStatusDetail(status: SyncStatus, now: number): string {
     case "degraded":
       return `Last heard from Cowboy ${relativeAge(now - 0, now) === "just now" ? "a moment ago" : "recently"}; waiting for a heartbeat.`;
     case "offline":
-      return `${synced ? `Last synced ${synced}. ` : ""}Everything you write is saved on this device.${queued}`;
+      return `This device is offline; check its network. ${synced ? `Last synced ${synced}. ` : ""}Everything you write is saved on this device.${queued}`;
+    case "unreachable":
+      return `The network is up but the Cowboy server is not answering; check the VPN or the server. ${synced ? `Last synced ${synced}. ` : ""}Everything you write is saved on this device.${queued}`;
     case "auth_required":
       return status.outbox.pending > 0
         ? `${countLabel(status.outbox.pending, "queued message", "queued messages")} will send after you sign in.`
@@ -239,6 +253,7 @@ export function syncStatusTone(
     case "waiting":
     case "degraded":
     case "offline":
+    case "unreachable":
       return "warning";
     case "auth_required":
       return "info";

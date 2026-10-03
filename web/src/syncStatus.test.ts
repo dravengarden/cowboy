@@ -1,4 +1,4 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { assert, assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import {
   attentionCount,
   deriveSyncPhase,
@@ -8,8 +8,10 @@ import {
   relativeAge,
   SYNC_PRESENTATION_DEBOUNCE_MS,
   SYNC_RECOVERED_FLASH_MS,
+  syncStatusDetail,
   syncStatusLabel,
   type SyncStatusInput,
+  syncStatusTone,
   withHeld,
 } from "./syncStatus.ts";
 
@@ -36,7 +38,7 @@ Deno.test("deriveSyncPhase orders fences, auth, liveness, capacity and outages",
   );
   assertEquals(
     deriveSyncPhase({ ...base, connected: false, socket: "none", attempts: 2 }),
-    "offline",
+    "unreachable",
   );
   assertEquals(
     deriveSyncPhase({ ...base, connected: false, socket: "none", online: false }),
@@ -151,4 +153,35 @@ Deno.test("withHeld keeps identity when the held count is unchanged", () => {
   const adjusted = withHeld(status, 2);
   assertEquals(adjusted.outbox.held, 2);
   assertEquals(adjusted.phase, status.phase);
+});
+
+Deno.test("an unanswered server is named apart from a device without network", () => {
+  const now = 10_000;
+  const unreachable = deriveSyncStatus(
+    {
+      ...base,
+      connected: false,
+      socket: "none",
+      attempts: 3,
+      retryAt: now + 4_000,
+      outbox: { pending: 1, held: 0, sessions: ["a"] },
+    },
+    undefined,
+    now,
+  );
+  assertEquals(unreachable.phase, "unreachable");
+  // The countdown survives so the surface can say when the next try is.
+  assertEquals(unreachable.retryAt, now + 4_000);
+  assertEquals(syncStatusLabel(unreachable, now), "Can't reach Cowboy · 1 queued");
+  assert(syncStatusDetail(unreachable, now).includes("server is not answering"));
+  assertEquals(syncStatusTone("unreachable"), "warning");
+
+  // No network outranks attempt counting: the device is the thing to check.
+  const offline = deriveSyncStatus(
+    { ...base, connected: false, socket: "none", online: false, attempts: 5 },
+    undefined,
+    now,
+  );
+  assertEquals(offline.phase, "offline");
+  assert(syncStatusDetail(offline, now).includes("check its network"));
 });

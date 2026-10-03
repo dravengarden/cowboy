@@ -5,6 +5,7 @@ import {
   type DesktopPane,
   useDesktopWorkspace,
 } from "./DesktopWorkspaceController";
+import { DesktopConnectionNotice } from "./DesktopConnectionNotice";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
 import { DesktopReadingModeControl } from "./DesktopReadingModeControl";
@@ -418,6 +419,7 @@ export function DesktopWorkspace({
         >
           Prompt
         </PaneHeader>
+        <DesktopConnectionNotice />
         {prompt}
       </Box>
 

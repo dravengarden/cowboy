@@ -102,6 +102,7 @@ function regionHints(
   status: Status,
   projection: "history" | "explore",
   sourceMode: boolean,
+  live: boolean,
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -146,7 +147,8 @@ function regionHints(
     case "prompt.composer":
       return [
         { keys: "Esc", label: "Normal" },
-        { keys: "Mod+Enter", label: status === "busy" ? "Queue" : "Send" },
+        // Without a live server a send is queued, exactly as while busy.
+        { keys: "Mod+Enter", label: status === "busy" || !live ? "Queue" : "Send" },
         // The label names the destination, not the current state: a hint
         // describes what the key does next.
         {
@@ -235,7 +237,7 @@ export function DesktopStatusLine({
     : [];
   const ordinaryHints: RegionHint[] = [
     ...promptRegions,
-    ...regionHints(focusedRegion, status, projection, sourceMode),
+    ...regionHints(focusedRegion, status, projection, sourceMode, rawSync.phase === "live"),
     ...(focusedRegion === "sessions.list" && itemCount > 0
       ? [{ keys: DESKTOP_SESSION_SLOTS_LABEL, label: "Switch" }]
       : []),
@@ -374,6 +376,8 @@ export function DesktopStatusLine({
             ml: 0.75,
             mr: 1,
             minWidth: 0,
+            // Hints yield space; the connection segment on the right must not.
+            overflow: "hidden",
             color: "text.disabled",
             "@media (max-width: 1180px)": { display: "none" },
           }}
@@ -398,10 +402,30 @@ export function DesktopStatusLine({
         </Stack>
       )}
       <Box sx={{ flex: 1 }} />
-      <Stack direction="row" alignItems="center" divider={<Divider orientation="vertical" flexItem />}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        divider={<Divider orientation="vertical" flexItem />}
+        sx={{ flexShrink: 0 }}
+      >
         <Segment label={status.toUpperCase()} tooltip="Session status" mono />
         <Segment
-          label={syncLabel.toUpperCase()}
+          label={
+            <Stack direction="row" spacing={0.6} alignItems="center">
+              <Box
+                component="span"
+                aria-hidden
+                sx={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  bgcolor: "currentColor",
+                  flexShrink: 0,
+                }}
+              />
+              <Box component="span">{syncLabel.toUpperCase()}</Box>
+            </Stack>
+          }
           color={sync.phase === "live" && sync.outbox.held > 0 ? "warning.main" : `${syncTone}.main`}
           tooltip={syncStatusDetail(sync, now)}
           mono
