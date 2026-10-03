@@ -146,6 +146,17 @@ Owner source `f5096b38` activated successfully on Hawk with passing health check
 Machine, Controller and all 17 worker/keeper PIDs were retained in the bounded
 samples; the host gate's ordinary failed-unit policy remains unchanged.
 
+Ordinary rollback now opens each nonempty predecessor with `ValidateSource`
+and requires the journal's lane before restoring a profile or restarting a
+service. Unavailable, incomplete and wrong-lane predecessors refuse at target
+selection. Machine bootstrap remains a valid ordinary predecessor; explicit
+recovery retains candidate-only admission and never falls back. Interrupted
+recovery can persist its rolling-back intent before this refusal, so it does
+not preserve every structurally valid journal byte. The
+[rollback predecessor release](releases/plugin-rollback-predecessor-2026-10-04.md)
+records three-lane fixtures and successful Hawk owner activation at source
+`8ad13670`, with the 17 worker/keeper PIDs retained in bounded samples.
+
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state
 outright; compatible portable recovery readers remain unadmitted. A finite
