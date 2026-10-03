@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -56,6 +57,13 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         return str(path)
 
     native = args.native_root.resolve()
+    for provider, adapter in [("codex", "codex-adapter/bin/codex-acp"), ("claude", "claude-adapter/bin/claude-agent-acp")]:
+        environment = closed_environment(root / (provider + "-probe-home"))
+        environment["COWBOY_MATRIX_CONFIG"] = config(provider)
+        result = subprocess.run([str(native / adapter), "--version"], env=environment, cwd=root,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        require(result.returncode == 0, "Artifact version probe requires session bindings when Matrix is enabled")
+    checks.append("enrolled_artifact_probes_need_no_native_session_binding")
     codex = native / "codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
     launcher = native / "codex-adapter/app/cowboy-launch.mjs"
     api = Api([{"type": "custom_tool_call", "call_id": "memory-read", "name": "exec", "namespace": "functions", "input": "text(await tools.mcp__matrix__memory_get(" + json.dumps({"id": receipt["id"]}) + "));"}, final("memory-done"), final("corrected"), final("forgotten")])
