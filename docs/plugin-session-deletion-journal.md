@@ -55,3 +55,7 @@ They are not an independently supplied old/new executable matrix, an OS-process
 crash or power-loss simulation, supported-device acceptance or native resume.
 Continuous Session incarnation, worktree ownership and general state leases
 remain separate from this finite terminal-deletion dataset.
+
+The [Hawk reader release](releases/plugin-session-deletion-reader-2026-10-03.md)
+records exact source/build gates, writer-disabled observation and bounded
+production continuity separately from writer admission.
