@@ -157,6 +157,7 @@ build: build-web
 build-machine-bootstrap:
     cargo build --release --locked --no-default-features --features machine-host --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
     cargo build --release --locked --no-default-features --features code-adapter --bin cowboy-code-adapter
+    cargo build --release --locked --bin cowboy-acp-worker
 
 # Native macOS SwiftUI installer manager. Run these on macOS with Xcode's Swift
 # toolchain; build-app packages the existing Machine bootstrap commands.

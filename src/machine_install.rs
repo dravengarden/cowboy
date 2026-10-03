@@ -37,8 +37,14 @@ pub struct InstallArgs {
     display_name: Option<String>,
     #[arg(long = "workspace", required = true)]
     workspaces: Vec<String>,
+    #[arg(long, required_unless_present = "refresh", conflicts_with = "refresh")]
+    enrollment_token: Option<String>,
+    /// Refresh an enrolled Machine without replacing its identity or token.
     #[arg(long)]
-    enrollment_token: String,
+    refresh: bool,
+    /// Permit Service-authorized Plugin lifecycle operations on this Machine.
+    #[arg(long)]
+    plugin_operation_admission: bool,
     #[arg(long)]
     artifact_public_key: Option<PathBuf>,
     #[arg(long)]
@@ -135,7 +141,9 @@ pub async fn register(
         machine_id: machine_id.clone(),
         display_name: display_name.map(str::to_owned),
         workspaces: workspaces.to_vec(),
-        enrollment_token: token.trim().to_owned(),
+        enrollment_token: Some(token.trim().to_owned()),
+        refresh: false,
+        plugin_operation_admission: false,
         artifact_public_key: None,
         machine_binary: None,
         state_dir: Some(state_dir.clone()),
@@ -200,7 +208,9 @@ struct MachineServiceResponse {
 
 async fn fetch_service_id(controller_url: &str) -> Result<String> {
     let endpoint = format!("{controller_url}/api/machine/service");
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?
         .get(endpoint)
         .send()
         .await
@@ -236,11 +246,24 @@ fn bind_service_origin(state_dir: &Path, origin: &str) -> Result<()> {
 }
 
 fn install(args: InstallArgs) -> Result<()> {
+    if args.refresh {
+        let origin = normalize_controller_url(&args.controller_url)?;
+        let service_id = tokio::runtime::Runtime::new()?.block_on(fetch_service_id(&origin))?;
+        anyhow::ensure!(
+            service_id == args.service_id,
+            "refresh Service id does not match the Controller"
+        );
+    }
     let (home, launcher) = prepare_install(&args)?;
     install_background_service(&home, &launcher, &args.service_id, args.no_start)
 }
 
 fn prepare_install(args: &InstallArgs) -> Result<(PathBuf, PathBuf)> {
+    let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+    prepare_install_at(args, &home)
+}
+
+fn prepare_install_at(args: &InstallArgs, home: &Path) -> Result<(PathBuf, PathBuf)> {
     validate_scalar(&args.controller_url)?;
     anyhow::ensure!(
         crate::service_identity::valid_service_id(&args.service_id),
@@ -252,12 +275,31 @@ fn prepare_install(args: &InstallArgs) -> Result<(PathBuf, PathBuf)> {
     for workspace in &args.workspaces {
         validate_scalar(workspace)?;
     }
-    let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
     let state = args.state_dir.clone().map_or_else(
-        || crate::service_identity::service_state_dir(&home, &args.service_id),
+        || crate::service_identity::service_state_dir(home, &args.service_id),
         Ok,
     )?;
     validate_socket_paths(&state)?;
+    let installed = if args.refresh {
+        installed_launcher(args, &state, home)?
+    } else {
+        None
+    };
+    validate_install_mode(args, &state, installed.as_ref())?;
+    let source = machine_host_binary(args.machine_binary.as_deref());
+    let payloads = ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"];
+    for name in payloads {
+        let path = if name == "cowboy-machine" {
+            source.clone()
+        } else {
+            companion_binary(&source, name)
+        };
+        anyhow::ensure!(
+            path.is_file(),
+            "bootstrap bundle is missing {}",
+            path.display()
+        );
+    }
     bind_service_origin(&state, &normalize_controller_url(&args.controller_url)?)?;
     let config = home
         .join(".config/cowboy-machine/services")
@@ -269,40 +311,182 @@ fn prepare_install(args: &InstallArgs) -> Result<(PathBuf, PathBuf)> {
     set_mode(&state, 0o700)?;
     set_mode(&config, 0o700)?;
 
-    let source = machine_host_binary(args.machine_binary.as_deref());
-    anyhow::ensure!(
-        source.is_file(),
-        "cowboy-machine was not found next to this cowboy binary ({})",
-        source.display()
-    );
-    let code_adapter_source = companion_binary(&source, "cowboy-code-adapter");
-    anyhow::ensure!(
-        code_adapter_source.is_file(),
-        "cowboy-code-adapter was not found next to the Machine host ({})",
-        code_adapter_source.display()
-    );
-    let bootstrap = state.join("bootstrap/cowboy-machine");
-    std::fs::copy(&source, &bootstrap)
-        .with_context(|| format!("copying Machine host from {}", source.display()))?;
-    set_mode(&bootstrap, 0o755)?;
-
-    let code_adapter_bootstrap = state.join("bootstrap/cowboy-code-adapter");
-    std::fs::copy(&code_adapter_source, &code_adapter_bootstrap).with_context(|| {
-        format!(
-            "copying Machine code adapter from {}",
-            code_adapter_source.display()
-        )
-    })?;
-    set_mode(&code_adapter_bootstrap, 0o755)?;
+    for name in payloads {
+        let path = if name == "cowboy-machine" {
+            source.clone()
+        } else {
+            companion_binary(&source, name)
+        };
+        atomic_replace(&state.join("bootstrap").join(name), 0o755, |file| {
+            let mut input = std::fs::File::open(&path)?;
+            std::io::copy(&mut input, file)?;
+            Ok(())
+        })?;
+    }
 
     let token = state.join("enrollment-token");
-    std::fs::write(&token, &args.enrollment_token)?;
-    set_mode(&token, 0o600)?;
-    let launcher = runtime.join(format!("cowboy-machine-launch-{}", args.service_id));
-    std::fs::write(&launcher, launcher_script(args, &state, &token))?;
-    set_mode(&launcher, 0o755)?;
+    if let Some(value) = &args.enrollment_token {
+        atomic_write(&token, value.as_bytes(), 0o600)?;
+    }
+    let launcher = installed.as_ref().map_or_else(
+        || runtime.join(format!("cowboy-machine-launch-{}", args.service_id)),
+        |installed| installed.path.clone(),
+    );
+    let mut script = launcher_script(args, &state, &token);
+    if let Some(installed) = &installed {
+        for (flag, relative) in [
+            ("--socket", MACHINE_SOCKET),
+            ("--provider-usage-socket", USAGE_SOCKET),
+            ("--code-adapter-socket", CODE_SOCKET),
+            ("--zed-adapter-socket", ZED_SOCKET),
+        ] {
+            if let Some(value) = installed.value(flag) {
+                script = script.replace(
+                    &shell_quote(&state.join(relative).display().to_string()),
+                    &shell_quote(value),
+                );
+            }
+        }
+    }
+    atomic_write(&launcher, script.as_bytes(), 0o755)?;
 
-    Ok((home, launcher))
+    Ok((home.to_path_buf(), launcher))
+}
+
+struct InstalledLauncher {
+    path: PathBuf,
+    arguments: Vec<String>,
+}
+
+impl InstalledLauncher {
+    fn value(&self, flag: &str) -> Option<&str> {
+        self.arguments
+            .windows(2)
+            .find(|pair| pair[0] == flag)
+            .map(|pair| pair[1].as_str())
+    }
+}
+
+fn installed_launcher(
+    args: &InstallArgs,
+    state: &Path,
+    home: &Path,
+) -> Result<Option<InstalledLauncher>> {
+    for name in [
+        format!("cowboy-machine-launch-{}", args.service_id),
+        "cowboy-machine-launch".to_owned(),
+    ] {
+        let path = home.join(".local/bin").join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let script = std::fs::read_to_string(&path)?;
+        let command = script
+            .lines()
+            .find(|line| line.starts_with("exec "))
+            .context("installed launcher has no exec command")?;
+        let installed = InstalledLauncher {
+            path,
+            arguments: shell_words::split(command)
+                .context("decoding installed launcher arguments")?,
+        };
+        anyhow::ensure!(
+            installed.value("--service-id") == Some(args.service_id.as_str()),
+            "installed launcher belongs to a different Service"
+        );
+        anyhow::ensure!(
+            installed.value("--state-dir") == state.to_str(),
+            "installed launcher uses a different state directory"
+        );
+        anyhow::ensure!(
+            installed
+                .value("--controller-url")
+                .map(normalize_controller_url)
+                .transpose()?
+                == Some(normalize_controller_url(&args.controller_url)?),
+            "installed launcher uses a different Controller origin"
+        );
+        return Ok(Some(installed));
+    }
+    Ok(None)
+}
+
+fn validate_install_mode(
+    args: &InstallArgs,
+    state: &Path,
+    installed: Option<&InstalledLauncher>,
+) -> Result<()> {
+    if args.refresh {
+        anyhow::ensure!(
+            args.enrollment_token.is_none(),
+            "refresh cannot enroll again"
+        );
+        anyhow::ensure!(
+            state.join("identity_ed25519").is_file(),
+            "refresh requires an existing Machine identity in --state-dir"
+        );
+        let origin = match std::fs::read_to_string(state.join("service-origin")) {
+            Ok(origin) => origin,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => installed.and_then(|launcher| launcher.value("--controller-url")).context("refresh requires an existing Service origin binding or matching installed launcher")?.to_owned(),
+            Err(error) => return Err(error.into()),
+        };
+        anyhow::ensure!(
+            origin.trim() == normalize_controller_url(&args.controller_url)?,
+            "refresh cannot change the Service origin"
+        );
+        let machine_id = std::fs::read_to_string(state.join("machine-id"))
+            .context("refresh requires an enrolled Machine id")?;
+        anyhow::ensure!(
+            !machine_id.trim().is_empty(),
+            "refresh requires a nonempty enrolled Machine id"
+        );
+        if let Some(requested) = &args.machine_id {
+            anyhow::ensure!(
+                requested == machine_id.trim(),
+                "refresh cannot change the enrolled Machine id"
+            );
+        }
+    } else {
+        anyhow::ensure!(
+            args.enrollment_token
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "enrollment token is required"
+        );
+    }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    use std::io::Write as _;
+    atomic_replace(path, mode, |file| {
+        file.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+fn atomic_replace(
+    path: &Path,
+    mode: u32,
+    write: impl FnOnce(&mut std::fs::File) -> Result<()>,
+) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let temporary = path.with_extension(format!("stage-{}", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&temporary)?;
+        write(&mut file)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn install_background_service(
@@ -311,6 +495,14 @@ fn install_background_service(
     service_id: &str,
     no_start: bool,
 ) -> Result<()> {
+    let service_id = if launcher
+        .file_name()
+        .is_some_and(|name| name == "cowboy-machine-launch")
+    {
+        ""
+    } else {
+        service_id
+    };
     if cfg!(target_os = "macos") {
         install_launch_agent(home, launcher, service_id, no_start)
     } else if cfg!(target_os = "linux") {
@@ -335,8 +527,6 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         state.display().to_string(),
         "--workspace-config".to_owned(),
         state.join("config/workspaces.json").display().to_string(),
-        "--enrollment-token-file".to_owned(),
-        token.display().to_string(),
         "--socket".to_owned(),
         state.join(MACHINE_SOCKET).display().to_string(),
         "--provider-usage-socket".to_owned(),
@@ -348,6 +538,15 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         "--max-sessions".to_owned(),
         args.max_sessions.max(1).to_string(),
     ]);
+    if !args.refresh {
+        command.extend([
+            "--enrollment-token-file".to_owned(),
+            token.display().to_string(),
+        ]);
+    }
+    if args.plugin_operation_admission {
+        command.push("--plugin-operation-admission".to_owned());
+    }
     if args.draining {
         command.push("--draining".to_owned());
     }
@@ -366,8 +565,9 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
     let _ = writeln!(
         script,
-        "PATH={}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
-        shell_quote(&state.join("components/commands").display().to_string())
+        "PATH={}:{}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
+        shell_quote(&state.join("components/commands").display().to_string()),
+        shell_quote(&state.join("bootstrap").display().to_string())
     );
     for detect in crate::plugin_runtime_args::path_detect() {
         let cmd = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD");
@@ -423,11 +623,16 @@ fn install_systemd_user(
         "[Unit]\nDescription=Cowboy Machine\nAfter=network-online.target\n\n[Service]\nExecStart={}\nRestart=on-failure\nRestartSec=2\nSuccessExitStatus=75\n\n[Install]\nWantedBy=default.target\n",
         launcher.display()
     );
-    let unit_name = format!("cowboy-machine-{service_id}.service");
+    let unit_name = if service_id.is_empty() {
+        "cowboy-machine.service".to_owned()
+    } else {
+        format!("cowboy-machine-{service_id}.service")
+    };
     std::fs::write(unit_dir.join(&unit_name), unit)?;
     if !no_start {
         checked("systemctl", &["--user", "daemon-reload"])?;
-        checked("systemctl", &["--user", "enable", "--now", &unit_name])?;
+        checked("systemctl", &["--user", "enable", &unit_name])?;
+        checked("systemctl", &["--user", "restart", &unit_name])?;
     }
     Ok(())
 }
@@ -440,7 +645,11 @@ fn install_launch_agent(
 ) -> Result<()> {
     let agent_dir = home.join("Library/LaunchAgents");
     std::fs::create_dir_all(&agent_dir)?;
-    let label = format!("xyz.stormbird.cowboy-machine.{service_id}");
+    let label = if service_id.is_empty() {
+        "xyz.stormbird.cowboy-machine".to_owned()
+    } else {
+        format!("xyz.stormbird.cowboy-machine.{service_id}")
+    };
     let plist = launch_agent_plist(&label, launcher);
     let path = agent_dir.join(format!("{label}.plist"));
     std::fs::write(&path, plist)?;
@@ -524,6 +733,129 @@ fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn refresh_args(state: &Path, source: &Path) -> InstallArgs {
+        InstallArgs::try_parse_from([
+            "installer",
+            "--controller-url",
+            "https://cowboy.example",
+            "--service-id",
+            "svc-0123456789abcdef0123456789abcdef",
+            "--workspace",
+            "home=/work",
+            "--refresh",
+            "--no-start",
+            "--plugin-operation-admission",
+            "--state-dir",
+            state.to_str().unwrap(),
+            "--machine-binary",
+            source.to_str().unwrap(),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn refresh_preserves_identity_token_and_signed_commands() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let state = root.path().join("state");
+        let bundle = root.path().join("bundle");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(state.join("components/commands")).unwrap();
+        for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
+            std::fs::write(bundle.join(name), name).unwrap();
+        }
+        std::fs::write(state.join("identity_ed25519"), "existing private key").unwrap();
+        std::fs::write(state.join("machine-id"), "mac").unwrap();
+        std::fs::write(state.join("service-origin"), "https://cowboy.example\n").unwrap();
+        std::fs::write(state.join("enrollment-token"), "do not replace").unwrap();
+        std::fs::write(
+            state.join("components/commands/cowboy-machine"),
+            "signed host",
+        )
+        .unwrap();
+        let args = refresh_args(&state, &bundle.join("cowboy-machine"));
+        let (_, launcher) = prepare_install_at(&args, root.path()).unwrap();
+        let script = std::fs::read_to_string(&launcher).unwrap();
+        assert!(!script.contains("--enrollment-token-file"));
+        assert!(script.contains("--plugin-operation-admission"));
+        assert_eq!(
+            std::fs::read_to_string(state.join("identity_ed25519")).unwrap(),
+            "existing private key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(state.join("enrollment-token")).unwrap(),
+            "do not replace"
+        );
+        assert_eq!(
+            std::fs::read_to_string(state.join("components/commands/cowboy-machine")).unwrap(),
+            "signed host"
+        );
+        assert_eq!(
+            std::fs::read_to_string(state.join("bootstrap/cowboy-acp-worker")).unwrap(),
+            "cowboy-acp-worker"
+        );
+        let legacy = root.path().join(".local/bin/cowboy-machine-launch");
+        let legacy_socket = state.join("run/cowboy-machine.sock");
+        std::fs::rename(&launcher, &legacy).unwrap();
+        std::fs::write(
+            &legacy,
+            script.replace(
+                &shell_quote(&state.join(MACHINE_SOCKET).display().to_string()),
+                &shell_quote(&legacy_socket.display().to_string()),
+            ),
+        )
+        .unwrap();
+        std::fs::remove_file(state.join("service-origin")).unwrap();
+        let (_, refreshed) = prepare_install_at(&args, root.path()).unwrap();
+        assert_eq!(refreshed, legacy);
+        assert!(
+            std::fs::read_to_string(refreshed)
+                .unwrap()
+                .contains(legacy_socket.to_str().unwrap())
+        );
+        assert!(!launcher.exists());
+        let mut wrong = args;
+        wrong.machine_id = Some("another-machine".to_owned());
+        assert!(prepare_install_at(&wrong, root.path()).is_err());
+        wrong.machine_id = None;
+        wrong.controller_url = "https://other.example".to_owned();
+        assert!(prepare_install_at(&wrong, root.path()).is_err());
+    }
+
+    #[test]
+    fn refresh_requires_enrollment_and_a_complete_bundle_before_writing() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let state = root.path().join("state");
+        let args = refresh_args(&state, &root.path().join("cowboy-machine"));
+        assert!(prepare_install_at(&args, root.path()).is_err());
+        assert!(!state.exists());
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(state.join("identity_ed25519"), "key").unwrap();
+        std::fs::write(state.join("machine-id"), "mac").unwrap();
+        std::fs::write(state.join("service-origin"), "https://cowboy.example").unwrap();
+        assert!(prepare_install_at(&args, root.path()).is_err());
+        assert!(!state.join("bootstrap").exists());
+    }
+
+    #[test]
+    fn installer_requires_exactly_one_enrollment_mode() {
+        let base = [
+            "installer",
+            "--controller-url",
+            "https://cowboy.example",
+            "--service-id",
+            "svc-0123456789abcdef0123456789abcdef",
+            "--workspace",
+            "home=/work",
+        ];
+        assert!(InstallArgs::try_parse_from(base).is_err());
+        let mut enroll = base.to_vec();
+        enroll.extend(["--enrollment-token", "one-time"]);
+        let args = InstallArgs::try_parse_from(&enroll).unwrap();
+        assert!(!args.plugin_operation_admission);
+        enroll.push("--refresh");
+        assert!(InstallArgs::try_parse_from(enroll).is_err());
+    }
+
     #[test]
     fn launcher_prefers_the_active_signed_generation() {
         let args = InstallArgs {
@@ -532,7 +864,9 @@ mod tests {
             machine_id: Some("mac".to_owned()),
             display_name: None,
             workspaces: vec!["main=/work/main".to_owned()],
-            enrollment_token: "secret".to_owned(),
+            enrollment_token: Some("secret".to_owned()),
+            refresh: false,
+            plugin_operation_admission: true,
             artifact_public_key: None,
             machine_binary: None,
             state_dir: None,
@@ -548,6 +882,8 @@ mod tests {
         assert!(script.contains("/opt/homebrew/bin"));
         assert!(script.contains("--enrollment-token-file"));
         assert!(script.contains("--machine-id"));
+        assert!(script.contains("--plugin-operation-admission"));
+        assert!(script.contains("'/state/bootstrap':"));
         assert!(script.contains("COWBOY_ACP_GROK_CMD"));
         assert!(script.contains("--experimental-memory --rules"));
         assert!(script.contains("Read and follow the closest AGENTS.md"));
@@ -562,7 +898,9 @@ mod tests {
             machine_id: None,
             display_name: None,
             workspaces: vec!["home=/home/me".to_owned()],
-            enrollment_token: "secret".to_owned(),
+            enrollment_token: Some("secret".to_owned()),
+            refresh: false,
+            plugin_operation_admission: false,
             artifact_public_key: None,
             machine_binary: None,
             state_dir: None,
