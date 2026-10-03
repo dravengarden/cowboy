@@ -64,7 +64,8 @@ export function MachineSetupGate({
   useBootReady(setupNeeded);
 
   if (!presented.loaded) {
-    const unreachable = slow && (sync.phase === "offline" || sync.phase === "connecting");
+    const unreachable = slow &&
+      (sync.phase === "offline" || sync.phase === "unreachable" || sync.phase === "connecting");
     // The same skeleton the document painted: a first contact keeps one shape
     // until the app replaces it. The explanation appears over it, in place.
     return (
@@ -73,7 +74,9 @@ export function MachineSetupGate({
           <>
             <Typography sx={{ fontSize: 13, maxWidth: 320 }}>
               {sync.phase === "offline"
-                ? "Cowboy is offline and this device has nothing cached yet."
+                ? "This device is offline and has nothing cached yet."
+                : sync.phase === "unreachable"
+                ? "Can't reach the Cowboy server, and this device has nothing cached yet."
                 : "Still trying to reach Cowboy…"}
             </Typography>
             <Button

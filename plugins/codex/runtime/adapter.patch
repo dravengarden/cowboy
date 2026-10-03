@@ -32,7 +32,7 @@ diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
 
      let codex: ChildProcessWithoutNullStreams;
 -    if (codexPath) {
-+    if (spawnEnv['COWBOY_EXECUTION_DESCRIPTOR']) {
++    if (executionBridge) {
 +        codex = spawn(process.execPath, [executionBridge!, '--cowboy-private-cli', 'app-server'], {env: spawnEnv});
 +    } else if (codexPath) {
          codex = process.platform === 'win32'

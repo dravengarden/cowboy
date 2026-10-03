@@ -245,7 +245,8 @@ type SyncPhase =
   | "connecting"      // socket opening or backoff wait; retryAt
   | "waiting"         // client_capacity waiting/channel_limit; position
   | "degraded"        // socket open, heartbeat older than 30 s or repeated fetch failures
-  | "offline"         // navigator offline, or attempts >= 2 without success
+  | "offline"         // navigator offline: this device has no network
+  | "unreachable"     // network up, but attempts >= 2 without reaching the server
   | "auth_required"   // 4001 or 401; local data preserved
   | "fenced";         // dataset changed; reload required
 
@@ -345,6 +346,16 @@ Queued rows add the authored time ("Written 14:02 · sends when online").
 composer) and Discard. `rejected` rows show the server reason and the
 actions that fit it (see the conflict catalog).
 
+A transcript prompt whose acknowledgement or stall deadline ends without a
+Hub refusal is not left in the transcript as a red row. Its fate is unknown
+and the conversation has often moved on, sometimes from another device, so it
+is parked in the session's drafts (cmid `recovery-<id>`) before its local
+retry record is retired, with a quiet "Saved to drafts" notice. It is never
+resubmitted automatically. If the original echoes later, the parked draft is
+removed unless the user already edited it. Hub refusals, a wedged local write
+and queue edits or moves stay `held` with their inline chrome; a draft save
+failure also leaves the held row in place.
+
 Earlier unconfirmed sends are resolved at the next authored send, before the
 new message enters the durable outbox or reaches the Agent. A compact decision
 shows a short text preview and attachment count, without internal image tokens:
@@ -380,9 +391,21 @@ They do not raise the Mobile connection pill or add another session-list badge.
 
 **Status line segment.** Always present, next to connection and worker state:
 `● Live`, `◌ Reconnecting · 4 s`, `⏳ Waiting for a seat (2nd)`,
-`⊘ Offline · 2 queued`, `⚠ 1 needs attention`. Tooltip carries last synced
-time and the retry countdown. Click opens the command palette filtered to
+`⊘ Offline · 2 queued`, `⊘ Can't reach Cowboy`, `⚠ 1 needs attention`, led
+by a dot in the phase tone. Tooltip carries last synced time and the retry
+countdown. Region hints yield width before this segment does, so a narrow
+window never clips the connection state. Click opens the command palette filtered to
 `Reconnect now`, `Retry held sends`, `Reload app`, `Update now`.
+
+**Connection notice.** The status line alone was too quiet: a lasting outage
+went unnoticed until a send sat waiting. Once `offline`, `unreachable`,
+`degraded` or `waiting` outlasts the presentation debounce, a tinted strip
+sits at the top of the prompt pane, where the eyes are when writing. It says
+whether the device or the server is the thing to check, the retry countdown,
+the last sync age and what happens to queued messages, with Retry now; on
+recovery it flashes "Reconnected" and leaves. A short `connecting` blip stays
+in the status line only. While the server is not live the send button and its
+shortcut hint read "Queue", because that is what a send does.
 
 **Banners.** Only sign-in required, dataset changed, and update ready. The
 update banner no longer counts down while the user is composing; it fills with
@@ -482,7 +505,8 @@ no cached predecessor falls through to the ordinary forward recovery.
 | `connecting` | Reconnecting… | Retrying in 4 s. Your messages will send automatically. |
 | `waiting` | Waiting for a seat (2nd) | Another client holds this account's active seat. |
 | `degraded` | Connection unstable | Last heard from Cowboy 45 s ago. |
-| `offline` | Offline · 2 queued | Last synced 3 min ago. Everything you write is saved on this device. |
+| `offline` | Offline · 2 queued | This device is offline; check its network. Last synced 3 min ago. Everything you write is saved on this device. |
+| `unreachable` | Can't reach Cowboy · 2 queued | The network is up but the Cowboy server is not answering; check the VPN or the server. Last synced 3 min ago. Everything you write is saved on this device. |
 | `auth_required` | Sign in to sync | 3 queued messages will send after you sign in. |
 | `fenced` | Reload required | This device was signed in as a different account. |
 | reconnect flash | Synced | |
@@ -514,7 +538,7 @@ and fixes each with a server outcome and a presentation.
 | 15 | Two tabs, one device | atomic outbox deltas (existing); replica writes guarded by `lastSeq` | none |
 | 16 | Client parked by capacity on reconnect | `waiting` with position; obligations stay queued | pill "Waiting for a seat (2nd)" |
 | 17 | Replay partially fails with an unaddressed broadcast error | addressed results replace broadcast errors for client-originated commands | only the originating row shows the reason; other clients are not toasted |
-| 18 | Held row after reload | `held` persisted in `session:<sid>:delivery` | stays held; never auto-resent |
+| 18 | Held row after reload | `held` persisted in `session:<sid>:delivery` | a held transcript prompt is parked in drafts; other rows stay held; never auto-resent |
 | 19 | Composer draft with images hits `localStorage` quota | drafts move to the dataset-scoped IndexedDB with text mirrored to `localStorage` for synchronous seed | no silent image loss; a pending paste placeholder is still lost on crash and stays documented |
 | 20 | Update becomes ready mid-composition | update policy above | no reload on its own; the bar narrates its download and stays pressable |
 

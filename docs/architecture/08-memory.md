@@ -1,29 +1,33 @@
-# Agent-owned memory boundary
+# Matrix memory boundary
 
-cowboy does not implement an agent-memory store. It launches each agent as the
-human user with that runtime's native home. Codex uses the normal `CODEX_HOME`;
-Grok uses `~/.grok` with its experimental native memory enabled for Cowboy
-sessions. Both stores remain owned by their agent runtime.
+Matrix owns long-term extraction, consolidation, retrieval, revision, forgetting
+and checkpointing. It is a separate product and filesystem instance repository,
+not a Cowboy database table or Controller endpoint. Native agents still own
+their conversation history, compaction, authentication and execution.
 
-This is a deliberate ownership boundary:
+The standard Codex and Claude Plugins can opt in through a private runtime-host
+configuration. Their exact signed adapters disable native automatic memory,
+recall bounded historical context before a user turn, provide Matrix MCP tools,
+and durably queue public observations for Matrix's background worker. They do
+not read or rewrite native memory databases. Existing sessions retain their
+recorded Plugin generation; publication cannot retrofit a running process.
 
-- Codex and Grok each own memory extraction, consolidation, relevance
-  selection, storage, per-task controls, and rate-limit policy.
-- Repository guidance that must always apply belongs in `AGENTS.md`, checked-in
-  documentation, tests, or hooks.
-- Reusable procedures belong in skills.
-- Active work belongs in the current thread, Codex Goal mode, or the harness
-  task graph.
-- cowboy owns only session transport, persistence, process lifetime, and the
-  client-facing control plane.
+For OVH runtime with Hawk/Falcon execution, Matrix requests and its outbox stay
+on OVH. The execution descriptor supplies executor and workspace identity.
+Explicit host mappings join those registrations to one logical Matrix project.
+The Matrix server independently fixes user/Provider/runtime and checks grants.
 
-There are no cowboy memory CLI commands, HTTP endpoints, background janitor
-sessions, reconcile loops, or scheduled tidy jobs. Generated memory under
-`~/.codex` and `~/.grok/memory` is tool-owned state: cowboy neither reads nor
-mutates it. Columbus may audit follower stores read-only for stale filesystem
-references, but it does not bridge or rebuild them.
+`cowboy.memory-client` contains only bounded delivery. Codex and Claude own
+their native protocol integration. Grok is deferred and retains native memory.
+DeepSeek variants stay isolated and never read standard Codex/Claude Matrix
+configuration, credentials or stores.
 
-The old in-process mnemosyne port was removed because it duplicated Codex's
-native capability and depended on a second agent session to judge the first
-agent's generated notes. Its legacy store can remain offline for rollback or
-manual knowledge promotion, but it is never loaded into a cowboy session.
+Required guidance belongs in AGENTS.md, documentation, tests and hooks;
+reusable procedures belong in skills. Memory is fallible historical evidence
+and cannot override current instructions or observed state. Failed recall gives
+an unavailable marker, with no stale cache or native-memory fallback.
+Completed observations remain in a private bounded outbox during outages.
+
+See [configuration and acceptance](../matrix-memory.md) and the independent
+[Matrix product](https://github.com/dravengarden/matrix). The `matrix-ovh`
+instance owns its access configuration, memory journal and Git checkpoints.

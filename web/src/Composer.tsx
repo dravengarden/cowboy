@@ -1398,6 +1398,9 @@ export function ComposerWorkspace({
 
   const busy = status === "busy";
   const starting = status === "starting";
+  // Without a live server a send is queued until Cowboy is reachable, so the
+  // button names that outcome instead of promising an immediate send.
+  const serverConnected = useConnected();
   // A compaction is running right now: the turn is busy AND the live tail is
   // Claude Code's "Compacting..." notice (covers both a hand-fired /compact and
   // the agent's own auto-compaction). Drives the Compact button's disabled +
@@ -2812,7 +2815,7 @@ export function ComposerWorkspace({
                     size="small"
                     disableElevation
                     startIcon={<Send fontSize="small" />}
-                    aria-label={busy || starting ? "queue message" : "send"}
+                    aria-label={busy || starting || !serverConnected ? "queue message" : "send"}
                     disabled={!sendable || submitFeedback.pending}
                     aria-busy={submitFeedback.pending || undefined}
                     onClick={(): void => submitWithFeedback()}
@@ -2826,12 +2829,14 @@ export function ComposerWorkspace({
                   >
                     {submitFeedback.progress
                       ? <CircularProgress size={16} color="inherit" />
-                      : busy || starting
+                      : busy || starting || !serverConnected
                       ? "Queue"
                       : "Send"}
                   </Button>,
                   `${MOD_LABEL}↵`,
-                  `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`,
+                  !serverConnected
+                    ? `Queue until Cowboy is reachable · ${MOD_LABEL}Enter`
+                    : `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`,
                   sendable,
                 )}
               </Stack>

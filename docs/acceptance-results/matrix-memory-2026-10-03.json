@@ -1,0 +1,979 @@
+{
+  "schema": "cowboy.matrix-release-acceptance/v1",
+  "date": "2026-10-03",
+  "runtime_source_revision": "c4e7d418aa81ffa2cce6820e11c535ddde2f2799",
+  "integrated_revision": "3eab9425",
+  "production": {
+    "schema": "matrix.production-activation/v1",
+    "observed_at": "2026-10-03T08:41:13.358163+00:00",
+    "instance": "/home/ubuntu/matrix-ovh",
+    "product_revision": "55eaa3f22543489ef13c20c933e5fa6de34c52d2",
+    "version": "0.1.1",
+    "storage_schema": 1,
+    "release_sha256": "f4628e58dbc4dd23d1c727721273b6cc1b12dde1036f76d9fedc36dab0bd88a8",
+    "health": {
+      "ready": true,
+      "version": "0.1.1"
+    },
+    "units": {
+      "matrix-server.service": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "772754",
+        "NRestarts": "0"
+      },
+      "matrix-worker.service": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "772757",
+        "NRestarts": "0"
+      },
+      "cowboy-machine-svc-4e4d5154f3df9aa109d7d841dd925fd7.service": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "394847",
+        "NRestarts": "0"
+      }
+    },
+    "clients": {
+      "codex": {
+        "mode": "0o600",
+        "projects": 55,
+        "machines": [
+          "falcon",
+          "hawk"
+        ]
+      },
+      "claude": {
+        "mode": "0o600",
+        "projects": 55,
+        "machines": [
+          "falcon",
+          "hawk"
+        ]
+      }
+    },
+    "checkpoint": {
+      "at": "2026-10-03T08:41:10.715128+00:00",
+      "changed": true,
+      "pushed": false,
+      "revision": "27a8bc76f695f7a2c349577215ccd3c82cf881d4",
+      "sequence": 5
+    },
+    "git_head": "27a8bc76f695f7a2c349577215ccd3c82cf881d4",
+    "git_clean": true,
+    "remote_names": [],
+    "push_enabled": false,
+    "upgrade": {
+      "after": {
+        "at": "2026-10-03T08:28:20.202275+00:00",
+        "changed": true,
+        "pushed": false,
+        "revision": "3ad494a6311bbf0834a670dcb1b278c153d2095a",
+        "sequence": 1
+      },
+      "at": "2026-10-03T08:28:20.180698+00:00",
+      "before": {
+        "at": "2026-10-03T08:28:19.686789+00:00",
+        "changed": false,
+        "pushed": false,
+        "revision": "04c64e120cb2d561d354778635a219a1e6457b37",
+        "sequence": 1
+      },
+      "cowboy_restarted": false,
+      "previous_revision": "36fc7aca13fe7e6028e4d8c71b2650f1571cf01a",
+      "product_revision": "55eaa3f22543489ef13c20c933e5fa6de34c52d2",
+      "sha256": "f4628e58dbc4dd23d1c727721273b6cc1b12dde1036f76d9fedc36dab0bd88a8",
+      "storage_schema": 1,
+      "version": "0.1.1"
+    },
+    "legacy_matrix_preserved": true
+  },
+  "installed": [
+    {
+      "plugin_id": "claude-code",
+      "plugin_version": "3.4.3",
+      "plugin_kind": "agent_provider",
+      "generation_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+      "installation_revision": "installation-e736a9e444db7dd5aca423cb508179cc1747d7b4211ac231ac532592b14d3702",
+      "contract_fingerprint": "sha256:6347dfb886afb9df4b31b36ff5819ae6b720c1bba64c5b13d200f02a5c73fc53",
+      "state": "active",
+      "rollback_generation_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56",
+      "active_session_leases": 0,
+      "auth_generation": 54,
+      "replica_state": "current",
+      "materialization_state": "current"
+    },
+    {
+      "plugin_id": "codex",
+      "plugin_version": "3.3.1",
+      "plugin_kind": "agent_provider",
+      "generation_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+      "installation_revision": "installation-e199b6e6f7f2d727ca33381c23319a42dfac7c65865d1b1b038bdbefd5be730f",
+      "contract_fingerprint": "sha256:4cbe55dd625b0562cfeea1c18e126ce13c74017fedabcc2b013c1f8de1beaf0a",
+      "state": "active",
+      "rollback_generation_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c",
+      "active_session_leases": 0,
+      "auth_generation": 9,
+      "replica_state": "current",
+      "materialization_state": "current"
+    }
+  ],
+  "installation_operations": {
+    "codex": {
+      "requires_reconciliation": false,
+      "operations": [
+        {
+          "evidence_schema": 2,
+          "machine_receipt": {
+            "state": "applied",
+            "revision": "installation-e199b6e6f7f2d727ca33381c23319a42dfac7c65865d1b1b038bdbefd5be730f"
+          },
+          "operation_id": "ovh-matrix-codex-3-3-1-1790563075662",
+          "phase": "completed",
+          "problem": null,
+          "attention_from": null,
+          "plugin_kind": "agent_provider",
+          "plugin_version": "3.3.1",
+          "generation_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+          "created_at_ms": 1791015300212,
+          "updated_at_ms": 1791015493308
+        },
+        {
+          "evidence_schema": 2,
+          "machine_receipt": {
+            "state": "unknown",
+            "phase": "staging",
+            "reason": "effect_failure"
+          },
+          "operation_id": "ovh-matrix-codex-3-3-0-1790563075662",
+          "phase": "needs_attention",
+          "problem": "unknown_machine_outcome",
+          "attention_from": "installing",
+          "plugin_kind": "agent_provider",
+          "plugin_version": "3.3.0",
+          "generation_digest": "sha256:ce7c32301e63ebef8ad558f7ed7dc48bbe04279e1fcc10618e33c8341e1a9ea3",
+          "created_at_ms": 1791014226309,
+          "updated_at_ms": 1791014393429
+        }
+      ]
+    },
+    "claude": {
+      "requires_reconciliation": false,
+      "operations": [
+        {
+          "evidence_schema": 2,
+          "machine_receipt": {
+            "state": "applied",
+            "revision": "installation-e736a9e444db7dd5aca423cb508179cc1747d7b4211ac231ac532592b14d3702"
+          },
+          "operation_id": "ovh-matrix-claude-3-4-3-1790563075662",
+          "phase": "completed",
+          "problem": null,
+          "attention_from": null,
+          "plugin_kind": "agent_provider",
+          "plugin_version": "3.4.3",
+          "generation_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+          "created_at_ms": 1791015537510,
+          "updated_at_ms": 1791015764067
+        }
+      ]
+    }
+  },
+  "controller": {
+    "pid": 1998362,
+    "restarts": 0,
+    "activated_by_task": false
+  },
+  "machine": {
+    "id": "ovh",
+    "status": "online",
+    "connected": true,
+    "schedulable": true,
+    "active_sessions": 3
+  },
+  "gates": {
+    "matrix_tests": 33,
+    "cowboy_check_compact": "passed",
+    "integrated_web_tests": 2004,
+    "nix_package": "matrix-memory-0.1.1"
+  },
+  "conformance": {
+    "memory-native-v011": {
+      "schema": "cowboy.matrix-native-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "enrolled_artifact_probes_need_no_native_session_binding",
+        "packaged_codex_native_http_mcp_and_recall",
+        "packaged_codex_completed_turn_capture",
+        "packaged_claude_native_http_mcp_and_shared_recall"
+      ],
+      "not_checked": [
+        "remote execution placement",
+        "live model quality",
+        "native-memory baseline"
+      ]
+    },
+    "codex-matrix-execution-final": {
+      "schema": "cowboy.execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "long_state_path_uses_private_short_socket",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "provider_refuses_environment_override",
+        "target_image_read_reaches_native_model_input",
+        "background_job_survives_lost_reply_and_35_second_transport_gap",
+        "cancel_reaches_original_target_job_without_replay",
+        "native_apply_patch_and_command_use_target",
+        "runtime_files_unchanged",
+        "native_target_instructions",
+        "cold_native_resume_automatically_rebinds_each_turn",
+        "cold_resume_retains_history_without_effect_replay",
+        "global_environment_config_unchanged",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "matrix_memory_uses_runtime_service_with_bound_target_scope",
+        "matrix_remote_turns_are_durably_captured",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "launcher_sha256": "bb5360dae4551a880220022c248af8a477d3f7713e3236cd56c6d6805ca37738",
+      "packaged_bridge_sha256": "9528b2fe5ea8c9947f48e7a89d6e08c7ef3dea2358f62cb52ea21501f3702153",
+      "packaged_adapter_sha256": "2fa6ed1a85b8e95b5919828200a59c5dd184b88d1e89066cc56fd5c868d4dedf",
+      "scripted_api_requests": 13,
+      "real_model_requests": 0,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "authenticated_enrolled_transport",
+        "cross_host_network",
+        "signed_provider_release",
+        "subscription_inference",
+        "inline_user_attachments",
+        "native_nested_agents"
+      ]
+    },
+    "claude-matrix-execution-final": {
+      "schema": "cowboy.claude-execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "native_control_cannot_replace_bound_execution",
+        "module_readiness_uses_no_model_request",
+        "native_tools_use_target_files_and_processes_without_mcp",
+        "runtime_context_and_guidance_are_replaced",
+        "unicode_quotes_crlf_bytes_preserved",
+        "stale_edit_is_refused",
+        "target_image_enters_model_context",
+        "background_cancel_settles",
+        "bounded_large_read_stays_in_target_tool_result",
+        "native_notebook_edit_preserves_metadata",
+        "native_read_observes_retained_task_output",
+        "lost_start_receipt_and_transport_outage_do_not_replay",
+        "cold_native_resume_preserves_context_reads_and_effects",
+        "background_process_handle_survives_native_resume",
+        "real_compaction_and_next_turn_preserve_target_context",
+        "cold_resume_after_compaction_has_no_runtime_file_locators",
+        "independent_native_searches_execute_concurrently",
+        "native_interrupt_stops_foreground_target_process",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "hot_effort_configuration_preserves_bound_execution",
+        "broken_module_refused_before_model_request",
+        "bare_mode_refused_without_changing_authentication",
+        "malformed_result_denies_without_native_fallback",
+        "bridge_error_denies_without_native_fallback",
+        "matrix_memory_uses_runtime_service_with_bound_target_scope",
+        "matrix_remote_turns_are_durably_captured",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "claude_version": "2.1.287",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "executor_version": "0.159.3",
+      "packaged_launcher_sha256": "18c51695c82821b8b11ed36a0496c02745de9879962ec96d6f5cbb8c5a673797",
+      "scripted_api_requests": 40,
+      "native_title_requests": 1,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "real_subscription_inference",
+        "cross_host_latency",
+        "native_subagents_and_project_hooks"
+      ]
+    },
+    "codex-generation-final": {
+      "schema_version": 1,
+      "plugin_id": "codex",
+      "plugin_version": "3.3.1",
+      "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "codex",
+          "version": "0.159.3",
+          "artifact_digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+          "status": "passed"
+        },
+        {
+          "command": "codex-acp",
+          "version": "2.1.0",
+          "artifact_digest": "sha256:755df0157c5f07ff7ee8ee125c934be0bac542380d8880712e9f200f08c8ac22",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.2.0",
+        "artifact_digest": "sha256:cb86ae38f75cbb45c2d140479be57ca336ceac018a2baf0c0d709a9a2710e65c"
+      },
+      "worker": {
+        "executable_digest": "sha256:57877745ef58dbdff2a6dc7af097a4ee7582ea7637c43fce1f4219b704e559d8",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    },
+    "claude-generation-final": {
+      "schema_version": 1,
+      "plugin_id": "claude-code",
+      "plugin_version": "3.4.3",
+      "artifact_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "claude",
+          "version": "2.1.287",
+          "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+          "status": "passed"
+        },
+        {
+          "command": "claude-agent-acp",
+          "version": "0.84.0",
+          "artifact_digest": "sha256:c5acf18796ce5f2c4da6142c3ba6c7b2baae5a460c73b2b0ba25a74bbeaf5695",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.3.1",
+        "artifact_digest": "sha256:b6943cb0516de6d00ec637b2ad5ede1b0914d09217e8e20f8b850da190200c56"
+      },
+      "worker": {
+        "executable_digest": "sha256:57877745ef58dbdff2a6dc7af097a4ee7582ea7637c43fce1f4219b704e559d8",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    },
+    "codex-macos-final": {
+      "schema_version": 1,
+      "plugin_id": "codex",
+      "plugin_version": "3.3.1",
+      "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+      "platform": {
+        "os": "macos",
+        "architecture": "aarch64"
+      },
+      "probes": [
+        {
+          "command": "codex",
+          "version": "0.159.3",
+          "artifact_digest": "sha256:b2838cc82cfd0a9253bab7abbadec09c71fba46b34742a1338b30ca255f41237",
+          "status": "passed"
+        },
+        {
+          "command": "codex-acp",
+          "version": "2.1.0",
+          "artifact_digest": "sha256:8e5cb35e79990e528e716e27547c2a1ebbc460bbcac056a6cc278781bc0b55e1",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false
+    },
+    "claude-macos-final": {
+      "schema_version": 1,
+      "plugin_id": "claude-code",
+      "plugin_version": "3.4.3",
+      "artifact_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+      "platform": {
+        "os": "macos",
+        "architecture": "aarch64"
+      },
+      "probes": [
+        {
+          "command": "claude",
+          "version": "2.1.287",
+          "artifact_digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+          "status": "passed"
+        },
+        {
+          "command": "claude-agent-acp",
+          "version": "0.84.0",
+          "artifact_digest": "sha256:6b282c1ab49a78b63ea6568994280f9f8b447c248dd60711d6128f9972f7b3f2",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false
+    },
+    "catalog-final": {
+      "schema": "cowboy.catalog-publication-conformance/v1",
+      "accepted": true,
+      "source_revision": "c4e7d418aa81ffa2cce6820e11c535ddde2f2799",
+      "candidate": {
+        "release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+        "source_revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+        "executable_sha256": "sha256:2407e141de71fa63a3272cdf05ab584233c48e5d15ddbbddcee0d74968d52f2d"
+      },
+      "sdk_sha256": "sha256:b5e447de816d9d0f9030f579000d470d7a9740321b088089aec216a82e5c11d9",
+      "publications": [
+        {
+          "role": "active",
+          "reader": {
+            "release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+            "source_revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+            "executable_sha256": "sha256:2407e141de71fa63a3272cdf05ab584233c48e5d15ddbbddcee0d74968d52f2d"
+          },
+          "release": {
+            "plugin_id": "codex",
+            "plugin_version": "3.3.1",
+            "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:3c2236b86d594ec683a211b9fda13940b268a7079225f8a254b39d17c774ca23",
+          "package_digest": "sha256:961f34c6a4dca6888d854ce0994e9cb108daa4cc4906aba61bc5c8691f4e6590",
+          "host_bundle_digest": "sha256:0f6a793254ab2b821ca5aaedd5f81f795e5c9916cf160126c778328abe3c58b0",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "next_transaction_recovery",
+          "reader": {
+            "release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+            "source_revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+            "executable_sha256": "sha256:2407e141de71fa63a3272cdf05ab584233c48e5d15ddbbddcee0d74968d52f2d"
+          },
+          "release": {
+            "plugin_id": "codex",
+            "plugin_version": "3.3.1",
+            "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:3c2236b86d594ec683a211b9fda13940b268a7079225f8a254b39d17c774ca23",
+          "package_digest": "sha256:961f34c6a4dca6888d854ce0994e9cb108daa4cc4906aba61bc5c8691f4e6590",
+          "host_bundle_digest": "sha256:0f6a793254ab2b821ca5aaedd5f81f795e5c9916cf160126c778328abe3c58b0",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "cold",
+          "reader": {
+            "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+            "source_revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "executable_sha256": "sha256:876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+          },
+          "release": {
+            "plugin_id": "codex",
+            "plugin_version": "3.3.1",
+            "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:3c2236b86d594ec683a211b9fda13940b268a7079225f8a254b39d17c774ca23",
+          "package_digest": "sha256:961f34c6a4dca6888d854ce0994e9cb108daa4cc4906aba61bc5c8691f4e6590",
+          "host_bundle_digest": "sha256:0f6a793254ab2b821ca5aaedd5f81f795e5c9916cf160126c778328abe3c58b0",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "active",
+          "reader": {
+            "release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+            "source_revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+            "executable_sha256": "sha256:2407e141de71fa63a3272cdf05ab584233c48e5d15ddbbddcee0d74968d52f2d"
+          },
+          "release": {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.3",
+            "artifact_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:a1bd010b45462861e00690370d2a47ae7e7ce492b680f332241152172186692c",
+          "package_digest": "sha256:8eddba1759540dc96170638c6e4db0d4701e55f6c771de7be3a698af9a235cbf",
+          "host_bundle_digest": "sha256:81b9278b99464e4ba905bb0264e8bdb83b7fffd49e075f6e7d9122062a7dcd0c",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "next_transaction_recovery",
+          "reader": {
+            "release": "/nix/store/fqrvkfszwszsqvfr2qsibv59s4jpbrlf-cowboy-controller-release",
+            "source_revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+            "executable_sha256": "sha256:2407e141de71fa63a3272cdf05ab584233c48e5d15ddbbddcee0d74968d52f2d"
+          },
+          "release": {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.3",
+            "artifact_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:a1bd010b45462861e00690370d2a47ae7e7ce492b680f332241152172186692c",
+          "package_digest": "sha256:8eddba1759540dc96170638c6e4db0d4701e55f6c771de7be3a698af9a235cbf",
+          "host_bundle_digest": "sha256:81b9278b99464e4ba905bb0264e8bdb83b7fffd49e075f6e7d9122062a7dcd0c",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "cold",
+          "reader": {
+            "release": "/nix/store/linlap4hzqancmr6cr658c07kh4n6v7w-cowboy-controller-release",
+            "source_revision": "89bf4b720fb7c0048e71b193ab6b0b6e6bf7b134",
+            "executable_sha256": "sha256:876adf6a91cd16225b96a9ffd339d4941b8501be8f9eac2f7e02c3c5289e0147"
+          },
+          "release": {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.3",
+            "artifact_digest": "sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:a1bd010b45462861e00690370d2a47ae7e7ce492b680f332241152172186692c",
+          "package_digest": "sha256:8eddba1759540dc96170638c6e4db0d4701e55f6c771de7be3a698af9a235cbf",
+          "host_bundle_digest": "sha256:81b9278b99464e4ba905bb0264e8bdb83b7fffd49e075f6e7d9122062a7dcd0c",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        }
+      ],
+      "production_mutated": false,
+      "production_credentials": false,
+      "not_checked": [
+        "production_signature",
+        "actual_role_provenance",
+        "complete_production_catalog_and_host_policy",
+        "historical_pre_host_migration",
+        "runtime_platform_drain_and_installation"
+      ]
+    },
+    "published-urls-final": {
+      "accepted": true,
+      "artifacts": [
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/961f34c6a4dca6888d854ce0994e9cb108daa4cc4906aba61bc5c8691f4e6590/codex.cowboy-plugin",
+          "digest": "sha256:961f34c6a4dca6888d854ce0994e9cb108daa4cc4906aba61bc5c8691f4e6590",
+          "bytes": 16898,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce/codex.tar.gz",
+          "digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+          "bytes": 162464331,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/755df0157c5f07ff7ee8ee125c934be0bac542380d8880712e9f200f08c8ac22/codex-acp.tar.gz",
+          "digest": "sha256:755df0157c5f07ff7ee8ee125c934be0bac542380d8880712e9f200f08c8ac22",
+          "bytes": 46470395,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/b2838cc82cfd0a9253bab7abbadec09c71fba46b34742a1338b30ca255f41237/codex.tar.gz",
+          "digest": "sha256:b2838cc82cfd0a9253bab7abbadec09c71fba46b34742a1338b30ca255f41237",
+          "bytes": 133847481,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/8e5cb35e79990e528e716e27547c2a1ebbc460bbcac056a6cc278781bc0b55e1/codex-acp.tar.gz",
+          "digest": "sha256:8e5cb35e79990e528e716e27547c2a1ebbc460bbcac056a6cc278781bc0b55e1",
+          "bytes": 41319196,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/8eddba1759540dc96170638c6e4db0d4701e55f6c771de7be3a698af9a235cbf/claude-code.cowboy-plugin",
+          "digest": "sha256:8eddba1759540dc96170638c6e4db0d4701e55f6c771de7be3a698af9a235cbf",
+          "bytes": 17489,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111/claude.tar.gz",
+          "digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+          "bytes": 109421707,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/c5acf18796ce5f2c4da6142c3ba6c7b2baae5a460c73b2b0ba25a74bbeaf5695/claude-agent-acp.tar.gz",
+          "digest": "sha256:c5acf18796ce5f2c4da6142c3ba6c7b2baae5a460c73b2b0ba25a74bbeaf5695",
+          "bytes": 52052876,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278/claude.tar.gz",
+          "digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+          "bytes": 99617644,
+          "verified": true
+        },
+        {
+          "url": "https://cowboy.stormbird.xyz/plugin-artifacts/6b282c1ab49a78b63ea6568994280f9f8b447c248dd60711d6128f9972f7b3f2/claude-agent-acp.tar.gz",
+          "digest": "sha256:6b282c1ab49a78b63ea6568994280f9f8b447c248dd60711d6128f9972f7b3f2",
+          "bytes": 46898365,
+          "verified": true
+        }
+      ]
+    }
+  },
+  "quality": {
+    "schema": "matrix.synthetic-quality/v1",
+    "accepted": true,
+    "policy": "evidence-deltas-v1",
+    "driver_identity": "630cf86d79db8d9b5219c5996455c4f5ea16ea959f6900edb833b2d8901716a7",
+    "checks": [
+      {
+        "name": "automatic_extraction",
+        "passed": true
+      },
+      {
+        "name": "codex_to_fresh_claude_cross_machine",
+        "passed": true
+      },
+      {
+        "name": "project_isolation",
+        "passed": true
+      },
+      {
+        "name": "owner_isolation",
+        "passed": true
+      },
+      {
+        "name": "irrelevant_query_abstains",
+        "passed": true
+      },
+      {
+        "name": "automatic_correction",
+        "passed": true
+      },
+      {
+        "name": "claude_to_codex_updates_existing_topic",
+        "passed": true
+      },
+      {
+        "name": "forgotten_memory_absent",
+        "passed": true
+      },
+      {
+        "name": "restart_keeps_forgetting",
+        "passed": true
+      },
+      {
+        "name": "git_checkpoint",
+        "passed": true
+      },
+      {
+        "name": "chinese_extraction",
+        "passed": true
+      },
+      {
+        "name": "chinese_retrieval",
+        "passed": true
+      }
+    ],
+    "extractions": [
+      {
+        "turn": "first",
+        "result": {
+          "busy": false,
+          "completed": 1,
+          "failed": 0
+        },
+        "errors": []
+      },
+      {
+        "turn": "correction",
+        "result": {
+          "busy": false,
+          "completed": 1,
+          "failed": 0
+        },
+        "errors": []
+      },
+      {
+        "turn": "chinese",
+        "result": {
+          "busy": false,
+          "completed": 1,
+          "failed": 0
+        },
+        "errors": []
+      }
+    ],
+    "extraction_seconds": [
+      8.845,
+      10.044,
+      9.837
+    ],
+    "not_checked": [
+      "native answering behavior",
+      "native-memory baseline",
+      "production quality",
+      "token costs",
+      "physical erasure"
+    ]
+  },
+  "real_native_answering": [
+    {
+      "schema": "matrix.real-native-answering/v1",
+      "provider": "codex",
+      "plugin_generation": "d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+      "project": "matrix-acceptance",
+      "runtime_machine": "ovh",
+      "execution_machine": "ovh",
+      "accepted": true,
+      "cowboy_managed_session": false,
+      "tools": [],
+      "session": "01a100e9-e275-7801-82bf-b994d27b8409",
+      "matrix_mcp_tools": 4,
+      "stop_reason": "completed",
+      "answer": "MATRIX-TAUGHT",
+      "seconds": 4.35
+    },
+    {
+      "schema": "matrix.real-native-answering/v1",
+      "provider": "claude",
+      "plugin_generation": "23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+      "project": "matrix-acceptance",
+      "runtime_machine": "ovh",
+      "execution_machine": "ovh",
+      "accepted": true,
+      "cowboy_managed_session": false,
+      "tools": [],
+      "answer": "MTRX-E2E-619-A",
+      "stop_reason": "success",
+      "session": "302895b8-d068-437d-925e-fe9efa79e496",
+      "seconds": 2.191
+    },
+    {
+      "schema": "matrix.real-native-answering/v1",
+      "provider": "claude",
+      "plugin_generation": "23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+      "project": "matrix-acceptance",
+      "runtime_machine": "ovh",
+      "execution_machine": "ovh",
+      "accepted": true,
+      "cowboy_managed_session": false,
+      "tools": [],
+      "answer": "MATRIX-CORRECTED",
+      "stop_reason": "success",
+      "session": "847ca2c8-cf14-4f6d-91a9-a5d2e0b0d05d",
+      "seconds": 1.971
+    },
+    {
+      "schema": "matrix.real-native-answering/v1",
+      "provider": "codex",
+      "plugin_generation": "d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+      "project": "matrix-acceptance",
+      "runtime_machine": "ovh",
+      "execution_machine": "ovh",
+      "accepted": true,
+      "cowboy_managed_session": false,
+      "tools": [],
+      "session": "01a100eb-4180-7cf3-9d6d-c1de32e5ebea",
+      "matrix_mcp_tools": 4,
+      "stop_reason": "completed",
+      "answer": "MTRX-E2E-619-B",
+      "seconds": 3.816
+    },
+    {
+      "schema": "matrix.real-native-answering/v1",
+      "provider": "codex",
+      "plugin_generation": "d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+      "project": "matrix-acceptance",
+      "runtime_machine": "ovh",
+      "execution_machine": "ovh",
+      "accepted": true,
+      "cowboy_managed_session": false,
+      "tools": [],
+      "session": "01a100eb-d17d-7ce2-ac12-2efef4a76e47",
+      "matrix_mcp_tools": 4,
+      "stop_reason": "completed",
+      "answer": "UNKNOWN",
+      "seconds": 4.546
+    },
+    {
+      "schema": "matrix.real-native-answering/v1",
+      "provider": "claude",
+      "plugin_generation": "23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1",
+      "project": "matrix-acceptance",
+      "runtime_machine": "ovh",
+      "execution_machine": "ovh",
+      "accepted": true,
+      "cowboy_managed_session": false,
+      "tools": [],
+      "answer": "UNKNOWN",
+      "stop_reason": "success",
+      "session": "fbe20b83-1dae-4b5e-96f8-5995f8938487",
+      "seconds": 1.929
+    }
+  ],
+  "final_memory_status": {
+    "jobs": {
+      "completed": 7
+    },
+    "memories": {
+      "forgotten": 2
+    },
+    "sequence": 5
+  },
+  "forget_receipts": [
+    {
+      "id": "836aac219d93f011258ff91bcd17fb06",
+      "revision": 3,
+      "sequence": 4,
+      "state": "forgotten"
+    },
+    {
+      "id": "bad7618a079626119d9b94e7297238ad",
+      "revision": 2,
+      "sequence": 5,
+      "state": "forgotten"
+    }
+  ],
+  "not_checked": [
+    "new Cowboy-managed live-model remote session: missing normal product device credential",
+    "native-memory A/B baseline",
+    "production task quality or token costs",
+    "large-corpus retrieval quality",
+    "standalone hook compatibility",
+    "physical erasure",
+    "off-host backup",
+    "Grok integration"
+  ],
+  "staging_resolution": {
+    "schema": 1,
+    "http_status": 200,
+    "operation_id": "ovh-matrix-codex-3-3-0-1790563075662",
+    "data": {
+      "schema": 1,
+      "operation_id": "ovh-matrix-codex-3-3-0-1790563075662",
+      "phase": "needs_attention",
+      "machine_receipt": {
+        "state": "unknown",
+        "phase": "staging",
+        "reason": "effect_failure"
+      },
+      "reconciliation_performed": true,
+      "staging_failure_resolved": true,
+      "resolution_id": "install-staging-a65b2455739378b3d54d062ea80169ae4d8a5890456ec6b2006fea1b9f23171f",
+      "resolved_at_ms": 1791014436215
+    }
+  }
+}

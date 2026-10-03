@@ -26,6 +26,8 @@ use crate::runtime_wire::{
     StartSession, WorkerCommand, WorkerSnapshot, WorkerState, negotiate, read_frame, write_frame,
 };
 
+pub(crate) mod deletions;
+
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
 /// Bytes still queued on the broker side prove the worker kept writing and the
@@ -274,6 +276,7 @@ struct Broker {
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
+    deletion_journal: Mutex<Option<deletions::Journal>>,
     /// Session workspaces awaiting generated-artifact cleanup after their
     /// process owner has been stopped and collected. Source worktrees and
     /// branches are retained.
@@ -375,6 +378,7 @@ impl Broker {
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
+            deletion_journal: Mutex::new(None),
             deleted_session_workspaces: Mutex::new(HashMap::new()),
             session_lifecycle_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
@@ -759,6 +763,9 @@ impl Broker {
 
     fn update_snapshot(&self, mut snapshot: WorkerSnapshot, connection_id: u64) -> bool {
         let session_id = snapshot.session_id.clone();
+        if self.check_deletion_journal().is_err() {
+            return false;
+        }
         // Authenticate the original peer before a rejected snapshot can send
         // anything to the current worker. A replaced peer owns no such effect.
         if !self.worker_matches(&session_id, connection_id, &snapshot.worker_epoch) {
@@ -871,6 +878,7 @@ impl Broker {
     }
 
     fn register_worker(&self, registration: WorkerRegistration) -> Result<()> {
+        self.check_deletion_journal()?;
         let WorkerRegistration {
             session_id,
             epoch,
@@ -1042,6 +1050,36 @@ impl Broker {
             .clone()
     }
 
+    fn attach_deletion_journal(&self, journal: deletions::Journal) {
+        self.cancelled_sessions
+            .lock()
+            .extend(journal.deleted().iter().cloned());
+        *self.deletion_journal.lock() = Some(journal);
+    }
+
+    fn check_deletion_journal(&self) -> Result<()> {
+        if let Some(journal) = self.deletion_journal.lock().as_ref() {
+            journal.check()?;
+        }
+        Ok(())
+    }
+
+    async fn record_deletion(self: &Arc<Self>, session_id: &str) -> Result<()> {
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            if let Some(journal) = broker.deletion_journal.lock().as_mut() {
+                journal.check()?;
+                if journal.writer_enabled() {
+                    journal.mark_deleted(&session_id)?;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .context("joining Session deletion journal write")?
+    }
+
     fn has_deleted_session_owner_exit_proof(&self) -> bool {
         #[cfg(test)]
         if self.deleted_session_owner_collected.load(Ordering::Acquire) {
@@ -1177,6 +1215,14 @@ impl Broker {
         session: StartSession,
         _guard: &tokio::sync::MutexGuard<'_, ()>,
     ) {
+        if let Err(error) = self.check_deletion_journal() {
+            self.command_rejected(
+                &session.session_id,
+                format!("ensure:{}", session.session_id),
+                format!("Session deletion reader unavailable: {error}"),
+            );
+            return;
+        }
         // A delayed controller declaration is not permission to undo deletion.
         // Reset owns its separate fence and clears the tombstone deliberately.
         if self.cancelled_sessions.lock().contains(&session.session_id) {
@@ -1338,10 +1384,24 @@ impl Broker {
 
     async fn reset_session(self: &Arc<Self>, mut session: StartSession, command_id: String) {
         let session_id = session.session_id.clone();
-        self.revoke_cache_protection(&session, &session_id, "session_reset");
         session.adopt_only = false;
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
+        let journal_admission = (|| -> Result<()> {
+            if let Some(journal) = self.deletion_journal.lock().as_ref() {
+                journal.check()?;
+                ensure!(
+                    !journal.deleted().contains(&session_id),
+                    "Session ID is durably deleted"
+                );
+            }
+            Ok(())
+        })();
+        if let Err(error) = journal_admission {
+            self.command_rejected(&session_id, command_id, error.to_string());
+            return;
+        }
+        self.revoke_cache_protection(&session, &session_id, "session_reset");
         self.deleted_session_workspaces.lock().remove(&session_id);
         self.resetting_sessions
             .lock()
@@ -2454,17 +2514,54 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
     }
 }
 
-pub async fn run(args: MachineBrokerArgs) -> Result<()> {
+#[cfg(test)]
+async fn run(args: MachineBrokerArgs) -> Result<()> {
+    run_broker(args, None).await
+}
+
+/// Reader-first production cutover. The persistent writer remains unadmitted
+/// until old component rollback/recovery readers are fenced by their owner.
+pub(crate) async fn run_with_deletion_reader(
+    args: MachineBrokerArgs,
+    path: PathBuf,
+    owner: deletions::Owner,
+) -> Result<()> {
+    let journal =
+        tokio::task::spawn_blocking(move || deletions::Journal::open(&path, owner, false))
+            .await
+            .context("joining Session deletion reader open")??;
+    tracing::info!(
+        deleted_sessions = journal.deleted().len(),
+        writer_enabled = false,
+        "Session deletion journal reader ready"
+    );
+    run_broker(args, Some(journal)).await
+}
+
+async fn run_broker(args: MachineBrokerArgs, journal: Option<deletions::Journal>) -> Result<()> {
+    let broker = Arc::new(Broker::new(args));
+    if let Some(journal) = journal {
+        broker.attach_deletion_journal(journal);
+    }
     let listener = match inherited_systemd_listener()? {
         Some(listener) => {
-            tracing::info!(socket = %args.socket.display(), "cowboy Machine broker using systemd socket");
+            tracing::info!(socket = %broker.args.socket.display(), "cowboy Machine broker using systemd socket");
             listener
         }
-        None => bind_runtime_listener(&args.socket).await?,
+        None => bind_runtime_listener(&broker.args.socket).await?,
     };
-    let broker = Arc::new(Broker::new(args));
-    tokio::spawn(monitor_workers(Arc::clone(&broker)));
+    // A cancelled server must not retain the durable namespace's owner lock
+    // through an orphaned monitor task.
+    let _monitor = BrokerMonitor(tokio::spawn(monitor_workers(Arc::clone(&broker))));
     accept_runtime_peers(broker.args.socket.clone(), listener, broker).await
+}
+
+struct BrokerMonitor(tokio::task::JoinHandle<()>);
+
+impl Drop for BrokerMonitor {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 async fn bind_runtime_listener(socket: &Path) -> Result<UnixListener> {
@@ -2898,6 +2995,14 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             // owns the session lifecycle decision.
             let cleanup_gate = broker.session_lifecycle_gate(&session_id);
             let _cleanup_guard = cleanup_gate.lock().await;
+            if let Err(error) = broker.record_deletion(&session_id).await {
+                broker.command_rejected(
+                    &session_id,
+                    command_id,
+                    format!("durable Session deletion was not confirmed: {error}"),
+                );
+                return;
+            }
             let cleanup_command_id = command_id.clone();
             let cleanup_session = broker.sessions.lock().get(&session_id).cloned();
             let cleanup_cwd = cleanup_session.as_ref().map(|session| session.cwd.clone());
@@ -4135,6 +4240,193 @@ mod tests {
         assert!(broker.launching.lock().is_empty());
         drop(client);
         handler.await.expect("core task").expect("core EOF");
+    }
+
+    fn deletion_fixture_owner() -> deletions::Owner {
+        deletions::Owner {
+            machine_id: "fixture-machine".into(),
+            service_id: Some("fixture-service".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn deletion_storage_failure_has_no_stop_or_registry_effect() {
+        let root = tempfile::tempdir().expect("journal root");
+        let (broker, launch, mut worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        broker.attach_deletion_journal(
+            deletions::Journal::open(root.path(), deletion_fixture_owner(), true).unwrap(),
+        );
+        std::fs::create_dir(root.path().join("deletions.json")).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-1".into(),
+                command_id: "delete-storage-failed".into(),
+            },
+        )
+        .await;
+        assert!(matches!(rx.try_recv(), Ok(Frame::CommandAck {
+            accepted: false, command_id, ..
+        }) if command_id == "delete-storage-failed"));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(broker.deleted_session_workspaces.lock().is_empty());
+        assert!(worker_rx.try_recv().is_err());
+        assert!(broker.check_deletion_journal().is_err());
+    }
+
+    #[tokio::test]
+    async fn read_only_deletion_reader_preserves_existing_volatile_delete() {
+        let root = tempfile::tempdir().expect("journal root");
+        let (broker, _, _) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        broker.attach_deletion_journal(
+            deletions::Journal::open(root.path(), deletion_fixture_owner(), false).unwrap(),
+        );
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-1".into(),
+                command_id: "delete-volatile".into(),
+            },
+        )
+        .await;
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(!broker.sessions.lock().contains_key("sess-1"));
+        assert!(!root.path().join("deletions.json").exists());
+    }
+
+    #[tokio::test]
+    async fn durable_delete_survives_broker_restart_and_fences_real_ipc() {
+        let root = tempfile::tempdir().expect("restart fixture");
+        let socket = root.path().join("runtime.sock");
+        let journal_root = root.path().join("deletions");
+        let (fixture, mut launch, _) = reconnecting_worker_fixture();
+        let mut args = fixture.args.clone();
+        args.socket = socket.clone();
+        args.worktree_root = root.path().join("worktrees");
+        let journal =
+            deletions::Journal::open(&journal_root, deletion_fixture_owner(), true).unwrap();
+        let server = tokio::spawn(run_broker(args.clone(), Some(journal)));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !socket.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("writer socket ready");
+        let (mut reader, mut writer, _) = connect_peer(&socket, PeerRole::Core, None, None).await;
+        write_frame(
+            &mut writer,
+            &Frame::CoreCommand {
+                command: CoreCommand::StopSession {
+                    session_id: "sess-1".into(),
+                    command_id: "durable-delete".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap(),
+            Some(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(journal_root.join("deletions.json").is_file());
+        drop(reader);
+        drop(writer);
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        // Reopen succeeds only after the actual old owner has released its
+        // lock. This also tests cancellation of the broker's monitor task.
+        let journal = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match deletions::Journal::open(&journal_root, deletion_fixture_owner(), false) {
+                    Ok(journal) => break journal,
+                    Err(error) if error.to_string().contains("already owned") => {
+                        tokio::task::yield_now().await
+                    }
+                    Err(error) => panic!("cold reader refused: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("old namespace owner exits");
+        assert!(journal.deleted().contains("sess-1"));
+        let server = tokio::spawn(run_broker(args, Some(journal)));
+        let (deleted_reader, deleted_writer, reply) =
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    match UnixStream::connect(&socket).await {
+                        Ok(stream) => {
+                            drop(stream);
+                            break;
+                        }
+                        Err(_) => tokio::task::yield_now().await,
+                    }
+                }
+                connect_peer(&socket, PeerRole::Worker, Some("sess-1"), Some("old-epoch")).await
+            })
+            .await
+            .expect("cold worker handshake");
+        assert!(matches!(reply, Frame::Reject { reason } if reason.contains("deleted")));
+        drop(deleted_reader);
+        drop(deleted_writer);
+        let (mut reader, mut writer, _) = connect_peer(&socket, PeerRole::Core, None, None).await;
+        launch.adopt_only = true;
+        write_frame(
+            &mut writer,
+            &Frame::CoreCommand {
+                command: CoreCommand::EnsureSession { session: launch },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap(),
+            Some(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        drop(reader);
+        drop(writer);
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn durable_terminal_identity_cannot_be_cleared_by_reset() {
+        let root = tempfile::tempdir().expect("journal root");
+        let mut journal =
+            deletions::Journal::open(root.path(), deletion_fixture_owner(), true).unwrap();
+        journal.mark_deleted("sess-1").unwrap();
+        let (broker, launch, mut worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        broker.attach_deletion_journal(journal);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        broker
+            .reset_session(launch.clone(), "reset-deleted".into())
+            .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(worker_rx.try_recv().is_err());
     }
 
     #[test]

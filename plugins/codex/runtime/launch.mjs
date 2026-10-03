@@ -2,6 +2,7 @@
 // The client spawns the exact CODEX_PATH directly, including these -c options.
 import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { matrixConfiguration, memoryNative } from "./memory.mjs";
 
 export function splitConfigurationArguments(args) {
   const configuration = [];
@@ -19,8 +20,7 @@ export function splitConfigurationArguments(args) {
 
 export async function main(args) {
   if (args[0] === "--cowboy-private-cli") {
-    const bridge = await import("./cowboy-execution.mjs");
-    await bridge.main(args);
+    await memoryNative(args);
     return;
   }
   const { configuration, arguments: forwarded } = splitConfigurationArguments(
@@ -30,7 +30,12 @@ export async function main(args) {
     throw new Error("Configured Codex requires an exact Machine-bound CLI");
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
-  if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
+  const inspection = forwarded.length === 1 &&
+    ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
+  if (
+    !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+      await matrixConfiguration("codex"))
+  ) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");
     }
