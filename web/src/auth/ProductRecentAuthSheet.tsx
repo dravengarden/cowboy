@@ -10,6 +10,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ExternalSignInButton } from "./ExternalSignInButton";
 import { ConfirmSheet } from "../Sheet";
 import { NativeAuthenticationBrowserOpenError } from "../openExternal";
 import { passwordLoginFields } from "./coreSecurity";
@@ -263,7 +264,9 @@ export function ProductRecentAuthSheet({
   };
 
   const verifyProvider = (): void => {
-    if (!selectedProvider || !useProviderHandoff) return;
+    if (busy || providerAbort.current || !selectedProvider || !useProviderHandoff) {
+      return;
+    }
     const abort = new AbortController();
     providerAbort.current = abort;
     finish(
@@ -450,7 +453,9 @@ export function ProductRecentAuthSheet({
                 type="submit"
                 variant="contained"
                 size="large"
-                disabled={busy || password === ""}
+                loading={busy}
+                aria-busy={busy}
+                disabled={password === ""}
               >
                 Verify password
               </Button>
@@ -458,7 +463,7 @@ export function ProductRecentAuthSheet({
           )}
           {!verifiedMe && selectedProvider && (
             <>
-              <Button
+              <ExternalSignInButton
                 type="button"
                 href={useProviderHandoff
                   ? undefined
@@ -466,12 +471,14 @@ export function ProductRecentAuthSheet({
                 onClick={useProviderHandoff ? verifyProvider : undefined}
                 variant="contained"
                 size="large"
-                disabled={useProviderHandoff && busy}
+                busy={busy}
+                onRedirectBusy={setBusy}
+                onRedirectError={setError}
               >
                 {useProviderHandoff && busy
                   ? "Waiting for approval…"
                   : selectedProvider.button_label}
-              </Button>
+              </ExternalSignInButton>
               {!useProviderHandoff && (
                 <Typography variant="body2" color="text.secondary">
                   After the secure redirect returns, repeat the Passkey change.
@@ -481,14 +488,17 @@ export function ProductRecentAuthSheet({
                 ordinary same-window sign-in available to a locked session. */}
               {useProviderHandoff && windowBlocked && (
                 <>
-                  <Button
+                  <ExternalSignInButton
                     type="button"
+                    busy={busy}
+                    onRedirectBusy={setBusy}
+                    onRedirectError={setError}
                     href={selectedProvider.start_url}
                     variant="outlined"
                     size="large"
                   >
                     Continue in this window
-                  </Button>
+                  </ExternalSignInButton>
                   <Typography variant="body2" color="text.secondary">
                     {purpose === "primary"
                       ? "Cowboy reloads when the secure redirect returns; running agents are unaffected."
@@ -496,7 +506,7 @@ export function ProductRecentAuthSheet({
                   </Typography>
                 </>
               )}
-              {useProviderHandoff && busy && (
+              {useProviderHandoff && busy && providerAbort.current && (
                 <Button
                   type="button"
                   variant="text"
