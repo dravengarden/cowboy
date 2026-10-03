@@ -132,6 +132,18 @@ records ten invalid-record fixtures, compatible production receipt inspection
 and successful Hawk owner activation at source `ab151b1e`; no invalid production
 authorization was seeded.
 
+Published owner source `f5096b38` also requires clean direct children of
+`/nix/store` for journal candidate/predecessor and receipt release/active/
+predecessor paths, sharing explicit recovery's path predicate. Prefix-only
+subdirectories, traversal and redundant separators refuse without normalization;
+empty optional predecessors keep bootstrap semantics. Existing manifest,
+lane and reader checks remain necessary. The
+[canonical store-root candidate](releases/plugin-store-root-2026-10-04.md)
+passed 32 path fixtures, its full gates and clean Hawk build. It is not installed:
+two new unrelated failed Stormbird rollout/data-stream tasks require separate
+handling before host activation. No activation or failure-state cleanup was
+performed for this candidate.
+
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state
 outright; compatible portable recovery readers remain unadmitted. A finite
