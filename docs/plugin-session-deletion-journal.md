@@ -93,6 +93,17 @@ records remain readable. Refusal leaves owner evidence unchanged. The
 records the parser/control fixtures and host activation. This does not add
 cross-generation or writer admission.
 
+The published owner descendant also validates journal and success-receipt
+transaction IDs with the explicit repair command's generated-format rule.
+Missing, null, empty and malformed IDs refuse before recovery effects or
+history filenames can use them. Compatible recovery keeps the original ID even
+when the recovered revision changes. The
+[transaction identity candidate](releases/plugin-transaction-identity-2026-10-03.md)
+passed its gates and clean Hawk build, but host activation was refused before
+switching by two unrelated failed OVH observation units. It is not installed;
+the previous owner remains active, and no failed unit was cleared to bypass
+preflight.
+
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state
 outright; compatible portable recovery readers remain unadmitted. A finite
