@@ -52,7 +52,7 @@ const cases = bundles.flatMap((bundle) =>
   (slowMobile
     ? ["slow-mobile", "lost-send"]
     : failedRecovery
-    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work"]
+    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error"]
     : updateSettings
     ? ["update-settings"]
     : continuity
@@ -472,7 +472,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
         (metadata || updateSettings
           ? 0
           : failedRecovery
-          ? 2
+          ? scenario.startsWith("failed-recovery-review") ? 1 : 2
           : continuity
           ? 4
           : local || draftSend || slowMobile

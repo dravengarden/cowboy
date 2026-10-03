@@ -355,6 +355,14 @@ held message and attention badge remain available. Historical runtime errors sta
 at their original transcript position; a recovered turn clears its stale session
 error notification.
 
+The Sessions drawer's held-message count opens a per-session review sheet on
+this device. It shows the retained text and attachment count and offers Retry
+or Save to drafts for held prompt/queue creations. Saving retires the original
+retry obligation only after the draft is durable, and never sends that content
+to the Agent. Failure retains the original message and badge. Closing the sheet
+does not acknowledge or remove a held message. Its badge hit area is 44px while
+the painted row geometry stays stable on the Mobile swipe path.
+
 **Sessions drawer.** Connection state is app-level, not per session, so the
 floating pill hides while the drawer is open and the drawer carries its own
 inline line at the top of the list: "Reconnecting… · list from 3 min ago",

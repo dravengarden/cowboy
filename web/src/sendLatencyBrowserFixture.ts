@@ -12,6 +12,7 @@ import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
 import { optimisticQuestionKey } from "./explore/optimisticPages.ts";
+import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -94,7 +95,7 @@ export async function run() {
     const { runClientUpdateFixture } = await import("./clientUpdateBrowserFixture.tsx");
     return await runClientUpdateFixture();
   }
-  if (scenario === "failed-recovery-storage-error") {
+  if (scenario === "failed-recovery-storage-error" || scenario === "failed-recovery-review-storage-error") {
     const outbox = productSyncDatabase.outbox.bind(productSyncDatabase);
     productSyncDatabase.outbox = <T>(scope: ProductSyncScope): LocalPersistence<ClientSnapshot<T>> => {
       const persistence = outbox<T>(scope);
@@ -115,7 +116,7 @@ export async function run() {
   const session = "fixture-session";
   const root = createRoot(document.getElementById("root")!);
   const started = performance.now();
-  root.render(createElement(Probe));
+  root.render(createElement(SurfaceProvider, null, createElement(Probe)));
   const samples: { kind: string; milliseconds: number }[] = [];
   const send = async (kind: string, began: number) => {
     const text = `synthetic-${crypto.randomUUID()}`;
@@ -144,6 +145,36 @@ export async function run() {
       await until(() => snapshot.optimisticMessages.get(session)?.some((row) => row.status === "failed") === true, "failed older send retained");
       const oldCmid = snapshot.optimisticMessages.get(session)![0]!.cmid;
       await until(() => document.querySelector('[aria-label="1 message needs attention"]') !== null, "failure badge paints");
+      const badge = document.querySelector<HTMLElement>('[aria-label="1 message needs attention"]')!;
+      badge.click();
+      await until(() => document.body.textContent?.includes("Unconfirmed messages") === true,
+        "badge opens message review");
+      await until(() => document.body.textContent?.includes("1 attachment kept with this message") === true,
+        "review identifies the original message and its attachment");
+      const reviewButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === label)!;
+      if (scenario.startsWith("failed-recovery-review")) {
+        reviewButton("Save to drafts").click();
+        if (scenario === "failed-recovery-review-storage-error") {
+          await until(() => document.body.textContent?.includes("Could not save the draft") === true,
+            "review reports draft save failure");
+          if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid && row.status === "failed"))
+            throw new Error("manual draft save failure lost the original message");
+          return ["review preserves the original caption and image when draft save fails"];
+        }
+        await until(() => document.querySelector('[aria-label="1 message needs attention"]') === null,
+          "saving to drafts clears the session warning");
+        await until(() => snapshot.drafts.get(session)?.some((row) =>
+          row.text === "older unconfirmed caption" && row.attachments.length === 1 && row.status === undefined) === true,
+          "manual review saves the caption and image as an acknowledged draft");
+        if (!await retained("older unconfirmed caption")) throw new Error("manually saved draft not durable");
+        const metrics = await (await fetch("/fixture/metrics")).json();
+        if (metrics.deliveries !== 1) throw new Error("manual review resubmitted the held message");
+        return ["session warning opens message review", "save to drafts clears warning and preserves content", "review never resubmits the held message"];
+      }
+      reviewButton("Close").click();
+      await until(() => document.body.textContent?.includes("Unconfirmed messages") !== true,
+        "closing review preserves the warning without navigating");
       let heldBubbleDisappeared = false;
       const heldBubbleObserver = new MutationObserver(() => {
         if (document.querySelector(`[data-key="opt-${oldCmid}"]`) === null) heldBubbleDisappeared = true;

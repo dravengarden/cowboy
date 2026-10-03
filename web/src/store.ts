@@ -2844,6 +2844,33 @@ export function useHeldDeliveries(): HeldDeliverySummary {
   return useSyncExternalStore(subscribeSyncStatus, () => heldDeliveries, () => heldDeliveries);
 }
 
+/** Device-local obligations for the session badge's review sheet. */
+export function heldDeliveryDetails(sessionId: string): readonly {
+  id: string;
+  text: string;
+  attachments: number;
+  canSaveDraft: boolean;
+}[] {
+  return (qClients.get(sessionId)?.pending() ?? []).filter((mutation) =>
+    qStatus.get(mutation.id) === "failed"
+  ).map((mutation) => {
+    const row = (mutation.args as { row?: QueuedMessage }).row;
+    return {
+      id: mutation.id,
+      text: row?.text ?? "",
+      attachments: row?.attachments.length ?? 0,
+      canSaveDraft: row !== undefined && CHAT_CREATION_MUTATORS.has(mutation.name),
+    };
+  });
+}
+
+/** Save the original before retiring the retry record; never resubmit it. */
+export async function saveHeldDeliveryAsDraft(sessionId: string, id: string): Promise<void> {
+  const pending = qClients.get(sessionId)?.pending().find((mutation) => mutation.id === id);
+  if (pending === undefined || !CHAT_CREATION_MUTATORS.has(pending.name)) return;
+  await saveRecoveredSendAsDraft(sessionId, id);
+}
+
 function outboxSummary(): SyncStatusInput["outbox"] {
   let pending = 0;
   let held = 0;
