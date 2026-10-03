@@ -7,11 +7,28 @@ function environment() {
   return { text: context?.environment ?? unavailable };
 }
 
-function instructions(_$, event) {
+async function instructions($, event) {
+  let memory = "";
+  if (context?.memory) {
+    memory = "[Matrix memory unavailable; verify facts directly.]";
+    try {
+      const response = await $.http.fetch("http://cowboy-execution/memory", {
+        socketPath: context.socketPath,
+        method: "POST",
+        headers: { Authorization: "Bearer " + context.bridgeToken },
+        body: "{}",
+      });
+      if (response.ok) {
+        const value = JSON.parse(response.text).text;
+        if (typeof value === "string" && value.length <= 12000) memory = value;
+      }
+    } catch { /* Recall failure never restores native memory. */ }
+  }
   return {
     blocks: [
       ...event.blocks.filter((block) => block.name === "currentDate"),
       { name: "claudeMd", text: context?.instructions ?? unavailable },
+      ...(memory ? [{ name: "matrixMemory", text: memory }] : []),
     ],
     instructionFiles: [],
   };
@@ -90,6 +107,12 @@ export function register(on) {
     if (["TodoWrite", "AskUserQuestion"].includes(event.tool)) {
       return next(event);
     }
+    if (
+      context?.memory &&
+      ["memory_search", "memory_get", "memory_put", "memory_forget"].some((
+        name,
+      ) => event.tool === "mcp__matrix__" + name)
+    ) return next(event);
     if (!context?.descriptions[event.tool]) return { deny: unavailable };
     const input = { ...event };
     delete input.tool;

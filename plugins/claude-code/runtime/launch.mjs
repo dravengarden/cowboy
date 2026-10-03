@@ -18,6 +18,13 @@ import {
   WorkspaceTools,
 } from "./tools.mjs";
 import { startModBridge } from "./mod-bridge.mjs";
+import {
+  claudeObservation,
+  localMemoryNative,
+  MATRIX_TOOLS,
+  MatrixClient,
+  matrixConfiguration,
+} from "./memory.mjs";
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 const forbiddenTools = [
@@ -35,7 +42,7 @@ const forbiddenTools = [
   "ExitPlanMode",
 ];
 
-export function nativeArguments(args, plugin) {
+export function nativeArguments(args, plugin, memoryConfig) {
   const values = new Set([
     "--model",
     "--fallback-model",
@@ -163,6 +170,9 @@ export function nativeArguments(args, plugin) {
     "--strict-mcp-config",
     "--plugin-dir",
     plugin,
+    ...(memoryConfig
+      ? ["--mcp-config", memoryConfig, "--allowedTools", MATRIX_TOOLS.join(",")]
+      : []),
     ...forwarded,
   ];
 }
@@ -237,7 +247,7 @@ export function allowedControl(request) {
   ]).has(request.subtype);
 }
 
-async function bridge(child, tools, context) {
+async function bridge(child, tools, context, memory) {
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => {
     resolveReady = resolve;
@@ -325,6 +335,7 @@ async function bridge(child, tools, context) {
             "This command is unavailable in an execution session",
           );
         }
+        if (memory && prompt.trim() && !command) await memory.begin(prompt);
       }
       await send(child.stdin, frame);
     }
@@ -380,8 +391,14 @@ async function bridge(child, tools, context) {
         resolveReady();
         continue;
       }
-      if (stage === "ready") await send(process.stdout, cleanCommands(frame));
-      else if (frame.type === "control_request") {
+      if (stage === "ready") {
+        const observation = claudeObservation(frame);
+        if (memory && observation) memory.add(...observation);
+        if (memory && frame.type === "result" && !frame.local_command) {
+          await memory.finish();
+        }
+        await send(process.stdout, cleanCommands(frame));
+      } else if (frame.type === "control_request") {
         throw new Error(
           "Unexpected native request during execution initialization",
         );
@@ -409,7 +426,7 @@ async function native(args) {
   }
   const descriptorPath = process.env.COWBOY_EXECUTION_DESCRIPTOR;
   if (!descriptorPath) {
-    throw new Error("Bound Claude execution descriptor missing");
+    return await localMemoryNative(executable, args);
   }
   const descriptor = await readDescriptor(descriptorPath);
   const root = join(
@@ -422,7 +439,7 @@ async function native(args) {
     throw new Error("Invalid private execution directory");
   }
   const stage = await mkdtemp(join(root, "native-"));
-  let child, connection, modBridge;
+  let child, connection, modBridge, memory;
   try {
     connection = await Connection.open(descriptor);
     const tools = new WorkspaceTools(
@@ -431,11 +448,31 @@ async function native(args) {
       join(root, "state.json"),
     );
     await tools.load();
+    memory = await MatrixClient.open(
+      await matrixConfiguration("claude"),
+      descriptor,
+    );
+    if (memory) {
+      const nativeCall = tools.nativeCall.bind(tools);
+      tools.nativeCall = async (tool, input) => {
+        const result = await nativeCall(tool, input);
+        memory.add(
+          "tool",
+          JSON.stringify(
+            { tool, input, result },
+            (key, value) =>
+              ["data", "base64"].includes(key) ? undefined : value,
+          ),
+        );
+        return result;
+      };
+    }
     const context = await tools.context();
-    modBridge = await startModBridge(tools);
+    modBridge = await startModBridge(tools, { memory });
     context.socketPath = modBridge.socketPath;
     context.bridgeToken = modBridge.token;
     context.descriptions = DESCRIPTIONS;
+    context.memory = Boolean(memory);
     const plugin = join(stage, "plugin");
     await mkdir(join(plugin, ".claude-plugin"), { recursive: true });
     await mkdir(join(plugin, "hooks"));
@@ -456,6 +493,14 @@ async function native(args) {
       mode: 0o600,
       flag: "wx",
     });
+    const memoryConfig = memory ? join(stage, "matrix-mcp.json") : undefined;
+    if (memory) {
+      await writeFile(
+        memoryConfig,
+        JSON.stringify({ mcpServers: { matrix: memory.mcp() } }),
+        { mode: 0o600, flag: "wx" },
+      );
+    }
     const environment = {
       ...process.env,
       COWBOY_CLAUDE_CONTEXT: contextPath,
@@ -476,7 +521,7 @@ async function native(args) {
     delete environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
-    child = spawn(executable, nativeArguments(args, plugin), {
+    child = spawn(executable, nativeArguments(args, plugin, memoryConfig), {
       env: environment,
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -487,7 +532,7 @@ async function native(args) {
       child.once("error", reject);
       child.once("exit", (code) => resolve(code ?? 1));
     });
-    bridge(child, tools, context).catch((error) => {
+    bridge(child, tools, context, memory).catch((error) => {
       process.stderr.write(
         (error.cowboyDiagnostic ??
           "Cowboy Claude execution initialization or transport failed; local fallback is disabled") +
@@ -500,6 +545,7 @@ async function native(args) {
   } finally {
     child?.kill("SIGTERM");
     connection?.close();
+    await memory?.close();
     await modBridge?.close();
     await rm(stage, { recursive: true, force: true });
   }
@@ -533,7 +579,10 @@ export async function main(args) {
     return;
   }
   if (args[0] === "--cowboy-private-cli") return await native(args.slice(1));
-  if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
+  if (
+    process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+    await matrixConfiguration("claude")
+  ) {
     if (!isAbsolute(process.env.CLAUDE_CODE_EXECUTABLE ?? "")) {
       throw new Error("Missing exact Claude executable");
     }

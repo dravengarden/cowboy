@@ -8,7 +8,7 @@ const MAX_FRAME = 16 * 1024 * 1024;
 
 // Private per-process endpoint. The existing authenticated Cowboy execution
 // connection still owns remote operations, reconnect and effect deduplication.
-export async function startModBridge(tools, { waitMs = 20000 } = {}) {
+export async function startModBridge(tools, { waitMs = 20000, memory } = {}) {
   const directory = await mkdtemp("/tmp/cowboy-claude-mod-");
   await chmod(directory, 0o700);
   const socketPath = join(directory, "bridge.sock");
@@ -45,7 +45,7 @@ export async function startModBridge(tools, { waitMs = 20000 } = {}) {
       }
       if (
         request.method !== "POST" ||
-        !["/ready", "/tool", "/result"].includes(request.url)
+        !["/ready", "/tool", "/result", "/memory"].includes(request.url)
       ) {
         answer(404, { deny: "Unknown execution operation" });
         return;
@@ -62,6 +62,10 @@ export async function startModBridge(tools, { waitMs = 20000 } = {}) {
       }
       if (request.url === "/ready") {
         answer(200, { ready: true });
+        return;
+      }
+      if (request.url === "/memory") {
+        answer(200, { text: memory?.context ?? "" });
         return;
       }
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8"));
