@@ -73,7 +73,9 @@ export function useNetworkActionState(): NetworkActionState {
         ]);
         succeeded = true;
       } catch (error) {
-        notify(actionErrorMessage(error, "The action could not be completed"));
+        if (!(error instanceof Error && error.name === "AbortError" && error.message === "New message kept in composer")) {
+          notify(actionErrorMessage(error, "The action could not be completed"));
+        }
       } finally {
         globalThis.clearTimeout(timer);
         if (progressAt > 0) {

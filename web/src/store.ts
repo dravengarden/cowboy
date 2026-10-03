@@ -1,4 +1,5 @@
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
+import { requestPriorSendDecision } from "./priorSendDecision";
 // Single WebSocket store shared by the whole app. cowboy is the source of
 // truth; this store just accumulates what it pushes. Exposed via
 // useSyncExternalStore so any component re-renders on change.
@@ -2859,7 +2860,7 @@ export function heldDeliveryDetails(sessionId: string): readonly {
       id: mutation.id,
       text: row?.text ?? "",
       attachments: row?.attachments.length ?? 0,
-      canSaveDraft: row !== undefined && CHAT_CREATION_MUTATORS.has(mutation.name),
+      canSaveDraft: row !== undefined,
     };
   });
 }
@@ -2867,7 +2868,7 @@ export function heldDeliveryDetails(sessionId: string): readonly {
 /** Save the original before retiring the retry record; never resubmit it. */
 export async function saveHeldDeliveryAsDraft(sessionId: string, id: string): Promise<void> {
   const pending = qClients.get(sessionId)?.pending().find((mutation) => mutation.id === id);
-  if (pending === undefined || !CHAT_CREATION_MUTATORS.has(pending.name)) return;
+  if (pending === undefined || (pending.args as { row?: QueuedMessage }).row === undefined) return;
   await saveRecoveredSendAsDraft(sessionId, id);
 }
 
@@ -4156,10 +4157,11 @@ async function qAdd(
   const origin = opts.origin ?? "composer";
   const cmid = opts.cmid ?? newCmid();
   if (target === "transcript" || target === "queue") {
+    await durableQueue(sessionId);
     const older = (qClients.get(sessionId)?.pending() ?? []).filter((mutation) =>
-      CHAT_CREATION_MUTATORS.has(mutation.name) && qStatus.get(mutation.id) === "failed"
+      (mutation.args as { row?: QueuedMessage }).row !== undefined && qStatus.get(mutation.id) === "failed"
     ).map((mutation) => mutation.id);
-    if (older.length > 0) olderFailedByNewCmid.set(cmid, older);
+    if (older.length > 0) await requestPriorSendDecision(sessionId, older);
   }
   if (target === "transcript") rememberSendImagePreviews(cmid, attachments, text);
   const row: QueuedMessage = {

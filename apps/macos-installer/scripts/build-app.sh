@@ -18,10 +18,11 @@ if [[ "${1:-}" == "--build-backend" ]]; then
             --bin cowboy --bin cowboy-machine --bin cowboy-machine-install
         cargo build --release --locked --no-default-features --features code-adapter \
             --bin cowboy-code-adapter
+        cargo build --release --locked --bin cowboy-acp-worker
     )
 fi
 
-for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter; do
+for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter cowboy-acp-worker; do
     if [[ ! -x "$backend_dir/$executable" ]]; then
         echo "missing executable backend: $backend_dir/$executable" >&2
         echo "run with --build-backend or set COWBOY_BOOTSTRAP_DIR" >&2
@@ -37,7 +38,7 @@ mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/bin"
 cp "$binary_path" "$app_bundle/Contents/MacOS/CowboyInstaller"
 cp "$app_root/Resources/Info.plist" "$app_bundle/Contents/Info.plist"
 cp "$app_root/Resources/Cowboy.icns" "$app_bundle/Contents/Resources/Cowboy.icns"
-for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter; do
+for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter cowboy-acp-worker; do
     cp "$backend_dir/$executable" "$app_bundle/Contents/Resources/bin/$executable"
 done
 
@@ -45,7 +46,7 @@ plutil -replace CFBundleShortVersionString -string "$version" "$app_bundle/Conte
 plutil -replace CFBundleVersion -string "$build_number" "$app_bundle/Contents/Info.plist"
 
 signing_identity="${CODE_SIGN_IDENTITY:--}"
-for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter; do
+for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter cowboy-acp-worker; do
     codesign --force --options runtime --sign "$signing_identity" \
         "$app_bundle/Contents/Resources/bin/$executable"
 done

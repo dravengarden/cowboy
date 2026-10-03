@@ -11,6 +11,7 @@ import { activateDraft, openSession, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
+import { PriorSendDecisionSheet } from "./HeldMessagesSheet.tsx";
 import { optimisticQuestionKey } from "./explore/optimisticPages.ts";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 
@@ -42,6 +43,7 @@ function Probe() {
     });
     return scenario === "continuity" ? transcript : createElement("div", null,
       createElement(SessionObligationBadge, { sessionId: "fixture-session" }),
+      createElement(PriorSendDecisionSheet),
       createElement("div", { id: "recovery-drafts" }, ...(snapshot.drafts.get("fixture-session") ?? []).map((row) =>
         createElement("div", { key: row.id }, `${row.text}:${row.attachments.length}`))), transcript);
   }
@@ -141,79 +143,48 @@ export async function run() {
       const data = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
       const image: Attachment = { id: "old-shot", name: "old.gif", isImage: true, mimeType: "image/gif",
         previewUrl: `data:image/gif;base64,${data}`, block: { type: "image", data, mimeType: "image/gif" } };
-      await submitPrompt(session, "older unconfirmed caption", [image]);
+      const oldText = "older unconfirmed caption ![old.gif](cowboy-att:old-shot)";
+      await submitPrompt(session, oldText, [image]);
       await until(() => snapshot.optimisticMessages.get(session)?.some((row) => row.status === "failed") === true, "failed older send retained");
       const oldCmid = snapshot.optimisticMessages.get(session)![0]!.cmid;
-      await until(() => document.querySelector('[aria-label="1 message needs attention"]') !== null, "failure badge paints");
-      if (!document.querySelector('[aria-label="1 message needs attention"]')?.textContent?.includes("unconfirmed · Review"))
-        throw new Error("session warning hides its meaning or action");
-      await until(() => document.querySelector('[data-held-message-notice]')?.textContent?.includes("Kept on this device") === true,
-        "unconfirmed message explanation is visible without clicking the warning");
-      const notice = document.querySelector('[data-held-message-notice]')!;
-      const scroller = document.querySelector('[data-transcript-session]')!;
-      if (scroller.contains(notice)) throw new Error("held notice can scroll away with older messages");
-      const review = scenario.startsWith("failed-recovery-review")
-        ? document.querySelector<HTMLElement>('[aria-label="Review unconfirmed messages"]')!
-        : document.querySelector<HTMLElement>('[aria-label="1 message needs attention"]')!;
-      review.click();
-      await until(() => document.body.textContent?.includes("Unconfirmed messages") === true,
-        "badge opens message review");
-      await until(() => document.body.textContent?.includes("1 attachment kept with this message") === true,
-        "review identifies the original message and its attachment");
-      const reviewButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === label)!;
-      if (scenario.startsWith("failed-recovery-review")) {
-        reviewButton("Save to drafts").click();
-        if (scenario === "failed-recovery-review-storage-error") {
-          await until(() => document.body.textContent?.includes("Could not save the draft") === true,
-            "review reports draft save failure");
-          if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid && row.status === "failed"))
-            throw new Error("manual draft save failure lost the original message");
-          return ["review preserves the original caption and image when draft save fails"];
-        }
-        await until(() => document.querySelector('[aria-label="1 message needs attention"]') === null,
-          "saving to drafts clears the session warning");
-        if (document.querySelector('[data-held-message-notice]')) throw new Error("resolved message keeps the transcript warning visible");
-        await until(() => snapshot.drafts.get(session)?.some((row) =>
-          row.text === "older unconfirmed caption" && row.attachments.length === 1 && row.status === undefined) === true,
-          "manual review saves the caption and image as an acknowledged draft");
-        if (!await retained("older unconfirmed caption")) throw new Error("manually saved draft not durable");
-        const metrics = await (await fetch("/fixture/metrics")).json();
-        if (metrics.deliveries !== 1) throw new Error("manual review resubmitted the held message");
-        return ["session warning opens message review", "save to drafts clears warning and preserves content", "review never resubmits the held message"];
-      }
-      reviewButton("Close").click();
-      await until(() => document.body.textContent?.includes("Unconfirmed messages") !== true,
-        "closing review preserves the warning without navigating");
-      let heldBubbleDisappeared = false;
-      const heldBubbleObserver = new MutationObserver(() => {
-        if (document.querySelector(`[data-key="opt-${oldCmid}"]`) === null) heldBubbleDisappeared = true;
+      if (document.querySelector('[data-held-message-notice]') || document.querySelector('[aria-label="1 message needs attention"]'))
+        throw new Error("held messages create persistent warning noise");
+      let cancelled = false;
+      const nextSend = submitPrompt(session, "new working prompt").catch((error) => {
+        if (error.name !== "AbortError") throw error;
+        cancelled = true;
       });
-      heldBubbleObserver.observe(document.body, { childList: true, subtree: true });
-      await submitPrompt(session, "new working prompt");
-      await until(() => document.querySelector(`[data-key="opt-${oldCmid}"]`) !== null &&
-        document.body.textContent?.includes("new working prompt") === true,
-        "older held bubble remains visible beside a newer page's pending prompt");
-      await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("new working prompt"), "new user echo");
-      heldBubbleObserver.disconnect();
-      if (heldBubbleDisappeared) throw new Error("changing pages briefly hid the older unconfirmed message");
-      if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid)) throw new Error("older send retired before agent progress");
+      await until(() => document.body.textContent?.includes("Previous message unconfirmed") === true,
+        "sending a new message asks how to resolve the earlier send");
+      const decision = document.querySelector('[role="dialog"]')!;
+      if (!decision || decision.textContent?.includes("cowboy-att:")) throw new Error("decision exposes internal attachment syntax");
+      const metricsBefore = await (await fetch("/fixture/metrics")).json();
+      if (metricsBefore.deliveries !== 1) throw new Error("new message sent before the user's decision");
+      const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((item) => item.textContent?.trim() === label)!;
       if (scenario === "failed-recovery-no-work") {
-        await until(() => snapshot.timelines.get(session)?.some((event) => event.kind === "turn_end") === true, "turn ends before work");
-        if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid && row.status === "failed") || (snapshot.drafts.get(session) ?? []).length !== 0) throw new Error("a turn without work retired the failed message");
-        return ["receipt and user echo without agent work preserve the held message"];
+        button("Retry old").click();
+        await nextSend;
+        if (!cancelled) throw new Error("retry old also sent the new message");
+        if (!(await retained("older unconfirmed caption"))) throw new Error("retry lost original content");
+        return ["retry old pauses the new send without clearing composer content"];
       }
-      await until(() => document.body.textContent?.includes("Agent is working again") === true, "actual resumed work");
-      if (scenario === "failed-recovery-storage-error") {
-        await delay(300);
-        if (!snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid && row.status === "failed")) throw new Error("failed draft save lost the source message");
-        return ["draft save failure preserves the original held message and image"];
+      button("Ignore & send").click();
+      if (scenario.endsWith("storage-error")) {
+        await until(() => document.body.textContent?.includes("Could not keep the old message") === true,
+          "archive save failure stays in the decision sheet");
+        const metrics = await (await fetch("/fixture/metrics")).json();
+        if (metrics.deliveries !== 1 || !snapshot.optimisticMessages.get(session)?.some((row) => row.cmid === oldCmid))
+          throw new Error("failed archive sent the new message or lost original content");
+        return ["failed archive preserves the original message and blocks the new send"];
       }
-      await until(() => (snapshot.optimisticMessages.get(session) ?? []).length === 0, "old bottom error retired");
-      await until(() => document.querySelector('[aria-label="1 message needs attention"]') === null, "attention badge clears");
-      await until(() => snapshot.drafts.get(session)?.some((row) => row.text === "older unconfirmed caption" && row.attachments.length === 1 && row.status === undefined) === true, "old content saved as acknowledged draft");
-      if (!await retained("older unconfirmed caption")) throw new Error("recovered draft not durable");
-      return ["new prompt must start agent work before old errors clear", "caption and image retained as a durable draft", "old delivery never resubmitted"];
+      await nextSend;
+      await until(() => snapshot.drafts.get(session)?.some((row) => row.text === oldText && row.attachments.length === 1) === true,
+        "ignored original preserved with image in drafts");
+      await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("new working prompt"), "new message sent after decision");
+      if (!await retained("older unconfirmed caption")) throw new Error("ignored message not durable");
+      if (document.querySelector('[data-held-message-notice]')) throw new Error("permanent warning remains");
+      return ["decision happens before sending", "ignore keeps old text and images in drafts", "new message sent once without persistent warning"];
     }
     if (scenario === "continuity") {
       openSession(session);

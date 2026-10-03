@@ -176,7 +176,8 @@ export function useThemeMode(): ThemeControls {
           },
           // Session-sheet dismiss is a ButtonBase, not an IconButton. Clear a
           // leftover hover/focus latch on unfilled controls, but retain the
-          // semantic fill of contained actions: iOS keeps :hover after a tap,
+          // semantic fill of contained actions and aria-selected views. iOS
+          // keeps :hover after a tap,
           // and transparent + contrastText paints those buttons as blank bars.
           MuiButtonBase: {
             defaultProps: {
@@ -187,14 +188,14 @@ export function useThemeMode(): ThemeControls {
               root: {
                 WebkitTapHighlightColor: "transparent",
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
-                  "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible":
+                  "&:not(.MuiButton-contained):not([aria-selected='true']):hover, &:not(.MuiButton-contained):not([aria-selected='true']).Mui-focusVisible":
                     {
                       backgroundColor: "transparent",
                     },
                 },
                 "@media (hover: none), (pointer: coarse), (any-pointer: coarse)":
                   {
-                    "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible":
+                    "&:not(.MuiButton-contained):not([aria-selected='true']):hover, &:not(.MuiButton-contained):not([aria-selected='true']).Mui-focusVisible":
                       {
                         backgroundColor: "transparent",
                       },

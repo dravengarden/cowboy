@@ -1,8 +1,10 @@
 /** Out-of-order Git reads against the real components, without a live account. */
-import { StrictMode } from "react";
+import { type ReactNode, StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { ThemeProvider } from "@mui/material";
+import { useThemeMode } from "./theme.ts";
+import { COARSE_POINTER_ROOT_CLASS } from "./platform.ts";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { ReviewChanges } from "./mobile/review/ReviewChanges.tsx";
 import { ReviewRepository } from "./mobile/review/ReviewRepository.tsx";
@@ -91,7 +93,12 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     "width:420px;height:600px;display:flex;flex-direction:column";
   document.body.append(container);
   const root = createRoot(container);
-  const theme = createTheme();
+  let setMode: ReturnType<typeof useThemeMode>["setMode"];
+  function ProductTheme({ children }: { children: ReactNode }) {
+    const controls = useThemeMode();
+    setMode = controls.setMode;
+    return <ThemeProvider theme={controls.theme}>{children}</ThemeProvider>;
+  }
   const revisions: string[] = [];
   const queues: GitReviewEntry[][] = [];
   const onRevision = (revision: string) => {
@@ -104,7 +111,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
     flushSync(() =>
       root.render(
         <StrictMode>
-          <ThemeProvider theme={theme}>
+          <ProductTheme>
             <SurfaceProvider>
               {repository
                 ? (
@@ -133,7 +140,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
                   />
                 )}
             </SurfaceProvider>
-          </ThemeProvider>
+          </ProductTheme>
         </StrictMode>,
       )
     );
@@ -220,6 +227,56 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
       "a cancelled branch read cannot replace current content with its late failure",
     );
 
+    historyTruncated = false;
+    render("", true);
+    await settle();
+    for (const mode of ["light", "dark"] as const) {
+      flushSync(() => setMode(mode));
+      await settle();
+      document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
+      for (const label of ["Changes", "History", "Worktrees", "History"]) {
+        const tab = [...container.querySelectorAll<HTMLElement>('[role="tab"]')]
+          .find((node) => node.textContent?.trim() === label)!;
+        flushSync(() => {
+          tab.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              bubbles: true,
+              pointerType: "touch",
+            }),
+          );
+          tab.click();
+        });
+        tab.classList.add("Mui-focusVisible");
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        const background = getComputedStyle(tab).backgroundColor;
+        check(
+          tab.getAttribute("aria-selected") === "true" &&
+            background !== "transparent" && background !== "rgba(0, 0, 0, 0)",
+          `${mode}: selected touch tab lost its fill`,
+        );
+        for (
+          const other of container.querySelectorAll<HTMLElement>(
+            '[role="tab"][aria-selected="false"]',
+          )
+        ) {
+          other.dataset.touchActivated = "true";
+          other.classList.add("Mui-focusVisible");
+          // MUI interpolates the previous tab's background for 150ms.
+          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+          const fill = getComputedStyle(other).backgroundColor;
+          check(
+            fill === "transparent" || /rgba\([^)]*,\s*0\)$/.test(fill),
+            `${mode}: old touch tab retained selected paint (${fill})`,
+          );
+        }
+      }
+    }
+    document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
+    tests.push(
+      "real light and dark themes retain selected tab fill after touch and clear the old tab",
+    );
+    render("refs/heads/next");
+    historyTruncated = true;
     render("", true);
     click("History");
     await until(
@@ -265,6 +322,7 @@ export async function runReviewRequestBrowserConformance(): Promise<string[]> {
   } finally {
     flushSync(() => root.unmount());
     container.remove();
+    document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
     globalThis.fetch = originalFetch;
   }
   return tests;

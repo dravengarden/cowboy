@@ -345,44 +345,36 @@ Queued rows add the authored time ("Written 14:02 · sends when online").
 composer) and Discard. `rejected` rows show the server reason and the
 actions that fit it (see the conflict catalog).
 
-When a newer locally authored prompt is echoed and starts actual agent work,
-older failed prompt/queue creations from that device are saved as drafts before
-their retry obligations and bottom-of-transcript failure bubbles are retired.
-Text and attachments survive; the older content is never submitted automatically.
-A delivery receipt alone, another device’s prompt, or a turn that fails before
-work does not trigger recovery. If the draft cannot be saved durably, the original
-held message and attention badge remain available. Historical runtime errors stay
-at their original transcript position; a recovered turn clears its stale session
-error notification.
+Earlier unconfirmed sends are resolved at the next authored send, before the
+new message enters the durable outbox or reaches the Agent. A compact decision
+shows a short text preview and attachment count, without internal image tokens:
 
-The Sessions drawer labels held deliveries explicitly as "unconfirmed · Review"
-below the directory. The opened transcript shows a persistent explanation and
-Review button outside the scrolling and paged history, so users do not have to
-infer the meaning of an icon or find an older failed bubble. Either entry opens
-a per-session review sheet on this device. It shows the retained text and attachment count and offers Retry
-or Save to drafts for held prompt/queue creations. Saving retires the original
-retry obligation only after the draft is durable, and never sends that content
-to the Agent. Failure retains the original message and badge. Closing the sheet
-does not acknowledge or remove a held message. Its badge hit area is 44px while
-the painted row geometry stays stable on the Mobile swipe path.
+- **Ignore & send** saves each earlier message, including attachment bytes, as
+  a durable draft before retiring its local retry record and sending the new
+  message. The old message is never resubmitted by this choice.
+- **Retry old** retries the original message identity and pauses the new send;
+  the composer retains the new text and attachments.
+- Closing cancels the new send and preserves both old and new content. A draft
+  save failure stays in the decision and sends nothing new.
+
+Held messages have no permanent session-list warning, transcript banner or
+floating attention reminder. Their existing inline delivery state and draft
+recovery remain available. Pending offline sends retain their ordinary queue
+indicator. This flow changes delivery orchestration only, not editor, IME,
+selection, image-paste or caret behavior.
 
 **Sessions drawer.** Connection state is app-level, not per session, so the
 floating pill hides while the drawer is open and the drawer carries its own
 inline line at the top of the list: "Reconnecting… · list from 3 min ago",
 tappable into the same sheet. Row status dots keep meaning agent status. A
-row with pending or held rows shows a small badge with the count. Sessions
+row with pending rows shows a small badge with the count. Sessions
 without a cached tail show a subdued "Not cached" glyph while the Hub is not
 live so the user knows before tapping.
 
 **Reconnect.** The pill turns green "Synced" for 2 s, then disappears.
 
-**Attention.** Held or rejected rows outside the opened session raise the
-pill as "2 messages need attention"; rows of the opened session are not
-counted because their own chrome already offers Retry, Return and Discard.
-Tapping opens the sheet, which lists the sessions and opens one on tap.
-"Hide reminder" acknowledges exactly the rows held now, so a resolved row
-never re-raises the pill for the rest, while a new failure does. The
-acknowledgement persists across reloads.
+**Attention.** Earlier messages are handled by the pre-send decision above.
+They do not raise the Mobile connection pill or add another session-list badge.
 
 ### Desktop
 

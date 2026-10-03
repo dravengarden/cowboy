@@ -18,7 +18,6 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { HeldMessagesNotice } from "./HeldMessagesSheet";
 import {
   Box,
   Button,
@@ -5432,7 +5431,6 @@ export function Transcript({
         minHeight: 0,
       }}
     >
-      <HeldMessagesNotice sessionId={sessionId} />
       <Box
         ref={parentRef}
         data-transcript-session={sessionId}

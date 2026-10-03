@@ -10,7 +10,6 @@ import { requestPickSession } from "../sessionPickRequest";
 import { retrySyncNow, useHeldDeliveries, useStoreSelector, useSyncStatus } from "../store";
 import { SYNC_SHEET_EVENT } from "../syncSheetRequest";
 import {
-  attentionCount,
   presentedSyncPhase,
   relativeAge,
   SYNC_PRESENTATION_DEBOUNCE_MS,
@@ -84,12 +83,13 @@ export function MobileSyncPill(): ReactNode {
   const banner = controlPlaneConnection.useConnectionBanner();
   const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState(false);
-  const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(readAcknowledged);
+  const [, setAcknowledged] = useState<ReadonlySet<string>>(readAcknowledged);
   const shownRef = useRef<SyncPhase | null>(null);
   const recoveredAtRef = useRef<number | undefined>(undefined);
   const wasLiveRef = useRef(raw.phase === "live");
 
-  const attention = attentionCount(held.sessions, activeId, acknowledged);
+  // Earlier sends are resolved at the next send, rather than raising a floating reminder.
+  const attention = 0;
   const status = withHeld(raw, attention);
 
   if (status.phase === "live" && !wasLiveRef.current && shownRef.current !== null) {
