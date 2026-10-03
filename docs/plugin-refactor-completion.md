@@ -654,12 +654,14 @@ adoption rather than a new production configuration-ABA acceptance test.
 Its [candidate acceptance](releases/plugin-workspace-configuration-identity-2026-09-28.md)
 records the failing old-behaviour regression, complete gate and 34-check
 connected chain against the exact immutable Machine.
-The [alias-identity candidate](releases/plugin-workspace-alias-identity-2026-10-03.md)
+The [alias-identity release](releases/plugin-workspace-alias-identity-2026-10-03.md)
 then keeps one Machine incarnation/handle for several configured IDs naming
 the same root, including aliases after handle-budget overflow. Its protocol-24
 connected negative reproduces an erroneous 410 on the preceding production
 artifact; the candidate passes all 36 v16 checks against the same Controller
-and native pair. This alias fix awaits its own Machine maintenance activation.
+and native pair. The final freshly integrated artifact repeats all 36 checks
+and is activated on Hawk by the October 3 Machine maintenance transaction,
+with all 14 workers and two execution keepers retaining their original PIDs.
 
 The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
 connects authenticated per-root observations to the finite Code executor,
