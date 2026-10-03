@@ -120,6 +120,18 @@ commit and rollback replay remain unchanged. The
 three-lane rejection/reopen fixtures and successful Hawk owner activation at
 Columbus source `193565d0`; no invalid production phase was seeded.
 
+Journal and success-receipt maintenance authority must agree with the lane:
+Machine requires true, while Controller/Web cannot carry Machine authority.
+Missing, null or false original Machine authorization refuses before automatic
+recovery, active-revision acceptance or explicit repair effects. A later
+invocation's flag cannot substitute for the original record, and refusal does
+not rewrite authorization. Existing invocation requirements and valid replay
+remain unchanged. The
+[maintenance authority release](releases/plugin-maintenance-authority-2026-10-04.md)
+records ten invalid-record fixtures, compatible production receipt inspection
+and successful Hawk owner activation at source `ab151b1e`; no invalid production
+authorization was seeded.
+
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state
 outright; compatible portable recovery readers remain unadmitted. A finite
