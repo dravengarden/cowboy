@@ -25,6 +25,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--matrix-source", type=Path, required=True)
 parser.add_argument("--native-root", type=Path, required=True)
 parser.add_argument("--receipt", type=Path, required=True)
+parser.add_argument("--code-mode", action="store_true", help="Exercise Matrix's bounded Python retrieval through both native clients")
 args = parser.parse_args()
 require([name for _, name in socket.if_nameindex()] == ["lo"], "loopback namespace required")
 require(not args.receipt.exists(), "new receipt required")
@@ -50,6 +51,8 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
     source = store.observe(binding, {"turn": "seed", "learn": False, "events": [{"id": "u1", "role": "user", "text": "The release protocol requires receipt marker MATRIX-SHARED-619."}]})
     note = {"scope": "project", "topic": "release-marker", "kind": "fact", "title": "Release protocol", "body": "The release protocol requires receipt marker MATRIX-SHARED-619.", "sources": [{"event": source["events"][0], "quote": "MATRIX-SHARED-619"}]}
     receipt = store.put(binding, {**note, "operation": "seed", "expected_revision": 0})
+    memory_tool = "memory_search" if args.code_mode else "memory_get"
+    memory_arguments = {"code": "for m in search('release')['results'][:1]: emit({'id':m['id'],'body':get(m['id'])['body']})"} if args.code_mode else {"id": receipt["id"]}
     def config(provider):
         path = root / (provider + "-matrix.json")
         path.write_text(json.dumps({"schema": 1, "provider": provider, "endpoint": f"http://127.0.0.1:{server.server_port}", "token": clients[provider]["token"], "state_dir": str(root / "delivery"), "projects": [{"path": str(runtime), "machine": "fixture-host", "project": "fixture"}]}))
@@ -66,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
     checks.append("enrolled_artifact_probes_need_no_native_session_binding")
     codex = native / "codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
     launcher = native / "codex-adapter/app/cowboy-launch.mjs"
-    api = Api([{"type": "custom_tool_call", "call_id": "memory-read", "name": "exec", "namespace": "functions", "input": "text(await tools.mcp__matrix__memory_get(" + json.dumps({"id": receipt["id"]}) + "));"}, final("memory-done"), final("corrected"), final("forgotten")])
+    api = Api([{"type": "custom_tool_call", "call_id": "memory-read", "name": "exec", "namespace": "functions", "input": "text(await tools.mcp__matrix__" + memory_tool + "(" + json.dumps(memory_arguments) + "));"}, final("memory-done"), final("corrected"), final("forgotten")])
     environment = closed_environment(root / "codex-home")
     environment.update({"COWBOY_OFFLINE_FIXTURE_KEY": "fake-fixture", "COWBOY_PRIVATE_CODEX_EXECUTABLE": str(codex), "COWBOY_PRIVATE_CODEX_ARGUMENTS": "[]", "COWBOY_MATRIX_CONFIG": config("codex")})
     home = Path(environment["CODEX_HOME"])
@@ -82,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         complete_turn(client, thread, "Find the release protocol marker.")
         encoded = json.dumps(api.requests)
         require("MATRIX-SHARED-619" in json.dumps(api.requests[0]), "Codex automatic recall missing")
-        require("mcp__matrix__memory_get" in encoded and "MATRIX-SHARED-619" in encoded, "Codex MCP/recall missing")
+        require("mcp__matrix__" + memory_tool in encoded and "MATRIX-SHARED-619" in encoded, "Codex MCP/recall missing")
         require(any("MATRIX-SHARED-619" in str(item.get("output")) for request in api.requests for item in request.get("input", []) if item.get("type") in ("function_call_output", "custom_tool_call_output")), "Codex MCP did not return Matrix data")
         checks.append("packaged_codex_native_http_mcp_and_recall")
         # Automatic capture includes the actual public final message, no helper history scan.
@@ -95,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         client.close()
         api.close()
 
-    api = ScriptedApi([tool("mcp__matrix__memory_get", {"id": receipt["id"]})])
+    api = ScriptedApi([tool("mcp__matrix__" + memory_tool, memory_arguments)])
     environment = closed_environment(root / "claude-home")
     environment.update({"ANTHROPIC_BASE_URL": f"http://127.0.0.1:{api.server_port}", "ANTHROPIC_API_KEY": "fake-fixture", "COWBOY_PRIVATE_CLAUDE_EXECUTABLE": str(native / "claude/package/claude"), "COWBOY_MATRIX_CONFIG": config("claude"), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
     client = Claude(str(native / "claude-adapter/bin/cowboy-configured-cli"), environment, runtime, WorkspaceFixture(runtime), aliases=False, bound_native=True)
@@ -105,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         require(not result.get("is_error"), "Claude native turn failed")
         require("MATRIX-SHARED-619" in json.dumps(api.requests[0]), "Claude automatic recall missing")
         encoded = json.dumps(api.requests)
-        require("mcp__matrix__memory_get" in encoded and "MATRIX-SHARED-619" in encoded, "Claude MCP/recall missing")
+        require("mcp__matrix__" + memory_tool in encoded and "MATRIX-SHARED-619" in encoded, "Claude MCP/recall missing")
         outputs = [b for r in api.requests for m in r.get("messages", []) for b in (m.get("content") if isinstance(m.get("content"), list) else []) if b.get("type") == "tool_result"]
         require(any("MATRIX-SHARED-619" in json.dumps(b) for b in outputs), "Claude MCP did not return Matrix data")
         checks.append("packaged_claude_native_http_mcp_and_shared_recall")
@@ -115,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         server.shutdown()
         server.server_close()
 
-report = {"schema": "cowboy.matrix-native-conformance/v1", "accepted": True, "checks": checks, "not_checked": ["remote execution placement", "live model quality", "native-memory baseline"]}
+report = {"schema": "cowboy.matrix-native-conformance/v1", "accepted": True, "retrieval_mode": "matrix-python-v1" if args.code_mode else "memory_get", "checks": checks, "not_checked": ["remote execution placement", "live model quality", "native-memory baseline"]}
 args.receipt.parent.mkdir(parents=True, exist_ok=True)
 args.receipt.write_text(json.dumps(report, indent=2) + "\n")
 print(json.dumps(report))

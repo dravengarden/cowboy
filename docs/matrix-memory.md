@@ -58,3 +58,17 @@ Acceptance includes actual native MCP discovery/calls, cross-Provider recall,
 correction/forgetting, resume/compaction, outage delivery, scope isolation and
 the existing packaged execution gates. A synthetic extraction or client test
 alone does not establish native acceptance or improvement over built-in memory.
+
+Matrix 0.2.0 keeps these four tool names and Provider versions. Its experimental
+`memory_search` code argument composes scoped reads and emits selected JSON in
+one call; native Codex code mode and Claude direct MCP both pass the packaged
+fixture with `tools/matrix_native_conformance.py --code-mode`. Run that fixture
+inside the pinned shell and an isolated loopback network namespace, supplying
+the independent Matrix source and exact packaged native root explicitly.
+Matrix's draft protocol support retains older native-client negotiation.
+The independently versioned [Matrix performance contract][matrix-performance]
+owns the draft pin, interpreter limits, private metrics, benchmark method and
+weekly feedback review. No Provider or active worker restart is needed to update
+the memory service.
+
+[matrix-performance]: https://github.com/dravengarden/matrix/blob/main/docs/performance.md
