@@ -93,3 +93,8 @@ production continuity separately from writer admission.
 The [component compatibility release](releases/plugin-session-deletion-compatibility-2026-10-03.md)
 records the installed Hawk owner guard, declared reader envelope and live
 generation/continuity observations separately from the remaining writer gate.
+
+The [reader-floor release](releases/plugin-session-deletion-floor-2026-10-03.md)
+records the root-owned persistent floor, actual undeclared-artifact refusal and
+bounded same-generation recovery fixtures. Older recovery authorities and
+writer acceptance remain separate.
