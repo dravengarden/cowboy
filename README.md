@@ -153,6 +153,28 @@ explicit rather than silently moving or replacing active work.
 Read the [architecture overview](docs/architecture/00-overview.md) for the
 component map and end-to-end request flow.
 
+### Local and remote execution
+
+Choose a **Project**, grouped by Machine and directory, then an installed AI
+such as **Codex · Machine 01** or **Claude Code · Machine 01**. Cowboy determines
+Local or Remote from the AI runtime and project locations.
+
+Codex and Claude Code each use one Provider Plugin for both modes. In Local
+mode, the AI runtime and project share a Machine. In Remote mode, the Agent
+runtime, model connection, authentication, and private conversation state stay
+on the runtime Machine; files, shell commands, and task processes run on the
+project Machine. For example, an AI on Machine 01 can work on a repository on
+Machine 02 without installing another AI Provider on Machine 02.
+
+Cowboy owns the target binding, transport, reconnect, cancellation, and target
+worktree. Each Provider Plugin adapts its native tools to that environment.
+Code, Review, Git, and uploads follow the same bound target. If the target is
+unavailable, the session never silently switches execution to the runtime
+Machine. Other Providers require explicit remote-execution support.
+
+See [Native execution environments](docs/execution-environments.md) for the
+ownership, compatibility, and recovery contracts.
+
 ## Product surfaces
 
 ### Desktop — keyboard first

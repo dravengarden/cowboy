@@ -142,6 +142,25 @@ inbound listener；本地 Machine 可以使用 UDS。每个 Session 都会记录
 
 组件图和端到端请求流程请参阅[架构概览](docs/architecture/00-overview.md)。
 
+### 本地与远端执行
+
+先选择按 Machine 和目录分级展示的 **Project**，再选择已安装的 AI，例如
+**Codex · Machine 01** 或 **Claude Code · Machine 01**。Cowboy 根据 AI runtime
+和项目所在的机器自动判断 Local 或 Remote。
+
+Codex 和 Claude Code 各自使用一个 Provider Plugin，同时支持两种模式。Local
+模式下，AI runtime 和项目位于同一台 Machine。Remote 模式下，Agent runtime、
+模型连接、认证和私有会话状态留在运行 AI 的 Machine；文件、Shell 命令和任务进程
+由项目所在的 Machine 执行。例如，Machine 01 上的 AI 可以操作 Machine 02 上的
+仓库，Machine 02 无需为此另行安装 AI Provider。
+
+Cowboy 负责目标绑定、传输、重连、取消与目标 worktree；各 Provider Plugin 负责
+将原生工具适配到该执行环境。Code、Review、Git 和上传使用同一个绑定目标。
+目标不可用时，会话不会静默切换到运行 AI 的 Machine 执行。其他 Provider 需明确
+支持远端执行能力。
+
+职责、兼容性与恢复契约见[原生执行环境](docs/execution-environments.md)。
+
 ## 产品界面
 
 ### Desktop — 键盘优先

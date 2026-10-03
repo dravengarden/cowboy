@@ -1,9 +1,18 @@
 import CloudOffOutlined from "@mui/icons-material/CloudOffOutlined";
 import CloudUploadOutlined from "@mui/icons-material/CloudUploadOutlined";
-import ErrorOutline from "@mui/icons-material/ErrorOutline";
-import { Box, ButtonBase, CircularProgress, Tooltip, Typography } from "@mui/material";
+import {
+  Box,
+  ButtonBase,
+  CircularProgress,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import { useEffect, useState } from "react";
-import { useCachedTailSessions, useSessionObligations, useSyncStatus } from "./store";
+import {
+  useCachedTailSessions,
+  useSessionObligations,
+  useSyncStatus,
+} from "./store";
 import { requestSyncSheet } from "./syncSheetRequest";
 import {
   relativeAge,
@@ -17,39 +26,29 @@ import {
 // element here sits on the Mobile swipe path, so it is paint-only: no
 // transform, no shadow, no work on finger-down.
 
-/** How many rows of a session still wait to send, or need the user's decision. */
+/** Pending offline sends only; held messages are handled at the next send. */
 export function SessionObligationBadge(
   { sessionId }: { sessionId: string },
 ): React.JSX.Element | null {
-  const { pending, held } = useSessionObligations(sessionId);
-  const total = pending + held;
-  if (total === 0) return null;
-  const attention = held > 0;
-  const label = attention
-    ? `${String(held)} ${held === 1 ? "message needs" : "messages need"} attention`
-    : `${String(pending)} ${pending === 1 ? "message waits" : "messages wait"} to send`;
+  const { pending } = useSessionObligations(sessionId);
+  if (pending === 0) return null;
+  const label = `${pending} ${
+    pending === 1 ? "message waits" : "messages wait"
+  } to send`;
   return (
-    <Tooltip title={label} enterDelay={300}>
+    <Tooltip title={label}>
       <Box
         role="img"
         aria-label={label}
         sx={{
           display: "inline-flex",
-          alignItems: "center",
           gap: 0.25,
-          flexShrink: 0,
-          color: attention ? "warning.main" : "info.main",
+          alignItems: "center",
+          color: "info.main",
         }}
       >
-        {attention
-          ? <ErrorOutline sx={{ fontSize: 15 }} />
-          : <CloudUploadOutlined sx={{ fontSize: 15 }} />}
-        <Typography
-          variant="caption"
-          sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
-        >
-          {total}
-        </Typography>
+        <CloudUploadOutlined sx={{ fontSize: 15 }} />
+        <Typography variant="caption">{pending}</Typography>
       </Box>
     </Tooltip>
   );
@@ -113,8 +112,14 @@ export function SessionsSyncedCaption(): React.JSX.Element | null {
       {busy
         ? <CircularProgress size={12} color="inherit" thickness={5} />
         : <CloudOffOutlined sx={{ fontSize: 15, flexShrink: 0 }} />}
-      <Typography variant="caption" sx={{ fontWeight: 600 }}>{label}</Typography>
-      <Typography variant="caption" sx={{ color: "text.secondary", minWidth: 0 }} noWrap>
+      <Typography variant="caption" sx={{ fontWeight: 600 }}>
+        {label}
+      </Typography>
+      <Typography
+        variant="caption"
+        sx={{ color: "text.secondary", minWidth: 0 }}
+        noWrap
+      >
         {age === null ? "· list may be out of date" : `· list from ${age}`}
       </Typography>
     </ButtonBase>
