@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-03",
+  "tests": [
+    {
+      "provider": "claude-code",
+      "model": "sonnet",
+      "session": "sess-1791001940454",
+      "runtime_machine": "ovh",
+      "project_machine": "hawk",
+      "native_endpoint": "api/execution-sessions",
+      "pid": 736867,
+      "request_started_epoch": 1791006917.6999402,
+      "request_finished_epoch": 1791006920.1702056,
+      "elapsed_seconds": 2.4702653884887695,
+      "assistant_marker_verified": true,
+      "stop_reason": "end_turn",
+      "observed_remote_sockets": [
+        "160.79.104.10:443",
+        "[2607:6bc0::10]:443"
+      ],
+      "route_interface": "ens3",
+      "proxy_used": false,
+      "temporary_session_deleted": true
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-luna",
+      "session": "sess-1791001940455",
+      "runtime_machine": "ovh",
+      "project_machine": "hawk",
+      "native_endpoint": "api/execution-sessions",
+      "pid": 737253,
+      "request_started_epoch": 1791006944.7522871,
+      "request_finished_epoch": 1791006948.3247223,
+      "elapsed_seconds": 3.572435140609741,
+      "assistant_marker_verified": true,
+      "stop_reason": "end_turn",
+      "observed_remote_sockets": [
+        "127.0.0.1:46457",
+        "[2606:4700:4408::ac40:9bd1]:443",
+        "[2606:4700:440b::ac40:9034]:443"
+      ],
+      "route_interface": "ens3",
+      "proxy_used": false,
+      "temporary_session_deleted": true
+    }
+  ],
+  "evidence": {
+    "method": "Actual successful native Remote model requests correlated with provider child PIDs, public sockets, and kernel destination routes.",
+    "routes": "Anthropic IPv4/IPv6 and ChatGPT IPv6 route via OVH native ens3 gateway.",
+    "nft_tables": [],
+    "proxy_environment_existing_provider_processes": []
+  },
+  "limitations": [
+    "No claim of complete interactive task or mobile acceptance from these minimal provider requests.",
+    "Peer transport policy is independent; native OVH peer mode means approved JMS return addresses, not an unapproved mainland direct path."
+  ]
+}

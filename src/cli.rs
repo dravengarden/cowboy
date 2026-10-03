@@ -194,6 +194,11 @@ pub struct ServeAcpArgs {
     #[arg(long, default_value = "local")]
     pub machine: String,
 
+    /// Run the AI on this enrolled Machine while --machine owns the Project.
+    /// Uses Cowboy's native Remote execution interface; no local fallback.
+    #[arg(long, requires = "workspace")]
+    pub runtime_machine: Option<String>,
+
     /// Registered workspace ID for new sessions on a non-local Machine.
     /// Required for remote creation; ACP's cwd remains a local-client path.
     #[arg(long)]
@@ -896,6 +901,24 @@ mod tests {
         };
         assert!(args.token.is_none());
         assert!(args.auth_state_dir.is_none());
+        assert!(args.runtime_machine.is_none());
+        let remote = Cli::try_parse_from([
+            "cowboy",
+            "serve-acp",
+            "--runtime-machine",
+            "ovh",
+            "--machine",
+            "hawk",
+            "--workspace",
+            "cowboy",
+        ])
+        .unwrap();
+        let Command::ServeAcp(remote) = remote.command else {
+            panic!("expected serve-acp");
+        };
+        assert_eq!(remote.runtime_machine.as_deref(), Some("ovh"));
+        assert_eq!(remote.machine, "hawk");
+        assert!(Cli::try_parse_from(["cowboy", "serve-acp", "--runtime-machine", "ovh"]).is_err());
 
         let cli = Cli::try_parse_from([
             "cowboy",
