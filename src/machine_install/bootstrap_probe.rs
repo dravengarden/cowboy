@@ -10,6 +10,41 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, ensure};
 
+pub(super) const PAYLOADS: [&str; 3] =
+    ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"];
+
+/// Own the exact bundle used for both the guard probe and installation copies.
+/// Caller paths can be replaced during the probe without changing this snapshot.
+pub(super) struct Bundle(Scratch);
+
+impl Bundle {
+    pub(super) fn prepare(source: &Path) -> Result<Self> {
+        let bundle = Self(Scratch::new()?);
+        for name in PAYLOADS {
+            let path = if name == "cowboy-machine" {
+                source.to_path_buf()
+            } else {
+                super::companion_binary(source, name)
+            };
+            ensure!(
+                path.is_file(),
+                "bootstrap bundle is missing {}",
+                path.display()
+            );
+            let target = bundle.payload(name);
+            std::fs::copy(&path, &target)
+                .with_context(|| format!("snapshotting bootstrap payload {}", path.display()))?;
+            super::set_mode(&target, 0o755)?;
+        }
+        check(&bundle.payload("cowboy-machine"))?;
+        Ok(bundle)
+    }
+
+    pub(super) fn payload(&self, name: &str) -> PathBuf {
+        self.0.0.join(name)
+    }
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {

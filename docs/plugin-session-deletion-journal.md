@@ -110,6 +110,17 @@ prevents a new guarded launcher from being paired silently with an old bootstrap
 It is a compatibility check of caller-selected installation code, not a sandbox
 or signed reader/recovery admission.
 
+The current installer now captures all three bootstrap payloads into an owned
+mode-0700 temporary bundle before either probe. Both diagnostics execute that
+copy, and install/refresh publish from it without reopening caller paths.
+Register retains the same captured bundle across local identity creation and
+installation. Replacing original paths during a probe cannot substitute the
+installed host or companions. Success and refusal drop the owned temporary
+bundle. Capture is sequential, not an atomic upstream bundle-version snapshot;
+trusted candidate code and its external dependencies are not sandboxed or made
+immutable. The [bundle snapshot release](releases/plugin-bootstrap-snapshot-2026-10-03.md)
+records the exact packaged installer acceptance.
+
 Rejected Welcome reconciliation no longer requests a host restart. This keeps
 a refused candidate from repeatedly exiting its healthy resident reader.
 These are bounded refusal checks, not a portable reader declaration, persistent

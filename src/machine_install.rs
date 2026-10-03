@@ -132,7 +132,7 @@ pub async fn register(
         "cowboy-machine was not found next to this cowboy binary ({host}). Install both on this computer, then run register again.",
         host = host.display()
     );
-    bootstrap_probe::check(&host)?;
+    let bundle = bootstrap_probe::Bundle::prepare(&host)?;
     bind_service_origin(&state_dir, &controller_url)?;
     let identity = crate::machine_auth::MachineIdentity::load_or_create(&state_dir)?;
     let fingerprint = crate::machine_auth::fingerprint(identity.public_key())?;
@@ -156,7 +156,7 @@ pub async fn register(
         draining: false,
         no_start: false,
     };
-    let (home, launcher) = prepare_install(&install_args)?;
+    let (home, launcher) = prepare_install_from_bundle(&install_args, &home, Some(bundle))?;
     if background {
         install_background_service(&home, &launcher, &service_id, false)?;
     }
@@ -269,6 +269,14 @@ fn prepare_install(args: &InstallArgs) -> Result<(PathBuf, PathBuf)> {
 }
 
 fn prepare_install_at(args: &InstallArgs, home: &Path) -> Result<(PathBuf, PathBuf)> {
+    prepare_install_from_bundle(args, home, None)
+}
+
+fn prepare_install_from_bundle(
+    args: &InstallArgs,
+    home: &Path,
+    bundle: Option<bootstrap_probe::Bundle>,
+) -> Result<(PathBuf, PathBuf)> {
     validate_scalar(&args.controller_url)?;
     anyhow::ensure!(
         crate::service_identity::valid_service_id(&args.service_id),
@@ -292,21 +300,12 @@ fn prepare_install_at(args: &InstallArgs, home: &Path) -> Result<(PathBuf, PathB
         None
     };
     validate_install_mode(args, &state, installed.as_ref())?;
-    let source = machine_host_binary(args.machine_binary.as_deref());
-    let payloads = ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"];
-    for name in payloads {
-        let path = if name == "cowboy-machine" {
-            source.clone()
-        } else {
-            companion_binary(&source, name)
-        };
-        anyhow::ensure!(
-            path.is_file(),
-            "bootstrap bundle is missing {}",
-            path.display()
-        );
-    }
-    bootstrap_probe::check(&source)?;
+    let bundle = match bundle {
+        Some(bundle) => bundle,
+        None => {
+            bootstrap_probe::Bundle::prepare(&machine_host_binary(args.machine_binary.as_deref()))?
+        }
+    };
     bind_service_origin(&state, &normalize_controller_url(&args.controller_url)?)?;
     let config = home
         .join(".config/cowboy-machine/services")
@@ -318,12 +317,8 @@ fn prepare_install_at(args: &InstallArgs, home: &Path) -> Result<(PathBuf, PathB
     set_mode(&state, 0o700)?;
     set_mode(&config, 0o700)?;
 
-    for name in payloads {
-        let path = if name == "cowboy-machine" {
-            source.clone()
-        } else {
-            companion_binary(&source, name)
-        };
+    for name in bootstrap_probe::PAYLOADS {
+        let path = bundle.payload(name);
         atomic_replace(&state.join("bootstrap").join(name), 0o755, |file| {
             let mut input = std::fs::File::open(&path)?;
             std::io::copy(&mut input, file)?;
@@ -795,6 +790,86 @@ mod tests {
         );
         assert!(!root.path().join(".local/bin").exists());
         assert!(!state.join("service-origin").exists());
+    }
+
+    #[test]
+    fn install_and_refresh_copy_the_probed_bundle_when_sources_are_replaced() {
+        for refresh in [false, true] {
+            let root = tempfile::tempdir_in("/tmp").unwrap();
+            let state = root.path().join("state");
+            let source = root.path().join("bundle");
+            std::fs::create_dir(&source).unwrap();
+            let probed_path = root.path().join("probed-path");
+            let mut script = String::from(
+                "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then\n",
+            );
+            // Replace caller paths during the final diagnostic, after its
+            // executable was loaded. A successful probe must not publish them.
+            for name in bootstrap_probe::PAYLOADS {
+                writeln!(
+                    script,
+                    "printf '%s' {} > {}",
+                    shell_quote("#!/bin/sh\nexit 2\n"),
+                    shell_quote(&source.join(name).display().to_string()),
+                )
+                .unwrap();
+            }
+            script.push_str("fi\n");
+            writeln!(
+                script,
+                "printf '%s' \"$0\" > {}",
+                shell_quote(&probed_path.display().to_string())
+            )
+            .unwrap();
+            script.push_str("if [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false}'\n");
+            for name in bootstrap_probe::PAYLOADS {
+                std::fs::write(source.join(name), name).unwrap();
+            }
+            std::fs::write(source.join("cowboy-machine"), &script).unwrap();
+            set_mode(&source.join("cowboy-machine"), 0o755).unwrap();
+            let mut args = refresh_args(&state, &source.join("cowboy-machine"));
+            if refresh {
+                std::fs::create_dir(&state).unwrap();
+                std::fs::write(state.join("identity_ed25519"), "retained key").unwrap();
+                std::fs::write(state.join("machine-id"), "fixture").unwrap();
+                std::fs::write(state.join("enrollment-token"), "retained token").unwrap();
+                std::fs::write(state.join("service-origin"), "https://cowboy.example").unwrap();
+            } else {
+                args.refresh = false;
+                args.enrollment_token = Some("new token".to_owned());
+            }
+            prepare_install_at(&args, root.path()).unwrap();
+            for name in bootstrap_probe::PAYLOADS {
+                let expected = if name == "cowboy-machine" {
+                    script.as_bytes()
+                } else {
+                    name.as_bytes()
+                };
+                assert_eq!(
+                    std::fs::read(state.join("bootstrap").join(name)).unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    std::fs::read(source.join(name)).unwrap(),
+                    b"#!/bin/sh\nexit 2\n"
+                );
+            }
+            if refresh {
+                assert_eq!(
+                    std::fs::read(state.join("identity_ed25519")).unwrap(),
+                    b"retained key"
+                );
+                assert_eq!(
+                    std::fs::read(state.join("enrollment-token")).unwrap(),
+                    b"retained token"
+                );
+            }
+            let probed = std::fs::read_to_string(probed_path).unwrap();
+            assert!(
+                !Path::new(&probed).exists(),
+                "private bundle was not cleaned up"
+            );
+        }
     }
 
     #[test]

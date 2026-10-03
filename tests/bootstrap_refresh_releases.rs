@@ -4,6 +4,7 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -228,6 +229,58 @@ fn legacy_launcher_refresh_preserves_or_upgrades_exact_bundles() {
                     .unwrap()
                     .contains("--check-portable-session-deletion")
             );
+            // Mutate all caller-owned files during the diagnostic. The installed
+            // bytes must remain those captured before either probe started.
+            let mutable = home.path().join("mutable");
+            std::fs::create_dir_all(mutable.join("bin")).unwrap();
+            let names = ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"];
+            for name in names {
+                std::fs::copy(
+                    guarded.join("bin").join(name),
+                    mutable.join("bin").join(name),
+                )
+                .unwrap();
+                std::fs::set_permissions(
+                    mutable.join("bin").join(name),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+            let quote =
+                |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+            let mut script = String::from(
+                "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then\n",
+            );
+            for name in names {
+                script.push_str(&format!(
+                    "printf '%s' 'replaced during probe' > {}\n",
+                    quote(&mutable.join("bin").join(name))
+                ));
+            }
+            script.push_str("fi\n");
+            script.push_str(&format!(
+                "exec {} \"$@\"\n",
+                quote(&guarded.join("bin/cowboy-machine"))
+            ));
+            std::fs::write(mutable.join("bin/cowboy-machine"), script).unwrap();
+            let captured = names.map(|name| sha256(&mutable.join("bin").join(name)));
+            let output = refresh(&installer, &mutable, home.path(), &state, &listener);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for (name, expected) in names.into_iter().zip(captured) {
+                assert_eq!(sha256(&state.join("bootstrap").join(name)), expected);
+                assert_eq!(
+                    std::fs::read(mutable.join("bin").join(name)).unwrap(),
+                    b"replaced during probe"
+                );
+            }
+            assert_eq!(&snapshot(&state, &launcher)[1..5], &before[1..5]);
+            println!(
+                "singleton={singleton} mutable source replacement retained captured bundle bytes"
+            );
             let journal = state.join("session-deletions");
             std::fs::create_dir(&journal).unwrap();
             let record = b"{\"schema\":1,\"owner\":{\"machine_id\":\"legacy-fixture\",\"service_id\":\"svc-0123456789abcdef0123456789abcdef\"},\"deleted\":[\"fixture-terminal\"]}";
@@ -278,6 +331,6 @@ fn legacy_launcher_refresh_preserves_or_upgrades_exact_bundles() {
         }
     }
     println!(
-        "legacy refresh matrix passed: two retained legacy candidates, two guarded upgrades, two independent old-installer negative controls"
+        "legacy refresh matrix passed: two retained legacy candidates, two guarded upgrades, two captured mutable-source bundles, two independent old-installer negative controls"
     );
 }
