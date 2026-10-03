@@ -48,7 +48,7 @@ primary phone/desktop product path.
 - [`persistence-admission.md`](persistence-admission.md) — Bounded FIFO admission, oversized/control reservations, shutdown drain and explicit loss limits
 - [`releases/persistence-admission-2026-09-16.md`](releases/persistence-admission-2026-09-16.md) — Controller admission repair, healthy new persistence epoch, retained worker/native processes and historical loss limits
 - [`architecture/06-server-api.md`](architecture/06-server-api.md) — REST, WebSocket, runtime SPA files, and session reload
-- [`architecture/08-memory.md`](architecture/08-memory.md) — Agent-owned memory and provider-state boundaries
+- [`architecture/08-memory.md`](architecture/08-memory.md) — Matrix long-term memory and native Provider-state boundaries
 - [`architecture/09-frontend.md`](architecture/09-frontend.md) — React state, durable draft delivery, transcript, composer, PWA, and native-shell contracts
 - [`usage-refresh-http-errors.md`](usage-refresh-http-errors.md) — Session account-usage identity and actionable HTTP failures
 - [`architecture/10-deploy-build.md`](architecture/10-deploy-build.md) — Pinned builds and component-scoped releases
@@ -75,6 +75,10 @@ primary phone/desktop product path.
 - [`product-sync-datasets.md`](product-sync-datasets.md) — Immutable Service/user browser datasets, version-fenced outboxes, explicit legacy recovery and Controller/Web rollout
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
+- [`plugin-session-deletion-journal.md`](plugin-session-deletion-journal.md) — Reader-first terminal Session records, component reader floor and bounded recovery; production writer remains disabled
+- [`releases/plugin-session-deletion-reader-2026-10-03.md`](releases/plugin-session-deletion-reader-2026-10-03.md) — Initial bounded reader, IPC fixtures and Hawk writer-disabled activation
+- [`releases/plugin-session-deletion-compatibility-2026-10-03.md`](releases/plugin-session-deletion-compatibility-2026-10-03.md) — Immutable reader declarations and component activation/rollback admission
+- [`releases/plugin-session-deletion-floor-2026-10-03.md`](releases/plugin-session-deletion-floor-2026-10-03.md) — Root-owned durable reader floor, live undeclared-artifact refusal and same-generation recovery fixtures
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
@@ -117,6 +121,10 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
+  silent credential renewal, independent device keys, and revocation boundaries
+- [`matrix-memory.md`](matrix-memory.md) — Explicit Matrix enrollment, shared recall/capture, and native memory cutover
+- [`releases/matrix-memory-2026-10-03.md`](releases/matrix-memory-2026-10-03.md) — Matrix 0.1.1 on OVH, signed Codex/Claude installs, cross-Provider learning, and acceptance limits
 - [`releases/usage-execution-2026-10-01.md`](releases/usage-execution-2026-10-01.md) — Account usage placement release, production pins and remaining OVH Anthropic timeout
 - [`releases/anthropic-usage-timeout-2026-10-01.md`](releases/anthropic-usage-timeout-2026-10-01.md) — OVH preparation root cause, host-only repair and three real account queries
 - [`releases/matrix-workspaces-2026-10-01.md`](releases/matrix-workspaces-2026-10-01.md) — Hierarchical picker, mapped remote tasks, latency samples and accepted releases

@@ -572,6 +572,7 @@ async fn device_continuation_rechecks_the_same_token_without_consuming_proof_twi
     let key = crate::client_auth::new_signing_key().unwrap();
     let public = crate::client_auth::public_key_to_base64(&key);
     let device = "d".repeat(32);
+    crate::server::persist_fixture_device(&h.store, &h.user.id, &device, &public).await;
     let (token, _) = h
         .devices
         .issue(&device, &h.user.id, &public, auth_now_ms())

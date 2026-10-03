@@ -31,7 +31,7 @@ enum Command {
     /// other ACP client. This is a thin bridge; it never starts a second Hub.
     #[cfg(feature = "full")]
     ServeAcp(ServeAcpArgs),
-    /// Sign this computer in through the configured Cowboy browser login.
+    /// Sign this computer in through Cowboy's browser login or the Cardea CLI broker.
     #[cfg(feature = "full")]
     Login(LoginArgs),
     /// Operate the Controller through its explicitly enabled private host endpoint.
@@ -239,6 +239,9 @@ pub struct LoginArgs {
     /// Name shown when approving this computer and in Account → Devices.
     #[arg(long)]
     pub device_name: Option<String>,
+    /// Use the native Cardea device broker instead of a Cowboy browser login.
+    #[arg(long, env = "COWBOY_CARDEA_PROFILE")]
+    pub cardea_profile: Option<String>,
 }
 
 #[cfg(feature = "full")]
@@ -549,7 +552,11 @@ async fn login_client(args: LoginArgs) -> anyhow::Result<()> {
         args.auth_state_dir,
         args.device_name,
     )?;
-    authentication.ensure_login().await?;
+    if let Some(profile) = args.cardea_profile.as_deref() {
+        authentication.ensure_cardea_login(profile).await?;
+    } else {
+        authentication.ensure_login().await?;
+    }
     eprintln!("Cowboy login ready for {base_url}");
     Ok(())
 }
@@ -926,6 +933,8 @@ mod tests {
             "https://cowboy.example",
             "--device-name",
             "Zed on Hawk",
+            "--cardea-profile",
+            "cowboy-hawk",
         ])
         .unwrap();
         let Command::Login(args) = cli.command else {
@@ -933,6 +942,7 @@ mod tests {
         };
         assert_eq!(args.origin, "https://cowboy.example");
         assert_eq!(args.device_name.as_deref(), Some("Zed on Hawk"));
+        assert_eq!(args.cardea_profile.as_deref(), Some("cowboy-hawk"));
     }
 
     #[test]
