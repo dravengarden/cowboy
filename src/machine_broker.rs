@@ -757,26 +757,45 @@ impl Broker {
         sweep
     }
 
-    fn update_snapshot(&self, mut snapshot: WorkerSnapshot, connection_id: u64) {
+    fn update_snapshot(&self, mut snapshot: WorkerSnapshot, connection_id: u64) -> bool {
         let session_id = snapshot.session_id.clone();
+        // Authenticate the original peer before a rejected snapshot can send
+        // anything to the current worker. A replaced peer owns no such effect.
+        if !self.worker_matches(&session_id, connection_id, &snapshot.worker_epoch) {
+            return false;
+        }
         let state = snapshot.state;
         let launch = snapshot.launch.clone();
         let incoming = launch
             .as_ref()
             .and_then(|launch| launch.execution_binding.as_ref());
+        // Keep declaration validation and replacement in one critical section.
+        // In particular, an old worker cannot undo a staged workspace reset.
+        // Deletion takes the same cancelled -> sessions lock order.
+        let cancelled = self.cancelled_sessions.lock();
+        let mut sessions = self.sessions.lock();
         if incoming.is_some_and(|binding| binding.decode().is_err())
-            || self
-                .sessions
-                .lock()
-                .get(&session_id)
-                .is_some_and(|declared| declared.execution_binding.as_ref() != incoming)
+            || launch
+                .as_ref()
+                .is_some_and(|launch| launch.session_id != session_id)
+            || sessions.get(&session_id).is_some_and(|declared| {
+                declared.execution_binding.as_ref() != incoming
+                    || launch.as_ref().is_some_and(|launch| {
+                        launch.provider != declared.provider
+                            || launch.cwd != declared.cwd
+                            || launch.system != declared.system
+                    })
+            })
         {
-            if let Some(worker) = self.workers.lock().get(&session_id) {
+            if let Some(worker) = self.workers.lock().get(&session_id)
+                && worker.connection_id == connection_id
+                && worker.epoch == snapshot.worker_epoch
+            {
                 let _ = worker.tx.send(Frame::Reject {
-                    reason: "worker execution binding differs from the session declaration".into(),
+                    reason: "worker session placement differs from the session declaration".into(),
                 });
             }
-            return;
+            return false;
         }
         let mut accepted = false;
         if let Some(worker) = self.workers.lock().get_mut(&session_id)
@@ -789,11 +808,10 @@ impl Broker {
             accepted = true;
         }
         if !accepted {
-            return;
+            return false;
         }
-        let cancelled = self.cancelled_sessions.lock();
         if cancelled.contains(&session_id) {
-            return;
+            return false;
         }
         if let Some(launch) = launch.as_ref()
             && let Some(failed_generation) = launch.fallback_for.as_ref()
@@ -814,10 +832,12 @@ impl Broker {
             }
         }
         if let Some(launch) = launch {
-            self.sessions.lock().insert(session_id.clone(), launch);
+            sessions.insert(session_id.clone(), launch);
         }
+        drop(sessions);
         self.session_states.lock().insert(session_id, state);
         drop(cancelled);
+        true
     }
 
     fn touch_worker(&self, session_id: &str, connection_id: u64) {
@@ -2951,7 +2971,9 @@ async fn handle_worker(
                 }
             }
             Frame::Snapshot { worker } if worker.session_id == session_id => {
-                broker.update_snapshot((*worker).clone(), connection_id);
+                if !broker.update_snapshot((*worker).clone(), connection_id) {
+                    continue;
+                }
                 let cancelled = broker.cancelled_sessions.lock();
                 if cancelled.contains(session_id) {
                     continue;
@@ -3792,8 +3814,7 @@ mod tests {
         assert!(broker.workers.lock().is_empty());
     }
 
-    #[test]
-    fn reconnecting_worker_rebuilds_broker_launch_state() {
+    fn reconnecting_worker_fixture() -> (Broker, StartSession, mpsc::UnboundedReceiver<Frame>) {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
@@ -3804,7 +3825,7 @@ mod tests {
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
         });
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel();
         broker
             .register_worker(WorkerRegistration {
                 session_id: "sess-1".to_owned(),
@@ -3857,7 +3878,152 @@ mod tests {
             },
             1,
         );
+        (broker, launch, rx)
+    }
+
+    #[test]
+    fn reconnecting_worker_rebuilds_broker_launch_state() {
+        let (broker, launch, _) = reconnecting_worker_fixture();
         assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+    }
+
+    #[test]
+    fn worker_snapshot_cannot_rewrite_declared_session_placement() {
+        for field in ["session_id", "provider", "cwd", "system"] {
+            let (broker, launch, mut rx) = reconnecting_worker_fixture();
+            let original = broker.workers.lock()["sess-1"].snapshot.clone();
+            let mut changed = original.clone();
+            changed.last_runtime_seq += 1;
+            let metadata = changed.launch.as_mut().expect("launch");
+            match field {
+                "session_id" => metadata.session_id = "other-session".into(),
+                "provider" => metadata.provider = "claude-code".into(),
+                "cwd" => metadata.cwd = "/other-worktree".into(),
+                "system" => metadata.system = true,
+                _ => unreachable!(),
+            }
+            broker.update_snapshot(changed, 1);
+            assert_eq!(
+                broker.sessions.lock().get("sess-1"),
+                Some(&launch),
+                "{field}"
+            );
+            assert_eq!(
+                broker.workers.lock()["sess-1"].snapshot,
+                original,
+                "{field}"
+            );
+            assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })), "{field}");
+        }
+    }
+
+    #[test]
+    fn stale_snapshot_cannot_reject_the_current_worker() {
+        for stale_epoch in [false, true] {
+            let (broker, launch, mut rx) = reconnecting_worker_fixture();
+            let original = broker.workers.lock()["sess-1"].snapshot.clone();
+            let mut stale = original.clone();
+            stale.launch.as_mut().expect("launch").cwd = "/stale".into();
+            if stale_epoch {
+                stale.worker_epoch = "retired-epoch".into();
+            }
+            broker.update_snapshot(stale, if stale_epoch { 1 } else { 2 });
+            assert!(rx.try_recv().is_err());
+            assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+            assert_eq!(broker.workers.lock()["sess-1"].snapshot, original);
+        }
+    }
+
+    #[test]
+    fn first_worker_snapshot_cannot_seed_another_session_id() {
+        let (broker, _, mut rx) = reconnecting_worker_fixture();
+        broker.sessions.lock().clear();
+        let mut snapshot = broker.workers.lock()["sess-1"].snapshot.clone();
+        snapshot.launch.as_mut().expect("launch").session_id = "other-session".into();
+        broker.update_snapshot(snapshot, 1);
+        assert!(broker.sessions.lock().is_empty());
+        assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })));
+    }
+
+    #[tokio::test]
+    async fn old_worker_snapshot_cannot_undo_staged_workspace_reset() {
+        let (broker, mut replacement, mut rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let old = broker.workers.lock()["sess-1"].snapshot.clone();
+        replacement.cwd = "/replacement-worktree".into();
+        replacement.adopt_only = true;
+        broker.ensure_session(replacement.clone()).await;
+        replacement.adopt_only = false;
+        broker.update_snapshot(old, 1);
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&replacement));
+        assert!(matches!(rx.try_recv(), Ok(Frame::Reject { .. })));
+        assert!(broker.launching.lock().is_empty());
+    }
+
+    #[test]
+    fn worker_snapshot_preserves_release_and_native_thread_updates() {
+        let (broker, _, mut rx) = reconnecting_worker_fixture();
+        let mut updated = broker.workers.lock()["sess-1"].snapshot.clone();
+        let launch = updated.launch.as_mut().expect("launch");
+        launch.provider_version = "next".into();
+        launch.provider_generation_digest = "next-digest".into();
+        launch.agent_session_id = Some("materialized-thread".into());
+        launch.context_window = Some(128_000);
+        let expected = launch.clone();
+        updated.last_runtime_seq += 1;
+        broker.update_snapshot(updated.clone(), 1);
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&expected));
+        assert_eq!(broker.workers.lock()["sess-1"].snapshot, updated);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn rejected_ipc_snapshot_has_no_controller_or_rollout_effect() {
+        let (broker, launch, mut worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        *broker.desired_generation.lock() = "gen-1".into();
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        let original = broker.workers.lock()["sess-1"].snapshot.clone();
+        let mut invalid = original.clone();
+        invalid.launch.as_mut().expect("launch").cwd = "/other-worktree".into();
+        let (peer, mut client) = UnixStream::pair().expect("IPC pair");
+        let (mut reader, _writer) = peer.into_split();
+        let handler_broker = Arc::clone(&broker);
+        let handler = tokio::spawn(async move {
+            handle_worker(handler_broker, 1, "sess-1", "epoch-1", &mut reader).await
+        });
+        write_frame(
+            &mut client,
+            &Frame::Snapshot {
+                worker: Box::new(invalid),
+            },
+        )
+        .await
+        .expect("send invalid snapshot");
+        // A subsequent frame proves the reader consumed the invalid snapshot;
+        // no elapsed-time assumption is needed to assert absence of projection.
+        let marker = Frame::CommandAck {
+            session_id: "sess-1".into(),
+            command_id: "marker".into(),
+            accepted: true,
+            reason: None,
+        };
+        write_frame(&mut client, &marker)
+            .await
+            .expect("send marker");
+        let projected = tokio::time::timeout(Duration::from_secs(2), controller_rx.recv())
+            .await
+            .expect("IPC progress")
+            .expect("controller frame");
+        assert_eq!(projected, marker);
+        assert!(controller_rx.try_recv().is_err());
+        assert!(matches!(worker_rx.try_recv(), Ok(Frame::Reject { .. })));
+        assert!(broker.healthy_generations.lock().is_empty());
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert_eq!(broker.workers.lock()["sess-1"].snapshot, original);
+        drop(client);
+        handler.await.expect("handler task").expect("handler EOF");
     }
 
     #[test]
