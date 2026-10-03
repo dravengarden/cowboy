@@ -11,7 +11,7 @@ import { activateDraft, addDraft, openSession, submitPrompt, useStore } from "./
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
-import { PriorSendDecisionSheet } from "./HeldMessagesSheet.tsx";
+import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet.tsx";
 import { optimisticQuestionKey } from "./explore/optimisticPages.ts";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 

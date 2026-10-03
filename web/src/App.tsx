@@ -1,5 +1,5 @@
 import { WorkspacePicker } from "./WorkspacePicker";
-import { PriorSendDecisionSheet } from "./HeldMessagesSheet";
+import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
 import { AiInstallationPicker } from "./AiInstallationPicker";
 import { useProjectPlacement } from "./useProjectPlacement";
 import { MachineProjects } from "./MachineProjects";

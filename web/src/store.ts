@@ -1,6 +1,6 @@
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
-import { requestPriorSendDecision } from "./priorSendDecision";
+import { createAuthoredSendGate } from "./authoredSendGate";
 // Single WebSocket store shared by the whole app. cowboy is the source of
 // truth; this store just accumulates what it pushes. Exposed via
 // useSyncExternalStore so any component re-renders on change.
@@ -2877,23 +2877,20 @@ export async function saveHeldDeliveryAsDraft(sessionId: string, id: string): Pr
   await saveRecoveredSendAsDraft(sessionId, id);
 }
 
-export function hasPendingPriorSends(sessionId: string, ids: readonly string[]): boolean {
-  return (qClients.get(sessionId)?.pending() ?? []).some((mutation) => ids.includes(mutation.id));
-}
-
-/** Every authored send waits for the same decision before changing its source. */
-async function prepareAuthoredSend(sessionId: string, sourceCmid?: string): Promise<void> {
-  await durableQueue(sessionId);
-  for (;;) {
-    const older = (qClients.get(sessionId)?.pending() ?? []).filter((mutation) => {
-      const row = (mutation.args as { row?: QueuedMessage }).row;
-      return row !== undefined && qStatus.get(mutation.id) === "failed" &&
-        (sourceCmid === undefined || (mutation.id !== sourceCmid && row.cmid !== sourceCmid));
-    }).map((mutation) => mutation.id);
-    if (older.length === 0) return;
-    await requestPriorSendDecision(sessionId, older);
-  }
-}
+const authoredSendGate = createAuthoredSendGate({
+  hydrate: async (sessionId) => { await durableQueue(sessionId); },
+  pending: (sessionId) => (qClients.get(sessionId)?.pending() ?? []).map((mutation) => {
+    const row = (mutation.args as { row?: QueuedMessage }).row;
+    return {
+      id: mutation.id,
+      authored: row !== undefined,
+      held: qStatus.get(mutation.id) === "failed",
+      ...(row?.cmid !== undefined ? { sourceCmid: row.cmid } : {}),
+    };
+  }),
+});
+export const hasPendingPriorSends = authoredSendGate.hasPending;
+const prepareAuthoredSend = authoredSendGate.prepare;
 
 function outboxSummary(): SyncStatusInput["outbox"] {
   let pending = 0;
