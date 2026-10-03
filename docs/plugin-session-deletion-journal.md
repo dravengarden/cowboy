@@ -45,6 +45,20 @@ alone does not fence rollback to an older component. This separate admission
 is still open; the private candidate must not be enabled by simply changing
 the constructor boolean.
 
+Machine release metadata now declares `sessionDeletionJournal` with
+`readerSchema: 1` and `writerSchema: 0`. The Columbus component owner rejects
+nonzero writer declarations and requires a declared schema-1 reader whenever
+a committed deletion entry exists. Its checks cover dispatch, locked candidate
+and fallback admission, profile restoration and interrupted recovery, including
+already-healthy predecessor and Git-pinned candidate paths. Corrupt or dangling
+entries cannot be treated as absent state. Empty reader namespaces remain
+compatible with a legacy fallback; pending files are not committed evidence.
+
+This finite guard does not yet supply the durable component-owner reader floor
+needed before the first write, fence older host activators/portable updater
+recovery, or admit independent Machine recovery. Production writing therefore
+remains disabled. Release metadata is a build-owned claim, not authorization.
+
 ## Evidence boundary
 
 Source fixtures close and reopen the journal, and restart in-process broker
@@ -59,3 +73,7 @@ remain separate from this finite terminal-deletion dataset.
 The [Hawk reader release](releases/plugin-session-deletion-reader-2026-10-03.md)
 records exact source/build gates, writer-disabled observation and bounded
 production continuity separately from writer admission.
+
+The [component compatibility release](releases/plugin-session-deletion-compatibility-2026-10-03.md)
+records the installed Hawk owner guard, declared reader envelope and live
+generation/continuity observations separately from the remaining writer gate.

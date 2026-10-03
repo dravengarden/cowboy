@@ -345,6 +345,16 @@ Queued rows add the authored time ("Written 14:02 · sends when online").
 composer) and Discard. `rejected` rows show the server reason and the
 actions that fit it (see the conflict catalog).
 
+A transcript prompt whose acknowledgement or stall deadline ends without a
+Hub refusal is not left in the transcript as a red row. Its fate is unknown
+and the conversation has often moved on, sometimes from another device, so it
+is parked in the session's drafts (cmid `recovery-<id>`) before its local
+retry record is retired, with a quiet "Saved to drafts" notice. It is never
+resubmitted automatically. If the original echoes later, the parked draft is
+removed unless the user already edited it. Hub refusals, a wedged local write
+and queue edits or moves stay `held` with their inline chrome; a draft save
+failure also leaves the held row in place.
+
 Earlier unconfirmed sends are resolved at the next authored send, before the
 new message enters the durable outbox or reaches the Agent. A compact decision
 shows a short text preview and attachment count, without internal image tokens:
@@ -514,7 +524,7 @@ and fixes each with a server outcome and a presentation.
 | 15 | Two tabs, one device | atomic outbox deltas (existing); replica writes guarded by `lastSeq` | none |
 | 16 | Client parked by capacity on reconnect | `waiting` with position; obligations stay queued | pill "Waiting for a seat (2nd)" |
 | 17 | Replay partially fails with an unaddressed broadcast error | addressed results replace broadcast errors for client-originated commands | only the originating row shows the reason; other clients are not toasted |
-| 18 | Held row after reload | `held` persisted in `session:<sid>:delivery` | stays held; never auto-resent |
+| 18 | Held row after reload | `held` persisted in `session:<sid>:delivery` | a held transcript prompt is parked in drafts; other rows stay held; never auto-resent |
 | 19 | Composer draft with images hits `localStorage` quota | drafts move to the dataset-scoped IndexedDB with text mirrored to `localStorage` for synchronous seed | no silent image loss; a pending paste placeholder is still lost on crash and stays documented |
 | 20 | Update becomes ready mid-composition | update policy above | no reload on its own; the bar narrates its download and stays pressable |
 
