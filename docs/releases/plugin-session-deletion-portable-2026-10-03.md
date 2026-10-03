@@ -60,5 +60,48 @@ no real Controller, Provider runtime or production dataset.
 
 ## Immutable release and activation
 
-Exact build, activation and bounded continuity observations are recorded after
-the clean committed Machine artifact completes its owning release transaction.
+Source `14cb070e0ab4e5ea5dfbdbd1287cf1b80c7b19dc` is published to remote
+main. Concurrent main integration added Matrix conformance documentation/tool
+changes without changing the tested Rust source. The clean committed narrow
+Machine release and source-boundary output built successfully:
+
+- `/nix/store/ypqs95ri4mv39bqx9lhknn2zcz4yrn3k-cowboy-machine-release`.
+- `/nix/store/54g96bk7hymx36az3jqagapzlk4f4ihr-cowboy-source-boundary`.
+
+The default-feature Cowboy package required by that immutable bundle passed
+1,311 unit tests with 24 ignored and its enabled three-test integration target.
+The packaged Machine diagnostic passed six isolated cases: absent state,
+staging-only, committed file, committed directory, dangling committed link and
+invalid namespace file. Accepted diagnostics created no Machine state/stores;
+staging bytes remained unchanged. These probes used temporary directories.
+
+Machine-only transaction `1791022091513469183-14cb070e0ab4` committed
+successfully, published, without recovery at `2026-10-03T10:08:19.038530178Z`.
+Its previous release is
+`/nix/store/n6b8rxna00v77pyqkyk9658xcwnqnh61-cowboy-machine-release`.
+No Controller, Web, host configuration or portable-device activation was made
+by this task. This supplies the updated guard for future portable bundles; it
+does not rewrite already installed portable launchers.
+
+Integration of previously published worker changes advanced the desired
+generation to `worker-6ede7a91cc8b8b3402d4`; this guard itself changes no
+worker-generation input. The public deployment-health endpoint reported the
+Machine connected and online with that exact active generation. This is a
+generation report, not proof that every existing worker has been replaced.
+
+Before/after observations at `2026-10-03T10:07:07.687Z` and
+`2026-10-03T10:08:24.420Z` retained every original PID across 13 ACP worker
+and four execution keeper units. Machine PID changed from `70549` to `929157`;
+Controller PID remained `486493`. Web profile and root-owned reader-floor bytes
+were unchanged. These are bounded samples, not native-resume acceptance.
+
+HTTPS health, version, SPA, service worker and Machine deployment-health all
+returned 200. HTML/SW retained `no-store`; the separate SPA version remained
+`4aae6c684d7dd1914dd7520ccfa82cb4`. The resident reader logged zero deleted
+IDs with `writer_enabled=false` at `2026-10-03T10:08:11.615527Z`. Its
+production deletion namespace still contained only `.lock`; no records were
+seeded, migrated or written, and production deletion remains volatile.
+
+The [receipt and bounded observations](../experiments/plugin-session-deletion-portable-2026-10-03.json)
+retain exact artifacts, native digest, process samples and packaged diagnostic
+results. Older recovery authorities and writer admission remain separate.
