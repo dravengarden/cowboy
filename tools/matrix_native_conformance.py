@@ -95,6 +95,7 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         client.ready()
         result = client.prompt(text="Find the release protocol marker.")
         require(not result.get("is_error"), "Claude native turn failed")
+        require("MATRIX-SHARED-619" in json.dumps(api.requests[0]), "Claude automatic recall missing")
         encoded = json.dumps(api.requests)
         require("mcp__matrix__memory_get" in encoded and "MATRIX-SHARED-619" in encoded, "Claude MCP/recall missing")
         outputs = [b for r in api.requests for m in r.get("messages", []) for b in (m.get("content") if isinstance(m.get("content"), list) else []) if b.get("type") == "tool_result"]

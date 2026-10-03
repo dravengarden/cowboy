@@ -36,8 +36,9 @@ messages, command results and file changes. Its existing execution bridge still
 owns every remote filesystem/process operation.
 
 Claude's remote Mods facade allows only the four exact Matrix MCP tools
-alongside existing target tools. Its private socket projects current recall at
-prompt construction, including after compaction. Matrix calls run on OVH;
+alongside existing target tools. Its input bridge retrieves fresh context before
+each user turn, including after compaction; native cached project instructions
+are not used for dynamic recall. Matrix calls run on OVH;
 project tools continue through the target keeper. Local Claude retains its ACP
 execution surface with Matrix recall/MCP added. Native auto-memory is disabled.
 
