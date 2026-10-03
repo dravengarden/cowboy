@@ -69,6 +69,7 @@ try {
       "mod-bridge.mjs",
       "tools.mjs",
       "context-mod.js",
+      "memory.mjs",
     ];
     const digests: Record<string, string> = {};
     for (const source of sources) {
@@ -79,6 +80,20 @@ try {
       );
       digests[source] = await sha256(`${root}/${source}`);
     }
+    await Deno.writeTextFile(
+      `${destination}/app/memory.mjs`,
+      (await Deno.readTextFile(`${root}/memory.mjs`)).replace(
+        "@cowboy/memory-client",
+        "./matrix-client.mjs",
+      ),
+    );
+    await Deno.copyFile(
+      `${repository}/components/memory-client/index.mjs`,
+      `${destination}/app/matrix-client.mjs`,
+    );
+    digests["matrix-client.mjs"] = await sha256(
+      `${destination}/app/matrix-client.mjs`,
+    );
     const prefix =
       '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n';
     await Deno.writeTextFile(

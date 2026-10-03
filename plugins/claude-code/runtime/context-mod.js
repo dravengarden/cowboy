@@ -11,7 +11,10 @@ function instructions(_$, event) {
   return {
     blocks: [
       ...event.blocks.filter((block) => block.name === "currentDate"),
-      { name: "claudeMd", text: context?.instructions ?? unavailable },
+      {
+        name: "claudeMd",
+        text: context?.instructions ?? unavailable,
+      },
     ],
     instructionFiles: [],
   };
@@ -90,6 +93,12 @@ export function register(on) {
     if (["TodoWrite", "AskUserQuestion"].includes(event.tool)) {
       return next(event);
     }
+    if (
+      context?.memory &&
+      ["memory_search", "memory_get", "memory_put", "memory_forget"].some((
+        name,
+      ) => event.tool === "mcp__matrix__" + name)
+    ) return next(event);
     if (!context?.descriptions[event.tool]) return { deny: unavailable };
     const input = { ...event };
     delete input.tool;

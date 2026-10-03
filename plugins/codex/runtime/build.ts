@@ -133,12 +133,25 @@ try {
       `${repository}/components/provider-runtime/packages/codex-acp/launch.mjs`,
       `${targetRoot}/app/cowboy-execution.mjs`,
     );
+    await Deno.writeTextFile(
+      `${targetRoot}/app/memory.mjs`,
+      (await Deno.readTextFile(`${root}/memory.mjs`)).replace(
+        "@cowboy/memory-client",
+        "./matrix-client.mjs",
+      ),
+    );
+    await Deno.copyFile(
+      `${repository}/components/memory-client/index.mjs`,
+      `${targetRoot}/app/matrix-client.mjs`,
+    );
     await Deno.remove(`${targetRoot}/bin/cowboy-configured-cli`);
     const provenance = {
       schema: "cowboy.codex-source-patch/v1",
       upstream: adapter,
       patch_sha256: await sha256(`${root}/adapter.patch`),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
+      memory_bridge_sha256: await sha256(`${targetRoot}/app/memory.mjs`),
+      memory_client_sha256: await sha256(`${targetRoot}/app/matrix-client.mjs`),
       execution_bridge_sha256: await sha256(
         `${targetRoot}/app/cowboy-execution.mjs`,
       ),

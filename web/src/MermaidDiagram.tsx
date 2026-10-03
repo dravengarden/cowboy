@@ -51,13 +51,24 @@ async function renderMermaid(
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
+      // By default a syntax error renders Mermaid's bomb "Syntax error in text"
+      // diagram into a temp node under <body> and then rejects, so the error
+      // art leaks onto the page next to our own source fallback.
+      suppressErrorRendering: true,
       theme: mode === "dark" ? "dark" : "neutral",
       ...(mode === "dark" ? { themeVariables: DARK_THEME_VARIABLES } : {}),
     });
     configuredMode = mode;
   }
-  const { svg } = await mermaid.render(id, source);
-  return svg;
+  try {
+    const { svg } = await mermaid.render(id, source);
+    return svg;
+  } catch (error) {
+    // Belt and braces: drop any temp container a failed render left behind.
+    document.getElementById(`d${id}`)?.remove();
+    document.getElementById(id)?.remove();
+    throw error;
+  }
 }
 
 function prepareInlineSvg(markup: string): string {

@@ -199,7 +199,7 @@ macos-installer-verify APP="apps/macos-installer/dist/Cowboy Manager.app":
 # Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are
 # payload kinds; neither owns a separate release or installation format.
 component-package-check:
-    for package in plugin-contract plugin-api app-shell state-store state-sync state-sync-idb provider-authoring provider-ui provider-runtime code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
+    for package in plugin-contract plugin-api app-shell state-store state-sync state-sync-idb provider-authoring provider-ui provider-runtime memory-client code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
     cargo package --locked --allow-dirty --list -p cowboy-provider-sdk >/dev/null
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
@@ -483,7 +483,7 @@ provider-release-coverage CATALOG:
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
-    node --test plugins/claude-code/runtime/*.test.mjs
+    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs
     deno fmt --check plugins/claude-code/runtime
     deno check plugins/claude-code/runtime/build.ts
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs

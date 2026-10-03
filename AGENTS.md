@@ -78,8 +78,11 @@ Do not claim an iOS release shipped.
   diagnosing later service symptoms.
 
 ## Memory / sessions
-- cowboy does not own agent memory. Standard Codex uses its native local-memory
-  feature through the normal user `CODEX_HOME`. Provider variants such as
+- Cowboy does not own the memory store. Standard Codex and Claude can enroll
+  in the separately versioned Matrix service through their signed Provider
+  adapters; enrolled sessions disable native long-term memory and use explicit
+  project/executor bindings. See `docs/architecture/08-memory.md`.
+  Unenrolled runtimes retain their native behavior. Provider variants such as
   `codex-deepseek` use a fully separate provider-owned `CODEX_HOME` and must not
   read, link, or mutate standard Codex config, auth, history, memory, rules,
   plugins, or skills. Required project guidance stays in `AGENTS.md`, docs,

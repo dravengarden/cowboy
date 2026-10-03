@@ -103,3 +103,11 @@ Deno.test("Mermaid failures return to the ordinary Markdown code renderer", () =
   assert(mermaidBranch.includes("<MarkdownCodeBoundary"));
   assert(mermaidBranch.includes("<CodeBlock"));
 });
+
+Deno.test("a failed Mermaid render does not leak its error art onto the page", () => {
+  // Without suppressErrorRendering Mermaid renders its bomb "Syntax error in
+  // text" diagram into a temp node under <body> before rejecting, so it shows
+  // up below the app next to the Markdown source fallback.
+  assert(mermaidSource.includes("suppressErrorRendering: true"));
+  assert(mermaidSource.includes("document.getElementById(`d${id}`)?.remove()"));
+});
