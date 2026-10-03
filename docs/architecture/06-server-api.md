@@ -151,17 +151,18 @@ ignored so a stale installed PWA cannot restore removed auto-resume behavior.
 
 ## Auth
 
-When product authentication is enabled, accounts are required and there is no
-implicit loopback bypass. A product cookie (`cowboy_user`), a browser-approved
-device access token plus its per-request Ed25519 proof, or a legacy
-`Authorization: Bearer cow_...` token is required on `/ws` and product APIs.
+Product authentication and external HTTPS are mandatory; auth-off startup is
+rejected. A device-bound product cookie (`cowboy_user`) plus its P-256 proof,
+or a browser-approved device access token plus its per-request Ed25519 proof,
+is required on `/ws` and product APIs. Bearer-only legacy credentials are
+rejected by the secure transport middleware. The local IPC exceptions are
+closed and strip browser account/admin cookies; they do not grant a loopback
+caller a product account. See [transport security](../device-transport-security.md).
 Cookie `/ws` upgrades also run the CSRF Origin allow-list; missing or disallowed
-Origin is 403 and does not open a socket. Sender-constrained and legacy bearer
+Origin is 403 and does not open a socket. Sender-constrained bearer
 requests skip Origin. Missing, expired, disabled, or invalid principals return
 **401 before `on_upgrade`**. A later revoke closes the socket with application
-code **4001**. The explicit auth-off deployment flag remains the trusted-intranet
-rollback and exposes the synthetic local owner without manufacturing a client
-credential.
+code **4001**.
 
 Native and ACP clients use browser-approved device authorization. The client
 generates its Ed25519 key and PKCE verifier; the browser performs the configured
@@ -173,9 +174,9 @@ rotate on every use, and revoke the device family on replay. Access tokens are
 memory-only and one active token is retained per device. `serve-acp` opens this
 flow automatically and retries once after a rejected short access token.
 
-Personal access token endpoints remain only as a hidden migration boundary for
-old clients. Their secrets are still hash-only at rest, but normal Account and
-Zed setup no longer creates, displays, or asks users to copy one.
+Creating a personal bearer-only API token returns **410**. Account and Zed setup
+use registered device credentials; a historical token is not an alternate
+authentication mode.
 
 Session REST families (`/api/sessions/{id}/*`, `/api/code/sessions/{id}/*`,
 `/api/history/{id}`) use `can_see` / `can_mutate`. Product viewers see own

@@ -1,5 +1,10 @@
 # Mandatory device authentication and HTTPS (Option 1)
 
+Option 1 is the current delivery baseline for both public and private networks.
+The [security priorities and roadmap](secure-connectivity-design.md) defer
+Option 2 until PWA delivery, bootstrap trust and full application integration
+have a reviewed design. No WireGuard product mode is enabled.
+
 Cowboy authenticates the account and the device independently. Stormbird or a
 VPN is not required by this protocol. Every external connection uses HTTPS/WSS;
 the client validates the Service certificate using its platform TLS trust store.
@@ -71,30 +76,43 @@ requires a new login. A SW version bump delivers the matching frontend.
 The macOS Manager binary must include the signer before it can log in to an
 enforcing Controller. iOS remote web changes do not constitute an IPA release.
 
-`just device-browser-conformance <pinned-firefox> <Rust-test-binary>` runs real
-WebCrypto/IndexedDB, HTTPS and WSS against a disposable Rust fixture in a private
-network namespace. Its temporary certificate exception applies only to that
-disposable profile. Unit tests cover forged/tampered proofs, nonce reuse, epoch
-changes, stolen cookies and retired credentials. Full repository and PostgreSQL
-gates remain part of release verification.
+From the pinned shell, run
+`just device-browser-conformance <pinned-firefox> <Rust-test-binary> <pinned-certutil>`.
+The runner exercises real WebCrypto/IndexedDB, HTTPS and WSS against a disposable
+Rust fixture in a private network namespace. It imports an ephemeral fixture CA
+only into its temporary Firefox profile and keeps `acceptInsecureCerts=false`.
+Both HTTPS and WSS must reject untrusted certificates and wrong hostnames before
+application dispatch; the trusted connection then exercises login and device
+proofs as a positive control. The host trust store and normal browser profiles
+are untouched.
+
+The [2026-10-03 follow-up receipt](experiments/option1-browser-security-2026-10-03.json)
+records **22 passing browser checks**, including the original 16 device/login/
+restart cases and six TLS validation/context checks, with source and test-binary
+hashes. This strengthens the test harness; the earlier fixture's certificate
+exception was not a production TLS setting. The follow-up changes no production
+runtime and does not constitute Safari/physical-device acceptance.
+
+Unit tests cover forged/tampered proofs, nonce reuse, epoch changes, stolen
+cookies and retired credentials. Full repository and PostgreSQL gates remain
+part of production release verification.
 
 ## Option 2 boundary
 
-Option 2 is scoped to a statically configured WireGuard data plane on a LAN.
-Native peers can use UDP; a browser-local WASM peer needs WSS or WebTransport
-carried directly to the Cowboy server. A host/IP locates the endpoint, while a
-pinned public key identifies the peer. WireGuard keys remain separate from
-browser/CLI account keys. HTTPS remains necessary for PWA delivery and its outer
-carrier, and application account/device checks must survive transport changes.
+Option 2 is **roadmap only**. Its intended scope is a reachable internal Service
+with simple domain/IP configuration, excluding VPN discovery, NAT traversal,
+mesh/relay infrastructure, system routing and a central network control plane.
+Peer provisioning, browser bootstrap and the product transport remain undecided.
 
-Cowboy does not own discovery, NAT traversal, relays across multiple hosts or a
-central peer/address control plane. Each endpoint still needs a local peer
-configuration and trusted public-key provisioning. Existing system WireGuard
-can supply connectivity, but an installed VPN is not a prerequisite for the
-proposed browser-local design. Neither native helper nor browser tunnel is part
-of the present release. See [browser userspace WireGuard](browser-wireguard-transport.md)
-for the updated PWA scope and integration requirements.
+The browser experiment uses trusted HTTPS to load the page and WSS to carry WG
+packets. It does not establish how a PWA could securely install, cold-start or
+update without HTTPS, nor does an address by itself authenticate a Server key.
+Those questions, HttpOnly session binding and supported-platform acceptance
+must be resolved before resuming implementation. The current HTTPS and device
+requirements remain mandatory throughout.
 
-The initial Rust implementation comparison, configuration proposal and successful
-isolated interoperability probe are recorded in
-[Self-managed WireGuard transport](wireguard-transport.md).
+The [browser research](browser-wireguard-transport.md) and
+[native interoperability investigation](wireguard-transport.md) retain their
+isolated evidence. Static profiles, native helpers and browser carrier proposals
+in those notes are research candidates, not accepted product configuration or
+a dependency of Option 1 delivery.

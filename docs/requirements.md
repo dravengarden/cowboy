@@ -47,6 +47,13 @@ The detailed package and type-system design lives in
 [Installable Provider packages](plugin-packages.md). Runtime details live in
 the numbered [architecture chapters](architecture/00-overview.md).
 
+The [security priorities](secure-connectivity-design.md), updated 2026-10-03,
+keep mandatory HTTPS and device authentication (Option 1) as the sole current
+delivery baseline, including on private networks. [Its protocol](device-transport-security.md)
+is implemented. WireGuard Option 2 is deferred roadmap work: isolated transport
+experiments do not authorize a new product mode, weaker TLS/authentication or
+changes to core authority before a reviewed bootstrap and migration design.
+
 ## State ownership
 
 | State | Owner and identity |

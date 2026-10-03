@@ -31,7 +31,7 @@ underlying CLI to a lowest-common-denominator chat API.
 
 ```mermaid
 flowchart TB
-    PHONE["Phone IDE"] --> HTTP["HTTP + WebSocket"]
+    PHONE["Phone IDE"] --> HTTP["HTTPS + WSS"]
     DESKTOP["Desktop IDE"] --> HTTP
     HTTP --> HUB["Cowboy Hub<br/>seq · state · fan-out"]
     HUB --> STORE[("PostgreSQL / SQLite")]
@@ -49,6 +49,12 @@ Hawk-local fast path uses a Unix-domain socket. The controller never opens a
 public listener on each development host. Machine fencing, command
 deduplication, worker snapshots, and event replay preserve ownership across
 reconnects and rolling updates.
+
+Remote product access requires HTTPS and device-bound authentication
+([security contract](../device-transport-security.md)). The
+[security roadmap](../secure-connectivity-design.md) prioritizes reliability of
+this Option 1 path; application-local WireGuard remains deferred research and
+does not change the current Hub/Machine/worker topology.
 
 ## Component map
 
