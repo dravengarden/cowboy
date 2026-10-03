@@ -87,3 +87,7 @@ WireGuard keys remain separate from browser/CLI account keys. Enrollment,
 revocation, address allocation, route ownership and host service lifecycle need
 their own protocol and receipts. The present release does not implement that
 network or promise browser access without a native VPN client.
+
+The initial Rust implementation comparison, configuration proposal and successful
+isolated interoperability probe are recorded in
+[Self-managed WireGuard transport](wireguard-transport.md).

@@ -1,0 +1,142 @@
+{
+  "web": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1790993365038911002-b06c3153ee2a",
+    "revision": "b06c3153ee2a12e9434ae59a2279624509ba1b41",
+    "published": true,
+    "release": "/nix/store/hrzlm56pydrkar3s37x3dkj6a73y7v5b-cowboy-web-release",
+    "previousRelease": "/nix/store/8l2qfmvlqp7v55agcv0msk96v7f6x3qb-cowboy-web-release",
+    "activeRelease": "/nix/store/hrzlm56pydrkar3s37x3dkj6a73y7v5b-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-03T02:09:25.038911002Z",
+    "recordedAt": "2026-10-03T02:09:25.078775078Z",
+    "recovered": false
+  },
+  "controller": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "controller",
+    "transaction": "1790993374749845259-b06c3153ee2a",
+    "revision": "b06c3153ee2a12e9434ae59a2279624509ba1b41",
+    "published": true,
+    "release": "/nix/store/f2cdh9yn4dm4k1krvv7wkblfwcpjhhiz-cowboy-controller-release",
+    "previousRelease": "/nix/store/nh3g45vdi67vv9nxvi3nb5lnhpc497df-cowboy-controller-release",
+    "activeRelease": "/nix/store/f2cdh9yn4dm4k1krvv7wkblfwcpjhhiz-cowboy-controller-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-03T02:09:34.749845259Z",
+    "recordedAt": "2026-10-03T02:09:49.246524969Z",
+    "recovered": false
+  },
+  "http": {
+    "public-health": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "strict-transport-security": "max-age=31536000"
+      },
+      "body": "ok"
+    },
+    "version": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "strict-transport-security": "max-age=31536000"
+      },
+      "body": "{\"version\":\"f054e84cb531dffd6c8f1865f75b2be5\"}"
+    },
+    "shell": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "text/html",
+        "etag": "\"f054e84cb531dffd6c8f1865f75b2be5\"",
+        "strict-transport-security": "max-age=31536000"
+      },
+      "length": 33846
+    },
+    "signer": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "text/javascript",
+        "etag": "\"96cbe59b0f073f21c6d9f79051ca6bc2\"",
+        "strict-transport-security": "max-age=31536000"
+      },
+      "length": 5660
+    },
+    "challenge": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-type": "application/json"
+      },
+      "body": "{\"epoch\":\"blvwJAztAAWsNLEqNLkh2Fo0bBGY-u2qiDiENI_2EkE\",\"server_time_ms\":1790993462126}"
+    },
+    "unsigned-login": {
+      "status": 401,
+      "headers": {
+        "content-type": "application/json",
+        "x-cowboy-device-proof": "required"
+      },
+      "body": "{\"code\":\"device_proof_required\"}"
+    },
+    "retired-token-creation": {
+      "status": 410,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Use registered device credentials"
+    },
+    "machine": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-eed1d8105af00846771d\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+    },
+    "service-worker": {
+      "version_line": "const VERSION = \"cowboy-v1809\";",
+      "imports_signer": true
+    }
+  },
+  "manager": {
+    "manager_revision": "305b910c",
+    "bootstrap_revision": "ca7a73c2",
+    "version": "0.1.6",
+    "build": 7,
+    "bundle": "/tmp/cowboy-option1-manager-305b910c/Cowboy Manager.app",
+    "swift_tests": 43,
+    "bootstrap_input_sha256": {
+      "cowboy": "416b81976c01bb06dc5a55c686931fcb39ce2db1070f7eef633ae63db66e1129",
+      "cowboy-machine": "9360be991dfb23fa73dfdba13b1143e968ca881cec017a353557b6518faf3bc2",
+      "cowboy-machine-install": "d5ed5aa4993a81a1de65985da080a8c0cde41e2adbfd3f3af4fce79b9199fe3b",
+      "cowboy-code-adapter": "f4f9fd06910a719cc792c2b69be23757733d9458c28b32cfd36d8160bbb49f29",
+      "cowboy-acp-worker": "33d14e9a657eabea372b51167e37aab58d61ebc973dbb36e79d810fdda3fbcba"
+    },
+    "manager_sha256": "873b43cf1332479107c9b65756ff710875c1b6fce9c665282f3a5b4d650760e9",
+    "machine_activation": false,
+    "installed": "/Applications/Cowboy Manager.app",
+    "previous": "/Users/dravenchen/Library/Application Support/Cowboy/releases/pre-option1-305b910c/Cowboy Manager.app"
+  },
+  "machine": {
+    "pid_before": 1223771,
+    "pid_after": 1223771,
+    "started_at": "2026-10-03 10:01:35 CST",
+    "worker_generation_before": "worker-eed1d8105af00846771d",
+    "worker_generation_after": "worker-eed1d8105af00846771d"
+  },
+  "remote_plaintext_with_spoofed_https_header": {
+    "from": "macbook-air",
+    "status": 426,
+    "body": "HTTPS is required"
+  },
+  "ios_release": false
+}
