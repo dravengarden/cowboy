@@ -1,6 +1,6 @@
 # Matrix Provider integration
 
-Source contract for standard Codex 3.3.0 and Claude 3.4.2. Upstream native CLI,
+Source contract for standard Codex 3.3.1 and Claude 3.4.3. Upstream native CLI,
 ACP and authentication versions are unchanged. Installation and native runtime
 acceptance are separate release receipts, not implied by this document.
 

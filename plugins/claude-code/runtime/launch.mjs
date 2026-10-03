@@ -589,9 +589,11 @@ export async function main(args) {
     return;
   }
   if (args[0] === "--cowboy-private-cli") return await native(args.slice(1));
+  const inspection = args.length === 1 &&
+    ["--version", "-V", "--help", "-h"].includes(args[0]);
   if (
-    process.env.COWBOY_EXECUTION_DESCRIPTOR ||
-    await matrixConfiguration("claude")
+    !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+      await matrixConfiguration("claude"))
   ) {
     if (!isAbsolute(process.env.CLAUDE_CODE_EXECUTABLE ?? "")) {
       throw new Error("Missing exact Claude executable");

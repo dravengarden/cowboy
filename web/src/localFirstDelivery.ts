@@ -116,6 +116,46 @@ export function deliveryStallMs(
   }
 }
 
+/**
+ * What becomes of an unconfirmed send once its deadline ends.
+ *
+ * A transcript prompt whose transport timed out is parked in the session's
+ * drafts instead of sitting in the transcript as a red row. Its fate is unknown,
+ * the conversation may already have moved on (often from another device), and
+ * resending it automatically could inject stale text into a later turn. A
+ * draft keeps the content, syncs to every device, and leaves the decision to
+ * the user without claiming an error.
+ *
+ * Everything else stays held: a Hub refusal carries a reason the user must see,
+ * a stalled local write cannot be parked through the same wedged database, and
+ * queue edits and moves have their own surface.
+ */
+export function unconfirmedSendDisposition(input: {
+  readonly mutation: string;
+  readonly phase: DeliveryStatus;
+  readonly refused: boolean;
+}): "draft" | "hold" {
+  if (input.mutation !== "submitPrompt") return "hold";
+  if (input.refused || input.phase === "committing") return "hold";
+  return "draft";
+}
+
+/** Deterministic id for the draft that preserves one parked send, so parking
+ * the same send twice (a retry, a reload) cannot create a second draft. */
+export function recoveryDraftCmid(sendId: string): string {
+  return `recovery-${sendId}`;
+}
+
+/** A send that was parked and then echoed late did reach the agent. Its
+ * draft is a duplicate unless the user has already edited it. */
+export function lateEchoRetiresRecoveryDraft(
+  parked: { readonly text: string; readonly attachments: number },
+  draft: { readonly text: string; readonly attachments: readonly unknown[] },
+): boolean {
+  return draft.text === parked.text &&
+    draft.attachments.length === parked.attachments;
+}
+
 export function destinationForPrompt(
   connected: boolean,
   dispatchable: boolean,

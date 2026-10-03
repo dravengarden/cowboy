@@ -30,9 +30,11 @@ export async function main(args) {
     throw new Error("Configured Codex requires an exact Machine-bound CLI");
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
+  const inspection = forwarded.length === 1 &&
+    ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
   if (
-    process.env.COWBOY_EXECUTION_DESCRIPTOR ||
-    await matrixConfiguration("codex")
+    !inspection && (process.env.COWBOY_EXECUTION_DESCRIPTOR ||
+      await matrixConfiguration("codex"))
   ) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");

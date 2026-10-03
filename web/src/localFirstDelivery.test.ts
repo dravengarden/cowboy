@@ -7,10 +7,13 @@ import {
   destinationForPrompt,
   firstDeliveryAttempt,
   homeForOrigin,
+  lateEchoRetiresRecoveryDraft,
   pendingSyncAppearance,
+  recoveryDraftCmid,
   retryDeliveryAttempt,
   returnLabelForHome,
   statusAfterExplicitSend,
+  unconfirmedSendDisposition,
 } from "./localFirstDelivery.ts";
 
 Deno.test("failed sends return to the list they left", () => {
@@ -102,4 +105,83 @@ Deno.test("return is offered on queue cards and on drafts that came from the que
   assertEquals(canReturnFromPendingRow("draft", "queue"), true);
   assertEquals(canReturnFromPendingRow("draft", "composer"), false);
   assertEquals(canReturnFromPendingRow("draft", "draft"), false);
+});
+
+Deno.test("a timed-out transcript prompt is parked in drafts, not held as an error", () => {
+  for (const phase of ["sending", "pending", "failed"] as const) {
+    assertEquals(
+      unconfirmedSendDisposition({
+        mutation: "submitPrompt",
+        phase,
+        refused: false,
+      }),
+      "draft",
+    );
+  }
+});
+
+Deno.test("refusals, wedged local writes, and queue work stay held", () => {
+  assertEquals(
+    unconfirmedSendDisposition({
+      mutation: "submitPrompt",
+      phase: "sending",
+      refused: true,
+    }),
+    "hold",
+  );
+  assertEquals(
+    unconfirmedSendDisposition({
+      mutation: "submitPrompt",
+      phase: "committing",
+      refused: false,
+    }),
+    "hold",
+  );
+  for (
+    const mutation of [
+      "addQueue",
+      "frontQueue",
+      "forceQueue",
+      "addDraft",
+      "activateDraft",
+    ]
+  ) {
+    assertEquals(
+      unconfirmedSendDisposition({
+        mutation,
+        phase: "sending",
+        refused: false,
+      }),
+      "hold",
+    );
+  }
+});
+
+Deno.test("parking one send twice reuses the same draft", () => {
+  assertEquals(recoveryDraftCmid("cmid-1"), "recovery-cmid-1");
+  assertEquals(recoveryDraftCmid("cmid-1"), recoveryDraftCmid("cmid-1"));
+});
+
+Deno.test("a late echo retires only an untouched recovery draft", () => {
+  const parked = { text: "iloader is ready", attachments: 0 };
+  assert(
+    lateEchoRetiresRecoveryDraft(parked, {
+      text: "iloader is ready",
+      attachments: [],
+    }),
+  );
+  assertEquals(
+    lateEchoRetiresRecoveryDraft(parked, {
+      text: "iloader is ready, now pair",
+      attachments: [],
+    }),
+    false,
+  );
+  assertEquals(
+    lateEchoRetiresRecoveryDraft(parked, {
+      text: "iloader is ready",
+      attachments: [{}],
+    }),
+    false,
+  );
 });
