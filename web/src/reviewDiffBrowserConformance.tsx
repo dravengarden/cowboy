@@ -2,7 +2,7 @@
 import { StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { EditorView } from "@codemirror/view";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import {
@@ -142,11 +142,11 @@ export async function runReviewDiffBrowserConformance(): Promise<string[]> {
     flushSync(() =>
       root.render(
         <StrictMode>
-          <ThemeProvider theme={createTheme()}>
+          <BrowserProductTheme>
             <SurfaceProvider>
               <Consumer patch={patch} scope={scope} />
             </SurfaceProvider>
-          </ThemeProvider>
+          </BrowserProductTheme>
         </StrictMode>,
       )
     );

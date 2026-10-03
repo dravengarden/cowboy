@@ -49,6 +49,12 @@ routinely breaks another.
   Markdown/code renderer; never replace readable source with broken media.
 - Quality gate before commit: `deno check` + `oxlint` (the cowboy web gate). Do
   not run repo-wide `deno fmt`.
+- Browser UI conformance must use the real Cowboy theme through
+  `src/browserProductTheme.tsx` (or `useThemeMode` when testing theme changes).
+  Do not replace product overrides with a bare MUI `createTheme()` or copied
+  component styles. The isolated `tools/idb-browser-conformance.ts` runner
+  accepts a third argument, `light` or `dark`; exercise both for visual and
+  interaction changes. Firefox checks do not establish physical iOS acceptance.
 
 ## Mobile drawers, Code Review, and long transcripts
 

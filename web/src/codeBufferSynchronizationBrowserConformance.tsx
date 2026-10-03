@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { CodeBufferSynchronizationPanel } from "./CodeBufferSynchronizationPanel.tsx";
 import type { CodeBufferSynchronizations } from "./codeBuffers/synchronizationProjection.ts";
@@ -45,11 +45,11 @@ function mount(source: CodeBufferSynchronizations) {
   flushSync(() =>
     root.render(
       <StrictMode>
-        <ThemeProvider theme={createTheme()}>
+        <BrowserProductTheme>
           <SurfaceProvider>
             <CodeBufferSynchronizationPanel source={source} />
           </SurfaceProvider>
-        </ThemeProvider>
+        </BrowserProductTheme>
       </StrictMode>,
     )
   );

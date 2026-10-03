@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { ReviewFileTree } from "./mobile/review/ReviewFileTree.tsx";
 
@@ -70,12 +70,11 @@ export async function runReviewTreeBrowserConformance(): Promise<string[]> {
   container.style.cssText = "width:420px;height:600px";
   document.body.append(container);
   const root = createRoot(container);
-  const theme = createTheme();
   const render = (sessionId: string, refreshToken = 0) =>
     flushSync(() =>
       root.render(
         <StrictMode>
-          <ThemeProvider theme={theme}>
+          <BrowserProductTheme>
             <SurfaceProvider>
               <ReviewFileTree
                 key={sessionId}
@@ -87,7 +86,7 @@ export async function runReviewTreeBrowserConformance(): Promise<string[]> {
                 refreshToken={refreshToken}
               />
             </SurfaceProvider>
-          </ThemeProvider>
+          </BrowserProductTheme>
         </StrictMode>,
       )
     );

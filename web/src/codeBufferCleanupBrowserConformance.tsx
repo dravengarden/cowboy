@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel.tsx";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { fixture, ID, opened, OTHER, wire } from "./codeBuffers/fixture.ts";
@@ -23,17 +23,14 @@ function mount(source: CodeBufferCleanup) {
   container.style.width = "360px";
   document.body.append(container);
   const root = createRoot(container);
-  const theme = createTheme({
-    components: { MuiButton: { styleOverrides: { root: { minHeight: 44 } } } },
-  });
   flushSync(() =>
     root.render(
       <StrictMode>
-        <ThemeProvider theme={theme}>
+        <BrowserProductTheme>
           <SurfaceProvider>
             <CodeBufferCleanupPanel source={source} />
           </SurfaceProvider>
-        </ThemeProvider>
+        </BrowserProductTheme>
       </StrictMode>,
     )
   );

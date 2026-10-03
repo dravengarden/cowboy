@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { fixture, OTHER, readWire, wire } from "./codeBuffers/fixture.ts";
 import { navigationWire } from "./codeBuffers/navigationFixture.ts";
@@ -69,12 +69,12 @@ async function mount(locations = golden.locations) {
     flushSync(() =>
       root.render(
         <StrictMode>
-          <ThemeProvider theme={createTheme()}>
+          <BrowserProductTheme>
             <SurfaceProvider>
               {show && <Consumer text={text} />}
               <CodeBufferNavigationPanel source={f.registry.navigations} />
             </SurfaceProvider>
-          </ThemeProvider>
+          </BrowserProductTheme>
         </StrictMode>,
       )
     );

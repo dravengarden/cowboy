@@ -1,7 +1,7 @@
 /** Actual Git review recovery after a failed load. Synthetic HTTP, no account. */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { ReviewChanges } from "./mobile/review/ReviewChanges.tsx";
 import { runReviewRequestBrowserConformance } from "./reviewRequestBrowserConformance.tsx";
@@ -69,7 +69,7 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
   const mount = () =>
     root.render(
       <StrictMode>
-        <ThemeProvider theme={createTheme()}>
+        <BrowserProductTheme>
           <SurfaceProvider>
             <ReviewChanges
               sessionId="workspace::fixture"
@@ -78,7 +78,7 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
               onRevision={noop}
             />
           </SurfaceProvider>
-        </ThemeProvider>
+        </BrowserProductTheme>
       </StrictMode>,
     );
   const text = () => container.textContent ?? "";
@@ -109,7 +109,7 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
     const missing = createRoot(container);
     missing.render(
       <StrictMode>
-        <ThemeProvider theme={createTheme()}>
+        <BrowserProductTheme>
           <SurfaceProvider>
             <ReviewChanges
               sessionId="workspace::fixture"
@@ -118,7 +118,7 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
               onRevision={noop}
             />
           </SurfaceProvider>
-        </ThemeProvider>
+        </BrowserProductTheme>
       </StrictMode>,
     );
     await until(failed, "durable failure alert");
@@ -136,7 +136,7 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
     const hidden = createRoot(container);
     hidden.render(
       <StrictMode>
-        <ThemeProvider theme={createTheme()}>
+        <BrowserProductTheme>
           <SurfaceProvider>
             <ReviewChanges
               sessionId="workspace::fixture"
@@ -145,7 +145,7 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
               onRevision={noop}
             />
           </SurfaceProvider>
-        </ThemeProvider>
+        </BrowserProductTheme>
       </StrictMode>,
     );
     await until(failed, "hidden page alert");

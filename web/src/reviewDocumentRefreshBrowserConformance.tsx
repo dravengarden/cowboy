@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { DocumentView } from "./mobile/review/ReviewApp.tsx";
 import { DOCUMENT_REFRESH_RESUME_GRACE_MS } from "./mobile/review/documentRefreshModel.ts";
@@ -84,7 +84,7 @@ export async function runReviewDocumentRefreshBrowserConformance(): Promise<
     flushSync(() =>
       root.render(
         <StrictMode>
-          <ThemeProvider theme={createTheme()}>
+          <BrowserProductTheme>
             <SurfaceProvider>
               <DocumentView
                 sessionId="workspace::fixture"
@@ -109,7 +109,7 @@ export async function runReviewDocumentRefreshBrowserConformance(): Promise<
                 onOutlineSelect={noop}
               />
             </SurfaceProvider>
-          </ThemeProvider>
+          </BrowserProductTheme>
         </StrictMode>,
       )
     );

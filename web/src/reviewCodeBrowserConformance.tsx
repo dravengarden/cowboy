@@ -2,7 +2,7 @@
 import { StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { fixture, ID, readWire, wire } from "./codeBuffers/fixture.ts";
 import {
@@ -96,11 +96,11 @@ export async function runReviewCodeBrowserConformance(): Promise<string[]> {
     flushSync(() =>
       root.render(
         <StrictMode>
-          <ThemeProvider theme={createTheme()}>
+          <BrowserProductTheme>
             <SurfaceProvider>
               <Consumer text={text} complete={complete} />
             </SurfaceProvider>
-          </ThemeProvider>
+          </BrowserProductTheme>
         </StrictMode>,
       )
     );
