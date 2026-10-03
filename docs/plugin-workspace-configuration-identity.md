@@ -27,6 +27,15 @@ either configuration or identity changes. For aliases of one tracked path,
 removing any prior binding conservatively retires that path's identity.
 The original 256-root handle budget and wire protocol 22 remain unchanged.
 
+Several configured IDs may name the same canonical root. An advertisement
+observes that path once, retains one handle and gives every alias the same
+opaque incarnation. Later advertisements preserve it while the object and
+accepted bindings remain unchanged. The 256-handle budget counts distinct
+paths, so an alias of an admitted root remains observable even after a new
+distinct root has been refused at capacity. A replacement retires the shared
+Machine identity; subsequent advertisement gives every alias a fresh value.
+Controller read scopes remain independent per workspace ID.
+
 Configuration notifications still contain only configuration. A filesystem
 object replacement changes its identity without restarting the Code adapter;
 a genuine configuration change retains the existing adapter reconfiguration
@@ -45,6 +54,7 @@ invalid-configuration behaviour and the object-replacement notification rule.
 This covers configurations the Machine actually accepts. It does not detect
 unobserved on-disk edits, make inventory delivery atomic across a connection,
 cancel already-dispatched reads, or extend identity to Session worktrees or
-security domains. The resident protocol-21 Machine receives none of this
-behaviour until a separately authorized Machine activation; publishing a
-protocol-22 candidate and passing isolated gates do not activate it.
+security domains. The original protocol-22 candidate was not activated by its
+source task. Hawk's later October 2 protocol-24 Machine activation includes the
+fix; see the [production adoption record](releases/plugin-root-identity-adoption-2026-10-03.md).
+That maintenance receipt establishes adoption, not a new production ABA test.
