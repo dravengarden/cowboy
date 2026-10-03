@@ -9,11 +9,7 @@ const rowSource = appSource.slice(rowStart, rowEnd);
 
 Deno.test("session rows show the user-selected directory", () => {
   assertEquals(
-<<<<<<< HEAD
     /secondary=\{[\s\S]*?\{sessionDisplayDirectory\(s\)\}/.test(appSource),
-=======
-    appSource.includes("{sessionDisplayDirectory(s)}"),
->>>>>>> origin/main
     true,
   );
 });
