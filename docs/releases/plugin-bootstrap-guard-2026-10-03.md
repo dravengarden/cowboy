@@ -70,6 +70,43 @@ required.
 
 ## Release receipt
 
-Exact immutable build, packaged matrix and Machine activation observations are
-recorded after the clean committed release completes its owning transaction.
-Production Session deletion writing remains disabled.
+Published source is `f1cf02dca1938636d5b435fd6fdb45fb18dc7aa1`. After adding
+the final namespace-entry count check, the targeted installer unit tests and
+exact source matrix passed again, along with Clippy and formatting. The clean
+committed immutable outputs are:
+
+- `/nix/store/dkyb2js19cj4q1blm5sd6hb09jvaaf5s-cowboy-machine-release`.
+- `/nix/store/b8an6gl31ws1x8ijgrbapfqg8j9pkcj0-cowboy-source-boundary`.
+
+The default-feature package required by the bundle passed 1,314 unit tests with
+24 ignored and its enabled three-test integration target. The opt-in matrix
+then passed using this exact packaged installer as its third supplied artifact.
+Its SHA-256 is
+`f65898e3a631387df07a5e9e88b28a4ac4716dc157ec4c4c10ea9f456a9bf385`.
+The old and guarded candidate installer digests are retained separately in the
+[machine-readable observations](../experiments/plugin-bootstrap-guard-2026-10-03.json).
+Neither source-Cargo acceptance alone nor a release metadata declaration is
+substituted for this packaged execution.
+
+Machine-only transaction `1791024827245034676-f1cf02dca193` succeeded and
+committed, published, without recovery at `2026-10-03T10:53:56.833751985Z`.
+Its previous release is
+`/nix/store/ypqs95ri4mv39bqx9lhknn2zcz4yrn3k-cowboy-machine-release`.
+The active desired generation remains `worker-6ede7a91cc8b8b3402d4`.
+Machine deployment-health reported connected, online and that exact generation.
+
+Bounded observations at `2026-10-03T10:52:49.077Z` and
+`2026-10-03T10:54:12.042Z` retained every original PID across 13 ACP worker
+and four execution keeper units. Machine PID changed from `929157` to
+`1285097`; Controller PID remained `486493`. Web profile and root-owned
+reader-floor bytes were unchanged. HTTPS health/version/SPA/SW/Machine
+deployment-health returned 200, HTML/SW retained `no-store`, and the separate
+SPA version remained `4aae6c684d7dd1914dd7520ccfa82cb4`.
+
+At `2026-10-03T10:53:47.330929Z`, the resident reader reported zero deleted
+Sessions and `writer_enabled=false`. Its production namespace still contained
+only `.lock`. No record was seeded or migrated, and new production deletion
+remains volatile. This task activated no Controller, Web, host configuration,
+macOS Manager, portable-device bundle or iOS release. Process samples do not
+establish native resume or full worker replacement. Older installer/activator
+authority, signed portable reader recovery and writer admission remain open.
