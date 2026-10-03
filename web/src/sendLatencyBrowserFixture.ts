@@ -7,11 +7,11 @@ import { bindProductSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSyncDatabase, type ProductSyncScope } from "./productSyncDatabase.ts";
 import { TranscriptCachedCaption } from "./TranscriptCachedCaption.tsx";
 import { Transcript } from "./Transcript.tsx";
-import { activateDraft, openSession, submitPrompt, useStore } from "./store.ts";
+import { activateDraft, addDraft, openSession, submitPrompt, useStore } from "./store.ts";
 import { promptEchoReadyToReplaceOptimistic } from "./sendImagePreviews.ts";
 import type { Attachment } from "./attachments.ts";
 import { SessionObligationBadge } from "./SessionOfflineBadges.tsx";
-import { PriorSendDecisionSheet } from "./HeldMessagesSheet.tsx";
+import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet.tsx";
 import { optimisticQuestionKey } from "./explore/optimisticPages.ts";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 
@@ -149,8 +149,14 @@ export async function run() {
       const oldCmid = snapshot.optimisticMessages.get(session)![0]!.cmid;
       if (document.querySelector('[data-held-message-notice]') || document.querySelector('[aria-label="1 message needs attention"]'))
         throw new Error("held messages create persistent warning noise");
+      let nextDraft: string | undefined;
+      if (scenario === "failed-recovery-review") {
+        await addDraft(session, "new working prompt", []);
+        await until(() => snapshot.drafts.get(session)?.some((row) => row.text === "new working prompt" && row.status === undefined) === true, "new draft acknowledged");
+        nextDraft = snapshot.drafts.get(session)!.find((row) => row.text === "new working prompt")!.id;
+      }
       let cancelled = false;
-      const nextSend = submitPrompt(session, "new working prompt").catch((error) => {
+      const nextSend = (nextDraft ? activateDraft(session, nextDraft) : submitPrompt(session, "new working prompt")).catch((error) => {
         if (error.name !== "AbortError") throw error;
         cancelled = true;
       });
@@ -168,6 +174,14 @@ export async function run() {
         if (!cancelled) throw new Error("retry old also sent the new message");
         if (!(await retained("older unconfirmed caption"))) throw new Error("retry lost original content");
         return ["retry old pauses the new send without clearing composer content"];
+      }
+      if (scenario === "failed-recovery-late-confirmation") {
+        await fetch("/fixture/confirm-old", { method: "POST" });
+        await nextSend;
+        await until(() => document.body.textContent?.includes("Previous message unconfirmed") !== true, "late confirmation dismisses obsolete decision");
+        await until(() => JSON.stringify(snapshot.timelines.get(session) ?? []).includes("new working prompt"), "late confirmation releases exactly one new send");
+        if (snapshot.drafts.get(session)?.some((row) => row.text === oldText)) throw new Error("confirmed message unnecessarily archived");
+        return ["late confirmation closes stale decision and resumes the waiting send without archiving"];
       }
       button("Ignore & send").click();
       if (scenario.endsWith("storage-error")) {

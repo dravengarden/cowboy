@@ -52,7 +52,7 @@ const cases = bundles.flatMap((bundle) =>
   (slowMobile
     ? ["slow-mobile", "lost-send"]
     : failedRecovery
-    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error"]
+    ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error", "failed-recovery-late-confirmation"]
     : updateSettings
     ? ["update-settings"]
     : continuity
@@ -86,6 +86,9 @@ for (const { bundle, scenario } of cases) {
   let attempts = 0;
   const recoveryCase = scenario.startsWith("failed-recovery");
   const recoveredDrafts: Record<string, unknown>[] = [];
+  let recoveryQueueVersion = 2;
+  let failedCmid: string | undefined;
+  let failedBlocks: Record<string, unknown>[] = [];
   let lostSend = false;
   let recoveredTransport = false;
   let datasetId = descriptor.dataset_id;
@@ -132,6 +135,17 @@ for (const { bundle, scenario } of cases) {
         } catch {
           return new Response("missing fixture chunk", { status: 404 });
         }
+      }
+      if (request.method === "POST" && url.pathname === "/fixture/confirm-old") {
+        for (const socket of sockets) socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: ++recoveryQueueVersion,
+          value: { queue: [], drafts: recoveredDrafts }, confirmed: [failedCmid] }));
+        for (const [index, content] of failedBlocks.entries()) {
+          const echo = { session_id: session.id, seq: ++seq, kind: "update", ...(index === 0 ? { cmid: failedCmid } : {}),
+            update: { sessionUpdate: "user_message_chunk", content } };
+          history.push(echo);
+          for (const socket of sockets) socket.send(JSON.stringify({ type: "event", envelope: echo }));
+        }
+        return new Response("ok");
       }
       if (url.pathname === "/fixture/metrics") {
         return Response.json({ deliveries, metadataMutations });
@@ -190,10 +204,10 @@ for (const { bundle, scenario } of cases) {
           socket.send(JSON.stringify({ type: "bootstrap_complete" }));
         };
         socket.onmessage = async (event) => {
-          const message = JSON.parse(event.data);
+          let message = JSON.parse(event.data);
           if (recoveryCase && message.type === "add_draft") {
-            recoveredDrafts.push({ id: "recovered-draft", cmid: message.cmid, text: message.text, content: message.content });
-            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: 3,
+            recoveredDrafts.push({ id: `recovered-draft-${recoveredDrafts.length}`, cmid: message.cmid, text: message.text, content: message.content });
+            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: ++recoveryQueueVersion,
               value: { queue: [], drafts: recoveredDrafts }, confirmed: [message.cmid] }));
             return;
           }
@@ -248,6 +262,13 @@ for (const { bundle, scenario } of cases) {
             }
             return;
           }
+          if (recoveryCase && message.type === "activate_draft") {
+            const index = recoveredDrafts.findIndex((row) => row.id === message.id);
+            const source = recoveredDrafts[index];
+            if (!source) throw new Error("draft source missing in fixture");
+            recoveredDrafts.splice(index, 1);
+            message = { ...message, type: "submit", text: source.text, content: source.content };
+          }
           if (message.type === "sync") metadataMutations++;
           if (message.type !== "submit") {
             return;
@@ -260,14 +281,16 @@ for (const { bundle, scenario } of cases) {
           seen.add(message.cmid);
           deliveries++;
           if (recoveryCase && deliveries === 1) {
+            failedCmid = message.cmid;
+            failedBlocks = message.content ?? [{ type: "text", text: message.text }];
             socket.send(JSON.stringify({ type: "command_result", session_id: session.id, cmid: message.cmid,
               outcome: "rejected", message: "Synthetic older send failure" }));
             return;
           }
           if (recoveryCase) {
             // The receipt may precede the echo and drop the pending mutation.
-            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: 2,
-              value: { queue: [], drafts: [] }, confirmed: [message.cmid] }));
+            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: ++recoveryQueueVersion,
+              value: { queue: [], drafts: recoveredDrafts }, confirmed: [message.cmid] }));
           }
           if (local) {
             socket.send(JSON.stringify({

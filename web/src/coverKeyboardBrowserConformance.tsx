@@ -1,7 +1,7 @@
 /** Actual cover/footer layout with synthetic keyboard geometry, not iOS IME acceptance. */
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { createTheme, ThemeProvider } from "@mui/material";
+import { BrowserProductTheme } from "./browserProductTheme";
 import { DetentSheet } from "@cowboy/app-shell";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { inferKeyboardOpen } from "./keyboardGeometry";
@@ -30,7 +30,7 @@ export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
     });
     flushSync(() =>
       root.render(
-        <ThemeProvider theme={createTheme()}>
+        <BrowserProductTheme>
           <DetentSheet
             open
             onClose={() => {}}
@@ -51,7 +51,7 @@ export async function runCoverKeyboardBrowserConformance(): Promise<string[]> {
           >
             <input aria-label="Title" defaultValue="New session" />
           </DetentSheet>
-        </ThemeProvider>,
+        </BrowserProductTheme>,
       )
     );
   }

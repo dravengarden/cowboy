@@ -4,11 +4,13 @@ Research and first interoperability probe, 2026-10-03. Option 1 is deployed;
 Option 2 is a proposed product mode with a working isolated transport probe.
 No production WireGuard interface, route, firewall rule or peer was installed.
 The scope is LAN reachability and a statically configured WireGuard data plane;
-Cowboy does not own a VPN control plane.
+Cowboy does not own a VPN control plane. The native probe below does not constrain
+PWA clients to an installed VPN: the follow-up [browser userspace research](browser-wireguard-transport.md)
+explores WireGuard inside WASM over a direct browser-compatible carrier.
 
 ## Rust implementation
 
-GotaTun is the preferred candidate. Mullvad maintains this Rust userspace
+GotaTun is the preferred native candidate. Mullvad maintains this Rust userspace
 implementation, derived from BoringTun, with a library and a standalone daemon.
 Its documented targets include Linux, macOS and Windows, plus mobile library
 targets. The repository uses MPL-2.0 for current contributions; retain its
@@ -62,9 +64,11 @@ host user namespace or a populated network namespace.
 
 ## LAN scope and ownership
 
-Assume each device can directly reach the server's UDP listener on the LAN.
-Static peer configurations are sufficient: each endpoint retains its private
-key and receives the other endpoint's public key through a trusted channel.
+For native UDP peers, assume each device can reach the server's UDP listener on
+the LAN. Browser peers instead need a reachable WSS or WebTransport endpoint on
+that same server. Static peer configurations are sufficient: each endpoint
+retains its private key and receives the other endpoint's public key through a
+trusted channel.
 The operator supplies tunnel addresses and narrow AllowedIPs. No discovery,
 automatic enrollment, address allocator, NAT hole punching, relay, mesh routing
 or central peer inventory is required in Cowboy. Standard `wg`/`wg-quick` can
@@ -72,7 +76,8 @@ configure this data plane. [WireGuard configuration](https://www.wireguard.com/q
 
 LAN reachability alone does not encrypt traffic. Option 1 remains the HTTPS
 application with mandatory device authentication; Option 2 carries that same
-application over a private WireGuard interface. WireGuard peer keys are separate
+application over a WireGuard tunnel, which can use an OS interface or an
+in-memory browser network stack. WireGuard peer keys are separate
 from the existing P-256/Ed25519 application identities. Removing a VPN peer and
 revoking an application session are separate administrative operations.
 
@@ -81,16 +86,17 @@ revoking an application session are separate administrative operations.
 | LAN reachability, UDP firewall access and stable endpoint | Host/network administration |
 | Peer public keys, static tunnel addresses and AllowedIPs | Operator-owned WireGuard profiles |
 | Existing system tunnel, routes and peer removal | OS WireGuard tools or an external VPN client |
-| Optional integrated tunnel startup/shutdown | A small local Cowboy network helper, if needed |
+| Optional native tunnel startup/shutdown | A small local Cowboy network helper, if needed |
+| Browser tunnel and direct WSS carrier | Proposed Cowboy WASM worker and server ingress |
 | HTTPS, account/device checks and HTTP/WebSocket service | Existing Cowboy application |
 
-## Two ways to supply the tunnel
+## Native/system tunnel choices
 
 **Existing system WireGuard:** the operator brings up the tunnel and points
 Cowboy clients at the reachable HTTPS service hostname or IP. Cowboy needs no
 WireGuard cryptographic library or new application transport protocol in this
-case. This is the simplest initial deployment path and also works for Browser/PWA
-with an external VPN client.
+case. This deployment path also works for Browser/PWA with an external VPN
+client. It does not meet the separate goal of a PWA that owns its own tunnel.
 
 **Integrated userspace WireGuard:** if Cowboy should bring up the tunnel itself,
 GotaTun is the preferred Rust candidate. Accept a local static profile and manage
@@ -108,7 +114,7 @@ public endpoint.
 
 ## Static profile proposal
 
-These are design fields for an optional integrated client, **not currently
+These are design fields for an optional integrated native client, **not currently
 accepted Cowboy options**. Existing system tunnels use their normal WireGuard
 configuration instead:
 
@@ -137,12 +143,16 @@ profile updates through host/network administration.
 
 For Browser/PWA, retain HTTPS and Option 1's account/device checks inside the
 tunnel. WebCrypto requires a secure context, and a browser cannot install a
-system WireGuard interface. [WebCrypto secure context](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/subtle).
+system WireGuard interface. It can run WireGuard in WASM and route its own
+application traffic through a userspace stack and a WSS/WebTransport carrier;
+that requires application integration rather than OS routes.
+[WebCrypto secure context](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/subtle).
 
 An integrated native mobile client still needs the platform VPN lifecycle,
 including iOS packet-tunnel extensions and Android VpnService. Compiling a Rust
-library does not supply those permissions or lifecycle layers; an external VPN
-client avoids adding them to Cowboy initially.
+library does not supply those permissions or lifecycle layers. This applies to
+system-wide native VPN integration; a browser-local tunnel has a different
+lifecycle and does not require those OS VPN permissions.
 [Apple packet tunnels](https://developer.apple.com/documentation/networkextension/nepackettunnelprovider),
 [Android VpnService](https://developer.android.com/reference/android/net/VpnService).
 
@@ -153,10 +163,10 @@ The eight isolated interoperability checks already use this topology and static
 peer configuration. They establish Linux transport feasibility, not an integrated
 Cowboy server/client release, mobile readiness or production performance.
 
-Before implementing an integrated helper, first validate the real Cowboy
-HTTPS/WebSocket service over an externally configured LAN tunnel. Check hostname
-and certificate handling, reconnects, UDP blocking, MTU/large artifact transfers,
-sleep/wake and operator removal of a peer during a live session. If integrated
-startup is still needed, define the local profile/helper interface, route-conflict
-checks, platform permissions and cleanup/recovery behavior. Enrollment protocols,
-central inventories and a self-healing multi-site VPN remain outside this scope.
+The PWA goal now takes priority over native helper integration: first validate
+an actual browser WASM tunnel through a same-server carrier, then bridge Cowboy's
+API and live session protocol into it. The native probe remains useful reference
+interop evidence but does not exercise that path. The [browser research](browser-wireguard-transport.md)
+records upstream examples, Rust compilation checks, integration boundaries and
+the next experiment. Discovery, NAT traversal and a multi-site control plane
+remain outside the scope.

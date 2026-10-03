@@ -62,10 +62,6 @@ export function WorkspacePicker(
     `${entry.label}\n${entry.help}`.toLocaleLowerCase().includes(query)
   );
   const navigate = (next: string[]): void => {
-    const destination = workspaceBranch(root, next);
-    if (destination.entries.length === 1) {
-      onChange(destination.entries[0]!.value);
-    }
     setPath(next);
     requestAnimationFrame(() => {
       document.querySelector<HTMLElement>(
@@ -89,7 +85,6 @@ export function WorkspacePicker(
       data-current-directory={currentParent || undefined}
       onClick={() => {
         if (browsePath) navigate(browsePath);
-        else if (currentParent) onChange(entry.value);
         else choose(entry.value);
       }}
       onKeyDown={(event) => {
@@ -128,7 +123,7 @@ export function WorkspacePicker(
         </Typography>
         {currentParent && (
           <Typography variant="caption" display="block" color="text.secondary">
-            Current directory
+            {label === "Project" ? "Select this project" : "Use this directory"}
           </Typography>
         )}
       </Box>

@@ -10,9 +10,12 @@ import {
   subscribePriorSendDecision,
 } from "./priorSendDecision";
 import {
+  hasPendingPriorSends,
   heldDeliveryDetails,
   retryQueued,
   saveHeldDeliveryAsDraft,
+  useHeldDeliveries,
+  useSessionObligations,
 } from "./store";
 
 export function PriorSendDecisionSheet(): React.JSX.Element | null {
@@ -29,12 +32,18 @@ export function PriorSendDecisionSheet(): React.JSX.Element | null {
 
 function Decision(
   { request }: { request: PriorSendDecision },
-): React.JSX.Element {
+): React.JSX.Element | null {
+  useHeldDeliveries();
+  useSessionObligations(request.sessionId);
   const rows = heldDeliveryDetails(request.sessionId).filter((row) =>
     request.ids.includes(row.id)
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const pending = hasPendingPriorSends(request.sessionId, request.ids);
+  useEffect(() => {
+    if (!pending && !saving) finishPriorSendDecision(request, true);
+  }, [pending, saving, request]);
   const continueSend = async (): Promise<void> => {
     setSaving(true);
     setError("");
@@ -50,6 +59,7 @@ function Decision(
       setSaving(false);
     }
   };
+  if (!pending && !saving) return null;
   return (
     <ConfirmSheet
       open

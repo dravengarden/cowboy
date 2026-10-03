@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-03",
+  "kind": "browser-wireguard-compilation-research",
+  "rust": "1.98.1",
+  "target": "wasm32-unknown-unknown",
+  "toolchain_nix_store": "/nix/store/ywaldxi97skk5rhm9jwir08vy2vgxiav-rust-minimal-1.98.1",
+  "toolchain_origin": "repository flake inputs plus rust-toolchain.toml, with wasm32-unknown-unknown target added",
+  "working_directory": "repository root; all Rust commands run within nix develop",
+  "rustflags": [
+    "--cfg",
+    "getrandom_backend=\"wasm_js\""
+  ],
+  "command_template": "cargo check --target wasm32-unknown-unknown --manifest-path <probe-root>/<package>-adapted-probe/Cargo.toml",
+  "probe_source": "pub use wg::noise::Tunn;\n",
+  "checks": [
+    {
+      "package": "gotatun",
+      "version": "0.9.2",
+      "source_commit": "ad58de51e859f458384fe4759eabdff478a6b133",
+      "upstream": {
+        "result": "failed",
+        "exit_code": 101,
+        "diagnostic": "E0433: cannot find module or crate inner in this scope; sleepyinstant has no wasm32 backend",
+        "log_sha256": "a5049fdc7decd7d5d497d1e295ff54bd4871ca3cf71f31671ee5eb046fa40011"
+      },
+      "clock_adapted": {
+        "result": "passed",
+        "exit_code": 0,
+        "log_sha256": "84af5221aea12f639dd2d7c6e9cf22ba1e4b3afe808c31b9d5e6bba4f869ee6c",
+        "manifest": "[package]\nname = \"browser-gotatun-adapted-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n[workspace]\n[lib]\ncrate-type = [\"rlib\"]\n[dependencies]\nwg = { package = \"gotatun\", version = \"=0.9.2\", default-features = false, features = [\"ring\"] }\ngetrandom = { version = \"0.2\", features = [\"js\"] }\nring = { version = \"0.17\", features = [\"wasm32_unknown_unknown_js\"] }\ngetrandom03 = { package = \"getrandom\", version = \"0.3\", features = [\"wasm_js\"] }\n\n[patch.crates-io]\ngotatun = { path = \"<probe-root>/gotatun-clock-adapted\" }\n",
+        "lockfile_sha256": "68d7f5126b6ebd3eb8714db79feed3e60a93373fdacb5c7ac4781e1400296dbf",
+        "patches": {
+          "Cargo.toml": "--- upstream/Cargo.toml\n+++ experimental/Cargo.toml\n@@ -282,3 +282,6 @@\n     \"user\",\n ]\n default-features = false\n+\n+[target.'cfg(target_arch = \"wasm32\")'.dependencies.web-time]\n+version = \"=1.1.0\"\n",
+          "src/sleepyinstant/mod.rs": "--- upstream/src/sleepyinstant/mod.rs\n+++ experimental/src/sleepyinstant/mod.rs\n@@ -89,3 +89,7 @@\n         assert!(start.elapsed() >= sleep_time);\n     }\n }\n+\n+// Research-only browser clock adapter.\n+#[cfg(target_arch = \"wasm32\")]\n+use web_time as inner;\n",
+          "src/noise/handshake.rs": "--- upstream/src/noise/handshake.rs\n+++ experimental/src/noise/handshake.rs\n@@ -24,7 +24,11 @@\n use chacha20poly1305::XChaCha20Poly1305;\n use constant_time_eq::constant_time_eq_n;\n use std::convert::TryInto;\n-use std::time::{Duration, SystemTime};\n+use std::time::Duration;\n+#[cfg(not(target_arch = \"wasm32\"))]\n+use std::time::SystemTime;\n+#[cfg(target_arch = \"wasm32\")]\n+use web_time::SystemTime;\n use zerocopy::IntoBytes;\n \n #[cfg(feature = \"mock_instant\")]\n"
+        }
+      }
+    },
+    {
+      "package": "boringtun",
+      "version": "0.7.1",
+      "source_commit": "051c9d47dc9c5cb36e461b7d36dcd673820dc98b",
+      "upstream": {
+        "result": "failed",
+        "exit_code": 101,
+        "diagnostic": "E0433: cannot find module or crate inner in this scope; sleepyinstant has no wasm32 backend",
+        "log_sha256": "97aa97c8a051280f84b92bdd151e75d5cd662ef5b9dc93499a08c99309080ab3"
+      },
+      "clock_adapted": {
+        "result": "passed",
+        "exit_code": 0,
+        "log_sha256": "57db0e17197579bab9ae4c923487cf167894facc6adc2bf76e9e13b97f8d994c",
+        "manifest": "[package]\nname = \"browser-boringtun-adapted-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n[workspace]\n[lib]\ncrate-type = [\"rlib\"]\n[dependencies]\nwg = { package = \"boringtun\", version = \"=0.7.1\", default-features = false }\ngetrandom = { version = \"0.2\", features = [\"js\"] }\nring = { version = \"0.17\", features = [\"wasm32_unknown_unknown_js\"] }\n\n[patch.crates-io]\nboringtun = { path = \"<probe-root>/boringtun-clock-adapted\" }\n",
+        "lockfile_sha256": "75952347588283469da4419e73848767201550057f50cb499a5347302e0bd877",
+        "patches": {
+          "Cargo.toml": "--- upstream/Cargo.toml\n+++ experimental/Cargo.toml\n@@ -150,3 +150,6 @@\n     \"user\",\n ]\n default-features = false\n+\n+[target.'cfg(target_arch = \"wasm32\")'.dependencies.web-time]\n+version = \"=1.1.0\"\n",
+          "src/sleepyinstant/mod.rs": "--- upstream/src/sleepyinstant/mod.rs\n+++ experimental/src/sleepyinstant/mod.rs\n@@ -75,3 +75,7 @@\n         assert!(start.elapsed() >= sleep_time);\n     }\n }\n+\n+// Research-only browser clock adapter.\n+#[cfg(target_arch = \"wasm32\")]\n+use web_time as inner;\n",
+          "src/noise/handshake.rs": "--- upstream/src/noise/handshake.rs\n+++ experimental/src/noise/handshake.rs\n@@ -14,7 +14,11 @@\n use rand_core::OsRng;\n use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};\n use std::convert::TryInto;\n-use std::time::{Duration, SystemTime};\n+use std::time::Duration;\n+#[cfg(not(target_arch = \"wasm32\"))]\n+use std::time::SystemTime;\n+#[cfg(target_arch = \"wasm32\")]\n+use web_time::SystemTime;\n \n #[cfg(feature = \"mock-instant\")]\n use mock_instant::Instant;\n"
+        }
+      }
+    }
+  ],
+  "limits": [
+    "cargo check only: no linked WASM artifact or browser execution",
+    "no browser-to-native handshake, HTTP or WebSocket exchange performed",
+    "no throughput, suspension or rekey validation",
+    "temporary dependency patches are research artifacts, not product dependencies",
+    "no production activation or network changes"
+  ]
+}

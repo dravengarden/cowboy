@@ -4,6 +4,10 @@
 const browser = Deno.args[0];
 // Closed fixture selector; this runner never opens the deployed application.
 const suite = Deno.args[1] ?? "idb";
+const themeMode = Deno.args[2] ?? "light";
+if (themeMode !== "light" && themeMode !== "dark") {
+  throw new Error("unknown theme mode");
+}
 if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
@@ -109,6 +113,8 @@ try {
       if (request.method === "GET" && url.pathname === `/${token}`) {
         return new Response(
           `<!doctype html><script>
+localStorage.setItem("cowboy:theme-system-default-v1", "1");
+localStorage.setItem("cowboy-theme-mode", ${JSON.stringify(themeMode)});
 // This HTTP fixture owns transport/authentication; real proofs run separately
 // in device-browser-conformance against HTTPS and the Rust verifier.
 globalThis.CowboyDeviceProof = { proof: async () => "fixture", resetChallenge() {}, install() {} };
@@ -209,6 +215,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     {
       ok: true,
       suite,
+      theme_mode: themeMode,
       browser: new TextDecoder().decode(version.stdout).trim(),
       executable: browser,
       fixture_sha256: digest,
