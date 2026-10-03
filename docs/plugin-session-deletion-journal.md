@@ -67,8 +67,20 @@ candidate's exact worker generation. The independently accepted target must
 pass remote/active/candidate ancestry, is retained through interruption, and
 is revalidated before restoration. A missing or changed target cannot select
 the legacy predecessor. Its actual revision and generation enter the recovery
-receipt. Cross-generation recovery and failed-transaction repair selection are
-still unadmitted for Machine.
+receipt. Cross-generation recovery remains unadmitted for Machine.
+
+Machine maintenance can now select a new compatible target for one exact failed
+transaction through `--recover-transaction`. The journal must still await
+rollback and retain maintenance authorization; a completed transaction cannot
+reuse that approval. The new target must declare the reader, keep the failed
+candidate's exact worker generation, pass the owner floor/dataset checks and
+integrate fresh main, active provenance, the failed candidate and any previously
+selected recovery revision. Selection retains an independent GC root and
+archives the original decision before replacing the journal. It changes no
+success receipt before the existing rollback, health and pinning engine runs.
+Unavailable or changed selected targets never revive the predecessor. The
+[same-generation repair release](releases/plugin-machine-repair-2026-10-03.md)
+records owner tests and activation; no production failure was seeded.
 
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state

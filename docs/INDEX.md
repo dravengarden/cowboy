@@ -84,6 +84,7 @@ primary phone/desktop product path.
 - [`releases/plugin-session-deletion-portable-2026-10-03.md`](releases/plugin-session-deletion-portable-2026-10-03.md) — Portable host/launcher refusal for terminal state and rejected-Welcome restart protection; writer stays disabled
 - [`releases/plugin-bootstrap-guard-2026-10-03.md`](releases/plugin-bootstrap-guard-2026-10-03.md) — Pre-copy bootstrap compatibility probe and exact legacy launcher refresh/old-installer authority controls
 - [`releases/plugin-bootstrap-snapshot-2026-10-03.md`](releases/plugin-bootstrap-snapshot-2026-10-03.md) — Shared bootstrap probe/install bundle and mutable caller-path replacement acceptance
+- [`releases/plugin-machine-repair-2026-10-03.md`](releases/plugin-machine-repair-2026-10-03.md) — Exact failed Machine transaction repair with same-generation reader admission
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
