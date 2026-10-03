@@ -1,6 +1,8 @@
 import { StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { ThemeProvider } from "@mui/material";
+import { useThemeMode } from "./theme";
 import { WorkspacePicker } from "./WorkspacePicker";
 
 export async function runWorkspacePickerBrowserConformance(): Promise<
@@ -22,16 +24,19 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
   ];
   function Harness({ label = "Working directory" }: { label?: string }) {
     const [value, setValue] = useState("other-id");
+    const { theme } = useThemeMode();
     return (
-      <WorkspacePicker
-        label={label}
-        entries={entries}
-        value={value}
-        onChange={(id) => {
-          selections.push(id);
-          setValue(id);
-        }}
-      />
+      <ThemeProvider theme={theme}>
+        <WorkspacePicker
+          label={label}
+          entries={entries}
+          value={value}
+          onChange={(id) => {
+            selections.push(id);
+            setValue(id);
+          }}
+        />
+      </ThemeProvider>
     );
   }
   // Popover's automatic Grow duration depends on its measured content height.
@@ -86,8 +91,8 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     click('[role="menuitem"]', "columbus");
     await settle();
     check(
-      selections.at(-1) === "parent-id",
-      "Expanding selects the registered parent",
+      selections.length === 0,
+      "Browsing registered parents preserves the selected project",
     );
     check(
       document.querySelector('[role="menu"]') && item("cowboy"),
@@ -97,7 +102,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       '[data-current-directory="true"]',
     );
     check(
-      parent?.textContent?.includes("Current directory"),
+      parent?.textContent?.includes("Use this directory"),
       "Current parent has an explicit caption",
     );
     check(
@@ -109,14 +114,18 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
         item("cowboy").getBoundingClientRect().top,
       "Current parent is separated from children",
     );
-    const count = selections.length;
     flushSync(() => parent!.click());
-    await settle();
+    await closed();
     check(
-      document.querySelector('[role="menu"]') &&
-        selections.at(-1) === "parent-id",
-      "Selecting current parent keeps the menu open",
+      selections.at(-1) === "parent-id",
+      "Explicit parent selection closes the picker",
     );
+    click('[role="combobox"]');
+    await settle();
+    click('[role="menuitem"]', "hawk");
+    await settle();
+    click('[role="menuitem"]', "columbus");
+    await settle();
     click('[role="menuitem"]', "cowboy");
     await closed();
     check(
@@ -127,6 +136,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     await settle();
     click('[role="menuitem"]', "hawk");
     await settle();
+    const count = selections.length;
     flushSync(() => {
       const row = item("columbus");
       row.focus();
@@ -137,8 +147,8 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     await settle();
     check(
       document.querySelector('[role="menu"]') && item("cowboy") &&
-        selections.at(-1) === "parent-id",
-      "Keyboard Enter expands and selects the parent",
+        selections.length === count,
+      "Keyboard Enter expands without changing selection",
     );
     flushSync(() =>
       item("cowboy").dispatchEvent(
@@ -153,10 +163,10 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     );
     await settle();
     check(
-      item("cowboy") && selections.at(-1) === "parent-id",
+      item("cowboy") && selections.length === count,
       "Right arrow follows parent expansion semantics",
     );
-    check(selections.length > count, "Parent reentry updates selection");
+    check(selections.length === count, "Parent reentry preserves selection");
     click('[role="menuitem"]', "cowboy");
     await closed();
     click('[role="combobox"]');
@@ -216,10 +226,10 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     );
     return [
       "default hierarchy",
-      "parent expands and is selected by default",
+      "parent browsing preserves selection",
       "current parent has a distinct outlined surface",
-      "parent remains open and child selection closes",
-      "keyboard expansion selects the parent",
+      "explicit parent and child choices close the picker",
+      "keyboard browsing preserves selection",
       "flat full paths",
       "saved preference",
       "project hierarchy independent of old directory preference",
