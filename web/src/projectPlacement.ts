@@ -26,6 +26,7 @@ export interface ProjectChoice {
   machineId: string;
   projectId: string;
   name: string;
+  hierarchyPath: string[];
 }
 
 /** Labels may contain slashes; neither labels nor host paths are route keys. */
@@ -43,6 +44,10 @@ export function projectChoices(
       machineId: machine.id,
       projectId: project.id,
       name: project.display_name,
+      hierarchyPath: [
+        machine.display_name,
+        ...project.display_name.split("/").filter(Boolean),
+      ],
     }))
   );
 }

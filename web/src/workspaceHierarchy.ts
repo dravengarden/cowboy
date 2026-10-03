@@ -2,6 +2,8 @@ export interface WorkspaceEntry {
   value: string;
   label: string;
   help: string;
+  /** Explicit display segments keep Machine names containing '/' intact. */
+  hierarchyPath?: readonly string[];
 }
 
 export interface WorkspaceBranch {
@@ -23,7 +25,11 @@ export function workspaceTree(
   };
   for (const entry of entries) {
     let node = root;
-    for (const label of entry.label.split("/").filter(Boolean)) {
+    for (
+      const label of (entry.hierarchyPath ?? entry.label.split("/")).filter(
+        Boolean,
+      )
+    ) {
       let child = node.children.get(label);
       if (!child) {
         child = {

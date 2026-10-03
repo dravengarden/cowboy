@@ -7,6 +7,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
   string[]
 > {
   localStorage.removeItem("cowboy.workspaceHierarchy");
+  localStorage.removeItem("cowboy.projectHierarchy");
   const container = document.createElement("div");
   container.style.width = "360px";
   container.style.display = "flex";
@@ -19,10 +20,11 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     { value: "child-id", label: "hawk/columbus/cowboy", help: "Project root" },
     { value: "other-id", label: "falcon/suger", help: "Other root" },
   ];
-  function Harness() {
+  function Harness({ label = "Working directory" }: { label?: string }) {
     const [value, setValue] = useState("other-id");
     return (
       <WorkspacePicker
+        label={label}
         entries={entries}
         value={value}
         onChange={(id) => {
@@ -175,6 +177,43 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       localStorage.getItem("cowboy.workspaceHierarchy") === "false",
       "Preference is saved",
     );
+    // An older local directory picker must not flatten the unified project
+    // picker. Both local and remote projects use the same component and tree.
+    click('[role="menuitem"]', "hawk/columbus/cowboy");
+    await closed();
+    flushSync(() => root.render(<Harness key="project" label="Project" />));
+    click('[role="combobox"]');
+    await settle();
+    check(
+      document.querySelector<HTMLInputElement>('input[type="checkbox"]')
+        ?.checked,
+      "Projects default to hierarchy despite the old flat directory preference",
+    );
+    check(
+      document.querySelectorAll('[role="menuitem"]').length === 2 &&
+        item("hawk") && item("falcon"),
+      "Project root shows Machines instead of all projects",
+    );
+    const search = document.querySelector<HTMLInputElement>(
+      'input:not([type="checkbox"]):not([role="combobox"])',
+    )!;
+    flushSync(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+        .set!.call(search, "Project root");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle();
+    check(
+      document.querySelectorAll('[role="menuitem"]').length === 1 &&
+        item("hawk/columbus/cowboy"),
+      "Search finds nested projects by source path without browsing each Machine",
+    );
+    click('[role="menuitem"]', "hawk/columbus/cowboy");
+    await closed();
+    check(
+      selections.at(-1) === "child-id",
+      "Search preserves project identity",
+    );
     return [
       "default hierarchy",
       "parent expands and is selected by default",
@@ -183,10 +222,13 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       "keyboard expansion selects the parent",
       "flat full paths",
       "saved preference",
+      "project hierarchy independent of old directory preference",
+      "cross-Machine project search by source path",
     ];
   } finally {
     flushSync(() => root.unmount());
     container.remove();
     localStorage.removeItem("cowboy.workspaceHierarchy");
+    localStorage.removeItem("cowboy.projectHierarchy");
   }
 }

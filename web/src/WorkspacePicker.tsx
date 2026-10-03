@@ -27,8 +27,6 @@ import {
   workspaceTree,
 } from "./workspaceHierarchy";
 
-const preferenceKey = "cowboy.workspaceHierarchy";
-
 export function WorkspacePicker(
   { entries, value, onChange, label = "Working directory" }: {
     label?: string;
@@ -37,6 +35,11 @@ export function WorkspacePicker(
     onChange: (value: string) => void;
   },
 ): React.JSX.Element {
+  // Project placement is shared by local and remote execution. Its display
+  // preference must not inherit a flat directory picker from an older flow.
+  const preferenceKey = label === "Project"
+    ? "cowboy.projectHierarchy"
+    : "cowboy.workspaceHierarchy";
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -50,9 +53,14 @@ export function WorkspacePicker(
   const root = useMemo(() => workspaceTree(entries), [entries]);
   const branch = workspaceBranch(root, path);
   const selected = entries.find((entry) => entry.value === value);
-  const hasGroups = entries.some((entry) => entry.label.includes("/"));
+  const hasGroups = entries.some((entry) =>
+    (entry.hierarchyPath?.length ?? entry.label.split("/").length) > 1
+  );
   const query = search.trim().toLocaleLowerCase();
   const grouped = hierarchical && hasGroups && !query;
+  const matches = entries.filter((entry) =>
+    `${entry.label}\n${entry.help}`.toLocaleLowerCase().includes(query)
+  );
   const navigate = (next: string[]): void => {
     const destination = workspaceBranch(root, next);
     if (destination.entries.length === 1) {
@@ -213,7 +221,7 @@ export function WorkspacePicker(
           {hasGroups && (
             <FormControlLabel
               label={label === "Project"
-                ? "Group projects"
+                ? "Group by machine and directory"
                 : "Group by directory"}
               sx={{
                 m: 0,
@@ -370,17 +378,14 @@ export function WorkspacePicker(
                 ];
               }),
             ]
-            : entries.filter((entry) =>
-              entry.label.toLocaleLowerCase().includes(query)
-            ).map((entry) => entryRow(entry))}
+            : matches.map((entry) => entryRow(entry))}
         </MenuList>
-        {query &&
-          !entries.some((entry) =>
-            entry.label.toLocaleLowerCase().includes(query)
-          ) &&
+        {query && matches.length === 0 &&
           (
             <Typography sx={{ p: 2 }} color="text.secondary">
-              No matching directories
+              {label === "Project"
+                ? "No matching projects"
+                : "No matching directories"}
             </Typography>
           )}
       </Popover>
