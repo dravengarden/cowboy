@@ -166,6 +166,7 @@ impl BridgeState {
 struct Bridge {
     provider: Arc<str>,
     machine: Arc<str>,
+    runtime_machine: Option<Arc<str>>,
     workspace: Option<Arc<str>>,
     base_url: Url,
     authentication: crate::client_auth_client::ClientAuthentication,
@@ -177,6 +178,14 @@ struct Bridge {
 }
 
 pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
+    if let Some(runtime) = args.runtime_machine.as_deref()
+        && (runtime.trim().is_empty()
+            || runtime == "local"
+            || args.machine == "local"
+            || runtime == args.machine)
+    {
+        bail!("--runtime-machine requires distinct enrolled runtime and Project Machines");
+    }
     if args.provider.is_empty()
         || args.provider.len() > 128
         || matches!(args.provider.as_str(), "." | "..")
@@ -200,6 +209,7 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
     let bridge = Bridge {
         provider: Arc::from(args.provider),
         machine: Arc::from(args.machine),
+        runtime_machine: args.runtime_machine.map(Arc::from),
         workspace: args.workspace.map(Arc::from),
         base_url,
         authentication,
@@ -592,6 +602,25 @@ impl Bridge {
     }
 
     fn matches_remote_workspace(&self, meta: &SessionMeta) -> bool {
+        if let Some(runtime) = self.runtime_machine.as_deref() {
+            return meta.machine_id == runtime
+                && meta.execution_binding.as_ref().is_some_and(|binding| {
+                    let ready = binding
+                        .for_runtime(runtime, &meta.cwd)
+                        .is_ok_and(|binding| {
+                            binding.environment.machine_id == self.machine.as_ref()
+                                && self.workspace.as_deref() == Some(binding.workspace.id.as_str())
+                        });
+                    ready
+                        || binding.preparation().is_some_and(|preparation| {
+                            preparation.runtime.machine_id == runtime
+                                && preparation.runtime.cwd == meta.cwd
+                                && preparation.machine_id == self.machine.as_ref()
+                                && self.workspace.as_deref()
+                                    == Some(preparation.workspace_id.as_str())
+                        })
+                });
+        }
         meta.machine_id == self.machine.as_ref()
             && self.workspace.is_some()
             && meta.workspace_id.as_deref() == self.workspace.as_deref()
@@ -679,18 +708,29 @@ impl Bridge {
             serde_json::json!(workspace)
         };
         self.wait_for_daemon().await?;
+        let path = if self.runtime_machine.is_some() {
+            "api/execution-sessions"
+        } else {
+            "api/sessions"
+        };
         let url = self
             .base_url
-            .join("api/sessions")
+            .join(path)
             .map_err(|error| error.to_string())?;
         let target = url_request_target(&url);
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "provider": self.provider.as_ref(),
             "machine_id": self.machine.as_ref(),
             "cwd": requested_workspace,
             "origin": "api",
             "system": false
         });
+        if let Some(runtime) = self.runtime_machine.as_deref() {
+            body.as_object_mut()
+                .expect("creation body is an object")
+                .remove("system");
+            body["runtime_machine_id"] = serde_json::json!(runtime);
+        }
         let mut rejected_access = None;
         let mut attempts = 0_u8;
         let response = loop {
@@ -1817,38 +1857,53 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         use axum::{Json, Router, http::StatusCode, routing::post};
         let (requests, mut received) = mpsc::unbounded_channel();
-        let app = Router::new().route(
-            "/api/sessions",
-            post(move |Json(body): Json<serde_json::Value>| {
-                let requests = requests.clone();
-                async move {
-                    requests.send(body.clone()).unwrap();
-                    if body["machine_id"] != "local" {
-                        let workspaces = [crate::machine_protocol::MachineWorkspace {
-                            id: "matrix".to_owned(),
-                            display_name: "Matrix".to_owned(),
-                            canonical_path: "/home/ubuntu/matrix".to_owned(),
-                        }];
-                        if let Err(error) = crate::server::resolve_machine_workspace(
-                            &workspaces,
-                            body["cwd"].as_str(),
-                        ) {
-                            return (StatusCode::BAD_REQUEST, error);
+        let native_requests = requests.clone();
+        let app = Router::new()
+            .route(
+                "/api/sessions",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    let requests = requests.clone();
+                    async move {
+                        requests.send(body.clone()).unwrap();
+                        if body["machine_id"] != "local" {
+                            let workspaces = [crate::machine_protocol::MachineWorkspace {
+                                id: "matrix".to_owned(),
+                                display_name: "Matrix".to_owned(),
+                                canonical_path: "/home/ubuntu/matrix".to_owned(),
+                            }];
+                            if let Err(error) = crate::server::resolve_machine_workspace(
+                                &workspaces,
+                                body["cwd"].as_str(),
+                            ) {
+                                return (StatusCode::BAD_REQUEST, error);
+                            }
+                            if body["provider"] == "async-fixture" {
+                                return (
+                                    StatusCode::CREATED,
+                                    r#"{"session_id":"async-created"}"#.to_owned(),
+                                );
+                            }
                         }
-                        if body["provider"] == "async-fixture" {
-                            return (
-                                StatusCode::CREATED,
-                                r#"{"session_id":"async-created"}"#.to_owned(),
-                            );
-                        }
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "Machine ovh is offline".to_owned(),
+                        )
                     }
-                    (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "Machine ovh is offline".to_owned(),
-                    )
-                }
-            }),
-        );
+                }),
+            )
+            .route(
+                "/api/execution-sessions",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    let native_requests = native_requests.clone();
+                    async move {
+                        native_requests.send(body).unwrap();
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "native Remote environment is offline",
+                        )
+                    }
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -1856,6 +1911,7 @@ mod tests {
         let mut bridge = Bridge {
             provider: Arc::from("grok"),
             machine: Arc::from("ovh"),
+            runtime_machine: None,
             workspace: None,
             authentication: crate::client_auth_client::ClientAuthentication::fixture(
                 base_url.clone(),
@@ -2063,6 +2119,75 @@ mod tests {
                 .validate_session("remote", Some(&client_cwd))
                 .is_err()
         );
+        bridge.machine = Arc::from("hawk");
+        bridge.runtime_machine = Some(Arc::from("ovh"));
+        bridge.workspace = Some(Arc::from("cowboy"));
+        let error = bridge.create_session(client_cwd.clone()).await.unwrap_err();
+        assert!(error.contains("native Remote environment is offline"));
+        let request = received.recv().await.unwrap();
+        assert_eq!(request["machine_id"], "hawk");
+        assert_eq!(request["runtime_machine_id"], "ovh");
+        assert_eq!(request["cwd"], "cowboy");
+        assert!(request.get("system").is_none());
+        assert!(
+            received.try_recv().is_err(),
+            "must not fall back to local creation"
+        );
+
+        let mut native = remote;
+        native.cwd = "/runtime/session".to_owned();
+        native.workspace_id = Some("cowboy".to_owned());
+        native.execution_binding = Some(crate::execution_environment::fixture());
+        assert!(bridge.matches_remote_workspace(&native));
+        for pointer in [
+            "/environment/machine_id",
+            "/runtime/machine_id",
+            "/workspace/id",
+        ] {
+            let mut other = native.clone();
+            let mut record = other.execution_binding.as_ref().unwrap().record().clone();
+            *record.pointer_mut(pointer).unwrap() = serde_json::json!("other");
+            other.execution_binding = Some(
+                crate::execution_environment::ExecutionBinding::from_record(record),
+            );
+            assert!(!bridge.matches_remote_workspace(&other), "{pointer}");
+        }
+        native.execution_binding = None;
+        assert!(
+            !bridge.matches_remote_workspace(&native),
+            "unbound sessions are not Remote sessions"
+        );
+        let ready = crate::execution_environment::fixture().decode().unwrap();
+        let pending = crate::execution_environment::PreparationV1 {
+            schema: 1,
+            phase: "preparing".to_owned(),
+            runtime: ready.runtime,
+            machine_id: ready.environment.machine_id,
+            workspace_id: ready.workspace.id,
+            source_path: ready.workspace.source_path,
+            executor_digest: ready.environment.executor_digest,
+        };
+        let pending = serde_json::to_value(pending).unwrap();
+        native.execution_binding = Some(
+            crate::execution_environment::ExecutionBinding::from_record(pending.clone()),
+        );
+        assert!(bridge.matches_remote_workspace(&native));
+        assert!(native.execution_binding.as_ref().unwrap().decode().is_err());
+        for pointer in [
+            "/runtime/machine_id",
+            "/runtime/cwd",
+            "/machine_id",
+            "/workspace_id",
+            "/phase",
+        ] {
+            let mut other = native.clone();
+            let mut record = pending.clone();
+            *record.pointer_mut(pointer).unwrap() = serde_json::json!("other");
+            other.execution_binding = Some(
+                crate::execution_environment::ExecutionBinding::from_record(record),
+            );
+            assert!(!bridge.matches_remote_workspace(&other), "{pointer}");
+        }
         server.abort();
     }
 

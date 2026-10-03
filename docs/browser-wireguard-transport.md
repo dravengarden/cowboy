@@ -1,7 +1,13 @@
 # Browser userspace WireGuard for Cowboy
 
+**Roadmap status, 2026-10-03:** implementation is deferred in favor of completing
+Option 1. [Security priorities and open questions](secure-connectivity-design.md)
+govern further work. The candidate paths below are research, not an approved
+product design. In particular, this experiment loads its PWA code over trusted
+HTTPS; it does not solve first load, installation or updates without HTTPS.
+
 Research date: 2026-10-03. Scope: the PWA owns its Cowboy tunnel without an
-installed VPN client, on an already reachable LAN. No production implementation
+installed VPN client, on an already reachable LAN. The browser/native datagram experiment now passes; no production integration
 or activation is included. This updates the PWA conclusion in the
 [native transport investigation](wireguard-transport.md).
 
@@ -56,7 +62,7 @@ and deployed artifacts were not modified.
 
 | Candidate | Evidence | Assessment |
 | --- | --- | --- |
-| GotaTun 0.9.2 | Native interoperability was already demonstrated. The upstream crate fails the browser target because `sleepyinstant` has no WASM backend; a temporary clock adapter passes `cargo check`. | Preferred engine to investigate for sharing Rust with the server; browser integration needs upstream-quality adaptation and validation. |
+| GotaTun 0.9.2 | Native interoperability was already demonstrated. The upstream crate needs a WASM clock adapter. The adapted engine now passes real-browser WSS handshake, datagram and rekey checks against a native Rust peer. | Preferred engine to investigate for sharing Rust with the server; browser integration needs upstream-quality adaptation and validation. |
 | BoringTun 0.7.1 | The published crate has the same missing clock backend. The corresponding temporary adapter also passes `cargo check`. | Useful alternative/reference, with the same browser portability work. |
 | foundation_wireguard 0.0.2 | Its source describes BoringTun + smoltcp + browser WebSocket transport and explicitly mentions patched BoringTun clocks. | Reference design only. It brings a broader mesh framework; its presence on docs.rs is not evidence of a verified standalone browser package. |
 | wireguard-go in Tailscale/NetBird | Published browser implementations with application protocol bridges. | Strong feasibility evidence; adopting their complete clients would import unrelated platform machinery. |
@@ -72,9 +78,9 @@ its default AWS-LC backend. Both unmodified crates then failed with `E0433` at
 3. Add `web-time = 1.1.0` only for the WASM target.
 
 `cargo check` passed for both adapted crates. This is **type-check evidence**;
-it is not a linked/browser-executed tunnel or an audit. Clock behavior after
-suspension, wall-clock changes, RNG operation, timers/rekeying and cryptographic
-interoperability must be exercised in an actual browser. Test-only mock clocks
+it is not a linked/browser-executed tunnel or an audit. The subsequent runtime experiment below exercises browser RNG, the handshake
+and real timers/rekeying. Physical suspension, wall-clock changes and independent
+browser/native implementations still need further validation. Test-only mock clocks
 are not a production solution.
 
 Source references: [GotaTun manifest](https://github.com/mullvad/gotatun/blob/ad58de51e859f458384fe4759eabdff478a6b133/gotatun/Cargo.toml),
@@ -83,7 +89,50 @@ Source references: [GotaTun manifest](https://github.com/mullvad/gotatun/blob/ad
 [foundation browser module](https://docs.rs/foundation_wireguard/0.0.2/foundation_wireguard/wasm/index.html),
 [web-time](https://docs.rs/web-time/1.1.0/web_time/).
 
-## Proposed Cowboy path
+## Browser execution evidence
+
+The [standalone experiment](../tools/browser-wireguard-probe/README.md) now runs
+GotaTun in a real Firefox **151.0.1** Web Worker against a native Rust GotaTun
+server. The [runtime receipt](experiments/browser-wireguard-runtime-2026-10-03.json)
+records **15 passing checks**, plus source/artifact hashes and measurement limits.
+
+The browser generated its own key using its CSPRNG. WSS certificate validation
+remained enabled: only the fixture CA was trusted, in a disposable Firefox
+profile. All communication stayed in a private network namespace with only
+loopback. No OS VPN, TUN interface, host route, production credential or live
+Cowboy session was involved.
+
+The passing checks cover:
+
+- A real handshake, valid IPv4/UDP payloads in both directions and server push.
+- Both public-key checks, replay rejection in both directions, a modified AEAD
+  tag and a forbidden inner source address. Negative cases check actual rejection
+  and use subsequent working traffic as a positive control where applicable.
+- Peer removal during a live connection, explicit reauthorization and WSS
+  reconnect with a fresh WireGuard session.
+- Recovery after deliberately dropping the initial handshake and continued
+  traffic through the unmodified default **120-second** rekey threshold. Both a
+  new accepted handshake and a changed session receiver index are required.
+- Sixty-four payloads of approximately 1 KB each, with byte-for-byte integrity.
+
+The optimized WASM module is approximately **300 KiB** before compression.
+Reported round-trip timings include fixture RPC/polling and loopback transport;
+they are not production LAN latency or throughput measurements. The WG marker
+check is a framing sanity check, not a separate cryptographic audit.
+
+Two integration details were required beyond the previous type check: select a
+WASM-capable Clang for ring's C objects, and trim WireGuard padding using the
+validated inner IP length before delivering the UDP payload. The latter is the
+adapter's responsibility; the crypto engine is not an application framing layer.
+
+This completes the minimal browser-to-Rust data-plane experiment. It does not
+exercise Cowboy's account/device auth, HTTP API or live product WebSocket. Its
+`/fixture/*` control endpoints are trusted test setup, not an enrollment design.
+Explicit pause/reset/resume is covered; physical-device background suspension,
+Safari/PWA acceptance, persistent keys and a userspace TCP/TLS stack are still
+outstanding.
+
+## Candidate Cowboy path — deferred
 
 ```mermaid
 flowchart LR
@@ -97,8 +146,8 @@ flowchart LR
 The same server owns the WSS endpoint and terminates WireGuard. A WebSocket
 adapter here is a data-plane ingress, not a distributed relay/control service.
 It can feed the userspace engine directly, without creating system interfaces
-or changing host routes. A separate implementation experiment must establish
-that path; the earlier native TUN probe does not test it.
+or changing host routes. The browser experiment now establishes that carrier/engine path for the fixture
+UDP service. Bridging the real Cowboy application is still outstanding.
 
 A proposed browser profile would identify a carrier such as
 `wss://cowboy.example.com/api/transport/wireguard`, the pinned server public key,
@@ -159,15 +208,18 @@ that origin. An outer proxy that only forwards packets need not decrypt the WG
 payload, but a proxy also controlling application delivery has a different trust
 position.
 
-## Next bounded experiment
+## Deferred application integration experiment
 
-Build a standalone browser fixture with a WASM peer, WSS carrier and native
-server peer; no Cowboy production integration is needed for this experiment.
-Verify a real handshake, bidirectional IP payloads, wrong-key rejection, replay
-rejection, peer removal, rekeying and recovery after the page resumes. Then send
-one real Cowboy API request and one live session through the userspace stack,
-including account/device proof and the cookie-to-tunnel binding.
+Resume only after the roadmap's bootstrap/trust and platform design is reviewed.
+A possible later experiment would extend the isolated fixture with a userspace
+TCP stack and a narrowly scoped adapter for one real Cowboy API request and one
+live session. Preserve the
+account/device proof and explicitly test the HttpOnly-cookie-to-tunnel binding,
+request cancellation, expiration and revocation. Do not route arbitrary LAN
+services or add network discovery to this experiment.
 
-Measure bundle/startup cost, latency, large-transfer backpressure and packet-loss
-behavior; exercise Safari/PWA alongside desktop browsers. The research supports
-this experiment. It does not yet establish a production-ready browser transport.
+That later work would also measure application bundle/startup cost,
+large-transfer backpressure and packet-loss behavior, and run Safari/PWA
+alongside desktop browsers. The current
+browser/native data-plane result supports this work; full Cowboy transport and
+mobile readiness have not been established.

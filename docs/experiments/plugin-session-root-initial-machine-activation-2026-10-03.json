@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "machine": "hawk",
+  "component": "cowboy",
+  "lane": "machine",
+  "transaction": "1791001877874758963-7e3c2cd5848b",
+  "revision": "7e3c2cd5848bfc814e2999bf555d89d844032551",
+  "workerGeneration": "worker-eed1d8105af00846771d",
+  "published": true,
+  "release": "/nix/store/4nk5169wyvcaip82x7lkmw3nn4svhm8j-cowboy-machine-release",
+  "previousRelease": "/nix/store/nakjm0zavlfm0x9jz9sbminncv9lhihy-cowboy-machine-release",
+  "activeRelease": "/nix/store/4nk5169wyvcaip82x7lkmw3nn4svhm8j-cowboy-machine-release",
+  "outcome": "succeeded",
+  "phase": "committed",
+  "maintenance": true,
+  "startedAt": "2026-10-03T04:31:17.874758963Z",
+  "recordedAt": "2026-10-03T04:31:27.454772225Z",
+  "recovered": false
+}

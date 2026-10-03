@@ -35,6 +35,9 @@ mints a new random value. A stale token cannot retire a newer one. These
 incarnations are neither advertised workspace identities nor persisted tokens,
 Plugin grants or filesystem authority.
 
+Directory opens use `O_DIRECTORY`: a FIFO, socket or regular-file replacement
+is refused before opening can wait for a writer or touch a device.
+
 The Machine verifies a carried incarnation before core Code dispatch and again
 before producing its result. It consumes the envelope itself and forwards only
 the existing Code request to the isolated core adapter. It never forwards this

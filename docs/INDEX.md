@@ -18,6 +18,7 @@ primary phone/desktop product path.
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`execution-environments.md`](execution-environments.md) — Native remote execution decision: separate runtime placement from target files/processes; core, Provider and infrastructure ownership; staged acceptance
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, and ownership contract
+- [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Target architecture: fixed core, typed components and Plugin composition across Service/Machine; first read-only structural slice implemented
 - [`plugin-composition-checker.md`](plugin-composition-checker.md) — Implemented core diagnostic, generated Rust/TS contracts, graph rules and remaining authority/recovery work
 - [`plugin-installation-incarnations.md`](plugin-installation-incarnations.md) — Durable installation revisions, uninstall CAS, tombstones and reader-first rollout
@@ -57,7 +58,7 @@ primary phone/desktop product path.
 - [`architecture/14-admin.md`](architecture/14-admin.md) — Admin console and product registration
 - [`architecture/14-zed-code-provider.md`](architecture/14-zed-code-provider.md) — Isolated Zed code-provider integration
 - [`architecture/15-multi-machine.md`](architecture/15-multi-machine.md) — Enrollment, outbound connectivity, placement, and Machine lifecycle
-- [`architecture/16-product-auth.md`](architecture/16-product-auth.md) — Feature-gated product login, self-host identity, and session-deadline enforcement
+- [`architecture/16-product-auth.md`](architecture/16-product-auth.md) — Mandatory product login/device proof, self-host identity, and session-deadline enforcement
 - [`architecture/17-authentication-plugins.md`](architecture/17-authentication-plugins.md) — Signed authentication packages, configurable login UI, and server-owned session policy
 - [`architecture/18-auth-capacity-sso.md`](architecture/18-auth-capacity-sso.md) — Configurable client/session capacity, fair admission, SSO logout, and isolated automation
 - [`../examples/authentication/README.md`](../examples/authentication/README.md) — Google, Apple, and Cloudflare Email Authentication Provider examples
@@ -66,6 +67,10 @@ primary phone/desktop product path.
 ### Core documents
 
 - [`requirements.md`](requirements.md) — Cowboy core requirements, state ownership, and context-preserving Provider reload
+- [`device-transport-security.md`](device-transport-security.md) — Implemented mandatory HTTPS/device binding, proxy boundary and enrollment
+- [`secure-connectivity-design.md`](secure-connectivity-design.md) — Current security baseline, acceptance priorities and WireGuard roadmap
+- [`wireguard-transport.md`](wireguard-transport.md) — Deferred research: Rust implementations and native interoperability evidence
+- [`browser-wireguard-transport.md`](browser-wireguard-transport.md) — Deferred research: browser WASM/WSS runtime evidence and unresolved application integration
 - [`plugin-components.md`](plugin-components.md) — Plugin manifests, shared component ownership, and coordinated versioning
 - [`product-sync-datasets.md`](product-sync-datasets.md) — Immutable Service/user browser datasets, version-fenced outboxes, explicit legacy recovery and Controller/Web rollout
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence

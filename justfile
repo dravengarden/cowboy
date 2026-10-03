@@ -45,8 +45,8 @@ idb-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
 
 # Real browser signatures, HTTPS, WSS and durable device identity. No real account.
-device-browser-conformance BROWSER TEST_BINARY:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/browser-device-conformance.py "$1" "$2"' conformance "{{BROWSER}}" "{{TEST_BINARY}}"
+device-browser-conformance BROWSER TEST_BINARY CERTUTIL:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/browser-device-conformance.py "$1" "$2" "$3"' conformance "{{BROWSER}}" "{{TEST_BINARY}}" "{{CERTUTIL}}"
 
 # Same native engine with independent Worker owners and abrupt termination.
 idb-outbox-browser-conformance BROWSER:
@@ -541,10 +541,24 @@ lint:
     cd web && deno task lint
 
 dependencies:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo deny check
-    cargo machete --with-metadata
-    cd plugins/zed/adapter && cargo deny check
-    cd plugins/zed/adapter && cargo machete --with-metadata
+    # Audit declared workspace members; independent experiments own their gates
+    # and may require path-patched locks that recursive metadata would rewrite.
+    python3 - <<'PY'
+    import json
+    import subprocess
+    document = json.loads(subprocess.check_output([
+        "cargo", "metadata", "--locked", "--no-deps", "--format-version=1",
+    ]))
+    members = set(document["workspace_members"])
+    paths = [p["manifest_path"] for p in document["packages"] if p["id"] in members]
+    if not paths:
+        raise SystemExit("dependency audit requires a non-empty workspace")
+    subprocess.run(["cargo", "machete", "--with-metadata", *paths], check=True)
+    PY
+    (cd plugins/zed/adapter && cargo deny check && cargo machete --with-metadata)
 
 typecheck:
     cd web && deno task typecheck

@@ -83,7 +83,14 @@ pub(super) type SharedRootIdentities = Arc<parking_lot::Mutex<RootIdentities>>;
 /// the description cannot belong to a different object than the one pinned.
 fn observe(path: &Path) -> Option<(std::fs::File, ObservedObject)> {
     use std::os::unix::fs::MetadataExt as _;
-    let handle = std::fs::File::open(path).ok()?;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    // A replaced cwd can be a FIFO. Reject non-directories in the kernel,
+    // before opening can block a Machine runtime thread waiting for a writer.
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY)
+        .open(path)
+        .ok()?;
     let metadata = handle.metadata().ok()?;
     let object = ObservedObject {
         device: metadata.dev(),
@@ -335,6 +342,26 @@ impl RootIdentities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_observations_refuse_special_files_without_waiting_for_a_writer() {
+        let parent = tempfile::tempdir().unwrap();
+        let fifo = parent.path().join("fifo");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+        assert!(observe(&fifo).is_none());
+        let mut identities = SessionRootIdentities::default();
+        assert!(identities.observe(fifo.to_str().unwrap()).is_err());
+        assert!(identities.roots.is_empty());
+        let file = parent.path().join("file");
+        std::fs::write(&file, "file").unwrap();
+        assert!(observe(&file).is_none());
+        assert!(observe(parent.path()).is_some());
+    }
 
     #[test]
     fn session_roots_are_pinned_and_replacement_never_revives_old_observations() {

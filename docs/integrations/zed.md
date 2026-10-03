@@ -112,6 +112,25 @@ immediately. A slow connection must not turn a retained session into an
 connect within the readiness deadline, the request returns a connection error;
 it does not create a replacement session.
 
+## Separate AI and Project Machines
+
+For native Remote execution, select both enrolled Machines explicitly:
+
+```bash
+cowboy serve-acp --provider codex --runtime-machine ovh \
+  --machine hawk --workspace columbus \
+  --daemon-url https://cowboy.stormbird.xyz
+```
+
+The AI runs on `--runtime-machine`; `--machine` owns the registered Project
+and its prepared worktree. The bridge uses the native execution-session API
+and retains the server's placement, Provider, credential and executor checks.
+If creation fails it reports the failure without creating a local session.
+Session listing and loading require the same runtime, Project Machine and
+workspace binding. Without `--runtime-machine`, the existing same-Machine
+interface remains unchanged. This selects application placement, not a network
+route; the host network owns ordinary DNS and sockets.
+
 ## Known TODOs
 
 - `Cowboy · Provider` names with provider icons require published ACP Registry
