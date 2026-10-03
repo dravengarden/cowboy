@@ -82,6 +82,17 @@ Unavailable or changed selected targets never revive the predecessor. The
 [same-generation repair release](releases/plugin-machine-repair-2026-10-03.md)
 records owner tests and activation; no production failure was seeded.
 
+The owner now bounds journal, success-receipt and existing recovery-selection
+archive reads to 64 KiB each; its floor remains limited to 8 KiB. It opens only
+regular files without following final symlinks or blocking on FIFO admission,
+and limits bytes read after file metadata inspection. Journal/receipt JSON and
+reader declarations/floor require exact field names and reject duplicate or
+unknown keys, case aliases and trailing values. Existing canonical schema-1
+records remain readable. Refusal leaves owner evidence unchanged. The
+[bounded owner-state release](releases/plugin-owner-state-2026-10-03.md)
+records the parser/control fixtures and host activation. This does not add
+cross-generation or writer admission.
+
 Older host activators and older portable installers/launchers remain outside
 this finite guard. Updated portable paths refuse committed terminal state
 outright; compatible portable recovery readers remain unadmitted. A finite
