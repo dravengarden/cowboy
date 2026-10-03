@@ -195,7 +195,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "review-document-refresh"
         ? 5
         : suite === "review-recovery"
-        ? 14
+        ? 15
         : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
