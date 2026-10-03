@@ -19,11 +19,11 @@ Deno.test("a just-sent prompt keeps the restore skeleton from covering it", asyn
   );
   const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
   assertEquals(
-    transcript.includes("pendingMessages.length"),
+    transcript.includes("optimisticMsgs.length,"),
     true,
   );
   assertEquals(
-    transcript.includes("matched.length > 0 ? matched : pendingMessages"),
+    transcript.includes("const fromStore = pendingMessages;"),
     true,
   );
   assert(store.includes("reconcileReadyOptimistic("));
