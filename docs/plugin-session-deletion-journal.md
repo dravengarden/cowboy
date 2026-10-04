@@ -342,3 +342,16 @@ records the source guard, executable launcher tests and Machine release receipt.
 
 The [bootstrap compatibility release](releases/plugin-bootstrap-guard-2026-10-03.md)
 records pre-copy probe checks and exact old/new installer refresh controls.
+
+### Signed pre-floor bootstrap packages
+
+The installer accepts a closed singleton reader-only v4 manifest and local exact
+three-program archive through `--bootstrap-manifest`, `--bootstrap-artifact` and
+`--artifact-public-key`. Signature and whole-package digest are checked before
+any bundled code runs, and captured payload bytes are checked after the required
+guard probe and before publication. Floor and committed namespace absence are
+rechecked after that probe. Existing floors still refuse signed installation or
+refresh. This does not retain a bootstrap recovery anchor, authenticate bootstrap
+bytes before their own future startup, create a floor or enable the writer. See
+the [signed package release](releases/plugin-signed-bootstrap-bundle-2026-10-04.md)
+for bounds, native acceptance and remaining selection/recovery authority.

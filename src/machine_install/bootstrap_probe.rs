@@ -15,11 +15,11 @@ pub(super) const PAYLOADS: [&str; 3] =
 
 /// Own the exact bundle used for both the guard probe and installation copies.
 /// Caller paths can be replaced during the probe without changing this snapshot.
-pub(super) struct Bundle(Scratch);
+pub(super) struct Bundle(Scratch, Option<std::collections::BTreeMap<String, Vec<u8>>>);
 
 impl Bundle {
     pub(super) fn prepare(source: &Path) -> Result<Self> {
-        let bundle = Self(Scratch::new()?);
+        let bundle = Self(Scratch::new()?, None);
         for name in PAYLOADS {
             let path = if name == "cowboy-machine" {
                 source.to_path_buf()
@@ -38,6 +38,36 @@ impl Bundle {
         }
         check(&bundle.payload("cowboy-machine"))?;
         Ok(bundle)
+    }
+
+    pub(super) fn prepare_signed(manifest: &Path, artifact: &Path, key: &Path) -> Result<Self> {
+        let payloads = super::signed_bootstrap::authenticate(manifest, artifact, key)?;
+        let bundle = Self(Scratch::new()?, Some(payloads));
+        for (name, bytes) in bundle.1.as_ref().expect("authenticated payloads") {
+            std::fs::write(bundle.payload(name), bytes)?;
+            super::set_mode(&bundle.payload(name), 0o755)?;
+        }
+        check(&bundle.payload("cowboy-machine"))?;
+        bundle.verify()?;
+        Ok(bundle)
+    }
+
+    pub(super) fn verify(&self) -> Result<()> {
+        let Some(expected) = &self.1 else {
+            return Ok(());
+        };
+        ensure!(
+            std::fs::read_dir(&self.0.0)?.count() == PAYLOADS.len(),
+            "signed bootstrap probe changed bundle entries"
+        );
+        for (name, bytes) in expected {
+            ensure!(
+                super::signed_bootstrap::read_regular(&self.payload(name), bytes.len() as u64)?
+                    == *bytes,
+                "signed bootstrap probe changed authenticated payload"
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn payload(&self, name: &str) -> PathBuf {

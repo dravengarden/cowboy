@@ -144,6 +144,7 @@
           ./src/machine_cli.rs
           ./src/machine_cli
           ./src/machine_auth.rs
+          ./src/component_proof.rs
           ./src/machine_components.rs
           ./src/machine_components
           ./src/machine_install.rs
@@ -625,6 +626,8 @@
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
         test -e ${machine-src}/src/session_deletion_admission/reader_floor.rs
+        test -e ${machine-src}/src/component_proof.rs
+        test -e ${machine-src}/src/machine_install/signed_bootstrap.rs
         test -e ${machine-src}/src/machine_install/bootstrap_probe.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
