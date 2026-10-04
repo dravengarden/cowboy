@@ -50,15 +50,13 @@ equivalent. `build-native-shell.sh` checks for it before every device build
 because its absence degrades to a `cargo:warning` that cargo hides for registry
 dependencies, and only surfaces ten minutes later as undefined symbols.
 
-## Blocked: iOS device builds need Xcode 26.x (2026-09-21)
+## Xcode 27 Swift runtime compatibility
 
-**Do not report an iOS release as shippable until this clears.** The last
-successful one is 0.1.31 (revision `ed8bad98`, 2026-09-15) built under Xcode
-26.6 (17F113). The Mac's Xcode was then upgraded in place to 27.0 (27A266a),
-leaving no 26.x to `xcode-select`, and `bash tools/build-native-shell.sh ios`
-has not produced an IPA since.
+The last release before the Xcode 27 migration was 0.1.31 (revision `ed8bad98`,
+2026-09-15), built under Xcode 26.6 (17F113). Xcode 27.0 (27A266a) exposed
+three separate Swift dependency failures.
 
-Three failure layers, peeled in order. The first two are fixed and committed:
+The build handles them as follows:
 
 1. swift-rs 1.0.7 fed swiftc an iOS `-sdk`/`-target` pair followed by a macOS
    pair that overrode it, so iOS Swift sources compiled against MacOSX27.0.sdk
@@ -67,7 +65,7 @@ Three failure layers, peeled in order. The first two are fixed and committed:
 2. Xcode 27's SwiftPM internalizes `@_cdecl` exports in static products.
    swift-rs 1.0.8 promotes them back with `llvm-objcopy`, which needs the
    `llvm-tools` component above.
-3. **Open.** swift-rs 1.0.8 promotes only symbols from a package's own object
+3. swift-rs 1.0.8 promotes only symbols from a package's own object
    member, so its own Swift runtime exports stay local:
 
    ```text
@@ -82,10 +80,12 @@ Three failure layers, peeled in order. The first two are fixed and committed:
    `SwiftRs.o` is embedded in `libTauri.a`, `libtauri-plugin-haptics.a` and
    `libtauri-plugin-opener.a` alike, and promoting it in each produces duplicate
    globals that crash Xcode 27's `ld` with "malformed atom files with duplicate
-   names" — `-ld_classic` is gone, so there is no escape hatch. A correct fix
-   promotes the runtime in exactly one archive, which is upstream's call, not a
-   local patch. As of 2026-09-21 `Brendonovich/swift-rs` has no commit after the
-   1.0.8 release.
+   names". Cowboy's `apple/swift-rs-compat.py` Cargo workspace wrapper exports
+   exactly those three functions from `SwiftRs.o` in the build's `libTauri.a`
+   before rustc embeds dependency archives into the native staticlib/cdylib.
+   Haptics and opener copies remain local. Missing or ambiguous symbols,
+   duplicate global runtime owners, borrowed archives and failed promotion
+   abort the build instead of falling back to an old artifact.
 
 Do not work around this by pointing `[patch.crates-io]` at a fork:
 `tools/check-native-shell.ts` requires every locked native package to carry a
@@ -93,9 +93,14 @@ Do not work around this by pointing `[patch.crates-io]` at a fork:
 policy rather than satisfy it. Changing the policy is a separate, explicit
 decision.
 
-Unblock when upstream ships the runtime-globalization fix (then bump the lock
-and rebuild), or when a Mac with Xcode 26.x is available (then the current lock
-already builds — swift-rs 1.0.8's objcopy path is Xcode-27-only).
+The adapter changes only artifacts inside this invocation's fresh target
+directory, never Cargo registry sources or the dependency lock. It runs only
+for Cowboy's iOS library under Xcode 27 or newer. The receipt records the
+owner archive, its before/after hashes, exact exports and other archive paths
+under `swift_rs_compat`. Remove the adapter when a checksummed upstream release
+exports one shared runtime correctly and passes the device and simulator builds.
+Source checks alone do not establish a shippable release; require a successful
+exact-revision IPA receipt and the publisher's complete source validation.
 
 Fetch the Cowboy task commit on the Mac and create a session-owned Git worktree.
 Do not copy a working source tree over SCP or build from a stable checkout,

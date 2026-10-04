@@ -208,6 +208,10 @@ if [ "$native_platform" = macos ]; then
   cargo tauri build --bundles app --target aarch64-apple-darwin "${native_flags[@]}" -- --locked
   native_app="$CARGO_TARGET_DIR/aarch64-apple-darwin/$native_profile/bundle/macos/Cowboy.app"
 else
+  # Cargo's workspace wrapper runs after registry dependencies have built and
+  # before rustc embeds their archives into Cowboy's staticlib/cdylib. Export
+  # swift-rs's runtime from one archive, never from every plugin copy.
+  export RUSTC_WORKSPACE_WRAPPER="$native_source/apple/swift-rs-compat.py"
   mkdir -p gen/apple
   # The Xcode project itself is generated, but ALL handwritten sources,
   # entitlements, launch resources and XcodeGen settings come from this commit.
@@ -273,6 +277,9 @@ report = dict(source_revision=revision, platform=platform, profile=profile,
     rustc=subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip(),
     signing="ad-hoc" if platform == "macos" else "unsigned",
     installed=False, real_login="not_checked", physical_device="not_checked")
+compat = build / "swift-rs-compat.json"
+if platform != "macos" and int(report["xcode"].split()[1].split(".")[0]) >= 27:
+    report["swift_rs_compat"] = json.loads(compat.read_text())
 if platform == "ios":
     ipa = build / "Cowboy.ipa"
     report.update(ipa=str(ipa), ipa_sha256=hashlib.sha256(ipa.read_bytes()).hexdigest())
