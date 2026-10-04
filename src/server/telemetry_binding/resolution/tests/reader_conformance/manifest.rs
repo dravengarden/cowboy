@@ -202,6 +202,7 @@ fn resolve_roles(lanes: impl IntoIterator<Item = (Lane, Role, PathBuf)>) -> Resu
             "revision",
             "workerGeneration",
             "bootstrap",
+            "sessionDeletionJournal",
         ];
         ensure!(
             source
@@ -209,6 +210,17 @@ fn resolve_roles(lanes: impl IntoIterator<Item = (Lane, Role, PathBuf)>) -> Resu
                 .is_some_and(|o| o.keys().all(|key| allowed.contains(&key.as_str()))),
             "unknown provenance field"
         );
+        if let Some(reader) = source.get("sessionDeletionJournal") {
+            ensure!(
+                lane == Lane::Machine
+                    && reader.as_object().is_some_and(|fields| {
+                        fields.len() == 2
+                            && fields.get("readerSchema") == Some(&serde_json::json!(1))
+                            && fields.get("writerSchema") == Some(&serde_json::json!(0))
+                    }),
+                "invalid Machine deletion-reader provenance"
+            );
+        }
         ensure!(
             if lane == Lane::Machine {
                 source["workerGeneration"].as_str().is_some_and(|value| {
