@@ -1,17 +1,20 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   type DesktopCommand,
-  useDesktopCommand,
+  useDesktopCommands,
 } from "./DesktopCommandProvider";
 import {
+  DESKTOP_COMPOSER_FORMAT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   DESKTOP_WORKSPACE_PREFIX,
 } from "./workspaceShortcuts";
+import { COMPOSER_COMMANDS } from "../../composerCommands";
 import { toggleComposerSourceMode } from "../../composerSourceMode";
 
 export function DesktopComposerCommandBindings({
   sendable,
+  canInsert,
   canAttach,
   canJumpFront,
   canForce,
@@ -24,8 +27,10 @@ export function DesktopComposerCommandBindings({
   onJumpFront,
   onForce,
   onMore,
+  onFormat,
 }: {
   sendable: boolean;
+  canInsert: boolean;
   canAttach: boolean;
   canJumpFront: boolean;
   canForce: boolean;
@@ -38,9 +43,11 @@ export function DesktopComposerCommandBindings({
   onJumpFront: () => void;
   onForce: () => void;
   onMore: () => void;
+  onFormat: (id: string) => void;
 }): null {
   const state = useRef({
     sendable,
+    canInsert,
     canAttach,
     canJumpFront,
     canForce,
@@ -53,9 +60,11 @@ export function DesktopComposerCommandBindings({
     onJumpFront,
     onForce,
     onMore,
+    onFormat,
   });
   state.current = {
     sendable,
+    canInsert,
     canAttach,
     canJumpFront,
     canForce,
@@ -68,24 +77,37 @@ export function DesktopComposerCommandBindings({
     onJumpFront,
     onForce,
     onMore,
+    onFormat,
   };
   const commands = useMemo<DesktopCommand[]>(() => [
     {
       id: "composer.slash",
       title: "Insert slash command",
       group: "Prompt actions",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.composerSlash,
+      ],
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
+      when: () => state.current.canInsert,
+      disabledReason: "Resume this session to use completions",
       run: () => state.current.onSlash(),
     },
     {
       id: "composer.reference",
       title: "Reference a file",
       group: "Prompt actions",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.composerReference,
+      ],
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
+      when: () => state.current.canInsert,
+      disabledReason: "Resume this session to use completions",
       run: () => state.current.onReference(),
     },
     {
@@ -93,6 +115,10 @@ export function DesktopComposerCommandBindings({
       title: "Attach file",
       description: "Pick an image or file for the current prompt",
       group: "Prompt actions",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.composerAttach,
+      ],
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -116,6 +142,10 @@ export function DesktopComposerCommandBindings({
       id: "composer.schedule",
       title: "Schedule prompt",
       group: "Prompt actions",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.composerSchedule,
+      ],
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -127,6 +157,10 @@ export function DesktopComposerCommandBindings({
       id: "composer.jumpFront",
       title: "Jump prompt to front of queue",
       group: "Prompt actions",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.composerJumpFront,
+      ],
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -140,6 +174,7 @@ export function DesktopComposerCommandBindings({
       description: "Interrupt the current turn and run this prompt now",
       group: "Prompt actions",
       shortcut: "Alt+Enter",
+      consumeWhenDisabled: true,
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -149,13 +184,14 @@ export function DesktopComposerCommandBindings({
     },
     {
       id: "composer.more",
-      title: "Open prompt actions",
+      title: "More formatting",
       group: "Prompt actions",
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.composerMore],
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.canMore,
-      disabledReason: "Every prompt action is already visible",
+      disabledReason: "Formatting menu is unavailable",
       run: () => state.current.onMore(),
     },
     {
@@ -177,16 +213,31 @@ export function DesktopComposerCommandBindings({
       contexts: ["prompt"],
       run: () => void toggleComposerSourceMode(),
     },
+    ...COMPOSER_COMMANDS.filter((command) =>
+      !["slash", "mention", "attach", "sourceMode"].includes(command.id)
+    ).map((command): DesktopCommand => ({
+      id: `composer.format.${command.id}`,
+      title: command.label,
+      group: "Prompt formatting",
+      ...(DESKTOP_COMPOSER_FORMAT_KEYS[command.id]
+        ? {
+          sequence: [
+            DESKTOP_WORKSPACE_PREFIX,
+            DESKTOP_COMPOSER_FORMAT_KEYS[command.id]!,
+          ],
+        }
+        : {}),
+      allowInEditor: true,
+      contexts: ["prompt"],
+      regions: ["prompt.composer"],
+      run: () => state.current.onFormat(command.id),
+    })),
   ], []);
 
-  useDesktopCommand(commands[0] as DesktopCommand);
-  useDesktopCommand(commands[1] as DesktopCommand);
-  useDesktopCommand(commands[2] as DesktopCommand);
-  useDesktopCommand(commands[3] as DesktopCommand);
-  useDesktopCommand(commands[4] as DesktopCommand);
-  useDesktopCommand(commands[5] as DesktopCommand);
-  useDesktopCommand(commands[6] as DesktopCommand);
-  useDesktopCommand(commands[7] as DesktopCommand);
-  useDesktopCommand(commands[8] as DesktopCommand);
+  const { register } = useDesktopCommands();
+  useEffect(() => {
+    const unregister = commands.map(register);
+    return () => unregister.forEach((remove) => remove());
+  }, [commands, register]);
   return null;
 }

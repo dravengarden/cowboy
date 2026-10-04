@@ -819,7 +819,7 @@ Deno.test("mobile composer keeps one boundary gap across focus transitions", () 
   assertEquals(mobileComposerStackGap, 4);
   assertEquals(
     composerSource.includes(
-      'pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)"',
+      'pt: desktop ? 0 : "var(--mobile-composer-boundary-gap)"',
     ),
     true,
   );

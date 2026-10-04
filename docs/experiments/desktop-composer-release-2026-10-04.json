@@ -1,0 +1,291 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-04T07:59:09.502110+00:00",
+  "change": "Full-width borderless Desktop Prompt with persistent editing/delivery controls and scoped shortcuts",
+  "implementationCommit": "05cb35a4",
+  "releaseRevision": "a72389e163d8a1d98def743848485ad2caa252b7",
+  "releaseArtifact": "/nix/store/fyzz0s8pc8sicz0g0s5ppnjn13a2545n-cowboy-web-release",
+  "serviceWorkerVersion": "cowboy-v1821",
+  "checks": {
+    "webTypecheck": "passed",
+    "webLint": {
+      "outcome": "passed",
+      "preexistingWarnings": 8
+    },
+    "webTests": {
+      "passed": 2025,
+      "failed": 0
+    },
+    "browserRunnerDenoCheck": "passed",
+    "immutableWebReleaseBuild": "passed",
+    "browserConformance": [
+      {
+        "ok": true,
+        "suite": "desktop-composer",
+        "theme_mode": "light",
+        "browser": "Mozilla Firefox 151.0.1",
+        "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+        "fixture_sha256": "b9ead7d428e234e3587af465aca8ac64bbc6167e8ed01d3fa5a0af7185c06141",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+          "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+          "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+          "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+          "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+          "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor"
+        ],
+        "physical_device": "not_checked"
+      },
+      {
+        "ok": true,
+        "suite": "desktop-composer",
+        "theme_mode": "dark",
+        "browser": "Mozilla Firefox 151.0.1",
+        "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+        "fixture_sha256": "b9ead7d428e234e3587af465aca8ac64bbc6167e8ed01d3fa5a0af7185c06141",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+          "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+          "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+          "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+          "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+          "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor"
+        ],
+        "physical_device": "not_checked"
+      },
+      {
+        "ok": true,
+        "suite": "desktop-composer",
+        "theme_mode": "light",
+        "browser": "Chromium 148.0.7778.178",
+        "executable": "/nix/store/r7ifk1v95jfl02775kgbrd61dyr1rfsx-chromium-148.0.7778.178/bin/chromium",
+        "fixture_sha256": "b9ead7d428e234e3587af465aca8ac64bbc6167e8ed01d3fa5a0af7185c06141",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+          "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+          "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+          "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+          "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+          "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor"
+        ],
+        "physical_device": "not_checked"
+      },
+      {
+        "ok": true,
+        "suite": "desktop-composer",
+        "theme_mode": "dark",
+        "browser": "Chromium 148.0.7778.178",
+        "executable": "/nix/store/r7ifk1v95jfl02775kgbrd61dyr1rfsx-chromium-148.0.7778.178/bin/chromium",
+        "fixture_sha256": "b9ead7d428e234e3587af465aca8ac64bbc6167e8ed01d3fa5a0af7185c06141",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+          "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+          "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+          "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+          "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+          "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor"
+        ],
+        "physical_device": "not_checked"
+      }
+    ],
+    "visualReview": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "paneWidthsPx": [
+        360,
+        600,
+        1560
+      ],
+      "surface": "Real editor, Desktop toolbar and BrowserProductTheme in an isolated fixture"
+    }
+  },
+  "before": {
+    "observedAt": "2026-10-04T07:57:13.180553+00:00",
+    "controller": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 10:01:22 CST",
+      "MainPID": "959309"
+    },
+    "machine": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 15:17:21 CST",
+      "MainPID": "4090042"
+    },
+    "webProfile": "/nix/store/spgrz6hi1p3jmky5hs47qd7lgmap8ird-cowboy-web-0.1.0",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791096446025247327-303980048f72",
+      "revision": "303980048f72d9ada58fac9fea3944a8a2da04ba",
+      "published": false,
+      "release": "/nix/store/4kh9vhbscp9l8chj95c0ixqyp4irasgb-cowboy-web-release",
+      "previousRelease": "/nix/store/idch5w1ygj5iaj8sqwr1fnp4bpchid9l-cowboy-web-release",
+      "activeRelease": "/nix/store/4kh9vhbscp9l8chj95c0ixqyp4irasgb-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T06:47:26.025247327Z",
+      "recordedAt": "2026-10-04T06:47:26.172201418Z",
+      "recovered": false
+    },
+    "http": [
+      {
+        "url": "http://127.0.0.1:3333/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+        "body": "ok"
+      },
+      {
+        "url": "http://127.0.0.1:3333/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "d16d55657709d3ed96ecc2a6b46d12feaf81995ff57a5396f9d01d346e89e3e5",
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/version",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "70384a00818fc49eb3d69c8dcbe40a5012fc890fa607a7f87af94bfdcf5fba59",
+        "body": "{\"version\":\"0dcd935b8b1dea0c95e4e992de859044\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"0dcd935b8b1dea0c95e4e992de859044\"",
+        "sha256": "0dcd935b8b1dea0c95e4e992de85904460664ed9ef6cf4418fbc56453f7c6438",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"ea47f2e59458c601515d69dabfadddfe\"",
+        "sha256": "ea47f2e59458c601515d69dabfadddfe626be80c4d896188f73ea98cad087f0d",
+        "serviceWorkerVersion": "cowboy-v1820",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/assets/main-B5EzRZJM.js",
+        "status": 200,
+        "cacheControl": "public, max-age=31536000, immutable",
+        "etag": "\"5713b2cdc21a41d37fb601e4b6862547\"",
+        "sha256": "5713b2cdc21a41d37fb601e4b68625477b681ee29689d3e45d37c1eddb30451c",
+        "matchesActiveArtifact": true
+      }
+    ]
+  },
+  "after": {
+    "observedAt": "2026-10-04T07:58:08.740578+00:00",
+    "controller": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 10:01:22 CST",
+      "MainPID": "959309"
+    },
+    "machine": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 15:17:21 CST",
+      "MainPID": "4090042"
+    },
+    "webProfile": "/nix/store/d41629wgz4ajvpqjpz1fqxx5n6sy93kk-cowboy-web-0.1.0",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791100661823795738-a72389e163d8",
+      "revision": "a72389e163d8a1d98def743848485ad2caa252b7",
+      "published": true,
+      "release": "/nix/store/fyzz0s8pc8sicz0g0s5ppnjn13a2545n-cowboy-web-release",
+      "previousRelease": "/nix/store/4kh9vhbscp9l8chj95c0ixqyp4irasgb-cowboy-web-release",
+      "activeRelease": "/nix/store/fyzz0s8pc8sicz0g0s5ppnjn13a2545n-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T07:57:41.823795738Z",
+      "recordedAt": "2026-10-04T07:57:42.096202241Z",
+      "recovered": false
+    },
+    "http": [
+      {
+        "url": "http://127.0.0.1:3333/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+        "body": "ok"
+      },
+      {
+        "url": "http://127.0.0.1:3333/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "d16d55657709d3ed96ecc2a6b46d12feaf81995ff57a5396f9d01d346e89e3e5",
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/version",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "1659679bbc2d22535a00c9a9e86a84456741ba421338ebb1517b1dbefcad866d",
+        "body": "{\"version\":\"c5bbb11a7023ec9405021391b4f5d603\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"c5bbb11a7023ec9405021391b4f5d603\"",
+        "sha256": "c5bbb11a7023ec9405021391b4f5d6031e635d4ee4d1f6cd45d4fd7308165a70",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"cc537e9214e66a0458886e327fdd68ee\"",
+        "sha256": "cc537e9214e66a0458886e327fdd68eeb845a3e335cb6a70661f707ef21293ff",
+        "serviceWorkerVersion": "cowboy-v1821",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/assets/main-CGUSLSM3.js",
+        "status": 200,
+        "cacheControl": "public, max-age=31536000, immutable",
+        "etag": "\"a7afda2dcf8cdadbb3d46c79cb1ae6dc\"",
+        "sha256": "a7afda2dcf8cdadbb3d46c79cb1ae6dc7102f514af9480b1e43460aa8af533c8",
+        "matchesActiveArtifact": true
+      }
+    ]
+  },
+  "verified": {
+    "publishedToRemoteMainBeforeActivation": true,
+    "activationUnitResult": "success",
+    "controllerAndMachinePidAndStartTimeUnchanged": true,
+    "activeWorkerGenerationUnchanged": true,
+    "machineOnline": true,
+    "publicIndexServiceWorkerAndEntryMatchImmutableArtifact": true,
+    "versionMatchesPublicIndexEtag": true,
+    "shellAndServiceWorkerCacheControl": "no-store",
+    "hashedEntryCacheControl": "public, max-age=31536000, immutable"
+  },
+  "scope": [
+    "Web-only activation; no Controller or Machine release performed by this task.",
+    "Browser conformance uses the real editor/toolbar/theme with synthetic session-state callbacks, not an authenticated live-session end-to-end test.",
+    "The browser fixture runs on Linux with Vim disabled; native macOS/Windows shortcut behavior and physical IME are not established by these results.",
+    "No physical iPhone acceptance is claimed. PITFALLS #69 remains open."
+  ]
+}
