@@ -35,6 +35,7 @@
          @"let clipboardDenied=false;try{await window.__cowboyReadClipboard()}catch{clipboardDenied=true}"
          @"check('foreign origin cannot read clipboard',clipboardDenied);"
          @"check('app icon bridge coexists',typeof window.__cowboyAppIcon==='function');"
+         @"check('installed bundle version beats compile-time version',window.__cowboyNativeApp?.version==='9.8.7'&&window.__cowboyNativeApp?.build==='987'&&Object.isFrozen(window.__cowboyNativeApp));"
          @"const iconState=await window.__cowboyAppIcon({action:'state'});"
          @"check('foreign origin cannot read app icon state',iconState.ok===false);"
          @"const iconSet=await window.__cowboyAppIcon({action:'set',id:'palette-054'});"
