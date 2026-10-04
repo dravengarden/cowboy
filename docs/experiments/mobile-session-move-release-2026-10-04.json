@@ -1,0 +1,290 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-04T08:33:53.743804+00:00",
+  "change": "Wider Mobile Sessions rail, compact gutters and reliable moves to Global",
+  "implementationCommit": "a40d2fabac87062af5650e8b4a013f6cf4d32ce6",
+  "releaseRevision": "35d6a79986093db0aa7b22f10627011fac403c5f",
+  "releaseArtifact": "/nix/store/zxbn1pdx7vf6r5psg5vrh14hc3lvr333-cowboy-web-release",
+  "serviceWorkerVersion": "cowboy-v1822",
+  "behavior": {
+    "phoneSessionsWidth": "viewport minus 44px, capped at 480px",
+    "mobileRowTotalEdgeGutterPx": 8,
+    "mobileRowIndentPx": 16,
+    "mobileGripAndMenuTargetPx": 44,
+    "globalMove": "Direct nested-item action; pinned picker destination; explicit horizontal outdent; reveal all destination ancestors and scroll to moved item",
+    "dragProtection": "Final pointer sample wins; pointercancel and grip taps do not submit; canonical optimistic tree wins over flat reorder"
+  },
+  "checks": {
+    "webTypecheck": "passed",
+    "webLint": {
+      "outcome": "passed",
+      "preexistingWarnings": 8
+    },
+    "webTests": {
+      "passed": 2028,
+      "failed": 0
+    },
+    "browserRunnerDenoCheck": "passed",
+    "immutableWebReleaseBuild": "passed",
+    "browserConformance": [
+      {
+        "ok": true,
+        "suite": "session-move",
+        "theme_mode": "light",
+        "browser": "Chromium 148.0.7778.178",
+        "executable": "/nix/store/r7ifk1v95jfl02775kgbrd61dyr1rfsx-chromium-148.0.7778.178/bin/chromium",
+        "fixture_sha256": "02c8d417035065a1c52150970c26d6412b08ab735d5dbac1cb96b3ab7f601e0c",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "Long destination lists keep Global visible; current location cannot accidentally reorder itself",
+          "Search retains Global, and folder moves exclude themselves and their descendants",
+          "Fast horizontal drop escapes mid-folder to Global; canonical tree order wins; cancellation and grip taps preserve placement",
+          "Wider rail, peek and dismissal hit area agree across resize; touch tracking is 1:1 and cancellation/settle release ownership"
+        ],
+        "physical_device": "not_checked"
+      },
+      {
+        "ok": true,
+        "suite": "session-move",
+        "theme_mode": "dark",
+        "browser": "Chromium 148.0.7778.178",
+        "executable": "/nix/store/r7ifk1v95jfl02775kgbrd61dyr1rfsx-chromium-148.0.7778.178/bin/chromium",
+        "fixture_sha256": "efc263fafbc2ee0118d35662e6b9bb530e29b586cecf2dd34ccafd7182338701",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "Long destination lists keep Global visible; current location cannot accidentally reorder itself",
+          "Search retains Global, and folder moves exclude themselves and their descendants",
+          "Fast horizontal drop escapes mid-folder to Global; canonical tree order wins; cancellation and grip taps preserve placement",
+          "Wider rail, peek and dismissal hit area agree across resize; touch tracking is 1:1 and cancellation/settle release ownership"
+        ],
+        "physical_device": "not_checked"
+      },
+      {
+        "ok": true,
+        "suite": "session-move",
+        "theme_mode": "light",
+        "browser": "Mozilla Firefox 151.0.1",
+        "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+        "fixture_sha256": "efc263fafbc2ee0118d35662e6b9bb530e29b586cecf2dd34ccafd7182338701",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "Long destination lists keep Global visible; current location cannot accidentally reorder itself",
+          "Search retains Global, and folder moves exclude themselves and their descendants",
+          "Fast horizontal drop escapes mid-folder to Global; canonical tree order wins; cancellation and grip taps preserve placement",
+          "Wider rail, peek and dismissal hit area agree across resize; touch tracking is 1:1 and cancellation/settle release ownership"
+        ],
+        "physical_device": "not_checked"
+      },
+      {
+        "ok": true,
+        "suite": "session-move",
+        "theme_mode": "dark",
+        "browser": "Mozilla Firefox 151.0.1",
+        "executable": "/nix/store/bvshrp9mdjbmx1asq5ndikxim24jfxfv-firefox-151.0.1/bin/firefox",
+        "fixture_sha256": "02c8d417035065a1c52150970c26d6412b08ab735d5dbac1cb96b3ab7f601e0c",
+        "isolation": "fresh profile / private loopback namespace / no credentials",
+        "tests": [
+          "Long destination lists keep Global visible; current location cannot accidentally reorder itself",
+          "Search retains Global, and folder moves exclude themselves and their descendants",
+          "Fast horizontal drop escapes mid-folder to Global; canonical tree order wins; cancellation and grip taps preserve placement",
+          "Wider rail, peek and dismissal hit area agree across resize; touch tracking is 1:1 and cancellation/settle release ownership"
+        ],
+        "physical_device": "not_checked"
+      }
+    ],
+    "phonePickerVisualReview": {
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "viewportWidthsPx": [
+        320,
+        390,
+        430
+      ]
+    }
+  },
+  "before": {
+    "observedAt": "2026-10-04T08:31:54.547360+00:00",
+    "controller": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 10:01:22 CST",
+      "MainPID": "959309"
+    },
+    "machine": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 16:22:52 CST",
+      "MainPID": "452169"
+    },
+    "webProfile": "/nix/store/d41629wgz4ajvpqjpz1fqxx5n6sy93kk-cowboy-web-0.1.0",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791100661823795738-a72389e163d8",
+      "revision": "a72389e163d8a1d98def743848485ad2caa252b7",
+      "published": true,
+      "release": "/nix/store/fyzz0s8pc8sicz0g0s5ppnjn13a2545n-cowboy-web-release",
+      "previousRelease": "/nix/store/4kh9vhbscp9l8chj95c0ixqyp4irasgb-cowboy-web-release",
+      "activeRelease": "/nix/store/fyzz0s8pc8sicz0g0s5ppnjn13a2545n-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T07:57:41.823795738Z",
+      "recordedAt": "2026-10-04T07:57:42.096202241Z",
+      "recovered": false
+    },
+    "http": [
+      {
+        "url": "http://127.0.0.1:3333/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+        "body": "ok"
+      },
+      {
+        "url": "http://127.0.0.1:3333/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "d16d55657709d3ed96ecc2a6b46d12feaf81995ff57a5396f9d01d346e89e3e5",
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/version",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "1659679bbc2d22535a00c9a9e86a84456741ba421338ebb1517b1dbefcad866d",
+        "body": "{\"version\":\"c5bbb11a7023ec9405021391b4f5d603\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"c5bbb11a7023ec9405021391b4f5d603\"",
+        "sha256": "c5bbb11a7023ec9405021391b4f5d6031e635d4ee4d1f6cd45d4fd7308165a70",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"cc537e9214e66a0458886e327fdd68ee\"",
+        "sha256": "cc537e9214e66a0458886e327fdd68eeb845a3e335cb6a70661f707ef21293ff",
+        "serviceWorkerVersion": "cowboy-v1821",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/assets/main-CGUSLSM3.js",
+        "status": 200,
+        "cacheControl": "public, max-age=31536000, immutable",
+        "etag": "\"a7afda2dcf8cdadbb3d46c79cb1ae6dc\"",
+        "sha256": "a7afda2dcf8cdadbb3d46c79cb1ae6dc7102f514af9480b1e43460aa8af533c8",
+        "matchesActiveArtifact": true
+      }
+    ]
+  },
+  "after": {
+    "observedAt": "2026-10-04T08:32:46.558059+00:00",
+    "controller": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 10:01:22 CST",
+      "MainPID": "959309"
+    },
+    "machine": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 16:22:52 CST",
+      "MainPID": "452169"
+    },
+    "webProfile": "/nix/store/kkwvhid1pwxna6vnd8qx2bnyy75jicqx-cowboy-web-0.1.0",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791102745077559224-35d6a7998609",
+      "revision": "35d6a79986093db0aa7b22f10627011fac403c5f",
+      "published": true,
+      "release": "/nix/store/zxbn1pdx7vf6r5psg5vrh14hc3lvr333-cowboy-web-release",
+      "previousRelease": "/nix/store/fyzz0s8pc8sicz0g0s5ppnjn13a2545n-cowboy-web-release",
+      "activeRelease": "/nix/store/zxbn1pdx7vf6r5psg5vrh14hc3lvr333-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T08:32:25.077559224Z",
+      "recordedAt": "2026-10-04T08:32:25.124960924Z",
+      "recovered": false
+    },
+    "http": [
+      {
+        "url": "http://127.0.0.1:3333/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+        "body": "ok"
+      },
+      {
+        "url": "http://127.0.0.1:3333/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "d16d55657709d3ed96ecc2a6b46d12feaf81995ff57a5396f9d01d346e89e3e5",
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/version",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "e316ae31c61dbeec9fd255c0c27d2b41a94e50be24b484c2aba1ceb26b5e4866",
+        "body": "{\"version\":\"e27539c32cdebc1c7f858d65e6b29cca\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"e27539c32cdebc1c7f858d65e6b29cca\"",
+        "sha256": "e27539c32cdebc1c7f858d65e6b29cca7a3d250d86f01df957c1e3c49db8e511",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"bdaf5a14610854171b1d9171e69ff15e\"",
+        "sha256": "bdaf5a14610854171b1d9171e69ff15e56bb0312a60647c7473fce95d958c923",
+        "serviceWorkerVersion": "cowboy-v1822",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/assets/main-rKl_VG5Z.js",
+        "status": 200,
+        "cacheControl": "public, max-age=31536000, immutable",
+        "etag": "\"f3d8adfaf18b4c3e60cd83b011dc97b4\"",
+        "sha256": "f3d8adfaf18b4c3e60cd83b011dc97b41e9f21d85c40a887a84bc4dd12ad0c93",
+        "matchesActiveArtifact": true
+      }
+    ]
+  },
+  "verified": {
+    "publishedToRemoteMainBeforeActivation": true,
+    "activationUnitResult": "success",
+    "controllerAndMachinePidAndStartTimeUnchangedDuringWebActivation": true,
+    "activeWorkerGenerationUnchangedDuringWebActivation": true,
+    "machineOnline": true,
+    "publicIndexServiceWorkerAndEntryMatchImmutableArtifact": true,
+    "versionMatchesPublicIndexEtag": true,
+    "shellAndServiceWorkerCacheControl": "no-store",
+    "hashedEntryCacheControl": "public, max-age=31536000, immutable"
+  },
+  "scope": [
+    "Only the Web lane was activated by this task.",
+    "Browser tests use the real picker, useSortable, tree projection, spatial drawer controller and BrowserProductTheme with isolated synthetic state.",
+    "The full authenticated SessionList move-notification and scroll wiring was source-reviewed, not exercised against a user account.",
+    "Synthetic touch tracking is not physical iPhone frame-time or native gesture acceptance; no such acceptance is claimed."
+  ]
+}

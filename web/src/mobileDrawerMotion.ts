@@ -15,6 +15,21 @@ export function predictDrawerOffset(
  *  compositor so the page does not hitch on a JS spring tick. */
 export const MOBILE_DRAWER_SETTLE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 
+/** Sessions uses the phone canvas, leaving a full touch target to dismiss. */
+export const MOBILE_SESSION_DRAWER_WIDTH =
+  "var(--mobile-drawer-width, min(calc(100% - 44px), 480px))";
+
+export function mobileSpatialDrawerWidth(
+  viewportWidth: number,
+  phone: boolean,
+  side: "left" | "right",
+): number {
+  if (!phone) return Math.min(440, viewportWidth * 0.52);
+  return side === "left"
+    ? Math.max(0, Math.min(480, viewportWidth - 44))
+    : Math.min(360, viewportWidth * 0.84);
+}
+
 /** iOS snappy panel: critically damped, perceptual ~200ms. The previous
  *  0.30/0.88 spring settled later and still had a floaty tail. */
 export const MOBILE_DRAWER_SPRING_RESPONSE = 0.2;
@@ -63,9 +78,7 @@ export function mobileDrawerProgress(
   offset: number,
   width: number,
 ): number {
-  return width > 0
-    ? Math.max(0, Math.min(1, offset / width))
-    : 0;
+  return width > 0 ? Math.max(0, Math.min(1, offset / width)) : 0;
 }
 
 /** Obsidian recedes the workspace with a join-to-edge gradient, not a

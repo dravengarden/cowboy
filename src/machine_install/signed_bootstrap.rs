@@ -348,6 +348,162 @@ mod tests {
         (manifest, artifact, key, desired)
     }
 
+    #[cfg(feature = "machine-host")]
+    fn cache_floor(root: &Path, state: &Path, mut desired: DesiredComponent) -> std::path::PathBuf {
+        let signer = MachineIdentity::load_or_create(&root.join("signer")).unwrap();
+        let bytes = b"#!/bin/sh\nexit 0\n";
+        desired.version = "reader-anchor".into();
+        desired.generation = "accepted-reader".into();
+        desired.digest = format!("{:x}", Sha256::digest(bytes));
+        desired.artifact_format = ArtifactFormat::Raw;
+        desired.entrypoint = None;
+        desired.signature = Some(
+            signer
+                .sign(&crate::component_proof::component_proof(&desired))
+                .unwrap(),
+        );
+        let generation = state
+            .join("components/payloads/machine_host/reader-anchor")
+            .join(&desired.digest);
+        std::fs::create_dir_all(&generation).unwrap();
+        std::fs::write(generation.join("bin"), bytes).unwrap();
+        super::super::set_mode(&generation.join("bin"), 0o755).unwrap();
+        std::fs::write(generation.join("artifact"), bytes).unwrap();
+        std::fs::write(
+            generation.join("manifest.json"),
+            serde_json::to_vec(&desired).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(state.join("components/active")).unwrap();
+        std::fs::create_dir_all(state.join("components/commands")).unwrap();
+        std::os::unix::fs::symlink(&generation, state.join("components/active/machine_host"))
+            .unwrap();
+        std::os::unix::fs::symlink(
+            generation.join("bin"),
+            state.join("components/commands/cowboy-machine"),
+        )
+        .unwrap();
+        let floor = crate::session_deletion_admission::reader_floor::Floor::new(
+            state,
+            &desired,
+            signer.public_key(),
+            format!(
+                "{:x}",
+                Sha256::digest(crate::component_proof::component_proof(&desired))
+            ),
+        )
+        .unwrap();
+        crate::session_deletion_admission::reader_floor::retain(state, &floor).unwrap();
+        generation
+    }
+
+    #[cfg(feature = "machine-host")]
+    fn refresh_args(
+        state: &Path,
+        manifest: &Path,
+        artifact: &Path,
+        key: &Path,
+    ) -> super::super::InstallArgs {
+        use clap::Parser as _;
+        super::super::InstallArgs::try_parse_from([
+            "installer",
+            "--controller-url",
+            "https://cowboy.invalid",
+            "--service-id",
+            "svc-0123456789abcdef0123456789abcdef",
+            "--workspace",
+            "main=/tmp",
+            "--refresh",
+            "--no-start",
+            "--state-dir",
+            state.to_str().unwrap(),
+            "--bootstrap-manifest",
+            manifest.to_str().unwrap(),
+            "--bootstrap-artifact",
+            artifact.to_str().unwrap(),
+            "--artifact-public-key",
+            key.to_str().unwrap(),
+        ])
+        .unwrap()
+    }
+
+    #[cfg(feature = "machine-host")]
+    #[test]
+    fn floored_signed_refresh_preserves_evidence_and_refuses_local_damage_before_probe() {
+        for case in [
+            "healthy",
+            "anchor",
+            "active",
+            "command",
+            "publisher",
+            "package",
+            "committed",
+            "floor-change",
+            "selection-change",
+        ] {
+            let root = tempfile::tempdir_in("/tmp").unwrap();
+            let state = root.path().join("s");
+            let bytes = archive(&[
+                ("cowboy-machine", GUARD.as_bytes()),
+                ("cowboy-code-adapter", b"code"),
+                ("cowboy-acp-worker", b"worker"),
+            ]);
+            let (manifest, artifact, key, desired) = package(root.path(), &bytes);
+            let generation = cache_floor(root.path(), &state, desired);
+            let args = refresh_args(&state, &manifest, &artifact, &key);
+            let admitted = super::super::admission::Admission::check(&args, &state).unwrap();
+            let floor_path = state.join(crate::session_deletion_admission::reader_floor::NAME);
+            let original_floor = std::fs::read(&floor_path).unwrap();
+            match case {
+                "healthy" => {}
+                "anchor" => std::fs::write(generation.join("artifact"), b"tampered").unwrap(),
+                "active" => {
+                    std::fs::remove_file(state.join("components/active/machine_host")).unwrap()
+                }
+                "command" => {
+                    std::fs::remove_file(state.join("components/commands/cowboy-machine")).unwrap()
+                }
+                "publisher" => {
+                    let other =
+                        MachineIdentity::load_or_create(&root.path().join("other")).unwrap();
+                    std::fs::write(&key, other.public_key()).unwrap();
+                }
+                "package" => std::fs::write(&artifact, b"tampered").unwrap(),
+                "committed" => {
+                    std::fs::create_dir_all(state.join("session-deletions")).unwrap();
+                    std::fs::write(state.join("session-deletions/deletions.json"), b"{}").unwrap();
+                }
+                "floor-change" => {
+                    let mut changed = original_floor.clone();
+                    changed.push(b'\n');
+                    std::fs::write(&floor_path, changed).unwrap();
+                }
+                "selection-change" => {
+                    let path = state.join("components/active/machine_host");
+                    std::fs::remove_file(&path).unwrap();
+                    std::os::unix::fs::symlink(generation.join("."), path).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                admitted.recheck(&args, &state).is_ok(),
+                case == "healthy",
+                "{case}"
+            );
+            if !matches!(case, "healthy" | "floor-change" | "selection-change") {
+                assert!(
+                    super::super::prepare_install_at(&args, root.path()).is_err(),
+                    "{case}"
+                );
+                assert!(!state.join("signed-bootstrap").exists());
+            }
+            assert!(!root.path().join(".local/bin").exists());
+            if case != "floor-change" {
+                assert_eq!(std::fs::read(&floor_path).unwrap(), original_floor);
+            }
+        }
+    }
+
     #[test]
     fn signed_bundle_authenticates_all_payloads_before_probe_and_rechecks_probe_effects() {
         let root = tempfile::tempdir().unwrap();
@@ -644,6 +800,201 @@ mod tests {
             if case != "healthy" {
                 assert!(!state.join("run").exists());
             }
+        }
+    }
+
+    #[cfg(feature = "machine-host")]
+    #[tokio::test]
+    #[ignore = "requires exact current and preceding immutable Machine releases"]
+    async fn immutable_floored_signed_refresh_preserves_selection_and_refuses_offline_damage() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let release =
+            std::path::PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
+        let old = std::path::PathBuf::from(
+            std::env::var("COWBOY_TEST_PORTABLE_PRE_REFRESH_RELEASE").unwrap(),
+        );
+        let payloads: Vec<_> = super::super::bootstrap_probe::PAYLOADS
+            .iter()
+            .map(|name| {
+                (
+                    *name,
+                    std::fs::read(release.join("bin").join(name)).unwrap(),
+                )
+            })
+            .collect();
+        let entries: Vec<_> = payloads
+            .iter()
+            .map(|(name, bytes)| (*name, bytes.as_slice()))
+            .collect();
+        let bytes = archive(&entries);
+        for case in ["healthy", "anchor", "missing-cache", "floor", "package"] {
+            let root = tempfile::tempdir_in("/tmp").unwrap();
+            let state = root.path().join("s");
+            let (manifest, artifact, key, desired) = package(root.path(), &bytes);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(AtomicUsize::new(0));
+            let observed = requests.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut buffer = [0; 4096];
+                    assert!(socket.read(&mut buffer).await.unwrap() > 0);
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    let body = r#"{"service_id":"svc-0123456789abcdef0123456789abcdef"}"#;
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+                }
+            });
+            let invoke = |package: &Path, refresh: bool| {
+                let mut command =
+                    tokio::process::Command::new(package.join("bin/cowboy-machine-install"));
+                command
+                    .env("HOME", root.path())
+                    .args([
+                        "--controller-url",
+                        &origin,
+                        "--service-id",
+                        "svc-0123456789abcdef0123456789abcdef",
+                        "--workspace",
+                        "main=/tmp",
+                        "--no-start",
+                        "--state-dir",
+                    ])
+                    .arg(&state)
+                    .arg("--bootstrap-manifest")
+                    .arg(&manifest)
+                    .arg("--bootstrap-artifact")
+                    .arg(&artifact)
+                    .arg("--artifact-public-key")
+                    .arg(&key);
+                if refresh {
+                    command.arg("--refresh");
+                } else {
+                    command.args(["--enrollment-token", "fixture"]);
+                }
+                command
+            };
+            let initial = invoke(&release, false).output().await.unwrap();
+            assert!(
+                initial.status.success(),
+                "{}",
+                String::from_utf8_lossy(&initial.stderr)
+            );
+            MachineIdentity::load_or_create(&state).unwrap();
+            std::fs::write(state.join("machine-id"), "retained-machine").unwrap();
+            let generation = cache_floor(root.path(), &state, desired);
+            let floor_path = state.join(crate::session_deletion_admission::reader_floor::NAME);
+            let floor_bytes = std::fs::read(&floor_path).unwrap();
+            let launcher = root
+                .path()
+                .join(".local/bin/cowboy-machine-launch-svc-0123456789abcdef0123456789abcdef");
+            let original_launcher = std::fs::read(&launcher).unwrap();
+            let original_identity = std::fs::read(state.join("identity_ed25519")).unwrap();
+            let original_generation = std::fs::read_dir(state.join("signed-bootstrap"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let retained: Vec<_> = std::fs::read_dir(&original_generation)
+                .unwrap()
+                .map(|e| {
+                    let p = e.unwrap().path();
+                    (p.clone(), std::fs::read(p).unwrap())
+                })
+                .collect();
+            match case {
+                "healthy" => {
+                    let preceding = invoke(&old, true).output().await.unwrap();
+                    assert!(
+                        !preceding.status.success(),
+                        "preceding installer admitted floor refresh"
+                    );
+                    assert_eq!(requests.load(Ordering::SeqCst), 0);
+                }
+                "anchor" => std::fs::write(generation.join("artifact"), b"tampered").unwrap(),
+                "missing-cache" => {
+                    std::fs::remove_file(state.join("components/active/machine_host")).unwrap();
+                    std::fs::remove_file(state.join("components/commands/cowboy-machine")).unwrap();
+                }
+                "floor" => std::fs::write(&floor_path, b"{}").unwrap(),
+                "package" => std::fs::write(&artifact, b"tampered").unwrap(),
+                _ => unreachable!(),
+            }
+            let expected_floor = std::fs::read(&floor_path).unwrap();
+            let active = std::fs::read_link(state.join("components/active/machine_host")).ok();
+            let selected =
+                std::fs::read_link(state.join("components/commands/cowboy-machine")).ok();
+            let output = invoke(&release, true).output().await.unwrap();
+            assert_eq!(
+                output.status.success(),
+                case == "healthy",
+                "{case}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                usize::from(case == "healthy"),
+                "{case}"
+            );
+            assert_eq!(std::fs::read(&floor_path).unwrap(), expected_floor);
+            assert_eq!(
+                std::fs::read(state.join("identity_ed25519")).unwrap(),
+                original_identity
+            );
+            assert_eq!(
+                std::fs::read(state.join("enrollment-token")).unwrap(),
+                b"fixture"
+            );
+            assert_eq!(
+                std::fs::read(state.join("machine-id")).unwrap(),
+                b"retained-machine"
+            );
+            assert_eq!(
+                std::fs::read_link(state.join("components/active/machine_host")).ok(),
+                active
+            );
+            assert_eq!(
+                std::fs::read_link(state.join("components/commands/cowboy-machine")).ok(),
+                selected
+            );
+            for (path, original) in &retained {
+                assert_eq!(std::fs::read(path).unwrap(), *original);
+            }
+            if case == "healthy" {
+                assert_eq!(std::fs::read(&floor_path).unwrap(), floor_bytes);
+                assert_eq!(
+                    std::fs::read_dir(state.join("signed-bootstrap"))
+                        .unwrap()
+                        .count(),
+                    2
+                );
+                let started = tokio::process::Command::new("/bin/sh")
+                    .env("HOME", root.path())
+                    .arg(&launcher)
+                    .output()
+                    .await
+                    .unwrap();
+                assert!(
+                    started.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&started.stderr)
+                );
+            } else {
+                assert_eq!(std::fs::read(&launcher).unwrap(), original_launcher);
+                assert_eq!(
+                    std::fs::read_dir(state.join("signed-bootstrap"))
+                        .unwrap()
+                        .count(),
+                    1
+                );
+            }
+            server.abort();
+            let _ = server.await;
         }
     }
 

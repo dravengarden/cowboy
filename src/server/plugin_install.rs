@@ -215,7 +215,7 @@ trait Effects: Sync {
         &self,
         before_install: bool,
     ) -> impl std::future::Future<Output = bool> + Send;
-    fn sync_auth(&self) -> impl std::future::Future<Output = bool> + Send;
+    fn sync_auth(&self, before_install: bool) -> impl std::future::Future<Output = bool> + Send;
     fn install(
         &self,
         step: &InstallStep,
@@ -243,7 +243,7 @@ async fn coordinate(
                 .abort(fence, InstallProblem::PreconditionsChanged, precondition)
                 .await;
         }
-        if !effects.sync_auth().await {
+        if !effects.sync_auth(true).await {
             return progress
                 .abort(
                     fence,
@@ -304,7 +304,7 @@ async fn coordinate(
         }
     }
     if effects.needs_auth_sync(false).await
-        && (effects.authorized().await.is_err() || !effects.sync_auth().await)
+        && (effects.authorized().await.is_err() || !effects.sync_auth(false).await)
     {
         progress
             .advance(
@@ -417,7 +417,7 @@ impl Effects for LiveEffects {
         provider_auth_sync_required_before_install(authentication.as_ref(), installed.as_ref())
     }
 
-    async fn sync_auth(&self) -> bool {
+    async fn sync_auth(&self, before_install: bool) -> bool {
         let Ok(envelope) = provider_auth_envelope_for_machine(
             &self.state,
             &self.machine,
@@ -430,6 +430,8 @@ impl Effects for LiveEffects {
         // Key lookup may wait for storage. Check again at enqueue, retaining the
         // original connection rather than silently following a reconnect.
         self.authorized().await.is_ok()
+            && self.authority.matches_auth_sync(before_install)
+            && self.release.current(&self.state.plugin_catalog)
             && self
                 .state
                 .provider_auth_sync

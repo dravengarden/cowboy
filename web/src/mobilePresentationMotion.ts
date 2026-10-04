@@ -4,6 +4,7 @@ import {
   mobileCodeSwipeFlattenSx,
 } from "./mobileCodeSurface";
 import { holdStorePresentation } from "./store";
+import { MOBILE_SESSION_DRAWER_WIDTH } from "./mobileDrawerMotion";
 
 /** Standing peek paint collapse. Settled rows each own `contain: layout
  *  paint`; leaving that in place until the 2 px claim restyles N tiles on
@@ -102,7 +103,7 @@ export const mobileDrawerRailHitSx = {
     },
   "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='left']":
     {
-      left: "var(--mobile-drawer-width, min(84%, 360px))",
+      left: MOBILE_SESSION_DRAWER_WIDTH,
     },
   "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='right']":
     {

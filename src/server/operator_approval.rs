@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 enum Credential {
+    Cardea(Box<super::cardea_authorization::Grant>),
     Product(super::product_continuation::ProductContinuation),
     #[cfg(unix)]
     Host(Arc<crate::local_operator::Grant>),
@@ -28,6 +29,59 @@ pub(super) struct OperatorApproval {
 }
 
 impl OperatorApproval {
+    fn require_general_purpose(&self) -> Result<()> {
+        ensure!(
+            !matches!(self.credential, Credential::Cardea(_)),
+            "Cardea installation approval has a closed purpose"
+        );
+        Ok(())
+    }
+    pub(super) fn capture_cardea(service: &str, grant: super::cardea_authorization::Grant) -> Self {
+        Self {
+            service: service.to_owned(),
+            actor: grant.actor(),
+            credential: Credential::Cardea(Box::new(grant)),
+            received: TimeSample::now(),
+        }
+    }
+
+    fn cardea_installation_matches(
+        &self,
+        machine: &str,
+        desired: &crate::machine_protocol::DesiredPlugin,
+        operation: &str,
+        target: &crate::machine_protocol::plugin_install::InstallTarget,
+    ) -> bool {
+        match &self.credential {
+            Credential::Cardea(grant) => {
+                grant.matches_service(&self.service)
+                    && grant.matches(machine, desired, operation, target)
+            }
+            _ => true,
+        }
+    }
+
+    fn cardea_dispatch_current(&self) -> bool {
+        match &self.credential {
+            Credential::Cardea(grant) => grant.dispatch_current(),
+            _ => true,
+        }
+    }
+
+    fn installation_expiry(&self) -> i64 {
+        let default = self.received.deadline_ms(Duration::from_mins(5));
+        match &self.credential {
+            Credential::Cardea(grant) => default.min(grant.expires_at_ms()),
+            _ => default,
+        }
+    }
+    fn cardea_auth_sync_current(&self, before_install: bool) -> bool {
+        match &self.credential {
+            Credential::Cardea(grant) if before_install => grant.dispatch_current(),
+            Credential::Cardea(grant) => grant.continuation_current(),
+            _ => true,
+        }
+    }
     #[cfg(unix)]
     pub(super) fn capture_host(
         service: &str,
@@ -128,6 +182,7 @@ impl OperatorApproval {
         intent: crate::plugin_operation::resolution::ResolutionIntent,
     ) -> Result<crate::plugin_operation::resolution::ResolutionPermit> {
         use crate::plugin_operation::resolution::ResolutionPermit;
+        self.require_general_purpose()?;
         intent.validate()?;
         let budget =
             OperationBudget::new(intent.expires_at_ms, Duration::from_mins(1), self.received);
@@ -145,6 +200,7 @@ impl OperatorApproval {
     }
 
     pub(super) fn bind(self, intent: &UninstallIntent) -> Result<UninstallAuthority> {
+        self.require_general_purpose()?;
         ensure!(
             self.actor == intent.actor && self.service == intent.service_id,
             "Plugin confirmation owner changed"
@@ -168,6 +224,7 @@ impl OperatorApproval {
         self,
         intent: &crate::telemetry_binding::Intent,
     ) -> Result<TelemetryBindingAuthority> {
+        self.require_general_purpose()?;
         ensure!(
             self.actor == intent.actor && self.service == intent.service_id,
             "binding confirmation owner changed"
@@ -185,6 +242,9 @@ impl OperatorApproval {
     }
 
     pub(super) async fn current_operator(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
+        if let Credential::Cardea(grant) = &self.credential {
+            return grant.current(auth).await;
+        }
         #[cfg(unix)]
         if let Credential::Host(grant) = &self.credential {
             return grant.current().then(|| grant.actor());

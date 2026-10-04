@@ -7,6 +7,7 @@ import {
   folderAncestors,
   normalizeSessionFolderName,
   planProjectFolders,
+  sessionFolderLocation,
   sessionFolderMutators as m,
   type SessionFoldersValue,
   unboundProjectLabels,
@@ -87,6 +88,23 @@ Deno.test("move rejects cycles and appends in the new parent", () => {
   value = m.move(value, { id: "f-c", parent: null });
   assertEquals(ids(value, null), ["f-a", "f-d", "f-c"]);
   assertEquals(folderAncestors(value, "f-b"), ["f-a"]);
+});
+
+Deno.test("move destinations identify Global and disambiguate equal folder names", () => {
+  let value = m.create(EMPTY_SESSION_FOLDERS, {
+    id: "a",
+    name: "Work",
+    parent: null,
+  });
+  value = m.create(value, { id: "b", name: "Work", parent: "a" });
+  value = m.create(value, { id: "c", name: "Work", parent: "b" });
+  assertEquals(sessionFolderLocation(value, null), "Global");
+  assertEquals(
+    sessionFolderLocation(value, "c"),
+    "Global › Work › Work › Work",
+  );
+  value = m.move(value, { id: "b", parent: null });
+  assertEquals(sessionFolderLocation(value, "c"), "Global › Work › Work");
 });
 
 Deno.test("reorder permutes only the submitted siblings", () => {

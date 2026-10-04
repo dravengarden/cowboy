@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
+#[cfg(feature = "full")]
+pub(crate) mod cardea;
 
 #[derive(Parser)]
 #[command(
@@ -39,6 +41,12 @@ enum Command {
     /// Operate the Controller through its explicitly enabled private host endpoint.
     #[cfg(all(feature = "full", unix))]
     Operator(crate::local_operator::OperatorArgs),
+    /// Offline Cardea catalog preparation; human activation remains required.
+    #[cfg(feature = "full")]
+    Cardea {
+        #[command(subcommand)]
+        command: cardea::Command,
+    },
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     #[cfg(feature = "full")]
     TryAgent(TryAgentArgs),
@@ -473,15 +481,9 @@ impl Cli {
             #[cfg(all(feature = "full", unix))]
             Command::Operator(args) => crate::local_operator::run(args).await,
             #[cfg(feature = "full")]
-            Command::TryAgent(args) => {
-                crate::server::init_tracing();
-                let spec = crate::provider::lookup(&args.provider)
-                    .ok_or_else(|| anyhow::anyhow!("unknown provider {:?}", args.provider))?;
-                let local = tokio::task::LocalSet::new();
-                local
-                    .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
-                    .await
-            }
+            Command::Cardea { command } => cardea::run(command),
+            #[cfg(feature = "full")]
+            Command::TryAgent(args) => run_trial_agent(args).await,
             #[cfg(feature = "full")]
             Command::MachineEnroll(args) => {
                 let database_url = args
@@ -576,6 +578,16 @@ async fn login_client(args: LoginArgs) -> anyhow::Result<()> {
     }
     eprintln!("Cowboy login ready for {base_url}");
     Ok(())
+}
+
+#[cfg(feature = "full")]
+async fn run_trial_agent(args: TryAgentArgs) -> anyhow::Result<()> {
+    crate::server::init_tracing();
+    let spec = crate::provider::lookup(&args.provider)
+        .ok_or_else(|| anyhow::anyhow!("unknown provider {:?}", args.provider))?;
+    tokio::task::LocalSet::new()
+        .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
+        .await
 }
 
 #[cfg(feature = "full")]

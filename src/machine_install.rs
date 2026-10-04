@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
+mod admission;
 mod bootstrap_probe;
+mod recovery;
 mod signed_bootstrap;
 
 // Service IDs already consume 36 bytes. Compact socket basenames leave room
@@ -69,6 +71,9 @@ pub struct InstallArgs {
 
 pub fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if std::env::args().nth(1).as_deref() == Some("--restore-floor-selection") {
+        return recovery::run();
+    }
     if std::env::args().nth(1).as_deref() == Some("--check-signed-bootstrap") {
         return signed_bootstrap::run_check();
     }
@@ -272,8 +277,7 @@ fn install(args: InstallArgs) -> Result<()> {
             || crate::service_identity::service_state_dir(&home, &args.service_id),
             Ok,
         )?;
-        crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
-        crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
+        admission::Admission::check(&args, &state)?;
         let origin = normalize_controller_url(&args.controller_url)?;
         let service_id = tokio::runtime::Runtime::new()?.block_on(fetch_service_id(&origin))?;
         anyhow::ensure!(
@@ -315,8 +319,7 @@ fn prepare_install_from_bundle(
         Ok,
     )?;
     validate_socket_paths(&state)?;
-    crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
-    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
+    let admission = admission::Admission::check(args, &state)?;
     let installed = if args.refresh {
         installed_launcher(args, &state, home)?
     } else {
@@ -345,8 +348,7 @@ fn prepare_install_from_bundle(
     };
     bundle.verify()?;
     // The admitted probe is executable code; do not publish over new refusal state.
-    crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
-    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
+    admission.recheck(args, &state)?;
     bind_service_origin(&state, &normalize_controller_url(&args.controller_url)?)?;
     let config = home
         .join(".config/cowboy-machine/services")
@@ -394,8 +396,7 @@ fn prepare_install_from_bundle(
             }
         }
     }
-    crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
-    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
+    admission.recheck(args, &state)?;
     atomic_write(&launcher, script.as_bytes(), 0o755)?;
 
     Ok((home.to_path_buf(), launcher))

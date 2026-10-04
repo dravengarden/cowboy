@@ -68,6 +68,7 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod cardea_authorization;
 mod code_buffers;
 mod code_reads;
 mod execution;
@@ -8715,21 +8716,10 @@ async fn api_auth_cardea_device_exchange(
     };
     // One stable Cowboy device per Cardea grant; refresh cannot bypass local
     // device revocation or allocate a new capacity slot on every request.
-    let configuration = match provider.cardea_device_configuration() {
-        Ok(v) => v,
+    let id = match provider.cardea_product_device_id(&identity.grant_id) {
+        Ok(id) => id,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let id = crate::admin::hex_sha256(
-        serde_json::to_vec(&serde_json::json!([
-            "cardea-device/v1",
-            configuration["issuer"],
-            configuration["client_id"],
-            identity.grant_id,
-        ]))
-        .unwrap()
-        .as_slice(),
-    )[..32]
-        .to_owned();
     let devices = match store.list_user_devices_for_user(&user.id).await {
         Ok(devices) => devices,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -9702,6 +9692,7 @@ async fn serve_axum(
     };
 
     let app = Router::new()
+        .merge(cardea_authorization::routes())
         .merge(code_buffers::routes(&state))
         .merge(telemetry_binding::resolution::surface::routes())
         .merge(telemetry_binding::recovery::surface::routes())
