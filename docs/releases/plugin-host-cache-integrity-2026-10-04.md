@@ -109,3 +109,42 @@ can evaluate. The current retained source passes; overriding it with pre-reader
 claim source `abbbd77a` fails the actual Nix assertion without writing the lock
 file or dispatching a transaction. Pool/adapter upgrades keep their independent
 maintenance boundary. No general native compatibility or resume is claimed.
+
+The first resident candidate from `e64ae98f` built and verified, but dispatch
+refused stale ancestry after remote main advanced with documentation only. No
+root transaction or new receipt was created. Fresh integration `1803851e`
+rebuilt immutable metadata; native and retained companion paths/digests stayed
+identical. The installed owner and its journal were retained throughout.
+
+Final source `1803851ea511b0230570bac688dbfe2a5185ee7f` built `.#cowboy-machine-host-release`,
+the source-boundary check and the immutable worker-registry input check. The
+activated artifact is `/nix/store/z4pmjs2j2jy5093vljzzif72vmxbxicz-cowboy-machine-release`. Its native Machine executable is
+`/nix/store/fi5sq3s9bxxi4ixvmlc5gzgzzwkmrapn-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped`, SHA-256
+`ac2c93835c2589e9cd716469999e6ae15e6432c86e5e70cff1b5061d01bf1028`. The separate retained source receipt pins
+`406471a28de430debf6f8363b44abc3e621589d7`; all six worker/proxy/Code/Zed/JS
+companion hashes equal the preceding active bundle. The actual worker remains
+`/nix/store/s4dsd8zbcrn18995krfwciiszhz27nwn-cowboy-0.1.0/bin/cowboy-acp-worker`.
+
+Installed-owner transaction `1791086185838758576-1803851ea511` succeeded and
+published at `2026-10-04T03:56:33.839691692Z` with `maintenance: true` and no
+recovery. Machine changed from PID `965129` to
+`1442220`. Samples at `2026-10-04T03:55:56.643Z` and
+`2026-10-04T03:58:18.403Z` preserve all 13 worker and five keeper unit
+IDs, states and PIDs exactly. Controller PID `959309` and its
+receipt remain unchanged. The selected pool stays `worker-6ede7a91cc8b8b3402d4`.
+This is bounded Linux process continuity, not general native resume acceptance.
+
+All five public HTTPS checks returned 200; HTML/SW retained `no-store`. The Web
+profile and SPA version `798bda6db1a3a8958a6102125058e8e2`, root reader-floor
+SHA-256 `26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`, installed-owner hash and sudoers
+SHA-256 `149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69` stayed unchanged. Both component
+journals are absent and no failed system unit was observed or cleared. The
+Machine logged zero deleted IDs with `writer_enabled=false` at
+`2026-10-04T03:56:25.922499Z`; deletion state remains only `.lock`.
+
+The [machine-readable evidence](../experiments/plugin-host-cache-integrity-2026-10-04.json)
+contains artifact/native/retained identities, exact owner and transaction, initial
+stale refusal, complete process/HTTP samples and the unchanged boundary hashes.
+Portable cached startup authentication, persistent floor, bootstrap/recovery
+admission and production deletion writing remain closed. No Controller, Web,
+host-configuration, installed Plugin or iOS activation was performed by this task.
