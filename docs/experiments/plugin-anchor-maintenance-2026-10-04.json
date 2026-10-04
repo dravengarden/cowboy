@@ -1,0 +1,572 @@
+{
+  "schema": 1,
+  "purpose": "Independent worker/Code maintenance acceptance before advancing the retained pool pin",
+  "candidate": {
+    "release": "/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release",
+    "source": {
+      "component": "cowboy",
+      "dirty": false,
+      "lane": "machine",
+      "repository": "git@github.com:dravengarden/cowboy.git",
+      "revision": "90ec4edae56349cb06b9f39f13a0086197b5356b",
+      "schema": 1,
+      "sessionDeletionJournal": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "workerGeneration": "worker-dc63f38423cbd1971eda"
+    },
+    "machine": {
+      "path": "/nix/store/3dj5mpdazymirngk3633l4094dy4sryy-cowboy-machine-0.1.0/bin/cowboy-machine",
+      "sha256": "dc1ee4bf847ee6e06051a51e622fb7ca8c76c684a0da3efeceb1d6f3e3bf8d56"
+    },
+    "native": {
+      "path": "/nix/store/3dj5mpdazymirngk3633l4094dy4sryy-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "7f7c7759a02e544bedff63cc4d842decbee75d3243776d41c90bf5bfebcd5f12"
+    },
+    "installer": {
+      "path": "/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release/bin/cowboy-machine-install",
+      "sha256": "dacdcb779fc3537eb149e9d73c3339d3e716962457a62c388c0cdbc29c26fb80"
+    },
+    "companions": {
+      "cowboy-acp-worker": {
+        "path": "/nix/store/2z6hdp0lafhpsykcn7niccyin5ks99vs-cowboy-0.1.0/bin/cowboy-acp-worker",
+        "sha256": "e0860fb92547ac7159af4ba61d6c5867075153128575436b8017ffac430ebcde"
+      },
+      "cowboy-codex-app-server": {
+        "path": "/nix/store/2z6hdp0lafhpsykcn7niccyin5ks99vs-cowboy-0.1.0/bin/cowboy-codex-app-server",
+        "sha256": "c9e615a03318cb928d96d5278cd69fef0397f4352db1a8e42855dadeb1a5a109"
+      },
+      "cowboy-code-adapter": {
+        "path": "/nix/store/6aci5yfg24b82dsiahni9s3cdpk70ayj-cowboy-code-adapter-0.1.0/bin/cowboy-code-adapter",
+        "sha256": "a0ed2a83d346159ec3452a5678f1f8ea313093935e24824b84dece1f219c4a58"
+      },
+      "cowboy-zed-adapter": {
+        "path": "/nix/store/z37cw1h6m1z8rnjv7ipaxvx09ab0y3ds-cowboy-zed-adapter-1.20.4/bin/cowboy-zed-adapter",
+        "sha256": "7d30f412bdb2c0af9f5e32d70ecee8f08994a30012c2feec82825afc815f4e04"
+      },
+      "cowboy-zed-server": {
+        "path": "/nix/store/j27dma3v67b3snax2yip1gw19nmm9w66-cowboy-zed-server-x86_64-unknown-linux-musl-1.6.0/bin/cowboy-zed-server",
+        "sha256": "d84c0516b2dc872b2c3ac97a23a972056532249cea7daa6414274fee877014c3"
+      },
+      "cowboy-plugin-js": {
+        "path": "/nix/store/1f1qw5521fmj34q2akcn24l5cj4sxpv4-deno-2.9.7/bin/deno",
+        "sha256": "8941159cce51f5440610e2c83b6d38943e6c64f0941a8d4c628952fff9efad7c"
+      }
+    }
+  },
+  "comparison": {
+    "release": "/nix/store/2rf1w7b7rps36fbn0141d4wd5sl81zcz-cowboy-machine-release",
+    "retainedSource": {
+      "component": "cowboy",
+      "dirty": false,
+      "lane": "machine",
+      "repository": "git@github.com:dravengarden/cowboy.git",
+      "revision": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+      "schema": 1,
+      "sessionDeletionJournal": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "workerGeneration": "worker-9fce17441fdd1e8ca642"
+    },
+    "companions": {
+      "cowboy-acp-worker": {
+        "path": "/nix/store/15g5pm1mdy61jc044rawhafdaqy0kxai-cowboy-0.1.0/bin/cowboy-acp-worker",
+        "sha256": "1c82896e3c01e6f962399bc08248e35d5900fb073f153308017b3962a1dab932"
+      },
+      "cowboy-codex-app-server": {
+        "path": "/nix/store/15g5pm1mdy61jc044rawhafdaqy0kxai-cowboy-0.1.0/bin/cowboy-codex-app-server",
+        "sha256": "8819ea4fcc17b57f4dda534a21bf91690b21c9abd65db2886ac9f32bfae667a7"
+      },
+      "cowboy-code-adapter": {
+        "path": "/nix/store/f1fi47pxhkzc8nxmffw92vain4882jn7-cowboy-code-adapter-0.1.0/bin/cowboy-code-adapter",
+        "sha256": "1880bab737f9af2143a2605a17131839c1b94eb9178dc74291b745652035edae"
+      },
+      "cowboy-zed-adapter": {
+        "path": "/nix/store/z37cw1h6m1z8rnjv7ipaxvx09ab0y3ds-cowboy-zed-adapter-1.20.4/bin/cowboy-zed-adapter",
+        "sha256": "7d30f412bdb2c0af9f5e32d70ecee8f08994a30012c2feec82825afc815f4e04"
+      },
+      "cowboy-zed-server": {
+        "path": "/nix/store/j27dma3v67b3snax2yip1gw19nmm9w66-cowboy-zed-server-x86_64-unknown-linux-musl-1.6.0/bin/cowboy-zed-server",
+        "sha256": "d84c0516b2dc872b2c3ac97a23a972056532249cea7daa6414274fee877014c3"
+      },
+      "cowboy-plugin-js": {
+        "path": "/nix/store/1f1qw5521fmj34q2akcn24l5cj4sxpv4-deno-2.9.7/bin/deno",
+        "sha256": "8941159cce51f5440610e2c83b6d38943e6c64f0941a8d4c628952fff9efad7c"
+      }
+    }
+  },
+  "sourceGate": {
+    "allFeatureTests": 1819,
+    "machineHostTests": 503,
+    "allFeatureIgnored": 50,
+    "machineHostIgnored": 12,
+    "allFeatureClippy": true,
+    "defaultClippy": true,
+    "providerGate": true,
+    "format": true,
+    "timingRetry": "Initial 100ms OTLP first-attempt fixture expired under concurrent builds; focused test and complete gate repeated successfully without code or timeout changes."
+  },
+  "nativeAcceptance": {
+    "codex-coexistence": {
+      "schema_version": 1,
+      "plugin_id": "codex",
+      "plugin_version": "3.3.2",
+      "artifact_digest": "sha256:a833d5b617922fc67938bd5ddf9a43bf9dd928caee2a3242a869014357c3e08f",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "codex",
+          "version": "0.159.3",
+          "artifact_digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+          "status": "passed"
+        },
+        {
+          "command": "codex-acp",
+          "version": "2.1.0",
+          "artifact_digest": "sha256:8ce40a0cb5ff6e15d8fa0972072788cef9cecec3bfaa5fc43f78ab729ca9a708",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.3.1",
+        "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+      },
+      "worker": {
+        "executable_digest": "sha256:e0860fb92547ac7159af4ba61d6c5867075153128575436b8017ffac430ebcde",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    },
+    "claude-coexistence": {
+      "schema_version": 1,
+      "plugin_id": "claude-code",
+      "plugin_version": "3.4.5",
+      "artifact_digest": "sha256:acebb0153651c858b42c35ae93df0ac42fc038125a430a06f7bd35636d5cff49",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "claude",
+          "version": "2.1.287",
+          "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+          "status": "passed"
+        },
+        {
+          "command": "claude-agent-acp",
+          "version": "0.84.0",
+          "artifact_digest": "sha256:60b56f5f0a5ecd7795e911743aaac6c8d1a47bd1ea49db67d50d1bd6e2eeeb57",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.4.4",
+        "artifact_digest": "sha256:51d13bf26ed9a9bfa5359cc08fb8da6034a178f45e501a46f2829128cefb894e"
+      },
+      "worker": {
+        "executable_digest": "sha256:e0860fb92547ac7159af4ba61d6c5867075153128575436b8017ffac430ebcde",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    },
+    "codex-execution": {
+      "schema": "cowboy.execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "long_state_path_uses_private_short_socket",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "provider_refuses_environment_override",
+        "target_image_read_reaches_native_model_input",
+        "background_job_survives_lost_reply_and_35_second_transport_gap",
+        "cancel_reaches_original_target_job_without_replay",
+        "output_backpressure_survives_35_second_transport_gap",
+        "native_apply_patch_and_command_use_target",
+        "runtime_files_unchanged",
+        "native_target_instructions",
+        "cold_native_resume_automatically_rebinds_each_turn",
+        "cold_resume_retains_history_without_effect_replay",
+        "global_environment_config_unchanged",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+        "concurrent_large_input_and_output_do_not_deadlock",
+        "post_flood_commands_and_cancellation_keep_original_executor",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "launcher_sha256": "bb5360dae4551a880220022c248af8a477d3f7713e3236cd56c6d6805ca37738",
+      "packaged_bridge_sha256": "9528b2fe5ea8c9947f48e7a89d6e08c7ef3dea2358f62cb52ea21501f3702153",
+      "packaged_adapter_sha256": "2fa6ed1a85b8e95b5919828200a59c5dd184b88d1e89066cc56fd5c868d4dedf",
+      "scripted_api_requests": 13,
+      "real_model_requests": 0,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "authenticated_enrolled_transport",
+        "cross_host_network",
+        "signed_provider_release",
+        "subscription_inference",
+        "inline_user_attachments",
+        "native_nested_agents"
+      ],
+      "cursor_expirations": 0
+    },
+    "claude-execution": {
+      "schema": "cowboy.claude-execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "native_control_cannot_replace_bound_execution",
+        "module_readiness_uses_no_model_request",
+        "native_tools_use_target_files_and_processes_without_mcp",
+        "runtime_context_and_guidance_are_replaced",
+        "unicode_quotes_crlf_bytes_preserved",
+        "stale_edit_is_refused",
+        "target_image_enters_model_context",
+        "background_cancel_settles",
+        "bounded_large_read_stays_in_target_tool_result",
+        "native_notebook_edit_preserves_metadata",
+        "native_read_observes_retained_task_output",
+        "lost_start_receipt_and_transport_outage_do_not_replay",
+        "cold_native_resume_preserves_context_reads_and_effects",
+        "background_process_handle_survives_native_resume",
+        "real_compaction_and_next_turn_preserve_target_context",
+        "cold_resume_after_compaction_has_no_runtime_file_locators",
+        "independent_native_searches_execute_concurrently",
+        "native_interrupt_stops_foreground_target_process",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "hot_effort_configuration_preserves_bound_execution",
+        "broken_module_refused_before_model_request",
+        "bare_mode_refused_without_changing_authentication",
+        "malformed_result_denies_without_native_fallback",
+        "bridge_error_denies_without_native_fallback",
+        "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+        "concurrent_large_input_and_output_do_not_deadlock",
+        "post_flood_commands_and_cancellation_keep_original_executor",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "claude_version": "2.1.287",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "executor_version": "0.159.3",
+      "packaged_launcher_sha256": "18c51695c82821b8b11ed36a0496c02745de9879962ec96d6f5cbb8c5a673797",
+      "scripted_api_requests": 40,
+      "native_title_requests": 1,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "real_subscription_inference",
+        "cross_host_latency",
+        "native_subagents_and_project_hooks"
+      ],
+      "cursor_expirations": 0
+    },
+    "session-receipt": {
+      "schema": "cowboy.execution-session-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "current_browser_device_login_and_bound_api_credentials",
+        "real_product_setup_login_and_two_signed_machine_handshakes",
+        "signed_fixture_installed_through_public_operator_lifecycle",
+        "runtime_without_projects_is_schedulable_in_browser_machine_inventory",
+        "native_project_registry_cas_and_operator_authorization",
+        "remote_only_policy_enforced_by_legacy_and_native_creation",
+        "placement_needs_no_runtime_project_or_directory_mapping",
+        "public_creation_persists_exact_binding_and_isolated_target_worktree",
+        "worker_tools_cross_both_enrolled_machine_connections",
+        "runtime_and_stable_source_remain_unchanged",
+        "project_removal_retires_new_admission_and_preserves_bound_session_and_files",
+        "controller_restart_retains_binding_and_resumes_original_environment_without_replay",
+        "native_project_registry_and_policy_survive_machine_and_controller_restart",
+        "target_machine_restart_reattaches_original_keeper_without_replay",
+        "public_deletion_waits_for_target_stop_and_preserves_work"
+      ],
+      "inputs": {
+        "controller": {
+          "path": "/nix/store/p5yslgidrz67mdhsfl7s8qa9x3qy371r-cowboy-0.1.0/bin/cowboy",
+          "sha256": "dd3aeab5095d32e512927664293e5af853361a06bd645e44760a6265a50cbe73"
+        },
+        "machine": {
+          "path": "/nix/store/3dj5mpdazymirngk3633l4094dy4sryy-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "dc1ee4bf847ee6e06051a51e622fb7ca8c76c684a0da3efeceb1d6f3e3bf8d56"
+        },
+        "worker": {
+          "path": "/nix/store/2z6hdp0lafhpsykcn7niccyin5ks99vs-cowboy-0.1.0/bin/cowboy-acp-worker",
+          "sha256": "e0860fb92547ac7159af4ba61d6c5867075153128575436b8017ffac430ebcde"
+        },
+        "keeper": {
+          "path": "/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release/bin/cowboy-execution-host",
+          "sha256": "ffc3b17aa71d2b0938bb20d419e7ac89951f1fc6f8fefd312feaaf7582a50860"
+        },
+        "pack": {
+          "path": "/nix/store/3ynf5bnwpdrzv1jka5s7h8hpzr0fsj05-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack",
+          "sha256": "46ca35ee6996bbdf5a1b9eb4474155cc89cda7215e769625312cff4547217980"
+        },
+        "native_cli": {
+          "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+          "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        }
+      },
+      "fixture_release": {
+        "release_schema": 4,
+        "plugin_id": "execution-fixture",
+        "plugin_version": "1.0.0",
+        "artifact_digest": "sha256:62b2f1f2ffa0e136d60c621176ededb022aef7812820ad841d15aff4412483b0"
+      },
+      "harness_sha256": "ad078472cdf2727313990ea968a33095df38a73d3205c23ef088c9a35b8142ca",
+      "real_model_requests": 0,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "native_codex_turns_covered_by_separate_gate",
+        "cross_host_latency",
+        "production_subscription_inference",
+        "external_tls_termination_fixture_uses_trusted_loopback_proxy_boundary"
+      ],
+      "device_fixture_sha256": "187ef0605032f68e6cfc3c72e3c9d6104b47e8526cf9c054a4e7f9dd08bfad47"
+    },
+    "code-receipt": {
+      "schema": "dravengarden.cowboy.code-buffer-connected-conformance/v17",
+      "source_revision": "90ec4edae56349cb06b9f39f13a0086197b5356b",
+      "artifacts": [
+        {
+          "lane": "controller",
+          "role": "supplied",
+          "release": "/nix/store/hmxnw956b36jsisj4qjpkw14nqm41gaw-cowboy-controller-release",
+          "executable": "/nix/store/p5yslgidrz67mdhsfl7s8qa9x3qy371r-cowboy-0.1.0/bin/cowboy",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "controller",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "e4c3ac8ccb2a19d1819b6a13b955340e8f1b93c5",
+            "schema": 1
+          },
+          "source_sha256": "6348acb6594524af137118ac0f3b2920dc886cc4ae41e34b49fbcfc662b552e6",
+          "executable_sha256": "dd3aeab5095d32e512927664293e5af853361a06bd645e44760a6265a50cbe73",
+          "executable_chain": [
+            {
+              "path": "/nix/store/p5yslgidrz67mdhsfl7s8qa9x3qy371r-cowboy-0.1.0/bin/cowboy",
+              "sha256": "dd3aeab5095d32e512927664293e5af853361a06bd645e44760a6265a50cbe73"
+            }
+          ]
+        },
+        {
+          "lane": "machine",
+          "role": "supplied",
+          "release": "/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release",
+          "executable": "/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release/bin/cowboy-machine",
+          "source": {
+            "component": "cowboy",
+            "dirty": false,
+            "lane": "machine",
+            "repository": "git@github.com:dravengarden/cowboy.git",
+            "revision": "90ec4edae56349cb06b9f39f13a0086197b5356b",
+            "schema": 1,
+            "sessionDeletionJournal": {
+              "readerSchema": 1,
+              "writerSchema": 0
+            },
+            "workerGeneration": "worker-dc63f38423cbd1971eda"
+          },
+          "source_sha256": "e79262e242a5f96880875f101f88368089aa7ba45820e4351a5d7069bbc6fcf2",
+          "executable_sha256": "2b55efa5ec846815a5d3b23c044afeed1ccc533992bf79c84adc293c681f1f53",
+          "executable_chain": [
+            {
+              "path": "/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release/bin/cowboy-machine",
+              "sha256": "2b55efa5ec846815a5d3b23c044afeed1ccc533992bf79c84adc293c681f1f53"
+            },
+            {
+              "path": "/nix/store/3dj5mpdazymirngk3633l4094dy4sryy-cowboy-machine-0.1.0/bin/cowboy-machine",
+              "sha256": "dc1ee4bf847ee6e06051a51e622fb7ca8c76c684a0da3efeceb1d6f3e3bf8d56"
+            },
+            {
+              "path": "/nix/store/3dj5mpdazymirngk3633l4094dy4sryy-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+              "sha256": "7f7c7759a02e544bedff63cc4d842decbee75d3243776d41c90bf5bfebcd5f12"
+            }
+          ]
+        }
+      ],
+      "native": [
+        {
+          "path": "/nix/store/z37cw1h6m1z8rnjv7ipaxvx09ab0y3ds-cowboy-zed-adapter-1.20.4/bin/cowboy-zed-adapter",
+          "sha256": "7d30f412bdb2c0af9f5e32d70ecee8f08994a30012c2feec82825afc815f4e04"
+        },
+        {
+          "path": "/nix/store/j27dma3v67b3snax2yip1gw19nmm9w66-cowboy-zed-server-x86_64-unknown-linux-musl-1.6.0/bin/cowboy-zed-server",
+          "sha256": "d84c0516b2dc872b2c3ac97a23a972056532249cea7daa6414274fee877014c3"
+        }
+      ],
+      "core_adapter": {
+        "path": "/nix/store/6aci5yfg24b82dsiahni9s3cdpk70ayj-cowboy-code-adapter-0.1.0/bin/cowboy-code-adapter",
+        "sha256": "a0ed2a83d346159ec3452a5678f1f8ea313093935e24824b84dece1f219c4a58"
+      },
+      "ssh_keygen": {
+        "path": "/nix/store/k1ac1aqh0cb2xxph82l9c19yv32a7lyn-openssh-10.4p1/bin/ssh-keygen",
+        "sha256": "85ba27c28c6bbb4e57395bcd7f7e56774f0d939d235de3603893ccae056d9257"
+      },
+      "git": {
+        "path": "/nix/store/bcnisk3ydfgv26v2gw3zlky24g00yww2-git-2.54.0/bin/git",
+        "sha256": "bb109beeee3d9dc486e3b0749028e18a58572670b283a1092d9fe2034440437e"
+      },
+      "test_lsp": {
+        "path": "/home/draven/.local/state/cowboy-machine/worktrees/sess-1790563075658/plugins/zed/adapter/target/debug/examples/navigation_lsp",
+        "sha256": "d870d5fc1d249205656b87c5f9ae04fa250fb20a89823cf73b78941ed72c650a"
+      },
+      "package_sha256": "e1edad3f6ba10b5dc50bcba5ffdfa5d04b8b06ed123fce12e9b46ab66a856486",
+      "release_sha256": "8951d828fad8bfd7f0e35957d70cde864d84439782540efd21e4604e81d57f2b",
+      "stage": "complete",
+      "checks": [
+        "authenticated_code_installation",
+        "real_login_enrollment_and_effect_free_unready_refusal",
+        "held_real_core_file_reply_is_discarded_after_original_cookie_logout",
+        "machine_owned_root_identity_refuses_a_replaced_advertised_root",
+        "machine_owned_root_aliases_are_readable_before_and_after_replacement",
+        "machine_owned_session_root_discards_real_conditional_reply_after_replacement",
+        "machine_owned_session_root_expires_old_page_without_io_and_allows_fresh_read",
+        "cancelled_http_open_drains_without_replay",
+        "legacy_language_original_login_revocation",
+        "legacy_hover_original_login_revocation",
+        "legacy_navigation_original_login_revocation",
+        "legacy_outline_original_login_revocation",
+        "independent_owners_unicode_content_equality_and_disk_mismatch",
+        "cancelled_read_drains_before_explicit_release_without_closing_peer",
+        "owned_open_original_login_revocation",
+        "owned_query_original_login_revocation",
+        "owned_release_original_login_revocation",
+        "owned_read_failed_reply_original_login_revocation",
+        "navigation_failed_query_original_login_revocation",
+        "lost_real_navigation_execute_reply_original_query_without_replay",
+        "enrolled_protocol21_all_five_navigation_kinds_unicode_original_owner",
+        "explicit_synchronization_authentication_shared_owner_refusal_and_local_fence",
+        "synchronization_failed_query_original_login_revocation",
+        "lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall",
+        "synchronization_retirement_drains_after_cancelled_http_without_replay",
+        "cancelled_destination_observer_handoff_to_ordinary_owner_after_uninstall",
+        "lost_real_parent_release_reply_original_query_without_replay",
+        "native_budget_refusal_lost_reply_original_query_unchanged_text_and_explicit_retirement",
+        "http_uninstall_and_missing_paths_preserve_original_native_reads",
+        "complete_native_destination_text_pages_after_parent_and_path_removal",
+        "destination_content_read_after_parent_release_and_path_removal",
+        "cancelled_release_observed_once_and_independent_owner_retained",
+        "navigation_replacement_connection_and_restart_refuse_adoption",
+        "replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id",
+        "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
+        "bound_session_reads_target_without_runtime_connection_and_fences_unknown_and_replaced_routes",
+        "colocated_reads_execute_here_only_by_permission_and_fence_a_replaced_root",
+        "withdrawing_colocation_permission_routes_the_same_root_to_the_retained_machine"
+      ],
+      "wire": {
+        "connections": 5,
+        "configurations": 5,
+        "protocols": [
+          25,
+          25,
+          25,
+          25,
+          25
+        ],
+        "commands": {
+          "bufferHover": 3,
+          "bufferLanguage": 3,
+          "bufferLeaseContentSupport": 43,
+          "bufferLeaseSupport": 9,
+          "bufferLeaseTextSupport": 2,
+          "bufferNavigate": 3,
+          "bufferSymbols": 3,
+          "codeNavigationDestination": 1,
+          "codeNavigationExecute": 6,
+          "codeNavigationPrepare": 6,
+          "codeNavigationQuery": 9,
+          "codeNavigationRelease": 5,
+          "codeSyncApply": 2,
+          "codeSyncPrepare": 4,
+          "codeSyncQuery": 3,
+          "codeSyncRetire": 2,
+          "coreColocatedFile": 2,
+          "coreFile": 5,
+          "coreManifest": 1,
+          "coreSessionFile": 4,
+          "coreSwapFile": 5,
+          "ensureWorktree": 1,
+          "installationObservation": 1,
+          "installationStep": 1,
+          "openBufferLease": 9,
+          "prepareBuffer": 9,
+          "queryBufferLease": 4,
+          "readBufferLease": 45,
+          "refreshInventory": 2,
+          "releaseBufferLease": 7,
+          "uninstallObservation": 1,
+          "uninstallStep": 1
+        },
+        "session_root_observations": 15,
+        "session_root_verifications": 22,
+        "replies": 239,
+        "held_replies": 22,
+        "discarded_replies": 7,
+        "cuts": 1
+      },
+      "last_http": {
+        "status": 200,
+        "elapsed_ms": 5,
+        "result": "json"
+      },
+      "failure": null,
+      "cleanup": true,
+      "accepted": true,
+      "not_checked": [
+        "production_roles_policies_accounts_installation_and_activation",
+        "review_integration_browser_storage_and_supported_devices",
+        "real_language_implementation_or_atomic_diagnostics_freshness",
+        "dirty_buffer_override_independent_restoration_and_full_destination_view",
+        "abandoned_browser_restart_restoration_and_post_effect_recovery",
+        "agent_authentication_sessions_and_native_worker_generation_upgrade",
+        "physical_power_loss_general_graph_state_leases_and_refactor_completion"
+      ]
+    }
+  },
+  "portableAcceptance": {
+    "anchorCases": 36,
+    "pointerCases": 28,
+    "signedRefreshCases": 5,
+    "signedStartupCases": 9,
+    "cachedStartupCases": 24,
+    "bootstrapOldPackageRefuses": true
+  },
+  "logs": {
+    "portable": {
+      "path": "/tmp/cowboy-anchor-acceptance/portable.log",
+      "sha256": "8d46e096a34a103308a7845542f82d62cf95447f11d8cbcee7d43d70b6879093"
+    },
+    "integratedSourceGate": {
+      "path": "/tmp/cowboy-anchor-recovery-recheck.log",
+      "sha256": "f0aed1631fb2626314d9aa8138bc7b750014a6f35a7b1e85d47fcc15ef17b1d6"
+    },
+    "hostGuardRefusal": {
+      "path": "/tmp/cowboy-anchor-host-guard.log",
+      "sha256": "dbcf13f283d46d041dd905c6dacfb083cc19f4c633edc180823bec4bf3fcbb81"
+    }
+  }
+}

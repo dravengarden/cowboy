@@ -68,3 +68,35 @@ Incoming main changes common dependencies, so the retained-worker interface guar
 must refuse a host-only release. Any full Machine candidate needs separate
 worker/Code maintenance acceptance before activation; source checks alone do not
 accept the new pool generation.
+
+
+The integrated candidate is source `90ec4edae56349cb06b9f39f13a0086197b5356b`,
+full immutable bundle
+`/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release`,
+worker generation `worker-dc63f38423cbd1971eda`. Independent maintenance
+acceptance is recorded in
+[the native receipt](../experiments/plugin-anchor-maintenance-2026-10-04.json):
+Codex and Claude signed generation coexistence and descendant drain passed on the
+exact native worker; native execution passed 22 and 33 checks respectively;
+real public remote-session admission/recovery passed 15 checks; connected Code
+passed 38 checks with cleanup complete and no failure. The worker, app-server
+bridge and core Code adapter differ from the preceding retained bundle. Zed
+adapter/server and JS runtime paths and digests remain equal. This finite local
+acceptance does not claim external target coverage or live Provider upgrades.
+
+The integrated gate passed 1,819 all-feature tests (50 explicit native ignores)
+and 503 Machine-host tests (12 ignores), both Clippy configurations, formatting,
+and the Provider gate. A first run's 100 ms OTLP fixture failed to enter its first
+HTTP attempt under concurrent builds; the focused test and complete gate repeated
+successfully without changing code or timeouts. The exact immutable installer
+passed all 36 anchor-package cases, 28 selection-pointer cases, 5 signed refresh
+cases, 9 signed startup cases, 24 cache-startup cases and the old-package bootstrap
+negative control. These tests use disposable local proof and cache fixtures;
+production floor and cache recovery were not invoked.
+
+Only after this independent acceptance is the retained worker input advanced to
+the accepted candidate. The pinned private source uses native authenticated SSH
+fetching; GitHub's unauthenticated archive returned 404. No credential is copied
+into an artifact. The final host-only artifact must retain all six accepted
+companion paths and digests and carry the candidate's exact retained source.
+Production activation evidence follows after that artifact is built and checked.
