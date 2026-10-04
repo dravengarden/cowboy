@@ -29,6 +29,7 @@ primary phone/desktop product path.
 - [`unattended-release-adoption.md`](unattended-release-adoption.md) — Controller-owned Catalog observation, bounded fallback and shutdown drain; unattended installation intent and host policy remain designs
 - [`plugin-no-effect-resolution.md`](plugin-no-effect-resolution.md) — Independently confirmed, atomic resolution of proven pre-effect uninstall interruptions
 - [`telemetry-binding-resolution.md`](telemetry-binding-resolution.md) — Independently authorized Service binding resolution, schema-two audit reader and closed production admission
+- [`local-observability.md`](local-observability.md) — Host-local OTel storage, retention, bounded remote queries and AI diagnostic commands
 - [`telemetry-machine-recovery.md`](telemetry-machine-recovery.md) — Independently authorized reopened Prepared closure, protocol 17, atomic Machine audit and retained Service fence
 - [`core-security-client-boundary.md`](core-security-client-boundary.md) — Core-owned local authentication UI and typed native Passkey port; storage/SDK migration remains separate
 - [`core-security-storage-bridge.md`](core-security-storage-bridge.md) — Typed core Passkey storage, atomic legacy import and independent ceremony lifetimes; ownership cutover remains separate
@@ -101,6 +102,10 @@ primary phone/desktop product path.
 - [`releases/plugin-bootstrap-startup-authentication-2026-10-04.md`](releases/plugin-bootstrap-startup-authentication-2026-10-04.md) — Retained signed bootstrap evidence and installer-owned verification before publisher code; floor recovery remains closed
 - [`releases/plugin-floored-signed-refresh-2026-10-04.md`](releases/plugin-floored-signed-refresh-2026-10-04.md) — Signed enrolled refresh preserves authenticated floor, anchor and cache selection; missing-cache recovery remains closed
 - [`releases/plugin-floor-selection-recovery-2026-10-04.md`](releases/plugin-floor-selection-recovery-2026-10-04.md) — Explicit offline repair of missing selection pointers to the intact signed floor anchor; lost-anchor recovery remains closed
+- [`releases/plugin-anchor-package-recovery-2026-10-04.md`](releases/plugin-anchor-package-recovery-2026-10-04.md) — Linux restoration of a completely absent anchor from its original floor-bound signed proof and artifact; damaged generations remain untouched
+- [`releases/plugin-anchor-quarantine-recovery-2026-10-04.md`](releases/plugin-anchor-quarantine-recovery-2026-10-04.md) — Explicit original-proof repair with retained damage outside cache pruning
+- [`releases/plugin-cache-streaming-authentication-2026-10-04.md`](releases/plugin-cache-streaming-authentication-2026-10-04.md) — Stream large cached artifacts at startup while preserving signed proof and floor authentication
+- [`releases/plugin-cache-key-input-2026-10-04.md`](releases/plugin-cache-key-input-2026-10-04.md) — Bounded regular publisher-key startup input and immutable key-link/FIFO refusal acceptance
 - [`releases/plugin-portable-reader-floor-2026-10-04.md`](releases/plugin-portable-reader-floor-2026-10-04.md) — Portable monotonic reader floor and retained signed anchor; bootstrap/recovery and committed deletion admission stay closed
 - [`releases/plugin-host-startup-integrity-2026-10-04.md`](releases/plugin-host-startup-integrity-2026-10-04.md) — Offline portable cached-host signature, package and selection checks before exec; committed-state admission and writer remain closed
 - [`releases/plugin-host-cache-integrity-2026-10-04.md`](releases/plugin-host-cache-integrity-2026-10-04.md) — Signed staged Machine host bytes checked before probe and pointer publication; cached startup admission remains closed
@@ -146,6 +151,8 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`cardea-operations.md`](cardea-operations.md) — Human-reviewed exact Plugin
+  installation through the shared Cardea CLI/SDK and Cowboy-owned authority
 - [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
   silent credential renewal, independent device keys, and revocation boundaries
 - [`matrix-memory.md`](matrix-memory.md) — Explicit Matrix enrollment, shared recall/capture, and native memory cutover

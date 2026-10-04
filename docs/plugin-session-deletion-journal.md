@@ -388,3 +388,40 @@ resumed, and complete selection is checked by the normal startup guard. No
 publisher code, Controller request, store repair, floor rewrite or bootstrap
 fallback occurs. Missing/damaged anchor packages, committed deletion state and
 key rotation remain closed; no deletion writer is enabled.
+
+The later [exact anchor package restoration](releases/plugin-anchor-package-recovery-2026-10-04.md)
+adds paired `--anchor-manifest`/`--anchor-artifact` inputs to the explicit recovery
+command on Linux. The supplied canonical signed proof and original artifact digest
+must match the existing floor exactly. Only a completely absent generation can be
+published from a validated private snapshot with atomic no-replace rename; intact
+generations are authenticated idempotently, and damaged/conflicting generations
+are retained without repair. Whole-cache loss and exact dangling anchor pointers
+can then recover to that original anchor. This never selects a new version, changes
+the floor, fetches an unsigned URL, probes publisher code or enables the writer.
+Non-Linux package rebuilding, damaged-generation replacement, key rotation and
+committed deletion admission remain closed.
+
+The subsequent [explicit damaged-anchor quarantine](releases/plugin-anchor-quarantine-recovery-2026-10-04.md)
+adds `--quarantine-damaged-anchor` to that command only with both original evidence
+inputs. Default recovery still refuses damage. The explicit path verifies the
+original proof, stages a complete authenticated replacement and atomically
+exchanges it with a regular damaged anchor directory on Linux. Retained damage
+lives under a private state-level quarantine outside ordinary cache pruning, and
+the successful command reports its path. No damaged bytes or links are executed;
+missing-floor reconstruction, publisher rotation, committed deletion admission,
+non-Linux exchange and writer activation remain closed.
+
+The subsequent [streaming startup verifier](releases/plugin-cache-streaming-authentication-2026-10-04.md)
+removes whole-artifact allocation from ordinary cached startup authentication.
+It hashes the regular artifact before parsing and binds the archive's observed
+compressed stream, including trailing bytes, to a second digest check on the same
+descriptor. Fixed byte buffers preserve valid large-package admission; archive
+path/hash metadata still scales with entry count. Publisher, floor, directory,
+payload and pointer authentication remain unchanged, with no additional recovery
+or deletion-writer authority.
+
+The subsequent [bounded startup key input](releases/plugin-cache-key-input-2026-10-04.md)
+uses recovery's regular-file, no-follow and 16 KiB publisher-key checks for
+ordinary cached startup too. FIFO, key symlink, oversized and invalid UTF-8 inputs
+refuse before cached code execution. This changes no floor, publisher or writer
+authority; configured keys must use regular files, as already required by recovery.

@@ -11,9 +11,16 @@ use crate::machine_protocol::{
 
 use crate::component_proof::{component_proof, component_slot};
 
+mod anchor_recovery;
 mod cached_host;
 mod host_payload;
 
+#[cfg(all(test, target_os = "linux"))]
+mod streaming_tests;
+
+pub(crate) use anchor_recovery::{
+    restore_portable_host_anchor, restore_portable_host_anchor_with_quarantine,
+};
 pub(crate) use cached_host::check_portable_host_cache;
 pub(crate) use cached_host::restore_portable_host_selection;
 
@@ -929,6 +936,541 @@ mod tests {
         floor_selection_recovery_cases(Some(&release)).await;
     }
 
+    #[cfg(target_os = "linux")]
+    fn recovery_tree(path: &Path) -> std::collections::BTreeMap<PathBuf, (u32, Vec<u8>)> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut tree = std::collections::BTreeMap::new();
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return tree;
+        };
+        let bytes = if metadata.is_symlink() {
+            std::fs::read_link(path)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec()
+        } else if metadata.is_file() {
+            Sha256::digest(std::fs::read(path).unwrap()).to_vec()
+        } else {
+            Vec::new()
+        };
+        tree.insert(path.to_path_buf(), (metadata.permissions().mode(), bytes));
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                tree.extend(recovery_tree(&entry.unwrap().path()));
+            }
+        }
+        tree
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn anchor_package_recovery_cases(release: Option<&Path>, quarantine: bool) {
+        for archive in [false, true] {
+            let mut cases = vec![
+                "absent",
+                "dangling",
+                "all-cache",
+                "intact",
+                "partial",
+                "candidate-artifact",
+                "candidate-generation",
+                "candidate-signature",
+                "unknown",
+                "duplicate",
+                "publisher",
+                "floor",
+                "committed",
+                "foreign",
+                "parent-link",
+                "input-link",
+                "artifact-missing",
+                "manifest-oversized",
+            ];
+            if quarantine {
+                cases.extend([
+                    "damaged-payload",
+                    "damaged-manifest",
+                    "damaged-artifact",
+                    "oversized-artifact",
+                    "extra-payload",
+                    "internal-link",
+                    "anchor-link",
+                    "anchor-file",
+                    "quarantine-link",
+                    "quarantine-public",
+                    "quarantine-file",
+                ]);
+            }
+            for case in cases {
+                let state = tempfile::tempdir_in("/tmp").unwrap();
+                let identity =
+                    MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+                let key = state.path().join("publisher.pub");
+                std::fs::write(&key, identity.public_key()).unwrap();
+                let store = ComponentStore::new(
+                    state.path().join("components"),
+                    Some(&key),
+                    "fixture".into(),
+                )
+                .unwrap();
+                let marker = state.path().join("executed");
+                let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display());
+                let bytes = if archive {
+                    host_archive(script.as_bytes(), b"signed companion")
+                } else {
+                    script.as_bytes().to_vec()
+                };
+                let desired = portable_host(
+                    &identity,
+                    serve_once(&bytes).await,
+                    &bytes,
+                    "anchor",
+                    archive,
+                    true,
+                );
+                store.reconcile(desired.clone()).await.unwrap();
+                std::fs::remove_file(&marker).unwrap();
+                let generation = store
+                    .root
+                    .join("active/machine_host")
+                    .canonicalize()
+                    .unwrap();
+                let manifest = state.path().join("saved-manifest.json");
+                let artifact = state.path().join("saved-artifact");
+                std::fs::copy(generation.join("manifest.json"), &manifest).unwrap();
+                std::fs::copy(generation.join("artifact"), &artifact).unwrap();
+                let floor_path = state
+                    .path()
+                    .join(crate::session_deletion_admission::reader_floor::NAME);
+                let original_floor = std::fs::read(&floor_path).unwrap();
+                if !matches!(
+                    case,
+                    "intact"
+                        | "damaged-payload"
+                        | "damaged-manifest"
+                        | "damaged-artifact"
+                        | "oversized-artifact"
+                        | "extra-payload"
+                        | "internal-link"
+                ) {
+                    std::fs::remove_dir_all(&generation).unwrap();
+                }
+                if !matches!(
+                    case,
+                    "dangling"
+                        | "intact"
+                        | "damaged-payload"
+                        | "damaged-manifest"
+                        | "damaged-artifact"
+                        | "oversized-artifact"
+                        | "extra-payload"
+                        | "internal-link"
+                ) {
+                    std::fs::remove_file(store.root.join("active/machine_host")).unwrap();
+                    std::fs::remove_file(store.command_path("cowboy-machine")).unwrap();
+                }
+                if quarantine
+                    && !matches!(
+                        case,
+                        "absent"
+                            | "dangling"
+                            | "all-cache"
+                            | "intact"
+                            | "partial"
+                            | "damaged-payload"
+                            | "damaged-manifest"
+                            | "damaged-artifact"
+                            | "oversized-artifact"
+                            | "extra-payload"
+                            | "internal-link"
+                            | "anchor-link"
+                            | "anchor-file"
+                            | "quarantine-link"
+                            | "quarantine-public"
+                            | "quarantine-file"
+                    )
+                {
+                    std::fs::create_dir(&generation).unwrap();
+                    std::fs::write(generation.join("artifact"), b"retained damage").unwrap();
+                }
+                let quarantine_root = state.path().join("component-anchor-quarantine");
+                match case {
+                    "damaged-payload" => {
+                        std::fs::write(
+                            component_executable(&generation, &desired).unwrap(),
+                            b"retained damaged executable",
+                        )
+                        .unwrap();
+                    }
+                    "damaged-manifest" => {
+                        std::fs::write(generation.join("manifest.json"), b"{}").unwrap();
+                    }
+                    "extra-payload" => {
+                        if archive {
+                            std::fs::write(
+                                generation.join("content/unexpected"),
+                                vec![0; 512 * 1024],
+                            )
+                            .unwrap();
+                        } else {
+                            std::fs::write(generation.join("bin"), b"retained damage").unwrap();
+                        }
+                    }
+                    "oversized-artifact" => {
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(generation.join("artifact"))
+                            .unwrap()
+                            .set_len(64 * 1024 * 1024)
+                            .unwrap();
+                    }
+                    "damaged-artifact" => {
+                        std::fs::write(generation.join("artifact"), b"retained damaged artifact")
+                            .unwrap();
+                    }
+                    "internal-link" => {
+                        std::fs::remove_file(component_executable(&generation, &desired).unwrap())
+                            .unwrap();
+                        std::os::unix::fs::symlink(
+                            state.path().join("external-evidence"),
+                            component_executable(&generation, &desired).unwrap(),
+                        )
+                        .unwrap();
+                        std::fs::write(
+                            state.path().join("external-evidence"),
+                            b"must remain untouched",
+                        )
+                        .unwrap();
+                    }
+                    "anchor-link" => {
+                        std::os::unix::fs::symlink(
+                            state.path().join("external-anchor"),
+                            &generation,
+                        )
+                        .unwrap();
+                    }
+                    "anchor-file" => {
+                        std::fs::write(&generation, b"not a directory").unwrap();
+                    }
+                    "quarantine-link" | "quarantine-public" | "quarantine-file" => {
+                        std::fs::create_dir(&generation).unwrap();
+                        std::fs::write(generation.join("artifact"), b"retained damage").unwrap();
+                        if case == "quarantine-link" {
+                            std::os::unix::fs::symlink(
+                                state.path().join("external-quarantine"),
+                                &quarantine_root,
+                            )
+                            .unwrap();
+                        } else if case == "quarantine-file" {
+                            std::fs::write(&quarantine_root, b"not a directory").unwrap();
+                        } else {
+                            use std::os::unix::fs::PermissionsExt as _;
+                            std::fs::create_dir(&quarantine_root).unwrap();
+                            std::fs::set_permissions(
+                                &quarantine_root,
+                                std::fs::Permissions::from_mode(0o755),
+                            )
+                            .unwrap();
+                        }
+                    }
+
+                    "all-cache" => std::fs::remove_dir_all(&store.root).unwrap(),
+                    "partial" => {
+                        std::fs::create_dir(&generation).unwrap();
+                        std::fs::write(generation.join("artifact"), b"retained damage").unwrap();
+                    }
+                    "candidate-artifact" => std::fs::write(&artifact, b"tampered").unwrap(),
+                    "candidate-generation" | "candidate-signature" => {
+                        let mut changed = desired.clone();
+                        if case == "candidate-generation" {
+                            changed.generation = "replacement".into();
+                        } else {
+                            changed.signature = Some("invalid".into());
+                        }
+                        std::fs::write(&manifest, serde_json::to_vec(&changed).unwrap()).unwrap();
+                    }
+                    "unknown" | "duplicate" => {
+                        let original = std::fs::read_to_string(&manifest).unwrap();
+                        let inserted = if case == "unknown" {
+                            "{\"unexpected\":true,"
+                        } else {
+                            "{\"version\":\"duplicate\","
+                        };
+                        std::fs::write(&manifest, original.replacen('{', inserted, 1)).unwrap();
+                    }
+                    "publisher" => {
+                        let wrong =
+                            MachineIdentity::load_or_create(&state.path().join("wrong")).unwrap();
+                        std::fs::write(&key, wrong.public_key()).unwrap();
+                    }
+                    "floor" => std::fs::write(&floor_path, b"{}").unwrap(),
+                    "committed" => {
+                        std::fs::create_dir_all(state.path().join("session-deletions")).unwrap();
+                        std::fs::write(
+                            state.path().join("session-deletions/deletions.json"),
+                            b"{}",
+                        )
+                        .unwrap();
+                    }
+                    "foreign" => std::os::unix::fs::symlink(
+                        state.path().join("foreign"),
+                        store.root.join("active/machine_host"),
+                    )
+                    .unwrap(),
+                    "parent-link" => {
+                        std::fs::rename(store.root.join("payloads"), state.path().join("outside"))
+                            .unwrap();
+                        std::os::unix::fs::symlink(
+                            state.path().join("outside"),
+                            store.root.join("payloads"),
+                        )
+                        .unwrap();
+                    }
+                    "input-link" => {
+                        std::fs::rename(&artifact, state.path().join("outside-input")).unwrap();
+                        std::os::unix::fs::symlink(state.path().join("outside-input"), &artifact)
+                            .unwrap();
+                    }
+                    "artifact-missing" => std::fs::remove_file(&artifact).unwrap(),
+                    "manifest-oversized" => std::fs::write(&manifest, vec![b' '; 65537]).unwrap(),
+                    _ => {}
+                }
+                let original_tree = recovery_tree(&store.root);
+                let original_state = recovery_tree(state.path());
+                let damage_tree = recovery_tree(&generation);
+                let normalize = |tree: std::collections::BTreeMap<PathBuf, (u32, Vec<u8>)>,
+                                 base: &Path| {
+                    tree.into_iter()
+                        .map(|(p, v)| (p.strip_prefix(base).unwrap().to_path_buf(), v))
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                };
+                let original_damage = normalize(damage_tree, &generation);
+                let floor_bytes = std::fs::read(&floor_path).unwrap();
+                let admitted = matches!(case, "absent" | "dangling" | "all-cache" | "intact")
+                    || (quarantine
+                        && matches!(
+                            case,
+                            "partial"
+                                | "damaged-payload"
+                                | "damaged-manifest"
+                                | "damaged-artifact"
+                                | "oversized-artifact"
+                                | "extra-payload"
+                                | "internal-link"
+                        ));
+                if quarantine
+                    && admitted
+                    && !matches!(case, "absent" | "dangling" | "all-cache" | "intact")
+                {
+                    assert!(
+                        restore_portable_host_anchor(state.path(), &key, &manifest, &artifact)
+                            .is_err()
+                    );
+                    assert_eq!(recovery_tree(state.path()), original_state);
+                }
+                if let Some(release) = release {
+                    let old = PathBuf::from(
+                        std::env::var(if quarantine {
+                            "COWBOY_TEST_PORTABLE_PRE_QUARANTINE_RELEASE"
+                        } else {
+                            "COWBOY_TEST_PORTABLE_PRE_ANCHOR_RELEASE"
+                        })
+                        .unwrap(),
+                    );
+                    let negative =
+                        tokio::process::Command::new(old.join("bin/cowboy-machine-install"))
+                            .args(["--restore-floor-selection", "--state-dir"])
+                            .arg(state.path())
+                            .arg("--artifact-public-key")
+                            .arg(&key)
+                            .arg("--anchor-manifest")
+                            .arg(&manifest)
+                            .arg("--anchor-artifact")
+                            .arg(&artifact)
+                            .args(if quarantine {
+                                vec!["--quarantine-damaged-anchor"]
+                            } else {
+                                vec![]
+                            })
+                            .output()
+                            .await
+                            .unwrap();
+                    assert!(!negative.status.success());
+                    assert_eq!(recovery_tree(&store.root), original_tree);
+                    let output =
+                        tokio::process::Command::new(release.join("bin/cowboy-machine-install"))
+                            .args(["--restore-floor-selection", "--state-dir"])
+                            .arg(state.path())
+                            .arg("--artifact-public-key")
+                            .arg(&key)
+                            .arg("--anchor-manifest")
+                            .arg(&manifest)
+                            .arg("--anchor-artifact")
+                            .arg(&artifact)
+                            .args(if quarantine {
+                                vec!["--quarantine-damaged-anchor"]
+                            } else {
+                                vec![]
+                            })
+                            .output()
+                            .await
+                            .unwrap();
+                    assert_eq!(
+                        output.status.success(),
+                        admitted,
+                        "{archive}/{case}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    if quarantine && admitted {
+                        let receipt: serde_json::Value =
+                            serde_json::from_slice(&output.stdout).unwrap();
+                        assert_eq!(receipt["writer"], false);
+                        if matches!(
+                            case,
+                            "partial"
+                                | "damaged-payload"
+                                | "damaged-manifest"
+                                | "damaged-artifact"
+                                | "oversized-artifact"
+                                | "extra-payload"
+                                | "internal-link"
+                        ) {
+                            let retained = PathBuf::from(receipt["quarantine"].as_str().unwrap());
+                            assert_eq!(retained.parent(), Some(quarantine_root.as_path()));
+                        } else {
+                            assert!(receipt.get("quarantine").is_none());
+                        }
+                    }
+                } else {
+                    let restored = (if quarantine {
+                        restore_portable_host_anchor_with_quarantine(
+                            state.path(),
+                            &key,
+                            &manifest,
+                            &artifact,
+                        )
+                        .map(|_| ())
+                    } else {
+                        restore_portable_host_anchor(state.path(), &key, &manifest, &artifact)
+                    })
+                    .and_then(|()| restore_portable_host_selection(state.path(), &key));
+                    assert_eq!(restored.is_ok(), admitted, "{archive}/{case}: {restored:?}");
+                }
+                assert_eq!(std::fs::read(&floor_path).unwrap(), floor_bytes);
+                assert!(!marker.exists());
+                if admitted {
+                    assert_eq!(floor_bytes, original_floor);
+                    assert_eq!(std::fs::read(generation.join("artifact")).unwrap(), bytes);
+                    let quarantine_tree = recovery_tree(&quarantine_root);
+                    if quarantine
+                        && matches!(
+                            case,
+                            "partial"
+                                | "damaged-payload"
+                                | "damaged-manifest"
+                                | "damaged-artifact"
+                                | "oversized-artifact"
+                                | "extra-payload"
+                                | "internal-link"
+                        )
+                    {
+                        let paths = std::fs::read_dir(&quarantine_root)
+                            .unwrap()
+                            .map(|e| e.unwrap().path())
+                            .collect::<Vec<_>>();
+                        assert_eq!(paths.len(), 1);
+                        assert_eq!(
+                            normalize(recovery_tree(&paths[0]), &paths[0]),
+                            original_damage
+                        );
+                        // Normal cache pruning must never enter retained quarantine.
+                        std::fs::create_dir_all(store.root.join("rollback")).unwrap();
+                        store.prune().unwrap();
+                        assert_eq!(recovery_tree(&quarantine_root), quarantine_tree);
+                    } else {
+                        assert!(quarantine_tree.is_empty());
+                    }
+                    let restored_tree = recovery_tree(&store.root);
+                    if let Some(release) = release {
+                        let repeated = tokio::process::Command::new(
+                            release.join("bin/cowboy-machine-install"),
+                        )
+                        .args(["--restore-floor-selection", "--state-dir"])
+                        .arg(state.path())
+                        .arg("--artifact-public-key")
+                        .arg(&key)
+                        .arg("--anchor-manifest")
+                        .arg(&manifest)
+                        .arg("--anchor-artifact")
+                        .arg(&artifact)
+                        .args(if quarantine {
+                            vec!["--quarantine-damaged-anchor"]
+                        } else {
+                            vec![]
+                        })
+                        .output()
+                        .await
+                        .unwrap();
+                        assert!(repeated.status.success());
+                        let diagnostic =
+                            tokio::process::Command::new(release.join("bin/cowboy-machine"))
+                                .args(["--check-portable-session-deletion", "--state-dir"])
+                                .arg(state.path())
+                                .arg("--artifact-public-key")
+                                .arg(&key)
+                                .output()
+                                .await
+                                .unwrap();
+                        assert!(diagnostic.status.success());
+                    } else {
+                        restore_portable_host_anchor(state.path(), &key, &manifest, &artifact)
+                            .unwrap();
+                        restore_portable_host_selection(state.path(), &key).unwrap();
+                    }
+                    assert_eq!(recovery_tree(&store.root), restored_tree);
+                    assert_eq!(recovery_tree(&quarantine_root), quarantine_tree);
+                    check_portable_host_cache(state.path(), Some(&key)).unwrap();
+                } else {
+                    assert_eq!(recovery_tree(state.path()), original_state);
+                    assert_eq!(
+                        recovery_tree(&store.root),
+                        original_tree,
+                        "{archive}/{case}: refused recovery modified evidence"
+                    );
+                }
+                assert!(!marker.exists());
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn anchor_package_recovery_binds_original_proof_and_never_replaces_damage() {
+        anchor_package_recovery_cases(None, false).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires exact current and preceding immutable Machine releases"]
+    async fn immutable_anchor_package_recovery_uses_original_floor_proof_without_executing_code() {
+        let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
+        anchor_package_recovery_cases(Some(&release), false).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn anchor_quarantine_recovery_preserves_damage_and_refuses_unsafe_destinations() {
+        anchor_package_recovery_cases(None, true).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires exact current and preceding immutable Machine releases"]
+    async fn immutable_anchor_quarantine_recovery_preserves_damage_without_executing_code() {
+        let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
+        anchor_package_recovery_cases(Some(&release), true).await;
+    }
+
     #[tokio::test]
     async fn anchor_corruption_or_probe_floor_removal_refuses_without_pointer_changes() {
         use crate::session_deletion_admission::reader_floor::{self, NAME};
@@ -1214,10 +1756,43 @@ mod tests {
         }
     }
 
+    fn replace_publisher_key_fixture(key: &Path, case: &str) {
+        match case {
+            "key-link" => {
+                let retained = key.with_extension("retained");
+                std::fs::rename(key, &retained).unwrap();
+                std::os::unix::fs::symlink(retained, key).unwrap();
+            }
+            "key-fifo" => {
+                std::fs::remove_file(key).unwrap();
+                rustix::fs::mkfifoat(
+                    rustix::fs::CWD,
+                    key,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .unwrap();
+            }
+            "key-oversized" => {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(key)
+                    .unwrap()
+                    .set_len(16 * 1024 + 1)
+                    .unwrap();
+            }
+            "key-invalid-utf8" => std::fs::write(key, [0xff]).unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
     #[tokio::test]
     async fn cached_host_authentication_is_offline_read_only_and_refuses_substitution() {
         for archive in [false, true] {
             for case in [
+                "key-link",
+                "key-fifo",
+                "key-oversized",
+                "key-invalid-utf8",
                 "bytes",
                 "manifest",
                 "artifact",
@@ -1271,6 +1846,9 @@ mod tests {
                 std::fs::write(&wrong, other_key.public_key()).unwrap();
                 assert!(check_portable_host_cache(state.path(), Some(&wrong)).is_err());
                 match case {
+                    "key-link" | "key-fifo" | "key-oversized" | "key-invalid-utf8" => {
+                        replace_publisher_key_fixture(&key, case);
+                    }
                     "bytes" => {
                         let path = if archive {
                             generation.join("content/lib/companion")
@@ -1404,9 +1982,14 @@ mod tests {
         );
         let native = release.join("bin/cowboy-machine");
         assert!(native.is_file());
+        let mut observations = Vec::new();
         for archive in [false, true] {
             for case in [
                 "healthy",
+                "key-link",
+                "key-fifo",
+                "key-oversized",
+                "key-invalid-utf8",
                 "bytes",
                 "manifest",
                 "artifact",
@@ -1541,6 +2124,9 @@ mod tests {
                 std::fs::write(&bootstrap, format!("#!/bin/sh\nif [ \"${{1-}}\" = --check-portable-session-deletion ]; then exec '{}' \"$@\"; fi\ntouch '{}'\n", native.display(), fallback.display())).unwrap();
                 set_executable(&bootstrap).unwrap();
                 match case {
+                    "key-link" | "key-fifo" | "key-oversized" | "key-invalid-utf8" => {
+                        replace_publisher_key_fixture(&key, case);
+                    }
                     "healthy" | "floor-healthy" | "floor-absent" | "floor-legacy"
                     | "floor-corrupt" | "floor-anchor" => {}
                     "bytes" => {
@@ -1581,17 +2167,53 @@ mod tests {
                     }
                     _ => unreachable!(),
                 }
+                let preceding = if matches!(case, "key-link" | "key-fifo")
+                    && std::env::var_os("COWBOY_TEST_PORTABLE_PRE_KEY_RELEASE").is_some()
+                {
+                    let old = PathBuf::from(
+                        std::env::var("COWBOY_TEST_PORTABLE_PRE_KEY_RELEASE")
+                            .expect("preceding key reader release required"),
+                    );
+                    let output = tokio::process::Command::new("timeout")
+                        .args(["--kill-after=2s", "2s"])
+                        .arg(old.join("bin/cowboy-machine"))
+                        .args(["--check-portable-session-deletion", "--state-dir"])
+                        .arg(state.path())
+                        .arg("--artifact-public-key")
+                        .arg(&key)
+                        .output()
+                        .await
+                        .unwrap();
+                    if case == "key-link" {
+                        assert!(output.status.success(), "preceding reader refused key link");
+                    } else {
+                        assert_eq!(
+                            output.status.code(),
+                            Some(124),
+                            "preceding FIFO did not block"
+                        );
+                    }
+                    Some(output.status.code())
+                } else {
+                    None
+                };
                 let launcher = state.path().join("launcher");
                 std::fs::write(
                     &launcher,
                     crate::machine_install::portable_cache_launcher_fixture(state.path(), &key),
                 )
                 .unwrap();
-                let output = tokio::process::Command::new("/bin/sh")
+                let output = tokio::process::Command::new("timeout")
+                    .args(["--kill-after=2s", "10s", "/bin/sh"])
                     .arg(&launcher)
                     .output()
                     .await
                     .unwrap();
+                assert_ne!(
+                    output.status.code(),
+                    Some(124),
+                    "{archive}/{case}: startup hung"
+                );
                 assert_eq!(
                     output.status.success(),
                     matches!(case, "healthy" | "floor-healthy"),
@@ -1604,12 +2226,29 @@ mod tests {
                     "{archive}/{case}: selected code executed"
                 );
                 assert!(!fallback.exists(), "{archive}/{case}: fallback executed");
+                observations.push(serde_json::json!({
+                    "format": if archive { "tar_gz" } else { "raw" },
+                    "case": case, "exitCode": output.status.code(),
+                    "precedingExitCode": preceding,
+                    "selectedExecuted": selected.exists(), "fallbackExecuted": false,
+                }));
                 assert_eq!(
                     state.path().join("run").exists(),
                     matches!(case, "healthy" | "floor-healthy"),
                     "refusal created runtime directory"
                 );
             }
+        }
+        if let Ok(path) = std::env::var("COWBOY_TEST_CACHE_KEY_RECEIPT") {
+            std::fs::write(
+                path,
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema": 1, "accepted": true, "release": release,
+                    "observations": observations,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
         }
     }
 

@@ -14,7 +14,7 @@ impl Effects for CheckedEffects<'_> {
     async fn needs_auth_sync(&self, before: bool) -> bool {
         self.inner.needs_auth_sync(before).await
     }
-    async fn sync_auth(&self) -> bool {
+    async fn sync_auth(&self, before_install: bool) -> bool {
         let op = self
             .store
             .plugin_install_operation(&self.intent.operation_id)
@@ -29,7 +29,7 @@ impl Effects for CheckedEffects<'_> {
                 InstallPhase::MachineAcknowledged
             }
         );
-        self.inner.sync_auth().await
+        self.inner.sync_auth(before_install).await
     }
     async fn install(&self, step: &InstallStep) -> Result<InstallObservation, CommandRequestError> {
         assert_eq!(

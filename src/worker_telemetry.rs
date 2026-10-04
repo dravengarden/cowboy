@@ -12,6 +12,7 @@ struct Active {
 
 #[derive(Default)]
 pub(crate) struct WorkerTelemetry {
+    local_active: Option<(Option<String>, std::time::Instant)>,
     queued: BTreeMap<String, SpanTimer>,
     active: Option<Active>,
     completed: VecDeque<SpanRecord>,
@@ -46,6 +47,21 @@ impl WorkerTelemetry {
     }
 
     pub(crate) fn started(&mut self, cmid: Option<&str>) {
+        if self
+            .local_active
+            .replace((cmid.map(str::to_owned), std::time::Instant::now()))
+            .is_some()
+        {
+            tracing::warn!(
+                event_name = "cowboy.worker.prompt_interrupted",
+                reason = "replaced_active_rpc",
+                "previous prompt completion was not observed"
+            );
+        }
+        tracing::info!(
+            event_name = "cowboy.worker.prompt_started",
+            "ACP prompt started"
+        );
         // The ACP prompt lock serializes real starts. A missing context must
         // clear previous attribution as well, including an untraced turn.
         if let Some(active) = self.active.take() {
@@ -70,6 +86,35 @@ impl WorkerTelemetry {
     }
 
     pub(crate) fn completed(&mut self, cmid: Option<&str>, reason: &str) {
+        if self
+            .local_active
+            .as_ref()
+            .is_some_and(|(id, _)| id.as_deref() == cmid)
+            && let Some((_, started)) = self.local_active.take()
+        {
+            let outcome = if reason.eq_ignore_ascii_case("error") {
+                "error"
+            } else if reason.eq_ignore_ascii_case("cancelled") {
+                "cancelled"
+            } else {
+                "ok"
+            };
+            if outcome == "error" {
+                tracing::warn!(
+                    event_name = "cowboy.worker.prompt_finished",
+                    reason = outcome,
+                    duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "ACP prompt failed"
+                );
+            } else {
+                tracing::info!(
+                    event_name = "cowboy.worker.prompt_finished",
+                    reason = outcome,
+                    duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "ACP prompt finished"
+                );
+            }
+        }
         let outcome = if reason.eq_ignore_ascii_case("cancelled") {
             Outcome::Cancelled
         } else if reason.eq_ignore_ascii_case("error") {
@@ -108,6 +153,14 @@ impl WorkerTelemetry {
                 ..
             }
         ) {
+            if let Some((_, started)) = self.local_active.take() {
+                tracing::warn!(
+                    event_name = "cowboy.worker.prompt_lost",
+                    reason = "worker_exit",
+                    duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "worker exited during ACP prompt"
+                );
+            }
             if let Some(active) = self.active.take() {
                 self.push(active.prompt.finish(Outcome::Error));
             }

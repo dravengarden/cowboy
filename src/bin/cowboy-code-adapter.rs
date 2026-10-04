@@ -16,9 +16,19 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
     let args = Args::parse();
-    cowboy::code_adapter::serve(&args.socket, args.workspaces).await
+    let root = args
+        .socket
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("adapter socket needs a parent"))?;
+    let logs = cowboy::logs::init(
+        cowboy::logs::directory(root),
+        cowboy::logs::Context {
+            service: "cowboy-code-adapter".into(),
+            machine: std::env::var("COWBOY_LOGS_MACHINE_ID").unwrap_or_default(),
+            ..Default::default()
+        },
+    )?
+    .track_outcome();
+    logs.finish(cowboy::code_adapter::serve(&args.socket, args.workspaces).await)
 }

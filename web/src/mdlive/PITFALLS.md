@@ -2746,3 +2746,25 @@ Desktop Vim + IME checks:
     the physical iPhone caret issue in #69 remains open. Browser acceptance uses
     the real product theme, editor and command dispatcher at 320–1560px, enlarged
     fonts, both themes, focus transfer, IME holds and menu ownership.
+
+114. **Desktop Queue/Drafts are disclosure rails, not another input card.**
+    This optimization is Desktop-only, per the user's explicit correction on
+    2026-10-04: "我只是让你优化 desktop，没让你改 mobile 啊". Desktop uses a
+    quiet divider, paint-only focus feedback, 32px rail, separate count and
+    width-dependent shortcut hints; reorder appears after expansion. Mobile
+    keeps its established framed/tinted cards, count-first wording, gutters,
+    chevron width, icon sizing and collapsed reorder access. Preserve exclusive
+    accordion, dirty-edit confirmation and floating keyboard editor ownership.
+    No CM6, IME, caret, attachment or swipe recognizer changes. Browser checks
+    cover both themes, 320–1200px and enlarged fonts, including Mobile restoration;
+    physical iPhone acceptance is not established by them, and #69 remains open.
+
+115. **Desktop draft destinations use the Sessions tree.** Mount the live
+    destination subscription only while the Desktop dialog is open, so other
+    agents' status updates cannot repaint the active writing canvas. Reuse
+    `buildSessionTree`, `displayedSessionOrder`, explicit Global placement and
+    project bindings; directories disclose sessions, never receive a draft
+    themselves. Search includes folder ancestry and stable project context;
+    generated execution paths remain in tooltips. Keep IME ownership of candidate
+    arrows, id-based selection, and source-session exclusion. Mobile keeps its
+    existing picker. No editor, native keyboard or image/caret code changes.

@@ -484,12 +484,16 @@ telemetry-victoria-conformance MATRIX DATABASES RECEIPT:
 provider-release-coverage CATALOG:
     deno run --allow-read --allow-run=sha256sum tools/check-provider-release-coverage.ts "{{CATALOG}}"
 
+# Cheap Remote Claude feedback before building an upstream upgrade candidate.
+claude-remote-check:
+    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs
+    deno fmt --check plugins/claude-code/runtime
+    deno fmt --check tools/claude-remote-routing.test.mjs
+    deno check plugins/claude-code/runtime/build.ts
+
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
-provider-check: plugin-check
-    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs
-    deno fmt --check plugins/claude-code/runtime
-    deno check plugins/claude-code/runtime/build.ts
+provider-check: claude-remote-check plugin-check
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/source.json
     deno check plugins/codex/runtime/build.ts
@@ -589,7 +593,13 @@ test:
 test-postgres:
     bash tools/test-postgres.sh
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres logs-conformance build
+
+# Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
+# An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
+logs-conformance:
+    cargo build --locked --bin cowboy
+    python3 tools/logs_conformance.py --cowboy target/debug/cowboy --receipt target/logs-conformance.json
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

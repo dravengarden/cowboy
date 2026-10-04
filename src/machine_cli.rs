@@ -341,14 +341,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     // SQLx first. Make the shared TLS provider explicit instead of depending
     // on another subsystem's initialization order.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    crate::logs::init_stderr();
     let args =
         Args::parse_from(std::iter::once(command_name.to_owned()).chain(std::env::args().skip(1)));
     run_args(args).await
@@ -447,9 +440,18 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     );
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
-    let worker_environment = managed_provider_environment(&components, &worker_command)?;
+    let log_directory = crate::logs::directory(&args.state_dir);
+    let mut log_context = crate::logs::Context::new("cowboy-machine");
+    log_context.machine = resolve_runtime_machine_id(&args.machine_id, &args.state_dir, None);
+    log_context.generation = desired_generation.clone();
+    let log_guard = crate::logs::init(log_directory.clone(), log_context)?.track_outcome();
+    let mut worker_environment = managed_provider_environment(&components, &worker_command)?;
+    worker_environment.insert(
+        "COWBOY_LOGS_DIR".into(),
+        log_directory.display().to_string(),
+    );
     let worktree_root = args.state_dir.join("worktrees");
-    let broker = MachineBrokerArgs {
+    let mut broker = MachineBrokerArgs {
         socket: args.socket,
         worker_command,
         desired_generation,
@@ -512,6 +514,10 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         &args.state_dir,
         enrolled_machine_id.as_deref(),
     );
+    log_guard.set_machine(&machine_id)?;
+    broker
+        .worker_environment
+        .insert("COWBOY_LOGS_MACHINE_ID".into(), machine_id.clone());
     let code_adapter_socket = args.code_adapter_socket.clone();
     let zed_adapter_socket = args.zed_adapter_socket.clone();
     let provider_usage = crate::provider_usage_spool::ProviderUsageSpool::open(
@@ -571,13 +577,15 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         args.state_dir.join("bootstrap/cowboy-code-adapter"),
         args.state_dir.join("worktrees"),
         Arc::clone(&workspaces),
+        log_directory,
+        machine_id.clone(),
     );
     let zed_adapter = supervise_zed_adapter(
         Arc::clone(&components),
         zed_adapter_socket,
         args.state_dir.join("zed"),
     );
-    tokio::try_join!(
+    let result = tokio::try_join!(
         crate::machine_broker::run_with_deletion_reader(
             broker,
             args.state_dir.join("session-deletions"),
@@ -590,8 +598,9 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         provider_usage_listener,
         code_adapter,
         zed_adapter
-    )?;
-    Ok(())
+    )
+    .map(|_| ());
+    log_guard.finish(result)
 }
 
 fn managed_provider_environment(
@@ -849,6 +858,8 @@ async fn supervise_code_adapter(
     bootstrap: PathBuf,
     worktree_root: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
+    logs: PathBuf,
+    machine_id: String,
 ) -> anyhow::Result<()> {
     let Some(socket) = socket else {
         return std::future::pending().await;
@@ -863,6 +874,9 @@ async fn supervise_code_adapter(
         let workspace_snapshot = workspaces.snapshot();
         let mut process = tokio::process::Command::new(&executable);
         process.arg("--socket").arg(&socket);
+        process
+            .env("COWBOY_LOGS_DIR", &logs)
+            .env("COWBOY_LOGS_MACHINE_ID", &machine_id);
         for root in code_adapter_trusted_roots(&worktree_root, &workspace_snapshot.workspaces) {
             process.arg("--workspace").arg(root);
         }

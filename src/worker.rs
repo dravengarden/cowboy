@@ -96,7 +96,8 @@ impl Shared {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         self.apply_snapshot_event(seq, &event);
         let diagnostics = self.telemetry.lock().event(&event);
-        if !diagnostics.is_empty() {
+        crate::logs::runtime_spans(&self.session_id, &diagnostics);
+        if crate::logs::forward_runtime() && !diagnostics.is_empty() {
             let mut traces = self.trace_outbox.lock();
             if traces.len() < 128 {
                 traces.insert(seq, diagnostics);

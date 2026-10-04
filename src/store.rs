@@ -35,6 +35,7 @@ use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 mod browser_devices;
+mod cardea_operations;
 mod copy;
 mod core_security;
 pub(crate) use core_security::HandoffPoint;

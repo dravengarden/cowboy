@@ -1,3 +1,5 @@
+import { checkDraftDestinationDialog } from "./desktop/draftDestinationBrowserConformance";
+import { checkPendingPanelLayout } from "./pendingPanelBrowserConformance";
 import { createRef, StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -457,6 +459,8 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(
       "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
     );
+    results.push(await checkPendingPanelLayout());
+    results.push(await checkDraftDestinationDialog());
     return results;
   } finally {
     clearImeStatus();

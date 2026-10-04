@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
+#[cfg(feature = "full")]
+pub(crate) mod cardea;
 
 #[derive(Parser)]
 #[command(
@@ -22,6 +24,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Query, aggregate and analyze `OTel` evidence where it is stored.
+    Logs(Box<crate::logs::cli::LogsArgs>),
     /// Run the cowboy daemon (HTTP + WebSocket). The long-running systemd
     /// service that owns the Hub + supervisor; every surface (Web UI, phone,
     /// native shell) connects to it as a client.
@@ -37,6 +41,12 @@ enum Command {
     /// Operate the Controller through its explicitly enabled private host endpoint.
     #[cfg(all(feature = "full", unix))]
     Operator(crate::local_operator::OperatorArgs),
+    /// Offline Cardea catalog preparation; human activation remains required.
+    #[cfg(feature = "full")]
+    Cardea {
+        #[command(subcommand)]
+        command: cardea::Command,
+    },
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     #[cfg(feature = "full")]
     TryAgent(TryAgentArgs),
@@ -366,6 +376,20 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_TELEMETRY_DIR")]
     pub telemetry_dir: Option<PathBuf>,
 
+    /// Local diagnostic destination. SQLite shares the host `OTel` query store;
+    /// JSONL retains the legacy format. Network export is configured separately.
+    #[arg(
+        long,
+        env = "COWBOY_TELEMETRY_LOCAL_BACKEND",
+        value_enum,
+        default_value = "sqlite"
+    )]
+    pub telemetry_local_backend: crate::logs::LocalBackend,
+
+    /// Maximum legacy JSONL segment age. SQLite retention uses logs configure.
+    #[arg(long, env = "COWBOY_TELEMETRY_RETAIN_SECONDS", default_value_t = 7 * 86400)]
+    pub telemetry_retain_seconds: u64,
+
     /// Maximum bytes per diagnostic segment; incident/accounting ledgers stay in DB.
     #[arg(long, env = "COWBOY_TELEMETRY_SEGMENT_BYTES", default_value_t = crate::telemetry_file::DEFAULT_SEGMENT_BYTES)]
     pub telemetry_segment_bytes: u64,
@@ -444,6 +468,7 @@ impl Cli {
         // background startup order must not decide whether TLS panics.
         let _ = rustls::crypto::ring::default_provider().install_default();
         match self.command {
+            Command::Logs(args) => args.run().await,
             #[cfg(feature = "full")]
             Command::Serve(args) => crate::server::serve(*args).await,
             #[cfg(feature = "full")]
@@ -456,15 +481,9 @@ impl Cli {
             #[cfg(all(feature = "full", unix))]
             Command::Operator(args) => crate::local_operator::run(args).await,
             #[cfg(feature = "full")]
-            Command::TryAgent(args) => {
-                crate::server::init_tracing();
-                let spec = crate::provider::lookup(&args.provider)
-                    .ok_or_else(|| anyhow::anyhow!("unknown provider {:?}", args.provider))?;
-                let local = tokio::task::LocalSet::new();
-                local
-                    .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
-                    .await
-            }
+            Command::Cardea { command } => cardea::run(command),
+            #[cfg(feature = "full")]
+            Command::TryAgent(args) => run_trial_agent(args).await,
             #[cfg(feature = "full")]
             Command::MachineEnroll(args) => {
                 let database_url = args
@@ -559,6 +578,16 @@ async fn login_client(args: LoginArgs) -> anyhow::Result<()> {
     }
     eprintln!("Cowboy login ready for {base_url}");
     Ok(())
+}
+
+#[cfg(feature = "full")]
+async fn run_trial_agent(args: TryAgentArgs) -> anyhow::Result<()> {
+    crate::server::init_tracing();
+    let spec = crate::provider::lookup(&args.provider)
+        .ok_or_else(|| anyhow::anyhow!("unknown provider {:?}", args.provider))?;
+    tokio::task::LocalSet::new()
+        .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
+        .await
 }
 
 #[cfg(feature = "full")]

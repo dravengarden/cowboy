@@ -1,3 +1,4 @@
+import { DesktopDraftDestinationPicker } from "./desktop/DesktopDraftDestinationPicker";
 import { ProtectedImage } from "./ProtectedImage";
 import {
   lazy,
@@ -210,7 +211,6 @@ import {
 import {
   desktopListItemSx,
   desktopSessionActionSx,
-  desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
 import { ACTION_ICON_WIDTH_PX } from "./desktop/topBarDensity";
 import {
@@ -3332,8 +3332,19 @@ export function ComposerWorkspace({
           drafts panel) so the snackbar survives when moving the LAST draft
           unmounts that panel. */
       }
+      {desktop && moveSrcId !== null && (
+        <DesktopDraftDestinationPicker
+          sourceId={sessionId}
+          onClose={(): void => setMoveSrcId(null)}
+          onPick={(destination): void => {
+            moveDraft(sessionId, moveSrcId, destination.id);
+            setMoveUndo({ id: moveSrcId, toId: destination.id, toTitle: destination.title });
+            setMoveSrcId(null);
+          }}
+        />
+      )}
       <Sheet
-        open={moveSrcId !== null}
+        open={!desktop && moveSrcId !== null}
         onClose={(): void => setMoveSrcId(null)}
         title="Move draft to…"
         mobileDismiss="footer"
@@ -3825,7 +3836,7 @@ interface PendingEditController {
 // Collapsible header ("N Queued Messages" / "N Drafts"). Bulk Send all /
 // Clear all live in the header kebab so the collapsed bar stays one line.
 // Drafts sit BELOW the queue and above the composer (see the Composer render).
-function PendingPanel({
+export function PendingPanel({
   desktop,
   keyboardOpen,
   kind,
@@ -4146,16 +4157,21 @@ function PendingPanel({
         }
         : {})}
       sx={{
-        mb: desktop ? 1 : 0,
-        // The original framed container, KEPT (the user liked it): a soft tinted,
-        // rounded, bordered box that groups the rows. Its OUTER edge sits at the
-        // composer's content gutter — exactly where the input box's outer border is
-        // — so the panel frame and the message box line up edge-to-edge (no horizontal
-        // margin on either). Drafts read a touch more "staging" than the live queue.
-        ...(desktop
-          ? desktopSurfaceSx({ interactive: false, focusWithin: true })
-          : mobileComposerPanelFrameSx),
-        bgcolor: kind === "draft" ? "action.selected" : "action.hover",
+        mb: desktop ? 0.5 : 0,
+        // Only Desktop adopts the borderless disclosure rail. Mobile keeps its
+        // established staging cards and touch geometry.
+        ...(desktop ? {
+          border: 0,
+          borderBottom: 1,
+          borderColor: "divider",
+          borderRadius: 0,
+          overflow: "hidden",
+          bgcolor: "transparent",
+          "&:focus-within": { borderColor: "primary.main" },
+        } : {
+          ...mobileComposerPanelFrameSx,
+          bgcolor: kind === "draft" ? "action.selected" : "action.hover",
+        }),
         ...(mobileFloatingEdit && {
           border: 0,
           bgcolor: "transparent",
@@ -4181,15 +4197,19 @@ function PendingPanel({
         data-mobile-pending-header={!desktop ? "true" : undefined}
         direction="row"
         alignItems="center"
-        // Pin the header to the SAME 44px as the composer input (ComposerTextarea
-        // `MuiInputBase-root` minHeight) so the "N Drafts" bar and the message box
-        // read as the same-height pair. `py: 0` drops the old extra 8px that made
-        // the bar (a 44px icon button + padding) taller than the input.
+        // Desktop is a compact utility rail; Mobile keeps native touch height.
         sx={{
           display: mobileFloatingEdit ? "none" : "flex",
-          pr: 0.75,
+          pr: desktop ? 0.5 : 0.75,
           py: 0,
-          minHeight: mobileComposerPanelHeaderMinHeight,
+          minHeight: desktop ? 32 : mobileComposerPanelHeaderMinHeight,
+          ...(desktop && {
+            "& > .MuiIconButton-root": {
+              width: 32,
+              height: 32,
+              minHeight: 32,
+            },
+          }),
         }}
       >
         {
@@ -4221,11 +4241,12 @@ function PendingPanel({
             // its follow-up click. Keep immediate press feedback without a
             // stateful ripple that can get stranded after the panel expands.
             "&:active": { bgcolor: "action.hover" },
+            ...(desktop && { "&:focus-visible": { bgcolor: "action.hover" } }),
           }}
         >
           <Box
             sx={{
-              width: 40,
+              width: desktop ? 28 : 40,
               display: "inline-flex",
               justifyContent: "center",
               flexShrink: 0,
@@ -4238,9 +4259,19 @@ function PendingPanel({
               : <ExpandMore fontSize="small" />}
           </Box>
           <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
-            {count} {noun}
-            {count === 1 ? "" : "s"}
+            {desktop
+              ? kind === "draft" ? "Drafts" : "Queue"
+              : `${count} ${noun}${count === 1 ? "" : "s"}`}
           </Typography>
+          {desktop && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ ml: 0.75, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+            >
+              {count}
+            </Typography>
+          )}
           {editingId !== null && (
             <Typography
               variant="caption"
@@ -4251,23 +4282,32 @@ function PendingPanel({
             </Typography>
           )}
           {desktop && (
-            <Suspense
-              fallback={
-                <ShortcutKeycap
+            <Box
+              sx={{
+                display: "none",
+                "@container pendingPanel (min-width: 30rem)": {
+                  display: "contents",
+                },
+              }}
+            >
+              <Suspense
+                fallback={
+                  <ShortcutKeycap
+                    keyLabel="G"
+                    variant="context"
+                    availability="inactive"
+                    sx={{ ml: 0.75 }}
+                  />
+                }
+              >
+                <DesktopListJumpKeycap
+                  region={`prompt.${kind}`}
                   keyLabel="G"
-                  variant="context"
-                  availability="inactive"
+                  prefix
                   sx={{ ml: 0.75 }}
                 />
-              }
-            >
-              <DesktopListJumpKeycap
-                region={`prompt.${kind}`}
-                keyLabel="G"
-                prefix
-                sx={{ ml: 0.75 }}
-              />
-            </Suspense>
+              </Suspense>
+            </Box>
           )}
           {
             /* Why-it's-held badge: the queue is manually paused, so it won't drain
@@ -4298,7 +4338,15 @@ function PendingPanel({
           )}
           <Box sx={{ flex: 1, minWidth: 0 }} />
           {desktop && (
-            <Stack direction="row" spacing={0.5} alignItems="center">
+            <Stack
+              direction="row"
+              spacing={0.5}
+              alignItems="center"
+              sx={{
+                display: "none",
+                "@container pendingPanel (min-width: 24rem)": { display: "flex" },
+              }}
+            >
               {kind === "queued" && (
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
@@ -4325,7 +4373,16 @@ function PendingPanel({
             <Typography
               variant="caption"
               color="primary.main"
-              sx={{ ml: 0.75, fontWeight: 700, letterSpacing: "0.04em" }}
+              title="Reorder · J/K move · Esc done"
+              sx={{
+                ml: 0.75,
+                minWidth: 0,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
             >
               REORDER · J/K MOVE · ESC DONE
             </Typography>
@@ -4337,7 +4394,7 @@ function PendingPanel({
             panel (ROW_ACTIONS_INLINE): there the grips are always shown, so the
             toggle is redundant — same adaptive rule as the row actions. */
         }
-        {count >= 2 && (
+        {count >= 2 && (!desktop || !visuallyCollapsed) && (
           <IconButton
             size="small"
             disabled={editingId !== null}
@@ -4358,6 +4415,8 @@ function PendingPanel({
           size="small"
           disabled={editingId !== null}
           aria-label={kind === "draft" ? "Draft actions" : "Queue actions"}
+          aria-haspopup={desktop ? "menu" : undefined}
+          aria-expanded={desktop ? panelMenuEl !== null : undefined}
           onClick={(event): void => {
             haptic();
             setPanelMenuEl(event.currentTarget);
@@ -4467,11 +4526,7 @@ function PendingPanel({
           data-desktop-pending-list={desktop ? "true" : undefined}
           data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
-            // Inner padding so the rows sit INSIDE the frame with a small inset
-            // (the original framed look). Keep all four sides: the arrival ring
-            // is a 2px outer outline, and the scrollport clips a first row whose
-            // top inset is missing. The frame's OUTER edge is what aligns with
-            // the input box, not the rows.
+            // Keep the row arrival outline clear of the inner scrollport edge.
             px: mobileFloatingEdit ? 0 : 0.5,
             pt: mobileFloatingEdit ? 0 : 0.5,
             pb: mobileFloatingEdit ? 0 : 0.5,

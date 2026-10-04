@@ -291,6 +291,8 @@ impl ProviderUsageSpool {
             ],
         )?;
         transaction.commit()?;
+        drop(connection);
+        crate::logs::provider_usage(&protocol);
         Ok(())
     }
 

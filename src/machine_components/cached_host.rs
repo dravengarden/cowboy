@@ -53,8 +53,10 @@ pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> any
     let generation = active
         .canonicalize()
         .context("resolving cached Machine host")?;
-    let publisher =
-        std::fs::read_to_string(key.context("cached Machine host requires a publisher key")?)?;
+    let publisher = String::from_utf8(read_regular(
+        key.context("cached Machine host requires a publisher key")?,
+        Some(16 * 1024),
+    )?)?;
     let desired = verify_generation(&root, &generation, &publisher)?;
     if let Some(floor) = &floor {
         authenticate_floor(&root, floor, &publisher)?;
@@ -211,18 +213,11 @@ pub(super) fn verify_generation(
         )?,
         "cached Machine host signature is invalid"
     );
-    let artifact = read_regular(&generation.join("artifact"), None)?;
-    ensure!(
-        format!("{:x}", Sha256::digest(&artifact)) == desired.digest.to_ascii_lowercase(),
-        "cached Machine host artifact digest mismatch"
-    );
-    HostPayload::from_authenticated(&desired, &artifact)?
-        .context("cached component is not a host")?
-        .verify(&generation)?;
+    HostPayload::verify_cached(&desired, &generation.join("artifact"), &generation)?;
     Ok(desired)
 }
 
-fn read_regular(path: &Path, limit: Option<u64>) -> anyhow::Result<Vec<u8>> {
+pub(super) fn read_regular(path: &Path, limit: Option<u64>) -> anyhow::Result<Vec<u8>> {
     ensure!(
         std::fs::symlink_metadata(path)?.is_file(),
         "cached Machine host proof is not a regular file"

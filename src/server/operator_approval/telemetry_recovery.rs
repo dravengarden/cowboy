@@ -32,6 +32,7 @@ impl OperatorApproval {
         request: &RecoveryRequest,
         before: &Operation,
     ) -> Result<TelemetryRecoveryAuthority> {
+        self.require_general_purpose()?;
         ensure!(
             self.service == request.step.service_id
                 && RecoveryActor::from(&self.actor) == request.actor

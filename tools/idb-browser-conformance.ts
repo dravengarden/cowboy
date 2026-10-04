@@ -210,7 +210,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "project-placement"
         ? 11
         : suite === "workspace-picker"
-        ? 9
+        ? 10
         : suite === "sheet-keyboard"
         ? 3
         : suite === "workspace-extensions"
@@ -219,6 +219,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 10
         : suite === "settings-recovery"
         ? 9
+        : suite === "desktop-composer"
+        ? 8
         : suite === "code-buffer-cleanup"
         ? 7
         : suite === "code-buffers"

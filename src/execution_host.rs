@@ -28,6 +28,22 @@ pub struct Args {
     pub socket: Option<PathBuf>,
 }
 
+/// Validate the private launch identity before initializing target-local logs.
+///
+/// # Errors
+/// Invalid or oversized contracts fail without logging their contents.
+pub fn log_context(path: &Path) -> Result<crate::logs::Context> {
+    let contract: LaunchContract =
+        serde_json::from_slice(&crate::logs::storage::private_read(path, 64 * 1024)?)?;
+    validate_contract(&contract)?;
+    let mut context = crate::logs::Context::new("cowboy-execution-host");
+    context.session = contract.session_id;
+    context.machine = contract.binding.environment.machine_id;
+    context.environment = contract.binding.environment.id;
+    context.generation = contract.executor.version;
+    Ok(context)
+}
+
 struct Host {
     scope: Scope,
     capability_digest: [u8; 32],
@@ -299,6 +315,7 @@ pub async fn run(args: Args) -> Result<()> {
     );
     let contract: LaunchContract = serde_json::from_slice(&std::fs::read(&args.contract)?)?;
     validate_contract(&contract)?;
+    tracing::info!(event_name = "cowboy.execution.starting", session = %contract.session_id, environment_id = %contract.binding.environment.id, incarnation = %contract.binding.environment.incarnation, "starting owned execution environment");
     ensure!(
         args.state_dir.is_absolute(),
         "execution state path must be absolute"
@@ -360,11 +377,43 @@ pub async fn run(args: Args) -> Result<()> {
         .env("CODEX_HOME", &private_home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .context("starting owned executor")?;
     let mut input = child.stdin.take().context("executor input unavailable")?;
+    let mut native_errors = child
+        .stderr
+        .take()
+        .context("executor diagnostics unavailable")?;
+    let stderr_reader = tokio::spawn(async move {
+        // Native stderr is unstructured and may contain command data. Drain it
+        // without blocking the executor, retaining only bounded metadata.
+        let mut buffer = [0_u8; 4096];
+        let mut bytes = 0_u64;
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                result = native_errors.read(&mut buffer) => match result {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => { bytes = bytes.saturating_add(count as u64); }
+                },
+                _ = interval.tick(), if bytes > 0 => {
+                    tracing::warn!(event_name = "cowboy.execution.native_stderr", reason = "native_diagnostic_output", bytes, "native executor wrote diagnostics; content excluded");
+                    bytes = 0;
+                }
+            }
+        }
+        if bytes > 0 {
+            tracing::warn!(
+                event_name = "cowboy.execution.native_stderr",
+                reason = "native_diagnostic_output",
+                bytes,
+                "native executor wrote diagnostics before exit"
+            );
+        }
+    });
     let mut output = BufReader::new(child.stdout.take().context("executor output unavailable")?);
     let initialization = tokio::time::timeout(Duration::from_secs(15), async {
         write_json(&mut input, &json!({"id": 0, "method": "initialize", "params": {"clientName": "cowboy-machine-executor"}})).await?;
@@ -378,6 +427,10 @@ pub async fn run(args: Args) -> Result<()> {
         Ok::<_, anyhow::Error>(result)
     }).await??;
     let (writer, mut requests) = mpsc::channel(64);
+    tracing::info!(
+        event_name = "cowboy.execution.ready",
+        "native executor initialized"
+    );
     let (stop, mut stopped) = tokio::sync::oneshot::channel();
     let (finished, finished_rx) = watch::channel(false);
     let host = Arc::new(Host {
@@ -416,25 +469,48 @@ pub async fn run(args: Args) -> Result<()> {
         });
         let mut event_space = backend_host.ledger.lock().event_space.subscribe();
         let mut pending_event = None;
+        let mut pressure_started: Option<std::time::Instant> = None;
         loop {
             if let Some(message) = pending_event.take() {
                 match backend_host.ledger.lock().push_event(message) {
-                    Ok(()) => {}
-                    Err(EventError::Full(message)) => pending_event = Some(message),
+                    Ok(()) => {
+                        if let Some(started) = pressure_started.take() {
+                            tracing::info!(
+                                event_name = "cowboy.execution.backpressure_cleared",
+                                duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+                                "execution event consumer caught up"
+                            );
+                        }
+                    }
+                    Err(EventError::Full(message)) => {
+                        if pressure_started.is_none() {
+                            pressure_started = Some(std::time::Instant::now());
+                            tracing::warn!(
+                                event_name = "cowboy.execution.backpressure",
+                                reason = "unacknowledged_event_capacity",
+                                "execution event consumer is behind"
+                            );
+                        }
+                        pending_event = Some(message);
+                    }
                     Err(EventError::Invalid) => {
-                        tracing::warn!(reason = "native_event_limit", "execution backend stopped");
+                        tracing::warn!(
+                            event_name = "cowboy.execution.backend_stopped",
+                            reason = "native_event_limit",
+                            "execution backend stopped"
+                        );
                         break;
                     }
                 }
             }
             tokio::select! {
                 _ = &mut native_writer => {
-                    tracing::warn!(reason = "native_input_closed", "execution backend stopped");
+                    tracing::warn!(event_name = "cowboy.execution.backend_stopped", reason = "native_input_closed", "execution backend stopped");
                     break;
                 }
                 message = native_messages.recv(), if pending_event.is_none() => {
                     let Some(Ok(mut message)) = message else {
-                        tracing::warn!(reason = "native_stream_closed", "execution backend stopped");
+                        tracing::warn!(event_name = "cowboy.execution.backend_stopped", reason = "native_stream_closed", "execution backend stopped");
                         break;
                     };
                     let mut ledger = backend_host.ledger.lock();
@@ -452,8 +528,14 @@ pub async fn run(args: Args) -> Result<()> {
                     if result.is_err() { break; }
                 }
                 _ = event_space.changed(), if pending_event.is_some() => {},
-                _ = child.wait() => break,
-                _ = &mut stopped => break,
+                status = child.wait() => {
+                    tracing::warn!(event_name = "cowboy.execution.native_exited", exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1), "native executor exited");
+                    break;
+                },
+                _ = &mut stopped => {
+                    tracing::info!(event_name = "cowboy.execution.shutdown_requested", "execution shutdown requested");
+                    break;
+                },
             }
         }
         backend_host.ledger.lock().lose();
@@ -469,6 +551,8 @@ pub async fn run(args: Args) -> Result<()> {
         }
         reader.abort();
         let _ = reader.await;
+        stderr_reader.abort();
+        let _ = stderr_reader.await;
         let _ = finished.send(true);
     });
     let connections = Arc::new(Semaphore::new(32));
@@ -494,5 +578,9 @@ pub async fn run(args: Args) -> Result<()> {
         let _ = stop.send(());
     }
     let _ = backend.await;
+    tracing::info!(
+        event_name = "cowboy.execution.stopped",
+        "execution environment stopped"
+    );
     Ok(())
 }

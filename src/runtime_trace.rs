@@ -39,7 +39,6 @@ impl Stage {
         }
     }
 
-    #[cfg(feature = "full")]
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::ControllerDispatch => "cowboy.controller.dispatch",
@@ -267,7 +266,8 @@ impl MachineSpans {
             && let Some(record) = span.finish(Outcome::Ok)
         {
             carrier.context = record.context.clone();
-            carrier.machine_dispatch = Some(record);
+            crate::logs::runtime_spans(session, std::slice::from_ref(&record));
+            carrier.machine_dispatch = crate::logs::forward_runtime().then_some(record);
         }
     }
 }
