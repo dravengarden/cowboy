@@ -149,6 +149,9 @@ the continuation is optional.
   common editor action — so the toggle takes the documented prefix fallback and
   keeps the same `E` mnemonic. It works from Vim Insert, Normal, and Visual
   because the preference is global rather than an edit on the document.
+- Workspace prefix then `[` / `]` / `\`: collapse or expand Sessions, Prompt,
+  or Conversation. The three adjacent keys sit in the same left-to-right
+  order as the panes. See [Pane collapse](#pane-collapse).
 - `Alt/Option+1…0`: switch to one of the first ten Sessions globally.
 - `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
   turn, `Mod+Shift+P` opens Command Palette, and `Mod+/` opens shortcut help.
@@ -247,6 +250,52 @@ the center without smooth-scroll latency.
 Mobile retains its shared capped scroller and fullscreen-first row editing. It
 must not load or emulate this focus-driven sizing contract.
 
+## Pane collapse
+
+Sessions, Prompt and Conversation can each be collapsed without changing
+product mode. The state is one global, persisted layout preference
+(`cowboy:desktop-collapsed-panes`), never per Session, and Mobile never reads
+it.
+
+- **Commands.** Workspace prefix then `[` / `]` / `\` toggles Sessions /
+  Prompt / Conversation. The Command Palette also lists each toggle and
+  Expand All Panes. Every pane header has a collapse control (chevron plus
+  its continuation keycap) at its trailing edge.
+- **Keycaps.** The `[` `]` `\` keycaps on headers and rails are sequence
+  continuations, so they follow the sequential-chord law: inactive at rest,
+  available while the prefix is armed. Pressing the prefix lights all three
+  across the screen, left to right. The status line lists them as Fold panes.
+- **Work-pane invariant.** Prompt and Conversation never collapse together.
+  Collapsing the last visible one swaps them instead, so the chord always
+  does something visible. Stored layouts are normalized the same way.
+- **Collapsed presentation.** Prompt and Conversation fold into a 36 px rail
+  on their own edge: chevron, keycap, vertical pane name, and the signals the
+  user may be waiting on (Prompt: queued/draft counts; Conversation: the
+  Session's live status). The whole rail is one restore target. Sessions
+  folds into a 56 px switcher: expand control, New Session, and one tile per
+  Session in `Alt/Option+1…0` slot order (monogram, live status, provider
+  badge, current-Session pill). The rail head aligns with the 44 px top bar;
+  in an installed window-controls-overlay PWA the head becomes a drag region
+  and the expand control moves below it.
+- **Mounting.** Collapsed panes stay mounted and are only removed from
+  layout, so the Composer keeps its draft, undo history, Vim mode and IME
+  state, Conversation keeps streaming, and the Sessions list keeps owning
+  slot switching and folder state. A Prompt that inherits the Conversation's
+  width is capped at a 960 px writing column.
+- **Focus.** Collapsing the focused pane moves focus to the remaining work
+  pane; restoring one by its command focuses it. Explicit jumps (prefix
+  `S/P/C`, Plan/Queue/Drafts, region focus) restore a collapsed pane first.
+  `H/L`, region cycling and Resize mode skip collapsed panes and their
+  splitters. `Alt/Option+1…0` never unfolds Sessions; it lands in Prompt (or
+  Conversation when Prompt is collapsed).
+- **Pointer.** Dragging a splitter more than 96 px past a pane's minimum
+  previews the collapse by dimming that pane and collapses it on release; the
+  stored width is kept for the restore. Panes switch instantly: animating the
+  width would reflow the Transcript and CodeMirror on every frame.
+- **Compact Desktop.** Below 1100 px Sessions already lives in its drawer, so
+  `[` opens or closes that drawer and the wide-layout preference is left
+  untouched.
+
 ## Commands and help
 
 Commands may declare pane `contexts` and exact `regions`. The Command Palette
@@ -339,6 +388,11 @@ and installed PWAs. Every registered command must pass both checked-in audits:
   `Alt+1…0` on Windows/Linux and `Option+1…0` on macOS. All ten slots are
   reserved even when a slot is empty, so the key never changes meaning with
   session count.
+- Pane-collapse continuations `[` `]` `\` are free under the prefix. When the
+  prefix modifier is still held, Windows/Linux `Alt+[ ] \` are not Chrome
+  chords; macOS `Cmd+[` / `Cmd+]` are Chrome Back/Forward, which Chromium does
+  not reserve, so the claimed continuation's `preventDefault()` keeps them in
+  Cowboy. Releasing Command before the continuation avoids the question.
 
 For every new shortcut, update the central shortcut constants, both collision
 audits where relevant, policy tests, visible hints, and this guide. Acceptance

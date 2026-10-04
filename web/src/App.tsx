@@ -167,9 +167,13 @@ import {
     buildSessionTree,
     displayedSessionOrder,
     dropTargetFolder,
+    type FolderActivity,
     folderIdFromRowKey,
     foldersRevealing,
     movedRowKey,
+    projectSessionDrop,
+    rowInsideFolder,
+    type SessionDropProjection,
     sessionTreeRowKey,
     type SessionTreeRow,
 } from "./sessionTree";
@@ -184,7 +188,8 @@ import {
 } from "./SessionFolderUi";
 import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
-import { useSortable } from "./useSortable";
+import { type SortableDrag, useSortable } from "./useSortable";
+import { haptic } from "./haptic";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useBackdropDismiss } from "./useBackdropDismiss";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
@@ -199,6 +204,11 @@ import { frostedChrome, frostedStatusChrome } from "./frostedGlass";
 import {
     clampComposerColWidth,
     composerColWidthStore,
+    DESKTOP_COMPACT_WIDTH_QUERY,
+    DESKTOP_CONVERSATION_MIN,
+    DESKTOP_PROMPT_MIN,
+    DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT,
+    dragCollapses,
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import { setComposerSourceMode, useComposerSourceMode } from "./composerSourceMode";
@@ -348,6 +358,14 @@ const DesktopRegionShortcut = lazy(async () => {
     const module = await import("./desktop/DesktopRegionShortcut");
     return { default: module.DesktopRegionShortcut };
 });
+const DesktopPaneCollapseButton = lazy(async () => {
+    const module = await import("./desktop/DesktopPaneCollapse");
+    return { default: module.DesktopPaneCollapseButton };
+});
+const DesktopSessionsRail = lazy(async () => {
+    const module = await import("./desktop/DesktopPaneCollapse");
+    return { default: module.DesktopSessionsRail };
+});
 const DesktopContextShortcut = lazy(async () => {
     const module = await import("./desktop/commands/DesktopContextShortcut");
     return { default: module.DesktopContextShortcut };
@@ -480,6 +498,84 @@ function StatusDot({
     return (
         <Tooltip title={label} enterDelay={300}>
             {indicator}
+        </Tooltip>
+    );
+}
+
+// A folder answers "how many of my agents are doing something", which one
+// aggregated dot cannot. Each live state gets the session row's own glyph
+// (spinner = working, amber dot = needs attention, green dot = ready) with
+// its count, grouped in one quiet capsule; dormant sessions only count toward
+// the total beside the folder name. Nothing live → no capsule at all, so a
+// folder of sleeping sessions reads as calm. Paint-only: safe inside the
+// Mobile drawer's swipe compositor (an existing spinner primitive).
+function FolderActivityBadges({
+    activity,
+    total,
+}: {
+    activity: FolderActivity;
+    total: number;
+}): React.JSX.Element | null {
+    const parts: { key: string; count: number; glyph: React.ReactNode; label: string }[] = [
+        {
+            key: "working",
+            count: activity.working,
+            label: "working",
+            glyph: (
+                <CircularProgress
+                    size={9}
+                    thickness={7}
+                    disableShrink
+                    color="inherit"
+                    sx={{ color: statusColor("busy"), flexShrink: 0 }}
+                />
+            ),
+        },
+        {
+            key: "attention",
+            count: activity.attention,
+            label: activity.attention === 1 ? "needs attention" : "need attention",
+            glyph: <Circle sx={{ fontSize: 8, color: statusColor("interrupted") }} />,
+        },
+        {
+            key: "live",
+            count: activity.live,
+            label: "ready",
+            glyph: <Circle sx={{ fontSize: 8, color: statusColor("running") }} />,
+        },
+    ].filter((part) => part.count > 0);
+    if (parts.length === 0) return null;
+    const summary = [
+        ...parts.map((part) => `${String(part.count)} ${part.label}`),
+        `${String(total)} total`,
+    ].join(" · ");
+    return (
+        <Tooltip title={summary} enterDelay={300}>
+            <Stack
+                direction="row"
+                alignItems="center"
+                spacing={0.75}
+                aria-label={summary}
+                data-folder-activity
+                sx={{
+                    flexShrink: 0,
+                    height: "1.375rem",
+                    px: 0.75,
+                    borderRadius: 99,
+                    bgcolor: "action.hover",
+                    fontSize: "0.75rem",
+                    fontWeight: 650,
+                    fontVariantNumeric: "tabular-nums",
+                    color: "text.secondary",
+                }}
+            >
+                {parts.map((part) => (
+                    <Stack key={part.key} direction="row" alignItems="center" spacing={0.4}>
+                        {part.glyph}
+                        <span>{part.count}</span>
+                    </Stack>
+                ))}
+            </Stack>
         </Tooltip>
     );
 }
@@ -786,9 +882,15 @@ function SessionList({
     // new order. A moved session lands in the container of the row above it
     // (a folder header files into that folder) and the flat session order is
     // re-submitted; a moved folder permutes its siblings only.
-    const applyRowOrder = (order: string[], movedKey: string | null): void => {
+    const applyRowOrder = (
+        order: string[],
+        movedKey: string | null,
+        // A pointer drag passes its projected container (vertical slot plus
+        // horizontal intent); Order mode infers it from the row above.
+        projectedFolder?: string | null,
+    ): void => {
         const moved = movedKey ? rowByKey.get(movedKey) : undefined;
-        if (!moved) return;
+        if (!moved || moved.kind === "empty") return;
         if (moved.kind === "folder") {
             const siblings = order
                 .map((key) => rowByKey.get(key))
@@ -804,10 +906,13 @@ function SessionList({
             .filter((key) => key !== movedKey)
             .map((key) => rowByKey.get(key))
             .filter((row): row is SessionTreeRow => row !== undefined);
-        const target = dropTargetFolder(others, index);
-        if (target !== (tree.folderOf.get(moved.session.id) ?? null)) {
-            placeSessions([moved.session.id], target);
-        }
+        const target = projectedFolder !== undefined
+            ? projectedFolder
+            : dropTargetFolder(others, index);
+        const refiled = target !== (tree.folderOf.get(moved.session.id) ?? null);
+        if (refiled) placeSessions([moved.session.id], target);
+        const reordered = order.some((key, i) => key !== rowKeys[i]);
+        if (!reordered) return;
         const sessionOrder = order
             .map((key) => rowByKey.get(key))
             .filter((row): row is SessionTreeRow & { kind: "session" } => row?.kind === "session")
@@ -816,12 +921,55 @@ function SessionList({
     };
     const applyRowOrderRef = useRef(applyRowOrder);
     applyRowOrderRef.current = applyRowOrder;
+    // Drag-into-folder (Obsidian's explorer, adapted to an ordered list): the
+    // vertical slot bounds where a session may land, horizontal movement picks
+    // the nesting depth inside those bounds, and the target folder lights up
+    // with its whole body while the dragged row slides to the indent it will
+    // take. One indent step of finger travel is a little wider than the
+    // visual indent so a vertical drag never wobbles between depths.
+    const finePointer = useMediaQuery("(pointer: fine) and (hover: hover)");
+    const indentPx = finePointer ? 16 : 20;
+    const [dragIndentPx, setDragIndentPx] = useState(0);
+    const projectDrag = (drag: SortableDrag): SessionDropProjection | null => {
+        const dragged = rowByKey.get(drag.id);
+        if (dragged?.kind !== "session") return null;
+        const others = tree.rows.filter((row) => sessionTreeRowKey(row) !== drag.id);
+        return projectSessionDrop(others, drag.targetIndex, dragged.depth, drag.depthSteps);
+    };
     const sortable = useSortable({
         ids: rowKeys,
         onReorder: (order): void =>
             applyRowOrder(order, sortable.draggingId ?? movedRowKey(rowKeys, order)),
+        onDrop: (order, drag): void => {
+            const projection = projectDrag(drag);
+            applyRowOrder(order, drag.id, projection ? projection.folder : undefined);
+        },
         scrollContainer: () => listRef.current,
+        horizontalStep: indentPx + 12,
+        dragOffsetX: dragIndentPx,
     });
+    const dropProjection = sortable.drag ? projectDrag(sortable.drag) : null;
+    const draggedDepth = sortable.drag
+        ? (rowByKey.get(sortable.drag.id)?.depth ?? 0)
+        : 0;
+    const nextDragIndentPx = dropProjection
+        ? (dropProjection.depth - draggedDepth) * indentPx
+        : 0;
+    useEffect(() => {
+        setDragIndentPx(nextDragIndentPx);
+        // A change of target container is a distinct, felt step.
+        if (sortable.drag) haptic(8);
+    }, [nextDragIndentPx, dropProjection?.folder]);
+    const dropFolderName = dropProjection?.folder
+        ? sessionFolderById(sessionFolders, dropProjection.folder)?.name ?? null
+        : null;
+    // Paint-only drag feedback per row: the target folder's header and body.
+    const dropHighlight = (row: SessionTreeRow, key: string): "header" | "body" | null => {
+        const target = dropProjection?.folder;
+        if (!target || key === sortable.drag?.id) return null;
+        if (row.kind === "folder" && row.folder.id === target) return "header";
+        return rowInsideFolder(row, target, sessionFolders) ? "body" : null;
+    };
     const runRowCommand = (
         command: SessionRowCommand,
         rowKey: string,
@@ -1108,6 +1256,44 @@ function SessionList({
     const folderDepthPl = (depth: number): string =>
         `calc(max(env(safe-area-inset-left), 12px) + ${String(depth * 20)}px)`;
     const folderDepthFinePl = (depth: number): string => `calc(6px + ${String(depth * 16)}px)`;
+    // Obsidian-style indent guides: one hairline per ancestor level, centred
+    // under that ancestor's chevron. A pseudo-element spanning the row margins
+    // joins consecutive rows into one continuous line, so a folder's body is
+    // visibly fenced off from the unfiled rows that follow it. Paint-only.
+    const treeGuideSx = (depth: number) => {
+        if (depth === 0) return {};
+        const levels = Array.from({ length: depth }, (_, level) => level);
+        return {
+            "&::before": {
+                content: '""',
+                position: "absolute",
+                top: "-2px",
+                bottom: "-2px",
+                left: 0,
+                right: 0,
+                pointerEvents: "none",
+                backgroundImage: (t: Theme) =>
+                    levels.map(() => `linear-gradient(${t.palette.divider}, ${t.palette.divider})`).join(", "),
+                backgroundSize: levels.map(() => "1px 100%").join(", "),
+                backgroundRepeat: "no-repeat",
+                backgroundPosition: levels
+                    .map((level) => `calc(max(env(safe-area-inset-left), 12px) + ${String(level * 20 + 22)}px) 0`)
+                    .join(", "),
+                "@media (pointer: fine) and (hover: hover)": {
+                    backgroundPosition: levels.map((level) => `${String(level * 16 + 22)}px 0`).join(", "),
+                },
+            },
+        };
+    };
+    const dropHighlightSx = (highlight: "header" | "body" | null) =>
+        highlight === "header"
+            ? {
+                bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.16),
+                boxShadow: (t: Theme) => `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.55)}`,
+            }
+            : highlight === "body"
+            ? { bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.07) }
+            : {};
     const folderMenuFolder = folderMenu?.folder ?? null;
     const folderMenuCount = folderMenuFolder
         ? tree.rows.find((r) => r.kind === "folder" && r.folder.id === folderMenuFolder.id)
@@ -1203,6 +1389,9 @@ function SessionList({
                 sx={{
                     flex: 1,
                     overflowY: "auto",
+                    // A drag slides the lifted row sideways to its target
+                    // indent; that must never open a horizontal scroller.
+                    overflowX: "hidden",
                     ...(desktop ? desktopScrollbarSx : {}),
                     // The dismiss island overlays rows during ordinary scrolling,
                     // but at the true end the final session must be able to rest
@@ -1232,6 +1421,43 @@ function SessionList({
                 {sortable.order.map((rowKey) => {
                     const row = rowByKey.get(rowKey);
                     if (!row) return null;
+                    if (row.kind === "empty") {
+                        // The body of an expanded empty folder: keeps the folder
+                        // visibly owning its (blank) contents and doubles as the
+                        // "into this folder" drop slot. Not a keyboard item.
+                        return (
+                    <Box
+                        component="li"
+                        key={rowKey}
+                        data-session-folder-empty={row.folder}
+                        ref={sortable.registerItem(rowKey)}
+                        style={sortable.itemStyle(rowKey)}
+                        sx={{
+                            ...treeGuideSx(row.depth),
+                            ...dropHighlightSx(dropHighlight(row, rowKey)),
+                            position: "relative",
+                            listStyle: "none",
+                            display: "flex",
+                            alignItems: "center",
+                            minHeight: 36,
+                            pl: `calc(${folderDepthPl(row.depth)} + 18px)`,
+                            pr: "max(env(safe-area-inset-right), 12px)",
+                            mx: 0.75,
+                            my: 0.25,
+                            borderRadius: "10px",
+                            color: "text.disabled",
+                            "@media (pointer: fine) and (hover: hover)": {
+                                pl: `calc(${folderDepthFinePl(row.depth)} + 12px)`,
+                                minHeight: 30,
+                            },
+                        }}
+                    >
+                        <Typography variant="caption" sx={{ fontStyle: "italic" }}>
+                            {sortable.drag ? "Drop here to file into this folder" : "Empty — drag a session here"}
+                        </Typography>
+                    </Box>
+                        );
+                    }
                     if (row.kind === "folder") {
                         const f = row.folder;
                         return (
@@ -1241,6 +1467,7 @@ function SessionList({
                         data-desktop-item={rowKey}
                         data-desktop-folder-row="true"
                         data-desktop-pin-active={desktop && pinned ? "true" : undefined}
+                        data-drop-target={dropHighlight(row, rowKey) === "header" ? "true" : undefined}
                         aria-expanded={row.expanded}
                         ref={sortable.registerItem(rowKey)}
                         style={sortable.itemStyle(rowKey)}
@@ -1249,6 +1476,8 @@ function SessionList({
                         onActivate={(): void => setFolderCollapsed([f.id], row.expanded)}
                         sx={{
                             ...(desktop && desktopListItemSx()),
+                            ...treeGuideSx(row.depth),
+                            ...dropHighlightSx(dropHighlight(row, rowKey)),
                             pl: folderDepthPl(row.depth),
                             pr: "max(env(safe-area-inset-right), 12px)",
                             mx: 0.75,
@@ -1276,9 +1505,9 @@ function SessionList({
                                 ? <ExpandMore sx={{ fontSize: "1.5rem" }} />
                                 : <ChevronRight sx={{ fontSize: "1.5rem" }} />}
                         </Box>
-                        {row.status
-                            ? <StatusDot status={row.status} sx={{ mr: 1 }} />
-                            : <Box aria-hidden sx={{ width: 10, height: 10, mr: 1, flexShrink: 0 }} />}
+                        {/* No leading status dot: one dot cannot say how many
+                            agents run, and an empty folder left a hole there.
+                            Live counts sit in the trailing activity capsule. */}
                         <ListItemText
                             primary={
                                 <Stack
@@ -1326,6 +1555,7 @@ function SessionList({
                             }
                             slotProps={{ primary: { component: "div" } }}
                         />
+                        <FolderActivityBadges activity={row.activity} total={row.sessionCount} />
                         <IconButton
                             className="cowboy-session-actions"
                             aria-label={`folder actions ${f.name}`}
@@ -1384,6 +1614,8 @@ function SessionList({
                         // inset on the notch side in landscape — ui.md §7).
                         sx={{
                             ...(desktop && desktopListItemSx()),
+                            ...treeGuideSx(row.depth),
+                            ...dropHighlightSx(dropHighlight(row, s.id)),
                             ...(desktop && s.id === activeId && {
                                 // Bind current-session material to the row itself.
                                 // This survives both the in-flow rail and the
@@ -1415,6 +1647,14 @@ function SessionList({
                             ...(deleting && {
                                 pointerEvents: "none",
                                 opacity: 0.55,
+                            }),
+                            // The lifted row is opaque so the rows it passes
+                            // over never show through its text.
+                            ...(sortable.drag?.id === s.id && {
+                                bgcolor: "background.paper",
+                                boxShadow: (t: Theme) =>
+                                    `0 8px 24px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
+                                "&::before": { display: "none" },
                             }),
                         }}
                     >
@@ -1504,6 +1744,34 @@ function SessionList({
                                 },
                             }}
                         />
+                        {sortable.drag?.id === s.id && (
+                            // Name the destination while dragging, so the drop
+                            // never has to be guessed from the gap alone.
+                            <Chip
+                                size="small"
+                                color="primary"
+                                icon={dropFolderName
+                                    ? <FolderOutlined sx={{ fontSize: "0.95rem !important" }} />
+                                    : undefined}
+                                label={dropFolderName ?? "Top level"}
+                                data-session-drop-destination
+                                sx={{
+                                    // A tag on the lifted row's top edge: it
+                                    // never squeezes the title it travels with.
+                                    position: "absolute",
+                                    top: -10,
+                                    right: 48,
+                                    zIndex: 1,
+                                    boxShadow: 2,
+                                    pointerEvents: "none",
+                                    maxWidth: "9rem",
+                                    height: "1.5rem",
+                                    fontSize: "0.75rem",
+                                    fontWeight: 650,
+                                    "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" },
+                                }}
+                            />
+                        )}
                         {desktop && slot >= 0 && slot < 10 && (
                             <Suspense fallback={null}>
                                 <DesktopSessionShortcut
@@ -2636,9 +2904,14 @@ export function App({
     // on parallel context without squeezing the actual work panes into slivers.
     const mobile = surface === "touch";
     const phone = useMediaQuery("(max-width:767.95px) and (pointer:coarse)");
-    const compactDesktopWidth = useMediaQuery("(max-width:1099px)");
+    const compactDesktopWidth = useMediaQuery(DESKTOP_COMPACT_WIDTH_QUERY);
     const desktopNavCollapsed = surface === "desktop" && compactDesktopWidth;
     const sessionsInDrawer = mobile || desktopNavCollapsed;
+    // A user-collapsed Sessions pane (wide Desktop only) keeps its list mounted
+    // but hidden and shows the narrow session switcher rail instead. Compact
+    // Desktop already owns Sessions through the drawer above.
+    const sessionsCollapsed = surface === "desktop" && !compactDesktopWidth &&
+        desktopWorkspace?.collapsedPanes.sessions === true;
     // Navbar placement belongs exclusively to the Touch product. When its user
     // picks "bottom", the AppBar moves below the transcript, just
     // above the composer (mobile-browser bottom-bar feel). The modals read the
@@ -2887,6 +3160,18 @@ export function App({
     const [colResizing, setColResizing] = useState(false);
     const colWidthRef = useRef(colWidth);
     colWidthRef.current = colWidth;
+    // Drag-to-collapse preview: the pane a splitter release would fold away.
+    const [sessionsCollapseIntent, setSessionsCollapseIntent] = useState(false);
+    const [workCollapseIntent, setWorkCollapseIntent] =
+        useState<"prompt" | "conversation" | null>(null);
+    // Compact Desktop: the Sessions collapse command opens/closes the drawer.
+    useEffect(() => {
+        if (surface !== "desktop") return undefined;
+        const onToggle = (): void => setDrawerOpen((open) => !open);
+        globalThis.addEventListener(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT, onToggle);
+        return (): void =>
+            globalThis.removeEventListener(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT, onToggle);
+    }, [surface]);
     useEffect(() => {
         if (!desktopWorkspace) return undefined;
         const onKeyboardResize = (event: Event): void => {
@@ -2951,6 +3236,11 @@ export function App({
             !sessions.some((session) => session.id === pendingCreatedSession.id)
         ? [pendingCreatedSession, ...sessions]
         : sessions;
+    // The collapsed Sessions rail lists tiles in Alt/Option slot order.
+    const collapsedRailSessions = useMemo(
+        () => sessionsCollapsed ? displayedSessionOrder(sessionsForView) : [],
+        [sessionsCollapsed, sessionsForView],
+    );
     const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
@@ -3103,15 +3393,26 @@ export function App({
         const el = e.currentTarget;
         el.setPointerCapture(e.pointerId);
         setResizing(true);
+        // Overshooting the minimum folds Sessions away on release; the drag
+        // previews that by dimming the rail. Its width stays what it was.
+        let collapse = false;
         const onMove = (ev: PointerEvent): void => {
-            setSidebarWidth(clampSidebarWidth(startWidth + (ev.clientX - startX)));
+            const raw = startWidth + (ev.clientX - startX);
+            const next = desktopWorkspace !== null && dragCollapses(raw, SIDEBAR_MIN);
+            if (next !== collapse) {
+                collapse = next;
+                setSessionsCollapseIntent(next);
+            }
+            setSidebarWidth(clampSidebarWidth(collapse ? startWidth : raw));
         };
         const onUp = (): void => {
             el.releasePointerCapture(e.pointerId);
             el.removeEventListener("pointermove", onMove);
             el.removeEventListener("pointerup", onUp);
             setResizing(false);
+            setSessionsCollapseIntent(false);
             sidebarWidthStore.set(widthRef.current);
+            if (collapse) desktopWorkspace?.togglePane("sessions");
         };
         el.addEventListener("pointermove", onMove);
         el.addEventListener("pointerup", onUp);
@@ -3129,15 +3430,36 @@ export function App({
         const el = e.currentTarget;
         el.setPointerCapture(e.pointerId);
         setColResizing(true);
+        // Measure the rendered geometry: the stored width may exceed what the
+        // Conversation floor lets Prompt occupy. Overshooting either pane's
+        // floor folds that pane away on release and keeps the stored width.
+        const renderedPrompt = el.previousElementSibling?.getBoundingClientRect().width ?? startWidth;
+        const containerWidth = el.parentElement?.getBoundingClientRect().width ?? 0;
+        let collapse: "prompt" | "conversation" | null = null;
         const onMove = (ev: PointerEvent): void => {
-            setColWidth(clampComposerColWidth(startWidth + (ev.clientX - startX)));
+            const dx = ev.clientX - startX;
+            const rawPrompt = renderedPrompt + dx;
+            const next = desktopWorkspace === null
+                ? null
+                : dragCollapses(rawPrompt, DESKTOP_PROMPT_MIN)
+                ? "prompt"
+                : dragCollapses(containerWidth - rawPrompt, DESKTOP_CONVERSATION_MIN)
+                ? "conversation"
+                : null;
+            if (next !== collapse) {
+                collapse = next;
+                setWorkCollapseIntent(next);
+            }
+            setColWidth(clampComposerColWidth(collapse ? startWidth : startWidth + dx));
         };
         const onUp = (): void => {
             el.releasePointerCapture(e.pointerId);
             el.removeEventListener("pointermove", onMove);
             el.removeEventListener("pointerup", onUp);
             setColResizing(false);
+            setWorkCollapseIntent(null);
             composerColWidthStore.set(colWidthRef.current);
+            if (collapse) desktopWorkspace?.togglePane(collapse);
         };
         el.addEventListener("pointermove", onMove);
         el.addEventListener("pointerup", onUp);
@@ -3233,6 +3555,10 @@ export function App({
                         shortcut={DESKTOP_SHORTCUTS.focusSessions}
                         title="Focus Sessions"
                         singleKeycap={DESKTOP_SHORTCUTS.focusSessions}
+                    />
+                    <DesktopPaneCollapseButton
+                        pane="sessions"
+                        sx={{ ml: 0.5, mr: -0.75, WebkitAppRegion: "no-drag" }}
                     />
                 </Suspense>
             )}
@@ -3505,8 +3831,24 @@ export function App({
                     {list}
                 </DetentSheet>
             ) : !mobile ? (
+                <>
+                {sessionsCollapsed && (
+                    <Suspense fallback={null}>
+                        <DesktopSessionsRail
+                            sessions={collapsedRailSessions}
+                            activeId={active?.id ?? null}
+                            allowNewSession={canStartSession}
+                            onPick={pick}
+                            onNew={openNewSession}
+                            renderStatus={(s): React.ReactNode => (
+                                <StatusDot status={s.status} backgroundTasks={s.background_tasks} />
+                            )}
+                        />
+                    </Suspense>
+                )}
                 <Stack
                     data-desktop-pane="sessions"
+                    data-desktop-pane-collapsed={sessionsCollapsed ? "true" : undefined}
                     data-desktop-region="sessions.list"
                     data-desktop-reorderable="true"
                     data-desktop-focus-default
@@ -3517,6 +3859,11 @@ export function App({
                         borderRight: 1,
                         borderColor: "divider",
                         height: "100%",
+                        // Collapsed Sessions stays mounted: its list still owns
+                        // the Alt/Option+1…0 slots and folder state.
+                        display: sessionsCollapsed ? "none" : "flex",
+                        opacity: sessionsCollapseIntent ? 0.38 : 1,
+                        transition: "opacity 120ms ease",
                         // Anchor the absolutely-positioned resize handle.
                         position: "relative",
                     }}
@@ -3587,6 +3934,7 @@ export function App({
                         )}
                     </Box>
                 </Stack>
+                </>
             ) : null}
 
             <Stack
@@ -3958,6 +4306,13 @@ export function App({
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
+                            // The collapsed Sessions rail is narrower than the
+                            // window controls, so they overhang this bar too.
+                            ...(sessionsCollapsed && {
+                                "@media (display-mode: window-controls-overlay)": {
+                                    pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
+                                },
+                            }),
                         }}
                     >
                         {/* Whenever the Sessions rail is hidden, its drawer toggle
@@ -4225,6 +4580,13 @@ export function App({
                                 projection={exploreState.projection}
                                 onProjectionChange={(projection): void =>
                                     changeTranscriptProjection(active.id, projection)}
+                                collapseIntent={workCollapseIntent}
+                                conversationActivity={(
+                                    <StatusDot
+                                        status={active.status}
+                                        backgroundTasks={active.background_tasks}
+                                    />
+                                )}
                                 prompt={active.system ? (
                                     <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                         View-only system session — managed by cowboy

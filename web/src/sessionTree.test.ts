@@ -9,6 +9,9 @@ import {
   foldersRevealing,
   mostUrgentStatus,
   movedRowKey,
+  projectSessionDrop,
+  rowInsideFolder,
+  sessionActivity,
   sessionTreeRowKey,
 } from "./sessionTree";
 
@@ -75,6 +78,8 @@ function shape(rows: ReturnType<typeof buildSessionTree>["rows"]): string[] {
       ? `${"  ".repeat(row.depth)}${row.folder.id}${
         row.expanded ? "" : "+"
       }(${row.sessionCount}${row.status ? `,${row.status}` : ""})`
+      : row.kind === "empty"
+      ? `${"  ".repeat(row.depth)}(empty)`
       : `${"  ".repeat(row.depth)}${row.session.id}`
   );
 }
@@ -89,6 +94,7 @@ Deno.test("folders precede sessions, keep display order, and aggregate status", 
     "  s3",
     // A folder whose parent vanished shows at the root, in position order.
     "f-orphan(0)",
+    "  (empty)",
     "f-garden(1,running)",
     "  s5",
     "s2",
@@ -102,6 +108,7 @@ Deno.test("collapsed folders hide their rows but keep their counts", () => {
   assertEquals(shape(tree.rows), [
     "f-cowboy+(3,busy)",
     "f-orphan(0)",
+    "  (empty)",
     "f-garden(1,running)",
     "  s5",
     "s2",
@@ -119,7 +126,13 @@ Deno.test("a parent cycle is cut at the root instead of looping", () => {
     placement: {},
   };
   const tree = buildSessionTree([session("s1")], cyclic, new Set());
-  assertEquals(shape(tree.rows), ["f-a(0)", "f-b(0)", "s1"]);
+  assertEquals(shape(tree.rows), [
+    "f-a(0)",
+    "  (empty)",
+    "f-b(0)",
+    "  (empty)",
+    "s1",
+  ]);
 });
 
 Deno.test("status priority prefers what needs attention", () => {
@@ -177,4 +190,59 @@ Deno.test("the list component takes its direction from one shared helper", async
   assertEquals(/mobileDrawer\s*\?\s*\[\.\.\.\w+\]\.reverse\(\)/.test(source), false);
   assertEquals(source.includes("displayedSessionOrder(sessions)"), true);
   assertEquals(source.includes("reorderSessions(displayedSessionOrder("), true);
+});
+
+Deno.test("folders count working, attention and live agents separately", () => {
+  const tree = buildSessionTree(sessions, value, new Set());
+  const cowboy = tree.rows[0];
+  assertEquals(cowboy?.kind === "folder" ? cowboy.activity : null, {
+    working: 1,
+    attention: 1,
+    live: 0,
+  });
+  assertEquals(
+    sessionActivity([
+      { status: "running", background_tasks: 2 },
+      { status: "running" },
+      { status: "starting" },
+      { status: "exited" },
+      { status: "crashed" },
+    ]),
+    // Idle-but-waiting on background work is working, like the row spinner.
+    { working: 1, attention: 1, live: 2 },
+  );
+});
+
+Deno.test("an expanded empty folder owns one empty body row", () => {
+  const rows = buildSessionTree(sessions, value, new Set()).rows;
+  const index = rows.findIndex((row) => row.kind === "empty");
+  assertEquals(sessionTreeRowKey(rows[index]!), "empty:f-orphan");
+  // Dropping onto the empty body files into that folder.
+  const without = rows.filter((row) => row.kind !== "session" || row.session.id !== "s2");
+  assertEquals(dropTargetFolder(without, index + 1), "f-orphan");
+});
+
+Deno.test("a drag projects its container from slot bounds and horizontal intent", () => {
+  // Rows with s2 (root, depth 0) picked up.
+  const rows = buildSessionTree(sessions, value, new Set(["f-garden"])).rows
+    .filter((row) => row.kind !== "session" || row.session.id !== "s2");
+  // [0 f-cowboy, 1 f-ime, 2 s4, 3 s1, 4 s3, 5 f-orphan, 6 (empty), 7 f-garden+]
+  assertEquals(projectSessionDrop(rows, 0, 0), { folder: null, depth: 0 });
+  // Right below a header goes into that folder, collapsed or not.
+  assertEquals(projectSessionDrop(rows, 1, 0), { folder: "f-cowboy", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 8, 0), { folder: "f-garden", depth: 1 });
+  // Between children the slot bounds clamp the depth.
+  assertEquals(projectSessionDrop(rows, 3, 0), { folder: "f-cowboy", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 3, 0, 2), { folder: "f-ime", depth: 2 });
+  assertEquals(projectSessionDrop(rows, 3, 2), { folder: "f-ime", depth: 2 });
+  // At the end of a folder block the drag keeps its own depth unless pushed.
+  assertEquals(projectSessionDrop(rows, 5, 0), { folder: null, depth: 0 });
+  assertEquals(projectSessionDrop(rows, 5, 0, 1), { folder: "f-cowboy", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 5, 1), { folder: "f-cowboy", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 5, 1, -3), { folder: null, depth: 0 });
+  // Below the empty body: stay out unless pushed in.
+  assertEquals(projectSessionDrop(rows, 7, 0), { folder: null, depth: 0 });
+  assertEquals(projectSessionDrop(rows, 7, 0, 1), { folder: "f-orphan", depth: 1 });
+  assertEquals(rowInsideFolder(rows[2]!, "f-cowboy", value), true);
+  assertEquals(rowInsideFolder(rows[5]!, "f-cowboy", value), false);
 });

@@ -57,6 +57,8 @@ The redesign must move ownership, not add more `surface === "desktop"` branches.
 - Conversation is the default primary pane and keeps a readable minimum.
 - Prompt defaults to 420 px, is independently resizable, and may be maximized.
 - Every pane can be hidden, restored, or maximized without changing product mode.
+  Collapse is implemented (workspace prefix then `[` `]` `\`); the contract
+  lives in `web/src/desktop/FOCUS.md` § Pane collapse.
 - Controls expand from the actual container width. A Desktop layout label or
   viewport breakpoint never decides whether useful controls are hidden.
 - Dense top-bar controls use available horizontal space before adding menus.

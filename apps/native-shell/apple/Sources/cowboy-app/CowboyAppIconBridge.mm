@@ -93,8 +93,16 @@ __attribute__((constructor)) static void cowboyInstallAppIconBridge(void) {
             @try {
                 WKUserContentController *controller = configuration.userContentController;
                 [controller addScriptMessageHandlerWithReply:handler contentWorld:WKContentWorld.pageWorld name:@"cowboyAppIcon"];
-                NSString *source = @"Object.defineProperty(window,'__cowboyAppIcon',{value:function(request){"
-                    @"return window.webkit.messageHandlers.cowboyAppIcon.postMessage(request)}});";
+                NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+                NSData *metadata = [NSJSONSerialization dataWithJSONObject:@{
+                    @"version":info[@"CFBundleShortVersionString"] ?: @"",
+                    @"build":info[@"CFBundleVersion"] ?: @""
+                } options:0 error:nil];
+                NSString *json = [[NSString alloc] initWithData:metadata encoding:NSUTF8StringEncoding];
+                NSString *source = [NSString stringWithFormat:
+                    @"Object.defineProperty(window,'__cowboyNativeApp',{value:Object.freeze(%@)});"
+                    @"Object.defineProperty(window,'__cowboyAppIcon',{value:function(request){"
+                    @"return window.webkit.messageHandlers.cowboyAppIcon.postMessage(request)}});", json];
                 [controller addUserScript:[[WKUserScript alloc] initWithSource:source injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
             } @catch (__unused NSException *exception) { }
             return ((WKWebView *(*)(id, SEL, CGRect, WKWebViewConfiguration *))predecessor)(receiver, @selector(initWithFrame:configuration:), frame, configuration);
