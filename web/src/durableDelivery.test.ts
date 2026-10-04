@@ -19,11 +19,10 @@ Deno.test("connected durable delivery starts its confirmation timeout", () => {
   });
 });
 
-Deno.test("a reconnect window routes even an idle prompt through the durable outbox", () => {
-  assertEquals(shouldUseTranscriptDelivery(false, true, true), false);
-  assertEquals(shouldUseTranscriptDelivery(true, true, true), true);
-  assertEquals(shouldUseTranscriptDelivery(true, false, true), false);
-  assertEquals(shouldUseTranscriptDelivery(true, true, false), false);
+Deno.test("an idle prompt stays in the conversation through a reconnect window", () => {
+  assertEquals(shouldUseTranscriptDelivery(true, true), true);
+  assertEquals(shouldUseTranscriptDelivery(false, true), false);
+  assertEquals(shouldUseTranscriptDelivery(true, false), false);
 });
 
 Deno.test("a dependent send waits for its latest durable snapshot", async () => {

@@ -157,11 +157,10 @@ export function lateEchoRetiresRecoveryDraft(
 }
 
 export function destinationForPrompt(
-  connected: boolean,
   dispatchable: boolean,
   queueEmpty: boolean,
 ): DeliveryDestination {
-  return shouldUseTranscriptDelivery(connected, dispatchable, queueEmpty)
+  return shouldUseTranscriptDelivery(dispatchable, queueEmpty)
     ? "transcript"
     : "queue";
 }

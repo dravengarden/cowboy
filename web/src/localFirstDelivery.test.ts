@@ -92,11 +92,10 @@ Deno.test("an explicit send paints loading as soon as the frame leaves", () => {
   assertEquals(statusAfterExplicitSend(false), "pending");
 });
 
-Deno.test("idle connected prompts go to the transcript; everything else is durable queue", () => {
-  assertEquals(destinationForPrompt(true, true, true), "transcript");
-  assertEquals(destinationForPrompt(false, true, true), "queue");
-  assertEquals(destinationForPrompt(true, false, true), "queue");
-  assertEquals(destinationForPrompt(true, true, false), "queue");
+Deno.test("idle prompts go to the transcript, online or not; everything else is durable queue", () => {
+  assertEquals(destinationForPrompt(true, true), "transcript");
+  assertEquals(destinationForPrompt(false, true), "queue");
+  assertEquals(destinationForPrompt(true, false), "queue");
 });
 
 Deno.test("return is offered on queue cards and on drafts that came from the queue", () => {

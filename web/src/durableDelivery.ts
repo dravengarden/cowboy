@@ -52,11 +52,15 @@ export async function discardDurableDelivery(
 
 /** Choose the immediate transcript presentation only when the prompt is likely
  *  to dispatch. Both transcript and queued presentation use the same durable
- *  IndexedDB mutation lane, so this predicate affects placement, not safety. */
+ *  IndexedDB mutation lane, so this predicate affects placement, not safety.
+ *
+ *  Connectivity is deliberately not an input. An idle session dispatches the
+ *  outbox resend as soon as the socket returns; parking an offline prompt in the
+ *  queue rail made it vanish from the conversation, then jump back once the
+ *  echo crossed a slow link. The bubble stays put and shows it is unsent. */
 export function shouldUseTranscriptDelivery(
-  connected: boolean,
   dispatchable: boolean,
   queueEmpty: boolean,
 ): boolean {
-  return connected && dispatchable && queueEmpty;
+  return dispatchable && queueEmpty;
 }

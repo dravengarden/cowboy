@@ -3921,6 +3921,10 @@ async function mutateQueueDurably<K extends keyof typeof qMut & string>(
   name: K,
   args: ArgsOf<QValue, typeof qMut, K>,
   id: string,
+  // Work that must finish before the durable write (restoration, a decision
+  // about older held sends). It runs AFTER the preview is painted, so a slow
+  // IndexedDB restore never leaves the gesture without visible feedback.
+  before?: () => Promise<void>,
 ) {
   if (productSessionAbandoned) throw new Error("product sync owner is closed");
   const previews = queuePreviews.get(sessionId) ?? new Map();
@@ -3933,6 +3937,7 @@ async function mutateQueueDurably<K extends keyof typeof qMut & string>(
   queuePreviews.set(sessionId, previews);
   commitQueue(sessionId);
   try {
+    await before?.();
     const store = await durableQueue(sessionId);
     return await store.mutateDurably(name, args, id);
   } catch (error) {
@@ -4238,9 +4243,15 @@ async function qAdd(
   const mode = opts.mode ?? "back";
   const origin = opts.origin ?? "composer";
   const cmid = opts.cmid ?? newCmid();
-  if (target === "transcript" || target === "queue") {
-    await prepareAuthoredSend(sessionId, opts.sourceCmid);
-  }
+  // Restoring the outbox and resolving older held sends can take seconds on a
+  // busy device. They run behind the preview, never before it (see below).
+  let preparing = target === "transcript" || target === "queue";
+  const prepare = preparing
+    ? async (): Promise<void> => {
+      await prepareAuthoredSend(sessionId, opts.sourceCmid);
+      preparing = false;
+    }
+    : undefined;
   if (target === "transcript") rememberSendImagePreviews(cmid, attachments, text);
   const row: QueuedMessage = {
     id: `opt-${cmid}`,
@@ -4284,7 +4295,7 @@ async function qAdd(
     // A newly opened session can be authored before its queue read completes.
     // Adopt this outbox's exact delta baseline before saving; unrelated caches
     // and network readiness remain independent of this durability barrier.
-    await mutateQueueDurably(sessionId, mutator, { row }, cmid);
+    await mutateQueueDurably(sessionId, mutator, { row }, cmid, prepare);
   } catch (error) {
     olderFailedByNewCmid.delete(cmid);
     qStatus.delete(cmid);
@@ -4296,6 +4307,9 @@ async function qAdd(
       optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, new Set([cmid])),
     });
     commitQueue(sessionId);
+    // A declined earlier-message decision is the user's answer, not a
+    // storage failure; the source editor keeps the text either way.
+    if (preparing) throw error;
     reportClientLog("error", "delivery_persist_failed", error, {
       session_id: sessionId,
       mutation_id: cmid,
@@ -4783,7 +4797,7 @@ export function submitPrompt(
   // state.queues already includes optimistic queue rows (merged by commitQueue),
   // so this covers both server + local pending.
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
+  if (shouldUseTranscriptDelivery(dispatchable, queueEmpty)) {
     // → dispatch: an optimistic CHAT bubble in the transcript.
     return optimisticMessage(sessionId, trimmed, attachments, "composer");
   } else {
@@ -4803,7 +4817,7 @@ export function forcePrompt(sessionId: string, text: string, attachments: Attach
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
+  if (shouldUseTranscriptDelivery(dispatchable, queueEmpty)) {
     // Idle → nothing to force ahead of; a normal optimistic chat send.
     return optimisticMessage(sessionId, trimmed, attachments, "composer");
   } else {
@@ -4825,7 +4839,7 @@ export function frontPrompt(sessionId: string, text: string, attachments: Attach
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
-  if (shouldUseTranscriptDelivery(isConnected(), dispatchable, queueEmpty)) {
+  if (shouldUseTranscriptDelivery(dispatchable, queueEmpty)) {
     return optimisticMessage(sessionId, trimmed, attachments, "composer");
   } else {
     return qAdd("queue", sessionId, trimmed, attachments, { mode: "front", origin: "composer" });
@@ -4902,7 +4916,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
   if (target.kind === "local") {
-    if (destinationForPrompt(isConnected(), sessionDispatchable(sessionId), true) === "transcript") {
+    if (destinationForPrompt(sessionDispatchable(sessionId), true) === "transcript") {
       await optimisticMessage(sessionId, row.text, row.attachments, "queue", row.cmid);
       await discardQueued(sessionId, target.cmid);
       return;
@@ -5127,7 +5141,6 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const dest = destinationForPrompt(
-    isConnected(),
     sessionDispatchable(sessionId),
     (state.queues.get(sessionId)?.length ?? 0) === 0,
   );
