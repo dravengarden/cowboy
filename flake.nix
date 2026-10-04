@@ -424,7 +424,18 @@
       cowboy-deletion-conformance = rustPlatform.buildRustPackage {
         pname = "cowboy-deletion-conformance";
         version = "0.1.0";
-        src = machine-src;
+        # Production Machine sources omit these fixture-only manifest inputs.
+        # Keep them in the conformance closure rather than broadening the host.
+        src = pkgs.runCommand "cowboy-deletion-conformance-source" {} ''
+          mkdir -p "$out"
+          cp -r ${machine-src}/. "$out/"
+          chmod -R u+w "$out"
+          mkdir -p "$out/examples/telemetry/victoria"
+          cp ${./examples/telemetry/victoria/plugin.json} \
+            "$out/examples/telemetry/victoria/plugin.json"
+          cp ${./examples/telemetry/victoria/telemetry.json} \
+            "$out/examples/telemetry/victoria/telemetry.json"
+        '';
         cargoDeps = cowboy-cargo-deps;
         nativeBuildInputs = [ pkgs.pkg-config pkgs.python3 ];
         buildInputs = [ pkgs.openssl ];
