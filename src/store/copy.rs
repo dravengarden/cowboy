@@ -16,6 +16,8 @@ use super::sqlite::SqliteStorage;
 
 const TABLES: &[&str] = &[
     "core_security_authority",
+    "cardea_operation_capacity",
+    "cardea_operations",
     "machines",
     "usage_execution_machines",
     "plugin_install_operations",
@@ -299,6 +301,10 @@ pub(crate) async fn postgres_to_sqlite(
             .context("removing SQLite bootstrap Machine row")?;
 
         let mut copied = BTreeMap::new();
+        sqlx::query("DELETE FROM cardea_operation_capacity")
+            .execute(&mut *destination_transaction)
+            .await
+            .context("removing SQLite bootstrap Cardea capacity row")?;
         for table in TABLES {
             eprintln!("copying {table}...");
             let source_columns = postgres_columns(&mut source_transaction, table).await?;

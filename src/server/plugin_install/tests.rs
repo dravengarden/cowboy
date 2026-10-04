@@ -77,7 +77,8 @@ impl Effects for MockEffects {
     async fn needs_auth_sync(&self, _: bool) -> bool {
         self.sync
     }
-    async fn sync_auth(&self) -> bool {
+    async fn sync_auth(&self, before_install: bool) -> bool {
+        assert_eq!(before_install, self.installs.load(Ordering::SeqCst) == 0);
         self.syncs.fetch_add(1, Ordering::SeqCst) != self.sync_fails_at
     }
     async fn install(&self, step: &InstallStep) -> Result<InstallObservation, CommandRequestError> {
