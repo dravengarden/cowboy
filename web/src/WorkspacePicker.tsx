@@ -1,3 +1,4 @@
+import { isImeKeyEvent } from "./imeKey";
 import { useMemo, useState } from "react";
 import {
   Box,
@@ -69,13 +70,22 @@ export function WorkspacePicker(
       )?.focus();
     });
   };
+  const openPicker = (element: HTMLElement): void => {
+    const selectedPath = selected?.hierarchyPath ??
+      selected?.label.split("/") ?? [];
+    const node = workspaceBranch(root, selectedPath);
+    // A selectable parent opens itself; a leaf opens its containing directory.
+    setPath(node.children.size > 0 ? node.path : node.path.slice(0, -1));
+    setSearch("");
+    setAnchor(element);
+  };
   const choose = (id: string): void => {
     onChange(id);
     setAnchor(null);
   };
   const entryRow = (
     entry: WorkspaceEntry,
-    label = entry.label,
+    rowLabel = entry.label,
     browsePath?: string[],
     currentParent = false,
   ): React.JSX.Element => (
@@ -119,7 +129,7 @@ export function WorkspacePicker(
           component="span"
           sx={{ fontWeight: currentParent ? 600 : 400 }}
         >
-          {label}
+          {rowLabel}
         </Typography>
         {currentParent && (
           <Typography variant="caption" display="block" color="text.secondary">
@@ -153,17 +163,14 @@ export function WorkspacePicker(
           },
         }}
         onClick={(event) => {
-          setPath([]);
-          setSearch("");
-          setAnchor(event.currentTarget);
+          openPicker(event.currentTarget);
         }}
         onKeyDown={(event) => {
+          if (isImeKeyEvent(event.nativeEvent)) return;
           if (["Enter", " ", "ArrowDown"].includes(event.key)) {
             event.preventDefault();
             event.stopPropagation();
-            setPath([]);
-            setSearch("");
-            setAnchor(event.currentTarget);
+            openPicker(event.currentTarget);
           }
         }}
       />
@@ -301,6 +308,7 @@ export function WorkspacePicker(
         </Stack>
         <MenuList
           id="workspace-picker-menu"
+          autoFocusItem
           aria-label={label === "Project" ? "Projects" : "Working directories"}
           sx={{
             px: 0.75,
