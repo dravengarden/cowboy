@@ -760,12 +760,40 @@ pub struct DesiredComponent {
     pub entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Signed reader-only claim; it does not grant portable state admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_deletion_journal: Option<SessionDeletionReader>,
     /// Optional executable readiness check run against the staged generation
     /// before any active symlink changes. Automatic activation requires one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<ComponentProbe>,
     #[serde(default)]
     pub automatic: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionDeletionReader {
+    pub reader_schema: u32,
+    pub writer_schema: u32,
+}
+
+impl DesiredComponent {
+    #[cfg(any(feature = "full", feature = "machine-host"))]
+    pub(crate) fn validate_session_deletion_declaration(&self) -> Result<(), &'static str> {
+        let Some(reader) = &self.session_deletion_journal else {
+            return Ok(());
+        };
+        if self.id.kind != ComponentKind::MachineHost || !self.id.slot.is_empty() {
+            return Err("Session deletion declaration requires the singleton Machine host");
+        }
+        if reader.reader_schema != 1 || reader.writer_schema != 0 {
+            return Err(
+                "Session deletion declaration requires schema-1 reader and disabled writer",
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

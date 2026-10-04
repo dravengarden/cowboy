@@ -79,7 +79,7 @@ primary phone/desktop product path.
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
 - [`plugin-session-deletion-journal.md`](plugin-session-deletion-journal.md) — Reader-first terminal Session records, component reader floor and bounded recovery; production writer remains disabled
-- [`plugin-activation-authority.md`](plugin-activation-authority.md) — Independent old-tool authority audit and proposed privileged-owner separation; decision pending
+- [`plugin-activation-authority.md`](plugin-activation-authority.md) — Independent old-tool authority audit and selected trusted-administrator scope; stronger isolation remains unimplemented
 - [`releases/plugin-session-deletion-reader-2026-10-03.md`](releases/plugin-session-deletion-reader-2026-10-03.md) — Initial bounded reader, IPC fixtures and Hawk writer-disabled activation
 - [`releases/plugin-session-deletion-compatibility-2026-10-03.md`](releases/plugin-session-deletion-compatibility-2026-10-03.md) — Immutable reader declarations and component activation/rollback admission
 - [`releases/plugin-session-deletion-floor-2026-10-03.md`](releases/plugin-session-deletion-floor-2026-10-03.md) — Root-owned durable reader floor, live undeclared-artifact refusal and same-generation recovery fixtures
@@ -95,6 +95,8 @@ primary phone/desktop product path.
 - [`releases/plugin-maintenance-authority-2026-10-04.md`](releases/plugin-maintenance-authority-2026-10-04.md) — Durable maintenance authority validation for journals and receipts before recovery acceptance
 - [`releases/plugin-store-root-2026-10-04.md`](releases/plugin-store-root-2026-10-04.md) — Canonical durable release roots and verified owner activation after authorized terminal-task retirement
 - [`releases/plugin-rollback-predecessor-2026-10-04.md`](releases/plugin-rollback-predecessor-2026-10-04.md) — Same-lane manifest admission before ordinary rollback restoration and verified owner activation
+- [`releases/plugin-installed-owner-2026-10-04.md`](releases/plugin-installed-owner-2026-10-04.md) — Supported dispatch pinned to the installed immutable owner, retired candidate transactions and preserved sudo policy
+- [`releases/plugin-portable-reader-claim-2026-10-04.md`](releases/plugin-portable-reader-claim-2026-10-04.md) — Signed read-only portable reader declaration and preserved legacy transcript; state admission remains closed
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags

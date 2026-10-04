@@ -1,14 +1,15 @@
 # Independent activation authority: audited gap and proposed boundary
 
-This is a decision proposal, not an implemented permission fence. The deployed
-owner at Columbus `8ad13670` validates ordinary rollback targets; it does not
+This records the authority audit, the selected administrator boundary and the
+remaining stronger isolation proposal. It is not a permission fence. At the audit baseline, the
+owner at Columbus `8ad13670` validated ordinary rollback targets; it did not
 control independently privileged old activators or same-user old installers.
 Production Session deletion writing remains disabled.
 
 ## Actual bypasses
 
-The Columbus dispatcher resolves its own executable and supplies it to
-`SystemdRunArgs`, then invokes `sudo systemd-run` to execute that binary's
+At the audit baseline, the Columbus dispatcher resolved its own executable and
+supplied it to `SystemdRunArgs`, then invoked `sudo systemd-run` to execute that binary's
 internal transaction as root. An independently supplied old executable can
 therefore run its own transaction implementation rather than the installed
 owner's admission checks. Its application code need not read the current reader
@@ -99,11 +100,28 @@ Disposable process fixtures are required before a host rights change. Actual
 production acceptance must separately record health, receipts and retained
 session/process observations; equal PIDs alone do not prove generation resume.
 
-## Decision required
+## Selected scope — October 4
 
-Strong isolation changes the deliberately retained Agent elevation policy and
-portable installation ownership. Its implementation needs a choice between
-that actor separation and retaining the current trusted-administrator scope.
-No permission policy, installation layout, service or production dataset was
-changed by this audit. The full refactor remains open under either unimplemented
-proposal.
+The user explicitly selected retaining sudo rights and continuing. The existing
+human/Agent `draven` administrator access stays trusted and unchanged; strong
+actor isolation is not selected. No further permission decision is pending for
+routine work within this scope.
+
+Supported component deployment and failed-transaction repair must use the
+installed machine owner. Caller-built clients must not elevate their own
+transaction executable; the old `candidate` transaction choice must refuse.
+The installed executable must be resolved once to its immutable Nix identity
+before preflight, rather than dispatching through a mutable host symlink.
+Updating that owner follows the existing clean committed host release path.
+
+This does not revoke independently invoked root-capable old executables or
+same-user portable installer writes. They are outside the selected guarantee,
+not secretly made safe by another application-level check. Portable compatible
+reader/recovery admission, production deletion writing and actual writer-release
+acceptance remain separate and closed until their own requirements are met.
+The whole refactor remains open.
+
+The [installed-owner release](releases/plugin-installed-owner-2026-10-04.md)
+implements the selected supported-entrypoint policy and records successful
+Hawk activation at owner source `e4a2b363`, with unchanged sudoers hashes and
+bounded process continuity. Strong actor isolation remains unimplemented.
