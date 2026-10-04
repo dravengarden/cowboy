@@ -425,3 +425,9 @@ uses recovery's regular-file, no-follow and 16 KiB publisher-key checks for
 ordinary cached startup too. FIFO, key symlink, oversized and invalid UTF-8 inputs
 refuse before cached code execution. This changes no floor, publisher or writer
 authority; configured keys must use regular files, as already required by recovery.
+
+The subsequent [logical namespace identity fix](releases/plugin-deletion-namespace-path-2026-10-04.md)
+retains the caller's absolute namespace path without resolving its final link
+before no-follow directory admission. Initial linked namespaces refuse before
+lock creation or broker binding; replacing a parent alias invalidates the held
+logical directory identity. It changes no production writer admission or schema.
