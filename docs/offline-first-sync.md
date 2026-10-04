@@ -718,6 +718,20 @@ the app has painted the same screen, and dissolving one copy of that screen
 through another doubles every glyph for a fifth of a second, which reads as a
 flash rather than as a transition.
 
+The saved screen's font-face rules remain in the document after hand-off.
+Removing them with the overlay can repaint the live transcript in a fallback
+face before its lazy font CSS import completes, even with cached font bytes.
+The reading family is selected in a layout effect before the first React paint.
+
+Session layout also has a single hand-off. Local replica adoption waits for the
+local title/order/folder reads to settle, concurrently with the replica reads;
+queue recovery and network admission do not depend on that wait. Each socket
+buffers its session, machine and sync-patch baseline until `bootstrap_complete`
+and reduces that batch synchronously before notifying React. Cached content
+stays visible throughout reconnect, admission/auth controls pass immediately,
+and an abandoned socket cannot publish an incomplete layout. Later live updates
+retain their normal presentation cadence.
+
 Measured with a real capture, saved screen mounted by CPU speed:
 
 | CPU | Saved screen on screen | Placeholder shown |

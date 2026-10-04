@@ -733,7 +733,10 @@
         const remove = () => {
           boot.host?.remove();
           boot.host = null;
-          document.getElementById("boot-snapshot-fonts")?.remove();
+          // Keep the faces for this document: the live reading font CSS loads
+          // asynchronously. Removing these rules at handover can make WebKit
+          // repaint in a fallback face until that import finishes, even when
+          // the woff2 bytes are already cached. The next navigation frees them.
         };
         boot.ready = () => {
           if (boot.done) return;

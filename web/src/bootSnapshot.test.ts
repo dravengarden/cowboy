@@ -150,3 +150,12 @@ Deno.test("the static boot shell and BootSkeleton render the same markup", async
     source.split(token).length - 1;
   assertEquals(count(html, 'class="boot-card'), count(skeleton, 'className="boot-card'));
 });
+
+Deno.test("snapshot handover retains font rules until the live lazy CSS arrives", async () => {
+  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+  assert(html.includes('fonts.id = "boot-snapshot-fonts"'));
+  assertFalse(html.includes('document.getElementById("boot-snapshot-fonts")?.remove()'));
+  const reading = await Deno.readTextFile(new URL("./readingSettings.ts", import.meta.url));
+  const faces = reading.slice(reading.indexOf("export function useReadingFontFaces"));
+  assert(faces.includes("useLayoutEffect"), "font family must be selected before first paint");
+});
