@@ -597,6 +597,19 @@ test-postgres:
 session-deletion-writer-conformance OLD NEW READER RECEIPT:
     unshare --user --map-root-user --mount --pid --net --fork --mount-proc python3 tools/session_deletion_writer_conformance.py --old-fixture "{{OLD}}" --new-fixture "{{NEW}}" --reader-release "{{READER}}" --receipt "{{RECEIPT}}"
 
+# Actual production binaries need real root ownership, but all authority mounts,
+# broker state, processes and networking live in independent private namespaces.
+session-deletion-production-conformance OLD NEW READER DEFAULT_READER RECEIPT:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host_mount=$(readlink /proc/self/ns/mnt)
+    host_net=$(readlink /proc/self/ns/net)
+    sudo -n unshare --mount --propagation private --pid --net --fork --mount-proc \
+      "$(command -v python3)" -B tools/session_deletion_production_conformance.py \
+      --old-writer "{{OLD}}" --new-writer "{{NEW}}" --reader-release "{{READER}}" \
+      --default-reader-release "{{DEFAULT_READER}}" --receipt "{{RECEIPT}}" \
+      --host-mount-ns "$host_mount" --host-net-ns "$host_net"
+
 check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres logs-conformance build
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
