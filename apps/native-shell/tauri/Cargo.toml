@@ -24,10 +24,10 @@ name = "cowboy_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "=2.6.2", features = [] }
+tauri-build = { version = "=2.7.0", features = [] }
 
 [dependencies]
-tauri = { version = "=2.11.2", features = [] }
+tauri = { version = "=2.12.0", features = [] }
 # Only native command the shell exposes: open the iOS app-settings page from the
 # loader's "去设置开启" button (where the Local Network toggle lives). On iOS the
 # opener routes `app-settings:` through UIApplication.open; a no-op everywhere the
