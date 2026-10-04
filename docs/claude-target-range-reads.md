@@ -153,3 +153,15 @@ The immutable original build commit and published bytes are retained. The full
 gate passed before the final additive Machine-host merge; Provider checks and
 all 13 Machine-component tests passed again after integration. No Controller,
 Machine-host, Web or native application release is activated by this task.
+
+The subsequent [OVH API path observation](experiments/ovh-provider-direct-api-2026-10-04.json)
+captured outbound TLS ClientHello for `chatgpt.com` on native IPv6 and
+`api.anthropic.com` on native IPv4/IPv6, all on OVH's `ens3`, with outer
+destinations matching official-origin DNS. Observed native Provider processes
+had no HTTP/SOCKS proxy environment or custom API base URL. Kernel defaults
+use `ens3`; no redirect, TPROXY or DNAT rules were present. This establishes
+sampled direct API egress, not an audit of every historical request.
+Account usage placement remains independent: Anthropic uses OVH, while
+OpenAI, xAI and DeepSeek use Hawk as previously selected. The Claude model
+probe exceeded its local response window, so successful full-turn acceptance
+and the timeout's root cause remain unverified despite the direct-path evidence.

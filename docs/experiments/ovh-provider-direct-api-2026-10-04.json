@@ -1,0 +1,74 @@
+{
+  "schema": "cowboy.provider-api-path-observation/v1",
+  "date": "2026-10-04",
+  "runtime_machine": "ovh",
+  "scope": "Standard installed Codex and Claude Code Provider API egress; not all historical requests",
+  "installed_plugins": {
+    "codex": "3.3.1",
+    "claude-code": "3.4.4"
+  },
+  "process_configuration": {
+    "observed_codex_app_servers": 3,
+    "observed_claude_processes": 4,
+    "http_https_socks_proxy_environment_present": false,
+    "custom_api_base_url_environment_present": false,
+    "codex_runtime_config_proxy_or_base_url_override_present": false
+  },
+  "host_routing": {
+    "ipv4_default_interface": "ens3",
+    "ipv6_default_interface": "ens3",
+    "policy_rule_tables": ["local", "main", "default"],
+    "nft_redirect_tproxy_dnat_rules": 0,
+    "stormbird_running_revision": 7
+  },
+  "outgoing_tls_client_hello_observations": [
+    {
+      "official_hostname": "chatgpt.com",
+      "capture_interface": "ens3",
+      "ip_versions_observed": [6],
+      "outer_destination_matches_official_origin_dns": true
+    },
+    {
+      "official_hostname": "api.anthropic.com",
+      "capture_interface": "ens3",
+      "ip_versions_observed": [4, 6],
+      "outer_destination_matches_official_origin_dns": true
+    }
+  ],
+  "tls_observation_window_seconds": 55,
+  "capture_payloads_persisted_or_printed": false,
+  "provider_credentials_printed": false,
+  "production_network_configuration_changed": false,
+  "claude_usage_refresh": {
+    "selected_executor": "ovh",
+    "http_status": 200,
+    "provider_status": "available"
+  },
+  "usage_executor_policy": {
+    "anthropic": "ovh",
+    "openai": "hawk",
+    "xai": "hawk",
+    "deepseek": "hawk"
+  },
+  "claude_model_probe": {
+    "official_cowboy_client_used": true,
+    "provider_id": "claude-code",
+    "runtime_machine": "ovh",
+    "target_machine": "hawk",
+    "business_files_modified": false,
+    "completed_response_confirmed": false,
+    "problem": "stdio ACP session/prompt exceeded the local 65-second observation window",
+    "probe_session_ids": ["sess-1791079282768", "sess-1791079282769"],
+    "cleanup": {
+      "method": "official ACP session/delete followed by session/list",
+      "probe_sessions_remaining": 0,
+      "machine_identity_deleted": false
+    },
+    "not_claimed": "Successful end-to-end Claude model turn or the root cause of its timeout"
+  },
+  "not_checked": [
+    "Every historical API request",
+    "Per-request process attribution for every captured TLS handshake",
+    "Fresh JMS outer-path proof for SSH to China peers"
+  ]
+}
