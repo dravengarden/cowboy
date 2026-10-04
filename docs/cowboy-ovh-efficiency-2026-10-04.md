@@ -379,3 +379,21 @@ and the retained acceptance failure are in the `final_host_followup` section of
 the JSON evidence. Send-confirmation and per-turn Matrix context redesign remain
 measurement-led follow-ups; no model-response or physical-client latency benefit
 is claimed by this account-usage optimization.
+
+## Launch verification proofs (supersedes the no-cache rule above)
+
+By operator decision the per-launch runtime comparison is no longer repeated
+while a retained runtime is provably unchanged. The first comparison in a
+Machine process still decompresses and hashes everything (components now in
+parallel). On success the Machine retains the inode, size, mode, mtime and
+ctime of every entry under `runtime/`; an identical stamp skips the full
+comparison. Unprivileged writers cannot restore ctime, so any rewrite, rename,
+chmod, addition or removal falls back to the full comparison; failed
+comparisons and entries changed within two seconds are never remembered.
+Signed Plugin/release descriptors are still verified on every request. Launch
+verification runs on the blocking pool and logs `verification_ms`.
+
+Hawk after activation (`cef8382d`): one cold comparison per Plugin
+(Codex 947 ms, Claude DeepSeek 593 ms, previously 1,467/2,008 ms per request),
+then usage resolution `verification_ms` 6–31 ms. OVH still runs the previous
+host until its separate maintenance transaction.
