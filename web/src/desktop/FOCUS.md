@@ -272,9 +272,15 @@ it.
   on their own edge: chevron, keycap, vertical pane name, and the signals the
   user may be waiting on (Prompt: queued/draft counts; Conversation: the
   Session's live status). The whole rail is one restore target. Sessions
-  folds into a 56 px switcher: expand control, New Session, and one tile per
-  Session in `Alt/Option+1…0` slot order (monogram, live status, provider
-  badge, current-Session pill). The rail head aligns with the 44 px top bar;
+  folds into a 56 px rail that shows the user's folder structure, because a
+  column that narrow cannot show titles: expand control, New Session, then
+  one labelled entry per top-level folder plus Unfiled (just Sessions when
+  there are no folders). Each entry carries one actionable badge (needs
+  attention in amber, else working in green; ready and dormant never badge)
+  and the group holding the open Session gets the edge pill. Clicking an
+  entry opens a menu with real titles, subfolder headings, status,
+  `Alt/Option+1…0` slots and Show all sessions; the rail ignores this
+  device's folder folds. The rail head aligns with the 44 px top bar;
   in an installed window-controls-overlay PWA the head becomes a drag region
   and the expand control moves below it.
 - **Mounting.** Collapsed panes stay mounted and are only removed from

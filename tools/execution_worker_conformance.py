@@ -68,7 +68,8 @@ def main():
     (args.target / "pixel.png").write_bytes(b"\x89PNG\r\n\x1a\n" +
         png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) +
         png_chunk(b"IDAT", zlib.compress((b"\0" + b"\xff\0\0" * 2) * 2)) + png_chunk(b"IEND", b""))
-    background = command("fixture_background", "printf background_started >> jobs.txt; trap 'printf cancelled >> jobs.txt; exit 0' INT TERM; sleep 120 & wait")
+    disconnected_output = "" if inputs.get("legacy_event_gap") else "head -c 8388608 /dev/zero | tr '\\0' x; "
+    background = command("fixture_background", "printf background_started >> jobs.txt; trap 'printf cancelled >> jobs.txt; exit 0' INT TERM; " + disconnected_output + "sleep 120 & wait")
     background["arguments"] = json.dumps({**json.loads(background["arguments"]), "tty": True})
     api = Api([
         {"type": "custom_tool_call", "call_id": "fixture_patch", "name": "apply_patch",
@@ -82,6 +83,11 @@ def main():
         command("fixture_resume", "pwd; cat fixture.txt; cat once.txt"),
         final("fixture_final_two"),
     ])
+    if inputs.get("legacy_event_gap"):
+        api.steps[0:0] = [
+            command("fixture_legacy_flood", "printf once >> legacy-starts; head -c 8388608 /dev/zero"),
+            command("fixture_legacy_health", "printf healthy > legacy-health"),
+        ]
     environment = closed_environment(args.runtime.parent / "agent-home")
     environment.update({
         "COWBOY_OFFLINE_FIXTURE_KEY": "not-a-production-credential",
@@ -125,6 +131,10 @@ def main():
         require(api.failure is None, api.failure or "scripted API failed")
         require((args.target / "fixture.txt").read_text() == "target after '\" $() 中文 🐎\n", "target edit failed")
         require((args.target / "once.txt").read_text() == "once", "target command did not execute exactly once")
+        if inputs.get("legacy_event_gap"):
+            require((args.target / "legacy-starts").read_text() == "once", "legacy recovery replayed a command")
+            require((args.target / "legacy-health").read_text() == "healthy", "legacy gap poisoned subsequent commands")
+            checks.append("native_codex_recovers_legacy_event_gap_without_poisoning_session_or_replaying_effects")
         require((args.runtime / "fixture.txt").read_text() == "runtime remains untouched\n"
                 and not (args.runtime / "once.txt").exists(), "runtime was modified")
         require("TARGET_GUIDANCE_MUST_REACH_MODEL" in json.dumps(api.requests[0]), "target instructions missing")
@@ -134,6 +144,8 @@ def main():
             item for item in api.requests[-1].get("input", []) if item.get("call_id") == "fixture_image"
         ])[:1500])
         checks.extend(["target_image_read_reaches_native_model_input", "background_job_survives_lost_reply_and_35_second_transport_gap", "cancel_reaches_original_target_job_without_replay"])
+        if not inputs.get("legacy_event_gap"):
+            checks.append("output_backpressure_survives_35_second_transport_gap")
         checks.extend(["native_apply_patch_and_command_use_target", "runtime_files_unchanged", "native_target_instructions"])
         client.close()
         client = native()

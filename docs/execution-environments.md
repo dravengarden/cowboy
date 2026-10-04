@@ -322,6 +322,43 @@ bounded output and effect outcomes, and validate the original binding and
 executor incarnation before reconnecting a Provider. Its lifecycle belongs
 beside detached workers, independently of the current control connection.
 
+The keeper retains at most 4 MiB or 8192 unacknowledged events and returns
+batches of at most 2 MiB. The bound worker acknowledges a delivered batch with
+its next `Events.after` cursor. Repeating that cursor is idempotent; only
+acknowledged entries may be removed. When the buffer fills, the keeper pauses
+its bounded native reader. The pinned native executor's bounded notification
+channel propagates backpressure to process output. Output may wait for the
+consumer, but a fast command or slow network must not evict unseen output,
+exit status or closure notifications. Native input and output are polled
+independently so a large request cannot prevent draining the output pipe.
+Explicit shutdown and native process death still terminate ownership.
+
+Older keepers can already have discarded history. A `CursorExpired` response
+must clear the worker's saved cursor and close its local WebSocket with a
+restart code. The next connection resumes the same native executor session
+from the current event cursor; native Codex owns per-process `process/read`
+recovery. If its bounded history is also exhausted, that process can report
+lost output. Repeatedly reconnecting with the expired cursor must never poison
+all subsequent commands, and recovery must never restart an uncertain effect.
+The worker also rejects a seventeenth concurrent request individually, before
+admission, while retaining the other sixteen requests and their connection.
+Bulk inputs cannot consume the bounded capacity reserved for event polling and
+result observation. Exhausting a request budget must not cut the control path
+needed to deliver and release those same requests.
+
+This layer fills the cross-host transport gap beyond native Codex session and
+process recovery. It can be deleted when the native transport covers the
+enrolled Machine route, detached ownership and bounded acknowledged delivery.
+Claude shares the keeper and worker transport through its Provider adapter;
+its polling process facade remains adapter-backed. The native worker gate
+checks both Provider lanes, slow delivery of 9 MiB of stdout/stderr, concurrent
+large input, exact output order and exit status, cancellation after the flood,
+and recovery of a lost start receipt without reexecution. Transport tests also
+cover legacy cursor expiry and request-capacity isolation.
+The [2026-10-04 native acceptance receipt](experiments/execution-transport-recovery-2026-10-04.json)
+records both current Provider lanes and a real legacy keeper. The Codex lane
+also emits 8 MiB while its control transport is unavailable for 35 seconds.
+
 Do not merely increase a timeout or open a replacement upstream session and call
 that recovery. If the target keeper or executor is lost, expose that loss and
 retain the worktree; surviving processes require independent ownership evidence.

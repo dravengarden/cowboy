@@ -8,7 +8,7 @@ use crate::execution_protocol::{
     self as wire, Command, LaunchContract, Outcome, Refusal, Request, Response, Scope,
 };
 use anyhow::{Context as _, Result, ensure};
-use ledger::{Admission, Ledger};
+use ledger::{Admission, EventError, Ledger};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -404,14 +404,39 @@ pub async fn run(args: Args) -> Result<()> {
     });
     let backend_host = Arc::clone(&host);
     let backend = tokio::spawn(async move {
+        // Poll both directions independently. A full executor output pipe must
+        // not prevent us from draining it while a large input frame is being
+        // written. Bounded admission owns the queued effects; backpressure is
+        // not evidence that the executor died and grants no replay authority.
+        let mut native_writer = Box::pin(async {
+            while let Some(request) = requests.recv().await {
+                write_json(&mut input, &request).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let mut event_space = backend_host.ledger.lock().event_space.subscribe();
+        let mut pending_event = None;
         loop {
-            tokio::select! {
-                request = requests.recv() => {
-                    let Some(request) = request else { break; };
-                    if !matches!(tokio::time::timeout(Duration::from_secs(10), write_json(&mut input, &request)).await, Ok(Ok(()))) { break; }
+            if let Some(message) = pending_event.take() {
+                match backend_host.ledger.lock().push_event(message) {
+                    Ok(()) => {}
+                    Err(EventError::Full(message)) => pending_event = Some(message),
+                    Err(EventError::Invalid) => {
+                        tracing::warn!(reason = "native_event_limit", "execution backend stopped");
+                        break;
+                    }
                 }
-                message = native_messages.recv() => {
-                    let Some(Ok(mut message)) = message else { break; };
+            }
+            tokio::select! {
+                _ = &mut native_writer => {
+                    tracing::warn!(reason = "native_input_closed", "execution backend stopped");
+                    break;
+                }
+                message = native_messages.recv(), if pending_event.is_none() => {
+                    let Some(Ok(mut message)) = message else {
+                        tracing::warn!(reason = "native_stream_closed", "execution backend stopped");
+                        break;
+                    };
                     let mut ledger = backend_host.ledger.lock();
                     let result = if let Some(id) = message.get("id").and_then(Value::as_u64) {
                         if message.get("method").is_some() || message.get("result").is_some() == message.get("error").is_some() { break; }
@@ -421,10 +446,12 @@ pub async fn run(args: Args) -> Result<()> {
                         }
                         ledger.finish(id, message)
                     } else if message.get("method").and_then(Value::as_str).is_some() {
-                        ledger.push_event(message)
+                        pending_event = Some(message);
+                        Ok(())
                     } else { Err(()) };
                     if result.is_err() { break; }
                 }
+                _ = event_space.changed(), if pending_event.is_some() => {},
                 _ = child.wait() => break,
                 _ = &mut stopped => break,
             }
@@ -432,6 +459,7 @@ pub async fn run(args: Args) -> Result<()> {
         backend_host.ledger.lock().lose();
         // EOF gives the executor a chance to reap its owned process groups.
         // The Machine service additionally owns the complete cgroup.
+        drop(native_writer);
         drop(input);
         if tokio::time::timeout(Duration::from_secs(5), child.wait())
             .await
