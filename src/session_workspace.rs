@@ -197,6 +197,12 @@ pub async fn prepare(
                     checkout.display()
                 )
             })?;
+        if !path.starts_with(&checkout) {
+            bail!(
+                "selected workspace escapes new session worktree {}",
+                checkout.display()
+            );
+        }
         Ok::<_, anyhow::Error>(path)
     }
     .await;
@@ -331,9 +337,27 @@ async fn reuse_existing(
     session_branch: &str,
     session_branch_ref: &str,
 ) -> Result<PreparedWorkspace> {
+    let metadata =
+        std::fs::symlink_metadata(destination).context("reading existing session worktree")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "existing session worktree is not a real directory: {}",
+            destination.display()
+        );
+    }
     let checkout = destination
         .canonicalize()
         .with_context(|| format!("canonicalizing existing worktree {}", destination.display()))?;
+    let managed_root = destination
+        .parent()
+        .context("session worktree has no parent")?
+        .canonicalize()?;
+    if checkout.parent() != Some(managed_root.as_path()) {
+        bail!(
+            "existing session worktree is outside managed root: {}",
+            checkout.display()
+        );
+    }
     let source_common = PathBuf::from(
         git_output(
             repository,
@@ -354,6 +378,16 @@ async fn reuse_existing(
     if source_common != destination_common {
         bail!(
             "existing session path {} belongs to another repository",
+            checkout.display()
+        );
+    }
+    let path = checkout
+        .join(relative_path)
+        .canonicalize()
+        .context("canonicalizing selected workspace in existing worktree")?;
+    if !path.starts_with(&checkout) {
+        bail!(
+            "selected workspace escapes existing session worktree {}",
             checkout.display()
         );
     }
@@ -381,16 +415,6 @@ async fn reuse_existing(
         }
     }
     let revision = git_output(&checkout, ["rev-parse", "HEAD^{commit}"]).await?;
-    let path = checkout
-        .join(relative_path)
-        .canonicalize()
-        .with_context(|| {
-            format!(
-                "canonicalizing selected workspace {} in existing worktree {}",
-                relative_path.display(),
-                checkout.display()
-            )
-        })?;
     Ok(PreparedWorkspace {
         path: path.display().to_string(),
         source_path: source.display().to_string(),
@@ -1060,6 +1084,96 @@ mod tests {
         git(&source, &["remote", "rename", "origin", "upstream"]);
         assert!(prepare(remote_request(), &managed).await.is_err());
         assert!(!managed.join("sess-remote").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn refuses_linked_checkout_and_escaping_selection_without_mutating_existing_work() {
+        let temp = TestDir::new();
+        let source = temp.0.join("source");
+        let managed = temp.0.join("managed");
+        let outside = temp.0.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "outside").unwrap();
+        git(&temp.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.invalid"]);
+        std::os::unix::fs::symlink(&outside, source.join("nested")).unwrap();
+        git(&source, &["add", "nested"]);
+        git(&source, &["commit", "-m", "linked subdirectory"]);
+        // The selected source subdirectory is a dirty real directory, while
+        // the committed version to be isolated links outside the checkout.
+        std::fs::remove_file(source.join("nested")).unwrap();
+        std::fs::create_dir(source.join("nested")).unwrap();
+        let request = |root: &Path, id: &str| PrepareWorkspaceRequest {
+            root: root.display().to_string(),
+            session_id: id.to_owned(),
+        };
+        let error = prepare(request(&source.join("nested"), "sess-new"), &managed)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("escapes new session worktree"));
+        assert!(!managed.join("sess-new").exists());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "outside"
+        );
+
+        std::os::unix::fs::symlink(&source, managed.join("sess-link")).unwrap();
+        let error = prepare(request(&source, "sess-link"), &managed)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not a real directory"));
+        assert!(
+            std::fs::symlink_metadata(managed.join("sess-link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let existing = managed.join("sess-existing");
+        git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                existing.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        std::fs::write(existing.join("dirty.txt"), "preserve").unwrap();
+        let error = prepare(request(&source.join("nested"), "sess-existing"), &managed)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("escapes existing session worktree")
+        );
+        assert!(current_branch(&existing).await.unwrap().is_none());
+        assert!(
+            !git_ref_exists(&source, "refs/heads/cowboy/sess-existing")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(existing.join("dirty.txt")).unwrap(),
+            "preserve"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "outside"
+        );
+        // Internal links remain compatible; only an escape is refused.
+        std::fs::remove_file(existing.join("nested")).unwrap();
+        std::fs::create_dir(existing.join("internal")).unwrap();
+        std::os::unix::fs::symlink("internal", existing.join("nested")).unwrap();
+        let reused = prepare(request(&source.join("nested"), "sess-existing"), &managed)
+            .await
+            .unwrap();
+        assert_eq!(Path::new(&reused.path), existing.join("internal"));
+        assert!(!reused.created);
     }
 
     #[tokio::test]

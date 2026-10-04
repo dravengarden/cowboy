@@ -695,6 +695,11 @@ The [source Controller/Web release](releases/review-owned-consumer-2026-09-17.md
 and later [working-diff Web release](releases/review-owned-diff-2026-09-17.md)
 record exact accepted artifacts and bounded production continuity observations.
 
+The [Session worktree preparation containment](plugin-session-worktree-containment.md)
+refuses linked checkouts and selected directories escaping the isolated checkout
+before mutating a reused branch. It is a preparation-time check; continuous
+Session/worktree ownership and durable incarnation remain open.
+
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Advertised-root and accepted-configuration identity are adopted by Hawk's October 2 protocol-24 Machine; the colocated Controller root fence is active. Protocol-25 Session filesystem read observations are adopted; continuous Session/worktree ownership remains open. The [worker snapshot placement fence](plugin-session-snapshot-placement.md) protects declared runtime placement and staged reset from worker observations. The [process-local lifecycle fence](plugin-session-lifecycle-fence.md) serializes launch declarations with deletion/reset/cleanup and refuses late declarations after deletion. The [reader-first terminal deletion journal](plugin-session-deletion-journal.md) adds bounded cold-reader and IPC fixtures; its Hawk's [production writer](releases/plugin-deletion-production-writer-2026-10-04.md) is active after exact native/IPC/startup-authority acceptance; installed component-owner activation, fallback and recovery enforce the durable reader floor. Portable writer admission and continuous ownership remain open. Durable Session incarnation remains open | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |

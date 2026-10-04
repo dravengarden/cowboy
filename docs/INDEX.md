@@ -141,6 +141,7 @@ primary phone/desktop product path.
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`plugin-refactor-completion.md`](plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
+- [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract
