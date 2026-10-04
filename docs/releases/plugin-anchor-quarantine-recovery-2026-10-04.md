@@ -82,3 +82,34 @@ not change ordinary startup authentication bounds.
 
 Production artifact and bounded observations follow after latest-main
 integration and metadata rebuild. No live floor-bearing recovery is performed.
+
+
+Production activated clean published source
+`48ba48b9442d533c000d277bdfb71799157c9528` from the final host artifact
+`/nix/store/m86n5bf0vlqmcn6gk1jzcmlkqi5n15dm-cowboy-machine-release`.
+Its native Machine and installer bytes equal the accepted candidate, and the
+entire immutable test matrix passed again against this exact final artifact.
+All six companion paths/digests and retained source
+`90ec4edae56349cb06b9f39f13a0086197b5356b` remain unchanged from the preceding
+production bundle; default generation remains `worker-dc63f38423cbd1971eda`.
+The installed owner stayed at SHA-256
+`9e1294320f0242363dc426aa856b602c3e55816a250544334e2a353bae545f8f`.
+
+Independent root transaction `1791108507466320305-48ba48b9442d` started at
+`2026-10-04T10:08:27.466320305Z` and committed successfully at
+`2026-10-04T10:08:36.099027685Z`; published true, maintenance true,
+recovered false. The bounded before/after observations at
+`10:06:46.176Z` and `10:09:23.618Z` are in
+[the production receipt](../experiments/plugin-anchor-quarantine-recovery-2026-10-04.json).
+Machine PID changed `1434181` → `1737365`. All 13 worker and 5 keeper unit IDs,
+active states and PIDs remained equal; Controller PID `812989`, its component
+receipt and Web profile remained equal. `/healthz`, `/version`, `/`, `/sw.js`
+and Hawk deployment health all returned 200. Root reader floor SHA-256 stayed
+`26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`;
+portable deletion state still contains only `.lock`. The new startup journal
+records `deleted_sessions=0 writer_enabled=false`. Production quarantine remains
+absent; no live repair, writer activation, active-session recycling,
+Controller/Web/OS activation or pool change belongs to this transaction.
+`/etc/sudoers` SHA-256 remains
+`149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69`
+and `sudo -n true` succeeds.
