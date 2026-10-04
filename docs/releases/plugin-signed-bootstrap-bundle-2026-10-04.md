@@ -35,7 +35,9 @@ after probing, before origin/bootstrap/token/launcher publication; external prob
 effects are retained, never erased to make admission pass.
 
 This is pre-floor package installation admission. Existing floor entries still
-refuse every register/install/refresh, including a valid signed package. Installing
+refuse every register/install/refresh, including a valid signed package. Refresh
+checks local refusal state before contacting the Controller, so an unavailable
+Controller cannot obscure that offline refusal. Installing
 this package does not create a component-cache anchor or a portable reader floor,
 and does not enable the deletion writer or admit committed portable deletion
 state. The installed bootstrap remains administrator-owned startup authority;

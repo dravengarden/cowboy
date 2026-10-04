@@ -263,6 +263,14 @@ fn bind_service_origin(state_dir: &Path, origin: &str) -> Result<()> {
 
 fn install(args: InstallArgs) -> Result<()> {
     if args.refresh {
+        // Local refusal intent takes precedence over even read-only remote discovery.
+        let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+        let state = args.state_dir.clone().map_or_else(
+            || crate::service_identity::service_state_dir(&home, &args.service_id),
+            Ok,
+        )?;
+        crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
+        crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
         let origin = normalize_controller_url(&args.controller_url)?;
         let service_id = tokio::runtime::Runtime::new()?.block_on(fetch_service_id(&origin))?;
         anyhow::ensure!(
