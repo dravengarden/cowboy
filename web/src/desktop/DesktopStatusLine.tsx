@@ -115,6 +115,13 @@ function regionHints(
         { keys: "C", label: "Compact" },
         { keys: "X", label: "Clear" },
       ];
+    case "sessions.rail":
+      return [
+        { keys: "J/K", label: "Folder" },
+        { keys: "1…9", label: "Open folder" },
+        { keys: "L/Enter", label: "Open" },
+        { keys: DESKTOP_SHORTCUTS.toggleSessions, label: "Expand list" },
+      ];
     case "sessions.list":
       return [
         { keys: "J/K", label: "Row" },
@@ -238,7 +245,7 @@ export function DesktopStatusLine({
   const ordinaryHints: RegionHint[] = [
     ...promptRegions,
     ...regionHints(focusedRegion, status, projection, sourceMode, rawSync.phase === "live"),
-    ...(focusedRegion === "sessions.list" && itemCount > 0
+    ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && itemCount > 0
       ? [{ keys: DESKTOP_SESSION_SLOTS_LABEL, label: "Switch" }]
       : []),
     ...(regionElement?.dataset.desktopReorderable === "true" &&

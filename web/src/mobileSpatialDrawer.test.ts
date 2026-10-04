@@ -81,7 +81,7 @@ Deno.test("spatial drawer swipe dismisses the software keyboard on claim", () =>
     "const settle: MobileSpatialDrawerSettle",
   );
   const settleOpen = drawerSource.indexOf(
-    "if (open) {\n      gestureTarget.setAttribute(\"data-mobile-drawer-open\", \"true\");\n      dismissMobileSoftwareKeyboardForSwipe();\n    }",
+    'if (open) {\n      gestureTarget.setAttribute("data-mobile-drawer-open", "true");\n      dismissMobileSoftwareKeyboardForSwipe();\n    }',
     settleStart,
   );
   assert(settleStart >= 0 && settleOpen > settleStart);
@@ -182,7 +182,7 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   assert(appSource.includes("width: 28"));
   assert(reviewDrawerSource.includes("width: 28"));
   assert(appSource.includes(
-    'width: "var(--mobile-drawer-width, min(84%, 360px))"',
+    "width: MOBILE_SESSION_DRAWER_WIDTH",
   ));
   assert(reviewDrawerSource.includes(
     'pl: "calc(100% - var(--mobile-drawer-width, min(84%, 360px)))"',
@@ -202,7 +202,9 @@ Deno.test("drawer and pager settle a stream whose start node was re-rendered", (
     assert(source.includes("move: onTouchMove,"));
     assert(source.includes("end: onTouchEnd,"));
     assert(source.includes("cancel: onTouchCancel,"));
-    const end = source.slice(source.indexOf("const onTouchEnd = (): void => {"));
+    const end = source.slice(
+      source.indexOf("const onTouchEnd = (): void => {"),
+    );
     assert(end.indexOf("stopFollowingDetachedStream();") < end.indexOf("if ("));
   }
 });

@@ -9,6 +9,7 @@ import {
   mobileDrawerCardVisual,
   mobileDrawerRailOffset,
   mobileDrawerSettleDurationMs,
+  mobileSpatialDrawerWidth,
 } from "./mobileDrawerMotion";
 import {
   type DrawerVelocitySample,
@@ -110,7 +111,7 @@ export function bindMobileSpatialDrawer({
   let stopFollowingDetachedStream: () => void = () => undefined;
   const drawerWidth = (): number => {
     const width = gestureTarget.clientWidth || surface.clientWidth;
-    return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
+    return mobileSpatialDrawerWidth(width, phone, side);
   };
   const publishProgress = (offset: number): void => {
     const width = Math.max(1, presentationWidth);
@@ -141,7 +142,8 @@ export function bindMobileSpatialDrawer({
     }
     return layers;
   };
-  const slidingLayers = (): HTMLElement[] => [page(), drawerMask, ...followerLayers()];
+  const slidingLayers =
+    (): HTMLElement[] => [page(), drawerMask, ...followerLayers()];
   const animatedLayers = (): HTMLElement[] => [drawer, ...slidingLayers()];
   const prepareLayer = (layer: HTMLElement): void => {
     layer.style.transformOrigin = origin;
@@ -155,7 +157,9 @@ export function bindMobileSpatialDrawer({
   };
   const applySlide = (offset: number, instant = false): void => {
     const pageX = `${String(openingSign * offset)}px`;
-    const railX = `${String(openingSign * mobileDrawerRailOffset(offset, presentationWidth))}px`;
+    const railX = `${
+      String(openingSign * mobileDrawerRailOffset(offset, presentationWidth))
+    }px`;
     const pageTransform = `translate3d(${pageX}, 0, 0)`;
     // Touchmove writes only transform (and transition:none). Origin and
     // will-change are armed before the first tracking frame so this loop
@@ -240,7 +244,9 @@ export function bindMobileSpatialDrawer({
     );
   };
   const clearTransitions = (): void => {
-    for (const layer of animatedLayers()) layer.style.removeProperty("transition");
+    for (const layer of animatedLayers()) {
+      layer.style.removeProperty("transition");
+    }
     if (dim) dim.style.removeProperty("transition");
   };
   const applyRestOpen = (open: boolean): void => {
@@ -330,15 +336,19 @@ export function bindMobileSpatialDrawer({
       Math.abs(targetOffset - releaseOffset) / Math.max(1, width),
     );
     const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
-    const transition =
-      `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+    const transition = `transform ${
+      String(duration)
+    }ms ${MOBILE_DRAWER_SETTLE_EASING}`;
     for (const layer of animatedLayers()) {
       if (layer === dim) continue;
       layer.style.transition = transition;
     }
     if (dim) {
-      dim.style.transition =
-        `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}, opacity ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+      dim.style.transition = `transform ${
+        String(duration)
+      }ms ${MOBILE_DRAWER_SETTLE_EASING}, opacity ${
+        String(duration)
+      }ms ${MOBILE_DRAWER_SETTLE_EASING}`;
     }
     const finish = (): void => {
       if (generation !== settleGen) return;
@@ -471,9 +481,7 @@ export function bindMobileSpatialDrawer({
     }
     const normalizedDelta = deltaX * openingSign;
     const opening = !gesture.startOpen;
-    const towardOpen = opening
-      ? normalizedDelta > 0
-      : normalizedDelta < 0;
+    const towardOpen = opening ? normalizedDelta > 0 : normalizedDelta < 0;
     if (
       !gesture.prepared &&
       obsidianDrawerShouldPrepare(normalizedDelta, deltaY, towardOpen)
@@ -593,7 +601,9 @@ export function bindMobileSpatialDrawer({
   gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
   gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
   gestureTarget.addEventListener("touchend", onTouchEnd, { passive: true });
-  gestureTarget.addEventListener("touchcancel", onTouchCancel, { passive: true });
+  gestureTarget.addEventListener("touchcancel", onTouchCancel, {
+    passive: true,
+  });
   globalThis.addEventListener("resize", onResize);
 
   return {

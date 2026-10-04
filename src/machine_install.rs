@@ -8,6 +8,7 @@ use clap::Parser;
 
 mod admission;
 mod bootstrap_probe;
+mod recovery;
 mod signed_bootstrap;
 
 // Service IDs already consume 36 bytes. Compact socket basenames leave room
@@ -70,6 +71,9 @@ pub struct InstallArgs {
 
 pub fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if std::env::args().nth(1).as_deref() == Some("--restore-floor-selection") {
+        return recovery::run();
+    }
     if std::env::args().nth(1).as_deref() == Some("--check-signed-bootstrap") {
         return signed_bootstrap::run_check();
     }

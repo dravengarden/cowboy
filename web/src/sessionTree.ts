@@ -65,8 +65,9 @@ export function sessionActivity(
   let attention = 0;
   let live = 0;
   for (const { status, background_tasks } of sessions) {
-    if (status === "busy" || waitingOnBackground(status, background_tasks)) working++;
-    else if (status === "crashed" || status === "interrupted") attention++;
+    if (status === "busy" || waitingOnBackground(status, background_tasks)) {
+      working++;
+    } else if (status === "crashed" || status === "interrupted") attention++;
     else if (status === "running" || status === "starting") live++;
   }
   return { working, attention, live };
@@ -146,7 +147,9 @@ export function buildSessionTree(
   const descendants = new Map<string, SessionMeta[]>();
   const summarize = (id: string): SessionMeta[] => {
     const found = [...(sessionsIn.get(id) ?? [])];
-    for (const child of children.get(id) ?? []) found.push(...summarize(child.id));
+    for (const child of children.get(id) ?? []) {
+      found.push(...summarize(child.id));
+    }
     descendants.set(id, found);
     return found;
   };
@@ -258,6 +261,8 @@ export interface SessionDropProjection {
  * except right below a folder header, where it goes into that folder (the
  * "drop onto the folder" gesture, collapsed or not). `depthOffset` is the
  * horizontal intent in indent steps: drag right to nest, left to step out.
+ * An explicit left drag may leave the surrounding branch even between its
+ * children. Folder-first rendering will regroup the item after the drop.
  */
 export function projectSessionDrop(
   rows: readonly SessionTreeRow[],
@@ -271,7 +276,9 @@ export function projectSessionDrop(
   const maxDepth = above.kind === "folder" ? above.depth + 1 : above.depth;
   const minDepth = Math.min(maxDepth, below?.depth ?? 0);
   const base = above.kind === "folder" ? maxDepth : originDepth;
-  const depth = Math.max(minDepth, Math.min(maxDepth, base + depthOffset));
+  const depth = depthOffset < 0
+    ? Math.max(0, Math.min(maxDepth, originDepth + depthOffset))
+    : Math.max(minDepth, Math.min(maxDepth, base + depthOffset));
   if (depth === 0) return { folder: null, depth };
   // Rows are a pre-order walk, so the nearest header one level up is the
   // container of this slot.
@@ -292,5 +299,6 @@ export function rowInsideFolder(
 ): boolean {
   const container = row.kind === "folder" ? row.folder.id : row.folder;
   return container !== null &&
-    (container === folder || folderAncestors(value, container).includes(folder));
+    (container === folder ||
+      folderAncestors(value, container).includes(folder));
 }

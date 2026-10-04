@@ -84,6 +84,20 @@ export function folderAncestors(
   return out;
 }
 
+/** Human-readable destination; include ancestors to distinguish equal names. */
+export function sessionFolderLocation(
+  value: SessionFoldersValue,
+  id: string | null,
+): string {
+  if (!id) return "Global";
+  const ids = [...folderAncestors(value, id).reverse(), id];
+  return [
+    "Global",
+    ...ids.map((key) => sessionFolderById(value, key)?.name)
+      .filter((name): name is string => name !== undefined),
+  ].join(" › ");
+}
+
 /** Whether `candidate` is `ancestor` itself or sits below it. */
 export function folderIsWithin(
   value: SessionFoldersValue,

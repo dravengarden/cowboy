@@ -160,6 +160,7 @@ import {
 } from "./store";
 import {
     type SessionFolder,
+    folderAncestors,
     sessionFolderById,
     unboundProjectLabels,
 } from "./sessionFolders";
@@ -197,7 +198,7 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useBackdropDismiss } from "./useBackdropDismiss";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
 import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth";
-import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
+import { MOBILE_SESSION_DRAWER_WIDTH, sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import {
     mobileDrawerRailHitSx,
     mobilePeekRestLayerSx,
@@ -839,6 +840,7 @@ function SessionList({
         { mode: "create"; parent: string | null } | { mode: "rename"; folder: SessionFolder } | null
     >(null);
     const [movePicker, setMovePicker] = useState<{ kind: "session" | "folder"; id: string } | null>(null);
+    const [movedRow, setMovedRow] = useState<string | null>(null);
     const [projectPicker, setProjectPicker] = useState<SessionFolder | null>(null);
     const [deleteFolder, setDeleteFolder] = useState<SessionFolder | null>(null);
     const unboundProjects = unboundProjectLabels(sessions, sessionFolders);
@@ -874,6 +876,39 @@ function SessionList({
     // region entry never lands on a hidden row.
     const revealSession = (sessionId: string): void =>
         setFolderCollapsed(foldersRevealing(tree, sessionFolders, sessionId), false);
+    const revealMovedRow = (key: string, folder: string | null): void => {
+        if (folder) setFolderCollapsed([folder, ...folderAncestors(sessionFolders, folder)], false);
+        setMovedRow(key);
+    };
+    const moveItem = (item: { kind: "session" | "folder"; id: string }, folder: string | null): void => {
+        const current = item.kind === "folder"
+            ? sessionFolderById(sessionFolders, item.id)?.parent ?? null
+            : tree.folderOf.get(item.id) ?? null;
+        if (folder === current) return;
+        if (item.kind === "folder") moveSessionFolder(item.id, folder);
+        else placeSessions([item.id], folder);
+        revealMovedRow(item.kind === "folder" ? `folder:${item.id}` : item.id, folder);
+    };
+    useLayoutEffect(() => {
+        if (!movedRow) return undefined;
+        const frame = requestAnimationFrame(() => {
+            const list = listRef.current;
+            const item = list?.querySelector<HTMLElement>(
+                `[data-desktop-item="${CSS.escape(movedRow)}"]`,
+            );
+            if (!list || !item) return;
+            list.scrollTop = sessionDrawerTargetScroll({
+                currentScroll: list.scrollTop,
+                viewportHeight: list.clientHeight,
+                contentHeight: list.scrollHeight,
+                itemTop: item.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop,
+                itemHeight: item.offsetHeight,
+            });
+            if (desktop) item.focus({ preventScroll: true });
+            setMovedRow(null);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [movedRow, tree, desktop]);
     const foldersHydrated = sessionFolders.folders.length > 0;
     useEffect(() => {
         if (activeId) revealSession(activeId);
@@ -913,7 +948,10 @@ function SessionList({
             ? projectedFolder
             : dropTargetFolder(others, index);
         const refiled = target !== (tree.folderOf.get(moved.session.id) ?? null);
-        if (refiled) placeSessions([moved.session.id], target);
+        if (refiled) {
+            placeSessions([moved.session.id], target);
+            revealMovedRow(moved.session.id, target);
+        }
         const reordered = order.some((key, i) => key !== rowKeys[i]);
         if (!reordered) return;
         const sessionOrder = order
@@ -931,7 +969,7 @@ function SessionList({
     // take. One indent step of finger travel is a little wider than the
     // visual indent so a vertical drag never wobbles between depths.
     const finePointer = useMediaQuery("(pointer: fine) and (hover: hover)");
-    const indentPx = finePointer ? 16 : 20;
+    const indentPx = finePointer || mobileDrawer ? 16 : 20;
     const [dragIndentPx, setDragIndentPx] = useState(0);
     const projectDrag = (drag: SortableDrag): SessionDropProjection | null => {
         const dragged = rowByKey.get(drag.id);
@@ -950,6 +988,7 @@ function SessionList({
         scrollContainer: () => listRef.current,
         horizontalStep: indentPx + 12,
         dragOffsetX: dragIndentPx,
+        optimisticReorder: false,
     });
     const dropProjection = sortable.drag ? projectDrag(sortable.drag) : null;
     const draggedDepth = sortable.drag
@@ -1257,7 +1296,9 @@ function SessionList({
         runRowCommand(command, rowKey, row, { toggle: key === "Enter" });
     };
     const folderDepthPl = (depth: number): string =>
-        `calc(max(env(safe-area-inset-left), 12px) + ${String(depth * 20)}px)`;
+        mobileDrawer
+            ? `${String(4 + depth * 16)}px`
+            : `calc(max(env(safe-area-inset-left), 12px) + ${String(depth * 20)}px)`;
     const folderDepthFinePl = (depth: number): string => `calc(6px + ${String(depth * 16)}px)`;
     // Obsidian-style indent guides: one hairline per ancestor level, centred
     // under that ancestor's chevron. A pseudo-element spanning the row margins
@@ -1280,7 +1321,9 @@ function SessionList({
                 backgroundSize: levels.map(() => "1px 100%").join(", "),
                 backgroundRepeat: "no-repeat",
                 backgroundPosition: levels
-                    .map((level) => `calc(max(env(safe-area-inset-left), 12px) + ${String(level * 20 + 22)}px) 0`)
+                    .map((level) => mobileDrawer
+                        ? `${String(level * 16 + 26)}px 0`
+                        : `calc(max(env(safe-area-inset-left), 12px) + ${String(level * 20 + 22)}px) 0`)
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
                     backgroundPosition: levels.map((level) => `${String(level * 16 + 22)}px 0`).join(", "),
@@ -1444,8 +1487,8 @@ function SessionList({
                             alignItems: "center",
                             minHeight: 36,
                             pl: `calc(${folderDepthPl(row.depth)} + 18px)`,
-                            pr: "max(env(safe-area-inset-right), 12px)",
-                            mx: 0.75,
+                            pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
+                            mx: mobileDrawer ? 0.5 : 0.75,
                             my: 0.25,
                             borderRadius: "10px",
                             color: "text.disabled",
@@ -1482,8 +1525,8 @@ function SessionList({
                             ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, rowKey)),
                             pl: folderDepthPl(row.depth),
-                            pr: "max(env(safe-area-inset-right), 12px)",
-                            mx: 0.75,
+                            pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
+                            mx: mobileDrawer ? 0.5 : 0.75,
                             my: 0.25,
                             "@media (pointer: fine) and (hover: hover)": {
                                 pl: folderDepthFinePl(row.depth),
@@ -1611,10 +1654,8 @@ function SessionList({
                             setPinned(false);
                             onPick(s.id);
                         }}
-                        // Symmetric side gutters so the leading grip + trailing
-                        // kebab circles never hug / get clipped by the screen edge
-                        // (floored at 12px, but yielding to a larger safe-area
-                        // inset on the notch side in landscape — ui.md §7).
+                        // The Mobile rail owns its safe-area inset once. Keep
+                        // row gutters compact while preserving 44px controls.
                         sx={{
                             ...(desktop && desktopListItemSx()),
                             ...treeGuideSx(row.depth),
@@ -1639,8 +1680,8 @@ function SessionList({
                                 },
                             }),
                             pl: folderDepthPl(row.depth),
-                            pr: "max(env(safe-area-inset-right), 12px)",
-                            mx: 0.75,
+                            pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
+                            mx: mobileDrawer ? 0.5 : 0.75,
                             my: 0.25,
                             "@media (pointer: fine) and (hover: hover)": {
                                 pl: folderDepthFinePl(row.depth),
@@ -1756,7 +1797,7 @@ function SessionList({
                                 icon={dropFolderName
                                     ? <FolderOutlined sx={{ fontSize: "0.95rem !important" }} />
                                     : undefined}
-                                label={dropFolderName ?? "Top level"}
+                                label={dropFolderName ?? "Global · top level"}
                                 data-session-drop-destination
                                 sx={{
                                     // A tag on the lifted row's top edge: it
@@ -1944,6 +1985,15 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Move to folder…" />
                 </MenuItem>
+                {menuAnchor && tree.folderOf.get(menuAnchor.row.id) && (
+                    <MenuItem onClick={(): void => {
+                        moveItem({ kind: "session", id: menuAnchor.row.id }, null);
+                        setMenuAnchor(null);
+                    }}>
+                        <ListItemIcon><DriveFileMoveOutlined fontSize="medium" /></ListItemIcon>
+                        <ListItemText primary="Move to Global" secondary="Outside all folders" />
+                    </MenuItem>
+                )}
                 <MenuItem onClick={toggleMenuSessionNotifications}>
                     <ListItemIcon>
                         {menuSessionMuted
@@ -2175,6 +2225,15 @@ function SessionList({
                     <ListItemIcon><DriveFileMoveOutlined fontSize="medium" /></ListItemIcon>
                     <ListItemText primary="Move to…" />
                 </MenuItem>
+                {folderMenuFolder?.parent && (
+                    <MenuItem onClick={(): void => {
+                        moveItem({ kind: "folder", id: folderMenuFolder.id }, null);
+                        setFolderMenu(null);
+                    }}>
+                        <ListItemIcon><DriveFileMoveOutlined fontSize="medium" /></ListItemIcon>
+                        <ListItemText primary="Move to Global" secondary="Outside all folders" />
+                    </MenuItem>
+                )}
                 <MenuItem
                     onClick={(): void => {
                         setProjectPicker(folderMenuFolder);
@@ -2324,11 +2383,8 @@ function SessionList({
                         : tree.folderOf.get(movePicker.id) ?? null}
                     exclude={movePicker.kind === "folder" ? movePicker.id : null}
                     onPick={(folder): void => {
-                        if (movePicker.kind === "folder") moveSessionFolder(movePicker.id, folder);
-                        else placeSessions([movePicker.id], folder);
-                        if (folder) setFolderCollapsed([folder], false);
+                        moveItem(movePicker, folder);
                         setMovePicker(null);
-                        if (desktop) focusRow(movePicker.kind === "folder" ? `folder:${movePicker.id}` : movePicker.id);
                     }}
                     onNewFolder={(): void =>
                         openFolderName({
@@ -3768,7 +3824,7 @@ export function App({
                         role="navigation"
                         aria-label="Sessions"
                         sx={{
-                            width: "var(--mobile-drawer-width, min(84%, 360px))",
+                            width: MOBILE_SESSION_DRAWER_WIDTH,
                             height: "100%",
                             minWidth: 0,
                             overflow: "hidden",

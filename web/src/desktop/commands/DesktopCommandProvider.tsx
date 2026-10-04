@@ -742,7 +742,11 @@ export function DesktopCommandProvider(
           // Region focus can arrive one render before DOM focus reaches the row.
           // Sessions still have an authoritative current item, so anchor Vim
           // navigation there instead of treating the list as selection-less.
-          if (active < 0 && region?.dataset.desktopRegion === "sessions.list") {
+          if (
+            active < 0 &&
+            (region?.dataset.desktopRegion === "sessions.list" ||
+              region?.dataset.desktopRegion === "sessions.rail")
+          ) {
             active = items.findIndex((item) => item.dataset.desktopCurrent === "true");
             if (active < 0) active = 0;
           }
@@ -851,6 +855,23 @@ export function DesktopCommandProvider(
               }),
             );
             return;
+          }
+          // Collapsed Sessions rail: folders are items; `l` opens the focused
+          // folder's menu (Enter already activates it) and 1…9 open a folder
+          // directly. The menu then owns j/k/h/l until it closes.
+          if (region?.dataset.desktopRegion === "sessions.rail" && !event.repeat) {
+            const target = key.toLowerCase() === "l"
+              ? items[active]
+              : /^[1-9]$/.test(key)
+              ? items[Number(key) - 1]
+              : undefined;
+            if (target) {
+              event.preventDefault();
+              event.stopPropagation();
+              target.focus({ preventScroll: true });
+              target.click();
+              return;
+            }
           }
           let next = -1;
           if (!pendingList) {
