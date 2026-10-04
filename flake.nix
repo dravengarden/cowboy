@@ -86,8 +86,6 @@
           ./Cargo.lock
           ./build.rs
           ./src
-          ./tools/worker-registry-input.ts
-          ./components/worker-registry-input.json
           ./migrations
           ./web/src/protocol.ts
           ./contracts/code-buffer-client.fixture.json
@@ -232,6 +230,13 @@
       worker-registry-digest = assert worker-registry-input.schema == 1;
         assert builtins.match "[0-9a-f]{64}" worker-registry-input.registry_sha256 != null;
         worker-registry-input.registry_sha256;
+      worker-registry-check = pkgs.runCommand "cowboy-worker-registry-input-check" { } ''
+        mkdir -p components
+        ln -s ${./components/registry.json} components/registry.json
+        ln -s ${./components/worker-registry-input.json} components/worker-registry-input.json
+        ${deno}/bin/deno run --allow-read ${./tools/worker-registry-input.ts}
+        touch "$out"
+      '';
       worker-generation = "worker-" + builtins.substring 0 20 (
         builtins.hashString "sha256" (
           pkgs.lib.concatMapStringsSep ":"
@@ -323,7 +328,7 @@
         # This derived digest must never become a stale worker-generation pin.
         # Enforce it inside the immutable worker build as well as the root gate.
         preBuild = ''
-          ${deno}/bin/deno run --allow-read tools/worker-registry-input.ts
+          test -e ${worker-registry-check}
         '';
         buildInputs = [ pkgs.openssl ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh deno ];
@@ -488,6 +493,7 @@
         pkgs.runCommand
           (if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
           { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
+        test -e ${worker-registry-check}
         mkdir -p "$out/bin" "$out/libexec" "$out/etc/cowboy-release"
         ln -s ${cowboy-machine}/bin/cowboy-machine \
           "$out/libexec/cowboy-machine"
@@ -702,6 +708,7 @@
           cowboy-machine-bootstrap-release cowboy-machine-release
           cowboy-machine-host-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
+        cowboy-worker-registry-input = worker-registry-check;
       };
 
       # Android native-shell builds on Linux. The Rust and Tauri CLI versions
