@@ -1,6 +1,7 @@
 //! Read-only authentication before the portable launcher selects cached code.
 //! An established reader floor retains its signed anchor and forbids downgrade.
-//! Bootstrap/recovery admission and concurrent-administrator fencing stay closed.
+//! Explicit restoration selects only the intact signed floor anchor.
+//! Bootstrap fallback, lost-anchor recovery and administrator fencing stay closed.
 
 use std::io::Read as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
@@ -245,4 +246,95 @@ fn read_regular(path: &Path, limit: Option<u64>) -> anyhow::Result<Vec<u8>> {
         file.read_to_end(&mut bytes)?;
     }
     Ok(bytes)
+}
+
+fn recovery_target(state: &Path, key: &Path) -> anyhow::Result<(PathBuf, PathBuf, Vec<u8>)> {
+    crate::session_deletion_admission::require_empty_portable_namespace(state)?;
+    let floor = reader_floor::read(state)?
+        .context("floor selection restoration requires an existing floor")?;
+    let root = state.join("components");
+    ensure!(
+        std::fs::symlink_metadata(&root)?.is_dir(),
+        "component recovery root is not regular"
+    );
+    let publisher = String::from_utf8(read_regular(key, Some(16 * 1024))?)?;
+    authenticate_floor(&root, &floor, &publisher)?;
+    let generation = floor.anchor_path(&root).canonicalize()?;
+    let desired = verify_generation(&root, &generation, &publisher)?;
+    let executable = component_executable(&generation, &desired)?;
+    rustix::fs::accessat(
+        rustix::fs::CWD,
+        &executable,
+        rustix::fs::Access::EXEC_OK,
+        rustix::fs::AtFlags::EACCESS,
+    )?;
+    for (directory, name, target) in [
+        ("active", "machine_host", &generation),
+        ("commands", "cowboy-machine", &executable),
+    ] {
+        let parent = root.join(directory);
+        match std::fs::symlink_metadata(&parent) {
+            Ok(metadata) => ensure!(
+                metadata.is_dir(),
+                "recovery selection directory is not regular"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        }
+        let link = parent.join(name);
+        match std::fs::symlink_metadata(&link) {
+            Ok(metadata) => ensure!(
+                metadata.is_symlink() && link.canonicalize()? == *target,
+                "floor restoration refuses an existing different selection"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok((
+        generation,
+        executable,
+        read_regular(&state.join(reader_floor::NAME), Some(8192))?,
+    ))
+}
+
+/// Administrator-invoked, idempotent repair. Never overwrite a pointer or floor;
+/// an interruption between links remains fail-closed and can be resumed.
+pub(crate) fn restore_portable_host_selection(state: &Path, key: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    let accepted = recovery_target(state, key)?;
+    let root = state.join("components");
+    for (directory, name, target) in [
+        ("active", "machine_host", &accepted.0),
+        ("commands", "cowboy-machine", &accepted.1),
+    ] {
+        ensure!(
+            recovery_target(state, key)? == accepted,
+            "floor recovery evidence changed before publication"
+        );
+        let parent = root.join(directory);
+        match std::fs::DirBuilder::new().mode(0o700).create(&parent) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        ensure!(
+            recovery_target(state, key)? == accepted,
+            "floor recovery evidence changed during publication"
+        );
+        match std::os::unix::fs::symlink(target, parent.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        std::fs::File::open(&parent)?.sync_all()?;
+        std::fs::File::open(&root)?.sync_all()?;
+    }
+    ensure!(
+        recovery_target(state, key)? == accepted,
+        "floor recovery evidence changed after publication"
+    );
+    check_portable_host_cache(state, Some(key))?;
+    std::fs::File::open(state)?.sync_all()?;
+    Ok(())
 }

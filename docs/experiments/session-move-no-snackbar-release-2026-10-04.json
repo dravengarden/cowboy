@@ -1,0 +1,174 @@
+{
+  "change": "Remove successful session/folder move snackbar; retain destination expansion and row reveal.",
+  "validation": {
+    "typecheck": "passed",
+    "lint": "passed with 8 existing warnings",
+    "diffCheck": "passed"
+  },
+  "before": {
+    "observedAt": "2026-10-04T08:45:48.535499+00:00",
+    "controller": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 10:01:22 CST",
+      "MainPID": "959309"
+    },
+    "machine": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 16:44:41 CST",
+      "MainPID": "706832"
+    },
+    "webProfile": "/nix/store/ir9f00y6jzwy3y5y8cpz02wapilxkrif-cowboy-web-0.1.0",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791103229056755939-e8cb9fcf0c01",
+      "revision": "e8cb9fcf0c01cf00726d8060c82a7d758ee24130",
+      "published": false,
+      "release": "/nix/store/63jlpyc1sxj6lfdmp9xvxfph5m93mvzj-cowboy-web-release",
+      "previousRelease": "/nix/store/zxbn1pdx7vf6r5psg5vrh14hc3lvr333-cowboy-web-release",
+      "activeRelease": "/nix/store/63jlpyc1sxj6lfdmp9xvxfph5m93mvzj-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T08:40:29.056755939Z",
+      "recordedAt": "2026-10-04T08:40:29.105983833Z",
+      "recovered": false
+    },
+    "http": [
+      {
+        "url": "http://127.0.0.1:3333/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+        "body": "ok"
+      },
+      {
+        "url": "http://127.0.0.1:3333/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "d16d55657709d3ed96ecc2a6b46d12feaf81995ff57a5396f9d01d346e89e3e5",
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/version",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "e893efc29c770690a8ce9d5026c869c0b4d41e9df367dcd9395462281603a768",
+        "body": "{\"version\":\"140f59fe3a9adfa214e6e86a08f06250\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"140f59fe3a9adfa214e6e86a08f06250\"",
+        "sha256": "140f59fe3a9adfa214e6e86a08f0625088416c2df778094f6d7efde7d32eb51b",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"bdaf5a14610854171b1d9171e69ff15e\"",
+        "sha256": "bdaf5a14610854171b1d9171e69ff15e56bb0312a60647c7473fce95d958c923",
+        "serviceWorkerVersion": "cowboy-v1822",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/assets/main-CF396TYL.js",
+        "status": 200,
+        "cacheControl": "public, max-age=31536000, immutable",
+        "etag": "\"123167b64e10f8d5048e60da4e4bb9f2\"",
+        "sha256": "123167b64e10f8d5048e60da4e4bb9f2695a9cc929c4734cbe3e72175414aa0a",
+        "matchesActiveArtifact": true
+      }
+    ]
+  },
+  "after": {
+    "observedAt": "2026-10-04T08:46:13.709410+00:00",
+    "controller": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 10:01:22 CST",
+      "MainPID": "959309"
+    },
+    "machine": {
+      "ActiveState": "active",
+      "ActiveEnterTimestamp": "Sun 2026-10-04 16:44:41 CST",
+      "MainPID": "706832"
+    },
+    "webProfile": "/nix/store/8fb7n7hi3zz54y31x822qrxiq3bfh967-cowboy-web-0.1.0",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791103563748941923-fe3672c9b823",
+      "revision": "fe3672c9b82389ab9fffaa49ffd893917b60bff0",
+      "published": true,
+      "release": "/nix/store/jsnwp7c7v1f4vfncrqk7fdav48ls25j1-cowboy-web-release",
+      "previousRelease": "/nix/store/63jlpyc1sxj6lfdmp9xvxfph5m93mvzj-cowboy-web-release",
+      "activeRelease": "/nix/store/jsnwp7c7v1f4vfncrqk7fdav48ls25j1-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T08:46:03.748941923Z",
+      "recordedAt": "2026-10-04T08:46:03.788922864Z",
+      "recovered": false
+    },
+    "http": [
+      {
+        "url": "http://127.0.0.1:3333/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+        "body": "ok"
+      },
+      {
+        "url": "http://127.0.0.1:3333/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "d16d55657709d3ed96ecc2a6b46d12feaf81995ff57a5396f9d01d346e89e3e5",
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/version",
+        "status": 200,
+        "cacheControl": null,
+        "etag": null,
+        "sha256": "aaef0f331cb2e4070136a4ba1ca4193e35f06570d17c012080b1f874c94c84a3",
+        "body": "{\"version\":\"dab909a47bb2f1fa725a6c7bcde0c154\"}"
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"dab909a47bb2f1fa725a6c7bcde0c154\"",
+        "sha256": "dab909a47bb2f1fa725a6c7bcde0c154defabb2bc1ed03527a53a1cd3c59ef40",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "etag": "\"219ecbeaed97182fab7222c3d8870a1c\"",
+        "sha256": "219ecbeaed97182fab7222c3d8870a1ccbcaed46d4c02e234111c89368c6160b",
+        "serviceWorkerVersion": "cowboy-v1823",
+        "matchesActiveArtifact": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/assets/main-Ba4CX_Ht.js",
+        "status": 200,
+        "cacheControl": "public, max-age=31536000, immutable",
+        "etag": "\"28716ff441e44eddb588016b32d6545d\"",
+        "sha256": "28716ff441e44eddb588016b32d6545d62df88d1d845a65da9d93f4d82ef85dc",
+        "matchesActiveArtifact": true
+      }
+    ]
+  }
+}
