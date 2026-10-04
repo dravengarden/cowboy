@@ -18,7 +18,7 @@ fn executable(path: &Path, script: &str) {
 }
 
 #[test]
-fn generated_launcher_guards_active_and_bootstrap_before_selection() {
+fn generated_launcher_refuses_unsigned_active_and_committed_before_selection() {
     let home = tempfile::tempdir_in("/tmp").unwrap();
     let state = home.path().join("state");
     let bundle = home.path().join("bundle");
@@ -88,16 +88,23 @@ fn generated_launcher_guards_active_and_bootstrap_before_selection() {
                 .output()
                 .unwrap()
         };
-        assert!(launch().status.success());
-        assert_eq!(
-            std::fs::read_to_string(&selected).unwrap(),
-            if active_present {
-                "active"
-            } else {
-                "bootstrap"
-            }
-        );
-        std::fs::remove_file(&selected).unwrap();
+        let output = launch();
+        if active_present {
+            // An executable command file is not a signed cached host selection.
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Machine host selection pointer")
+            );
+            assert!(!selected.exists(), "unsigned host or fallback executed");
+        } else {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(std::fs::read_to_string(&selected).unwrap(), "bootstrap");
+            std::fs::remove_file(&selected).unwrap();
+        }
         for case in ["record", "directory", "dangling"] {
             let committed = journal.join("deletions.json");
             match case {

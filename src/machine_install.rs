@@ -567,12 +567,20 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
     // The installer-owned bootstrap is the guard, even when an active signed
     // host is selected later. An older bootstrap lacking the diagnostic fails
-    // closed. This refuses terminal state; it does not admit a reader release.
+    // closed. It also authenticates cached host selection without running it.
+    // This refuses terminal state; it does not admit a reader release.
     let _ = writeln!(
         script,
-        "{} --check-portable-session-deletion --state-dir {} >/dev/null",
+        "{} --check-portable-session-deletion --state-dir {}{} >/dev/null",
         shell_quote(&state.join("bootstrap/cowboy-machine").display().to_string()),
-        shell_quote(&state.display().to_string())
+        shell_quote(&state.display().to_string()),
+        args.artifact_public_key
+            .as_ref()
+            .map(|key| format!(
+                " --artifact-public-key {}",
+                shell_quote(&key.display().to_string())
+            ))
+            .unwrap_or_default()
     );
     let _ = writeln!(
         script,
@@ -620,6 +628,24 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     }
     script.push('\n');
     script
+}
+
+#[cfg(all(test, feature = "machine-host"))]
+pub(crate) fn portable_cache_launcher_fixture(state: &Path, key: &Path) -> String {
+    let args = InstallArgs::try_parse_from([
+        "installer",
+        "--controller-url",
+        "https://example.invalid",
+        "--service-id",
+        "svc-0123456789abcdef0123456789abcdef",
+        "--workspace",
+        "fixture=/tmp",
+        "--refresh",
+        "--artifact-public-key",
+        key.to_str().unwrap(),
+    ])
+    .unwrap();
+    launcher_script(&args, state, &state.join("token"))
 }
 
 fn install_systemd_user(
@@ -821,7 +847,7 @@ mod tests {
                 shell_quote(&probed_path.display().to_string())
             )
             .unwrap();
-            script.push_str("if [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false}'\n");
+            script.push_str("if [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":1}'\n");
             for name in bootstrap_probe::PAYLOADS {
                 std::fs::write(source.join(name), name).unwrap();
             }
@@ -882,7 +908,7 @@ mod tests {
         for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
             std::fs::write(bundle.join(name), name).unwrap();
         }
-        std::fs::write(bundle.join("cowboy-machine"), "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false}'\n").unwrap();
+        std::fs::write(bundle.join("cowboy-machine"), "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":1}'\n").unwrap();
         set_mode(&bundle.join("cowboy-machine"), 0o755).unwrap();
         std::fs::write(state.join("identity_ed25519"), "existing private key").unwrap();
         std::fs::write(state.join("machine-id"), "mac").unwrap();
