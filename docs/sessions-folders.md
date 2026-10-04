@@ -151,6 +151,13 @@ children emits one `empty` row (`empty:<folder>` key) as its body.
   folder as an indented tree, with the current folder marked and a trailing
   "New folder…" row; a search field appears above eight folders (Obsidian's
   Move-to modal, without its path syntax).
+- **Global** means outside every folder. Nested sessions/folders have a direct
+  **Move to Global** menu action. The destination picker pins Global above the
+  scrolling folder list (including filtered results), disables the current
+  location and names ancestor paths to distinguish duplicate folder names.
+  Moves expand every destination ancestor and scroll the moved item into view
+  on either surface, with an informational destination notice. They do not
+  switch the active session.
 - Drawer footer "+" is unchanged; the New Session sheet gains an optional
   Folder row defaulting to the folder bound to the chosen workspace, else the
   folder of the current session, else Root.
@@ -200,23 +207,32 @@ inside, `R` rename, `M` move, `B` bind project, `X` delete).
 Both surfaces share one projection (`projectSessionDrop`), the outliner
 model used by Obsidian-style trees:
 
-- The vertical slot bounds the legal depth: never deeper than the row above
-  can parent, never shallower than the row below requires.
+- A vertical drag stays within the slot's depth bounds: never deeper than the
+  row above can parent, never shallower than the row below requires. Explicit
+  leftward intent may exit that branch even between two children. A user must
+  not scroll to the beginning/end of the tree just to reach Global.
 - Right below a folder header (collapsed, expanded or empty) the session goes
   into that folder: dropping "onto" a folder needs no hover timer.
 - Elsewhere the session keeps its own depth inside those bounds, and
   horizontal movement changes it: drag right to nest, left to step out (one
   step = the visual indent plus 12 px, so a vertical drag never wobbles). This
-  is how a session leaves a folder whose block is followed by nothing else.
+  also leaves a folder in the middle of its block. The grouped tree places
+  unfiled sessions after folders when the drop commits.
 - Feedback while dragging: the target folder's header is outlined and its
   whole body tinted, the lifted row slides to the indent it will take and
-  carries a tag naming the destination (folder name or Top level), empty
+  carries a tag naming the destination (folder name or Global), empty
   folders read "Drop here to file into this folder", and a light haptic marks
   each change of destination. Root shows no tint.
 - `useSortable` measures every row at pickup and moves the slot when the
   lifted row's centre crosses a neighbour's own midpoint, so mixed folder and
   session row heights no longer drift; shifted rows open exactly the lifted
   row's height.
+- Sessions uses its synced store's optimistic tree after a drop, not the
+  sortable's flat gap permutation. Otherwise a root move can remain painted
+  among children when the canonical key order is unchanged. The final pointer
+  sample is committed synchronously; `pointercancel` restores the original
+  placement rather than submitting a move. A grip tap without any slot/depth
+  change is also a no-op, including directly below a collapsed folder.
 
 ## Implementation notes
 

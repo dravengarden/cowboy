@@ -108,8 +108,8 @@ export interface Sortable {
 export function useSortable(opts: {
   ids: string[];
   onReorder: (newIds: string[]) => void;
-  /** Called on every drop, including a drop that only changed horizontal
-   *  intent. When present it replaces `onReorder`. */
+  /** Called when a drop changed its slot or horizontal intent. A grip tap
+   *  is not a move. When present it replaces `onReorder`. */
   onDrop?: ((newIds: string[], drag: SortableDrag) => void) | undefined;
   onDragStart?: (() => void) | undefined;
   onDragEnd?: (() => void) | undefined;
@@ -122,6 +122,9 @@ export function useSortable(opts: {
   horizontalStep?: number | undefined;
   /** Extra X offset for the dragged row (the caller's projected indent). */
   dragOffsetX?: number | undefined;
+  /** Tree owners already project optimistic placement/order together. A flat
+   * post-drop permutation would temporarily put root rows inside a branch. */
+  optimisticReorder?: boolean | undefined;
 }): Sortable {
   const {
     ids,
@@ -132,6 +135,7 @@ export function useSortable(opts: {
     scrollContainer,
     horizontalStep,
     dragOffsetX = 0,
+    optimisticReorder = true,
   } = opts;
   const nodes = useRef(new Map<string, HTMLElement>());
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -167,8 +171,20 @@ export function useSortable(opts: {
   // (resolved at pickup from the dragged row + the caller's hint). apply()/tick()
   // read this rather than re-resolving every frame.
   const scrollElRef = useRef<HTMLElement | null>(null);
-  const cbRef = useRef({ onReorder, onDrop, onDragStart, onDragEnd });
-  cbRef.current = { onReorder, onDrop, onDragStart, onDragEnd };
+  const cbRef = useRef({
+    onReorder,
+    onDrop,
+    onDragStart,
+    onDragEnd,
+    optimisticReorder,
+  });
+  cbRef.current = {
+    onReorder,
+    onDrop,
+    onDragStart,
+    onDragEnd,
+    optimisticReorder,
+  };
 
   // Clear the optimistic order once the ids CONTENT changes (a server echo, or a
   // draft added/removed). Keyed on the joined ids, NOT the array ref: callers
@@ -193,7 +209,9 @@ export function useSortable(opts: {
     const d = dragRef.current;
     const node = d ? nodes.current.get(d.id) : undefined;
     if (node) {
-      node.style.transform = `translate3d(${String(dragOffsetX)}px, ${String(dyRef.current)}px, 0)`;
+      node.style.transform = `translate3d(${String(dragOffsetX)}px, ${
+        String(dyRef.current)
+      }px, 0)`;
     }
   }, [dragOffsetX]);
 
@@ -217,14 +235,26 @@ export function useSortable(opts: {
       dyRef.current = effDy;
       const node = nodes.current.get(d.id);
       if (node) {
-        node.style.transform = `translate3d(${String(offsetXRef.current)}px, ${String(effDy)}px, 0)`;
+        node.style.transform = `translate3d(${String(offsetXRef.current)}px, ${
+          String(effDy)
+        }px, 0)`;
       }
-      const target = sortableTargetIndex(d.tops, d.heights, d.originIndex, effDy);
+      const target = sortableTargetIndex(
+        d.tops,
+        d.heights,
+        d.originIndex,
+        effDy,
+      );
       const step = stepRef.current;
-      const depthSteps = step ? Math.round((lastXRef.current - d.startX) / step) : 0;
+      const depthSteps = step
+        ? Math.round((lastXRef.current - d.startX) / step)
+        : 0;
       // Only a slot or depth change re-renders (to slide the other rows' gap).
       if (target !== d.targetIndex || depthSteps !== d.depthSteps) {
-        setDrag({ ...d, targetIndex: target, depthSteps });
+        const next = { ...d, targetIndex: target, depthSteps };
+        // pointerup can arrive before React commits the last pointermove.
+        dragRef.current = next;
+        setDrag(next);
       }
     };
 
@@ -296,43 +326,51 @@ export function useSortable(opts: {
     };
     raf = globalThis.requestAnimationFrame(tick);
 
-    const up = (): void => {
+    const finish = (commit: boolean): void => {
       const d = dragRef.current;
-      if (d) {
+      if (d && commit) {
         const next = [...idsRef.current];
         if (d.targetIndex !== d.originIndex) {
           const [moved] = next.splice(d.originIndex, 1);
           if (moved !== undefined) next.splice(d.targetIndex, 0, moved);
         }
         const moved = d.targetIndex !== d.originIndex;
-        if (moved) setOptimistic(next);
+        if (moved && cbRef.current.optimisticReorder) setOptimistic(next);
         const { onDrop: drop, onReorder: reorder } = cbRef.current;
-        if (drop) {
+        if (drop && (moved || d.depthSteps !== 0)) {
           drop(next, {
             id: d.id,
             originIndex: d.originIndex,
             targetIndex: d.targetIndex,
             depthSteps: d.depthSteps,
           });
-        } else if (moved) {
+        } else if (!drop && moved) {
           reorder(next);
         }
       }
       const node = d ? nodes.current.get(d.id) : undefined;
       if (node) node.style.transform = "";
+      dragRef.current = null;
       setDrag(null);
       scrollElRef.current = null; // don't pin a node past the drag
-      haptic(); // light settle on DROP (every reorder list, every drop path)
+      if (commit) haptic();
       cbRef.current.onDragEnd?.();
     };
+    const up = (event: PointerEvent): void => {
+      lastYRef.current = event.clientY;
+      lastXRef.current = event.clientX;
+      apply();
+      finish(true);
+    };
+    const cancel = (): void => finish(false);
     globalThis.addEventListener("pointermove", move);
     globalThis.addEventListener("pointerup", up);
-    globalThis.addEventListener("pointercancel", up);
+    globalThis.addEventListener("pointercancel", cancel);
     return () => {
       globalThis.cancelAnimationFrame(raf);
       globalThis.removeEventListener("pointermove", move);
       globalThis.removeEventListener("pointerup", up);
-      globalThis.removeEventListener("pointercancel", up);
+      globalThis.removeEventListener("pointercancel", cancel);
     };
   }, [drag === null]);
 
@@ -412,7 +450,9 @@ export function useSortable(opts: {
         // `willChange` promotes the row to its own compositor layer for a
         // jank-free GPU transform.
         return {
-          transform: `translate3d(${String(dragOffsetX)}px, ${String(dyRef.current)}px, 0)`,
+          transform: `translate3d(${String(dragOffsetX)}px, ${
+            String(dyRef.current)
+          }px, 0)`,
           zIndex: 5,
           position: "relative",
           transition: "none",
@@ -422,7 +462,10 @@ export function useSortable(opts: {
       }
       const idx = idsRef.current.indexOf(id);
       let shift = 0;
-      if (drag.targetIndex > drag.originIndex && idx > drag.originIndex && idx <= drag.targetIndex) {
+      if (
+        drag.targetIndex > drag.originIndex && idx > drag.originIndex &&
+        idx <= drag.targetIndex
+      ) {
         shift = -drag.slot;
       } else if (
         drag.targetIndex < drag.originIndex &&
@@ -465,7 +508,6 @@ export function useSortable(opts: {
     handleProps,
   };
 }
-
 
 // Project `base` onto the current `ids`: keep base's order for ids that still
 // exist (deduped), then append any ids base didn't include. Guarantees the result

@@ -177,6 +177,14 @@ React catch-up runs after release.
 
 ### Rail and peek
 
+On phones the Sessions rail uses the available width minus a 44 px dismissal
+strip, capped at 480 px in a wide/landscape viewport. The tablet and Review
+drawer widths retain their own contracts. `mobileSpatialDrawerWidth` publishes
+the measured width to `--mobile-drawer-width`; rail layout, peek travel and the
+close hit layer must agree, including after a resize. The Sessions rail owns
+the left safe-area inset once; its rows use compact 8 px total edge gutters,
+16 px nesting and unchanged 44 px touch controls.
+
 `mobileDrawerRailOffset(offset, width)` is `offset - width`. Closed rail
 sits off-screen; open rail meets the peek at 0. The peek uses `offset`.
 Sharing one matrix made the list ride with the page.
