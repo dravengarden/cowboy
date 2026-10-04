@@ -101,3 +101,40 @@ failure, cold resume, stamp expiration and live/dead temporary ownership.
 Release through the existing signed Plugin lifecycle. New sessions use the new
 generation; retain existing workers. A rollback requires an exact approved
 Plugin release operation, rather than copying files into installed generations.
+
+## Production receipt: 2026-10-04
+
+Signed Claude Plugin 3.4.4 is published and installed on OVH with digest
+`sha256:51d13bf26ed9a9bfa5359cc08fb8da6034a178f45e501a46f2829128cefb894e`.
+The installation operation is `ovh-claude-range-3-4-4-20261004`. Its first response
+exceeded the 90-second deadline and fenced the slot as uncertain; exact receipt
+reconciliation completed it without repeating the Machine effect. Replica and
+materialization remained current. Ten observed pre-existing Machine, worker and
+Claude processes retained both PID and start time. No service restart was
+requested. New sessions receive the new generation; existing workers retain
+their generation.
+
+The [deployment receipt](experiments/claude-range-deployment-2026-10-04.json)
+includes Linux and actual macOS runtime probes, old/new worker coexistence,
+packaged native worker conformance, active/recovery/cold Controller readers,
+signature-verified Catalog identity and five digest-verified public artifact
+downloads. The bootstrap role was checked against the live host activation
+script, rather than inferred from a remembered CLI path.
+
+The [native measurement](experiments/claude-range-native-2026-10-04.json) reduced
+serialized RPC bytes from 1,398,511 to 6,199 for the generated file and selected
+range: over 99.5 percent less transfer. RPC count increased from two to five in
+this sample, and local duration increased from about 14 to 26 ms. This is a
+transfer improvement, not a measured WAN latency improvement. Files below
+128 KiB still use two RPCs.
+
+The [rejected wait experiment](experiments/claude-range-longwait-rejected-2026-10-04.json)
+preserves the cancellation regression: approximately 9.95 seconds with a
+ten-second process-read wait versus 0.958 seconds with the retained one-second
+wait. The cancellation budget was not relaxed.
+
+Rollback uses an exact signed installation operation for 3.4.3, whose retained
+digest is `sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460f1`.
+Observe any uncertain receipt before another operation. Do not delete either
+generation while workers retain it. Production model prompts on the new
+generation and end-to-end WAN timings are not claimed by these receipts.
