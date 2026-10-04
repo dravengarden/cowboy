@@ -25,6 +25,10 @@ For Claude CLI, SDK, ACP or remote runtime changes, also read
 [Claude Remote compatibility](references/claude-remote-upgrades.md). It defines
 the fast feedback gate and the exact packaged-native acceptance required before
 publication; a working local Claude session does not accept Remote execution.
+Every Claude runtime upgrade must consult current official tool/Mods docs and
+compare the old/new tool inventory, schemas, availability and behavior. Resolve
+additions, removals and changes before release; an unchanged tool name or a
+passing startup probe does not establish compatibility.
 
 Recommended cards are already configuration: edit the selected
 `plugins/<id>/provider.json` → `configuration_presets`, not a model list in
