@@ -265,3 +265,15 @@ Order mode and Move to…).
 - Chrome bridge: Desktop keyboard map, drag-into-folder, inline rename.
 - iOS Simulator: drawer swipe stays 1:1 with folder rows present, kebab and
   Move-to sheets keep the keyboard rules, no new compositor descendants.
+
+### Desktop draft destination picker
+
+Moving a draft to another session uses the same folder tree, display order,
+project bindings and explicit Global placements as Sessions. Directories
+expand/collapse locally; the destination must be a session, not a directory.
+Search matches session titles, folder ancestry, projects, directories and
+execution machines. Rows use stable project labels and machine context;
+complete paths are available through the row tooltip. The source session is
+excluded, duplicate titles still select by session ID, and selecting moves
+without sending. Search owns IME candidate keys; arrows navigate eligible rows,
+Enter selects and Escape cancels. Mobile retains its existing picker.
