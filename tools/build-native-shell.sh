@@ -246,6 +246,15 @@ info = plistlib.loads(info_path.read_bytes())
 binary = app / ("Contents/MacOS" if platform == "macos" else "") / info["CFBundleExecutable"]
 if info["CFBundleIdentifier"] != "top.thundersparrow.cowboy":
     raise SystemExit("Unexpected native bundle identifier")
+scene_manifest = info.get("UIApplicationSceneManifest", {})
+if platform != "macos":
+    configurations = scene_manifest.get("UISceneConfigurations", {}).get("UIWindowSceneSessionRoleApplication", [])
+    if scene_manifest.get("UIApplicationSupportsMultipleScenes") is not False or not any(
+        value.get("UISceneConfigurationName") == "TaoScene" and
+        value.get("UISceneDelegateClassName") == "TaoSceneDelegate"
+        for value in configurations
+    ):
+        raise SystemExit("Compiled iOS bundle lacks its required single-scene Tao lifecycle")
 toolchain = json.loads((build / "apps/native-shell/toolchain.json").read_text())
 swift_packages = {}
 for state_path in (build / "target").rglob("workspace-state.json"):
@@ -276,6 +285,7 @@ report = dict(source_revision=revision, platform=platform, profile=profile,
     lock_sha256=hashlib.sha256((build / "apps/native-shell/tauri/Cargo.lock").read_bytes()).hexdigest(),
     xcode=subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
     toolchain=toolchain, swift_packages=swift_packages, alternate_icons=alternate_icons,
+    scene_manifest=scene_manifest,
     rustc=subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip(),
     signing="ad-hoc" if platform == "macos" else "unsigned",
     installed=False, real_login="not_checked", physical_device="not_checked")

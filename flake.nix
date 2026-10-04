@@ -11,7 +11,11 @@
     inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, rust-overlay }:
+  # Machine host fixes retain the separately accepted detached-worker bundle.
+  # Advance this exact source only with worker/adapter maintenance acceptance.
+  inputs.cowboy-workers.url = "github:dravengarden/cowboy/406471a28de430debf6f8363b44abc3e621589d7";
+
+  outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -141,9 +145,11 @@
           ./src/machine_cli
           ./src/machine_auth.rs
           ./src/machine_components.rs
+          ./src/machine_components
           ./src/machine_install.rs
           ./src/machine_install
           ./src/session_deletion_admission.rs
+          ./src/session_deletion_admission
           ./src/machine_protocol.rs
           ./src/machine_protocol
           ./src/machine_plugins.rs
@@ -221,10 +227,22 @@
       ] ++ plugin-contract-files ++ [
         (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
       ]));
+      worker-registry-input = builtins.fromJSON (builtins.readFile ./components/worker-registry-input.json);
+      worker-registry-digest = assert worker-registry-input.schema == 1;
+        assert builtins.match "[0-9a-f]{64}" worker-registry-input.registry_sha256 != null;
+        worker-registry-input.registry_sha256;
+      worker-registry-check = pkgs.runCommand "cowboy-worker-registry-input-check" { } ''
+        mkdir -p components
+        ln -s ${./components/registry.json} components/registry.json
+        ln -s ${./components/worker-registry-input.json} components/worker-registry-input.json
+        ${deno}/bin/deno run --allow-read ${./tools/worker-registry-input.ts}
+        touch "$out"
+      '';
       worker-generation = "worker-" + builtins.substring 0 20 (
         builtins.hashString "sha256" (
           pkgs.lib.concatMapStringsSep ":"
-            (path: builtins.hashFile "sha256" path)
+            (path: if path == ./components/registry.json then worker-registry-digest
+              else builtins.hashFile "sha256" path)
             worker-generation-files
         )
       );
@@ -308,6 +326,11 @@
           "cowboy-codex-app-server"
         ];
         nativeBuildInputs = [ pkgs.pkg-config ];
+        # This derived digest must never become a stale worker-generation pin.
+        # Enforce it inside the immutable worker build as well as the root gate.
+        preBuild = ''
+          test -e ${worker-registry-check}
+        '';
         buildInputs = [ pkgs.openssl ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh deno ];
         preCheck = ''
@@ -450,10 +473,28 @@
         };
       });
 
-      machine-release = bootstrap:
+      retained-worker-bundle = cowboy-workers.packages.${system}.cowboy-machine-release;
+      retained-worker-package = cowboy-workers.packages.${system}.cowboy;
+      retained-worker-interface-files = pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
+        ./Cargo.toml
+        ./Cargo.lock
+        ./src/runtime_wire.rs
+        ./src/execution_protocol.rs
+        ./src/execution_environment.rs
+        ./src/machine_protocol.rs
+        ./src/machine_protocol
+      ] ++ plugin-sdk-files ++ provider-sdk-files));
+      retained-worker-interface-compatible = pkgs.lib.all (path:
+        let
+          relative = pkgs.lib.removePrefix "${toString ./.}/" (toString path);
+          prior = "${cowboy-workers.outPath}/${relative}";
+        in builtins.pathExists prior && builtins.hashFile "sha256" path == builtins.hashFile "sha256" prior
+      ) retained-worker-interface-files;
+      machine-release = bootstrap: retain-workers:
         pkgs.runCommand
           (if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
           { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
+        test -e ${worker-registry-check}
         mkdir -p "$out/bin" "$out/libexec" "$out/etc/cowboy-release"
         ln -s ${cowboy-machine}/bin/cowboy-machine \
           "$out/libexec/cowboy-machine"
@@ -464,7 +505,7 @@
           else
             ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
               --set COWBOY_DEFAULT_EXECUTION_CONFIG ${execution-configuration} \
-              --add-flags "--desired-generation ${worker-generation}"''
+              --add-flags "--desired-generation ${if retain-workers then retained-worker-package.workerGeneration else worker-generation}"''
         }
         # Registration finds companions beside the native current_exe. Keep
         # both the native executable and its wrapper in this complete bundle.
@@ -475,16 +516,24 @@
         cp ${cowboy-machine}/bin/.cowboy-wrapped "$out/bin/.cowboy-wrapped"
         makeWrapper "$out/bin/.cowboy-wrapped" "$out/bin/cowboy" \
           --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
-        ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
-        ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
-        ln -s ${cowboy}/bin/cowboy-codex-app-server \
-          "$out/bin/cowboy-codex-app-server"
-        ln -s ${cowboy-code-adapter}/bin/cowboy-code-adapter \
-          "$out/bin/cowboy-code-adapter"
-        ln -s ${cowboy-zed-adapter}/bin/cowboy-zed-adapter \
-          "$out/bin/cowboy-zed-adapter"
-        ln -s ${cowboy-zed-server}/bin/cowboy-zed-server \
-          "$out/bin/cowboy-zed-server"
+        ${if retain-workers then ''
+          for command in cowboy-plugin-js cowboy-acp-worker cowboy-codex-app-server cowboy-code-adapter cowboy-zed-adapter cowboy-zed-server; do
+            ln -s ${retained-worker-bundle}/bin/"$command" "$out/bin/$command"
+          done
+          cp ${retained-worker-bundle}/etc/cowboy-release/source.json \
+            "$out/etc/cowboy-release/retained-worker-source.json"
+        '' else ''
+          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
+          ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
+          ln -s ${cowboy}/bin/cowboy-codex-app-server \
+            "$out/bin/cowboy-codex-app-server"
+          ln -s ${cowboy-code-adapter}/bin/cowboy-code-adapter \
+            "$out/bin/cowboy-code-adapter"
+          ln -s ${cowboy-zed-adapter}/bin/cowboy-zed-adapter \
+            "$out/bin/cowboy-zed-adapter"
+          ln -s ${cowboy-zed-server}/bin/cowboy-zed-server \
+            "$out/bin/cowboy-zed-server"
+        ''}
         machine_help="$(${cowboy-machine}/bin/cowboy-machine --help)"
         printf '%s\n' "$machine_help" \
           | ${pkgs.gnugrep}/bin/grep -F -- '--socket' >/dev/null
@@ -495,7 +544,7 @@
         fi
         cat >"$out/etc/cowboy-release/source.json" <<'EOF'
         ${builtins.toJSON ((release-source "machine" bootstrap) // {
-          workerGeneration = cowboy.workerGeneration;
+          workerGeneration = if retain-workers then retained-worker-package.workerGeneration else cowboy.workerGeneration;
           sessionDeletionJournal = {
             readerSchema = 1;
             writerSchema = 0;
@@ -503,8 +552,10 @@
         })}
         EOF
       '';
-      cowboy-machine-bootstrap-release = machine-release true;
-      cowboy-machine-release = machine-release false;
+      cowboy-machine-bootstrap-release = machine-release true false;
+      cowboy-machine-release = machine-release false false;
+      cowboy-machine-host-release = assert retained-worker-interface-compatible;
+        machine-release false true;
 
       cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
         test ! -e ${cowboy-src}/docs
@@ -573,6 +624,7 @@
         test -e ${machine-src}/src/session_workspace.rs
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
+        test -e ${machine-src}/src/session_deletion_admission/reader_floor.rs
         test -e ${machine-src}/src/machine_install/bootstrap_probe.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
@@ -646,6 +698,7 @@
         cowboy-web-release = cowboy-web-release;
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
         cowboy-machine-release = cowboy-machine-release;
+        cowboy-machine-host-release = cowboy-machine-host-release;
       };
 
       # `cowboy`'s buildRustPackage check phase runs the Rust tests; cowboy-web's
@@ -655,7 +708,9 @@
         inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary
           cowboy-web cowboy-controller-release cowboy-web-release
           cowboy-machine-bootstrap-release cowboy-machine-release
+          cowboy-machine-host-release
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
+        cowboy-worker-registry-input = worker-registry-check;
       };
 
       # Android native-shell builds on Linux. The Rust and Tauri CLI versions

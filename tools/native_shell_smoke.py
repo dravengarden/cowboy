@@ -80,6 +80,8 @@ def main():
     parser.add_argument("receipt", type=Path, help="exact Debug Simulator build receipt.json")
     parser.add_argument("--remote", action="store_true",
                         help="also require the real remote logged-out Cowboy page; never logs in")
+    parser.add_argument("--device", choices=["iphone", "ipad"], default="iphone",
+                        help="device family for the exclusively-created Simulator")
     args = parser.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("Actual native acceptance requires a Mac")
@@ -136,7 +138,9 @@ def main():
             choices = [r for r in runtimes["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"]]
             runtime = max(choices, key=lambda r: tuple(map(int, r["version"].split("."))))["identifier"]
             simulator = command("xcrun", "simctl", "create", "Cowboy Tauri Smoke " + revision[:8],
-                                "com.apple.CoreSimulator.SimDeviceType.iPhone-16", runtime, capture=True)
+                                "com.apple.CoreSimulator.SimDeviceType." +
+                                ("iPad-mini-A17-Pro" if args.device == "ipad" else "iPhone-16"),
+                                runtime, capture=True)
             print("Smoke Simulator: " + simulator + ", loopback port: " + str(port), flush=True)
             command("xcrun", "simctl", "boot", simulator)
             command("xcrun", "simctl", "bootstatus", simulator, "-b")
@@ -169,9 +173,12 @@ def main():
             tests.extend(report["tests"])
             check("expected shell origin", report["origin"] in
                   ["tauri://localhost", REMOTE_ORIGIN])
-            check("iPhone WebKit", "iPhone" in report["user_agent"] and "AppleWebKit" in report["user_agent"])
+            family_names = ["iPad", "Macintosh"] if args.device == "ipad" else ["iPhone"]
+            check(args.device + " WebKit", any(name in report["user_agent"] for name in family_names)
+                  and "AppleWebKit" in report["user_agent"])
             report.update(ok=True, tests=tests, source_revision=source_revision,
                           acceptance_revision=revision, simulator_runtime=runtime,
+                          simulator_device=args.device,
                           executable_sha256=build["executable_sha256"],
                           acceptance_scope=mode, initial_shell_origin=shell["origin"],
                           real_login="not_checked", physical_device="not_checked")

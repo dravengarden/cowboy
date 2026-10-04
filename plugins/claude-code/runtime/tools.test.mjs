@@ -1,10 +1,289 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { TASK_OUTPUT_PREFIX, WorkspaceTools } from "./tools.mjs";
+import { READ_RANGE } from "./read-range.mjs";
+
+test("range reads keep whole-file conflict stamps without transferring the file", async (t) => {
+  const { tools, files, calls, state, connection, binding } = await fixture(t);
+  const source = "x".repeat(127) + "\n";
+  const original = source.repeat(8192);
+  files.set("/target with space/file", Buffer.from(original));
+  tools.rangePython = "python3";
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-range-target-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = join(directory, "source");
+  let transferred = 0;
+  tools.command = async (argv) => {
+    const script = argv.indexOf("-c") + 1;
+    assert.deepEqual(argv.slice(1, script), ["-I", "-S", "-B", "-c"]);
+    assert.equal(argv[script], READ_RANGE);
+    await writeFile(target, files.get("/target with space/file"));
+    const output = execFileSync(argv[0], [
+      ...argv.slice(1, script + 1),
+      target,
+      ...argv.slice(script + 2),
+    ], {
+      encoding: "utf8",
+    });
+    transferred += Buffer.byteLength(output);
+    return { exitCode: 0, closed: true, output };
+  };
+  for (const offset of [1, 101]) {
+    const result = await tools.nativeCall("Read", {
+      file_path: "file",
+      offset,
+      limit: 10,
+    });
+    assert.equal(result.result.file.numLines, 10);
+    assert.equal(result.result.file.startLine, offset);
+    assert.equal(result.result.file.totalLines, 8193);
+  }
+  assert.deepEqual(calls.map((call) => call.method), [
+    "fs/getMetadata",
+    "fs/getMetadata",
+  ]);
+  assert.ok(transferred < 4096);
+  assert.equal((await readFile(state, "utf8")).includes(source), false);
+  const resumed = new WorkspaceTools(connection, binding, state);
+  await resumed.load();
+  // A change outside the selected range still revokes write authority.
+  files.set("/target with space/file", Buffer.from(original + "external"));
+  const refused = await resumed.nativeCall("Write", {
+    file_path: "file",
+    content: "lost",
+  });
+  assert.match(refused.deny, /changed/);
+  assert.equal(
+    files.get("/target with space/file").toString(),
+    original + "external",
+  );
+  files.set("/target with space/file", Buffer.from(original));
+  const edited = await resumed.nativeCall("Edit", {
+    file_path: "file",
+    old_string: source,
+    new_string: "changed\n",
+    replace_all: true,
+  });
+  assert.equal(edited.deny, undefined);
+  assert.ok(
+    files.get("/target with space/file").toString().startsWith("changed\n"),
+  );
+});
+
+test("range helper handles empty files, CRLF, Unicode, missing and nonregular files", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-range-helper-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = join(directory, "file");
+  const run = (path, offset = 1, limit = 10) =>
+    JSON.parse(execFileSync(
+      "python3",
+      ["-c", READ_RANGE, path, String(offset), String(limit)],
+      { encoding: "utf8" },
+    ));
+  await writeFile(target, "");
+  assert.equal(run(target).numLines, 1);
+  assert.equal(run(target, 2).numLines, 0);
+  await writeFile(target, "中文\r\nsecond\n");
+  assert.equal(
+    Buffer.from(run(target, 1, 1).dataBase64, "base64").toString(),
+    "中文\r",
+  );
+  assert.match(run(join(directory, "missing")).error, /failed/);
+  assert.match(run(directory).error, /failed/);
+  await writeFile(target, Buffer.from([255]));
+  assert.match(run(target).error, /failed/);
+  const changed = READ_RANGE.replace(
+    "current = os.stat(path)",
+    "os.truncate(path, 0)\n        current = os.stat(path)",
+  );
+  await writeFile(target, "before");
+  const raced = JSON.parse(
+    execFileSync("python3", ["-c", changed, target, "1", "1"], {
+      encoding: "utf8",
+    }),
+  );
+  assert.match(raced.error, /changed/);
+  await writeFile(
+    target,
+    Buffer.concat([Buffer.from("%PDF"), Buffer.alloc(64)]),
+  );
+  assert.equal(run(target).fallback, true);
+});
+
+test("range results fail closed without granting edit authority", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set("/target with space/file", Buffer.alloc(128 * 1024));
+  tools.rangePython = "python3";
+  tools.command = async () => ({
+    exitCode: 0,
+    output: JSON.stringify({ schema: 1, sha256: "bad", size: 10 }),
+  });
+  assert.match(
+    (await tools.nativeCall("Read", { file_path: "file" })).deny,
+    /Invalid/,
+  );
+  assert.deepEqual(tools.state.reads, {});
+});
+
+test("small files retain two native RPCs without a utility startup", async (t) => {
+  const { tools, files, calls } = await fixture(t);
+  tools.rangePython = "python3";
+  tools.command = () => {
+    throw new Error("Short Read must not start a utility");
+  };
+  files.set("/target with space/file", Buffer.from("short\n"));
+  assert.equal(
+    (await tools.nativeCall("Read", { file_path: "file" })).deny,
+    undefined,
+  );
+  assert.deepEqual(calls.map((call) => call.method), [
+    "fs/getMetadata",
+    "fs/readFile",
+  ]);
+});
+
+test("an undelivered Read cannot grant edit authority after state storage fails", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set("/target with space/file", Buffer.from("before"));
+  const save = tools.save.bind(tools);
+  tools.save = async () => {
+    const error = new Error("Fixture storage failure");
+    error.code = "EIO";
+    throw error;
+  };
+  assert.match(
+    (await tools.nativeCall("Read", { file_path: "file" })).deny,
+    /saved/,
+  );
+  assert.deepEqual(tools.state.reads, {});
+  tools.save = save;
+  assert.match(
+    (await tools.nativeCall("Write", {
+      file_path: "file",
+      content: "lost",
+    })).deny,
+    /not been read/,
+  );
+  assert.equal(files.get("/target with space/file").toString(), "before");
+});
+
+test("bounded read stamps expire to reread rather than granting stale write access", async (t) => {
+  const { tools, files } = await fixture(t);
+  const digest = "a".repeat(64);
+  tools.remember("/target with space/old", digest);
+  for (let index = 0; index < 80; index++) {
+    tools.remember("/target with space/" + index + "x".repeat(10000), digest);
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(tools.state.reads)) <= 512 * 1024);
+  assert.equal(tools.state.reads["/target with space/old"], undefined);
+  files.set("/target with space/old", Buffer.from("original"));
+  assert.match(
+    (await tools.nativeCall("Write", {
+      file_path: "old",
+      content: "lost",
+    })).deny,
+    /not been read/,
+  );
+  assert.equal(files.get("/target with space/old").toString(), "original");
+});
+
+test("failed atomic state replacement removes only its owned temporary file", async (t) => {
+  const { tools, state } = await fixture(t);
+  await mkdir(state);
+  const unrelated = state + ".keep";
+  await writeFile(unrelated, "keep");
+  await assert.rejects(tools.save());
+  assert.deepEqual((await readdir(join(state, ".."))).sort(), [
+    "state.json",
+    "state.json.keep",
+  ]);
+  assert.equal(await readFile(unrelated, "utf8"), "keep");
+});
+
+test("concurrent failed Reads roll back before subsequent state saves", async (t) => {
+  const { tools, state, files } = await fixture(t);
+  await mkdir(state);
+  files.set("/target with space/a", Buffer.from("a"));
+  files.set("/target with space/b", Buffer.from("b"));
+  const results = await Promise.all(
+    ["a", "b"].map((file_path) => tools.nativeCall("Read", { file_path })),
+  );
+  assert.ok(results.every((result) => result.deny));
+  assert.deepEqual(tools.state.reads, {});
+  await rm(state, { recursive: true });
+  await tools.save();
+  assert.deepEqual(JSON.parse(await readFile(state, "utf8")).reads, {});
+});
+
+test("startup cleans dead-writer temporaries and preserves live writers and unrelated files", async (t) => {
+  const { tools, state } = await fixture(t);
+  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  const pid = child.pid;
+  await once(child, "exit");
+  const suffix = "12345678-1234-1234-1234-123456789abc";
+  const dead = `${state}.${pid}.${suffix}`;
+  const live = `${state}.${process.pid}.${suffix}`;
+  const legacy = `${state}.${suffix}`;
+  await writeFile(dead, "partial", { mode: 0o600 });
+  await writeFile(live, "live", { mode: 0o600 });
+  await writeFile(legacy, "unowned", { mode: 0o600 });
+  await tools.load();
+  await assert.rejects(readFile(dead), { code: "ENOENT" });
+  assert.equal(await readFile(live, "utf8"), "live");
+  assert.equal(await readFile(legacy, "utf8"), "unowned");
+});
+
+test("closed private utility records expire without deleting user task handles", async (t) => {
+  const { tools, connection } = await fixture(t);
+  const user = "user-task";
+  tools.state.jobs[user] = { afterSeq: null, exited: false };
+  connection.call = async (method, params) => {
+    if (method === "process/start") return { processId: params.processId };
+    assert.equal(method, "process/read");
+    return { chunks: [], closed: true, exited: true, exitCode: 0 };
+  };
+  for (let index = 0; index < 20; index++) await tools.command(["true"]);
+  assert.deepEqual(Object.keys(tools.state.jobs), [user]);
+});
+
+test("quiet output retains the cancellation-compatible one-second wait bound", async (t) => {
+  const { tools, connection } = await fixture(t);
+  let clock = 0;
+  const waits = [];
+  const original = Date.now;
+  tools.state.jobs.quiet = { afterSeq: null, exited: false };
+  connection.call = async (method, params) => {
+    assert.equal(method, "process/read");
+    waits.push(params.waitMs);
+    clock += params.waitMs;
+    return {
+      chunks: [],
+      exited: clock >= 60000,
+      closed: clock >= 60000,
+      exitCode: clock >= 60000 ? 0 : null,
+    };
+  };
+  try {
+    Date.now = () => clock;
+    assert.equal((await tools.collectOutput("quiet", 120000)).exitCode, 0);
+  } finally {
+    Date.now = original;
+  }
+  assert.deepEqual(waits, Array(60).fill(1000));
+});
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-claude-tools-"));

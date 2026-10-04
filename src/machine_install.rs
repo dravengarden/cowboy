@@ -126,6 +126,7 @@ pub async fn register(
     };
     validate_socket_paths(&state_dir)?;
     crate::session_deletion_admission::require_empty_portable_namespace(&state_dir)?;
+    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state_dir)?;
     let host = machine_host_binary(None);
     anyhow::ensure!(
         host.is_file(),
@@ -294,6 +295,7 @@ fn prepare_install_from_bundle(
     )?;
     validate_socket_paths(&state)?;
     crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
+    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
     let installed = if args.refresh {
         installed_launcher(args, &state, home)?
     } else {
@@ -567,12 +569,20 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
     // The installer-owned bootstrap is the guard, even when an active signed
     // host is selected later. An older bootstrap lacking the diagnostic fails
-    // closed. This refuses terminal state; it does not admit a reader release.
+    // closed. It also authenticates cached host selection without running it.
+    // This refuses terminal state; it does not admit a reader release.
     let _ = writeln!(
         script,
-        "{} --check-portable-session-deletion --state-dir {} >/dev/null",
+        "{} --check-portable-session-deletion --state-dir {}{} >/dev/null",
         shell_quote(&state.join("bootstrap/cowboy-machine").display().to_string()),
-        shell_quote(&state.display().to_string())
+        shell_quote(&state.display().to_string()),
+        args.artifact_public_key
+            .as_ref()
+            .map(|key| format!(
+                " --artifact-public-key {}",
+                shell_quote(&key.display().to_string())
+            ))
+            .unwrap_or_default()
     );
     let _ = writeln!(
         script,
@@ -620,6 +630,24 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     }
     script.push('\n');
     script
+}
+
+#[cfg(all(test, feature = "machine-host"))]
+pub(crate) fn portable_cache_launcher_fixture(state: &Path, key: &Path) -> String {
+    let args = InstallArgs::try_parse_from([
+        "installer",
+        "--controller-url",
+        "https://example.invalid",
+        "--service-id",
+        "svc-0123456789abcdef0123456789abcdef",
+        "--workspace",
+        "fixture=/tmp",
+        "--refresh",
+        "--artifact-public-key",
+        key.to_str().unwrap(),
+    ])
+    .unwrap();
+    launcher_script(&args, state, &state.join("token"))
 }
 
 fn install_systemd_user(
@@ -765,6 +793,37 @@ mod tests {
     }
 
     #[test]
+    fn floor_refuses_refresh_before_bootstrap_identity_or_launcher_changes() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let state = root.path().join("state");
+        std::fs::create_dir_all(state.join("bootstrap")).unwrap();
+        std::fs::write(
+            state.join(crate::session_deletion_admission::reader_floor::NAME),
+            b"malformed floor",
+        )
+        .unwrap();
+        std::fs::write(state.join("bootstrap/cowboy-machine"), b"retained host").unwrap();
+        std::fs::write(state.join("identity_ed25519"), b"retained identity").unwrap();
+        let args = refresh_args(&state, &root.path().join("missing-source"));
+        assert!(
+            prepare_install_at(&args, root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("portable reader floor")
+        );
+        assert_eq!(
+            std::fs::read(state.join("bootstrap/cowboy-machine")).unwrap(),
+            b"retained host"
+        );
+        assert_eq!(
+            std::fs::read(state.join("identity_ed25519")).unwrap(),
+            b"retained identity"
+        );
+        assert!(!root.path().join(".local/bin").exists());
+        assert!(!state.join("service-origin").exists());
+    }
+
+    #[test]
     fn terminal_journal_refuses_refresh_before_bootstrap_or_launcher_changes() {
         let root = tempfile::tempdir_in("/tmp").unwrap();
         let state = root.path().join("state");
@@ -821,7 +880,7 @@ mod tests {
                 shell_quote(&probed_path.display().to_string())
             )
             .unwrap();
-            script.push_str("if [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false}'\n");
+            script.push_str("if [ -e \"$3/portable-session-deletion-reader-floor.json\" ]; then printf '%s' 'portable reader floor' >&2; exit 1; fi\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}'\n");
             for name in bootstrap_probe::PAYLOADS {
                 std::fs::write(source.join(name), name).unwrap();
             }
@@ -882,7 +941,7 @@ mod tests {
         for name in ["cowboy-machine", "cowboy-code-adapter", "cowboy-acp-worker"] {
             std::fs::write(bundle.join(name), name).unwrap();
         }
-        std::fs::write(bundle.join("cowboy-machine"), "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false}'\n").unwrap();
+        std::fs::write(bundle.join("cowboy-machine"), "#!/bin/sh\nif [ -e \"$3/portable-session-deletion-reader-floor.json\" ]; then printf '%s' 'portable reader floor' >&2; exit 1; fi\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}'\n").unwrap();
         set_mode(&bundle.join("cowboy-machine"), 0o755).unwrap();
         std::fs::write(state.join("identity_ed25519"), "existing private key").unwrap();
         std::fs::write(state.join("machine-id"), "mac").unwrap();

@@ -117,6 +117,27 @@ pub(crate) async fn run_plugin_command_with_environment(
     .await
 }
 
+/// Release admission authority only after spawn succeeded. Nothing awaits
+/// between command setup, spawn and this callback; failed spawns never admit.
+#[cfg(feature = "machine-host")]
+pub(crate) async fn run_plugin_command_with_environment_on_started(
+    program: &str,
+    args: &[String],
+    input: &[u8],
+    environment: &BTreeMap<String, String>,
+    on_started: impl FnOnce(),
+) -> Result<PluginCommandOutput, PluginCommandFailure> {
+    run_plugin_command_admitted(
+        program,
+        args,
+        input,
+        PLUGIN_COMMAND_TIMEOUT,
+        Some(environment),
+        on_started,
+    )
+    .await
+}
+
 #[cfg(any(feature = "full", test))]
 async fn run_plugin_command_with_timeout(
     program: &str,
@@ -133,6 +154,17 @@ async fn run_plugin_command_with_timeout_and_environment(
     input: &[u8],
     timeout: Duration,
     environment: Option<&BTreeMap<String, String>>,
+) -> Result<PluginCommandOutput, PluginCommandFailure> {
+    run_plugin_command_admitted(program, args, input, timeout, environment, || {}).await
+}
+
+async fn run_plugin_command_admitted(
+    program: &str,
+    args: &[String],
+    input: &[u8],
+    timeout: Duration,
+    environment: Option<&BTreeMap<String, String>>,
+    on_started: impl FnOnce(),
 ) -> Result<PluginCommandOutput, PluginCommandFailure> {
     if input.len() > MAX_PLUGIN_COMMAND_INPUT_BYTES {
         return Err(PluginCommandFailure {
@@ -162,6 +194,7 @@ async fn run_plugin_command_with_timeout_and_environment(
         error: anyhow::Error::new(error).context("spawn plugin command"),
     })?;
     let _process_group = child.id().map(PluginProcessGroup::new);
+    on_started();
     let run = async move {
         let mut stdin = child.stdin.take().context("plugin command stdin")?;
         let stdout = child.stdout.take().context("plugin command stdout")?;
@@ -475,6 +508,35 @@ async fn read_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn admission_callback_requires_a_successful_spawn_and_survives_timeout() {
+        let admitted = std::cell::Cell::new(false);
+        let failure = run_plugin_command_admitted(
+            "/nonexistent-cowboy-admission-fixture",
+            &[],
+            b"",
+            Duration::from_secs(1),
+            None,
+            || admitted.set(true),
+        )
+        .await
+        .unwrap_err();
+        assert!(!failure.started);
+        assert!(!admitted.get());
+        let failure = run_plugin_command_admitted(
+            "sleep",
+            &["10".to_owned()],
+            b"",
+            Duration::from_millis(20),
+            None,
+            || admitted.set(true),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.started && failure.timed_out);
+        assert!(admitted.get());
+    }
 
     #[tokio::test]
     async fn command_output_is_bounded_before_the_child_exits() {

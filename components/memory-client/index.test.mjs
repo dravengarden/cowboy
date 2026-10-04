@@ -19,13 +19,18 @@ async function fixture(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   const requests = [];
   let available = true;
+  let contextAvailable = true;
+  let observeWait = null;
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const value = JSON.parse(Buffer.concat(chunks));
     requests.push({ path: request.url, ...value });
+    if (request.url === "/v1/observe" && observeWait) await observeWait;
     if (
-      request.headers.authorization !== "Bearer " + "a".repeat(64) || !available
+      request.headers.authorization !== "Bearer " + "a".repeat(64) ||
+      !available ||
+      request.url === "/v1/context" && !contextAvailable
     ) {
       response.writeHead(503).end("{}");
       return;
@@ -73,6 +78,8 @@ async function fixture(t) {
     config,
     descriptor,
     setAvailable: (value) => available = value,
+    setContextAvailable: (value) => contextAvailable = value,
+    setObserveWait: (value) => observeWait = value,
   };
 }
 
@@ -187,4 +194,67 @@ test("outage retains completed turns for restart delivery without stale recall",
   assert.ok(f.requests.some((request) => request.payload.learn === false));
   await restarted.close();
   await restarted.delivery;
+});
+
+test("current evidence is delivered once despite concurrent flush, then retired on receipt", async (t) => {
+  const f = await fixture(t);
+  const client = await MatrixClient.open(f.config, f.descriptor);
+  let release;
+  f.setObserveWait(new Promise((resolve) => release = resolve));
+  const begin = client.begin("Verify the exact release.");
+  try {
+    for (let i = 0; i < 100 && !f.requests.length; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(f.requests.length, 1);
+    await client.flush();
+    assert.equal(
+      f.requests.length,
+      1,
+      "flush must not duplicate reserved evidence",
+    );
+    assert.equal(
+      (await readdir(client.directory)).filter((n) => n.endsWith(".json"))
+        .length,
+      1,
+    );
+  } finally {
+    release();
+  }
+  assert.match(await begin, /Current revision/);
+  await client.delivery;
+  assert.equal(f.requests.filter((r) => r.path === "/v1/observe").length, 1);
+  assert.equal(
+    (await readdir(client.directory)).filter((n) => n.endsWith(".json")).length,
+    0,
+  );
+  assert.equal(client.inFlight.size, 0);
+  const completedTurn = client.turn;
+  await client.close();
+  await client.delivery;
+  assert.ok(
+    f.requests.some((r) =>
+      r.payload.turn === completedTurn && r.payload.learn !== false
+    ),
+  );
+});
+
+test("context failure does not replay already acknowledged user evidence", async (t) => {
+  const f = await fixture(t);
+  const client = await MatrixClient.open(f.config, f.descriptor);
+  f.setContextAvailable(false);
+  assert.match(await client.begin("Use fresh facts."), /unavailable/);
+  await client.delivery;
+  assert.equal(f.requests.filter((r) => r.path === "/v1/observe").length, 1);
+  assert.equal(
+    (await readdir(client.directory)).filter((n) => n.endsWith(".json")).length,
+    0,
+  );
+  await client.close();
+  await client.delivery;
+  assert.equal(
+    f.requests.filter((r) => r.path === "/v1/observe").length,
+    2,
+    "completed-turn learning is a different observation and must still be delivered",
+  );
 });

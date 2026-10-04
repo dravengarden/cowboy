@@ -39,6 +39,7 @@ primary phone/desktop product path.
 
 - [`cowboy-ovh-efficiency-2026-10-04.md`](cowboy-ovh-efficiency-2026-10-04.md) — Current cross-host SSH timings, real-session history, recurring usage preparation and scoped optimization order
 - [`ovh-native-execution-efficiency-2026-10-04.md`](ovh-native-execution-efficiency-2026-10-04.md) — Live Codex Remote/Claude Mods bindings, reproducible RPC amplification and Controller-to-OVH optimization priorities
+- [`claude-target-range-reads.md`](claude-target-range-reads.md) — Target-authoritative range reads, whole-file conflict stamps and safe bounded state cleanup
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Current system topology and component map
 - [`architecture/01-acp-transport.md`](architecture/01-acp-transport.md) — ACP session lifecycle, streaming, permissions, and cancellation
 - [`claude-autonomous-activity.md`](claude-autonomous-activity.md) — Native execution state and loading feedback after a background task resumes Claude
@@ -96,6 +97,9 @@ primary phone/desktop product path.
 - [`releases/plugin-rollback-predecessor-2026-10-04.md`](releases/plugin-rollback-predecessor-2026-10-04.md) — Same-lane manifest admission before ordinary rollback restoration and verified owner activation
 - [`releases/plugin-installed-owner-2026-10-04.md`](releases/plugin-installed-owner-2026-10-04.md) — Supported dispatch pinned to the installed immutable owner, retired candidate transactions and preserved sudo policy
 - [`releases/plugin-portable-reader-claim-2026-10-04.md`](releases/plugin-portable-reader-claim-2026-10-04.md) — Signed read-only portable reader declaration and preserved legacy transcript; state admission remains closed
+- [`releases/plugin-portable-reader-floor-2026-10-04.md`](releases/plugin-portable-reader-floor-2026-10-04.md) — Portable monotonic reader floor and retained signed anchor; bootstrap/recovery and committed deletion admission stay closed
+- [`releases/plugin-host-startup-integrity-2026-10-04.md`](releases/plugin-host-startup-integrity-2026-10-04.md) — Offline portable cached-host signature, package and selection checks before exec; committed-state admission and writer remain closed
+- [`releases/plugin-host-cache-integrity-2026-10-04.md`](releases/plugin-host-cache-integrity-2026-10-04.md) — Signed staged Machine host bytes checked before probe and pointer publication; cached startup admission remains closed
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags

@@ -203,18 +203,49 @@ was published, and deletion writing remains disabled.
 
 ## Portable refusal gate
 
-Portable component declarations do not bind a Session deletion reader schema.
-Until that reader/recovery authority is supplied, a Machine-host reconcile
+Portable component declarations now bind a Session deletion reader schema,
+but persistent reader/recovery admission is not established. A Machine-host reconcile
 refuses any committed deletion entry before fetching a payload, before probing
 it and before publishing active/rollback/command links. Other component kinds
 retain their existing admission. A probe-created record refuses publication;
 verified staging and probe effects are not rolled back.
 
+Reconcile also checks staged Machine host bytes against the downloaded,
+digest-checked and publisher-signed artifact before running a probe and again
+before publishing pointers. Raw hosts must remain regular files with identical
+bytes. Archive hosts must retain the exact regular-file/directory tree, including
+companions and empty directories; changed bytes, extra entries, links, special
+entries and ambiguous archive paths refuse. Expected archive contents are parsed
+before extraction. Existing cache entries are checked, not silently repaired.
+An authenticated probe may leave effects behind, but modified host bytes cannot
+publish. This does not authenticate a cached host on a later launcher start,
+bind bootstrap recovery, create a persistent portable floor or fence a concurrent
+administrator writing the cache. Subsequent portable launcher authentication
+retains the authenticated original package and rechecks the cached manifest
+signature, package digest, exact payload contents and active/command selection
+before exec. Missing legacy package proofs refuse; they need a fresh signed
+reconciliation. The bootstrap diagnostic advertises `host_cache_guard: 1`, and
+install/refresh refuse an older deletion-only bootstrap before changing an
+installation. The installer-selected bootstrap and configured publisher key
+remain trusted. Subsequent portable floor support retains the first declared
+signed reader anchor before selection publication, and prevents downgrade or
+bootstrap fallback even over an empty namespace. It binds the canonical state
+namespace, fixed deletion dataset, normalized publisher key and exact signed
+anchor proof. The private, bounded floor is not replaced or cleared by updated
+tools; cache pruning retains its anchor. Installation/refresh remains closed
+once a floor exists until signed bootstrap/recovery admission is established.
+The current bootstrap diagnostic advertises `host_cache_guard: 2` and is checked
+against both committed-state and floor refusal fixtures before installation.
+See the [portable floor release](releases/plugin-portable-reader-floor-2026-10-04.md).
+See the [cached-startup release](releases/plugin-host-startup-integrity-2026-10-04.md). The [staged-host integrity release](releases/plugin-host-cache-integrity-2026-10-04.md)
+records that narrower boundary.
+
 Installation and refresh check the same gate before changing bootstrap payloads,
 identity or launcher configuration. Newly generated launchers run the
 installer-owned bootstrap's `--check-portable-session-deletion` diagnostic
-before selecting active or bootstrap hosts. The diagnostic only inspects
-namespace entries; it opens no Machine stores or Controller connection. A
+before selecting active or bootstrap hosts. The diagnostic checks namespace entries and authenticates selected cached host
+bytes and any retained floor anchor; it opens no Machine stores or Controller
+connection. A
 bootstrap without this diagnostic fails closed. A healthy empty or staging-only
 namespace retains existing behavior. Committed files, directories and dangling
 symlinks all refuse; invalid namespace entries and inspection errors do not
