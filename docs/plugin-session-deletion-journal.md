@@ -29,24 +29,34 @@ are retained and never replayed. The namespace accepts at most 4,096 terminal
 IDs, 4 MiB of committed JSON and 512 bytes per ID; exhaustion refuses new writes
 rather than evicting prior deletion decisions.
 
-## Production admission remains read-only
+## Production admission
 
-The resident production constructor hard-codes the writer off. No request,
-CLI flag or environment variable can enable it. A healthy empty reader retains
-the existing process-local deletion behavior and writes no terminal record;
-this release therefore does not make newly deleted production Sessions durable.
-Historical volatile deletes are not reconstructed or migrated automatically.
+Ordinary and bootstrap builds stay read-only. No request, CLI flag or runtime
+environment variable can enable their writer. The dedicated
+`cowboy-machine-writer-host-release` compiles the writer capability and exact
+clean Git revision into its native executable. On Hawk it also requires the
+administrator-owned component profile to select that exact native executable
+and matching schema-1 writer source, plus a valid existing root reader floor
+for the configured Machine and exact namespace. Refusal occurs before journal
+open or broker binding. Authority files are bounded regular files opened with
+no-follow/nonblocking flags; root directories, profile link ownership and
+non-writable authority permissions are checked. The profile is rechecked before
+startup admission completes. This is startup selection, not a revocable lease
+against independent administrator or same-user actions.
 
-Older Machine artifacts ignore this namespace. Before enabling the writer,
-the component owner must enforce a compatible reader on activation, fallback
-and independently authorized recovery, then accept exact old/new writer releases
-and real-process crash/reopen/failure cases. The installed component owner's
-floor, fallback and recovery guards are now implemented; exact production
-writer artifact and runtime admission acceptance remain open. The private
-candidate must not be enabled by simply changing the constructor boolean.
+The [production writer release](releases/plugin-deletion-production-writer-2026-10-04.md)
+is active on Hawk with writer true and the accepted worker generation retained.
+Positive terminal-deletion acknowledgement follows file and directory sync;
+loaded decisions fence cold worker admission. Historical volatile deletes are
+not reconstructed or migrated. The exact old/new production writer matrix
+covers ACK/dedup, SIGKILL/reopen, exclusive ownership, storage/lock failures,
+reader-only fallback and startup authority refusal. Four pre-ACK checkpoint
+boundaries remain separately tested in private library fixtures; no production
+checkpoint hooks, power-loss or supported-device acceptance is claimed.
 
-Machine release metadata now declares `sessionDeletionJournal` with
-`readerSchema: 1` and `writerSchema: 0`. The Columbus component owner accepts
+Machine reader release metadata declares `sessionDeletionJournal` with
+`readerSchema: 1` and `writerSchema: 0`; dedicated writer releases declare `1/1`.
+The Columbus component owner accepts
 schema-1 writer declarations only behind an already established valid root
 reader floor; a writer candidate cannot originate that floor. Unsupported
 schemas and foreign lanes refuse. It requires a declared schema-1 reader whenever
@@ -445,3 +455,8 @@ old/new/old fixture reader reopen. Actual production readers also reopen origina
 writer-produced schema-1 evidence. The fixture component/lane is nondeployable
 and refused by the installed owner. This closes an immutable test prerequisite,
 not production writer release/admission, power-loss or portable writer authority.
+
+The subsequent [production writer acceptance](releases/plugin-deletion-production-writer-2026-10-04.md)
+records the exact real release-binary matrix and Hawk writer-enabled activation.
+The earlier reader-only/portable milestones above retain their historical scope;
+portable writer authority and continuous ownership remain unadmitted.
