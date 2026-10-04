@@ -35,6 +35,12 @@ require the exact successful build receipt and published SideStore version.
   unpublished successful revision until the task pushes it or deploys a
   descendant revert. `/etc/nixos` and Columbus stable checkouts are never
   deployment sources.
+- Resident Machine fixes use `.#cowboy-machine-host-release` to retain the
+  separately accepted worker/Code/Zed bundle pinned by the `cowboy-workers`
+  flake input. Its source and exact generation remain in the artifact's
+  `retained-worker-source.json`; native wire/SDK/dependency source changes
+  refuse this output. Advancing that pin or using `.#cowboy-machine-release`
+  changes the pool/adapter boundary and needs separate maintenance acceptance.
 - Web releases atomically move only `/run/cowboy-web` and restart no process.
   Controller releases restart only `cowboy.service`. Machine releases are a
   separate explicit maintenance boundary for the resident Machine, worker
