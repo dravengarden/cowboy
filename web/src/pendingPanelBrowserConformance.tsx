@@ -23,7 +23,7 @@ export async function checkPendingPanelLayout(): Promise<string> {
   const originalFont = document.documentElement.style.fontSize;
   try {
     for (const desktop of [true, false]) {
-      for (const fontSize of [16, 24]) {
+      for (const fontSize of [8, 10.4, 16, 24]) {
         document.documentElement.style.fontSize = `${fontSize}px`;
         for (const width of [320, 430, 600, 1200]) {
           container.style.width = `${width}px`;
@@ -116,6 +116,30 @@ export async function checkPendingPanelLayout(): Promise<string> {
               "Only Desktop hides collapsed reorder",
             );
           }
+          const checkGrip = async (disclosure: HTMLButtonElement): Promise<void> => {
+            const panel = disclosure.parentElement!.parentElement!;
+            const reorder = panel.querySelector<HTMLButtonElement>("button[aria-label='reorder']");
+            if (reorder && reorder.getClientRects().length > 0) {
+              reorder.click();
+              await tick();
+            }
+            const grips = [...panel.querySelectorAll<HTMLButtonElement>("button[aria-label='Drag to reorder']")]
+              .filter((grip) => grip.getClientRects().length > 0);
+            check(grips.length === 2, "Both expanded rows expose their reorder grip");
+            for (const grip of grips) {
+              const size = desktop ? 2.75 * fontSize : 44;
+              const rect = grip.getBoundingClientRect();
+              const slot = grip.parentElement!.getBoundingClientRect();
+              check(Math.abs(rect.width - size) < 1 && Math.abs(rect.height - size) < 1,
+                "Desktop grip scales with the root font; Mobile keeps its touch target");
+              check(Math.abs(slot.width - size) < 1 && Math.abs(slot.height - size) < 1,
+                "Grip and its leading slot have matching geometry");
+              if (desktop) {
+                check(grip.scrollWidth <= grip.clientWidth + 1,
+                  `Desktop grip fits at ${fontSize}px root font`);
+              }
+            }
+          };
           const drafts = container.querySelector<HTMLButtonElement>(
             "button[aria-label='Expand drafts']",
           )!;
@@ -129,6 +153,7 @@ export async function checkPendingPanelLayout(): Promise<string> {
             drafts.getAttribute("aria-expanded") === "true",
             "Disclosure announces expansion",
           );
+          await checkGrip(drafts);
           const queue = container.querySelector<HTMLButtonElement>(
             "button[aria-label='Expand queued messages']",
           )!;
@@ -139,6 +164,7 @@ export async function checkPendingPanelLayout(): Promise<string> {
               drafts.getAttribute("aria-expanded") === "false",
             "Queue replaces Drafts exclusively",
           );
+          await checkGrip(queue);
           const menu = container.querySelector<HTMLButtonElement>(
             "button[aria-label='Queue actions']",
           )!;

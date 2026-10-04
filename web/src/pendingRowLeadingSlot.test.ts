@@ -20,8 +20,9 @@ Deno.test("pending row ordinal shares the reorder grip slot", () => {
       .test(leading),
   );
   assert(leading.includes('aria-label="Drag to reorder"'));
-  assert(leading.includes("width: 44"));
-  assert(leading.includes("height: 44"));
+  assert(leading.includes('const gripSize = desktop ? "2.75rem" : 44'));
+  assert(leading.includes("width: gripSize"));
+  assert(leading.includes("height: gripSize"));
   assert(leading.includes("<DesktopListJumpKeycap"));
   assert(leading.includes('position: "absolute"'));
   assert(

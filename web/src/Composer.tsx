@@ -4562,6 +4562,8 @@ export function PendingPanel({
             const optimistic = m.status !== undefined;
             const leadingHandle = editingId !== m.id && !optimistic &&
               count > 1;
+            const gripSize = desktop ? "2.75rem" : 44;
+            const hintWidth = desktop ? "1.75rem" : 44;
             const jumpBadgeSx = {
               position: "absolute",
               zIndex: 1,
@@ -4616,7 +4618,7 @@ export function PendingPanel({
                   /* One leading slot owns both reorder and the G+number jump hint.
                     On wide rows the number overlays the six-dot grip instead of
                     consuming a separate column. Narrow Desktop rows retain a quiet
-                    28px jump hint until reorder mode reveals the 44px grip; Mobile
+                    scaled jump hint until reorder mode reveals the grip; Mobile
                     still allocates nothing until its reorder mode is active. A
                     single row needs neither ordering affordance nor ordinal. */
                 }
@@ -4624,13 +4626,13 @@ export function PendingPanel({
                   <Box
                     sx={{
                       position: "relative",
-                      width: reordering ? 44 : (desktop ? 28 : 44),
-                      height: 44,
+                      width: reordering ? gripSize : hintWidth,
+                      height: gripSize,
                       flexShrink: 0,
                       display: reordering || desktop ? "inline-flex" : "none",
                       [ROW_ACTIONS_INLINE]: {
                         display: "inline-flex",
-                        width: 44,
+                        width: gripSize,
                       },
                     }}
                   >
@@ -4641,8 +4643,9 @@ export function PendingPanel({
                         ...TOOLBAR_ICON_BTN,
                         position: "absolute",
                         inset: 0,
-                        width: 44,
-                        height: 44,
+                        width: gripSize,
+                        height: gripSize,
+                        ...(desktop && { padding: "0.5rem" }),
                         color: "text.disabled",
                         display: reordering ? "inline-flex" : "none",
                         [ROW_ACTIONS_INLINE]: { display: "inline-flex" },

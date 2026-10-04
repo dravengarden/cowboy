@@ -2768,3 +2768,10 @@ Desktop Vim + IME checks:
     generated execution paths remain in tooltips. Keep IME ownership of candidate
     arrows, id-based selection, and source-session exclusion. Mobile keeps its
     existing picker. No editor, native keyboard or image/caret code changes.
+
+116. **Desktop pending reorder grips follow global font scale.** Draft and
+    Queue row grips, their leading slots and grip padding use rem on Desktop;
+    fixed 44px slots otherwise dwarf their scaled icon and jump keycap at the
+    default 65% font size. Mobile retains its 44px touch target. No editor,
+    CM6, caret, IME or native keyboard behavior changes. Browser checks cover
+    both panels and surfaces at 50%, 65%, 100% and 150% in both themes.
