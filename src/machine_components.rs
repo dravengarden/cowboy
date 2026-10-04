@@ -9,7 +9,10 @@ use crate::machine_protocol::{
     ArtifactFormat, ComponentInventory, ComponentState, DesiredComponent,
 };
 
+mod cached_host;
 mod host_payload;
+
+pub(crate) use cached_host::check_portable_host_cache;
 
 pub struct ComponentStore {
     root: PathBuf,
@@ -102,6 +105,11 @@ impl ComponentStore {
         }
         if let Some(payload) = &host_payload {
             payload.verify(&generation)?;
+            // Retain the authenticated envelope bytes for offline startup
+            // verification. Never reconstruct archive expectations from cache.
+            let temporary = generation.join(".artifact.partial");
+            std::fs::write(&temporary, &bytes)?;
+            std::fs::rename(temporary, generation.join("artifact"))?;
         }
         std::fs::write(
             generation.join("manifest.json"),
@@ -133,6 +141,10 @@ impl ComponentStore {
         // before publishing, without repairing or executing substituted bytes.
         if let Some(payload) = &host_payload {
             payload.verify(&generation)?;
+            let cached = cached_host::verify_generation(&self.root, &generation, publisher_key)?;
+            if cached != desired {
+                bail!("staged Machine host manifest changed during probe");
+            }
         }
         let active = self.root.join("active").join(&slot);
         let prior_generation = std::fs::read_link(&active).ok();
@@ -693,6 +705,330 @@ mod tests {
                 assert_eq!(
                     std::fs::read(store.command_path("cowboy-machine")).unwrap(),
                     script
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_host_authentication_is_offline_read_only_and_refuses_substitution() {
+        for archive in [false, true] {
+            for case in [
+                "bytes",
+                "manifest",
+                "artifact",
+                "legacy",
+                "proof-link",
+                "command",
+                "dangling",
+                "missing-active",
+                "outside",
+                "non-executable",
+                "payload-link",
+            ] {
+                let state = tempfile::tempdir_in("/tmp").unwrap();
+                let identity =
+                    MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+                let key = state.path().join("publisher.pub");
+                std::fs::write(&key, identity.public_key()).unwrap();
+                let store = ComponentStore::new(
+                    state.path().join("components"),
+                    Some(&key),
+                    "fixture".into(),
+                )
+                .unwrap();
+                let marker = state.path().join("executed");
+                let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display());
+                let bytes = if archive {
+                    host_archive(script.as_bytes(), b"signed companion")
+                } else {
+                    script.as_bytes().to_vec()
+                };
+                let mut desired =
+                    signed_component(&identity, serve_once(&bytes).await, &bytes, "healthy");
+                desired.id.kind = ComponentKind::MachineHost;
+                desired.id.slot.clear();
+                if archive {
+                    desired.artifact_format = ArtifactFormat::TarGz;
+                    desired.entrypoint = Some("bin/host".into());
+                }
+                desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+                store.reconcile(desired.clone()).await.unwrap();
+                std::fs::remove_file(&marker).unwrap();
+                let generation =
+                    std::fs::canonicalize(store.root.join("active/machine_host")).unwrap();
+                let executable = component_executable(&generation, &desired).unwrap();
+                check_portable_host_cache(state.path(), Some(&key)).unwrap();
+                assert!(!marker.exists(), "authentication executed the cached probe");
+                assert!(check_portable_host_cache(state.path(), None).is_err());
+                let other_key =
+                    MachineIdentity::load_or_create(&state.path().join("other-signer")).unwrap();
+                let wrong = state.path().join("wrong.pub");
+                std::fs::write(&wrong, other_key.public_key()).unwrap();
+                assert!(check_portable_host_cache(state.path(), Some(&wrong)).is_err());
+                match case {
+                    "bytes" => {
+                        let path = if archive {
+                            generation.join("content/lib/companion")
+                        } else {
+                            executable.clone()
+                        };
+                        std::fs::write(path, "substituted").unwrap();
+                    }
+                    "manifest" => {
+                        desired.generation = "unsigned-generation".into();
+                        std::fs::write(
+                            generation.join("manifest.json"),
+                            serde_json::to_vec(&desired).unwrap(),
+                        )
+                        .unwrap();
+                    }
+                    "artifact" => {
+                        std::fs::write(generation.join("artifact"), "substituted artifact").unwrap()
+                    }
+                    "legacy" => std::fs::remove_file(generation.join("artifact")).unwrap(),
+                    "proof-link" => {
+                        let artifact = generation.join("artifact");
+                        let outside = state.path().join("outside-artifact");
+                        std::fs::rename(&artifact, &outside).unwrap();
+                        std::os::unix::fs::symlink(outside, artifact).unwrap();
+                    }
+                    "command" | "dangling" => {
+                        let target = state.path().join("substitute");
+                        if case == "command" {
+                            std::fs::write(&target, script.as_bytes()).unwrap();
+                            set_executable(&target).unwrap();
+                        }
+                        std::fs::remove_file(store.command_path("cowboy-machine")).unwrap();
+                        std::os::unix::fs::symlink(target, store.command_path("cowboy-machine"))
+                            .unwrap();
+                    }
+                    "missing-active" => {
+                        std::fs::remove_file(store.root.join("active/machine_host")).unwrap()
+                    }
+                    "outside" => {
+                        let outside = state.path().join("outside-generation");
+                        std::fs::rename(&generation, &outside).unwrap();
+                        std::fs::remove_file(store.root.join("active/machine_host")).unwrap();
+                        std::os::unix::fs::symlink(outside, store.root.join("active/machine_host"))
+                            .unwrap();
+                    }
+                    "non-executable" => {
+                        use std::os::unix::fs::PermissionsExt as _;
+                        std::fs::set_permissions(
+                            &executable,
+                            std::fs::Permissions::from_mode(0o644),
+                        )
+                        .unwrap();
+                    }
+                    "payload-link" => {
+                        let outside = state.path().join("outside-executable");
+                        std::fs::rename(&executable, &outside).unwrap();
+                        std::os::unix::fs::symlink(outside, &executable).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let active = std::fs::read_link(store.root.join("active/machine_host")).ok();
+                let command = std::fs::read_link(store.command_path("cowboy-machine")).unwrap();
+                assert!(
+                    check_portable_host_cache(state.path(), Some(&key)).is_err(),
+                    "{archive}/{case}"
+                );
+                assert_eq!(
+                    std::fs::read_link(store.root.join("active/machine_host")).ok(),
+                    active
+                );
+                assert_eq!(
+                    std::fs::read_link(store.command_path("cowboy-machine")).unwrap(),
+                    command
+                );
+                assert!(
+                    !marker.exists(),
+                    "{archive}/{case}: cached code ran during refusal"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn absent_cached_host_selection_needs_no_key_or_state_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("absent");
+        check_portable_host_cache(&state, None).unwrap();
+        assert!(!state.exists());
+        std::fs::create_dir_all(state.join("components/active")).unwrap();
+        check_portable_host_cache(&state, None).unwrap();
+        assert!(!state.join("components/commands").exists());
+        std::fs::remove_dir(state.join("components/active")).unwrap();
+        std::os::unix::fs::symlink(root.path(), state.join("components/active")).unwrap();
+        assert!(check_portable_host_cache(&state, None).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an independently built immutable Machine host release"]
+    async fn immutable_portable_launcher_authenticates_cached_hosts_before_exec() {
+        let release = PathBuf::from(
+            std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").expect("immutable release required"),
+        );
+        let native = release.join("bin/cowboy-machine");
+        assert!(native.is_file());
+        for archive in [false, true] {
+            for case in [
+                "healthy",
+                "bytes",
+                "manifest",
+                "artifact",
+                "legacy",
+                "pointer",
+                "committed",
+            ] {
+                let state = tempfile::tempdir_in("/tmp").unwrap();
+                let identity =
+                    MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+                let key = state.path().join("publisher.pub");
+                std::fs::write(&key, identity.public_key()).unwrap();
+                let store = ComponentStore::new(
+                    state.path().join("components"),
+                    Some(&key),
+                    "fixture".into(),
+                )
+                .unwrap();
+                let selected = state.path().join("selected");
+                let fallback = state.path().join("fallback");
+                let script = format!(
+                    "#!/bin/sh\n[ \"${{1-}}\" = --probe ] && exit 0\ntouch '{}'\n",
+                    selected.display()
+                );
+                let bytes = if archive {
+                    host_archive(script.as_bytes(), b"signed companion")
+                } else {
+                    script.as_bytes().to_vec()
+                };
+                let mut desired =
+                    signed_component(&identity, serve_once(&bytes).await, &bytes, "healthy");
+                desired.id.kind = ComponentKind::MachineHost;
+                desired.id.slot.clear();
+                desired.probe.as_mut().unwrap().args = vec!["--probe".into()];
+                if archive {
+                    desired.artifact_format = ArtifactFormat::TarGz;
+                    desired.entrypoint = Some("bin/host".into());
+                }
+                desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+                store.reconcile(desired.clone()).await.unwrap();
+                let generation = store
+                    .root
+                    .join("active/machine_host")
+                    .canonicalize()
+                    .unwrap();
+                let executable = component_executable(&generation, &desired).unwrap();
+                std::fs::create_dir(state.path().join("bootstrap")).unwrap();
+                let bootstrap = state.path().join("bootstrap/cowboy-machine");
+                // The real immutable bootstrap runs the diagnostic. The shim's
+                // ordinary-start marker detects any unintended fallback.
+                std::fs::write(&bootstrap, format!("#!/bin/sh\nif [ \"${{1-}}\" = --check-portable-session-deletion ]; then exec '{}' \"$@\"; fi\ntouch '{}'\n", native.display(), fallback.display())).unwrap();
+                set_executable(&bootstrap).unwrap();
+                match case {
+                    "healthy" => {}
+                    "bytes" => {
+                        let target = if archive {
+                            generation.join("content/lib/companion")
+                        } else {
+                            executable.clone()
+                        };
+                        std::fs::write(target, b"substitute").unwrap();
+                    }
+                    "manifest" => {
+                        desired.generation = "unsigned".into();
+                        std::fs::write(
+                            generation.join("manifest.json"),
+                            serde_json::to_vec(&desired).unwrap(),
+                        )
+                        .unwrap();
+                    }
+                    "artifact" => {
+                        std::fs::write(generation.join("artifact"), b"substitute").unwrap()
+                    }
+                    "legacy" => std::fs::remove_file(generation.join("artifact")).unwrap(),
+                    "pointer" => {
+                        std::fs::remove_file(store.command_path("cowboy-machine")).unwrap();
+                        std::os::unix::fs::symlink(
+                            &bootstrap,
+                            store.command_path("cowboy-machine"),
+                        )
+                        .unwrap();
+                    }
+                    "committed" => {
+                        std::fs::create_dir(state.path().join("session-deletions")).unwrap();
+                        std::fs::write(
+                            state.path().join("session-deletions/deletions.json"),
+                            b"{}",
+                        )
+                        .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let launcher = state.path().join("launcher");
+                std::fs::write(
+                    &launcher,
+                    crate::machine_install::portable_cache_launcher_fixture(state.path(), &key),
+                )
+                .unwrap();
+                let output = tokio::process::Command::new("/bin/sh")
+                    .arg(&launcher)
+                    .output()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    output.status.success(),
+                    case == "healthy",
+                    "{archive}/{case}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    selected.exists(),
+                    case == "healthy",
+                    "{archive}/{case}: selected code executed"
+                );
+                assert!(!fallback.exists(), "{archive}/{case}: fallback executed");
+                assert_eq!(
+                    state.path().join("run").exists(),
+                    case == "healthy",
+                    "refusal created runtime directory"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn signed_probe_cannot_publish_modified_manifest_or_retained_proof() {
+        for target in ["manifest.json", "artifact"] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+            let key = state.path().join("publisher.pub");
+            std::fs::write(&key, identity.public_key()).unwrap();
+            let store = ComponentStore::new(
+                state.path().join("components"),
+                Some(&key),
+                "fixture".into(),
+            )
+            .unwrap();
+            let script = format!("#!/bin/sh\nprintf 'substituted' > {target}\n");
+            let mut desired = signed_component(
+                &identity,
+                serve_once(script.as_bytes()).await,
+                script.as_bytes(),
+                "candidate",
+            );
+            desired.id.kind = ComponentKind::MachineHost;
+            desired.id.slot.clear();
+            desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+            assert!(store.reconcile(desired).await.is_err());
+            for directory in ["active", "rollback", "commands"] {
+                assert_eq!(
+                    std::fs::read_dir(store.root.join(directory))
+                        .unwrap()
+                        .count(),
+                    0
                 );
             }
         }

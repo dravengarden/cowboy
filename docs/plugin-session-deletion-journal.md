@@ -220,7 +220,15 @@ before extraction. Existing cache entries are checked, not silently repaired.
 An authenticated probe may leave effects behind, but modified host bytes cannot
 publish. This does not authenticate a cached host on a later launcher start,
 bind bootstrap recovery, create a persistent portable floor or fence a concurrent
-administrator writing the cache. The [staged-host integrity release](releases/plugin-host-cache-integrity-2026-10-04.md)
+administrator writing the cache. Subsequent portable launcher authentication
+retains the authenticated original package and rechecks the cached manifest
+signature, package digest, exact payload contents and active/command selection
+before exec. Missing legacy package proofs refuse; they need a fresh signed
+reconciliation. The bootstrap diagnostic advertises `host_cache_guard: 1`, and
+install/refresh refuse an older deletion-only bootstrap before changing an
+installation. The installer-selected bootstrap and configured publisher key
+remain trusted; this supplies neither a persistent floor nor signed recovery.
+See the [cached-startup release](releases/plugin-host-startup-integrity-2026-10-04.md). The [staged-host integrity release](releases/plugin-host-cache-integrity-2026-10-04.md)
 records that narrower boundary.
 
 Installation and refresh check the same gate before changing bootstrap payloads,

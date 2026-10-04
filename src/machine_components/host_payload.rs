@@ -1,5 +1,5 @@
-//! Check staged host bytes against the artifact authenticated by reconcile.
-//! This is not cached startup authentication or a concurrent-writer fence.
+//! Check host bytes against an authenticated artifact at staging or startup.
+//! The caller authenticates the envelope; this is not a concurrent-writer fence.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};

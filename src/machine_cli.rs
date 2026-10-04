@@ -262,7 +262,8 @@ pub struct Args {
     #[arg(long, conflicts_with = "provider_usage_status")]
     check_telemetry_writer_policy: bool,
     /// Read-only guard used by portable launchers before host selection.
-    /// A committed terminal journal has no admitted portable recovery reader.
+    /// Authenticates cached host selection; a committed terminal journal still
+    /// has no admitted portable recovery reader.
     #[arg(long, conflicts_with_all = ["provider_usage_status", "check_telemetry_writer_policy", "cache_runtime_artifact", "complete_absent_uninstall"])]
     check_portable_session_deletion: bool,
     /// Machine-local ingestion socket for provider gateways.
@@ -356,7 +357,14 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
 async fn run_args(args: Args) -> anyhow::Result<()> {
     if args.check_portable_session_deletion {
         crate::session_deletion_admission::require_empty_portable_namespace(&args.state_dir)?;
-        println!("{}", serde_json::json!({"admitted": true, "writer": false}));
+        crate::machine_components::check_portable_host_cache(
+            &args.state_dir,
+            args.artifact_public_key.as_deref(),
+        )?;
+        println!(
+            "{}",
+            serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 1})
+        );
         return Ok(());
     }
     if let Some(operation) = &args.complete_absent_uninstall {
