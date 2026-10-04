@@ -76,3 +76,27 @@ advanced to this exact source, generation `worker-748825b42b4302fe26ca`.
 The final host-only package must retain every one of the six accepted companion
 paths/digests and the accepted native Machine/installer bytes. Production receipt
 follows after final artifact verification and activation.
+
+
+Production activation completed with clean published source `31db5a61d29dc46d252793d745a441db3fd93cd8`
+and artifact `/nix/store/sd59vv8dh9m5d8mgh7zj7bgliy78ckq6-cowboy-machine-release`. The root owner transaction
+`1791112154884958179-31db5a61d29d` started at 2026-10-04T11:09:14.884958179Z, committed at
+2026-10-04T11:09:22.364620744Z, and reports succeeded/committed, published true and recovered
+false. The final native Machine, installer and all six retained companion paths
+and digests match the independently accepted integrated candidate exactly.
+The exact deployed wrapper also passed all four large-cache diagnostics and both
+tamper refusals. Seven portable groups passed on the preceding final metadata
+wrapper with identical native/installer bytes; subsequent source changes were
+Web/documentation integration only.
+
+The before sample reflects another completed observability deployment during
+acceptance, not the earlier quarantine-release PID. This activation changed
+resident Machine PID 2354418 to 2615815;
+all 13 worker and 5 keeper IDs, PIDs and states remained identical. Controller PID
+2336663 and its root receipt stayed identical, as did the
+Web profile. All five HTTP checks returned 200. The retained deletion-reader floor
+SHA-256 stayed `26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`, and the portable namespace contained only
+`.lock`. Startup reports zero deleted sessions and writer false. Noninteractive
+sudo remains available; sudoers and the installed root activator digests are
+unchanged. Full observations and byte bindings are in
+[the production receipt](../experiments/plugin-cache-streaming-authentication-2026-10-04.json).
