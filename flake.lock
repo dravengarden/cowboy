@@ -2,6 +2,27 @@
   "nodes": {
     "cowboy-workers": {
       "inputs": {
+        "cowboy-workers": "cowboy-workers_2",
+        "nixpkgs": "nixpkgs_2",
+        "rust-overlay": "rust-overlay_2"
+      },
+      "locked": {
+        "lastModified": 1791097749,
+        "narHash": "sha256-80o36/+ih4jV72ALxeKEcEHw7Ya8WsE/oqZ7tdlADTk=",
+        "owner": "dravengarden",
+        "repo": "cowboy",
+        "rev": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+        "type": "github"
+      },
+      "original": {
+        "owner": "dravengarden",
+        "repo": "cowboy",
+        "rev": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+        "type": "github"
+      }
+    },
+    "cowboy-workers_2": {
+      "inputs": {
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       },
@@ -52,14 +73,52 @@
         "type": "github"
       }
     },
+    "nixpkgs_3": {
+      "locked": {
+        "lastModified": 1779560665,
+        "narHash": "sha256-tpyBcxPpcQb8ukyNF7DoCwfSY3VPsxHoYwj00Cayv5o=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "cowboy-workers": "cowboy-workers",
-        "nixpkgs": "nixpkgs_2",
-        "rust-overlay": "rust-overlay_2"
+        "nixpkgs": "nixpkgs_3",
+        "rust-overlay": "rust-overlay_3"
       }
     },
     "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "cowboy-workers",
+          "cowboy-workers",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790756160,
+        "narHash": "sha256-NPs4nNLxCpho3Ctj8O7t/bzmX0zR8r0zndKghAFEz5U=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "ed3a19fd0439ed618ec5fe1e12f0ba69a8be38b5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
           "cowboy-workers",
@@ -80,7 +139,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_2": {
+    "rust-overlay_3": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"

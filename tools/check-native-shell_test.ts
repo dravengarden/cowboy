@@ -54,6 +54,27 @@ Deno.test("complete native shell is owned by this checkout", () =>
 for (
   const [name, path, before, after, message] of [
     [
+      "missing Scene delegate",
+      "tauri/Info.ios.plist",
+      "<string>TaoSceneDelegate</string>",
+      "<string>MissingDelegate</string>",
+      "iOS needs a static single-scene",
+    ],
+    [
+      "empty Scene configurations",
+      "tauri/Info.ios.plist",
+      "<key>UIWindowSceneSessionRoleApplication</key>",
+      "<key>WrongSceneRole</key>",
+      "iOS needs a static single-scene",
+    ],
+    [
+      "obsolete Scene runtime",
+      "tauri/Cargo.lock",
+      'name = "tao"\nversion = "0.37.1"',
+      'name = "tao"\nversion = "0.35.3"',
+      "iOS scene lifecycle requires Tao",
+    ],
+    [
       "unused native build dependency",
       "tauri/build.rs",
       "tauri_build::build()",
@@ -70,7 +91,7 @@ for (
     [
       "unlocked manifest",
       "tauri/Cargo.toml",
-      '"=2.11.2"',
+      '"=2.12.0"',
       '"2"',
       "unlocked native manifest",
     ],

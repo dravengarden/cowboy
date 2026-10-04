@@ -227,15 +227,25 @@ before exec. Missing legacy package proofs refuse; they need a fresh signed
 reconciliation. The bootstrap diagnostic advertises `host_cache_guard: 1`, and
 install/refresh refuse an older deletion-only bootstrap before changing an
 installation. The installer-selected bootstrap and configured publisher key
-remain trusted; this supplies neither a persistent floor nor signed recovery.
+remain trusted. Subsequent portable floor support retains the first declared
+signed reader anchor before selection publication, and prevents downgrade or
+bootstrap fallback even over an empty namespace. It binds the canonical state
+namespace, fixed deletion dataset, normalized publisher key and exact signed
+anchor proof. The private, bounded floor is not replaced or cleared by updated
+tools; cache pruning retains its anchor. Installation/refresh remains closed
+once a floor exists until signed bootstrap/recovery admission is established.
+The current bootstrap diagnostic advertises `host_cache_guard: 2` and is checked
+against both committed-state and floor refusal fixtures before installation.
+See the [portable floor release](releases/plugin-portable-reader-floor-2026-10-04.md).
 See the [cached-startup release](releases/plugin-host-startup-integrity-2026-10-04.md). The [staged-host integrity release](releases/plugin-host-cache-integrity-2026-10-04.md)
 records that narrower boundary.
 
 Installation and refresh check the same gate before changing bootstrap payloads,
 identity or launcher configuration. Newly generated launchers run the
 installer-owned bootstrap's `--check-portable-session-deletion` diagnostic
-before selecting active or bootstrap hosts. The diagnostic only inspects
-namespace entries; it opens no Machine stores or Controller connection. A
+before selecting active or bootstrap hosts. The diagnostic checks namespace entries and authenticates selected cached host
+bytes and any retained floor anchor; it opens no Machine stores or Controller
+connection. A
 bootstrap without this diagnostic fails closed. A healthy empty or staging-only
 namespace retains existing behavior. Committed files, directories and dangling
 symlinks all refuse; invalid namespace entries and inspection errors do not
@@ -332,3 +342,27 @@ records the source guard, executable launcher tests and Machine release receipt.
 
 The [bootstrap compatibility release](releases/plugin-bootstrap-guard-2026-10-03.md)
 records pre-copy probe checks and exact old/new installer refresh controls.
+
+### Signed pre-floor bootstrap packages
+
+The installer accepts a closed singleton reader-only v4 manifest and local exact
+three-program archive through `--bootstrap-manifest`, `--bootstrap-artifact` and
+`--artifact-public-key`. Signature and whole-package digest are checked before
+any bundled code runs, and captured payload bytes are checked after the required
+guard probe and before publication. Floor and committed namespace absence are
+rechecked after that probe. Existing floors still refuse signed installation or
+refresh. This does not create a floor or enable the writer. See
+the [signed package release](releases/plugin-signed-bootstrap-bundle-2026-10-04.md)
+for bounds, native acceptance and remaining selection/recovery authority.
+
+The subsequent [startup authentication release](releases/plugin-bootstrap-startup-authentication-2026-10-04.md)
+retains the original manifest, archive and all three payloads in a fresh private
+generation. Its launcher first runs a captured installer-owned verifier, outside
+the publisher package, to authenticate those bytes and independently check local
+namespace/cache/floor admission. Only then does publisher code run. Refresh never
+overwrites the selected generation. Existing installations need an explicit
+pre-floor signed refresh to adopt this launcher; there is no automatic migration.
+Floor-bearing install/refresh, missing-cache recovery, publisher rotation and
+committed portable deletion admission remain closed. The verifier, launcher and
+configured key remain administrator-owned authority; same-user mutation is not
+fenced and signed probes are not sandboxes.

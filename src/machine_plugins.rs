@@ -114,6 +114,26 @@ struct PreparedUsageSidecars {
     targets: Vec<serde_json::Value>,
 }
 
+impl PreparedUsageSidecars {
+    fn configure_environment(&self, environment: &mut BTreeMap<String, String>) -> Result<()> {
+        if !self.targets.is_empty() {
+            environment.insert(
+                "COWBOY_PLUGIN_SIDECAR_TARGETS".to_owned(),
+                serde_json::to_string(&self.targets)?,
+            );
+            environment.insert(
+                "COWBOY_PLUGIN_SIDECAR_URLS".to_owned(),
+                self.targets
+                    .iter()
+                    .filter_map(|target| target.get("url").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        Ok(())
+    }
+}
+
 struct ResolvedPluginHostInvocation {
     command: Vec<String>,
     environment: BTreeMap<String, String>,
@@ -980,23 +1000,9 @@ impl MachinePluginStore {
                 targets: Vec::new(),
             }
         };
-        if !prepared_sidecars.targets.is_empty() {
-            environment.insert(
-                "COWBOY_PLUGIN_SIDECAR_TARGETS".to_owned(),
-                serde_json::to_string(&prepared_sidecars.targets)
-                    .map_err(anyhow::Error::from)
-                    .map_err(PluginHostInvocationFailure::from)?,
-            );
-            environment.insert(
-                "COWBOY_PLUGIN_SIDECAR_URLS".to_owned(),
-                prepared_sidecars
-                    .targets
-                    .iter()
-                    .filter_map(|target| target.get("url").and_then(serde_json::Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            );
-        }
+        prepared_sidecars
+            .configure_environment(&mut environment)
+            .map_err(PluginHostInvocationFailure::from)?;
         let (program, command_args) = resolved
             .command
             .split_first()
@@ -1017,7 +1023,11 @@ impl MachinePluginStore {
                 // Read-only observations may finish after a lifecycle change,
                 // but their result must pass the fence below. Reset is a
                 // mutation: retain its existing serialization until completion.
-                if operation != PluginHostOperation::ResetUsage {
+                // Legacy slots have no incarnation fence, so they also retain
+                // serialization across same-bytes uninstall/reinstallation.
+                if operation != PluginHostOperation::ResetUsage
+                    && resolved.installation_revision.is_some()
+                {
                     drop(lifecycle.take());
                 }
             },
@@ -5403,8 +5413,8 @@ mod tests {
             1,
             "one host request must not decompress/hash the same runtime repeatedly"
         );
-        // The signed collector is deliberately slow. Its network wait must not
-        // serialize unrelated lifecycle work after spawn admission.
+        // An untracked legacy slot has no incarnation fence and must keep
+        // its original serialization across same-bytes reinstallations.
         let slow = store.invoke_host_for_test(
             "gemini",
             &package.manifest.version,
@@ -5413,13 +5423,16 @@ mod tests {
             PluginHostOperation::CollectUsage,
             serde_json::json!({"delay_ms": 1000}),
         );
-        let unlocked = async {
+        let serialized_legacy = async {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let _guard = tokio::time::timeout(Duration::from_millis(500), store.lifecycle.lock())
-                .await
-                .expect("read-only collector held the lifecycle lock across its wait");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), store.lifecycle.lock())
+                    .await
+                    .is_err(),
+                "legacy observation must remain serialized without an incarnation fence"
+            );
         };
-        let (slow, ()) = tokio::join!(slow, unlocked);
+        let (slow, ()) = tokio::join!(slow, serialized_legacy);
         assert_eq!(slow.unwrap()["operation"], "collect");
         let reset = store.invoke_host_for_test(
             "gemini",
@@ -5512,29 +5525,9 @@ mod tests {
         };
         let refreshed_envelope =
             seal_auth_for_test(&store, &package, &service_signer, 2, &refreshed_bundle);
-        let slow = store.invoke_host_for_test(
-            "gemini",
-            &package.manifest.version,
-            &release.artifact_digest,
-            Some(1),
-            PluginHostOperation::CollectUsage,
-            serde_json::json!({"delay_ms": 1000}),
-        );
-        let rotate = async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            store.apply_auth(&refreshed_envelope).await.unwrap()
-        };
-        let (stale, refreshed_receipt) = tokio::join!(slow, rotate);
-        let stale = stale.unwrap_err();
-        assert!(stale.started);
-        assert!(
-            stale
-                .error
-                .to_string()
-                .contains("changed during host observation")
-        );
+        let refreshed_receipt = store.apply_auth(&refreshed_envelope).await.unwrap();
         assert!(refreshed_receipt.auth_generation_advanced);
-        // Seed legacy state after the concurrent collector, before testing the
+        // Seed legacy state after the credential refresh, before testing the
         // historical-home repair below. Do not delete state already migrated
         // by a successful launch in this fixture.
         fs::create_dir_all(legacy_session.parent().unwrap()).unwrap();
@@ -5655,6 +5648,69 @@ mod tests {
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
+        store.install(&desired).await.unwrap();
+        store.enable_installation_tracking().await.unwrap();
+        let tracked = store.inventory_one("gemini").unwrap().unwrap();
+        assert!(tracked.installation_revision.is_some());
+        let slow = store.invoke_host_for_test(
+            "gemini",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(2),
+            PluginHostOperation::CollectUsage,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let unlocked = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _guard = tokio::time::timeout(Duration::from_millis(500), store.lifecycle.lock())
+                .await
+                .expect("journaled read-only collector held the lifecycle lock across its wait");
+        };
+        let (slow, ()) = tokio::join!(slow, unlocked);
+        assert_eq!(slow.unwrap()["operation"], "collect");
+        let reset = store.invoke_host_for_test(
+            "gemini",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(2),
+            PluginHostOperation::ResetUsage,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let serialized = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), store.lifecycle.lock())
+                    .await
+                    .is_err(),
+                "journaled usage reset must retain lifecycle authority"
+            );
+        };
+        let (reset, ()) = tokio::join!(reset, serialized);
+        assert_eq!(reset.unwrap()["operation"], "consume_reset");
+        let next_envelope =
+            seal_auth_for_test(&store, &package, &service_signer, 3, &refreshed_bundle);
+        let slow = store.invoke_host_for_test(
+            "gemini",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(2),
+            PluginHostOperation::CollectUsage,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let rotate = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            store.apply_auth(&next_envelope).await.unwrap()
+        };
+        let (stale, refreshed_receipt) = tokio::join!(slow, rotate);
+        let stale = stale.unwrap_err();
+        assert!(stale.started);
+        assert!(
+            stale
+                .error
+                .to_string()
+                .contains("changed during host observation")
+        );
+        assert!(refreshed_receipt.auth_generation_advanced);
         assert_installation_cas(&store, &desired).await;
         server.await.unwrap();
         fs::remove_dir_all(root).unwrap();

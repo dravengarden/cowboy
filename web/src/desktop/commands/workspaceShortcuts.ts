@@ -31,6 +31,12 @@ export const DESKTOP_WORKSPACE_KEYS = {
   // workspace prefix is FOCUS.md's documented fallback, and it keeps the same
   // E mnemonic while working from Vim Insert, Normal and native inputs.
   toggleSourceMode: "E",
+  composerSlash: "/",
+  composerReference: "F",
+  composerAttach: "A",
+  composerSchedule: "H",
+  composerJumpFront: "J",
+  composerMore: "M",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
   // matches the panes on screen: Sessions | Prompt | Conversation. They are
   // free under the prefix, and their held-prefix forms (Cmd/Alt + [ ] \) are
@@ -39,6 +45,17 @@ export const DESKTOP_WORKSPACE_KEYS = {
   togglePrompt: "]",
   toggleConversation: "\\",
 } as const;
+
+/** Formatting shares the workspace prefix; bare letters remain editor input. */
+export const DESKTOP_COMPOSER_FORMAT_KEYS: Readonly<Record<string, string>> = {
+  undo: "Z",
+  redo: "Y",
+  bold: "B",
+  italic: "I",
+  code: "X",
+  link: "U",
+  bulletList: "O",
+};
 
 export function desktopWorkspaceSequence(key: string): string {
   return `${DESKTOP_WORKSPACE_PREFIX} → ${key}`;
@@ -55,7 +72,9 @@ export const DESKTOP_SHORTCUTS = {
   focusTopbar: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusTopbar),
   focusSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
   focusPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
-  focusConversation: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusConversation),
+  focusConversation: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.focusConversation,
+  ),
   focusPlan: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
   focusQueue: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
   focusDrafts: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
@@ -64,7 +83,9 @@ export const DESKTOP_SHORTCUTS = {
   toggleSourceMode: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
   ),
-  toggleSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.toggleSessions),
+  toggleSessions: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.toggleSessions,
+  ),
   togglePrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.togglePrompt),
   toggleConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.toggleConversation,
@@ -92,6 +113,18 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   w: "workspace.cycleRegion",
   r: "workspace.enterResize",
   e: "composer.toggleSourceMode",
+  "/": "composer.slash",
+  f: "composer.reference",
+  a: "composer.attach",
+  h: "composer.schedule",
+  j: "composer.jumpFront",
+  m: "composer.more",
+  ...Object.fromEntries(
+    Object.entries(DESKTOP_COMPOSER_FORMAT_KEYS).map(([id, key]) => [
+      key.toLowerCase(),
+      `composer.format.${id}`,
+    ]),
+  ),
   "[": "workspace.toggleSessions",
   "]": "workspace.togglePrompt",
   "\\": "workspace.toggleConversation",

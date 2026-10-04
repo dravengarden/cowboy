@@ -15,11 +15,15 @@ pub(super) const PAYLOADS: [&str; 3] =
 
 /// Own the exact bundle used for both the guard probe and installation copies.
 /// Caller paths can be replaced during the probe without changing this snapshot.
-pub(super) struct Bundle(Scratch);
+pub(super) struct Bundle(
+    Scratch,
+    Option<super::signed_bootstrap::Authenticated>,
+    Option<Vec<u8>>,
+);
 
 impl Bundle {
     pub(super) fn prepare(source: &Path) -> Result<Self> {
-        let bundle = Self(Scratch::new()?);
+        let bundle = Self(Scratch::new()?, None, None);
         for name in PAYLOADS {
             let path = if name == "cowboy-machine" {
                 source.to_path_buf()
@@ -38,6 +42,105 @@ impl Bundle {
         }
         check(&bundle.payload("cowboy-machine"))?;
         Ok(bundle)
+    }
+
+    pub(super) fn prepare_signed(manifest: &Path, artifact: &Path, key: &Path) -> Result<Self> {
+        let payloads = super::signed_bootstrap::authenticate(manifest, artifact, key)?;
+        let mut bundle = Self(Scratch::new()?, Some(payloads), None);
+        std::fs::copy(std::env::current_exe()?, bundle.payload(".verifier"))?;
+        bundle.2 = Some(super::signed_bootstrap::verifier_digest(
+            &bundle.payload(".verifier"),
+        )?);
+        for (name, bytes) in &bundle.1.as_ref().expect("authenticated payloads").payloads {
+            std::fs::write(bundle.payload(name), bytes)?;
+            super::set_mode(&bundle.payload(name), 0o755)?;
+        }
+        check(&bundle.payload("cowboy-machine"))?;
+        bundle.verify()?;
+        Ok(bundle)
+    }
+
+    pub(super) fn verify(&self) -> Result<()> {
+        let Some(expected) = &self.1 else {
+            return Ok(());
+        };
+        ensure!(
+            std::fs::read_dir(&self.0.0)?.count() == PAYLOADS.len() + 1,
+            "signed bootstrap probe changed bundle entries"
+        );
+        ensure!(
+            super::signed_bootstrap::verifier_digest(&self.payload(".verifier"))?
+                == *self.2.as_ref().expect("captured verifier"),
+            "signed bootstrap probe changed installer-owned verifier"
+        );
+        for (name, bytes) in &expected.payloads {
+            ensure!(
+                super::signed_bootstrap::read_regular(&self.payload(name), bytes.len() as u64)?
+                    == *bytes,
+                "signed bootstrap probe changed authenticated payload"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn install_signed(&self, state: &Path) -> Result<Option<PathBuf>> {
+        let Some(evidence) = &self.1 else {
+            return Ok(None);
+        };
+        self.verify()?;
+        let root = state.join("signed-bootstrap");
+        match DirBuilder::new().mode(0o700).create(&root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                ensure!(
+                    std::fs::symlink_metadata(&root)?.is_dir(),
+                    "signed bootstrap root is not regular"
+                );
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let generation = root.join(format!("{:032x}", rand::random::<u128>()));
+        DirBuilder::new().mode(0o700).create(&generation)?;
+        for name in PAYLOADS.into_iter().chain(["verifier"]) {
+            let source = self.payload(if name == "verifier" {
+                ".verifier"
+            } else {
+                name
+            });
+            super::atomic_replace(&generation.join(name), 0o755, |file| {
+                std::io::copy(&mut File::open(source)?, file)?;
+                Ok(())
+            })?;
+        }
+        super::atomic_write(&generation.join("manifest.json"), &evidence.manifest, 0o600)?;
+        super::atomic_write(&generation.join("artifact"), &evidence.artifact, 0o600)?;
+        ensure!(
+            super::signed_bootstrap::verifier_digest(&generation.join("verifier"))?
+                == *self.2.as_ref().expect("captured verifier"),
+            "installed verifier differs from snapshot"
+        );
+        for (name, bytes) in &evidence.payloads {
+            ensure!(
+                super::signed_bootstrap::read_regular(&generation.join(name), bytes.len() as u64)?
+                    == *bytes,
+                "published bootstrap differs from captured package"
+            );
+        }
+        ensure!(
+            super::signed_bootstrap::read_regular(
+                &generation.join("manifest.json"),
+                evidence.manifest.len() as u64
+            )? == evidence.manifest
+                && super::signed_bootstrap::read_regular(
+                    &generation.join("artifact"),
+                    evidence.artifact.len() as u64
+                )? == evidence.artifact,
+            "published bootstrap evidence differs from snapshot"
+        );
+        File::open(&generation)?.sync_all()?;
+        File::open(&root)?.sync_all()?;
+        File::open(state)?.sync_all()?;
+        Ok(Some(generation))
     }
 
     pub(super) fn payload(&self, name: &str) -> PathBuf {
@@ -100,14 +203,21 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
         .context("resolving bootstrap probe executable")?;
     let scratch = Scratch::new()?;
     let state = scratch.0.join("state");
-    for committed in [false, true] {
+    for case in ["empty", "committed", "floor"] {
+        let committed = case == "committed";
         if committed {
             let journal = state.join("session-deletions");
             std::fs::create_dir_all(&journal)?;
             std::fs::write(journal.join("deletions.json"), b"{}")?;
+        } else if case == "floor" {
+            std::fs::create_dir(&state)?;
+            std::fs::write(
+                state.join(crate::session_deletion_admission::reader_floor::NAME),
+                b"{}",
+            )?;
         }
-        let stdout_path = scratch.0.join(format!("stdout-{committed}"));
-        let stderr_path = scratch.0.join(format!("stderr-{committed}"));
+        let stdout_path = scratch.0.join(format!("stdout-{case}"));
+        let stderr_path = scratch.0.join(format!("stderr-{case}"));
         let output_file = |path: &Path| {
             OpenOptions::new()
                 .write(true)
@@ -168,6 +278,27 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
                     == 1,
                 "bootstrap guard probe changed the deletion namespace"
             );
+            std::fs::remove_file(state.join("session-deletions/deletions.json"))?;
+            std::fs::remove_dir(state.join("session-deletions"))?;
+            std::fs::remove_dir(&state)?;
+        } else if case == "floor" {
+            ensure!(
+                status.code() == Some(1),
+                "bootstrap did not refuse portable reader floor"
+            );
+            ensure!(
+                String::from_utf8_lossy(&stderr).contains("portable reader floor"),
+                "bootstrap returned the wrong reader-floor refusal"
+            );
+            ensure!(
+                bounded_output(&state.join(crate::session_deletion_admission::reader_floor::NAME))?
+                    == b"{}",
+                "bootstrap probe changed the reader floor"
+            );
+            ensure!(
+                std::fs::read_dir(&state)?.take(2).count() == 1,
+                "bootstrap floor probe opened Machine stores"
+            );
         } else {
             ensure!(
                 status.success(),
@@ -178,7 +309,7 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
                 serde_json::from_slice(&stdout).context("decoding bootstrap guard report")?;
             ensure!(
                 report
-                    == serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 1}),
+                    == serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 2}),
                 "bootstrap guard report is incompatible"
             );
             ensure!(
@@ -222,6 +353,22 @@ mod tests {
     }
 
     #[test]
+    fn advertised_floor_capability_without_floor_refusal_is_incompatible() {
+        let root = tempfile::tempdir().unwrap();
+        let source = script(
+            root.path(),
+            "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}'\n",
+        );
+        assert!(
+            check(&source)
+                .unwrap_err()
+                .root_cause()
+                .to_string()
+                .contains("did not refuse portable reader floor")
+        );
+    }
+
+    #[test]
     fn deletion_guard_without_cache_authentication_cannot_be_installed() {
         let root = tempfile::tempdir().unwrap();
         let source = script(
@@ -242,7 +389,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let source = script(
             root.path(),
-            "#!/bin/sh\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":1}'\n",
+            "#!/bin/sh\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}'\n",
         );
         assert!(
             check(&source)

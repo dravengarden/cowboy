@@ -14,6 +14,26 @@
 	     macOS app name comes from tauri.conf.json productName instead. -->
 	<key>CFBundleDisplayName</key>
 	<string>Cowboy</string>
+	<!-- iOS/iPadOS 27 validates a static Scene configuration before launch.
+	     Tao 0.37 supports the single-scene lifecycle and returns its delegate's
+	     configuration with correct Objective-C autorelease ownership. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>TaoScene</string>
+					<key>UISceneDelegateClassName</key>
+					<string>TaoSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<!-- Shown by the OS when the web UI's <input type=file> reaches for the
 	     camera / photo library. Without them the picker is denied on a device. -->
 	<key>NSCameraUsageDescription</key>

@@ -65,6 +65,22 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     "unexpected native dependency inventory",
   );
   const packages = lock.split("[[package]]").slice(1);
+  // Older Tao returns a dangling scene configuration and gates scene startup
+  // on multiple-window support. Both break the required single-scene lifecycle.
+  const tao = packages.find((block) => block.includes('name = "tao"\n'));
+  const taoVersion = tao?.match(/^version = "(\d+)\.(\d+)\.(\d+)"$/m);
+  requireValue(
+    taoVersion && Number(taoVersion[1]) === 0 &&
+      (Number(taoVersion[2]) > 37 ||
+        (Number(taoVersion[2]) === 37 && Number(taoVersion[3]) >= 1)),
+    "iOS scene lifecycle requires Tao 0.37.1 or newer",
+  );
+  const iosInfo = await read("tauri/Info.ios.plist");
+  requireValue(
+    /<key>UIApplicationSceneManifest<\/key>\s*<dict>\s*<key>UIApplicationSupportsMultipleScenes<\/key>\s*<false\/>\s*<key>UISceneConfigurations<\/key>\s*<dict>\s*<key>UIWindowSceneSessionRoleApplication<\/key>\s*<array>\s*<dict>\s*<key>UISceneConfigurationName<\/key>\s*<string>TaoScene<\/string>\s*<key>UISceneDelegateClassName<\/key>\s*<string>TaoSceneDelegate<\/string>/
+      .test(iosInfo),
+    "iOS needs a static single-scene Tao delegate configuration",
+  );
   for (const [name, version] of Object.entries(toolchain.crates)) {
     requireValue(
       typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version),

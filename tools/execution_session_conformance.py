@@ -253,12 +253,21 @@ def main():
         port = listener.getsockname()[1]
         listener.close()
         origin = f"http://127.0.0.1:{port}"
-        env["COWBOY_PUBLIC_ORIGIN"] = origin
+        public_origin = f"https://127.0.0.1:{port}" if inputs.get("browser_device") else origin
+        env["COWBOY_PUBLIC_ORIGIN"] = public_origin
+        device = None
+        if inputs.get("browser_device"):
+            from execution_fixture_device import FixtureDevice
+            device = FixtureDevice(root, env, port, public_origin)
         cookies = {}
 
-        def call(method, path, body=None, anonymous=False):
+        def call(method, path, body=None, anonymous=False, device_proof=True):
             client = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
-            headers = {"Origin": origin, "Content-Type": "application/json"}
+            headers = {"Origin": public_origin, "Content-Type": "application/json"}
+            if device:
+                headers["X-Forwarded-Proto"] = "https"
+                if not anonymous and device_proof:
+                    headers["x-cowboy-browser-proof"] = device.proof(method, path)
             if not anonymous:
                 headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
             client.request(method, path, None if body is None else json.dumps(body), headers)
@@ -296,6 +305,10 @@ def main():
             require(call("POST", "/api/auth/setup", {"token": setup.read_text().strip()})[0] == 200, "fixture setup failed")
             require(call("POST", "/api/auth/register", {"account": "fixture-owner", "password": "Fixture-correct-Horse-2026!"})[0] == 200, "fixture registration failed")
             require(call("POST", "/api/auth/login", {"account": "fixture-owner", "password": "Fixture-correct-Horse-2026!"})[0] == 200, "fixture login failed")
+            if device:
+                require(call("GET", "/api/machines", device_proof=False)[0] == 401,
+                        "cookie without device proof admitted")
+                checks.append("current_browser_device_login_and_bound_api_credentials")
             service = (root / "controller/service-id").read_text().strip()
             machines = {}
             for machine in ("runtime", "target"):
@@ -423,8 +436,12 @@ def main():
             status, dataset = call("GET", "/api/sync/dataset")
             require(status == 200, "browser dataset unavailable")
             query = urllib.parse.urlencode({"dataset": dataset["dataset_id"], "bootstrap": "lazy"})
-            browser = WebSocket(f"ws://127.0.0.1:{port}/ws?{query}", {"Origin": origin,
-                "Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()), "Sec-WebSocket-Protocol": "cowboy-sync-v1"})
+            browser_headers = {"Origin": public_origin,
+                "Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()), "Sec-WebSocket-Protocol": "cowboy-sync-v1"}
+            if device:
+                browser_headers.update({"X-Forwarded-Proto": "https",
+                    "x-cowboy-browser-proof": device.proof("GET", f"/ws?{query}")})
+            browser = WebSocket(f"ws://127.0.0.1:{port}/ws?{query}", browser_headers)
             browser.send({"type": "delete_session", "session_id": session})
             wait(lambda: call("GET", f"/api/sessions/{session}/info")[0] == 404, "confirmed environment deletion")
             browser.close()
@@ -457,6 +474,10 @@ def main():
         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "real_model_requests": 0, "production_credentials": False, "production_activation": False,
         "not_checked": ["native_codex_turns_covered_by_separate_gate", "cross_host_latency", "production_subscription_inference"]}
+    if inputs.get("browser_device"):
+        receipt["device_fixture_sha256"] = hashlib.sha256(
+            Path(__file__).with_name("execution_fixture_device.py").read_bytes()).hexdigest()
+        receipt["not_checked"].append("external_tls_termination_fixture_uses_trusted_loopback_proxy_boundary")
     with args.receipt.open("x") as output:
         json.dump(receipt, output, indent=2)
         output.write("\n")

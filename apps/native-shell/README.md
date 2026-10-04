@@ -52,6 +52,14 @@ dependencies, and only surfaces ten minutes later as undefined symbols.
 
 ## Xcode 27 Swift runtime compatibility
 
+iOS/iPadOS 27 also refuses to launch latest-SDK apps without a static Scene
+configuration. `tauri/Info.ios.plist` names `TaoSceneDelegate` and disables
+multiple windows. Tauri 2.12 brings Tao 0.37.1, which supports the single-scene
+lifecycle and fixes the scene configuration's autorelease ownership. Tao 0.35.3
+must not be restored: enabling scenes on that version introduces a second
+launch crash. The source gate protects both requirements, and the builder
+checks the compiled bundle's manifest before issuing a successful receipt.
+
 The last release before the Xcode 27 migration was 0.1.31 (revision `ed8bad98`,
 2026-09-15), built under Xcode 26.6 (17F113). Xcode 27.0 (27A266a) exposed
 three separate Swift dependency failures.

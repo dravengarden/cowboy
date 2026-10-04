@@ -159,6 +159,15 @@ the continuation is optional.
   reserves an Option letter; on Windows/Linux, `Alt+K` is additionally the
   workspace prefix. Slash, references, attachments, scheduling, queue priority,
   expand, and More remain visible in the UI and searchable in Command Palette.
+- In the main Composer, workspace prefix then `/`, `F`, `A`, `H`, `J`, `M`
+  opens slash commands, file references, attachments, scheduling, queue priority,
+  or More formatting. Formatting uses the same prefix: `B` bold, `I` italic,
+  `X` inline code, `U` link, `O` bulleted list, `Z` undo, `Y` redo. These are
+  scoped to `prompt.composer`; `E` Source mode retains its whole-Prompt scope.
+  Toolbar letters become available only after the prefix; tooltips and the
+  Command Palette show the complete sequence. A claimed direct chord stops
+  propagation to editor fallbacks. In particular, `Alt+Enter` must never also
+  save a draft, even when Force push is unavailable.
 - In Resize mode, `H/L` moves the selected split.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
@@ -272,16 +281,22 @@ it.
   on their own edge: chevron, keycap, vertical pane name, and the signals the
   user may be waiting on (Prompt: queued/draft counts; Conversation: the
   Session's live status). The whole rail is one restore target. Sessions
-  folds into a 56 px switcher: expand control, New Session, and one tile per
-  Session in `Alt/Option+1…0` slot order (monogram, live status, provider
-  badge, current-Session pill). The rail head aligns with the 44 px top bar;
+  folds into a 56 px rail that shows the user's folder structure, because a
+  column that narrow cannot show titles: expand control, New Session, then
+  one labelled entry per top-level folder plus Unfiled (just Sessions when
+  there are no folders). Each entry carries one actionable badge (needs
+  attention in amber, else working in green; ready and dormant never badge)
+  and the group holding the open Session gets the edge pill. Clicking an
+  entry opens a menu with real titles, subfolder headings, status,
+  `Alt/Option+1…0` slots and Show all sessions; the rail ignores this
+  device's folder folds. The rail head aligns with the 44 px top bar;
   in an installed window-controls-overlay PWA the head becomes a drag region
   and the expand control moves below it.
 - **Mounting.** Collapsed panes stay mounted and are only removed from
   layout, so the Composer keeps its draft, undo history, Vim mode and IME
   state, Conversation keeps streaming, and the Sessions list keeps owning
   slot switching and folder state. A Prompt that inherits the Conversation's
-  width is capped at a 960 px writing column.
+  width uses the full available writing canvas.
 - **Focus.** Collapsing the focused pane moves focus to the remaining work
   pane; restoring one by its command focuses it. Explicit jumps (prefix
   `S/P/C`, Plan/Queue/Drafts, region focus) restore a collapsed pane first.
@@ -409,6 +424,18 @@ attachment, and expand remain visible actions and Command Palette entries but
 do not reserve Option/Alt letters. Mobile renders neither bindings nor hints.
 
 ## Visual hierarchy
+
+The main Prompt editor is a flat pane surface with no nested card outline,
+focus halo or outer reading-width gutter. The pane header and status line own
+focus indication. Its bottom editing and delivery groups stay outside the
+editor scrollport. Container queries use the Prompt's actual width and the root
+font size to disclose quick formatting and labels; the formatting menu retains
+all commands. Send/Queue stays labelled at the right edge, while Draft,
+Schedule, Run next and Force push remain direct controls and may wrap when
+space is limited. Empty, preparing, busy, paused, disconnected, pending-submit
+and resumed states change labels/availability without replacing the editor.
+Quota exhaustion is an inline notice across the Desktop pane; Mobile keeps its
+existing card and keyboard geometry.
 
 Only the focused region gets the subtle accent rail/background. The focused
 item uses the MUI selected/focus-visible treatment. Avoid simultaneous heavy

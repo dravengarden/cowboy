@@ -190,6 +190,9 @@ import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { type SortableDrag, useSortable } from "./useSortable";
 import { haptic } from "./haptic";
+import { sessionsRailGroups } from "./desktop/sessionsRailGroups";
+
+const NO_COLLAPSED_FOLDERS: ReadonlySet<string> = new Set();
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useBackdropDismiss } from "./useBackdropDismiss";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
@@ -3236,11 +3239,19 @@ export function App({
             !sessions.some((session) => session.id === pendingCreatedSession.id)
         ? [pendingCreatedSession, ...sessions]
         : sessions;
-    // The collapsed Sessions rail lists tiles in Alt/Option slot order.
-    const collapsedRailSessions = useMemo(
-        () => sessionsCollapsed ? displayedSessionOrder(sessionsForView) : [],
-        [sessionsCollapsed, sessionsForView],
-    );
+    // The collapsed Sessions rail shows the folder structure (fully expanded,
+    // independent of this device's folds) and labels sessions with the same
+    // Alt/Option slots as the list, which number the flat displayed order.
+    const railFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    const collapsedRail = useMemo(() => {
+        if (!sessionsCollapsed) return { groups: [], slots: new Map<string, number>() };
+        const ordered = displayedSessionOrder(sessionsForView);
+        const rows = buildSessionTree(ordered, railFolders, NO_COLLAPSED_FOLDERS).rows;
+        return {
+            groups: sessionsRailGroups(rows, activeId),
+            slots: new Map(ordered.map((session, index): [string, number] => [session.id, index])),
+        };
+    }, [activeId, railFolders, sessionsCollapsed, sessionsForView]);
     const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
@@ -3835,7 +3846,8 @@ export function App({
                 {sessionsCollapsed && (
                     <Suspense fallback={null}>
                         <DesktopSessionsRail
-                            sessions={collapsedRailSessions}
+                            groups={collapsedRail.groups}
+                            slots={collapsedRail.slots}
                             activeId={active?.id ?? null}
                             allowNewSession={canStartSession}
                             onPick={pick}
