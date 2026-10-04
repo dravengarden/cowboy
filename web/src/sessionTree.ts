@@ -3,6 +3,7 @@
 // Mobile drawer and the Desktop rail render the same rows.
 
 import type { SessionMeta, Status } from "./protocol";
+import { waitingOnBackground } from "./backgroundActivity";
 import {
   effectiveSessionFolder,
   folderAncestors,
@@ -10,6 +11,19 @@ import {
   type SessionFolder,
   type SessionFoldersValue,
 } from "./sessionFolders";
+
+/**
+ * How many descendant sessions are in each live state. A folder answers "how
+ * many of my agents are doing something", which one aggregated dot cannot:
+ * `working` = a turn in flight (or idle but waiting on its own background
+ * work), `attention` = a crashed or interrupted turn, `live` = an agent
+ * process that is up and idle. Dormant sessions only count toward the total.
+ */
+export interface FolderActivity {
+  readonly working: number;
+  readonly attention: number;
+  readonly live: number;
+}
 
 export interface FolderRow {
   readonly kind: "folder";
@@ -20,6 +34,7 @@ export interface FolderRow {
   readonly sessionCount: number;
   /** Most urgent status among every descendant session, if any. */
   readonly status: Status | null;
+  readonly activity: FolderActivity;
 }
 
 export interface SessionRow {
@@ -29,7 +44,33 @@ export interface SessionRow {
   readonly folder: string | null;
 }
 
-export type SessionTreeRow = FolderRow | SessionRow;
+/**
+ * The single child of an expanded folder that holds nothing. It keeps the
+ * folder visibly owning a (blank) body, so the unfiled rows that follow do
+ * not read as its contents, and it is a drop slot for "into this folder".
+ */
+export interface EmptyFolderRow {
+  readonly kind: "empty";
+  /** The empty folder, which is also this row's container. */
+  readonly folder: string;
+  readonly depth: number;
+}
+
+export type SessionTreeRow = FolderRow | SessionRow | EmptyFolderRow;
+
+export function sessionActivity(
+  sessions: readonly Pick<SessionMeta, "status" | "background_tasks">[],
+): FolderActivity {
+  let working = 0;
+  let attention = 0;
+  let live = 0;
+  for (const { status, background_tasks } of sessions) {
+    if (status === "busy" || waitingOnBackground(status, background_tasks)) working++;
+    else if (status === "crashed" || status === "interrupted") attention++;
+    else if (status === "running" || status === "starting") live++;
+  }
+  return { working, attention, live };
+}
 
 export interface SessionTree {
   readonly rows: readonly SessionTreeRow[];
@@ -102,20 +143,12 @@ export function buildSessionTree(
     sessionsIn.set(folder, list);
   }
 
-  const counts = new Map<string, number>();
-  const statuses = new Map<string, Status[]>();
-  const summarize = (id: string): { count: number; statuses: Status[] } => {
-    const own = sessionsIn.get(id) ?? [];
-    let count = own.length;
-    const found: Status[] = own.map((session) => session.status);
-    for (const child of children.get(id) ?? []) {
-      const below = summarize(child.id);
-      count += below.count;
-      found.push(...below.statuses);
-    }
-    counts.set(id, count);
-    statuses.set(id, found);
-    return { count, statuses: found };
+  const descendants = new Map<string, SessionMeta[]>();
+  const summarize = (id: string): SessionMeta[] => {
+    const found = [...(sessionsIn.get(id) ?? [])];
+    for (const child of children.get(id) ?? []) found.push(...summarize(child.id));
+    descendants.set(id, found);
+    return found;
   };
   for (const folder of children.get(null) ?? []) summarize(folder.id);
 
@@ -123,15 +156,22 @@ export function buildSessionTree(
   const emit = (parent: string | null, depth: number): void => {
     for (const folder of children.get(parent) ?? []) {
       const expanded = !collapsed.has(folder.id);
+      const below = descendants.get(folder.id) ?? [];
       rows.push({
         kind: "folder",
         folder,
         depth,
         expanded,
-        sessionCount: counts.get(folder.id) ?? 0,
-        status: mostUrgentStatus(statuses.get(folder.id) ?? []),
+        sessionCount: below.length,
+        status: mostUrgentStatus(below.map((session) => session.status)),
+        activity: sessionActivity(below),
       });
-      if (expanded) emit(folder.id, depth + 1);
+      if (!expanded) continue;
+      const before = rows.length;
+      emit(folder.id, depth + 1);
+      if (rows.length === before) {
+        rows.push({ kind: "empty", folder: folder.id, depth: depth + 1 });
+      }
     }
     for (const session of sessionsIn.get(parent) ?? []) {
       rows.push({ kind: "session", session, depth, folder: parent });
@@ -141,9 +181,13 @@ export function buildSessionTree(
   return { rows, folderOf };
 }
 
-/** Stable list key of a row: the session id, or `folder:<id>`. */
+/** Stable list key of a row: the session id, `folder:<id>` or `empty:<id>`. */
 export function sessionTreeRowKey(row: SessionTreeRow): string {
-  return row.kind === "folder" ? `folder:${row.folder.id}` : row.session.id;
+  return row.kind === "folder"
+    ? `folder:${row.folder.id}`
+    : row.kind === "empty"
+    ? `empty:${row.folder}`
+    : row.session.id;
 }
 
 export function folderIdFromRowKey(key: string): string | null {
@@ -198,4 +242,55 @@ export function dropTargetFolder(
   const above = rows[index - 1];
   if (!above) return null;
   return above.kind === "folder" ? above.folder.id : above.folder;
+}
+
+/** Where a dragged session will land, and at what nesting depth. */
+export interface SessionDropProjection {
+  readonly folder: string | null;
+  readonly depth: number;
+}
+
+/**
+ * Project a drag onto the tree, Obsidian/outliner style. `rows` excludes the
+ * dragged session; the slot is `index`. The vertical slot bounds the legal
+ * depths: never deeper than the row above can parent, never shallower than
+ * the row below requires. Inside those bounds the drag keeps its own depth,
+ * except right below a folder header, where it goes into that folder (the
+ * "drop onto the folder" gesture, collapsed or not). `depthOffset` is the
+ * horizontal intent in indent steps: drag right to nest, left to step out.
+ */
+export function projectSessionDrop(
+  rows: readonly SessionTreeRow[],
+  index: number,
+  originDepth: number,
+  depthOffset = 0,
+): SessionDropProjection {
+  const above = rows[index - 1];
+  if (!above) return { folder: null, depth: 0 };
+  const below = rows[index];
+  const maxDepth = above.kind === "folder" ? above.depth + 1 : above.depth;
+  const minDepth = Math.min(maxDepth, below?.depth ?? 0);
+  const base = above.kind === "folder" ? maxDepth : originDepth;
+  const depth = Math.max(minDepth, Math.min(maxDepth, base + depthOffset));
+  if (depth === 0) return { folder: null, depth };
+  // Rows are a pre-order walk, so the nearest header one level up is the
+  // container of this slot.
+  for (let i = index - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row?.kind === "folder" && row.depth === depth - 1) {
+      return { folder: row.folder.id, depth };
+    }
+  }
+  return { folder: null, depth: 0 };
+}
+
+/** Whether `row` is `folder` or lies anywhere inside it. */
+export function rowInsideFolder(
+  row: SessionTreeRow,
+  folder: string,
+  value: SessionFoldersValue,
+): boolean {
+  const container = row.kind === "folder" ? row.folder.id : row.folder;
+  return container !== null &&
+    (container === folder || folderAncestors(value, container).includes(folder));
 }
