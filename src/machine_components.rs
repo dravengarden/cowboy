@@ -168,6 +168,9 @@ impl ComponentStore {
         &self,
         desired: &DesiredComponent,
     ) -> anyhow::Result<()> {
+        desired
+            .validate_session_deletion_declaration()
+            .map_err(anyhow::Error::msg)?;
         if desired.id.kind == crate::machine_protocol::ComponentKind::MachineHost {
             crate::session_deletion_admission::require_empty_portable_namespace(
                 self.root
@@ -374,7 +377,7 @@ fn component_proof(desired: &DesiredComponent) -> Vec<u8> {
         .transpose()
         .expect("component probe serializes")
         .unwrap_or_default();
-    let fields = [
+    let mut fields = vec![
         component_slot(desired),
         desired.version.clone(),
         desired.generation.clone(),
@@ -384,7 +387,13 @@ fn component_proof(desired: &DesiredComponent) -> Vec<u8> {
         probe,
         desired.automatic.to_string(),
     ];
-    let mut proof = b"cowboy-component-v3\n".to_vec();
+    let mut proof = if let Some(reader) = &desired.session_deletion_journal {
+        fields.push(serde_json::to_string(reader).expect("reader declaration serializes"));
+        b"cowboy-component-v4\n".to_vec()
+    } else {
+        // Preserve every byte of existing signatures when no claim is present.
+        b"cowboy-component-v3\n".to_vec()
+    };
     for field in fields {
         proof.extend_from_slice(field.len().to_string().as_bytes());
         proof.push(b':');
@@ -461,6 +470,158 @@ mod tests {
     use crate::machine_protocol::{ComponentId, ComponentKind};
 
     static TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn reader_claim_has_a_distinct_signature_domain_and_preserves_legacy_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = MachineIdentity::load_or_create(root.path()).unwrap();
+        let mut desired = signed_component(
+            &identity,
+            "https://example.invalid/host".into(),
+            b"host",
+            "v1",
+        );
+        desired.id.kind = ComponentKind::MachineHost;
+        desired.id.slot.clear();
+        desired.generation = "g1".into();
+        desired.digest = "a".repeat(64);
+        desired.probe = None;
+        desired.automatic = false;
+        let legacy = format!(
+            "cowboy-component-v3\n12:machine_host\n2:v1\n2:g1\n64:{}\n3:raw\n0:\n0:\n5:false\n",
+            "a".repeat(64)
+        );
+        assert_eq!(component_proof(&desired), legacy.as_bytes());
+        let old_signature = identity.sign(&component_proof(&desired)).unwrap();
+        desired.session_deletion_journal = Some(crate::machine_protocol::SessionDeletionReader {
+            reader_schema: 1,
+            writer_schema: 0,
+        });
+        let expected = legacy.replacen("cowboy-component-v3", "cowboy-component-v4", 1)
+            + "37:{\"reader_schema\":1,\"writer_schema\":0}\n";
+        assert_eq!(component_proof(&desired), expected.as_bytes());
+        assert!(
+            !crate::machine_auth::verify(
+                identity.public_key(),
+                &component_proof(&desired),
+                &old_signature
+            )
+            .unwrap()
+        );
+        let signature = identity.sign(&component_proof(&desired)).unwrap();
+        assert!(
+            crate::machine_auth::verify(
+                identity.public_key(),
+                &component_proof(&desired),
+                &signature
+            )
+            .unwrap()
+        );
+        for mutation in ["strip", "reader", "writer"] {
+            let mut changed = desired.clone();
+            match mutation {
+                "strip" => changed.session_deletion_journal = None,
+                "reader" => {
+                    changed
+                        .session_deletion_journal
+                        .as_mut()
+                        .unwrap()
+                        .reader_schema = 2
+                }
+                "writer" => {
+                    changed
+                        .session_deletion_journal
+                        .as_mut()
+                        .unwrap()
+                        .writer_schema = 1
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !crate::machine_auth::verify(
+                    identity.public_key(),
+                    &component_proof(&changed),
+                    &signature
+                )
+                .unwrap(),
+                "{mutation}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_reader_claim_refuses_before_fetch_or_staging() {
+        let state = tempfile::tempdir().unwrap();
+        let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+        let store =
+            ComponentStore::new(state.path().join("components"), None, "fixture".into()).unwrap();
+        for (kind, reader_schema, writer_schema) in [
+            (ComponentKind::ProviderCli, 1, 0),
+            (ComponentKind::MachineHost, 2, 0),
+            (ComponentKind::MachineHost, 1, 1),
+        ] {
+            let mut desired = signed_component(
+                &identity,
+                "http://127.0.0.1:1/never-fetched".into(),
+                b"host",
+                "v1",
+            );
+            desired.id.kind = kind;
+            desired.id.slot.clear();
+            desired.session_deletion_journal =
+                Some(crate::machine_protocol::SessionDeletionReader {
+                    reader_schema,
+                    writer_schema,
+                });
+            assert!(
+                store
+                    .reconcile(desired)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Session deletion declaration")
+            );
+        }
+        for name in ["active", "rollback", "commands", "payloads"] {
+            assert_eq!(std::fs::read_dir(store.root.join(name)).unwrap().count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn signed_reader_claim_does_not_admit_committed_portable_state() {
+        let state = tempfile::tempdir().unwrap();
+        let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+        let store =
+            ComponentStore::new(state.path().join("components"), None, "fixture".into()).unwrap();
+        let journal = state.path().join("session-deletions/deletions.json");
+        std::fs::create_dir(journal.parent().unwrap()).unwrap();
+        std::fs::write(&journal, "retained evidence").unwrap();
+        let mut desired = signed_component(
+            &identity,
+            "http://127.0.0.1:1/never-fetched".into(),
+            b"host",
+            "v1",
+        );
+        desired.id.kind = ComponentKind::MachineHost;
+        desired.id.slot.clear();
+        desired.session_deletion_journal = Some(crate::machine_protocol::SessionDeletionReader {
+            reader_schema: 1,
+            writer_schema: 0,
+        });
+        desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+        assert!(
+            store
+                .reconcile(desired)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("portable Session deletion reader admission")
+        );
+        assert_eq!(std::fs::read(&journal).unwrap(), b"retained evidence");
+        for name in ["active", "rollback", "commands", "payloads"] {
+            assert_eq!(std::fs::read_dir(store.root.join(name)).unwrap().count(), 0);
+        }
+    }
 
     #[tokio::test]
     async fn terminal_journal_refuses_host_fetch_without_mutating_component_links() {
@@ -548,6 +709,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            session_deletion_journal: None,
             probe: None,
             automatic: true,
         };
@@ -731,6 +893,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            session_deletion_journal: None,
             probe: Some(crate::machine_protocol::ComponentProbe {
                 args: Vec::new(),
                 timeout_ms: 2_000,
