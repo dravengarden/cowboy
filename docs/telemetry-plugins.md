@@ -25,14 +25,19 @@ agent stdout, prompts, nor conversation content is automatically exported.
 
 Sampled client command traces now continue across owned Controller, Machine
 and worker boundaries. The Controller converts bounded, authenticated runtime
-diagnostics to standard OTLP spans through the same local-file/optional-Plugin
-pipeline. No direct worker export, Collector service, Provider instrumentation
-or additional Plugin capability is introduced. The exact timing, privacy,
+diagnostics to standard OTLP spans through the shared local/optional-Plugin
+pipeline when forwarding is enabled. Machines retain their sampled spans locally
+by default. No direct worker network export, Collector service or additional
+Plugin capability is introduced. The exact timing, privacy,
 replay and capacity contract is in
 [owned runtime trace boundaries](client-opentelemetry.md#owned-runtime-trace-boundaries).
 
-The default backend is a private, bounded, rotating JSON-lines file directory
-under `/tmp`. Rotation must cap both segment size and retained segment count,
+The default local backend is indexed OTel protobuf in SQLite segments under the
+Controller's private data directory. The shared interface also supports the
+existing rotating JSON-lines directory under `/tmp`, selected with
+`COWBOY_TELEMETRY_LOCAL_BACKEND=jsonl` (or `both`). See
+[host-local observability](local-observability.md) for defaults, retention,
+remote Machine storage and AI diagnostic commands. JSONL rotation must cap both segment size and retained segment count,
 reject symlinks and competing writers, and preserve complete UTF-8 records.
 Temporary storage is intentionally not durable across reboot, tmpfs exhaustion
 or host cleanup. Local write failures must be observable without blocking the
@@ -67,13 +72,16 @@ publication; the implementation gates below are not production receipts.
 
 | Setting | Default | Bounds |
 | --- | --- | --- |
+| `COWBOY_TELEMETRY_LOCAL_BACKEND` | `sqlite` | `sqlite`, `jsonl`, `both` |
+| `COWBOY_LOGS_DIR` | `<data-dir>/logs` | Private local SQLite store; `cowboy logs configure` owns retention policy |
+| `COWBOY_TELEMETRY_RETAIN_SECONDS` | 604800 (7 days) | 60–7776000; idle JSONL cleanup every 30 seconds |
 | `COWBOY_TELEMETRY_DIR` / `--telemetry-dir` | `/tmp/cowboy-telemetry-<instance hash>` | Absolute private child directory |
 | `COWBOY_TELEMETRY_SEGMENT_BYTES` | 8388608 (8 MiB) | 65536–67108864 |
 | `COWBOY_TELEMETRY_RETAINED_FILES` | 8, including current | 2–32 |
 | `COWBOY_TELEMETRY_PLUGIN_CONFIG` | absent, local only | Exact Controller selection file |
 | `COWBOY_TELEMETRY_MANAGED_EXPORT_POLICY` | absent | Explicit exact-binding OTLP policy; mutually exclusive with legacy selection |
 
-Instance directory identity includes effective UID and data directory. The
+For the optional JSONL sink, instance directory identity includes effective UID and data directory. The
 writer owns mode-0700 directory, mode-0600 files, and an exclusive writer lock.
 It rotates `telemetry.jsonl` through `.1` to `.7` at segment capacity or the
 first write after a UTC day boundary: at most 64 MiB by default. It never

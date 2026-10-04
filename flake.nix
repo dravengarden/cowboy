@@ -116,6 +116,8 @@
           ./src/lib.rs
           ./src/main.rs
           ./src/cli.rs
+          ./src/logs.rs
+          ./src/logs
           ./src/composition
           ./tests/fixtures/composition-v1.json
           ./src/claude_shell.rs
@@ -187,6 +189,8 @@
           ./Cargo.lock
           ./src/lib.rs
           ./src/code_adapter.rs
+          ./src/logs.rs
+          ./src/logs
           ./src/code_review.rs
           ./src/files.rs
           ./src/workspace_roots.rs
@@ -221,6 +225,8 @@
         ./src/execution_environment.rs
         ./src/execution_protocol.rs
         ./src/runtime_trace.rs
+        ./src/logs.rs
+        ./src/logs
         ./src/worker.rs
         ./src/worker_execution.rs
         ./src/worker_telemetry.rs
