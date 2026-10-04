@@ -357,6 +357,23 @@ export function DesktopCommandProvider(
         const sessionsRegion = document.querySelector<HTMLElement>(
           "[data-desktop-region='sessions.list']",
         );
+        // A collapsed Sessions pane is a deliberate layout choice: switching
+        // by slot must not unfold it. Land in the work surface instead, as
+        // opening a session from the list does.
+        if (sessionsRegion?.dataset.desktopPaneCollapsed === "true") {
+          const list = sessionsRegion.querySelector<HTMLElement>("ul");
+          list?.dispatchEvent(
+            new CustomEvent("cowboy:desktop-select-session", {
+              cancelable: true,
+              detail: { digit },
+            }),
+          );
+          const target = workspace.collapsedPanes.prompt
+            ? "conversation.transcript"
+            : "prompt.composer";
+          requestAnimationFrame(() => workspace.focusRegion(target));
+          return;
+        }
         // The list owns slot numbering (flat session order, independent of
         // folder folds) and cancels the event once it has switched.
         const list = sessionsRegion?.querySelector<HTMLElement>("ul");

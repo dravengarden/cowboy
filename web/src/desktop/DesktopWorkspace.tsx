@@ -27,6 +27,8 @@ import {
   clampReadingQuestionsWidth,
   COMPOSER_COL_MAX,
   COMPOSER_COL_MIN,
+  DESKTOP_CONVERSATION_MIN,
+  DESKTOP_PROMPT_MIN,
   readingQuestionsWidthStore,
   READING_QUESTIONS_MAX,
   READING_QUESTIONS_MIN,
@@ -35,19 +37,47 @@ import {
   DESKTOP_SPLITTER_ADJUST_EVENT,
   splitterAdjustment,
 } from "./desktopSplitterKeyboard";
+import {
+  DesktopCollapsedPaneRail,
+  DesktopPaneCollapseButton,
+  DesktopRailCount,
+} from "./DesktopPaneCollapse";
+import { useStoreSelector } from "../store";
 
-const PROMPT_MIN = 360;
-const CONVERSATION_MIN = 520;
+const PROMPT_MIN = DESKTOP_PROMPT_MIN;
+const CONVERSATION_MIN = DESKTOP_CONVERSATION_MIN;
+// A Prompt that inherits the Conversation's width stays a readable writing
+// column instead of a full-window line length.
+const PROMPT_WIDE_MEASURE = 960;
+const NO_MESSAGES: readonly unknown[] = [];
+
+/** Queue and draft counts stay visible on the collapsed Prompt rail. */
+function PromptRailCounts({ sessionId }: { sessionId: string }): React.JSX.Element {
+  const queued = useStoreSelector((state) =>
+    (state.queues.get(sessionId) ?? NO_MESSAGES).length
+  );
+  const drafts = useStoreSelector((state) =>
+    (state.drafts.get(sessionId) ?? NO_MESSAGES).length
+  );
+  return (
+    <>
+      <DesktopRailCount count={queued} label="queued" />
+      <DesktopRailCount count={drafts} label={drafts === 1 ? "draft" : "drafts"} />
+    </>
+  );
+}
 
 function PaneHeader({
   pane,
   shortcut,
   actions,
+  collapsible = false,
   children,
 }: {
   pane: DesktopPane;
   shortcut: { value: string; title: string };
   actions?: React.ReactNode;
+  collapsible?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -120,6 +150,7 @@ function PaneHeader({
         singleKeycap={shortcut.value}
         sx={{ ml: 0.5 }}
       />
+      {collapsible && <DesktopPaneCollapseButton pane={pane} sx={{ ml: 0.75, mr: -0.75 }} />}
     </Box>
   );
 }
@@ -133,6 +164,8 @@ export function DesktopWorkspace({
   sessionId,
   projection,
   onProjectionChange,
+  conversationActivity,
+  collapseIntent = null,
 }: {
   promptWidth: number;
   resizing: boolean;
@@ -142,8 +175,14 @@ export function DesktopWorkspace({
   sessionId: string;
   projection: TranscriptProjection;
   onProjectionChange: (projection: TranscriptProjection) => void;
+  /** Live agent status shown on the collapsed Conversation rail. */
+  conversationActivity?: React.ReactNode;
+  /** Pane a splitter drag will collapse on release; previewed by dimming. */
+  collapseIntent?: "prompt" | "conversation" | null;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
+  const promptCollapsed = workspace.collapsedPanes.prompt;
+  const conversationCollapsed = workspace.collapsedPanes.conversation;
   const [questionsWidth, setQuestionsWidth] = useState(
     readingQuestionsWidthStore.get,
   );
@@ -390,28 +429,43 @@ export function DesktopWorkspace({
         position: "relative",
       }}
     >
+      {promptCollapsed && (
+        <DesktopCollapsedPaneRail
+          pane="prompt"
+          side="left"
+          indicators={<PromptRailCounts sessionId={sessionId} />}
+        />
+      )}
       <Box
         component="section"
         aria-label="Prompt pane"
         data-desktop-pane="prompt"
+        data-desktop-pane-collapsed={promptCollapsed ? "true" : undefined}
         tabIndex={-1}
         sx={{
           // Prefer the persisted working width while preserving Conversation's
           // productive floor. Do not impose a second percentage ceiling: it
           // would let pointer/keyboard state change while the visible divider
           // stayed fixed, making Resize mode appear broken.
-          width:
-            `min(${String(promptWidth)}px, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
+          width: conversationCollapsed
+            ? "auto"
+            : `min(${String(promptWidth)}px, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
+          flex: conversationCollapsed ? 1 : undefined,
           flexShrink: 0,
           minWidth: 0,
-          display: "flex",
+          // Collapsed panes stay mounted so the editor keeps its draft, undo
+          // history, Vim mode and IME state; they are simply not rendered.
+          display: promptCollapsed ? "none" : "flex",
           flexDirection: "column",
           minHeight: 0,
           bgcolor: (theme) => alpha(theme.palette.background.paper, 0.24),
+          opacity: collapseIntent === "prompt" ? 0.38 : 1,
+          transition: "opacity 120ms ease",
         }}
       >
         <PaneHeader
           pane="prompt"
+          collapsible
           shortcut={{
             value: DESKTOP_FOCUS_PROMPT_SHORTCUT,
             title: "Focus Message the agent",
@@ -419,68 +473,86 @@ export function DesktopWorkspace({
         >
           Prompt
         </PaneHeader>
-        <DesktopConnectionNotice />
-        {prompt}
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            width: "100%",
+            maxWidth: conversationCollapsed ? PROMPT_WIDE_MEASURE : "none",
+            alignSelf: "center",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <DesktopConnectionNotice />
+          {prompt}
+        </Box>
       </Box>
 
-      <Box
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize composer column"
-        title={`Resize layout · ${DESKTOP_SHORTCUTS.resize}`}
-        aria-valuemin={COMPOSER_COL_MIN}
-        aria-valuemax={COMPOSER_COL_MAX}
-        aria-valuenow={Math.round(promptWidth)}
-        data-desktop-splitter="prompt-conversation"
-        data-desktop-splitter-selected={
-          workspace.selectedSplitter === "prompt-conversation" ? "true" : undefined
-        }
-        tabIndex={-1}
-        onPointerDown={onResizeStart}
-        sx={{
-          flex: "0 0 auto",
-          alignSelf: "stretch",
-          width: "1px",
-          bgcolor: resizing || workspace.selectedSplitter === "prompt-conversation"
-            ? "primary.main"
-            : "divider",
-          transition: "background-color 120ms",
-          position: "relative",
-          cursor: "col-resize",
-          touchAction: "none",
-          zIndex: 3,
-          "&::after": {
-            content: '""',
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: "-11px",
-            right: "-11px",
-          },
-          "&:hover": { bgcolor: "primary.main" },
-          "&:focus": { outline: "none" },
-        }}
-      >
-        {workspace.selectedSplitter === "prompt-conversation" && (
-          <DesktopSplitterHint />
-        )}
-      </Box>
+      {!promptCollapsed && !conversationCollapsed && (
+        <Box
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize composer column"
+          title={`Resize layout · ${DESKTOP_SHORTCUTS.resize} · drag past the edge to collapse`}
+          aria-valuemin={COMPOSER_COL_MIN}
+          aria-valuemax={COMPOSER_COL_MAX}
+          aria-valuenow={Math.round(promptWidth)}
+          data-desktop-splitter="prompt-conversation"
+          data-desktop-splitter-selected={
+            workspace.selectedSplitter === "prompt-conversation" ? "true" : undefined
+          }
+          tabIndex={-1}
+          onPointerDown={onResizeStart}
+          sx={{
+            flex: "0 0 auto",
+            alignSelf: "stretch",
+            width: "1px",
+            bgcolor: resizing || workspace.selectedSplitter === "prompt-conversation"
+              ? "primary.main"
+              : "divider",
+            transition: "background-color 120ms",
+            position: "relative",
+            cursor: "col-resize",
+            touchAction: "none",
+            zIndex: 3,
+            "&::after": {
+              content: '""',
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: "-11px",
+              right: "-11px",
+            },
+            "&:hover": { bgcolor: "primary.main" },
+            "&:focus": { outline: "none" },
+          }}
+        >
+          {workspace.selectedSplitter === "prompt-conversation" && (
+            <DesktopSplitterHint />
+          )}
+        </Box>
+      )}
 
       <Box
         component="section"
         aria-label="Conversation pane"
         data-desktop-pane="conversation"
+        data-desktop-pane-collapsed={conversationCollapsed ? "true" : undefined}
         tabIndex={-1}
         sx={{
           flex: 1,
           minWidth: 0,
           position: "relative",
-          display: "flex",
+          display: conversationCollapsed ? "none" : "flex",
           flexDirection: "column",
+          opacity: collapseIntent === "conversation" ? 0.38 : 1,
+          transition: "opacity 120ms ease",
         }}
       >
         <PaneHeader
           pane="conversation"
+          collapsible
           shortcut={{ value: DESKTOP_SHORTCUTS.focusConversation, title: "Focus Conversation" }}
           actions={(
             <>
@@ -517,6 +589,13 @@ export function DesktopWorkspace({
           {conversation}
         </Box>
       </Box>
+      {conversationCollapsed && (
+        <DesktopCollapsedPaneRail
+          pane="conversation"
+          side="right"
+          indicators={conversationActivity}
+        />
+      )}
     </Box>
   );
 }

@@ -272,6 +272,17 @@ export function DesktopStatusLine({
     : workspaceCommandMode
     ? [
       { keys: "S/P/T/C", label: "Workspace", availability: "available" },
+      // Pane folds sit next to the pane jumps they mirror, ahead of the
+      // lower-frequency entries the status line may clip on narrow windows.
+      {
+        keys: [
+          DESKTOP_WORKSPACE_KEYS.toggleSessions,
+          DESKTOP_WORKSPACE_KEYS.togglePrompt,
+          DESKTOP_WORKSPACE_KEYS.toggleConversation,
+        ].join(" "),
+        label: "Fold panes",
+        availability: "available",
+      },
       { keys: "L/Q/D", label: "Plan/queue/drafts", availability: "available" },
       { keys: "N", label: "New", availability: "available" },
       { keys: "W", label: "Next region", availability: "available" },

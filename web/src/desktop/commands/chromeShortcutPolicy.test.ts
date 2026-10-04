@@ -64,8 +64,14 @@ Deno.test("direct product chords and Alt session slots remain browser-safe", () 
 
 Deno.test("workspace navigation has no global bare-letter shortcut", () => {
   assertEquals(Object.keys(DESKTOP_WORKSPACE_COMMANDS).sort(), [
-    ",", "c", "d", "e", "l", "n", "p", "q", "r", "s", "t", "w",
+    ",", "[", "\\", "]", "c", "d", "e", "l", "n", "p", "q", "r", "s", "t", "w",
   ]);
+  // Windows/Linux held-prefix pane folds (Alt + [ ] \) are not Chrome chords.
+  // macOS Cmd+[ / Cmd+] are Chrome Back/Forward, which are not reserved
+  // accelerators; the claimed continuation cancels them (FOCUS.md).
+  for (const key of ["[", "]", "\\"]) {
+    assertEquals(chromeShortcutConflict("test.command", `Alt+${key}`, false), null);
+  }
   for (const shortcut of Object.values(DESKTOP_SHORTCUTS)) {
     assert(!/^[a-z]$/i.test(shortcut));
   }

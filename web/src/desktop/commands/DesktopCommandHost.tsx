@@ -28,6 +28,10 @@ import {
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 import { DesktopModal } from "../DesktopModal";
 import { desktopImeOwnsKey } from "./imeShortcut";
+import {
+  DESKTOP_PANES_EXPANDED,
+  desktopCollapsedPanesStore,
+} from "../../desktopLayout";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -250,6 +254,43 @@ export function DesktopCommandHost({
       group: "Workspace",
       sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.cycleRegion],
       run: () => workspace.cycleRegion(),
+    },
+    {
+      id: "workspace.toggleSessions",
+      title: workspace.collapsedPanes.sessions ? "Expand Sessions" : "Collapse Sessions",
+      description: "Show or hide the Sessions sidebar",
+      group: "Workspace",
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.toggleSessions],
+      run: () => workspace.togglePane("sessions"),
+    },
+    {
+      id: "workspace.togglePrompt",
+      title: workspace.collapsedPanes.prompt ? "Expand Prompt" : "Collapse Prompt",
+      description: "Show or hide the Prompt column; Conversation takes its width",
+      group: "Workspace",
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.togglePrompt],
+      run: () => workspace.togglePane("prompt"),
+    },
+    {
+      id: "workspace.toggleConversation",
+      title: workspace.collapsedPanes.conversation
+        ? "Expand Conversation"
+        : "Collapse Conversation",
+      description: "Show or hide the Conversation; Prompt takes its width",
+      group: "Workspace",
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.toggleConversation],
+      run: () => workspace.togglePane("conversation"),
+    },
+    {
+      id: "workspace.expandAllPanes",
+      title: "Expand All Panes",
+      description: "Restore Sessions, Prompt and Conversation",
+      group: "Workspace",
+      when: () =>
+        workspace.collapsedPanes.sessions || workspace.collapsedPanes.prompt ||
+        workspace.collapsedPanes.conversation,
+      disabledReason: "Every pane is already expanded",
+      run: () => desktopCollapsedPanesStore.set(DESKTOP_PANES_EXPANDED),
     },
     {
       id: "prompt.focusPlan",

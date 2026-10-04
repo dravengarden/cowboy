@@ -31,6 +31,13 @@ export const DESKTOP_WORKSPACE_KEYS = {
   // workspace prefix is FOCUS.md's documented fallback, and it keeps the same
   // E mnemonic while working from Vim Insert, Normal and native inputs.
   toggleSourceMode: "E",
+  // Pane collapse uses three adjacent physical keys whose left-to-right order
+  // matches the panes on screen: Sessions | Prompt | Conversation. They are
+  // free under the prefix, and their held-prefix forms (Cmd/Alt + [ ] \) are
+  // page-cancelable rather than reserved by Chrome or the operating system.
+  toggleSessions: "[",
+  togglePrompt: "]",
+  toggleConversation: "\\",
 } as const;
 
 export function desktopWorkspaceSequence(key: string): string {
@@ -57,6 +64,11 @@ export const DESKTOP_SHORTCUTS = {
   toggleSourceMode: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
   ),
+  toggleSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.toggleSessions),
+  togglePrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.togglePrompt),
+  toggleConversation: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.toggleConversation,
+  ),
   sessionSlots: "Alt+1…0",
 } as const;
 
@@ -80,6 +92,9 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   w: "workspace.cycleRegion",
   r: "workspace.enterResize",
   e: "composer.toggleSourceMode",
+  "[": "workspace.toggleSessions",
+  "]": "workspace.togglePrompt",
+  "\\": "workspace.toggleConversation",
   ",": "settings.open",
 };
 
