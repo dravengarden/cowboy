@@ -1,5 +1,6 @@
 import { Box } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
+import { EditorExtensionsCommand } from "../editorExtensions/EditorExtensionsDialog";
 import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { ProductAccountSecurity } from "../auth/ProductAccountSecurity";
@@ -121,6 +122,7 @@ export function DesktopApp({
     <DesktopWorkspaceProvider>
       <DesktopCommandProvider>
         <DesktopAccountCommands />
+        <EditorExtensionsCommand />
         <App
           themeMode={themeMode}
           onSetThemeMode={onSetThemeMode}

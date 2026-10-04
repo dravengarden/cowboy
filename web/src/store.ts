@@ -5097,6 +5097,24 @@ export function addDraft(sessionId: string, text: string, attachments: Attachmen
   return qAdd("drafts", sessionId, trimmed, attachments);
 }
 
+/** A writing-document handoff is a new unsent row. The source document stays
+ * independent; the receipt targets exactly this row, never a whole session. */
+export async function copyDocumentToSession(sessionId: string, text: string, attachments: Attachment[]): Promise<{ undo: () => Promise<void> }> {
+  const cmid = newCmid();
+  if (!text.trim() && attachments.length === 0) throw new Error("The draft is empty");
+  await qAdd("drafts", sessionId, text, attachments, { cmid });
+  return { undo: async () => {
+    await waitForState(() => qClients.get(sessionId)?.baseValue().drafts.some((row) => row.cmid === cmid) === true, "Undo copy");
+    await removeDraftIfUnchanged(sessionId, cmid, text, attachments);
+  } };
+}
+
+export async function removeDraftIfUnchanged(sessionId: string, identity: string, text: string, attachments: readonly Attachment[]): Promise<void> {
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}/draft-copies/${encodeURIComponent(identity)}`;
+  const result = await fetch(path, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, content: contentOf(text, [...attachments]) }) });
+  if (!result.ok) throw new Error("This draft was edited, scheduled, sent or removed; it has been kept");
+}
+
 // Edit a draft in place (same shape as editQueued). Clearing both fields drops it.
 export function editDraft(
   sessionId: string,

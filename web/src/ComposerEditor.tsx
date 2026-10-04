@@ -284,7 +284,7 @@ export const ComposerEditor = forwardRef<
   {
     value: string;
     onChange: (value: string) => void;
-    onSubmit: () => void;
+    onSubmit?: (() => void) | undefined;
     // ⌃⏎ (mac) / Alt+⏎ — park the current text as a draft instead of sending.
     onSaveDraft?: () => void;
     // Fired when the send chord (⌘⏎) is HELD past the long-press threshold while
@@ -296,8 +296,8 @@ export const ComposerEditor = forwardRef<
     // (idle) the send chord fires onSubmit instantly on keydown — zero latency on
     // the hot path, no hold semantics.
     holdToForce?: boolean;
-    sessionId: string;
-    commands: () => AvailableCommand[];
+    sessionId?: string | undefined;
+    commands?: (() => AvailableCommand[]) | undefined;
     placeholder?: string;
     disabled?: boolean;
     autoFocus?: boolean;
@@ -353,7 +353,7 @@ export const ComposerEditor = forwardRef<
     onForceHold,
     holdToForce,
     sessionId,
-    commands,
+    commands = () => [],
     placeholder,
     disabled,
     autoFocus = false,
@@ -946,7 +946,7 @@ export const ComposerEditor = forwardRef<
       ])),
       autocompletion({
         override: [
-          fileCompletionSource(sessionId),
+          ...(sessionId ? [fileCompletionSource(sessionId)] : []),
           slashCompletionSource(
             () => commandsRef.current(),
             (command) => {
@@ -982,16 +982,16 @@ export const ComposerEditor = forwardRef<
             if (
               !enter || e.shiftKey || e.isComposing || view.composing
             ) return false;
-            if (hasDraftMod(e)) {
+            if (hasDraftMod(e) && onSaveDraftRef.current) {
               e.preventDefault();
               onSaveDraftRef.current?.();
               return true;
             }
-            if (!hasSendMod(e)) return false;
+            if (!hasSendMod(e) || !onSubmitRef.current) return false;
             e.preventDefault();
             if (!holdToForceRef.current) {
               // Idle: instant send. Ignore auto-repeats from a held key.
-              if (!e.repeat) onSubmitRef.current();
+              if (!e.repeat) onSubmitRef.current?.();
               return true;
             }
             // Busy: the first press arms the long-press timer; repeats are ignored
@@ -1020,7 +1020,7 @@ export const ComposerEditor = forwardRef<
             if (holdTimer.current !== undefined) {
               globalThis.clearTimeout(holdTimer.current);
               holdTimer.current = undefined;
-              if (!forceFired.current) onSubmitRef.current();
+              if (!forceFired.current) onSubmitRef.current?.();
             }
             return false;
           },

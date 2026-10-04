@@ -71,6 +71,7 @@ use tokio_util::io::ReaderStream;
 mod cardea_authorization;
 mod code_buffers;
 mod code_reads;
+mod draft_documents;
 mod execution;
 #[cfg(unix)]
 mod local_operator;
@@ -731,6 +732,28 @@ mod component_supersession_tests {
             kind,
             slot: slot.to_owned(),
         }
+    }
+
+    #[test]
+    fn independent_draft_routes_require_product_identity_and_operator_writes() {
+        use super::{RouteAuth, classify_route};
+        use axum::http::Method;
+        assert_eq!(
+            classify_route(&Method::GET, "/api/drafts"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/drafts/doc/history"),
+            RouteAuth::Product
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/drafts/mutations"),
+            RouteAuth::ProductOperator
+        );
+        assert_eq!(
+            classify_route(&Method::DELETE, "/api/sessions/session/draft-copies/cmid"),
+            RouteAuth::ProductSessionMutate
+        );
     }
 
     #[test]
@@ -4589,6 +4612,13 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         || path.starts_with("/api/code/navigations/")
     {
         return RouteAuth::ProductOperator;
+    }
+    if path == "/api/drafts" || path.starts_with("/api/drafts/") {
+        return if matches!(*method, Method::GET | Method::HEAD) {
+            RouteAuth::Product
+        } else {
+            RouteAuth::ProductOperator
+        };
     }
     if path == "/ws" {
         return RouteAuth::Product;
@@ -9702,6 +9732,11 @@ async fn serve_axum(
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
         .route("/api/sync/dataset", get(sync_dataset::get_dataset))
+        .route("/api/drafts", get(draft_documents::list))
+        .route("/api/drafts/mutations", post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
+        .route("/api/drafts/{id}", get(draft_documents::read))
+        .route("/api/drafts/{id}/history", get(draft_documents::history))
+        .route("/api/sessions/{id}/draft-copies/{cmid}", delete(draft_documents::undo_copy).layer(DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route(
             "/api/observability/batches",
             post(api_observability_batch).layer(DefaultBodyLimit::max(256 * 1024)),

@@ -1,3 +1,6 @@
+import { DraftsButton } from "./documents/DraftsButton";
+import { DRAFT_DRAG_TYPE } from "./documents/model";
+import { copyDraftToSession } from "./documents/transfer";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
@@ -1367,6 +1370,7 @@ function SessionList({
                 minHeight: 0,
             }}
         >
+            <DraftsButton />
             {!mobileDrawer && <Box sx={{ p: 1 }}>
                 <Stack direction="row" spacing={0.75} alignItems="stretch" justifyContent="flex-end">
                 {allowNewSession && <Button
@@ -1639,6 +1643,17 @@ function SessionList({
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
+                        onDragOver={(event): void => {
+                            if (desktop && event.dataTransfer.types.includes(DRAFT_DRAG_TYPE)) {
+                                event.preventDefault(); event.dataTransfer.dropEffect = "copy";
+                            }
+                        }}
+                        onDrop={(event): void => {
+                            const documentId = event.dataTransfer.getData(DRAFT_DRAG_TYPE);
+                            if (!desktop || !documentId) return;
+                            event.preventDefault();
+                            void copyDraftToSession(documentId, s.id, s.title).catch((error: Error) => notify(error.message));
+                        }}
                         onPointerEnter={desktop
                             ? (event): void => {
                                 if (event.pointerType !== "mouse" || s.id === activeId) return;

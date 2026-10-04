@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { retrySyncNow, useStoreSelector, useSyncStatus } from "../store";
 import { BootSkeleton } from "../BootSkeleton";
 import { useBootReady } from "../useBootReady";
+import { DraftsButton } from "../documents/DraftsButton";
 import { MachineSetupPage } from "./MachineSetupPage";
 import {
   needsMachineSetup,
@@ -70,6 +71,7 @@ export function MachineSetupGate({
     // until the app replaces it. The explanation appears over it, in place.
     return (
       <BootSkeleton>
+        <DraftsButton />
         {unreachable && (
           <>
             <Typography sx={{ fontSize: 13, maxWidth: 320 }}>
@@ -107,6 +109,7 @@ export function MachineSetupGate({
           "@media (prefers-reduced-motion: reduce)": { animation: "none" },
         }}
       >
+        <Box sx={{ position: "absolute", top: "max(8px, env(safe-area-inset-top))", right: 8, zIndex: 2 }}><DraftsButton /></Box>
         <MachineSetupPage />
       </Box>
     );
