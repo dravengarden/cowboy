@@ -4099,33 +4099,51 @@ impl Hub {
     }
 
     /// Keep client-set values the agent has not answered yet in an agent
-    /// snapshot. An entry settles once the agent reports that value, is
-    /// dropped if the agent no longer offers it, and expires so a lost
-    /// command cannot pin a value the agent never applied.
+    /// snapshot. Pending values settle together, only when one snapshot
+    /// reports every one of them: during rapid preset taps a stale answer can
+    /// match one latest value by coincidence while the rest are still queued,
+    /// and settling that one alone let the next stale answer flip it back.
+    /// Values the agent no longer offers are dropped (unless a model change is
+    /// pending, whose old-model snapshots cannot judge the new model's
+    /// options), and everything expires so a lost command cannot pin a value
+    /// the agent never applied.
     fn overlay_config_in_flight(&self, session_id: &str, options: &mut serde_json::Value) {
         const SETTLE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
         let mut in_flight = self.inner.config_in_flight.lock();
         let Some(pending) = in_flight.get_mut(session_id) else {
             return;
         };
-        pending.retain(|config_id, (value, set_at)| {
-            let Some(option) = options.as_array().and_then(|options| {
-                options.iter().find(|option| {
-                    option.get("id").and_then(serde_json::Value::as_str) == Some(config_id)
-                })
-            }) else {
-                return false;
-            };
-            if config_current_value(option) == Some(&*value)
-                || !config_option_accepts(option, value)
-                || set_at.elapsed() > SETTLE_DEADLINE
-            {
-                return false;
-            }
-            set_config_option_current_value(options, config_id, value)
+        let find = |options: &serde_json::Value, config_id: &str| {
+            options.as_array().and_then(|options| {
+                options
+                    .iter()
+                    .find(|option| {
+                        option.get("id").and_then(serde_json::Value::as_str) == Some(config_id)
+                    })
+                    .cloned()
+            })
+        };
+        let model_pending = pending.keys().any(|config_id| {
+            find(options, config_id).is_some_and(|option| {
+                option.get("category").and_then(serde_json::Value::as_str) == Some("model")
+            })
         });
-        if pending.is_empty() {
+        pending.retain(|config_id, (value, set_at)| {
+            find(options, config_id).is_some_and(|option| {
+                set_at.elapsed() <= SETTLE_DEADLINE
+                    && (model_pending || config_option_accepts(&option, value))
+            })
+        });
+        let settled = pending.iter().all(|(config_id, (value, _))| {
+            find(options, config_id)
+                .is_some_and(|option| config_current_value(&option) == Some(value))
+        });
+        if settled {
             in_flight.remove(session_id);
+            return;
+        }
+        for (config_id, (value, _)) in pending.iter() {
+            set_config_option_current_value(options, config_id, value);
         }
     }
 
@@ -5792,6 +5810,59 @@ mod config_preference_tests {
         hub.set_config_options("s", snapshot("sonnet", "default"));
         assert_eq!(current(1), Some(serde_json::json!("default")));
         assert_eq!(current(0), Some(serde_json::json!("sonnet")));
+    }
+
+    #[test]
+    fn rapid_preset_taps_never_show_a_stale_intermediate_selection() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        let snapshot = |model: &str, effort: &str| {
+            serde_json::json!([
+                {"id": "model", "category": "model", "currentValue": model,
+                 "options": [{"value": "opus"}, {"value": "sonnet"}]},
+                {"id": "effort", "category": "thought_level", "currentValue": effort,
+                 "options": [{"value": "default"}, {"value": "high"}]},
+            ])
+        };
+        let shown = || {
+            let options = hub.config_options("s").expect("options");
+            (
+                options[0]["currentValue"].clone(),
+                options[1]["currentValue"].clone(),
+            )
+        };
+        let target = (serde_json::json!("opus"), serde_json::json!("default"));
+        hub.set_config_options("s", snapshot("opus", "default"));
+        // Tap Sonnet·High, then immediately back to Opus·Default.
+        for (id, value) in [
+            ("model", "sonnet"),
+            ("effort", "high"),
+            ("model", "opus"),
+            ("effort", "default"),
+        ] {
+            hub.set_config_preference("s", id.to_owned(), serde_json::json!(value))
+                .expect("preference");
+        }
+        // The agent answers each command in order. The first answer matches
+        // the final effort by coincidence; it must not settle it alone.
+        for (model, effort) in [
+            ("sonnet", "default"),
+            ("sonnet", "high"),
+            ("opus", "high"),
+            ("opus", "default"),
+        ] {
+            hub.set_config_options("s", snapshot(model, effort));
+            assert_eq!(shown(), target, "after agent answer ({model}, {effort})");
+        }
+        hub.set_config_options("s", snapshot("opus", "high"));
+        assert_eq!(shown().1, serde_json::json!("high"), "settled values yield");
     }
 
     #[test]
