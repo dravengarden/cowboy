@@ -79,6 +79,12 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Scoped release 3.38.0 records app-shell 1.1.19 for the already-committed native
+installed-bundle version comparison (`eebf0a5c`). No component or Plugin depends
+on app-shell, so all other versions, Plugin pins and historical release records
+remain unchanged. This registry repair allows the complete gate to validate
+fresh main; it is not a Web, native-device or Plugin activation receipt.
+
 The component registry records the minimum Plugin version tested when a shared
 component release is cut. A Plugin may subsequently increase its own version
 without creating another component release or changing any sibling Plugin. When
