@@ -558,6 +558,7 @@ function DraftEditingSession(
               ? (
                 <Tooltip key={id} title={command.label}>
                   <IconButton
+                    data-draft-tool
                     aria-label={command.label}
                     onPointerDown={(e) => e.preventDefault()}
                     onMouseDown={(e) => e.preventDefault()}
@@ -573,6 +574,7 @@ function DraftEditingSession(
                       flexShrink: 0,
                       width: desktop ? "2.25rem" : 44,
                       height: desktop ? "2.25rem" : 44,
+                      padding: desktop ? "0.3rem" : undefined,
                     }}
                   >
                     {command.icon}

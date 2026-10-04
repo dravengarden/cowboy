@@ -49,6 +49,26 @@ function button(label: string): HTMLElement {
  * Only remote HTTP is a fixture. Native keyboard acceptance is a separate run. */
 export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
   const originalFetch = globalThis.fetch;
+  const originalMatchMedia = globalThis.matchMedia;
+  // Headless Firefox defaults to pointer:none. Exercise the actual Desktop
+  // product branch while keeping the real viewport/theme media queries.
+  globalThis.matchMedia = (query) => {
+    const pointer = query.includes("(pointer: fine)") ||
+      query.includes("(hover: hover)");
+    const coarse = query.includes("(any-pointer: coarse)");
+    if (!pointer && !coarse) return originalMatchMedia.call(globalThis, query);
+    return {
+      matches: pointer,
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => true,
+    };
+  };
+
   const originalFont = document.documentElement.style.fontSize;
   const server = new Map<string, DraftDocument>();
   const operations = new Set<string>();
@@ -151,7 +171,27 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
       !container.querySelector("[data-machine-setup-gate], [data-code-pane]"),
       "No Machine or Code surface",
     );
+    const row = container.querySelector<HTMLElement>("[role=treeitem]");
+    check(row, "Draft tree is present");
+    for (
+      const modifiers of [{ ctrlKey: true }, { metaKey: true }, {
+        altKey: true,
+      }]
+    ) {
+      const key = new KeyboardEvent("keydown", {
+        key: "j",
+        bubbles: true,
+        cancelable: true,
+        ...modifiers,
+      });
+      row.dispatchEvent(key);
+      check(!key.defaultPrevented, "Tree preserves modified browser shortcuts");
+    }
     const port = activeEditorExtensionPort()!;
+    check(
+      port.context.surface === "desktop",
+      "Actual Desktop surface is under test",
+    );
     check(
       port.context.id === id && port.read().text.includes("你好 🌏"),
       "Independent document identity/text",
@@ -308,7 +348,7 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
       }ms in this browser)`,
     );
 
-    for (const font of [16, 24]) {
+    for (const font of [8, 10.4, 16, 24]) {
       for (const width of [320, 600, 960, 1440]) {
         document.documentElement.style.fontSize = `${font}px`;
         container.style.width = `${width}px`;
@@ -320,6 +360,21 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
           workspace.scrollWidth <= workspace.clientWidth + 1,
           `Workspace overflow at ${width}px/${font}px: ${workspace.scrollWidth}`,
         );
+        for (
+          const action of container.querySelectorAll<HTMLElement>(
+            "button[data-draft-tool]",
+          )
+        ) {
+          if (!action.getClientRects().length) continue;
+          const icon = action.querySelector("svg")!;
+          const style = getComputedStyle(action);
+          check(
+            icon.getBoundingClientRect().width + parseFloat(style.paddingLeft) +
+                parseFloat(style.paddingRight) <=
+              action.getBoundingClientRect().width + 1,
+            "Desktop toolbar icon and padding follow the global font size",
+          );
+        }
         const editor = container.querySelector<HTMLElement>(".cm-editor")!;
         check(
           editor.getBoundingClientRect().height > 200,
@@ -328,7 +383,7 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
       }
     }
     results.push(
-      "Desktop workspace and shared editor fit 320–1440px at 16px and 24px fonts",
+      "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
     );
     await repo.document(recovered.context.id).whenSynced();
     flushSync(() => root.unmount());
@@ -348,6 +403,7 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
     container.remove();
     document.documentElement.style.fontSize = originalFont;
     globalThis.fetch = originalFetch;
+    globalThis.matchMedia = originalMatchMedia;
   }
 }
 

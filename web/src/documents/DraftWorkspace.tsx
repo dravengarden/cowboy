@@ -333,7 +333,10 @@ function DraftWorkspaceBody(
         aria-label={trash ? "Draft trash" : "Draft documents"}
         sx={{ flex: 1, overflowY: "auto", minHeight: 0, py: 0 }}
         onKeyDown={(event) => {
-          if (isImeKeyEvent(event.nativeEvent)) return;
+          if (
+            isImeKeyEvent(event.nativeEvent) || event.ctrlKey ||
+            event.metaKey || event.altKey
+          ) return;
           const items = [
             ...event.currentTarget.querySelectorAll<HTMLElement>(
               "[role=treeitem]",
@@ -398,7 +401,8 @@ function DraftWorkspaceBody(
               }}
               onKeyDown={(event) => {
                 if (
-                  entry.kind !== "folder" || isImeKeyEvent(event.nativeEvent)
+                  entry.kind !== "folder" || isImeKeyEvent(event.nativeEvent) ||
+                  event.ctrlKey || event.metaKey || event.altKey
                 ) return;
                 if (
                   ["ArrowRight", "ArrowLeft", ...(desktop ? ["h", "l"] : [])]
@@ -450,6 +454,7 @@ function DraftWorkspaceBody(
                 top: 0,
                 height: "100%",
                 width: desktop ? "2.25rem" : 44,
+                padding: desktop ? "0.3rem" : undefined,
               }}
             >
               <MoreHoriz fontSize="small" />
@@ -524,6 +529,10 @@ function DraftWorkspaceBody(
                 aria-valuenow={navWidth}
                 tabIndex={0}
                 onKeyDown={(e) => {
+                  if (
+                    isImeKeyEvent(e.nativeEvent) || e.ctrlKey || e.metaKey ||
+                    e.altKey
+                  ) return;
                   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
                     e.preventDefault();
                     setNavWidth((n) =>

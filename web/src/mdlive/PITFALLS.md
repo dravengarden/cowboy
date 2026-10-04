@@ -2799,7 +2799,9 @@ Desktop Vim + IME checks:
     The `draft-documents` browser suite covers StrictMode, real CM6/IDB,
     Unicode, offline replay, independent content/placement clocks, conflict
     recovery, templates/undo, IME fences, 84k text viewport rendering and
-    Desktop 320–1440px/16–24px fonts. Existing `desktop-composer` checks both
+    Desktop 320–1440px/8–24px fonts. Force fine-pointer/hover in the
+    headless fixture and assert the actual Desktop context: Firefox otherwise
+    takes the touch branch. Keep rem-sized toolbar padding proportional too. Existing `desktop-composer` checks both
     themes and touch layout. These are browser checks, not physical IME
     acceptance. The isolated native-input fixture uses the actual shared
     component in WKWebView; record its native results separately. #69 remains
