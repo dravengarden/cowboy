@@ -341,6 +341,34 @@ async fn linked_reader_and_writer_namespaces_refuse_before_broker_admission() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn process_replaced_lock_refuses_delete_without_mutating_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let mut process = Process::spawn(root.path(), "writer", "");
+    process.marker(READY);
+    let namespace = root.path().join("deletions");
+    std::fs::rename(namespace.join(".lock"), namespace.join("retained-lock")).unwrap();
+    let replacement = b"replacement lock evidence";
+    std::fs::write(namespace.join(".lock"), replacement).unwrap();
+    let (mut reader, mut writer, _) = connect_peer(
+        &root.path().join("runtime.sock"),
+        PeerRole::Core,
+        None,
+        None,
+    )
+    .await;
+    stop(&mut writer).await;
+    assert!(matches!(
+        frame(&mut reader).await,
+        Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+            if reason.contains("lock was replaced")
+    ));
+    assert!(!namespace.join("deletions.json").exists());
+    assert_eq!(std::fs::read(namespace.join(".lock")).unwrap(), replacement);
+    assert_eq!(std::fs::read_dir(&namespace).unwrap().count(), 2);
+    process.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn process_storage_failure_refuses_ack_and_cold_adoption() {
     let root = tempfile::tempdir().unwrap();
     let mut process = Process::spawn(root.path(), "writer", "");
