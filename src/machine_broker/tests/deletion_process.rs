@@ -126,17 +126,36 @@ async fn child() {
     let mode = std::env::var("COWBOY_TEST_DELETION_MODE").unwrap();
     assert!(matches!(
         mode.as_str(),
-        "writer" | "reader" | "foreign-machine" | "foreign-service"
+        "writer"
+            | "reader"
+            | "foreign-machine"
+            | "foreign-service"
+            | "release-writer"
+            | "release-reader"
     ));
     let mut owner = deletion_fixture_owner();
+    let release_compatible = mode.starts_with("release-");
+    if release_compatible {
+        owner.machine_id = "release-fixture".into();
+        owner.service_id = Some("svc-0123456789abcdef0123456789abcdef".into());
+    }
     if mode == "foreign-machine" {
         owner.machine_id = "foreign-machine".into();
     }
     if mode == "foreign-service" {
         owner.service_id = Some("foreign-service".into());
     }
-    let mut journal = deletions::Journal::open(&root.join("deletions"), owner, mode == "writer")
-        .expect("fixture journal admission");
+    let namespace = if release_compatible {
+        "session-deletions"
+    } else {
+        "deletions"
+    };
+    let mut journal = deletions::Journal::open(
+        &root.join(namespace),
+        owner,
+        matches!(mode.as_str(), "writer" | "release-writer"),
+    )
+    .expect("fixture journal admission");
     let checkpoint = std::env::var("COWBOY_TEST_DELETION_CHECKPOINT").unwrap();
     if !checkpoint.is_empty() {
         journal.set_checkpoint(move |stage| {
@@ -319,6 +338,34 @@ async fn linked_reader_and_writer_namespaces_refuse_before_broker_admission() {
             target
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn process_replaced_lock_refuses_delete_without_mutating_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let mut process = Process::spawn(root.path(), "writer", "");
+    process.marker(READY);
+    let namespace = root.path().join("deletions");
+    std::fs::rename(namespace.join(".lock"), namespace.join("retained-lock")).unwrap();
+    let replacement = b"replacement lock evidence";
+    std::fs::write(namespace.join(".lock"), replacement).unwrap();
+    let (mut reader, mut writer, _) = connect_peer(
+        &root.path().join("runtime.sock"),
+        PeerRole::Core,
+        None,
+        None,
+    )
+    .await;
+    stop(&mut writer).await;
+    assert!(matches!(
+        frame(&mut reader).await,
+        Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
+            if reason.contains("lock was replaced")
+    ));
+    assert!(!namespace.join("deletions.json").exists());
+    assert_eq!(std::fs::read(namespace.join(".lock")).unwrap(), replacement);
+    assert_eq!(std::fs::read_dir(&namespace).unwrap().count(), 2);
+    process.kill();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

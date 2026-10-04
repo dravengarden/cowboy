@@ -419,6 +419,75 @@
         };
       };
 
+      # Immutable private broker fixtures. This is deliberately not a Machine
+      # release: its closed metadata must refuse component activation.
+      cowboy-deletion-conformance = rustPlatform.buildRustPackage {
+        pname = "cowboy-deletion-conformance";
+        version = "0.1.0";
+        # Production Machine sources omit these fixture-only manifest inputs.
+        # Keep them in the conformance closure rather than broadening the host.
+        src = pkgs.runCommand "cowboy-deletion-conformance-source" {} ''
+          mkdir -p "$out"
+          cp -r ${machine-src}/. "$out/"
+          chmod -R u+w "$out"
+          mkdir -p "$out/examples/telemetry/victoria"
+          cp ${./examples/telemetry/victoria/plugin.json} \
+            "$out/examples/telemetry/victoria/plugin.json"
+          cp ${./examples/telemetry/victoria/telemetry.json} \
+            "$out/examples/telemetry/victoria/telemetry.json"
+        '';
+        cargoDeps = cowboy-cargo-deps;
+        nativeBuildInputs = [ pkgs.pkg-config pkgs.python3 ];
+        buildInputs = [ pkgs.openssl ];
+        doCheck = false;
+        buildPhase = ''
+          runHook preBuild
+          if ! cargo test --offline --locked --release --no-default-features \
+            --features machine-host --lib --no-run --message-format=json \
+            > conformance-build.json; then
+            python3 - <<'PY'
+          import json, pathlib, sys
+          for line in pathlib.Path("conformance-build.json").read_text().splitlines():
+              message = json.loads(line).get("message", {})
+              if message.get("rendered"):
+                  print(message["rendered"], file=sys.stderr)
+          PY
+            exit 1
+          fi
+          runHook postBuild
+        '';
+        installPhase = ''
+          runHook preInstall
+          mkdir -p "$out/bin" "$out/etc/cowboy-release"
+          python3 - "$out" <<'PY'
+          import json, pathlib, shutil, sys
+          artifacts = [json.loads(line) for line in pathlib.Path("conformance-build.json").read_text().splitlines()]
+          executables = [artifact["executable"] for artifact in artifacts
+              if artifact.get("reason") == "compiler-artifact"
+              and artifact["target"]["name"] == "cowboy"
+              and artifact["target"]["kind"] == ["lib"]
+              and artifact["profile"]["test"] and artifact.get("executable")]
+          if len(executables) != 1:
+              raise SystemExit("expected exactly one private broker test executable")
+          shutil.copy2(executables[0], pathlib.Path(sys.argv[1]) / "bin/cowboy-deletion-conformance-native")
+          PY
+          cat > "$out/etc/cowboy-release/source.json" <<'JSON'
+          ${builtins.toJSON {
+            schema = 1;
+            component = "cowboy-test";
+            lane = "conformance";
+            repository = "git@github.com:dravengarden/cowboy.git";
+            revision = self.rev or null;
+            dirty = !(self ? rev);
+            fixture = "session-deletion-private-broker";
+            sessionDeletionJournal = { readerSchema = 1; writerSchema = 1; };
+          }}
+          JSON
+          runHook postInstall
+        '';
+        meta.description = "Nondeployable immutable private Session deletion broker fixtures";
+      };
+
       cowboy-code-adapter = rustPlatform.buildRustPackage {
         pname = "cowboy-code-adapter";
         version = "0.1.0";
@@ -723,6 +792,7 @@
         default = cowboy;
         cowboy = cowboy;
         cowboy-machine = cowboy-machine;
+        cowboy-deletion-conformance = cowboy-deletion-conformance;
         cowboy-code-adapter = cowboy-code-adapter;
         cowboy-plugin-pack = cowboy-plugin-pack;
         cowboy-zed-adapter = cowboy-zed-adapter;
