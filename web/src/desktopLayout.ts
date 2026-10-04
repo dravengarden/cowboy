@@ -156,3 +156,26 @@ export function dragCollapses(rawWidth: number, minWidth: number): boolean {
 // Compact Desktop keeps Sessions in its top drawer. The Sessions collapse
 // command asks App to toggle that drawer rather than the in-flow rail.
 export const DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT = "cowboy:desktop-sessions-drawer-toggle";
+
+// While Sessions is collapsed the two work panes split the width evenly by
+// default. That layout remembers its own split as a ratio, independent of the
+// pixel width used beside the full Sessions list, so neither resize leaks into
+// the other.
+export const PROMPT_RATIO_MIN = 0.25;
+export const PROMPT_RATIO_MAX = 0.75;
+
+export function clampPromptRatio(ratio: number): number {
+  return Math.min(PROMPT_RATIO_MAX, Math.max(PROMPT_RATIO_MIN, ratio));
+}
+
+export const collapsedSessionsPromptRatioStore = persisted<number>(
+  "cowboy:desktop-prompt-ratio-sessions-collapsed",
+  0.5,
+  {
+    serialize: (ratio) => clampPromptRatio(ratio).toFixed(4),
+    deserialize: (raw) => {
+      const ratio = Number(raw);
+      return Number.isFinite(ratio) ? clampPromptRatio(ratio) : 0.5;
+    },
+  },
+);

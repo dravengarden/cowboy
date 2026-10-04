@@ -19,6 +19,7 @@ impl OperatorApproval {
         self,
         intent: &ResolutionIntent,
     ) -> Result<TelemetryResolutionAuthority> {
+        self.require_general_purpose()?;
         ensure!(
             self.service == intent.service_id && self.actor == intent.actor,
             "binding resolution confirmation owner changed"

@@ -222,7 +222,7 @@ pub(super) fn verify_generation(
     Ok(desired)
 }
 
-fn read_regular(path: &Path, limit: Option<u64>) -> anyhow::Result<Vec<u8>> {
+pub(super) fn read_regular(path: &Path, limit: Option<u64>) -> anyhow::Result<Vec<u8>> {
     ensure!(
         std::fs::symlink_metadata(path)?.is_file(),
         "cached Machine host proof is not a regular file"

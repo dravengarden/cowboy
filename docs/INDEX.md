@@ -101,6 +101,7 @@ primary phone/desktop product path.
 - [`releases/plugin-bootstrap-startup-authentication-2026-10-04.md`](releases/plugin-bootstrap-startup-authentication-2026-10-04.md) — Retained signed bootstrap evidence and installer-owned verification before publisher code; floor recovery remains closed
 - [`releases/plugin-floored-signed-refresh-2026-10-04.md`](releases/plugin-floored-signed-refresh-2026-10-04.md) — Signed enrolled refresh preserves authenticated floor, anchor and cache selection; missing-cache recovery remains closed
 - [`releases/plugin-floor-selection-recovery-2026-10-04.md`](releases/plugin-floor-selection-recovery-2026-10-04.md) — Explicit offline repair of missing selection pointers to the intact signed floor anchor; lost-anchor recovery remains closed
+- [`releases/plugin-anchor-package-recovery-2026-10-04.md`](releases/plugin-anchor-package-recovery-2026-10-04.md) — Linux restoration of a completely absent anchor from its original floor-bound signed proof and artifact; damaged generations remain untouched
 - [`releases/plugin-portable-reader-floor-2026-10-04.md`](releases/plugin-portable-reader-floor-2026-10-04.md) — Portable monotonic reader floor and retained signed anchor; bootstrap/recovery and committed deletion admission stay closed
 - [`releases/plugin-host-startup-integrity-2026-10-04.md`](releases/plugin-host-startup-integrity-2026-10-04.md) — Offline portable cached-host signature, package and selection checks before exec; committed-state admission and writer remain closed
 - [`releases/plugin-host-cache-integrity-2026-10-04.md`](releases/plugin-host-cache-integrity-2026-10-04.md) — Signed staged Machine host bytes checked before probe and pointer publication; cached startup admission remains closed
@@ -146,6 +147,8 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`cardea-operations.md`](cardea-operations.md) — Human-reviewed exact Plugin
+  installation through the shared Cardea CLI/SDK and Cowboy-owned authority
 - [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
   silent credential renewal, independent device keys, and revocation boundaries
 - [`matrix-memory.md`](matrix-memory.md) — Explicit Matrix enrollment, shared recall/capture, and native memory cutover

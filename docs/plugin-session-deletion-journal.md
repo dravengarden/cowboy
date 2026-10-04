@@ -388,3 +388,15 @@ resumed, and complete selection is checked by the normal startup guard. No
 publisher code, Controller request, store repair, floor rewrite or bootstrap
 fallback occurs. Missing/damaged anchor packages, committed deletion state and
 key rotation remain closed; no deletion writer is enabled.
+
+The later [exact anchor package restoration](releases/plugin-anchor-package-recovery-2026-10-04.md)
+adds paired `--anchor-manifest`/`--anchor-artifact` inputs to the explicit recovery
+command on Linux. The supplied canonical signed proof and original artifact digest
+must match the existing floor exactly. Only a completely absent generation can be
+published from a validated private snapshot with atomic no-replace rename; intact
+generations are authenticated idempotently, and damaged/conflicting generations
+are retained without repair. Whole-cache loss and exact dangling anchor pointers
+can then recover to that original anchor. This never selects a new version, changes
+the floor, fetches an unsigned URL, probes publisher code or enables the writer.
+Non-Linux package rebuilding, damaged-generation replacement, key rotation and
+committed deletion admission remain closed.

@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "github:dravengarden/cowboy/c4f29d40ec3854546ab2bbe54ff7237105f1d353";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=90ec4edae56349cb06b9f39f13a0086197b5356b";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
@@ -292,12 +292,40 @@
           fi
         '';
 
+      # Fetch the pinned private SDK as the evaluating caller. The sandboxed
+      # vendor builder receives source only, never an SSH agent or credential.
+      cardeaSdkRev = "71f12d90bd1b3212f11530cbd0c20086317a5976";
+      cardeaSdkSource = builtins.fetchGit {
+        url = "ssh://git@github.com/dravengarden/cardea.git";
+        rev = cardeaSdkRev;
+      };
+      cardeaVendorGit = pkgs.writeShellScriptBin "nix-prefetch-git" ''
+        set -euo pipefail
+        sdk_vendor_url= sdk_vendor_rev= sdk_vendor_out=
+        while (( $# )); do
+          case "$1" in
+            --url) sdk_vendor_url="$2"; shift 2 ;;
+            --rev) sdk_vendor_rev="$2"; shift 2 ;;
+            --out) sdk_vendor_out="$2"; shift 2 ;;
+            --builder|--quiet|--fetch-submodules) shift ;;
+            *) echo "Unsupported private SDK vendor argument" >&2; exit 1 ;;
+          esac
+        done
+        test "$sdk_vendor_url" = ssh://git@github.com/dravengarden/cardea.git
+        test "$sdk_vendor_rev" = ${cardeaSdkRev}
+        test -n "$sdk_vendor_out"
+        mkdir -p "$sdk_vendor_out"
+        cp -a ${cardeaSdkSource}/. "$sdk_vendor_out/"
+      '';
+
       cowboy-cargo-deps = rustPlatform.fetchCargoVendor {
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-9WRr2ZeOi1LtY85gSMqSoxsmf1qF6cxFRtZnfj6Mdl0=";
-        preBuild = staticCratesVendorPatch;
+        hash = "sha256-WCAGYsBytKeg+mYO8W4pd6fi/663ZlKmAiUgRns2Dqs=";
+        preBuild = staticCratesVendorPatch + ''
+          export PATH="${cardeaVendorGit}/bin:$PATH"
+        '';
       };
 
       # API/control plane + detached ACP worker. The SPA is served from a
