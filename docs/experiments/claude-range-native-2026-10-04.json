@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "acceptance": "pinned_native_executor_and_adapter_not_production_wan",
+  "native_version": "0.159.3",
+  "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "production_mutations": false,
+  "provider_inference_requested": false,
+  "measurements": [
+    {
+      "mode": "whole_file",
+      "elapsed_ms": 14.44614100000004,
+      "rpc_count": 2,
+      "methods": [
+        "fs/getMetadata",
+        "fs/readFile"
+      ],
+      "rpc_json_bytes": 1398511
+    },
+    {
+      "mode": "target_range",
+      "elapsed_ms": 26.383831999999984,
+      "rpc_count": 5,
+      "methods": [
+        "fs/getMetadata",
+        "process/start",
+        "process/read",
+        "process/read",
+        "process/read"
+      ],
+      "rpc_json_bytes": 6199
+    }
+  ],
+  "quiet_command_process_reads": 3,
+  "cancel_while_collecting_ms": 958.0404529999996,
+  "checks": [
+    "identical_selected_bytes",
+    "external_change_outside_range_refused",
+    "reread_then_write_persists_on_target",
+    "no_source_copy_in_runtime_state",
+    "closed_private_jobs_reaped",
+    "quiet_output_completed",
+    "taskstop_wakes_pending_read_and_retains_handle"
+  ]
+}
