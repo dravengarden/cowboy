@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -15,6 +16,15 @@ import {
   desktopPointerLeftRegion,
   desktopRegionFromPointerTarget,
 } from "./desktopComposerOwnership";
+import {
+  DESKTOP_COMPACT_WIDTH_QUERY,
+  DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT,
+  type DesktopCollapsedPanes,
+  desktopCollapsedPanesStore,
+  togglePaneCollapsed,
+  useDesktopCollapsedPanes,
+  withPaneCollapsed,
+} from "../desktopLayout";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
 export type WorkspaceMode = "normal" | "search" | "command";
@@ -40,6 +50,21 @@ interface DesktopWorkspaceContextValue {
   setReadingSidebarOpen: (open: boolean) => void;
   selectedSplitter: DesktopSplitterId | null;
   setSelectedSplitter: (splitter: DesktopSplitterId | null) => void;
+  collapsedPanes: DesktopCollapsedPanes;
+  /** Collapse or restore a pane, keeping keyboard focus on a visible pane. */
+  togglePane: (pane: DesktopPane) => void;
+}
+
+/** Where keyboard focus lands when a pane is restored by its own command. */
+const PANE_ENTRY_REGION: Record<DesktopPane, string> = {
+  sessions: "sessions.list",
+  prompt: "prompt.composer",
+  conversation: "conversation.transcript",
+};
+
+/** Run after React has committed a layout change and the browser laid it out. */
+function afterLayout(action: () => void): void {
+  requestAnimationFrame(() => requestAnimationFrame(action));
 }
 
 const DesktopWorkspaceContext = createContext<DesktopWorkspaceContextValue | null>(null);
@@ -126,17 +151,44 @@ export function DesktopWorkspaceProvider({
   const [productMode, setProductMode] = useState<DesktopProductMode>("agent");
   const [readingSidebarOpen, setReadingSidebarOpen] = useState(false);
   const [selectedSplitter, setSelectedSplitter] = useState<DesktopSplitterId | null>(null);
+  const collapsedPanes = useDesktopCollapsedPanes();
+  const focusedPaneRef = useRef(focusedPane);
+  focusedPaneRef.current = focusedPane;
+  // A collapsed pane stays mounted (editor state, scroll and live output
+  // survive) but is not rendered. Jumping into it restores it first, so every
+  // existing focus command keeps working without knowing about collapse.
+  const restoreCollapsedPane = useCallback((pane: DesktopPane | null): boolean => {
+    if (!pane) return false;
+    // Compact Desktop presents Sessions as a drawer whatever the wide-layout
+    // preference says; reaching into it must not rewrite that preference.
+    if (
+      pane === "sessions" &&
+      globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches
+    ) return false;
+    const current = desktopCollapsedPanesStore.get();
+    if (!current[pane]) return false;
+    desktopCollapsedPanesStore.set(withPaneCollapsed(current, pane, false));
+    return true;
+  }, []);
   const focusRegion = useCallback((region: string): void => {
     const element = document.querySelector<HTMLElement>(
       `[data-desktop-region="${CSS.escape(region)}"]`,
     );
     if (!element) return;
     const pane = paneFromTarget(element);
+    if (restoreCollapsedPane(pane)) {
+      afterLayout(() => focusRegion(region));
+      return;
+    }
     if (pane) setFocusedPane(pane);
     setFocusedRegion(region);
     focusElement(element);
-  }, []);
+  }, [restoreCollapsedPane]);
   const focusPane = useCallback((pane: DesktopPane): void => {
+    if (restoreCollapsedPane(pane)) {
+      afterLayout(() => focusPane(pane));
+      return;
+    }
     setFocusedPane(pane);
     const paneElement = document.querySelector<HTMLElement>(`[data-desktop-pane="${pane}"]`);
     const region = paneElement?.querySelector<HTMLElement>("[data-desktop-region]");
@@ -146,16 +198,45 @@ export function DesktopWorkspaceProvider({
     } else {
       focusElement(paneElement ?? null);
     }
-  }, []);
+  }, [restoreCollapsedPane]);
   const focusAdjacentPane = useCallback((delta: -1 | 1): void => {
     const order: DesktopPane[] = ["sessions", "prompt", "conversation"];
+    // H/L is spatial movement across what is on screen; it never restores a
+    // collapsed pane. Explicit jumps (workspace prefix S/P/C) do.
     const available = order.filter((pane) =>
+      !collapsedPanes[pane] &&
       document.querySelector(`[data-desktop-pane="${pane}"]`)
     );
     if (available.length === 0) return;
     const current = Math.max(0, available.indexOf(focusedPane));
     focusPane(available[(current + delta + available.length) % available.length] as DesktopPane);
-  }, [focusPane, focusedPane]);
+  }, [collapsedPanes, focusPane, focusedPane]);
+  const togglePane = useCallback((pane: DesktopPane): void => {
+    if (pane === "sessions" && globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches) {
+      globalThis.dispatchEvent(new CustomEvent(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT));
+      return;
+    }
+    const current = desktopCollapsedPanesStore.get();
+    const next = togglePaneCollapsed(current, pane);
+    desktopCollapsedPanesStore.set(next);
+    if (!next[pane]) {
+      // Restoring is an explicit request for that pane: move into it.
+      afterLayout(() => focusRegion(PANE_ENTRY_REGION[pane]));
+      return;
+    }
+    const active = document.activeElement;
+    const paneElement = document.querySelector(`[data-desktop-pane="${pane}"]`);
+    const focusInside = focusedPaneRef.current === pane ||
+      (active instanceof Node && paneElement?.contains(active) === true);
+    // A swap (hiding the last work pane) always lands in the pane it revealed.
+    const swapped = (["prompt", "conversation"] as const).find((other) =>
+      other !== pane && current[other] && !next[other]
+    );
+    if (!focusInside && !swapped) return;
+    const target: DesktopPane = swapped ??
+      (pane === "prompt" ? "conversation" : next.prompt ? "conversation" : "prompt");
+    afterLayout(() => focusRegion(PANE_ENTRY_REGION[target]));
+  }, [focusRegion]);
   const focusAdjacentRegion = useCallback((delta: -1 | 1): void => {
     const next = verticalWorkspaceRegion(focusedPane, focusedRegion, delta);
     if (next && document.querySelector(`[data-desktop-region="${CSS.escape(next)}"]`)) {
@@ -246,7 +327,7 @@ export function DesktopWorkspaceProvider({
       if (!splitter || splitter.offsetParent === null) setSelectedSplitter(null);
     });
     return (): void => cancelAnimationFrame(frame);
-  }, [productMode, readingSidebarOpen, selectedSplitter]);
+  }, [collapsedPanes, productMode, readingSidebarOpen, selectedSplitter]);
 
   useEffect(() => {
     const syncMountedWorkspace = (): boolean => {
@@ -304,7 +385,11 @@ export function DesktopWorkspaceProvider({
     setReadingSidebarOpen,
     selectedSplitter,
     setSelectedSplitter,
+    collapsedPanes,
+    togglePane,
   }), [
+    collapsedPanes,
+    togglePane,
     cycleRegion,
     focusAdjacentPane,
     focusAdjacentRegion,

@@ -199,6 +199,11 @@ import { frostedChrome, frostedStatusChrome } from "./frostedGlass";
 import {
     clampComposerColWidth,
     composerColWidthStore,
+    DESKTOP_COMPACT_WIDTH_QUERY,
+    DESKTOP_CONVERSATION_MIN,
+    DESKTOP_PROMPT_MIN,
+    DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT,
+    dragCollapses,
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import { setComposerSourceMode, useComposerSourceMode } from "./composerSourceMode";
@@ -347,6 +352,14 @@ const DesktopWorkspace = lazy(async () => {
 const DesktopRegionShortcut = lazy(async () => {
     const module = await import("./desktop/DesktopRegionShortcut");
     return { default: module.DesktopRegionShortcut };
+});
+const DesktopPaneCollapseButton = lazy(async () => {
+    const module = await import("./desktop/DesktopPaneCollapse");
+    return { default: module.DesktopPaneCollapseButton };
+});
+const DesktopSessionsRail = lazy(async () => {
+    const module = await import("./desktop/DesktopPaneCollapse");
+    return { default: module.DesktopSessionsRail };
 });
 const DesktopContextShortcut = lazy(async () => {
     const module = await import("./desktop/commands/DesktopContextShortcut");
@@ -2636,9 +2649,14 @@ export function App({
     // on parallel context without squeezing the actual work panes into slivers.
     const mobile = surface === "touch";
     const phone = useMediaQuery("(max-width:767.95px) and (pointer:coarse)");
-    const compactDesktopWidth = useMediaQuery("(max-width:1099px)");
+    const compactDesktopWidth = useMediaQuery(DESKTOP_COMPACT_WIDTH_QUERY);
     const desktopNavCollapsed = surface === "desktop" && compactDesktopWidth;
     const sessionsInDrawer = mobile || desktopNavCollapsed;
+    // A user-collapsed Sessions pane (wide Desktop only) keeps its list mounted
+    // but hidden and shows the narrow session switcher rail instead. Compact
+    // Desktop already owns Sessions through the drawer above.
+    const sessionsCollapsed = surface === "desktop" && !compactDesktopWidth &&
+        desktopWorkspace?.collapsedPanes.sessions === true;
     // Navbar placement belongs exclusively to the Touch product. When its user
     // picks "bottom", the AppBar moves below the transcript, just
     // above the composer (mobile-browser bottom-bar feel). The modals read the
@@ -2887,6 +2905,18 @@ export function App({
     const [colResizing, setColResizing] = useState(false);
     const colWidthRef = useRef(colWidth);
     colWidthRef.current = colWidth;
+    // Drag-to-collapse preview: the pane a splitter release would fold away.
+    const [sessionsCollapseIntent, setSessionsCollapseIntent] = useState(false);
+    const [workCollapseIntent, setWorkCollapseIntent] =
+        useState<"prompt" | "conversation" | null>(null);
+    // Compact Desktop: the Sessions collapse command opens/closes the drawer.
+    useEffect(() => {
+        if (surface !== "desktop") return undefined;
+        const onToggle = (): void => setDrawerOpen((open) => !open);
+        globalThis.addEventListener(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT, onToggle);
+        return (): void =>
+            globalThis.removeEventListener(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT, onToggle);
+    }, [surface]);
     useEffect(() => {
         if (!desktopWorkspace) return undefined;
         const onKeyboardResize = (event: Event): void => {
@@ -2951,6 +2981,11 @@ export function App({
             !sessions.some((session) => session.id === pendingCreatedSession.id)
         ? [pendingCreatedSession, ...sessions]
         : sessions;
+    // The collapsed Sessions rail lists tiles in Alt/Option slot order.
+    const collapsedRailSessions = useMemo(
+        () => sessionsCollapsed ? displayedSessionOrder(sessionsForView) : [],
+        [sessionsCollapsed, sessionsForView],
+    );
     const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
@@ -3103,15 +3138,26 @@ export function App({
         const el = e.currentTarget;
         el.setPointerCapture(e.pointerId);
         setResizing(true);
+        // Overshooting the minimum folds Sessions away on release; the drag
+        // previews that by dimming the rail. Its width stays what it was.
+        let collapse = false;
         const onMove = (ev: PointerEvent): void => {
-            setSidebarWidth(clampSidebarWidth(startWidth + (ev.clientX - startX)));
+            const raw = startWidth + (ev.clientX - startX);
+            const next = desktopWorkspace !== null && dragCollapses(raw, SIDEBAR_MIN);
+            if (next !== collapse) {
+                collapse = next;
+                setSessionsCollapseIntent(next);
+            }
+            setSidebarWidth(clampSidebarWidth(collapse ? startWidth : raw));
         };
         const onUp = (): void => {
             el.releasePointerCapture(e.pointerId);
             el.removeEventListener("pointermove", onMove);
             el.removeEventListener("pointerup", onUp);
             setResizing(false);
+            setSessionsCollapseIntent(false);
             sidebarWidthStore.set(widthRef.current);
+            if (collapse) desktopWorkspace?.togglePane("sessions");
         };
         el.addEventListener("pointermove", onMove);
         el.addEventListener("pointerup", onUp);
@@ -3129,15 +3175,36 @@ export function App({
         const el = e.currentTarget;
         el.setPointerCapture(e.pointerId);
         setColResizing(true);
+        // Measure the rendered geometry: the stored width may exceed what the
+        // Conversation floor lets Prompt occupy. Overshooting either pane's
+        // floor folds that pane away on release and keeps the stored width.
+        const renderedPrompt = el.previousElementSibling?.getBoundingClientRect().width ?? startWidth;
+        const containerWidth = el.parentElement?.getBoundingClientRect().width ?? 0;
+        let collapse: "prompt" | "conversation" | null = null;
         const onMove = (ev: PointerEvent): void => {
-            setColWidth(clampComposerColWidth(startWidth + (ev.clientX - startX)));
+            const dx = ev.clientX - startX;
+            const rawPrompt = renderedPrompt + dx;
+            const next = desktopWorkspace === null
+                ? null
+                : dragCollapses(rawPrompt, DESKTOP_PROMPT_MIN)
+                ? "prompt"
+                : dragCollapses(containerWidth - rawPrompt, DESKTOP_CONVERSATION_MIN)
+                ? "conversation"
+                : null;
+            if (next !== collapse) {
+                collapse = next;
+                setWorkCollapseIntent(next);
+            }
+            setColWidth(clampComposerColWidth(collapse ? startWidth : startWidth + dx));
         };
         const onUp = (): void => {
             el.releasePointerCapture(e.pointerId);
             el.removeEventListener("pointermove", onMove);
             el.removeEventListener("pointerup", onUp);
             setColResizing(false);
+            setWorkCollapseIntent(null);
             composerColWidthStore.set(colWidthRef.current);
+            if (collapse) desktopWorkspace?.togglePane(collapse);
         };
         el.addEventListener("pointermove", onMove);
         el.addEventListener("pointerup", onUp);
@@ -3233,6 +3300,10 @@ export function App({
                         shortcut={DESKTOP_SHORTCUTS.focusSessions}
                         title="Focus Sessions"
                         singleKeycap={DESKTOP_SHORTCUTS.focusSessions}
+                    />
+                    <DesktopPaneCollapseButton
+                        pane="sessions"
+                        sx={{ ml: 0.5, mr: -0.75, WebkitAppRegion: "no-drag" }}
                     />
                 </Suspense>
             )}
@@ -3505,8 +3576,24 @@ export function App({
                     {list}
                 </DetentSheet>
             ) : !mobile ? (
+                <>
+                {sessionsCollapsed && (
+                    <Suspense fallback={null}>
+                        <DesktopSessionsRail
+                            sessions={collapsedRailSessions}
+                            activeId={active?.id ?? null}
+                            allowNewSession={canStartSession}
+                            onPick={pick}
+                            onNew={openNewSession}
+                            renderStatus={(s): React.ReactNode => (
+                                <StatusDot status={s.status} backgroundTasks={s.background_tasks} />
+                            )}
+                        />
+                    </Suspense>
+                )}
                 <Stack
                     data-desktop-pane="sessions"
+                    data-desktop-pane-collapsed={sessionsCollapsed ? "true" : undefined}
                     data-desktop-region="sessions.list"
                     data-desktop-reorderable="true"
                     data-desktop-focus-default
@@ -3517,6 +3604,11 @@ export function App({
                         borderRight: 1,
                         borderColor: "divider",
                         height: "100%",
+                        // Collapsed Sessions stays mounted: its list still owns
+                        // the Alt/Option+1…0 slots and folder state.
+                        display: sessionsCollapsed ? "none" : "flex",
+                        opacity: sessionsCollapseIntent ? 0.38 : 1,
+                        transition: "opacity 120ms ease",
                         // Anchor the absolutely-positioned resize handle.
                         position: "relative",
                     }}
@@ -3587,6 +3679,7 @@ export function App({
                         )}
                     </Box>
                 </Stack>
+                </>
             ) : null}
 
             <Stack
@@ -3958,6 +4051,13 @@ export function App({
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
+                            // The collapsed Sessions rail is narrower than the
+                            // window controls, so they overhang this bar too.
+                            ...(sessionsCollapsed && {
+                                "@media (display-mode: window-controls-overlay)": {
+                                    pl: "calc(max(0px, env(titlebar-area-x, 0px) - 56px) + 12px)",
+                                },
+                            }),
                         }}
                     >
                         {/* Whenever the Sessions rail is hidden, its drawer toggle
@@ -4225,6 +4325,13 @@ export function App({
                                 projection={exploreState.projection}
                                 onProjectionChange={(projection): void =>
                                     changeTranscriptProjection(active.id, projection)}
+                                collapseIntent={workCollapseIntent}
+                                conversationActivity={(
+                                    <StatusDot
+                                        status={active.status}
+                                        backgroundTasks={active.background_tasks}
+                                    />
+                                )}
                                 prompt={active.system ? (
                                     <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                         View-only system session — managed by cowboy

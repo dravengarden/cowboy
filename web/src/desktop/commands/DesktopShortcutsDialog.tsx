@@ -16,6 +16,8 @@ import {
   DESKTOP_RESIZE_SELECT_SHORTCUT,
   DESKTOP_SESSION_SLOTS_LABEL,
   DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_KEYS,
+  desktopWorkspaceSequence,
 } from "./workspaceShortcuts";
 import { DesktopModal } from "../DesktopModal";
 
@@ -52,6 +54,18 @@ const NAVIGATION: ShortcutRow[] = [
       `${DESKTOP_FOCUS_PROMPT_SHORTCUT} returns to the editor without changing its Vim mode or caret`,
   },
   { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
+  {
+    keys: [
+      desktopWorkspaceSequence([
+        DESKTOP_WORKSPACE_KEYS.toggleSessions,
+        DESKTOP_WORKSPACE_KEYS.togglePrompt,
+        DESKTOP_WORKSPACE_KEYS.toggleConversation,
+      ].join(" ")),
+    ],
+    title: "Collapse / expand Sessions, Prompt, Conversation",
+    description:
+      "The three keys sit left to right like the panes. Prompt and Conversation never both collapse: hiding the last one swaps them. Jumping to a collapsed pane expands it; dragging a splitter past a pane's minimum collapses it",
+  },
   {
     keys: [DESKTOP_RESIZE_SELECT_SHORTCUT],
     title: "Select the nearest layout resize bar",

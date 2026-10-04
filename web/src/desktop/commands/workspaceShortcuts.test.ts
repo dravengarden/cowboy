@@ -116,6 +116,30 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     w: "workspace.cycleRegion",
     r: "workspace.enterResize",
     e: "composer.toggleSourceMode",
+    "[": "workspace.toggleSessions",
+    "]": "workspace.togglePrompt",
+    "\\": "workspace.toggleConversation",
     ",": "settings.open",
   });
+});
+
+Deno.test("pane collapse continuations use physical bracket keys", () => {
+  assertEquals(
+    desktopWorkspaceContinuationKey(
+      keyEvent({ key: "ü", code: "BracketLeft", metaKey: true }),
+      true,
+    ),
+    "[",
+  );
+  assertEquals(
+    desktopWorkspaceContinuationKey(keyEvent({ key: "+", code: "BracketRight" }), true),
+    "]",
+  );
+  assertEquals(
+    desktopWorkspaceContinuationKey(
+      keyEvent({ key: "#", code: "Backslash", altKey: true }),
+      false,
+    ),
+    "\\",
+  );
 });

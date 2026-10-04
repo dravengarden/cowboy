@@ -28,6 +28,9 @@ xcrun --sdk iphonesimulator clang++ -fobjc-arc -fblocks \
   apps/native-shell/apple/Sources/cowboy-app/CowboyNativeTweaks.mm \
   apps/native-shell/apple/Sources/cowboy-app/CowboyAppIconBridge.mm \
   -o "$native_app/CowboyPluginConformance"
+# Simulate a distributor stamping the installed bundle after compilation.
+/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 9.8.7' "$native_app/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 987' "$native_app/Info.plist"
 codesign --sign - "$native_app"
 native_runtime="$(xcrun simctl list runtimes --json | python3 -c 'import json,sys; values=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and ".iOS-" in r["identifier"]]; values.sort(key=lambda r: tuple(map(int,r["version"].split(".")))); print(values[-1]["identifier"])')"
 native_simulator="$(xcrun simctl create "Cowboy Plugin Conformance ${native_revision:0:8}" \
@@ -40,7 +43,7 @@ native_data="$(xcrun simctl get_app_container "$native_simulator" dev.cowboy.plu
 for _ in $(seq 1 90); do
   if [ -s "$native_data/Documents/conformance.json" ]; then
     mkdir -p dist/native-plugin-conformance
-    python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==13 else 1)' \
+    python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); report.update(source_revision=sys.argv[2], simulator_runtime=sys.argv[3], real_login="not_checked", product_shell_bundle="not_checked"); print(json.dumps(report,indent=2)); Path("dist/native-plugin-conformance/receipt.json").write_text(json.dumps(report,indent=2)+"\n"); sys.exit(0 if report.get("ok") and len(report.get("tests",[]))==14 else 1)' \
       "$native_data/Documents/conformance.json" "$native_revision" "$native_runtime"
     exit 0
   fi
