@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import sys
@@ -34,8 +35,7 @@ class SwiftRuntimeCompatibilityTests(unittest.TestCase):
             root = Path(temporary) / "target"
             root.mkdir()
             archives = [root / name for name in compat.ARCHIVES]
-            for archive in archives:
-                archive.write_bytes(b"original")
+            archives[0].write_bytes(b"original")
             arguments = ["-L", f"native={root}"]
             promoted = False
 
@@ -51,10 +51,18 @@ class SwiftRuntimeCompatibilityTests(unittest.TestCase):
 
             with patch.object(compat.subprocess, "check_output", side_effect=inspect), \
                  patch.object(compat.subprocess, "run", side_effect=promote) as run:
+                # Tauri builds before the plugin archives exist. Promotion
+                # must happen before its rlib bundles the native object.
+                compat.repair(arguments, root, Path("objcopy"), "tauri")
+                for archive in archives[1:]:
+                    archive.write_bytes(b"original")
                 compat.repair(arguments, root, Path("objcopy"))
                 compat.repair(arguments, root, Path("objcopy"))
                 self.assertEqual(run.call_count, 1)
             self.assertEqual([p.read_bytes() for p in archives], [b"promoted", b"original", b"original"])
+            receipt = json.loads((root.parent / "swift-rs-compat.json").read_text())
+            self.assertEqual(receipt["validated_at"], "cowboy_app_lib")
+            self.assertNotEqual(receipt["before_sha256"], receipt["after_sha256"])
 
     def test_borrowed_archive_and_incomplete_inventory_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
