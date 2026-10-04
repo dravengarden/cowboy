@@ -138,3 +138,18 @@ digest is `sha256:23eb04e31024aae477ccc71cb3111fd34f8cb21646ff99ea31ce0d3b9cd460
 Observe any uncertain receipt before another operation. Do not delete either
 generation while workers retain it. Production model prompts on the new
 generation and end-to-end WAN timings are not claimed by these receipts.
+
+After acceptance, this task removed its private probe extraction, build targets,
+dependency installation and generated release/site/Web output: 14,831,604,120
+logical bytes. Each deletion checked the exact task-owned directory and absence
+of process references first. Signed Catalog copies, enrolled Machines,
+installed generations, credentials and user workspaces remain intact. The
+runtime cleanup rules above apply independently to future sessions.
+
+Final integration preserves main's concurrent component history through 3.38.0
+and appends 3.39.0 for the new Provider source snapshot. The signed Plugin keeps
+its 3.38.0 binding: its actual SDK dependency pins are identical in both branches.
+The immutable original build commit and published bytes are retained. The full
+gate passed before the final additive Machine-host merge; Provider checks and
+all 13 Machine-component tests passed again after integration. No Controller,
+Machine-host, Web or native application release is activated by this task.
