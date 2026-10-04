@@ -14,6 +14,21 @@ const MAX_RESULTS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EVENTS_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EVENT_BATCH_BYTES: usize = 2 * 1024 * 1024;
 
+pub(super) enum EventError {
+    Full(serde_json::Value),
+    Invalid,
+}
+
+impl std::fmt::Debug for EventError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Native messages may contain source, credentials or command output.
+        f.write_str(match self {
+            Self::Full(_) => "EventBackpressure",
+            Self::Invalid => "InvalidEvent",
+        })
+    }
+}
+
 struct Entry {
     digest: [u8; 32],
     outcome: watch::Sender<Outcome>,
@@ -40,7 +55,9 @@ pub(super) struct Ledger {
     events: VecDeque<(Event, usize)>,
     event_bytes: usize,
     sequence: u64,
+    acknowledged: u64,
     pub event_changed: watch::Sender<u64>,
+    pub event_space: watch::Sender<u64>,
 }
 
 impl Ledger {
@@ -56,7 +73,9 @@ impl Ledger {
             events: VecDeque::new(),
             event_bytes: 0,
             sequence: 0,
+            acknowledged: 0,
             event_changed: watch::channel(0).0,
+            event_space: watch::channel(0).0,
         }
     }
 
@@ -135,10 +154,18 @@ impl Ledger {
         self.event_changed.send_replace(self.sequence);
     }
 
-    pub fn push_event(&mut self, message: serde_json::Value) -> Result<(), ()> {
-        let bytes = serde_json::to_vec(&message).map_err(|_| ())?.len();
+    pub fn push_event(&mut self, message: serde_json::Value) -> Result<(), EventError> {
+        let bytes = serde_json::to_vec(&message)
+            .map_err(|_| EventError::Invalid)?
+            .len();
         if bytes > MAX_EVENT_BATCH_BYTES {
-            return Err(());
+            return Err(EventError::Invalid);
+        }
+        if self.event_bytes + bytes > MAX_EVENTS_BYTES || self.events.len() >= 8192 {
+            // Never evict an event the consumer has not acknowledged. The
+            // keeper pauses its bounded native reader until Events advances.
+            // Backpressure then reaches the native executor and its processes.
+            return Err(EventError::Full(message));
         }
         self.sequence += 1;
         self.events.push_back((
@@ -149,23 +176,30 @@ impl Ledger {
             bytes,
         ));
         self.event_bytes += bytes;
-        while self.event_bytes > MAX_EVENTS_BYTES || self.events.len() > 8192 {
-            self.event_bytes -= self.events.pop_front().ok_or(())?.1;
-        }
         self.event_changed.send_replace(self.sequence);
         Ok(())
     }
 
-    pub fn events(&self, after: u64) -> Result<(Vec<Event>, u64), Refusal> {
+    pub fn events(&mut self, after: u64) -> Result<(Vec<Event>, u64), Refusal> {
         if after > self.sequence {
             return Err(Refusal::InvalidRequest);
         }
-        let first = self
-            .events
-            .front()
-            .map_or(self.sequence + 1, |(event, _)| event.sequence);
-        if after + 1 < first {
+        if after < self.acknowledged {
             return Err(Refusal::CursorExpired);
+        }
+        // Events has one consumer per bound worker. Its next cursor is an
+        // acknowledgement of the previous batch, not permission to drop any
+        // newer output. Repeating the current cursor remains idempotent.
+        if after > self.acknowledged {
+            while self
+                .events
+                .front()
+                .is_some_and(|(event, _)| event.sequence <= after)
+            {
+                self.event_bytes -= self.events.pop_front().expect("front exists").1;
+            }
+            self.acknowledged = after;
+            self.event_space.send_replace(after);
         }
         let mut bytes = 0;
         let mut events = Vec::new();
@@ -264,17 +298,72 @@ mod tests {
     }
 
     #[test]
-    fn event_gaps_are_explicit_and_batches_are_bounded() {
+    fn event_backpressure_preserves_unacknowledged_output_and_terminal_events() {
         let mut ledger = Ledger::new();
-        for _ in 0..4 {
+        for _ in 0..3 {
             ledger
                 .push_event(json!({"data": "a".repeat(1024 * 1024)}))
                 .unwrap();
         }
-        assert!(matches!(ledger.events(0), Err(Refusal::CursorExpired)));
-        let (events, through) = ledger.events(1).unwrap();
+        let fourth = json!({"data": "b".repeat(1024 * 1024)});
+        let Err(EventError::Full(retained)) = ledger.push_event(fourth.clone()) else {
+            panic!("full buffer must apply backpressure");
+        };
+        assert_eq!(retained, fourth);
+        assert_eq!(ledger.event_cursor(), 3);
+        let (events, through) = ledger.events(0).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(through, 2);
-        assert!(matches!(ledger.events(5), Err(Refusal::InvalidRequest)));
+        assert_eq!(through, 1);
+        assert_eq!(ledger.events(0).unwrap().0, events);
+        assert_eq!(ledger.events(through).unwrap().1, 2);
+        ledger.push_event(retained).unwrap();
+        ledger
+            .push_event(json!({"method":"process/exited"}))
+            .unwrap();
+        ledger
+            .push_event(json!({"method":"process/closed"}))
+            .unwrap();
+        let mut cursor = through;
+        let mut collected = events;
+        while cursor < ledger.event_cursor() {
+            let (batch, next) = ledger.events(cursor).unwrap();
+            assert!(next > cursor);
+            collected.extend(batch);
+            cursor = next;
+        }
+        assert_eq!(
+            collected
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            (1..=6).collect::<Vec<_>>()
+        );
+        assert_eq!(collected[3].message, fourth);
+        assert_eq!(collected[5].message["method"], "process/closed");
+        assert!(ledger.events(cursor).unwrap().0.is_empty());
+        assert_eq!(ledger.event_bytes, 0);
+        assert!(matches!(ledger.events(0), Err(Refusal::CursorExpired)));
+        assert!(matches!(ledger.events(7), Err(Refusal::InvalidRequest)));
+    }
+
+    #[test]
+    fn event_count_limit_applies_backpressure_without_losing_tiny_events() {
+        let mut ledger = Ledger::new();
+        for _ in 0..8192 {
+            ledger.push_event(json!({"method":"tiny"})).unwrap();
+        }
+        assert!(matches!(
+            ledger.push_event(json!({"method":"tail"})),
+            Err(EventError::Full(_))
+        ));
+        assert_eq!(ledger.events(0).unwrap().0.len(), 8192);
+        assert!(ledger.events(8192).unwrap().0.is_empty());
+        ledger.push_event(json!({"method":"tail"})).unwrap();
+        assert_eq!(ledger.events(8192).unwrap().0[0].sequence, 8193);
+        assert!(matches!(
+            ledger.push_event(json!({"data":"a".repeat(MAX_EVENT_BATCH_BYTES)})),
+            Err(EventError::Invalid)
+        ));
+        assert!(matches!(ledger.events(9000), Err(Refusal::InvalidRequest)));
     }
 }

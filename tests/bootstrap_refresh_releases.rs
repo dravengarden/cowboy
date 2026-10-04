@@ -204,10 +204,9 @@ fn legacy_launcher_refresh_preserves_or_upgrades_exact_bundles() {
                 String::from_utf8_lossy(&output.stderr)
             );
             if !compatible {
-                assert!(
-                    String::from_utf8_lossy(&output.stderr)
-                        .contains("bootstrap must support the portable Session deletion guard")
-                );
+                assert!(String::from_utf8_lossy(&output.stderr).contains(
+                    "bootstrap must support the portable Session deletion and host cache guard"
+                ));
                 assert_eq!(snapshot(&state, &launcher), before);
                 println!(
                     "singleton={singleton} legacy candidate refused; installation bytes retained"

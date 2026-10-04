@@ -1,5 +1,24 @@
-import { alpha, Box, ButtonBase, Stack, Tooltip, Typography } from "@mui/material";
-import { Add, KeyboardDoubleArrowLeft, KeyboardDoubleArrowRight } from "@mui/icons-material";
+import {
+  alpha,
+  Box,
+  ButtonBase,
+  Divider,
+  ListSubheader,
+  Menu,
+  MenuItem,
+  Stack,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import {
+  Add,
+  FolderOpenOutlined,
+  FolderOutlined,
+  KeyboardDoubleArrowLeft,
+  KeyboardDoubleArrowRight,
+  ListAltOutlined,
+} from "@mui/icons-material";
+import { useState } from "react";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import { ProviderIcon } from "../ProviderIcon";
 import type { SessionMeta } from "../protocol";
@@ -7,8 +26,7 @@ import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedC
 import { type DesktopPane, useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopShortcut } from "./commands/DesktopKeycap";
 import { DESKTOP_SHORTCUTS, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
-import { sessionMonogram } from "./sessionMonogram";
-import { isMac } from "../platform";
+import type { RailGroup } from "./sessionsRailGroups";
 
 const PANE_LABEL: Record<DesktopPane, string> = {
   sessions: "Sessions",
@@ -238,70 +256,109 @@ export function DesktopCollapsedPaneRail({
   );
 }
 
-function SessionTile({
-  session,
-  active,
-  slot,
-  status,
-  onPick,
+/** Summary used by a group's tooltip and its menu header. */
+function activitySummary(group: RailGroup): string {
+  const parts = [
+    group.activity.working > 0 ? `${String(group.activity.working)} working` : null,
+    group.activity.attention > 0
+      ? `${String(group.activity.attention)} ${group.activity.attention === 1 ? "needs" : "need"} attention`
+      : null,
+    group.activity.live > 0 ? `${String(group.activity.live)} ready` : null,
+    `${String(group.sessionCount)} ${group.sessionCount === 1 ? "session" : "sessions"}`,
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
+/**
+ * One badge, the most actionable count: attention (amber) beats working
+ * (green). Ready and dormant sessions never badge — a rail of calm folders
+ * should look calm. The full breakdown is in the tooltip and menu header.
+ */
+function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
+  const { attention, working } = group.activity;
+  const count = attention > 0 ? attention : working;
+  if (count === 0) return null;
+  return (
+    <Box
+      component="span"
+      aria-hidden
+      sx={{
+        position: "absolute",
+        top: -4,
+        right: -6,
+        minWidth: 16,
+        height: 16,
+        px: "3px",
+        display: "grid",
+        placeItems: "center",
+        borderRadius: 99,
+        fontSize: 10,
+        fontWeight: 750,
+        lineHeight: 1,
+        fontVariantNumeric: "tabular-nums",
+        color: "common.white",
+        bgcolor: attention > 0 ? "warning.main" : "success.main",
+        // A ring in the rail colour separates the badge from the glyph.
+        boxShadow: (theme) => `0 0 0 2px ${theme.palette.background.default}`,
+      }}
+    >
+      {count > 9 ? "9+" : count}
+    </Box>
+  );
+}
+
+function RailGroupButton({
+  group,
+  open,
+  onOpen,
 }: {
-  session: SessionMeta;
-  active: boolean;
-  slot: number;
-  status: React.ReactNode;
-  onPick: (id: string) => void;
+  group: RailGroup;
+  open: boolean;
+  onOpen: (anchor: HTMLElement) => void;
 }): React.JSX.Element {
-  const digit = slot < 10 ? (slot === 9 ? "0" : String(slot + 1)) : null;
+  const Icon = group.kind === "folder"
+    ? (open ? FolderOpenOutlined : FolderOutlined)
+    : ListAltOutlined;
   return (
     <Tooltip
+      title={open ? "" : `${group.name} · ${activitySummary(group)}`}
       placement="right"
-      enterDelay={250}
-      title={
-        <Stack direction="row" alignItems="center" spacing={0.75}>
-          <span>{session.title}</span>
-          {digit && <DesktopShortcut shortcut={`Alt+${digit}`} compact />}
-        </Stack>
-      }
+      enterDelay={300}
     >
       <ButtonBase
-        data-desktop-session-tile={session.id}
-        aria-label={session.title}
-        aria-current={active ? "true" : undefined}
-        aria-keyshortcuts={digit ? `${isMac ? "Option" : "Alt"}+${digit}` : undefined}
+        data-desktop-rail-group={group.id}
+        aria-label={`${group.name}: ${activitySummary(group)}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-current={group.current ? "true" : undefined}
         onMouseDown={(event): void => event.preventDefault()}
-        onClick={(): void => onPick(session.id)}
+        onClick={(event): void => onOpen(event.currentTarget)}
         sx={{
           position: "relative",
-          width: 40,
-          height: 40,
+          width: 48,
+          minHeight: 50,
+          py: 0.5,
           flexShrink: 0,
-          borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
-          border: 1,
-          borderColor: active
-            ? (theme) => alpha(theme.palette.primary.main, 0.38)
-            : "divider",
-          bgcolor: active
-            ? (theme) => alpha(theme.palette.primary.main, 0.13)
-            : (theme) => alpha(theme.palette.background.paper, 0.46),
-          color: active ? "primary.main" : "text.primary",
-          transition: "background-color 120ms ease, border-color 120ms ease",
-          "&:hover": {
-            borderColor: (theme) => alpha(theme.palette.primary.main, 0.48),
-            bgcolor: (theme) => alpha(theme.palette.primary.main, active ? 0.16 : 0.06),
-          },
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "3px",
+          borderRadius: `${DESKTOP_INSET_RADIUS + 2}px`,
+          color: group.current ? "primary.main" : "text.secondary",
+          bgcolor: open ? "action.selected" : "transparent",
+          transition: "background-color 120ms ease, color 120ms ease",
+          "&:hover": { bgcolor: open ? "action.selected" : "action.hover", color: "text.primary" },
           "&.Mui-focusVisible": {
-            borderColor: "primary.main",
-            boxShadow: (theme) => `0 0 0 2px ${alpha(theme.palette.primary.main, 0.16)}`,
+            boxShadow: (theme) => `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.5)}`,
           },
-          // The current session also gets the edge pill used by collapsed
-          // workspace switchers, so it reads at a glance down a long column.
-          ...(active && {
+          // The group holding the open session carries the edge pill.
+          ...(group.current && {
             "&::before": {
               content: '""',
               position: "absolute",
-              left: -7,
-              top: 8,
-              bottom: 8,
+              left: -4,
+              top: 10,
+              height: 20,
               width: 3,
               borderRadius: 99,
               bgcolor: "primary.main",
@@ -309,78 +366,202 @@ function SessionTile({
           }),
         }}
       >
+        <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
+          <Icon sx={{ fontSize: 22 }} />
+          <GroupBadge group={group} />
+        </Box>
         <Typography
           component="span"
-          sx={{ fontSize: 13, fontWeight: 650, lineHeight: 1, letterSpacing: "0.02em" }}
+          sx={{
+            maxWidth: 46,
+            fontSize: 10.5,
+            lineHeight: 1.15,
+            fontWeight: group.current ? 700 : 550,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
         >
-          {sessionMonogram(session.title)}
+          {group.name}
         </Typography>
-        <Box
-          component="span"
-          sx={{
-            position: "absolute",
-            top: 2,
-            right: 2,
-            display: "inline-flex",
-            "& > *": { m: 0 },
-          }}
-        >
-          {status}
-        </Box>
-        <Box
-          component="span"
-          sx={{
-            position: "absolute",
-            right: -4,
-            bottom: -4,
-            width: 18,
-            height: 18,
-            display: "grid",
-            placeItems: "center",
-            borderRadius: 99,
-            bgcolor: "background.default",
-            border: 1,
-            borderColor: "divider",
-            // ProviderIcon renders nothing until the installed Provider
-            // contract supplies an asset; never show an empty ring.
-            "&:empty": { display: "none" },
-          }}
-        >
-          <ProviderIcon
-            provider={session.provider}
-            providerVersion={session.provider_version}
-            providerDigest={session.provider_generation_digest}
-            sx={{ fontSize: 12, width: 12, height: 12 }}
-          />
-        </Box>
       </ButtonBase>
     </Tooltip>
   );
 }
 
+/** The opened group: real titles, subfolder headings, slots and status. */
+function RailGroupMenu({
+  group,
+  anchor,
+  activeId,
+  slots,
+  onClose,
+  onPick,
+  onShowAll,
+  renderStatus,
+}: {
+  group: RailGroup | null;
+  anchor: HTMLElement | null;
+  activeId: string | null;
+  slots: ReadonlyMap<string, number>;
+  onClose: () => void;
+  onPick: (id: string) => void;
+  onShowAll: () => void;
+  renderStatus: (session: SessionMeta) => React.ReactNode;
+}): React.JSX.Element {
+  const empty = !group || group.sections.every((section) => section.sessions.length === 0);
+  return (
+    <Menu
+      open={group !== null && anchor !== null}
+      anchorEl={anchor}
+      onClose={onClose}
+      anchorOrigin={{ vertical: "top", horizontal: "right" }}
+      transformOrigin={{ vertical: "top", horizontal: "left" }}
+      slotProps={{
+        paper: {
+          sx: {
+            ml: 1,
+            width: 320,
+            maxHeight: "70vh",
+            borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
+            border: 1,
+            borderColor: "divider",
+          },
+        },
+        list: { dense: true, sx: { py: 0.5 } },
+      }}
+    >
+      {group && (
+        <ListSubheader
+          disableSticky
+          sx={{ lineHeight: 1.3, pt: 1, pb: 0.75, bgcolor: "transparent" }}
+        >
+          <Typography component="div" variant="body2" sx={{ fontWeight: 700, color: "text.primary" }}>
+            {group.name}
+          </Typography>
+          <Typography component="div" variant="caption" color="text.secondary">
+            {activitySummary(group)}
+          </Typography>
+        </ListSubheader>
+      )}
+      {group?.sections.flatMap((section) => {
+        const indent = section.depth + (section.title ? 1 : 0);
+        const items: React.ReactNode[] = [];
+        if (section.title) {
+          items.push(
+            <ListSubheader
+              key={`heading:${section.folder ?? ""}`}
+              disableSticky
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.75,
+                lineHeight: 2.2,
+                pl: 2 + section.depth * 1.5,
+                bgcolor: "transparent",
+                fontSize: 12,
+                fontWeight: 650,
+              }}
+            >
+              <FolderOutlined sx={{ fontSize: 15 }} />
+              {section.title}
+            </ListSubheader>,
+          );
+        }
+        for (const session of section.sessions) {
+          const slot = slots.get(session.id);
+          const digit = slot !== undefined && slot < 10 ? (slot === 9 ? "0" : String(slot + 1)) : null;
+          items.push(
+            <MenuItem
+              key={session.id}
+              selected={session.id === activeId}
+              data-desktop-rail-session={session.id}
+              onClick={(): void => {
+                onPick(session.id);
+                onClose();
+              }}
+              sx={{
+                gap: 1,
+                minHeight: 36,
+                pl: 2 + indent * 1.5,
+                // The open session reads like the current row in the list.
+                "&.Mui-selected": {
+                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.13),
+                  color: "primary.main",
+                  "& .MuiTypography-root": { fontWeight: 650 },
+                },
+              }}
+            >
+              <Box component="span" sx={{ width: 12, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>
+                {renderStatus(session)}
+              </Box>
+              <ProviderIcon
+                provider={session.provider}
+                providerVersion={session.provider_version}
+                providerDigest={session.provider_generation_digest}
+                sx={{ fontSize: 16, width: 16, height: 16, flexShrink: 0 }}
+              />
+              <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                {session.title}
+              </Typography>
+              {digit && <DesktopShortcut shortcut={`Alt+${digit}`} compact quiet />}
+            </MenuItem>,
+          );
+        }
+        return items;
+      })}
+      {group && empty && (
+        <MenuItem disabled sx={{ fontStyle: "italic", fontSize: 13 }}>
+          No sessions in this folder
+        </MenuItem>
+      )}
+      {group && <Divider sx={{ my: 0.5 }} />}
+      {group && (
+        <MenuItem
+          onClick={(): void => {
+            onClose();
+            onShowAll();
+          }}
+          sx={{ gap: 1, minHeight: 34, color: "text.secondary", fontSize: 13 }}
+        >
+          <KeyboardDoubleArrowRight sx={{ fontSize: 16 }} />
+          <Box component="span" sx={{ flex: 1 }}>Show all sessions</Box>
+          <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.toggleSessions} compact quiet />
+        </MenuItem>
+      )}
+    </Menu>
+  );
+}
+
 /**
- * Collapsed Sessions: a narrow switcher instead of an empty edge. Each tile is
- * a session (monogram, live status, provider) in the same order as the
- * `Alt/Option+1…0` slots, so switching and watching agents still work while
- * the full list is folded away. The full list stays mounted (hidden) beside
- * it, so its keyboard slots and folder state are unaffected.
+ * Collapsed Sessions. A 56 px column cannot show titles, so it shows the
+ * user's own structure: one entry per top-level folder (plus Unfiled), each
+ * with a label and a single actionable badge (needs attention, else working).
+ * Opening an entry lists its sessions with real titles, subfolders, status
+ * and `Alt/Option+1…0` slots. The group holding the open session carries the
+ * edge pill. The full list stays mounted (hidden) beside it, so keyboard
+ * slots and folder state are unaffected.
  */
 export function DesktopSessionsRail({
-  sessions,
+  groups,
   activeId,
+  slots,
   allowNewSession,
   onPick,
   onNew,
   renderStatus,
 }: {
-  sessions: readonly SessionMeta[];
+  groups: readonly RailGroup[];
   activeId: string | null;
+  slots: ReadonlyMap<string, number>;
   allowNewSession: boolean;
   onPick: (id: string) => void;
   onNew: () => void;
   renderStatus: (session: SessionMeta) => React.ReactNode;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
+  const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
+  const openGroup = menu ? groups.find((group) => group.id === menu.id) ?? null : null;
   const expand = (
     <Tooltip title={<PaneTooltip pane="sessions" collapsed />} placement="right" enterDelay={350}>
       <ButtonBase
@@ -395,16 +576,10 @@ export function DesktopSessionsRail({
           gap: 0.4,
           borderRadius: `${DESKTOP_INSET_RADIUS}px`,
           color: "text.secondary",
-          border: 1,
-          borderColor: "transparent",
           WebkitAppRegion: "no-drag",
-          "&:hover": {
-            color: "primary.main",
-            borderColor: (theme) => alpha(theme.palette.primary.main, 0.28),
-            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
-          },
+          "&:hover": { color: "primary.main", bgcolor: "action.hover" },
           "&.Mui-focusVisible": {
-            borderColor: "primary.main",
+            boxShadow: (theme) => `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.5)}`,
           },
         }}
       >
@@ -426,7 +601,7 @@ export function DesktopSessionsRail({
         flexDirection: "column",
         borderRight: 1,
         borderColor: "divider",
-        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.24),
+        bgcolor: "background.default",
       }}
     >
       <Box
@@ -449,29 +624,27 @@ export function DesktopSessionsRail({
       >
         {expand}
       </Box>
-      <Box
-        sx={{
-          display: "none",
-          justifyContent: "center",
-          pt: 1,
-          "@media (display-mode: window-controls-overlay)": { display: "flex" },
-        }}
-      >
-        {expand}
-      </Box>
       <Stack
         alignItems="center"
-        spacing={1.25}
+        spacing={0.5}
         sx={{
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
           overflowX: "hidden",
-          py: 1.25,
+          py: 1,
           scrollbarWidth: "none",
           "&::-webkit-scrollbar": { display: "none" },
         }}
       >
+        <Box
+          sx={{
+            display: "none",
+            "@media (display-mode: window-controls-overlay)": { display: "flex" },
+          }}
+        >
+          {expand}
+        </Box>
         {allowNewSession && (
           <Tooltip
             placement="right"
@@ -489,36 +662,43 @@ export function DesktopSessionsRail({
               onMouseDown={(event): void => event.preventDefault()}
               onClick={onNew}
               sx={{
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 flexShrink: 0,
-                borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
-                border: 1,
-                borderStyle: "dashed",
-                borderColor: "divider",
+                borderRadius: `${DESKTOP_INSET_RADIUS + 2}px`,
                 color: "text.secondary",
-                "&:hover": {
-                  color: "primary.main",
-                  borderColor: (theme) => alpha(theme.palette.primary.main, 0.48),
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
+                "&:hover": { color: "primary.main", bgcolor: "action.hover" },
+                "&.Mui-focusVisible": {
+                  boxShadow: (theme) => `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.5)}`,
                 },
               }}
             >
-              <Add sx={{ fontSize: 20 }} />
+              <Add sx={{ fontSize: 22 }} />
             </ButtonBase>
           </Tooltip>
         )}
-        {sessions.map((session, slot) => (
-          <SessionTile
-            key={session.id}
-            session={session}
-            active={session.id === activeId}
-            slot={slot}
-            status={renderStatus(session)}
-            onPick={onPick}
+        {groups.length > 0 && (
+          <Box aria-hidden sx={{ width: 24, height: "1px", bgcolor: "divider", my: 0.5, flexShrink: 0 }} />
+        )}
+        {groups.map((group) => (
+          <RailGroupButton
+            key={group.id}
+            group={group}
+            open={menu?.id === group.id}
+            onOpen={(anchor): void => setMenu({ id: group.id, anchor })}
           />
         ))}
       </Stack>
+      <RailGroupMenu
+        group={openGroup}
+        anchor={menu?.anchor ?? null}
+        activeId={activeId}
+        slots={slots}
+        onClose={(): void => setMenu(null)}
+        onPick={onPick}
+        onShowAll={(): void => workspace.togglePane("sessions")}
+        renderStatus={renderStatus}
+      />
     </Box>
   );
 }

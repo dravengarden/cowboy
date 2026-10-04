@@ -322,6 +322,60 @@ bounded output and effect outcomes, and validate the original binding and
 executor incarnation before reconnecting a Provider. Its lifecycle belongs
 beside detached workers, independently of the current control connection.
 
+The keeper retains at most 4 MiB or 8192 unacknowledged events and returns
+batches of at most 2 MiB. The bound worker acknowledges a delivered batch with
+its next `Events.after` cursor. Repeating that cursor is idempotent; only
+acknowledged entries may be removed. When the buffer fills, the keeper pauses
+its bounded native reader. The pinned native executor's bounded notification
+channel propagates backpressure to process output. Output may wait for the
+consumer, but a fast command or slow network must not evict unseen output,
+exit status or closure notifications. Native input and output are polled
+independently so a large request cannot prevent draining the output pipe.
+Explicit shutdown and native process death still terminate ownership.
+
+Older keepers can already have discarded history. A `CursorExpired` response
+must clear the worker's saved cursor and close its local WebSocket with a
+restart code. The next connection resumes the same native executor session
+from the current event cursor; native Codex owns per-process `process/read`
+recovery. If its bounded history is also exhausted, that process can report
+lost output. Repeatedly reconnecting with the expired cursor must never poison
+all subsequent commands, and recovery must never restart an uncertain effect.
+The worker also rejects a seventeenth concurrent request individually, before
+admission, while retaining the other sixteen requests and their connection.
+Bulk inputs cannot consume the bounded capacity reserved for event polling and
+result observation. Exhausting a request budget must not cut the control path
+needed to deliver and release those same requests.
+
+This layer fills the cross-host transport gap beyond native Codex session and
+process recovery. It can be deleted when the native transport covers the
+enrolled Machine route, detached ownership and bounded acknowledged delivery.
+Claude shares the keeper and worker transport through its Provider adapter;
+its polling process facade remains adapter-backed. The native worker gate
+checks both Provider lanes, slow delivery of 9 MiB of stdout/stderr, concurrent
+large input, exact output order and exit status, cancellation after the flood,
+and recovery of a lost start receipt without reexecution. Transport tests also
+cover legacy cursor expiry and request-capacity isolation.
+The [2026-10-04 native acceptance receipt](experiments/execution-transport-recovery-2026-10-04.json)
+records both current Provider lanes and a real legacy keeper. The Codex lane
+also emits 8 MiB while its control transport is unavailable for 35 seconds.
+
+The enrolled-session gate, `just execution-session-conformance INPUT RECEIPT`,
+accepts `browser_device: true` for current Controllers. Its disposable P-256 key
+signs authenticated HTTP and WebSocket requests, including after Controller
+restart; a cookie without its device proof must be refused. The fixture acts at
+the trusted loopback TLS proxy boundary and does not test external TLS
+termination. It uses no production credentials or model requests. Retained
+Controllers predating device binding can use the original fixture mode.
+
+The [production receipt](experiments/execution-transport-deployment-2026-10-04.json)
+records the October 4 activation of `c4f29d40` on Falcon, Hawk and OVH, selecting
+`worker-9fce17441fdd1e8ca642`. All 13 original Hawk workers and seven OVH workers
+retained their PID, start time and executable at acceptance. Busy workers adopt
+the new generation at their native safe boundary. Existing keepers retain their
+original environment; the new worker's legacy recovery path covers event gaps.
+New environments use the backpressure keeper. Previously discarded output cannot
+be reconstructed, and recovery never replays uncertain effects.
+
 Do not merely increase a timeout or open a replacement upstream session and call
 that recovery. If the target keeper or executor is lost, expose that loss and
 retain the worktree; surviving processes require independent ownership evidence.

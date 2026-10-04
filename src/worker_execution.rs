@@ -13,7 +13,10 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Semaphore, mpsc, oneshot};
-use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
+use tokio_tungstenite::tungstenite::{
+    Message,
+    protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
+};
 
 use crate::execution_environment::BindingV1;
 use crate::execution_protocol::{
@@ -25,6 +28,11 @@ use crate::runtime_wire::Frame;
 pub(crate) const DESCRIPTOR_ENV: &str = "COWBOY_EXECUTION_DESCRIPTOR";
 const MAX_PENDING: usize = 24;
 const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
+// A validated binding is at most 16 KiB before JSON escaping. Bound the
+// complete control envelope too, and reserve its worst-case aggregate so
+// admitted bulk inputs cannot starve polling or result observation.
+const MAX_CONTROL_BYTES: usize = 64 * 1024;
+const CONTROL_RESERVE_BYTES: usize = MAX_PENDING * MAX_CONTROL_BYTES;
 const RETRY: Duration = Duration::from_secs(30);
 
 struct Pending {
@@ -118,18 +126,29 @@ impl Client {
             command,
         };
         let bytes = serde_json::to_vec(&request)?.len();
+        let invocation = matches!(request.command, Command::Invoke { .. });
         ensure!(
-            bytes <= wire::MAX_FRAME_BYTES,
+            bytes
+                <= if invocation {
+                    wire::MAX_FRAME_BYTES
+                } else {
+                    MAX_CONTROL_BYTES
+                },
             "execution request exceeds transport limit"
         );
         let (sender, receiver) = oneshot::channel();
         {
             let mut pending = self.pending.lock();
             pending.retain(|_, pending| !pending.sender.is_closed());
+            let (count_limit, byte_limit) = if invocation {
+                (MAX_PENDING - 1, MAX_PENDING_BYTES - CONTROL_RESERVE_BYTES)
+            } else {
+                (MAX_PENDING, MAX_PENDING_BYTES)
+            };
             ensure!(
-                pending.len() < MAX_PENDING
+                pending.len() < count_limit
                     && pending.values().map(|entry| entry.bytes).sum::<usize>() + bytes
-                        <= MAX_PENDING_BYTES,
+                        <= byte_limit,
                 "execution transport is at capacity"
             );
             pending.insert(
@@ -233,7 +252,12 @@ impl Endpoint {
                         let token = token.clone();
                         tasks.spawn(async move {
                             let _permit = permit;
-                            let _ = serve(socket, &token, client).await;
+                            let session = client.session.clone();
+                            if serve(socket, &token, client).await.is_err() {
+                                // Do not log frames, capabilities or arbitrary
+                                // native error text from the private endpoint.
+                                tracing::warn!(%session, reason = "endpoint_failed", "execution endpoint disconnected");
+                            }
                         });
                     }
                     _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -337,7 +361,14 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                         let message: Value = serde_json::from_str(&text)?;
                         if message["method"] == "initialized" && message.get("id").is_none() { continue; }
                         let id = message.get("id").context("execution request id missing")?.clone();
-                        ensure!(valid_id(&id) && ids.len() < 16 && ids.insert(id.to_string()), "invalid or duplicate execution request id");
+                        ensure!(valid_id(&id) && !ids.contains(&id.to_string()), "invalid or duplicate execution request id");
+                        if ids.len() >= 16 {
+                            // No effect was admitted. Limit this request, not
+                            // the transport carrying other commands/results.
+                            writer.send(Message::Text(json!({"id":id,"error":{"code":-32000,"message":"Execution request capacity reached; this request was not admitted"}}).to_string().into())).await?;
+                            continue;
+                        }
+                        ids.insert(id.to_string());
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
                         let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
                         let client = Arc::clone(&client);
@@ -363,6 +394,19 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                         }
                         cursor = through;
                         *client.event_cursor.lock() = Some(cursor);
+                    }
+                    Response::Refused { reason: wire::Refusal::CursorExpired } => {
+                        // Legacy keepers evict output. Native Codex resumes
+                        // the same executor session and recovers its processes
+                        // with process/read. Reusing the expired cursor poisons
+                        // every reconnect, including unrelated future calls.
+                        *client.event_cursor.lock() = None;
+                        tracing::warn!(session = %client.session, reason = "cursor_expired", "resuming native execution after an event gap");
+                        writer.send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::Restart,
+                            reason: "Execution event history expired; resume the original session".into(),
+                        }))).await?;
+                        return Ok(());
                     }
                     _ => bail!("execution events unavailable"),
                 }

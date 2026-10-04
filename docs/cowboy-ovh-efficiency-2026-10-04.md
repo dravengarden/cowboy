@@ -1,7 +1,8 @@
 # Cowboy and OVH efficiency analysis
 
-Status: read-only production research on 2026-10-04. No deployment, policy
-change, Provider inference request, installation or worker restart occurred.
+The initial production research on 2026-10-04 was read-only. No deployment,
+policy change, Provider inference request, installation or worker restart occurred
+in that research. The scoped implementation below has separate release acceptance.
 Temporary, authenticated SSH benchmark connections were used; only their own
 control sockets were closed. Existing production masters and sessions were not
 closed. See the [sanitized measurements](experiments/cowboy-ovh-efficiency-2026-10-04.json).
@@ -203,3 +204,178 @@ Still open: peak/OOM and saturated concurrency, actual physical iPhone send and
 network regression, native remote macOS acceptance, new production faults/cold
 starts, and the failed four-host 30-minute stability window. Healthy production
 remains retained under the operator's prior release decision.
+
+## Scoped optimization implementation
+
+The implementation removes repeated verification within one executable-host
+request. Admission first checks the actual active link and current sealed auth
+generation. It then verifies the signed Plugin, runtime artifacts, Provider
+projection and host bundle once, reconstructs uncached inventory from those
+request-local verified bytes, and prepares the launch from the same package.
+There is no cross-request executable, digest, timestamp or inventory trust cache.
+Ordinary session launches and every subsequent host request still perform full
+verification. Installation journal authority is never supplied by artifact cache
+metadata. Resolution logs separate verification, inventory and launch timings.
+
+Journaled read-only collection/activity release the lifecycle lock only after
+successful child spawn. Legacy slots without an installation incarnation retain
+their original serialization, including same-bytes uninstall/reinstallation.
+Result admission reacquires the lock and checks the actual active
+link, installation incarnation, operation fence and authentication generation.
+A same-artifact reinstall or auth rotation rejects the old result as an already
+started observation; it does not rerun the command. Reset remains serialized
+through completion. Process-group cleanup and command bounds are unchanged.
+Completion-fence timing is separate from collector time.
+
+Regression fixtures check one full verification for an uncached request, legacy
+observation serialization, journaled read-only collection concurrent with
+lifecycle work, serialized reset, auth
+rotation, same-bytes reinstall/removal, failed spawn, timeout and retained
+tamper rejection. These are hermetic fixtures, not production fault injection.
+
+Matrix memory-client 0.1.1 reserves the current-user outbox path before atomic
+publication, so its own background flush cannot duplicate the foreground
+observation. A successful observation receipt retires only that file even if
+context retrieval subsequently fails. Missing receipts retain durable retry;
+completed-turn learning remains a separate observation. Other processes may
+still deliver idempotently, and observe precedes context as before. No evidence,
+binding, context budget, unavailable-memory behavior or native-memory ownership
+is weakened. Claude 3.4.5 and Codex 3.3.2 carry that shared change; private CLI,
+adapter and execution pins stay unchanged. Component release 3.40.0 appends
+history and advances only this affected closure.
+
+Fresh OVH context-only reads used the existing private configuration internally,
+without exporting tokens or context text: Claude samples 6.1/2.5/2.1 ms and
+Codex samples 2.8/2.5/2.2 ms, all HTTP 200 with 282-byte responses. This small
+read-only sample does not measure a complete turn or memory usefulness. It
+does not justify another API, parallelizing dependent observe/context calls,
+changing timeouts or attributing historical 30-second sends to Matrix.
+
+Fresh pre-change collection logs show 30.708/29.154 seconds preparation and
+1.454/1.383 seconds collector time, with zero queue time. One authenticated CLI
+refresh took 45.758 seconds and returned available Anthropic usage. These
+point-in-time samples and the historical 27.8965-second preparation median are
+distinct baselines. Production activation and before/after acceptance must be
+recorded separately; source and fixture success alone are not deployment.
+
+Message delivery already has Controller dispatch/queue/delivery and Machine/
+worker queue/prompt/first-output correlation. This work does not change durable
+message IDs, acknowledgement semantics or resend policy. Current physical-client
+timing and complete-turn traces remain necessary to isolate confirmation delay;
+neither a faster usage query nor a larger confirmation deadline proves it fixed.
+
+## Production acceptance
+
+The [sanitized October 4 activation and measurements](experiments/cowboy-ovh-usage-efficiency-2026-10-04.json)
+record the deployed host `6397a9c9`, integrated into published main `22c6c47a`.
+The OVH override and finite Ubuntu maintenance belong to Columbus `947a0a2c`.
+New main also contains another task's portable-launcher changes; this host
+receipt does not claim those later changes were activated on OVH.
+
+OVH previously selected worker `2801f50d44994e96b2b4`, while the narrow host
+output retains the independently accepted `406471a2` worker bundle. The release
+therefore used explicit worker maintenance and selected its declared
+`worker-6ede7a91cc8b8b3402d4`; it did not build workers from this optimization.
+The independent four-minute rollback timer was armed before activation and
+disarmed after acceptance. All seven original workers retained their exact
+PID/start/executable/session/workspace/Provider identities at acceptance and
+after both Plugin installations; no worker handoff was needed. Normal
+`KillMode=control-group` was restored, the Controller reports the declared
+generation, and the host has no automatic restarts.
+
+| Measurement | Fresh pre-change sample | Post-acceptance samples |
+| --- | ---: | ---: |
+| Preparation | 29.327 s, n=1 | median 10.1445 s, n=6 |
+| Collector | 1.303 s, n=1 | median 1.460 s, n=6 |
+| Logged Machine total | 30.630 s, n=1 | median 11.587 s, n=6 |
+| Fresh authenticated CLI refresh | 30.930 s, n=1 | median 11.839 s, n=3 |
+
+Preparation decreased about 65% against the fresh comparison; CLI wall time
+decreased about 62%. The older 368-sample preparation median remains 27.8965
+seconds, a different window. Two 14–15 ms cached CLI reads are retained but
+excluded from refresh latency. The post-acceptance stage selection includes
+all successful recorded Claude collections on the new PID, including the new
+Plugin; it is not a p95, a zero-failure window or model-response timing.
+The old total is its command-completion log; the new total includes the result
+fence. Verification accounts for almost all remaining preparation; inventory and
+launch take 0–2 ms. Completion fences were 0 ms in this small sample.
+
+Claude 3.4.5 (`acebb015…`) and Codex 3.3.2 (`a833d5b6…`) were independently
+verified, published and installed only on OVH through official durable IDs.
+Both ended completed with exact Applied receipts and current credential
+materialization. Both initial observers returned HTTP 409 after roughly
+100–103 seconds; their same-ID reconciliation completed without resending an
+installation. Codex's first reconciliation returned HTTP 503 during a transient
+control reconnect, whose root cause this task does not establish. These failed
+observations remain evidence rather than successful timing samples.
+
+Exact Linux/macOS probes, old/new Provider coexistence and packaged native
+execution passed (Claude 30 checks, Codex 15). Actual active, next-transaction
+recovery, additional historical recovery and cold Catalog readers were covered;
+real first-party signature verification is separate from the temporary signing
+key used by reader fixtures. The full integrated gate passed, including 1,791
+all-feature and 483 standalone Machine tests, with `RUST_TEST_THREADS=1`.
+Earlier parallel fixture EAGAIN/ETXTBSY failures are retained; their production
+cause is not inferred. Serial test scheduling does not disable the fixtures'
+internal concurrency checks.
+
+Post-install cgroup observation showed about 188 MB anonymous memory and
+8.75 GB reclaimable file cache, with zero OOM or OOM kills. Cgroup current/peak
+counts are not host-only RSS. Signed artifacts, installed runtime state,
+permanent identities and previous recovery roots are retained. Disposable
+probe homes, transfer archives and raw private API observations are cleanup
+targets; they are not recovery sources.
+
+Before acceptance the independent timer could restore the exact previous
+override. Accepted maintenance is immutable; a later rollback requires a fresh
+reviewed transaction, not deletion of `committed.json`. Prefer a descendant
+host revert retaining the accepted worker floor, and exact signed previous
+Plugin releases through Cowboy's installer. Never edit live installation
+pointers, credentials, or a permanent Machine identity to undo this change.
+
+To reproduce the usage comparison, use the authenticated
+`cowboy operator usage --refresh anthropic` command with stdout captured into
+a protected temporary file; retain only HTTP status, Provider status, observation
+timestamp and elapsed wall time. A cached observation older than invocation
+start is not a fresh-refresh sample. Read the active OVH Machine PID from its
+user unit and select only `CollectUsage` resolution/preparation/command/
+observation records from that PID's journal. Separate queue time and result
+fence from verification, inventory, launch and collector time. Retain unsuccessful
+requests and the exact source/generation alongside successful timing samples;
+never export account fields, credentials, authored prompts or raw logs.
+
+## Final host guard and deployment follow-up
+
+The final optimized host is clean Cowboy
+`b78d6af5f14db12544b482b99ed72acc91e01bd2`, artifact
+`/nix/store/5vrd78rjm8d4za5qk51x5mva9fh2hkwy-cowboy-machine-release`.
+It adds the legacy-slot serialization guard and retains the independently
+accepted `worker-6ede7a91cc8b8b3402d4` bundle. Columbus candidate `f8ce80a4`
+selected it in a fresh host-only transaction, with no worker-generation change.
+After acceptance PID 1066606 matches the artifact's exact native executable,
+all seven original workers survive, containment is `control-group`, and the
+independent rollback timer is disarmed. The signed Provider versions and
+credential readiness remain unchanged. A final fresh refresh after acceptance
+returned HTTP 200 / available in 11.480 seconds; a preceding cached refresh is
+explicitly excluded from latency measurements.
+
+The first acceptance attempt refused a wrapper executable captured before its
+native exec. Actual PID/start identity, expected final ELF and usage were already
+healthy. Columbus `3a15adb4` fixes this deployment-helper race: activation waits
+for the declared native ELF; acceptance independently verifies clean immutable
+candidate provenance and the final ELF while retaining the original launch
+observation. It preserves the original admission receipt, records the old
+wrapper as `launch_exe`, and rejects foreign executables and PID reuse. All 17
+helper tests and native diff review passed. The finite timer was rearmed during
+this repair and disarmed only after successful acceptance of the unchanged host.
+No application rollback occurred. The original helper, its replacement hashes,
+and the refused observation remain in the protected receipt directory.
+
+Publication also integrates unrelated upstream portable-reader and native-shell
+changes; these are not claimed as deployed by this host artifact. The final
+integrated full gate passed 1,799 all-feature tests and 491 standalone Machine
+tests, plus the native release builds. Detailed follow-up provenance, timings,
+and the retained acceptance failure are in the `final_host_followup` section of
+the JSON evidence. Send-confirmation and per-turn Matrix context redesign remain
+measurement-led follow-ups; no model-response or physical-client latency benefit
+is claimed by this account-usage optimization.

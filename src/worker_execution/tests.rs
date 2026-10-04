@@ -5,6 +5,10 @@ use crate::execution_environment::{
 #[cfg(feature = "machine-host")]
 use crate::machine_protocol::execution::{Action, Request};
 
+#[cfg(feature = "machine-host")]
+mod native_backpressure;
+mod transport;
+
 fn binding() -> BindingV1 {
     BindingV1 {
         schema: 1,
@@ -221,6 +225,10 @@ async fn native_worker_execution() {
     let relay_outage = Arc::clone(&outage);
     let image_read = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let relay_image_read = Arc::clone(&image_read);
+    let slow_events = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let relay_slow_events = Arc::clone(&slow_events);
+    let event_gaps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let relay_event_gaps = Arc::clone(&event_gaps);
     let relay = tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_millis(50));
         let mut tasks = tokio::task::JoinSet::new();
@@ -239,11 +247,16 @@ async fn native_worker_execution() {
                 let client = Arc::clone(&relay_client);
                 let service = relay_service.clone();
                 let outage = Arc::clone(&relay_outage);
+                let slow_events = Arc::clone(&relay_slow_events);
+                let event_gaps = Arc::clone(&relay_event_gaps);
                 if matches!(&request.command, Command::Invoke { invocation, .. } if invocation.method == "fs/readFile" && invocation.params.to_string().contains("pixel.png"))
                 {
                     relay_image_read.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 tasks.spawn(async move {
+                    if matches!(request.command, Command::Events { .. }) && slow_events.load(std::sync::atomic::Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
                     let until = *outage.lock();
                     if let Some(until) = until { tokio::time::sleep_until(until).await; }
                     let trigger = matches!(&request.command, Command::Invoke { invocation, .. } if invocation.method == "process/start" && invocation.params.to_string().contains("background_started"));
@@ -269,6 +282,12 @@ async fn native_worker_execution() {
                     }
                     let until = *outage.lock();
                     if let Some(until) = until { tokio::time::sleep_until(until).await; }
+                    // A delayed duplicate poll can name already-acknowledged
+                    // history. Client fences that obsolete request; only an
+                    // active poll's refusal can disconnect the endpoint.
+                    if matches!(response, MachineResponse::Call { response: Response::Refused { reason: wire::Refusal::CursorExpired } }) && client.pending.lock().contains_key(&request.request_id) {
+                        event_gaps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     client.complete(RuntimeReply {
                         session_id: request.session_id,
                         worker_epoch: request.worker_epoch,
@@ -280,6 +299,11 @@ async fn native_worker_execution() {
             }
         }
     });
+    let legacy = input["legacy_event_gap"] == true;
+    if !legacy {
+        native_backpressure::check(&endpoint, &binding).await;
+        slow_events.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     let status = tokio::process::Command::new("python3")
         .arg(if input["provider"] == "claude-code" {
             "tools/execution_claude_worker_conformance.py"
@@ -307,6 +331,18 @@ async fn native_worker_execution() {
     ))
     .join(&binding.environment.incarnation);
     assert!(status.success(), "native worker execution failed");
+    let gaps = event_gaps.load(std::sync::atomic::Ordering::Relaxed);
+    if legacy {
+        assert_eq!(
+            gaps, 1,
+            "legacy cursor must expire once, without a reconnect loop"
+        );
+    } else {
+        assert_eq!(
+            gaps, 0,
+            "bounded backpressure must retain unacknowledged events"
+        );
+    }
     assert!(
         image_read.load(std::sync::atomic::Ordering::Relaxed),
         "native image reads must cross the target transport"
@@ -363,11 +399,19 @@ async fn native_worker_execution() {
     let receipt_path = std::env::var("COWBOY_TEST_EXECUTION_RECEIPT").unwrap();
     let mut receipt: Value =
         serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+    if !legacy {
+        receipt["checks"].as_array_mut().unwrap().extend([
+            json!("slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events"),
+            json!("concurrent_large_input_and_output_do_not_deadlock"),
+            json!("post_flood_commands_and_cancellation_keep_original_executor"),
+        ]);
+    }
     receipt["checks"].as_array_mut().unwrap().extend([
         json!("target_image_bytes_cross_machine_transport"),
         json!("idempotent_close_stops_environment_and_preserves_worktree"),
         json!("closed_environment_cannot_be_recreated"),
     ]);
+    receipt["cursor_expirations"] = gaps.into();
     receipt["accepted"] = true.into();
     std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
 }

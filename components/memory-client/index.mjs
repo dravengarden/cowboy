@@ -142,6 +142,7 @@ export class MatrixClient {
     this.context = "";
     this.turn = randomUUID();
     this.delivery = Promise.resolve();
+    this.inFlight = new Set();
   }
   async request(action, payload, binding = this.binding) {
     const response = await fetch(
@@ -191,14 +192,20 @@ export class MatrixClient {
     this.events.push({ id: "e" + this.events.length, role, text });
     this.bytes += bytes;
   }
-  async enqueue(payload) {
+  async enqueue(payload, reserved = false) {
     const names = (await readdir(this.directory)).filter((name) =>
       /^[a-f0-9]{64}\.json$/.test(name)
     );
     if (names.length >= 512) throw new Error("Matrix delivery queue is full");
     const value = { binding: this.binding, payload };
     const path = join(this.directory, hash(value) + ".json");
-    await atomic(path, value);
+    if (reserved) this.inFlight.add(path);
+    try {
+      await atomic(path, value);
+    } catch (error) {
+      this.inFlight.delete(path);
+      throw error;
+    }
     return path;
   }
   flush() {
@@ -209,12 +216,14 @@ export class MatrixClient {
       ).slice(0, 8);
       for (const name of names) {
         const path = join(this.directory, name);
+        if (this.inFlight.has(path)) continue;
         try {
           const stat = await lstat(path);
           if (!stat.isFile() || stat.mode & 0o077 || stat.size > 524288) {
             throw new Error("Invalid Matrix outbox");
           }
           const value = JSON.parse(await readFile(path, "utf8"));
+          if (this.inFlight.has(path)) continue;
           await this.request("observe", value.payload, value.binding);
           await unlink(path).catch((error) => {
             if (error.code !== "ENOENT") throw error;
@@ -239,9 +248,15 @@ export class MatrixClient {
       events: this.events,
       learn: false,
     };
-    await this.enqueue(evidence);
+    // Reserve before publishing the file so a concurrent background flush
+    // cannot send the same current-user observation. Durable evidence remains
+    // available to a restarted process if this request never gets a receipt.
+    const path = await this.enqueue(evidence, true);
     try {
       const receipt = await this.request("observe", evidence);
+      await unlink(path).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+      });
       const found = await this.request("context", {
         query: publicText(prompt),
         budget: 6000,
@@ -249,7 +264,11 @@ export class MatrixClient {
       this.context = found.text + "\nCurrent user evidence for memory_put: " +
         receipt.events.join(", ") +
         ". Cite an exact supporting excerpt; automatic learning also runs after the turn.\n";
-    } catch { /* Preserve the durable outbox and make absence explicit. */ }
+    } catch {
+      /* Preserve unacknowledged evidence and make absence explicit. */
+    } finally {
+      this.inFlight.delete(path);
+    }
     void this.flush();
     return this.context;
   }
