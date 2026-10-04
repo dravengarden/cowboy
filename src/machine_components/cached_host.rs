@@ -58,7 +58,7 @@ pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> any
             && std::fs::metadata(&executable)?.permissions().mode() & 0o111 != 0,
         "Machine host command does not select the authenticated executable"
     );
-    rustix::fs::faccessat(
+    rustix::fs::accessat(
         rustix::fs::CWD,
         &executable,
         rustix::fs::Access::EXEC_OK,
