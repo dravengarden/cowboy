@@ -162,7 +162,6 @@ import {
     type SessionFolder,
     folderAncestors,
     sessionFolderById,
-    sessionFolderLocation,
     unboundProjectLabels,
 } from "./sessionFolders";
 import {
@@ -880,7 +879,6 @@ function SessionList({
     const revealMovedRow = (key: string, folder: string | null): void => {
         if (folder) setFolderCollapsed([folder, ...folderAncestors(sessionFolders, folder)], false);
         setMovedRow(key);
-        notify(`Moved to ${sessionFolderLocation(sessionFolders, folder)}`, "info");
     };
     const moveItem = (item: { kind: "session" | "folder"; id: string }, folder: string | null): void => {
         const current = item.kind === "folder"
