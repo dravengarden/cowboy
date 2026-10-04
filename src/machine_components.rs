@@ -15,6 +15,7 @@ mod cached_host;
 mod host_payload;
 
 pub(crate) use cached_host::check_portable_host_cache;
+pub(crate) use cached_host::restore_portable_host_selection;
 
 pub struct ComponentStore {
     root: PathBuf,
@@ -709,6 +710,223 @@ mod tests {
         cached_host::authenticate_floor(&store.root, &floor, identity.public_key()).unwrap();
         assert!(!store.command_path("cowboy-machine").exists());
         assert!(check_portable_host_cache(state.path(), Some(&key)).is_err());
+    }
+
+    async fn floor_selection_recovery_cases(release: Option<&Path>) {
+        use std::os::unix::fs::PermissionsExt as _;
+        for archive in [false, true] {
+            for case in [
+                "absent",
+                "active-only",
+                "command-only",
+                "missing-dirs",
+                "foreign",
+                "anchor",
+                "missing-anchor",
+                "pointer-file",
+                "directory-link",
+                "proof-link",
+                "floor",
+                "committed",
+                "non-executable",
+                "publisher",
+            ] {
+                let state = tempfile::tempdir_in("/tmp").unwrap();
+                let identity =
+                    MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+                let key = state.path().join("publisher.pub");
+                std::fs::write(&key, identity.public_key()).unwrap();
+                let store = ComponentStore::new(
+                    state.path().join("components"),
+                    Some(&key),
+                    "fixture".into(),
+                )
+                .unwrap();
+                let marker = state.path().join("executed");
+                let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display());
+                let bytes = if archive {
+                    host_archive(script.as_bytes(), b"signed companion")
+                } else {
+                    script.as_bytes().to_vec()
+                };
+                let desired = portable_host(
+                    &identity,
+                    serve_once(&bytes).await,
+                    &bytes,
+                    "anchor",
+                    archive,
+                    true,
+                );
+                store.reconcile(desired.clone()).await.unwrap();
+                std::fs::remove_file(&marker).unwrap();
+                let generation = store
+                    .root
+                    .join("active/machine_host")
+                    .canonicalize()
+                    .unwrap();
+                let executable = component_executable(&generation, &desired).unwrap();
+                let active = store.root.join("active/machine_host");
+                let command = store.command_path("cowboy-machine");
+                let floor_path = state
+                    .path()
+                    .join(crate::session_deletion_admission::reader_floor::NAME);
+                let original_floor = std::fs::read(&floor_path).unwrap();
+                if case != "active-only" {
+                    std::fs::remove_file(&active).unwrap();
+                }
+                if case != "command-only" {
+                    std::fs::remove_file(&command).unwrap();
+                }
+                match case {
+                    "missing-dirs" => {
+                        std::fs::remove_dir(store.root.join("active")).unwrap();
+                        std::fs::remove_dir(store.root.join("commands")).unwrap();
+                    }
+                    "foreign" => {
+                        std::os::unix::fs::symlink(state.path().join("foreign"), &active).unwrap()
+                    }
+                    "anchor" => std::fs::write(generation.join("artifact"), b"tampered").unwrap(),
+                    "missing-anchor" => std::fs::remove_dir_all(&generation).unwrap(),
+                    "pointer-file" => {
+                        std::fs::write(&active, b"retained invalid selection").unwrap()
+                    }
+                    "directory-link" => {
+                        std::fs::remove_dir(store.root.join("active")).unwrap();
+                        std::os::unix::fs::symlink(state.path(), store.root.join("active"))
+                            .unwrap();
+                    }
+                    "proof-link" => {
+                        let artifact = generation.join("artifact");
+                        let outside = state.path().join("outside");
+                        std::fs::rename(&artifact, &outside).unwrap();
+                        std::os::unix::fs::symlink(outside, artifact).unwrap();
+                    }
+                    "floor" => std::fs::write(&floor_path, b"{}").unwrap(),
+                    "committed" => {
+                        std::fs::create_dir_all(state.path().join("session-deletions")).unwrap();
+                        std::fs::write(
+                            state.path().join("session-deletions/deletions.json"),
+                            b"{}",
+                        )
+                        .unwrap();
+                    }
+                    "non-executable" => {
+                        std::fs::set_permissions(
+                            &executable,
+                            std::fs::Permissions::from_mode(0o644),
+                        )
+                        .unwrap();
+                    }
+                    "publisher" => {
+                        let wrong =
+                            MachineIdentity::load_or_create(&state.path().join("wrong")).unwrap();
+                        std::fs::write(&key, wrong.public_key()).unwrap();
+                    }
+                    _ => {}
+                }
+                let floor_bytes = std::fs::read(&floor_path).unwrap();
+                let initial_active = std::fs::read_link(&active).ok();
+                let initial_command = std::fs::read_link(&command).ok();
+                let admitted = matches!(
+                    case,
+                    "absent" | "active-only" | "command-only" | "missing-dirs"
+                );
+                if let Some(release) = release {
+                    let old = PathBuf::from(
+                        std::env::var("COWBOY_TEST_PORTABLE_PRE_RECOVERY_RELEASE").unwrap(),
+                    );
+                    let negative =
+                        tokio::process::Command::new(old.join("bin/cowboy-machine-install"))
+                            .args(["--restore-floor-selection", "--state-dir"])
+                            .arg(state.path())
+                            .arg("--artifact-public-key")
+                            .arg(&key)
+                            .output()
+                            .await
+                            .unwrap();
+                    assert!(!negative.status.success());
+                    assert_eq!(std::fs::read_link(&active).ok(), initial_active);
+                    assert_eq!(std::fs::read_link(&command).ok(), initial_command);
+                    let output =
+                        tokio::process::Command::new(release.join("bin/cowboy-machine-install"))
+                            .args(["--restore-floor-selection", "--state-dir"])
+                            .arg(state.path())
+                            .arg("--artifact-public-key")
+                            .arg(&key)
+                            .output()
+                            .await
+                            .unwrap();
+                    assert_eq!(
+                        output.status.success(),
+                        admitted,
+                        "{archive}/{case}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                } else {
+                    assert_eq!(
+                        restore_portable_host_selection(state.path(), &key).is_ok(),
+                        admitted,
+                        "{archive}/{case}"
+                    );
+                }
+                assert_eq!(std::fs::read(&floor_path).unwrap(), floor_bytes);
+                assert!(
+                    !marker.exists(),
+                    "{archive}/{case}: recovery executed publisher code"
+                );
+                if admitted {
+                    assert_eq!(floor_bytes, original_floor);
+                    check_portable_host_cache(state.path(), Some(&key)).unwrap();
+                    assert_eq!(active.canonicalize().unwrap(), generation);
+                    assert_eq!(command.canonicalize().unwrap(), executable);
+                    if let Some(release) = release {
+                        let repeated = tokio::process::Command::new(
+                            release.join("bin/cowboy-machine-install"),
+                        )
+                        .args(["--restore-floor-selection", "--state-dir"])
+                        .arg(state.path())
+                        .arg("--artifact-public-key")
+                        .arg(&key)
+                        .output()
+                        .await
+                        .unwrap();
+                        assert!(repeated.status.success());
+                        let diagnostic =
+                            tokio::process::Command::new(release.join("bin/cowboy-machine"))
+                                .args(["--check-portable-session-deletion", "--state-dir"])
+                                .arg(state.path())
+                                .arg("--artifact-public-key")
+                                .arg(&key)
+                                .output()
+                                .await
+                                .unwrap();
+                        assert!(
+                            diagnostic.status.success(),
+                            "{}",
+                            String::from_utf8_lossy(&diagnostic.stderr)
+                        );
+                    } else {
+                        restore_portable_host_selection(state.path(), &key).unwrap();
+                    }
+                    assert!(!marker.exists());
+                } else {
+                    assert_eq!(std::fs::read_link(&active).ok(), initial_active);
+                    assert_eq!(std::fs::read_link(&command).ok(), initial_command);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn floor_selection_recovery_is_offline_idempotent_and_never_replaces_evidence() {
+        floor_selection_recovery_cases(None).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires current and preceding immutable Machine releases"]
+    async fn immutable_floor_selection_recovery_authenticates_before_any_publisher_code() {
+        let release = PathBuf::from(std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").unwrap());
+        floor_selection_recovery_cases(Some(&release)).await;
     }
 
     #[tokio::test]

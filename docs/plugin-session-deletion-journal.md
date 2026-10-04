@@ -377,3 +377,14 @@ launcher publication. The publisher must match the existing floor. New enrollmen
 unsigned refresh, missing-cache recovery, damaged anchor/floor, key rotation and
 committed deletion state still refuse. Refresh does not select a different cached
 host, replace the floor or enable the writer.
+
+The subsequent [floor selection recovery](releases/plugin-floor-selection-recovery-2026-10-04.md)
+adds an explicit offline `cowboy-machine-install --restore-floor-selection`
+command with `--state-dir` and `--artifact-public-key`. It authenticates the intact
+retained anchor and floor before filling missing selection pointers to that exact
+anchor. An existing pointer must already resolve to the anchor; foreign, damaged
+or non-symlink selections refuse without overwrite. Partial completion can be
+resumed, and complete selection is checked by the normal startup guard. No
+publisher code, Controller request, store repair, floor rewrite or bootstrap
+fallback occurs. Missing/damaged anchor packages, committed deletion state and
+key rotation remain closed; no deletion writer is enabled.
