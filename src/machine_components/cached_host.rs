@@ -1,6 +1,6 @@
 //! Read-only authentication before the portable launcher selects cached code.
-//! The installer-selected bootstrap/key remain trusted; this is not a floor,
-//! signed bootstrap admission, or a fence against concurrent administrators.
+//! An established reader floor retains its signed anchor and forbids downgrade.
+//! Bootstrap/recovery admission and concurrent-administrator fencing stay closed.
 
 use std::io::Read as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
@@ -11,8 +11,10 @@ use sha2::{Digest as _, Sha256};
 
 use super::{component_executable, component_proof, host_payload::HostPayload};
 use crate::machine_protocol::{ComponentKind, DesiredComponent};
+use crate::session_deletion_admission::reader_floor::{self, Floor};
 
 pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> anyhow::Result<()> {
+    let floor = reader_floor::read(state)?;
     let root = state.join("components");
     // Do not construct a ComponentStore: this check creates no cache or stores.
     for path in [&root, &root.join("active"), &root.join("commands")] {
@@ -41,7 +43,8 @@ pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> any
         }
     };
     match (present(&active)?, present(&command)?) {
-        (false, false) => return Ok(()),
+        (false, false) if floor.is_none() => return Ok(()),
+        (false, false) => bail!("portable reader floor refuses unadmitted bootstrap fallback"),
         (true, true) => {}
         _ => bail!("Machine host selection pointers are incomplete"),
     }
@@ -52,6 +55,10 @@ pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> any
     let publisher =
         std::fs::read_to_string(key.context("cached Machine host requires a publisher key")?)?;
     let desired = verify_generation(&root, &generation, &publisher)?;
+    if let Some(floor) = &floor {
+        authenticate_floor(&root, floor, &publisher)?;
+        require_declared_reader(&desired)?;
+    }
     let executable = component_executable(&generation, &desired)?;
     ensure!(
         command.canonicalize()? == executable
@@ -66,6 +73,82 @@ pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> any
     )
     .context("cached Machine host is not executable by the launcher")?;
     Ok(())
+}
+
+fn require_declared_reader(desired: &DesiredComponent) -> anyhow::Result<()> {
+    desired
+        .validate_session_deletion_declaration()
+        .map_err(anyhow::Error::msg)?;
+    ensure!(
+        desired.session_deletion_journal.is_some(),
+        "portable reader floor refuses undeclared Machine host"
+    );
+    Ok(())
+}
+
+fn proof_digest(desired: &DesiredComponent) -> String {
+    format!("{:x}", Sha256::digest(component_proof(desired)))
+}
+
+pub(super) fn authenticate_floor(
+    root: &Path,
+    floor: &Floor,
+    publisher: &str,
+) -> anyhow::Result<()> {
+    floor.check_publisher(publisher)?;
+    let anchor = verify_generation(root, &floor.anchor_path(root), publisher)
+        .context("authenticating portable reader floor anchor")?;
+    require_declared_reader(&anchor)?;
+    ensure!(
+        anchor.generation == floor.anchor_generation
+            && proof_digest(&anchor) == floor.anchor_proof_sha256,
+        "portable reader floor anchor differs from accepted signed proof"
+    );
+    Ok(())
+}
+
+pub(super) fn check_floor_candidate(
+    root: &Path,
+    desired: &DesiredComponent,
+    publisher: Option<&str>,
+) -> anyhow::Result<()> {
+    let state = root
+        .parent()
+        .context("component store has no Machine state parent")?;
+    if let Some(floor) = reader_floor::read(state)? {
+        require_declared_reader(desired)?;
+        authenticate_floor(
+            root,
+            &floor,
+            publisher.context("portable reader floor requires publisher key")?,
+        )?;
+        if desired.version == floor.anchor_version
+            && desired.digest.to_ascii_lowercase() == floor.anchor_digest
+        {
+            ensure!(
+                proof_digest(desired) == floor.anchor_proof_sha256,
+                "portable reader floor refuses replacement of its accepted anchor proof"
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn retain_reader_floor(
+    root: &Path,
+    desired: &DesiredComponent,
+    publisher: &str,
+) -> anyhow::Result<()> {
+    if desired.session_deletion_journal.is_none() {
+        return Ok(());
+    }
+    require_declared_reader(desired)?;
+    let state = root
+        .parent()
+        .context("component store has no Machine state parent")?;
+    let proposed = Floor::new(state, desired, publisher, proof_digest(desired))?;
+    let floor = reader_floor::retain(state, &proposed)?;
+    authenticate_floor(root, &floor, publisher)
 }
 
 pub(super) fn verify_generation(
