@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1791115759231819489-c4d7b663b96c",
+    "revision": "c4d7b663b96cd0cfdb6531dcfe0b9dbcad8a752d",
+    "published": true,
+    "release": "/nix/store/yhjsc50q4318a0r7xzds12a2ny5q5r1i-cowboy-web-release",
+    "previousRelease": "/nix/store/ak9nvwl12dv3hhbiq6am9rmw4d6waf1b-cowboy-web-release",
+    "activeRelease": "/nix/store/yhjsc50q4318a0r7xzds12a2ny5q5r1i-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-04T12:09:19.231819489Z",
+    "recordedAt": "2026-10-04T12:09:19.302225583Z",
+    "recovered": false
+  },
+  "verification": {
+    "web_version": "6bb586fb965e44806888dd1c5d03ca22",
+    "service_worker": "cowboy-v1830",
+    "healthz": "ok",
+    "spa_status": 200,
+    "spa_cache_control": "no-store",
+    "controller_pid_before": 2336663,
+    "controller_pid_after": 2336663,
+    "machine_active": true,
+    "unit_tests": {
+      "passed": 24,
+      "failed": 0
+    },
+    "typecheck": "passed",
+    "lint": "passed with existing warnings",
+    "session_move_browser": {
+      "browser": "Firefox 151.0.1",
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "result": "passed"
+    },
+    "physical_ipad": "not checked"
+  },
+  "root_cause_evidence": {
+    "layout": "server global_bootstrap sends Sessions before independently framed title/order/folder SyncPatch messages; store previously published each frame independently",
+    "local_restore": "replica adoption previously ran independently of title/order/folder outbox hydration",
+    "font_handover": "snapshot removal previously deleted boot-snapshot-fonts while useReadingFontFaces lazy CSS import could still be pending"
+  },
+  "scope": "Web only; no Controller or Machine activation"
+}
