@@ -18,7 +18,7 @@ import {
   KeyboardDoubleArrowRight,
   ListAltOutlined,
 } from "@mui/icons-material";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import { ProviderIcon } from "../ProviderIcon";
 import type { SessionMeta } from "../protocol";
@@ -284,15 +284,16 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
       aria-hidden
       sx={{
         position: "absolute",
-        top: -4,
-        right: -6,
-        minWidth: 16,
-        height: 16,
+        // Sits off the glyph's corner so the folder shape stays readable.
+        top: -6,
+        right: -10,
+        minWidth: 15,
+        height: 15,
         px: "3px",
         display: "grid",
         placeItems: "center",
         borderRadius: 99,
-        fontSize: 10,
+        fontSize: 9.5,
         fontWeight: 750,
         lineHeight: 1,
         fontVariantNumeric: "tabular-nums",
@@ -309,13 +310,20 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
 
 function RailGroupButton({
   group,
+  index,
   open,
   onOpen,
 }: {
   group: RailGroup;
+  index: number;
   open: boolean;
   onOpen: (anchor: HTMLElement) => void;
 }): React.JSX.Element {
+  const workspace = useDesktopWorkspace();
+  // Contextual slots: only while the rail owns keyboard focus, like every
+  // other region-scoped hint. Digits 1…9 open that folder directly.
+  const digit = index < 9 ? String(index + 1) : null;
+  const hint = digit !== null && workspace.focusedRegion === "sessions.rail";
   const Icon = group.kind === "folder"
     ? (open ? FolderOpenOutlined : FolderOutlined)
     : ListAltOutlined;
@@ -327,6 +335,9 @@ function RailGroupButton({
     >
       <ButtonBase
         data-desktop-rail-group={group.id}
+        data-desktop-item={group.id}
+        data-desktop-current={group.current ? "true" : undefined}
+        aria-keyshortcuts={digit ?? undefined}
         aria-label={`${group.name}: ${activitySummary(group)}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -348,8 +359,10 @@ function RailGroupButton({
           bgcolor: open ? "action.selected" : "transparent",
           transition: "background-color 120ms ease, color 120ms ease",
           "&:hover": { bgcolor: open ? "action.selected" : "action.hover", color: "text.primary" },
-          "&.Mui-focusVisible": {
-            boxShadow: (theme) => `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.5)}`,
+          "&.Mui-focusVisible, &:focus-visible": {
+            outline: "none",
+            bgcolor: open ? "action.selected" : "action.hover",
+            boxShadow: (theme) => `inset 0 0 0 2px ${alpha(theme.palette.primary.main, 0.55)}`,
           },
           // The group holding the open session carries the edge pill.
           ...(group.current && {
@@ -369,6 +382,14 @@ function RailGroupButton({
         <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
           <Icon sx={{ fontSize: 22 }} />
           <GroupBadge group={group} />
+          {hint && digit && (
+            <ShortcutKeycap
+              keyLabel={digit}
+              variant="context"
+              availability="available"
+              sx={{ position: "absolute", top: -6, left: -12 }}
+            />
+          )}
         </Box>
         <Typography
           component="span"
@@ -396,6 +417,7 @@ function RailGroupMenu({
   activeId,
   slots,
   onClose,
+  onExited,
   onPick,
   onShowAll,
   renderStatus,
@@ -404,17 +426,49 @@ function RailGroupMenu({
   anchor: HTMLElement | null;
   activeId: string | null;
   slots: ReadonlyMap<string, number>;
-  onClose: () => void;
+  /** `back`: the user stepped back out (Esc / h) — return focus to the rail. */
+  onClose: (back: boolean) => void;
+  /** The close transition finished and the menu items are gone. */
+  onExited: () => void;
   onPick: (id: string) => void;
   onShowAll: () => void;
   renderStatus: (session: SessionMeta) => React.ReactNode;
 }): React.JSX.Element {
+  // Vim keys inside the menu, matching the list it stands in for: j/k move,
+  // l opens, h steps back to the rail. Captured before MUI's first-letter
+  // type-ahead, which would otherwise treat j/k/h/l as item searches.
+  const onListKeyDown = (event: React.KeyboardEvent<HTMLElement>): void => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    if (!["j", "k", "h", "l"].includes(key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (key === "h") {
+      onClose(true);
+      return;
+    }
+    const items = [...event.currentTarget.querySelectorAll<HTMLElement>(
+      "[role='menuitem']:not([aria-disabled='true'])",
+    )];
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    if (key === "l") {
+      items[current]?.click();
+      return;
+    }
+    const next = key === "j"
+      ? Math.min(items.length - 1, current + 1)
+      : Math.max(0, current < 0 ? 0 : current - 1);
+    items[next]?.focus();
+  };
   const empty = !group || group.sections.every((section) => section.sessions.length === 0);
   return (
     <Menu
       open={group !== null && anchor !== null}
       anchorEl={anchor}
-      onClose={onClose}
+      onClose={(_event, reason): void => onClose(reason === "escapeKeyDown")}
+      // Focus is placed explicitly: back to the rail on Esc/h, into the
+      // Prompt after opening a session (MUI would pull it back to the rail).
+      disableRestoreFocus
       anchorOrigin={{ vertical: "top", horizontal: "right" }}
       transformOrigin={{ vertical: "top", horizontal: "left" }}
       slotProps={{
@@ -428,7 +482,8 @@ function RailGroupMenu({
             borderColor: "divider",
           },
         },
-        list: { dense: true, sx: { py: 0.5 } },
+        list: { dense: true, sx: { py: 0.5 }, onKeyDownCapture: onListKeyDown },
+        transition: { onExited },
       }}
     >
       {group && (
@@ -478,13 +533,17 @@ function RailGroupMenu({
               data-desktop-rail-session={session.id}
               onClick={(): void => {
                 onPick(session.id);
-                onClose();
+                onClose(false);
               }}
               sx={{
                 gap: 1,
                 minHeight: 36,
                 pl: 2 + indent * 1.5,
                 // The open session reads like the current row in the list.
+                "&.Mui-focusVisible, &:focus-visible": {
+                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08),
+                  boxShadow: (theme) => `inset 2px 0 0 ${theme.palette.primary.main}`,
+                },
                 "&.Mui-selected": {
                   bgcolor: (theme) => alpha(theme.palette.primary.main, 0.13),
                   color: "primary.main",
@@ -519,7 +578,7 @@ function RailGroupMenu({
       {group && (
         <MenuItem
           onClick={(): void => {
-            onClose();
+            onClose(false);
             onShowAll();
           }}
           sx={{ gap: 1, minHeight: 34, color: "text.secondary", fontSize: 13 }}
@@ -528,6 +587,29 @@ function RailGroupMenu({
           <Box component="span" sx={{ flex: 1 }}>Show all sessions</Box>
           <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.toggleSessions} compact quiet />
         </MenuItem>
+      )}
+      {group && (
+        // The menu's own key map, since it owns the keyboard while open.
+        <Box
+          aria-hidden
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 0.5,
+            px: 2,
+            pt: 0.5,
+            pb: 0.75,
+            fontSize: 11,
+            color: "text.disabled",
+          }}
+        >
+          <ShortcutKeycap keyLabel="J/K" variant="modal" />
+          <span>move</span>
+          <ShortcutKeycap keyLabel="Enter" variant="modal" sx={{ ml: 0.75 }} />
+          <span>open</span>
+          <ShortcutKeycap keyLabel="H" variant="modal" sx={{ ml: 0.75 }} />
+          <span>back</span>
+        </Box>
       )}
     </Menu>
   );
@@ -561,6 +643,10 @@ export function DesktopSessionsRail({
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
+  // Esc/h steps back to the folder that opened the menu. Focus moves only
+  // after the menu has unmounted; earlier, its focus trap or the vanishing
+  // item would drop focus to the region instead.
+  const returnFocus = useRef<HTMLElement | null>(null);
   const openGroup = menu ? groups.find((group) => group.id === menu.id) ?? null : null;
   const expand = (
     <Tooltip title={<PaneTooltip pane="sessions" collapsed />} placement="right" enterDelay={350}>
@@ -593,6 +679,9 @@ export function DesktopSessionsRail({
       component="nav"
       aria-label="Sessions (collapsed)"
       data-desktop-sessions-rail
+      // The collapsed rail is the visible Sessions pane: Cmd/Alt+K S focuses
+      // it (instead of unfolding the list), so the layout choice survives.
+      data-desktop-pane="sessions"
       sx={{
         width: DESKTOP_SESSIONS_RAIL_WIDTH,
         flexShrink: 0,
@@ -625,9 +714,12 @@ export function DesktopSessionsRail({
         {expand}
       </Box>
       <Stack
+        data-desktop-region="sessions.rail"
+        tabIndex={-1}
         alignItems="center"
         spacing={0.5}
         sx={{
+          outline: "none",
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
@@ -680,10 +772,11 @@ export function DesktopSessionsRail({
         {groups.length > 0 && (
           <Box aria-hidden sx={{ width: 24, height: "1px", bgcolor: "divider", my: 0.5, flexShrink: 0 }} />
         )}
-        {groups.map((group) => (
+        {groups.map((group, index) => (
           <RailGroupButton
             key={group.id}
             group={group}
+            index={index}
             open={menu?.id === group.id}
             onOpen={(anchor): void => setMenu({ id: group.id, anchor })}
           />
@@ -694,8 +787,23 @@ export function DesktopSessionsRail({
         anchor={menu?.anchor ?? null}
         activeId={activeId}
         slots={slots}
-        onClose={(): void => setMenu(null)}
-        onPick={onPick}
+        onClose={(back): void => {
+          returnFocus.current = back ? menu?.anchor ?? null : null;
+          setMenu(null);
+        }}
+        onExited={(): void => {
+          returnFocus.current?.focus({ preventScroll: true });
+          returnFocus.current = null;
+        }}
+        onPick={(id): void => {
+          onPick(id);
+          // Opening a session from the rail lands in its work surface, as
+          // opening one from the list does; a collapsed Prompt stays folded.
+          const target = workspace.collapsedPanes.prompt
+            ? "conversation.transcript"
+            : "prompt.composer";
+          requestAnimationFrame(() => workspace.focusRegion(target));
+        }}
         onShowAll={(): void => workspace.togglePane("sessions")}
         renderStatus={renderStatus}
       />

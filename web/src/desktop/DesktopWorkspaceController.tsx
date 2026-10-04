@@ -165,6 +165,12 @@ export function DesktopWorkspaceProvider({
       pane === "sessions" &&
       globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches
     ) return false;
+    // Collapsed Sessions still has a visible, navigable rail: jumping there
+    // focuses the rail and keeps the layout. Only `[` unfolds the list.
+    if (
+      pane === "sessions" &&
+      document.querySelector("[data-desktop-region='sessions.rail']")
+    ) return false;
     const current = desktopCollapsedPanesStore.get();
     if (!current[pane]) return false;
     desktopCollapsedPanesStore.set(withPaneCollapsed(current, pane, false));
