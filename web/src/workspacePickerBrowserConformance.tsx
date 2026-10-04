@@ -61,6 +61,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       <ThemeProvider theme={theme}>
         <WorkspacePicker
           label="Sessions directory (optional)"
+          clearable
           hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
           entries={directoryEntries}
           value={value}
@@ -309,8 +310,12 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     click('[role="combobox"]');
     await settle();
     check(
-      item("Global").classList.contains("Mui-selected"),
-      "Empty directory defaults to Global",
+      !document.querySelector('[role="menu"]')?.textContent?.includes(
+        "Global",
+      ) &&
+        container.querySelector<HTMLInputElement>('[role="combobox"]')
+            ?.value === "",
+      "Optional directory starts blank with no synthetic Global row",
     );
     click('[role="menuitem"]', "Work");
     await settle();
@@ -334,11 +339,25 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       item("Nested").classList.contains("Mui-selected"),
       "Selected nested directory is revealed",
     );
-    click(".MuiBreadcrumbs-root button");
-    await settle();
-    click('[role="menuitem"]', "Global");
+    click("button", "Clear selection");
     await closed();
-    check(selections.at(-1) === "", "Global clears the directory value");
+    check(
+      selections.at(-1) === "" &&
+        container.querySelector<HTMLInputElement>('[role="combobox"]')
+            ?.value === "",
+      "Popup clear returns to a genuinely empty directory",
+    );
+    click('[role="combobox"]');
+    await settle();
+    click('[role="menuitem"]', "Work");
+    await settle();
+    click('[role="menuitem"]', "Nested");
+    await closed();
+    click('button[aria-label="Clear Sessions directory (optional)"]');
+    check(
+      selections.at(-1) === "" && !document.querySelector('[role="menu"]'),
+      "Field clear empties selection without opening the dropdown",
+    );
     return [
       "default hierarchy",
       "parent browsing preserves selection",
@@ -349,7 +368,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       "saved preference",
       "project hierarchy independent of old directory preference",
       "cross-Machine project search by source path",
-      "optional Sessions directory: empty Global, parent/child selection and automatic reveal",
+      "optional Sessions directory: blank, real directories only, parent/child reveal and clear in field/popup",
     ];
   } finally {
     flushSync(() => root.unmount());

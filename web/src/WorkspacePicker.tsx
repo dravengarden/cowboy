@@ -6,6 +6,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
+  IconButton,
   InputAdornment,
   MenuItem,
   MenuList,
@@ -17,6 +18,7 @@ import {
 import {
   Check,
   ChevronRight,
+  Close,
   ExpandMore,
   FolderOpenOutlined,
   FolderOutlined,
@@ -38,8 +40,10 @@ export function WorkspacePicker(
     configuredDefault,
     onDefaultChange,
     hierarchyPreferenceKey,
+    clearable = false,
   }: {
     label?: string;
+    clearable?: boolean;
     hierarchyPreferenceKey?: string;
     entries: readonly WorkspaceEntry[];
     value: string;
@@ -170,7 +174,26 @@ export function WorkspacePicker(
         slotProps={{
           input: {
             readOnly: true,
-            endAdornment: <ExpandMore />,
+            endAdornment: (
+              <InputAdornment position="end">
+                {clearable && value && (
+                  <IconButton
+                    aria-label={`Clear ${label}`}
+                    title="Clear selection"
+                    size="small"
+                    sx={{ minWidth: 44, minHeight: 44 }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      choose("");
+                    }}
+                  >
+                    <Close fontSize="small" />
+                  </IconButton>
+                )}
+                <ExpandMore />
+              </InputAdornment>
+            ),
           },
           htmlInput: {
             role: "combobox",
@@ -275,6 +298,16 @@ export function WorkspacePicker(
               if (event.key === "Enter") event.stopPropagation();
             }}
           />
+          {clearable && value && (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => choose("")}
+              sx={{ alignSelf: "flex-start", minHeight: 44 }}
+            >
+              Clear selection
+            </Button>
+          )}
           {hasGroups && (
             <FormControlLabel
               label={label === "Project"
@@ -438,6 +471,11 @@ export function WorkspacePicker(
             ]
             : matches.map((entry) => entryRow(entry))}
         </MenuList>
+        {clearable && entries.length === 0 && !query && (
+          <Typography sx={{ p: 2 }} color="text.secondary">
+            No directories available
+          </Typography>
+        )}
         {query && matches.length === 0 &&
           (
             <Typography sx={{ p: 2 }} color="text.secondary">

@@ -287,7 +287,10 @@ Machine, retaining the existing connected/local fallback when it is absent.
 “Reset default” restores automatic selection. A configured identity that is
 removed does not silently select another project.
 
-The optional Sessions directory starts empty (Global) on ordinary creation.
+The optional Sessions directory starts visibly empty on ordinary creation.
+Global means no selection: it is not a synthetic row in the directory dropdown.
+A selected directory can be cleared through the field's clear button or the
+popup's Clear selection action.
 Creation from a folder preselects that folder. Choosing a directory does not
 change the source project or executor. Successful creation writes an explicit
 placement, including Global, so project bindings cannot override this choice.

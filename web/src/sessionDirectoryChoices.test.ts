@@ -5,7 +5,7 @@ import {
   sessionFolderMutators,
 } from "./sessionFolders.ts";
 import type { SessionMeta } from "./protocol.ts";
-Deno.test("session directory choices expose empty Global and exact nested folder identities", () => {
+Deno.test("session directory choices contain only folders; empty placement remains Global", () => {
   const folders = {
     folders: [
       {
@@ -26,10 +26,9 @@ Deno.test("session directory choices expose empty Global and exact nested folder
     placement: {},
   };
   const choices = sessionDirectoryChoices(folders);
-  assertEquals(choices[0].value, "");
-  assertEquals(choices[0].label, "Global");
-  assertEquals(choices[2].value, "child");
-  assertEquals(choices[2].hierarchyPath, ["Work", "Cowboy"]);
+  assertEquals(choices.map((choice) => choice.value), ["parent", "child"]);
+  assertEquals(choices[1].hierarchyPath, ["Work", "Cowboy"]);
+  assertEquals(sessionDirectoryChoices({ folders: [], placement: {} }), []);
   const session = { id: "new", workspace_name: "cowboy" } as SessionMeta;
   assertEquals(effectiveSessionFolder(session, folders), "parent");
   assertEquals(

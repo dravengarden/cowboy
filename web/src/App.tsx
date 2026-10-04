@@ -2699,14 +2699,12 @@ function NewSessionDialog({
                 />
                 <WorkspacePicker
                     label="Sessions directory (optional)"
+                    clearable
                     hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
                     entries={directoryChoices}
                     value={directory}
                     onChange={setDirectory}
                 />
-                <Typography variant="caption" color="text.secondary">
-                    Empty means Global. This organizes the session list; Project determines the working directory.
-                </Typography>
                 <AiInstallationPicker
                     installations={placement.installations}
                     value={placement.installation?.value ?? ""}
