@@ -1756,10 +1756,43 @@ mod tests {
         }
     }
 
+    fn replace_publisher_key_fixture(key: &Path, case: &str) {
+        match case {
+            "key-link" => {
+                let retained = key.with_extension("retained");
+                std::fs::rename(key, &retained).unwrap();
+                std::os::unix::fs::symlink(retained, key).unwrap();
+            }
+            "key-fifo" => {
+                std::fs::remove_file(key).unwrap();
+                rustix::fs::mkfifoat(
+                    rustix::fs::CWD,
+                    key,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .unwrap();
+            }
+            "key-oversized" => {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(key)
+                    .unwrap()
+                    .set_len(16 * 1024 + 1)
+                    .unwrap();
+            }
+            "key-invalid-utf8" => std::fs::write(key, [0xff]).unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
     #[tokio::test]
     async fn cached_host_authentication_is_offline_read_only_and_refuses_substitution() {
         for archive in [false, true] {
             for case in [
+                "key-link",
+                "key-fifo",
+                "key-oversized",
+                "key-invalid-utf8",
                 "bytes",
                 "manifest",
                 "artifact",
@@ -1813,6 +1846,9 @@ mod tests {
                 std::fs::write(&wrong, other_key.public_key()).unwrap();
                 assert!(check_portable_host_cache(state.path(), Some(&wrong)).is_err());
                 match case {
+                    "key-link" | "key-fifo" | "key-oversized" | "key-invalid-utf8" => {
+                        replace_publisher_key_fixture(&key, case);
+                    }
                     "bytes" => {
                         let path = if archive {
                             generation.join("content/lib/companion")
@@ -1946,9 +1982,14 @@ mod tests {
         );
         let native = release.join("bin/cowboy-machine");
         assert!(native.is_file());
+        let mut observations = Vec::new();
         for archive in [false, true] {
             for case in [
                 "healthy",
+                "key-link",
+                "key-fifo",
+                "key-oversized",
+                "key-invalid-utf8",
                 "bytes",
                 "manifest",
                 "artifact",
@@ -2083,6 +2124,9 @@ mod tests {
                 std::fs::write(&bootstrap, format!("#!/bin/sh\nif [ \"${{1-}}\" = --check-portable-session-deletion ]; then exec '{}' \"$@\"; fi\ntouch '{}'\n", native.display(), fallback.display())).unwrap();
                 set_executable(&bootstrap).unwrap();
                 match case {
+                    "key-link" | "key-fifo" | "key-oversized" | "key-invalid-utf8" => {
+                        replace_publisher_key_fixture(&key, case);
+                    }
                     "healthy" | "floor-healthy" | "floor-absent" | "floor-legacy"
                     | "floor-corrupt" | "floor-anchor" => {}
                     "bytes" => {
@@ -2123,17 +2167,53 @@ mod tests {
                     }
                     _ => unreachable!(),
                 }
+                let preceding = if matches!(case, "key-link" | "key-fifo")
+                    && std::env::var_os("COWBOY_TEST_PORTABLE_PRE_KEY_RELEASE").is_some()
+                {
+                    let old = PathBuf::from(
+                        std::env::var("COWBOY_TEST_PORTABLE_PRE_KEY_RELEASE")
+                            .expect("preceding key reader release required"),
+                    );
+                    let output = tokio::process::Command::new("timeout")
+                        .args(["--kill-after=2s", "2s"])
+                        .arg(old.join("bin/cowboy-machine"))
+                        .args(["--check-portable-session-deletion", "--state-dir"])
+                        .arg(state.path())
+                        .arg("--artifact-public-key")
+                        .arg(&key)
+                        .output()
+                        .await
+                        .unwrap();
+                    if case == "key-link" {
+                        assert!(output.status.success(), "preceding reader refused key link");
+                    } else {
+                        assert_eq!(
+                            output.status.code(),
+                            Some(124),
+                            "preceding FIFO did not block"
+                        );
+                    }
+                    Some(output.status.code())
+                } else {
+                    None
+                };
                 let launcher = state.path().join("launcher");
                 std::fs::write(
                     &launcher,
                     crate::machine_install::portable_cache_launcher_fixture(state.path(), &key),
                 )
                 .unwrap();
-                let output = tokio::process::Command::new("/bin/sh")
+                let output = tokio::process::Command::new("timeout")
+                    .args(["--kill-after=2s", "10s", "/bin/sh"])
                     .arg(&launcher)
                     .output()
                     .await
                     .unwrap();
+                assert_ne!(
+                    output.status.code(),
+                    Some(124),
+                    "{archive}/{case}: startup hung"
+                );
                 assert_eq!(
                     output.status.success(),
                     matches!(case, "healthy" | "floor-healthy"),
@@ -2146,12 +2226,29 @@ mod tests {
                     "{archive}/{case}: selected code executed"
                 );
                 assert!(!fallback.exists(), "{archive}/{case}: fallback executed");
+                observations.push(serde_json::json!({
+                    "format": if archive { "tar_gz" } else { "raw" },
+                    "case": case, "exitCode": output.status.code(),
+                    "precedingExitCode": preceding,
+                    "selectedExecuted": selected.exists(), "fallbackExecuted": false,
+                }));
                 assert_eq!(
                     state.path().join("run").exists(),
                     matches!(case, "healthy" | "floor-healthy"),
                     "refusal created runtime directory"
                 );
             }
+        }
+        if let Ok(path) = std::env::var("COWBOY_TEST_CACHE_KEY_RECEIPT") {
+            std::fs::write(
+                path,
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema": 1, "accepted": true, "release": release,
+                    "observations": observations,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
         }
     }
 

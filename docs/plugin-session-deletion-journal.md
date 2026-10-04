@@ -419,3 +419,9 @@ descriptor. Fixed byte buffers preserve valid large-package admission; archive
 path/hash metadata still scales with entry count. Publisher, floor, directory,
 payload and pointer authentication remain unchanged, with no additional recovery
 or deletion-writer authority.
+
+The subsequent [bounded startup key input](releases/plugin-cache-key-input-2026-10-04.md)
+uses recovery's regular-file, no-follow and 16 KiB publisher-key checks for
+ordinary cached startup too. FIFO, key symlink, oversized and invalid UTF-8 inputs
+refuse before cached code execution. This changes no floor, publisher or writer
+authority; configured keys must use regular files, as already required by recovery.
