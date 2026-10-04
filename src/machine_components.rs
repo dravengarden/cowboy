@@ -869,6 +869,34 @@ mod tests {
     }
 
     #[test]
+    fn retaining_host_proof_does_not_follow_cached_destination_or_partial_links() {
+        let state = tempfile::tempdir().unwrap();
+        let generation = state.path().join("generation");
+        std::fs::create_dir(&generation).unwrap();
+        let outside = state.path().join("outside");
+        std::fs::write(&outside, b"retained outside bytes").unwrap();
+        for name in ["artifact", ".artifact.partial"] {
+            std::os::unix::fs::symlink(&outside, generation.join(name)).unwrap();
+        }
+        retain_host_artifact(&generation, b"authenticated proof").unwrap();
+        assert_eq!(std::fs::read(&outside).unwrap(), b"retained outside bytes");
+        assert!(
+            std::fs::symlink_metadata(generation.join("artifact"))
+                .unwrap()
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read(generation.join("artifact")).unwrap(),
+            b"authenticated proof"
+        );
+        assert_eq!(
+            std::fs::read_link(generation.join(".artifact.partial")).unwrap(),
+            outside
+        );
+        assert_eq!(std::fs::read_dir(&generation).unwrap().count(), 2);
+    }
+
+    #[test]
     fn absent_cached_host_selection_needs_no_key_or_state_creation() {
         let root = tempfile::tempdir().unwrap();
         let state = root.path().join("absent");
