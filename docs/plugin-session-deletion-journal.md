@@ -166,6 +166,11 @@ Writer-release acceptance and the remaining recovery authorities are still
 open; production writing remains disabled. Release metadata is a build-owned
 claim, not authorization.
 
+The [activation authority audit](plugin-activation-authority.md) identifies the
+actual unrestricted-root and same-user write bypasses and a concrete owner
+separation proposal. No old-tool permission fence is implemented by that audit;
+the existing administrator policy needs an explicit scope decision.
+
 ## Portable refusal gate
 
 Portable component declarations do not bind a Session deletion reader schema.

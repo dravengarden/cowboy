@@ -76,6 +76,7 @@ primary phone/desktop product path.
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
 - [`plugin-session-deletion-journal.md`](plugin-session-deletion-journal.md) — Reader-first terminal Session records, component reader floor and bounded recovery; production writer remains disabled
+- [`plugin-activation-authority.md`](plugin-activation-authority.md) — Independent old-tool authority audit and proposed privileged-owner separation; decision pending
 - [`releases/plugin-session-deletion-reader-2026-10-03.md`](releases/plugin-session-deletion-reader-2026-10-03.md) — Initial bounded reader, IPC fixtures and Hawk writer-disabled activation
 - [`releases/plugin-session-deletion-compatibility-2026-10-03.md`](releases/plugin-session-deletion-compatibility-2026-10-03.md) — Immutable reader declarations and component activation/rollback admission
 - [`releases/plugin-session-deletion-floor-2026-10-03.md`](releases/plugin-session-deletion-floor-2026-10-03.md) — Root-owned durable reader floor, live undeclared-artifact refusal and same-generation recovery fixtures
