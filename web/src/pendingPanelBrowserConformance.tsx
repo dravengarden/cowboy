@@ -67,9 +67,26 @@ export async function checkPendingPanelLayout(): Promise<string> {
             const header = button.parentElement!;
             const panel = header.parentElement!;
             check(
-              getComputedStyle(panel).borderTopWidth === "0px",
-              "Panel has no card frame",
+              getComputedStyle(panel).borderTopWidth ===
+                (desktop ? "0px" : "1px"),
+              "Only Desktop removes the card frame",
             );
+            if (!desktop) {
+              check(
+                parseFloat(getComputedStyle(panel).borderTopLeftRadius) > 0,
+                "Mobile retains rounded card",
+              );
+              check(
+                button.textContent?.includes(
+                  label.includes("drafts") ? "2 Drafts" : "2 Queued Messages",
+                ),
+                "Mobile retains count-first labels",
+              );
+              check(
+                getComputedStyle(panel).backgroundColor !== "rgba(0, 0, 0, 0)",
+                "Mobile retains staging fill",
+              );
+            }
             check(
               getComputedStyle(panel).boxShadow === "none",
               "Panel has no focus halo",
@@ -82,10 +99,11 @@ export async function checkPendingPanelLayout(): Promise<string> {
               "button",
             );
             for (const action of actions) {
+              if (action.getClientRects().length === 0) continue;
               const rect = action.getBoundingClientRect();
               check(
-                rect.height >= (desktop ? 32 : 44),
-                "Disclosure and menu retain target height",
+                rect.height >= (desktop ? 32 : action === button ? 44 : 28),
+                "Desktop targets and original Mobile disclosure/icon sizing are retained",
               );
               check(
                 rect.right <= header.getBoundingClientRect().right + 1,
@@ -93,8 +111,9 @@ export async function checkPendingPanelLayout(): Promise<string> {
               );
             }
             check(
-              !header.querySelector("button[aria-label='reorder']"),
-              "Collapsed rail hides reorder",
+              Boolean(header.querySelector("button[aria-label='reorder']")) ===
+                !desktop,
+              "Only Desktop hides collapsed reorder",
             );
           }
           const drafts = container.querySelector<HTMLButtonElement>(
@@ -137,7 +156,7 @@ export async function checkPendingPanelLayout(): Promise<string> {
         }
       }
     }
-    return "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; disclosure, menu and touch targets passed";
+    return "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed";
   } finally {
     expanded.set(previous);
     document.documentElement.style.fontSize = originalFont;

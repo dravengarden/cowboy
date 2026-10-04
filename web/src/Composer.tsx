@@ -4146,15 +4146,20 @@ export function PendingPanel({
         : {})}
       sx={{
         mb: desktop ? 0.5 : 0,
-        // A disclosure rail belongs to the canvas, not a second input card.
-        // Paint-only focus feedback keeps Mobile's peek a single swipe layer.
-        border: 0,
-        borderBottom: 1,
-        borderColor: "divider",
-        borderRadius: 0,
-        overflow: "hidden",
-        bgcolor: "transparent",
-        "&:focus-within": { borderColor: "primary.main" },
+        // Only Desktop adopts the borderless disclosure rail. Mobile keeps its
+        // established staging cards and touch geometry.
+        ...(desktop ? {
+          border: 0,
+          borderBottom: 1,
+          borderColor: "divider",
+          borderRadius: 0,
+          overflow: "hidden",
+          bgcolor: "transparent",
+          "&:focus-within": { borderColor: "primary.main" },
+        } : {
+          ...mobileComposerPanelFrameSx,
+          bgcolor: kind === "draft" ? "action.selected" : "action.hover",
+        }),
         ...(mobileFloatingEdit && {
           border: 0,
           bgcolor: "transparent",
@@ -4183,14 +4188,16 @@ export function PendingPanel({
         // Desktop is a compact utility rail; Mobile keeps native touch height.
         sx={{
           display: mobileFloatingEdit ? "none" : "flex",
-          pr: desktop ? 0.5 : 0,
+          pr: desktop ? 0.5 : 0.75,
           py: 0,
           minHeight: desktop ? 32 : mobileComposerPanelHeaderMinHeight,
-          "& > .MuiIconButton-root": {
-            width: desktop ? 32 : 44,
-            height: desktop ? 32 : 44,
-            minHeight: desktop ? 32 : 44,
-          },
+          ...(desktop && {
+            "& > .MuiIconButton-root": {
+              width: 32,
+              height: 32,
+              minHeight: 32,
+            },
+          }),
         }}
       >
         {
@@ -4221,12 +4228,13 @@ export function PendingPanel({
             // pointerup activation changes the panel layout before Safari emits
             // its follow-up click. Keep immediate press feedback without a
             // stateful ripple that can get stranded after the panel expands.
-            "&:active, &:focus-visible": { bgcolor: "action.hover" },
+            "&:active": { bgcolor: "action.hover" },
+            ...(desktop && { "&:focus-visible": { bgcolor: "action.hover" } }),
           }}
         >
           <Box
             sx={{
-              width: desktop ? 28 : 36,
+              width: desktop ? 28 : 40,
               display: "inline-flex",
               justifyContent: "center",
               flexShrink: 0,
@@ -4239,15 +4247,19 @@ export function PendingPanel({
               : <ExpandMore fontSize="small" />}
           </Box>
           <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
-            {kind === "draft" ? "Drafts" : "Queue"}
+            {desktop
+              ? kind === "draft" ? "Drafts" : "Queue"
+              : `${count} ${noun}${count === 1 ? "" : "s"}`}
           </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ ml: 0.75, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
-          >
-            {count}
-          </Typography>
+          {desktop && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ ml: 0.75, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+            >
+              {count}
+            </Typography>
+          )}
           {editingId !== null && (
             <Typography
               variant="caption"
@@ -4370,7 +4382,7 @@ export function PendingPanel({
             panel (ROW_ACTIONS_INLINE): there the grips are always shown, so the
             toggle is redundant — same adaptive rule as the row actions. */
         }
-        {count >= 2 && !visuallyCollapsed && (
+        {count >= 2 && (!desktop || !visuallyCollapsed) && (
           <IconButton
             size="small"
             disabled={editingId !== null}
@@ -4391,8 +4403,8 @@ export function PendingPanel({
           size="small"
           disabled={editingId !== null}
           aria-label={kind === "draft" ? "Draft actions" : "Queue actions"}
-          aria-haspopup="menu"
-          aria-expanded={panelMenuEl !== null}
+          aria-haspopup={desktop ? "menu" : undefined}
+          aria-expanded={desktop ? panelMenuEl !== null : undefined}
           onClick={(event): void => {
             haptic();
             setPanelMenuEl(event.currentTarget);

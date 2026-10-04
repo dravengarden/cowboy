@@ -2747,13 +2747,14 @@ Desktop Vim + IME checks:
     the real product theme, editor and command dispatcher at 320–1560px, enlarged
     fonts, both themes, focus transfer, IME holds and menu ownership.
 
-114. **Queue/Drafts are disclosure rails, not another input card.** Their outer
-    frame and tinted fill obscure the borderless Prompt canvas. Use a quiet
-    divider and paint-only focus feedback, a 32px Desktop rail and 44px Mobile
-    targets. The count and menu stay visible; redundant Desktop list-jump hints
-    follow actual panel width, and reorder is revealed after expansion. Preserve
-    exclusive accordion, dirty-edit confirmation, floating keyboard editor and
-    existing Obsidian-aligned editor ownership. This changes chrome geometry only;
-    no CM6, IME, caret, attachment or swipe recognizer changes. Browser checks cover
-    both themes, 320–1200px and enlarged fonts; physical iPhone acceptance is not
-    established by them, and #69 remains open.
+114. **Desktop Queue/Drafts are disclosure rails, not another input card.**
+    This optimization is Desktop-only, per the user's explicit correction on
+    2026-10-04: "我只是让你优化 desktop，没让你改 mobile 啊". Desktop uses a
+    quiet divider, paint-only focus feedback, 32px rail, separate count and
+    width-dependent shortcut hints; reorder appears after expansion. Mobile
+    keeps its established framed/tinted cards, count-first wording, gutters,
+    chevron width, icon sizing and collapsed reorder access. Preserve exclusive
+    accordion, dirty-edit confirmation and floating keyboard editor ownership.
+    No CM6, IME, caret, attachment or swipe recognizer changes. Browser checks
+    cover both themes, 320–1200px and enlarged fonts, including Mobile restoration;
+    physical iPhone acceptance is not established by them, and #69 remains open.
