@@ -359,6 +359,14 @@ The [2026-10-04 native acceptance receipt](experiments/execution-transport-recov
 records both current Provider lanes and a real legacy keeper. The Codex lane
 also emits 8 MiB while its control transport is unavailable for 35 seconds.
 
+The enrolled-session gate, `just execution-session-conformance INPUT RECEIPT`,
+accepts `browser_device: true` for current Controllers. Its disposable P-256 key
+signs authenticated HTTP and WebSocket requests, including after Controller
+restart; a cookie without its device proof must be refused. The fixture acts at
+the trusted loopback TLS proxy boundary and does not test external TLS
+termination. It uses no production credentials or model requests. Retained
+Controllers predating device binding can use the original fixture mode.
+
 Do not merely increase a timeout or open a replacement upstream session and call
 that recovery. If the target keeper or executor is lost, expose that loss and
 retain the worktree; surviving processes require independent ownership evidence.
