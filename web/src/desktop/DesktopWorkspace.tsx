@@ -48,7 +48,6 @@ const PROMPT_MIN = DESKTOP_PROMPT_MIN;
 const CONVERSATION_MIN = DESKTOP_CONVERSATION_MIN;
 // A Prompt that inherits the Conversation's width stays a readable writing
 // column instead of a full-window line length.
-const PROMPT_WIDE_MEASURE = 960;
 const NO_MESSAGES: readonly unknown[] = [];
 
 /** Queue and draft counts stay visible on the collapsed Prompt rail. */
@@ -478,7 +477,6 @@ export function DesktopWorkspace({
             flex: 1,
             minHeight: 0,
             width: "100%",
-            maxWidth: conversationCollapsed ? PROMPT_WIDE_MEASURE : "none",
             alignSelf: "center",
             display: "flex",
             flexDirection: "column",

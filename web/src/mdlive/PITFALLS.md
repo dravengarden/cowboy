@@ -2730,3 +2730,19 @@ Desktop Vim + IME checks:
     recognising a multi-image row. Per-image deletion already falls back to a
     token-only range when a row carries more than one token, so removing the
     last one still takes the whole row.
+
+113. **Desktop Prompt is a pane, not a nested input card.** Its pane header
+    and workspace status line own focus indication. The Desktop canvas has no
+    rounded border, outer focus ring, reading-width cap or Mobile safe-area
+    gutters. The Desktop toolbar uses its actual container width and root font
+    size to disclose formatting and labels; delivery actions stay present, with
+    Send/Queue at the right and utility actions allowed to wrap for narrow panes
+    or enlarged fonts. Prefix shortcuts share the existing IME/modal dispatcher.
+    A claimed direct shortcut must stop propagation, not just prevent default:
+    CM6's Alt+Enter handler otherwise also saves a draft after the Desktop Force
+    push command, including when Force push is unavailable. Formatting reuses
+    the Obsidian-aligned editor handle and its selection/undo ownership. No CM6
+    extension, image decoration, touch geometry or native keyboard path changes;
+    the physical iPhone caret issue in #69 remains open. Browser acceptance uses
+    the real product theme, editor and command dispatcher at 320–1560px, enlarged
+    fonts, both themes, focus transfer, IME holds and menu ownership.
