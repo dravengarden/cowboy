@@ -9,6 +9,8 @@ use crate::machine_protocol::{
     ArtifactFormat, ComponentInventory, ComponentState, DesiredComponent,
 };
 
+mod host_payload;
+
 pub struct ComponentStore {
     root: PathBuf,
     publisher_key: Option<String>,
@@ -77,6 +79,7 @@ impl ComponentStore {
             bail!("component signature is invalid");
         }
         self.check_session_deletion_host_selection(&desired)?;
+        let host_payload = host_payload::HostPayload::from_authenticated(&desired, &bytes)?;
         let slot = component_slot(&desired);
         let generation = self
             .root
@@ -96,6 +99,9 @@ impl ComponentStore {
                 }
                 ArtifactFormat::TarGz => extract_tar_gz(&generation, &bytes, &executable)?,
             }
+        }
+        if let Some(payload) = &host_payload {
+            payload.verify(&generation)?;
         }
         std::fs::write(
             generation.join("manifest.json"),
@@ -123,6 +129,11 @@ impl ComponentStore {
             }
         }
         self.check_session_deletion_host_selection(&desired)?;
+        // A signed probe may mutate its own staging directory. Verify again
+        // before publishing, without repairing or executing substituted bytes.
+        if let Some(payload) = &host_payload {
+            payload.verify(&generation)?;
+        }
         let active = self.root.join("active").join(&slot);
         let prior_generation = std::fs::read_link(&active).ok();
         let rollback_generation = prior_generation.as_ref().and_then(|target| {
@@ -470,6 +481,222 @@ mod tests {
     use crate::machine_protocol::{ComponentId, ComponentKind};
 
     static TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn host_archive(executable: &[u8], companion: &[u8]) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (path, bytes) in [("bin/host", executable), ("lib/companion", companion)] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, path, bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn substituted_cached_hosts_refuse_before_probe_or_pointer_changes() {
+        for case in [
+            "raw-bytes",
+            "raw-link",
+            "archive-bytes",
+            "archive-extra",
+            "archive-link",
+        ] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+            let public_key = state.path().join("publisher.pub");
+            std::fs::write(&public_key, identity.public_key()).unwrap();
+            let store = ComponentStore::new(
+                state.path().join("components"),
+                Some(&public_key),
+                "fixture".into(),
+            )
+            .unwrap();
+            let marker = state.path().join("probe-ran");
+            let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display()).into_bytes();
+            let archive = case.starts_with("archive");
+            let bytes = if archive {
+                host_archive(&script, b"signed companion")
+            } else {
+                script.clone()
+            };
+            let mut desired =
+                signed_component(&identity, serve_once(&bytes).await, &bytes, "candidate");
+            desired.id.kind = ComponentKind::MachineHost;
+            desired.id.slot.clear();
+            desired.session_deletion_journal =
+                Some(crate::machine_protocol::SessionDeletionReader {
+                    reader_schema: 1,
+                    writer_schema: 0,
+                });
+            if archive {
+                desired.artifact_format = ArtifactFormat::TarGz;
+                desired.entrypoint = Some("bin/host".into());
+            }
+            desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+            let generation = store
+                .root
+                .join("payloads/machine_host/candidate")
+                .join(&desired.digest);
+            std::fs::create_dir_all(&generation).unwrap();
+            let executable = component_executable(&generation, &desired).unwrap();
+            if archive {
+                extract_tar_gz(&generation, &bytes, &executable).unwrap();
+            } else {
+                std::fs::write(&executable, &bytes).unwrap();
+                set_executable(&executable).unwrap();
+            }
+            match case {
+                "raw-bytes" => std::fs::write(&executable, &script[..script.len() - 1]).unwrap(),
+                "raw-link" => {
+                    let target = state.path().join("outside-host");
+                    std::fs::write(&target, &bytes).unwrap();
+                    set_executable(&target).unwrap();
+                    std::fs::remove_file(&executable).unwrap();
+                    std::os::unix::fs::symlink(target, &executable).unwrap();
+                }
+                "archive-bytes" => std::fs::write(
+                    generation.join("content/lib/companion"),
+                    "changed companion",
+                )
+                .unwrap(),
+                "archive-extra" => {
+                    std::fs::write(generation.join("content/unsigned"), "extra").unwrap()
+                }
+                "archive-link" => {
+                    let companion = generation.join("content/lib/companion");
+                    std::fs::remove_file(&companion).unwrap();
+                    std::os::unix::fs::symlink(&executable, companion).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            std::fs::write(generation.join("manifest.json"), b"retained manifest").unwrap();
+            for (directory, slot) in [
+                ("active", "machine_host"),
+                ("rollback", "machine_host"),
+                ("commands", "cowboy-machine"),
+            ] {
+                std::os::unix::fs::symlink(
+                    "/retained-target",
+                    store.root.join(directory).join(slot),
+                )
+                .unwrap();
+            }
+            let error = store.reconcile(desired).await.unwrap_err();
+            assert!(
+                error.to_string().contains("staged Machine host"),
+                "{case}: {error:#}"
+            );
+            assert!(!marker.exists(), "{case}: substituted probe executed");
+            assert_eq!(
+                std::fs::read(generation.join("manifest.json")).unwrap(),
+                b"retained manifest"
+            );
+            for (directory, slot) in [
+                ("active", "machine_host"),
+                ("rollback", "machine_host"),
+                ("commands", "cowboy-machine"),
+            ] {
+                assert_eq!(
+                    std::fs::read_link(store.root.join(directory).join(slot)).unwrap(),
+                    Path::new("/retained-target")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn signed_host_probe_cannot_publish_modified_payloads() {
+        for archive in [false, true] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+            let public_key = state.path().join("publisher.pub");
+            std::fs::write(&public_key, identity.public_key()).unwrap();
+            let store = ComponentStore::new(
+                state.path().join("components"),
+                Some(&public_key),
+                "fixture".into(),
+            )
+            .unwrap();
+            let marker = state.path().join("probe-ran");
+            let mutation = if archive {
+                "printf 'changed' > content/lib/companion"
+            } else {
+                "printf '\\n# changed\\n' >> bin"
+            };
+            let script =
+                format!("#!/bin/sh\ntouch '{}'\n{mutation}\n", marker.display()).into_bytes();
+            let bytes = if archive {
+                host_archive(&script, b"signed companion")
+            } else {
+                script
+            };
+            let mut desired =
+                signed_component(&identity, serve_once(&bytes).await, &bytes, "candidate");
+            desired.id.kind = ComponentKind::MachineHost;
+            desired.id.slot.clear();
+            if archive {
+                desired.artifact_format = ArtifactFormat::TarGz;
+                desired.entrypoint = Some("bin/host".into());
+            }
+            desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+            let error = store.reconcile(desired).await.unwrap_err();
+            assert!(
+                error.to_string().contains("staged Machine host"),
+                "{error:#}"
+            );
+            assert!(marker.exists());
+            for directory in ["active", "rollback", "commands"] {
+                assert_eq!(
+                    std::fs::read_dir(store.root.join(directory))
+                        .unwrap()
+                        .count(),
+                    0
+                );
+            }
+            // Probe effects remain; this is publication refusal, not rollback.
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_signed_hosts_activate_on_first_stage_and_cache_reuse() {
+        for archive in [false, true] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+            let public_key = state.path().join("publisher.pub");
+            std::fs::write(&public_key, identity.public_key()).unwrap();
+            let store = ComponentStore::new(
+                state.path().join("components"),
+                Some(&public_key),
+                "fixture".into(),
+            )
+            .unwrap();
+            let script = b"#!/bin/sh\nexit 0\n";
+            let bytes = if archive {
+                host_archive(script, b"signed companion")
+            } else {
+                script.to_vec()
+            };
+            for _ in 0..2 {
+                let mut desired =
+                    signed_component(&identity, serve_once(&bytes).await, &bytes, "healthy");
+                desired.id.kind = ComponentKind::MachineHost;
+                desired.id.slot.clear();
+                if archive {
+                    desired.artifact_format = ArtifactFormat::TarGz;
+                    desired.entrypoint = Some("bin/host".into());
+                }
+                desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+                store.reconcile(desired).await.unwrap();
+                assert_eq!(
+                    std::fs::read(store.command_path("cowboy-machine")).unwrap(),
+                    script
+                );
+            }
+        }
+    }
 
     #[test]
     fn reader_claim_has_a_distinct_signature_domain_and_preserves_legacy_bytes() {

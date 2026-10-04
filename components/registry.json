@@ -18409,12 +18409,12 @@
         },
         {
           "id": "cowboy.app-shell",
-          "version": "1.1.18",
+          "version": "1.1.19",
           "publisher": "cowboy",
           "sources": [
             "components/app-shell"
           ],
-          "digest": "sha256:79b37ef39d914c90a83d8531e95eada6e500529b3afcefc19b25bd33433a23e8",
+          "digest": "sha256:e9219bbf05a496e4eecb48a783496b5f53b689d0065ff932a6b115e369934cef",
           "package": {
             "kind": "npm",
             "name": "@cowboy/app-shell",
@@ -18549,9 +18549,9 @@
         }
       ],
       "plugins": {
-        "claude-code": "3.4.4",
+        "claude-code": "3.4.0",
         "claude-deepseek": "3.1.29",
-        "codex": "3.3.1",
+        "codex": "3.3.0",
         "codex-deepseek": "3.1.29",
         "gemini": "3.1.29",
         "grok": "3.1.30",
@@ -18585,7 +18585,7 @@
         },
         "plugins": {
           "claude-code": {
-            "component_release": "3.38.0",
+            "component_release": "3.37.0",
             "components": [
               {
                 "id": "cowboy.plugin-contract",
@@ -18616,7 +18616,7 @@
                 "version": "0.1.0"
               }
             ],
-            "source_digest": "sha256:dc01517cd6451f2fc0865a9f7c5beecc5ad355bebf26873adab1dd2bcbcad7ec"
+            "source_digest": "sha256:7609e920fd06f95b696b08a082aa2662e0d076c4fd82aa404772dc74d09117db"
           },
           "claude-deepseek": {
             "component_release": "3.35.0",
@@ -18680,7 +18680,7 @@
                 "version": "0.1.0"
               }
             ],
-            "source_digest": "sha256:6de5bd758b022874f91c20bcf0b321803a65f270d0d86d8d2c9446abd086a52c"
+            "source_digest": "sha256:07ac0f17755752efc6208cbaeb1451aa7502990b99e6bc9bbefdb3fe63f9d19a"
           },
           "codex-deepseek": {
             "component_release": "3.35.0",

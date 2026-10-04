@@ -141,6 +141,7 @@
           ./src/machine_cli
           ./src/machine_auth.rs
           ./src/machine_components.rs
+          ./src/machine_components
           ./src/machine_install.rs
           ./src/machine_install
           ./src/session_deletion_admission.rs

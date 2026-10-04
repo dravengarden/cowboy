@@ -203,12 +203,25 @@ was published, and deletion writing remains disabled.
 
 ## Portable refusal gate
 
-Portable component declarations do not bind a Session deletion reader schema.
-Until that reader/recovery authority is supplied, a Machine-host reconcile
+Portable component declarations now bind a Session deletion reader schema,
+but persistent reader/recovery admission is not established. A Machine-host reconcile
 refuses any committed deletion entry before fetching a payload, before probing
 it and before publishing active/rollback/command links. Other component kinds
 retain their existing admission. A probe-created record refuses publication;
 verified staging and probe effects are not rolled back.
+
+Reconcile also checks staged Machine host bytes against the downloaded,
+digest-checked and publisher-signed artifact before running a probe and again
+before publishing pointers. Raw hosts must remain regular files with identical
+bytes. Archive hosts must retain the exact regular-file/directory tree, including
+companions and empty directories; changed bytes, extra entries, links, special
+entries and ambiguous archive paths refuse. Expected archive contents are parsed
+before extraction. Existing cache entries are checked, not silently repaired.
+An authenticated probe may leave effects behind, but modified host bytes cannot
+publish. This does not authenticate a cached host on a later launcher start,
+bind bootstrap recovery, create a persistent portable floor or fence a concurrent
+administrator writing the cache. The [staged-host integrity release](releases/plugin-host-cache-integrity-2026-10-04.md)
+records that narrower boundary.
 
 Installation and refresh check the same gate before changing bootstrap payloads,
 identity or launcher configuration. Newly generated launchers run the
