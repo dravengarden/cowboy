@@ -10,7 +10,7 @@ pub(crate) const NAME: &str = "portable-session-deletion-reader-floor.json";
 pub(crate) fn require_absent_for_install(state: &Path) -> Result<()> {
     match std::fs::symlink_metadata(state.join(NAME)) {
         Ok(_) => bail!(
-            "portable reader floor refuses bootstrap installation until signed bootstrap/recovery admission is established"
+            "portable reader floor requires signed refresh with an authenticated selected host; bootstrap recovery remains closed"
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).context("inspecting portable reader floor before installation"),
