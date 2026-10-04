@@ -56,3 +56,10 @@ Deno.test("drag-to-collapse needs a deliberate overshoot past the minimum", () =
   assertEquals(dragCollapses(150, 240), false);
   assertEquals(dragCollapses(143, 240), true);
 });
+
+Deno.test("the collapsed-Sessions split ratio stays within usable bounds", async () => {
+  const { clampPromptRatio } = await import("./desktopLayout.ts");
+  assertEquals(clampPromptRatio(0.5), 0.5);
+  assertEquals(clampPromptRatio(0.1), 0.25);
+  assertEquals(clampPromptRatio(0.95), 0.75);
+});

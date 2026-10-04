@@ -165,6 +165,7 @@ export function DesktopWorkspace({
   onProjectionChange,
   conversationActivity,
   collapseIntent = null,
+  promptRatio = null,
 }: {
   promptWidth: number;
   resizing: boolean;
@@ -178,6 +179,9 @@ export function DesktopWorkspace({
   conversationActivity?: React.ReactNode;
   /** Pane a splitter drag will collapse on release; previewed by dimming. */
   collapseIntent?: "prompt" | "conversation" | null;
+  /** Share of the workspace for Prompt while Sessions is collapsed (the two
+   *  work panes split evenly by default); `null` uses `promptWidth`. */
+  promptRatio?: number | null;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const promptCollapsed = workspace.collapsedPanes.prompt;
@@ -448,6 +452,8 @@ export function DesktopWorkspace({
           // stayed fixed, making Resize mode appear broken.
           width: conversationCollapsed
             ? "auto"
+            : promptRatio !== null
+            ? `clamp(${String(PROMPT_MIN)}px, ${String(promptRatio * 100)}%, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`
             : `min(${String(promptWidth)}px, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
           flex: conversationCollapsed ? 1 : undefined,
           flexShrink: 0,
