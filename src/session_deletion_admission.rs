@@ -5,6 +5,8 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 
+#[cfg(feature = "machine-host")]
+pub(crate) mod owner_writer;
 pub(crate) mod reader_floor;
 
 pub(crate) fn require_empty_portable_namespace(state: &Path) -> Result<()> {

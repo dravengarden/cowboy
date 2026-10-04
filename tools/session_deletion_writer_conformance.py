@@ -52,7 +52,7 @@ def artifact(value, fixture):
 
 
 class Process:
-    def __init__(self, release, root, mode="reader", checkpoint="", fixture=True):
+    def __init__(self, release, root, mode="reader", checkpoint="", fixture=True, extra_env=None):
         self.root = root
         log_fd, log_path = tempfile.mkstemp(prefix="process-", suffix=".log", dir=root)
         os.close(log_fd)
@@ -64,6 +64,7 @@ class Process:
         env = {"HOME": str(root / "home"), "TMPDIR": str(root), "LANG": "C.UTF-8",
                "XDG_CONFIG_HOME": str(root / "config"), "XDG_CACHE_HOME": str(root / "cache"),
                "XDG_DATA_HOME": str(root / "data"), "RUST_LOG": "info"}
+        env.update(extra_env or {})
         if fixture:
             env.update(COWBOY_TEST_DELETION_ROOT=str(root), COWBOY_TEST_DELETION_MODE=mode,
                        COWBOY_TEST_DELETION_CHECKPOINT=checkpoint)

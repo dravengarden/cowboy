@@ -419,6 +419,15 @@
         };
       };
 
+      # Runtime environment cannot enable this writer. Its native build binds
+      # the exact clean revision and still requires root profile/floor admission.
+      cowboy-machine-writer = assert release-revision != null;
+        cowboy-machine.overrideAttrs (_old: {
+          pname = "cowboy-machine-writer";
+          COWBOY_SESSION_DELETION_WRITER_BUILD = "schema1";
+          COWBOY_SESSION_DELETION_WRITER_REVISION = release-revision;
+        });
+
       # Immutable private broker fixtures. This is deliberately not a Machine
       # release: its closed metadata must refuse component activation.
       cowboy-deletion-conformance = rustPlatform.buildRustPackage {
@@ -594,13 +603,16 @@
           prior = "${cowboy-workers.outPath}/${relative}";
         in builtins.pathExists prior && builtins.hashFile "sha256" path == builtins.hashFile "sha256" prior
       ) retained-worker-interface-files;
-      machine-release = bootstrap: retain-workers:
+      machine-release = bootstrap: retain-workers: writer:
+        assert !writer || (!bootstrap && retain-workers);
+        let native-machine = if writer then cowboy-machine-writer else cowboy-machine;
+        in
         pkgs.runCommand
-          (if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
+          (if writer then "cowboy-machine-writer-host-release" else if bootstrap then "cowboy-machine-bootstrap-release" else "cowboy-machine-release")
           { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
         test -e ${worker-registry-check}
         mkdir -p "$out/bin" "$out/libexec" "$out/etc/cowboy-release"
-        ln -s ${cowboy-machine}/bin/cowboy-machine \
+        ln -s ${native-machine}/bin/cowboy-machine \
           "$out/libexec/cowboy-machine"
         ${
           if bootstrap then
@@ -651,15 +663,17 @@
           workerGeneration = if retain-workers then retained-worker-package.workerGeneration else cowboy.workerGeneration;
           sessionDeletionJournal = {
             readerSchema = 1;
-            writerSchema = 0;
+            writerSchema = if writer then 1 else 0;
           };
         })}
         EOF
       '';
-      cowboy-machine-bootstrap-release = machine-release true false;
-      cowboy-machine-release = machine-release false false;
+      cowboy-machine-bootstrap-release = machine-release true false false;
+      cowboy-machine-release = machine-release false false false;
       cowboy-machine-host-release = assert retained-worker-interface-compatible;
-        machine-release false true;
+        machine-release false true false;
+      cowboy-machine-writer-host-release = assert retained-worker-interface-compatible;
+        machine-release false true true;
 
       cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
         test ! -e ${cowboy-src}/docs
@@ -806,6 +820,7 @@
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;
         cowboy-machine-release = cowboy-machine-release;
         cowboy-machine-host-release = cowboy-machine-host-release;
+        cowboy-machine-writer-host-release = cowboy-machine-writer-host-release;
       };
 
       # `cowboy`'s buildRustPackage check phase runs the Rust tests; cowboy-web's
