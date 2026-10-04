@@ -39,6 +39,7 @@ primary phone/desktop product path.
 
 - [`cowboy-ovh-efficiency-2026-10-04.md`](cowboy-ovh-efficiency-2026-10-04.md) — Current cross-host SSH timings, real-session history, recurring usage preparation and scoped optimization order
 - [`ovh-native-execution-efficiency-2026-10-04.md`](ovh-native-execution-efficiency-2026-10-04.md) — Live Codex Remote/Claude Mods bindings, reproducible RPC amplification and Controller-to-OVH optimization priorities
+- [`claude-target-range-reads.md`](claude-target-range-reads.md) — Target-authoritative range reads, whole-file conflict stamps and safe bounded state cleanup
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Current system topology and component map
 - [`architecture/01-acp-transport.md`](architecture/01-acp-transport.md) — ACP session lifecycle, streaming, permissions, and cancellation
 - [`claude-autonomous-activity.md`](claude-autonomous-activity.md) — Native execution state and loading feedback after a background task resumes Claude

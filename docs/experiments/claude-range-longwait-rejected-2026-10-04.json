@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "status": "rejected_not_shipped",
+  "candidate_wait_ms": 10000,
+  "fixed_cancel_budget_ms": 5000,
+  "actual_cancel_ms": 9952.59,
+  "native_version": "0.159.3",
+  "production_mutations": false,
+  "reason": "TaskStop waited for the ordered output collection beyond the frozen budget"
+}

@@ -68,6 +68,7 @@ try {
       "connection.mjs",
       "mod-bridge.mjs",
       "tools.mjs",
+      "read-range.mjs",
       "context-mod.js",
       "memory.mjs",
     ];

@@ -1,10 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, posix } from "node:path";
+import {
+  lstat,
+  open,
+  readdir,
+  readFile,
+  rename,
+  unlink,
+} from "node:fs/promises";
+import { basename, dirname, posix } from "node:path";
 import { pathToFileURL } from "node:url";
+import { READ_RANGE } from "./read-range.mjs";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
+const MAX_READ_STATE = 512 * 1024;
+const RANGE_FILE_THRESHOLD = 128 * 1024;
 const text = (value, native) => ({
   ...(native === undefined ? {} : { native }),
   content: [{ type: "text", text: value }],
@@ -151,16 +161,68 @@ export class WorkspaceTools {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
+    await this.cleanupTemporaryStates();
   }
 
-  async save() {
+  async cleanupTemporaryStates() {
+    const directory = dirname(this.statePath);
+    const owner = await lstat(directory);
+    if (
+      !owner.isDirectory() || (owner.mode & 0o077) ||
+      owner.uid !== process.getuid()
+    ) {
+      throw new Error("Invalid private state directory");
+    }
+    const prefix = basename(this.statePath) + ".";
+    for (const entry of await readdir(directory)) {
+      if (!entry.startsWith(prefix)) continue;
+      const match = /^(\d+)\.([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/
+        .exec(entry.slice(prefix.length));
+      if (
+        !match || !Number.isSafeInteger(Number(match[1])) ||
+        Number(match[1]) <= 0
+      ) continue;
+      try {
+        process.kill(Number(match[1]), 0);
+        continue;
+      } catch (error) {
+        if (error.code !== "ESRCH") continue;
+      }
+      const path = posix.join(directory, entry);
+      try {
+        const stat = await lstat(path);
+        if (
+          stat.isFile() && !(stat.mode & 0o077) && stat.uid === owner.uid
+        ) await unlink(path);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+
+  async save(update) {
     const saved = this.saves.then(async () => {
-      const temporary = `${this.statePath}.${randomUUID()}`;
-      await writeFile(temporary, JSON.stringify(this.state), {
-        mode: 0o600,
-        flag: "wx",
-      });
-      await rename(temporary, this.statePath);
+      const temporary = `${this.statePath}.${process.pid}.${randomUUID()}`;
+      let file;
+      let rollback;
+      try {
+        rollback = update?.();
+        file = await open(temporary, "wx", 0o600);
+        await file.writeFile(JSON.stringify(this.state));
+        await file.sync();
+        await file.close();
+        await rename(temporary, this.statePath);
+      } catch (error) {
+        rollback?.();
+        throw error;
+      } finally {
+        if (file) {
+          await file.close();
+          await unlink(temporary).catch((error) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+        }
+      }
     });
     this.saves = saved.catch(() => {});
     await saved;
@@ -174,11 +236,97 @@ export class WorkspaceTools {
     return posix.resolve(this.cwd, value);
   }
 
-  async bytes(path, optional = false) {
+  remember(path, digest) {
+    delete this.state.reads[path];
+    this.state.reads[path] = digest;
+    // Expiration revokes edit authority: an evicted file must be read again.
+    // Only hashes are persisted; no mirrored source or target file is deleted.
+    while (
+      Buffer.byteLength(JSON.stringify(this.state.reads)) > MAX_READ_STATE
+    ) {
+      delete this.state.reads[Object.keys(this.state.reads)[0]];
+    }
+  }
+
+  async rememberRead(path, digest) {
+    await this.save(() => {
+      const previous = this.state.reads[path];
+      this.remember(path, digest);
+      // Roll back before the next queued save can serialize this stamp.
+      return () => {
+        if (previous === undefined) delete this.state.reads[path];
+        else this.state.reads[path] = previous;
+      };
+    });
+  }
+
+  async rangeRead(path, args) {
+    const offset = bounded(args.offset, 1, 1, 10000000);
+    const limit = bounded(args.limit, 2000, 1, 10000);
+    const result = await this.command([
+      this.rangePython,
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      READ_RANGE,
+      path,
+      String(offset),
+      String(limit),
+    ]);
+    if (result.exitCode !== 0 || result.output_limit) {
+      throw new Error("Target range read failed; read it again.");
+    }
+    const data = JSON.parse(result.output);
+    if (data.fallback === true) return null;
+    if (data.error) throw new Error(data.error);
+    if (
+      data.schema !== 1 || !/^[a-f0-9]{64}$/.test(data.sha256) ||
+      !Number.isSafeInteger(data.size) || data.size < 0 ||
+      data.size > MAX_FILE ||
+      !Number.isSafeInteger(data.totalLines) || data.totalLines < 1 ||
+      data.totalLines > MAX_FILE + 1 || data.startLine !== offset ||
+      !Number.isSafeInteger(data.numLines) || data.numLines < 0 ||
+      data.numLines !==
+        Math.max(0, Math.min(limit, data.totalLines - offset + 1)) ||
+      typeof data.dataBase64 !== "string" ||
+      data.dataBase64.length > 44000
+    ) throw new Error("Invalid target range read");
+    const bytes = Buffer.from(data.dataBase64, "base64");
+    if (bytes.toString("base64") !== data.dataBase64) {
+      throw new Error("Invalid target range encoding");
+    }
+    const content = decode(bytes);
+    const lines = data.numLines === 0 ? [] : content.split("\n");
+    if (lines.length !== data.numLines) {
+      throw new Error("Invalid target range lines");
+    }
+    const rendered = lines.map((line, index) => `${offset + index}\t${line}`)
+      .join("\n");
+    if (Buffer.byteLength(rendered) > MAX_OUTPUT) {
+      throw new Error(
+        "Selected lines exceed output limit; request a smaller range",
+      );
+    }
+    await this.rememberRead(path, data.sha256);
+    return text(rendered, {
+      type: "text",
+      file: {
+        filePath: path,
+        content,
+        numLines: lines.length,
+        startLine: offset,
+        totalLines: data.totalLines,
+      },
+    });
+  }
+
+  async bytes(path, optional = false, knownMetadata) {
     try {
-      const metadata = await this.connection.call("fs/getMetadata", {
-        path: pathToFileURL(path).href,
-      });
+      const metadata = knownMetadata ??
+        await this.connection.call("fs/getMetadata", {
+          path: pathToFileURL(path).href,
+        });
       if (!metadata.isFile || metadata.size > MAX_FILE) {
         throw new Error("Read requires a file of at most 4 MiB");
       }
@@ -299,12 +447,22 @@ export class WorkspaceTools {
       return result;
     } finally {
       this.foreground.delete(id);
+      if (this.state.jobs[id]?.closed) {
+        // Private utilities never publish an output handle. Keep uncertain or
+        // still-running identities; only an observed closed job can expire.
+        delete this.state.jobs[id];
+        await this.save();
+      }
     }
   }
 
   async context() {
     const [platform, git] = await Promise.all([
-      this.command(["bash", "-c", 'printf "%s\\n" "$BASH"; uname -srm']),
+      this.command([
+        "bash",
+        "-c",
+        'printf "%s\\n" "$BASH"; uname -srm; command -v python3 || true',
+      ]),
       this.command([
         "git",
         "--no-optional-locks",
@@ -318,6 +476,8 @@ export class WorkspaceTools {
       throw new Error("Target Bash is unavailable");
     }
     this.shell = platform.output.split("\n")[0];
+    const python = platform.output.split("\n")[2]?.trim();
+    this.rangePython = python?.startsWith("/") ? python : undefined;
     const paths = [];
     let directory = this.cwd;
     for (;;) {
@@ -356,7 +516,7 @@ export class WorkspaceTools {
       nonce: randomUUID().replaceAll("-", ""),
       environment:
         `Primary working directory: ${this.cwd}\nPlatform: ${this.connection.info.platformOs}\nShell: ${this.shell}\nOS Version: ${
-          platform.output.split("\n").slice(1).join("\n").trim()
+          platform.output.split("\n")[1].trim()
         }\nIs directory a git repo: ${git.exitCode === 0}`,
       git: git.exitCode === 0
         ? `Target Git status at session start:\n${git.output}`
@@ -511,11 +671,25 @@ export class WorkspaceTools {
       throw new Error("Unsupported execution tool");
     }
     const path = this.path(args.file_path ?? args.notebook_path);
-    const bytes = await this.bytes(path, name === "write");
+    let metadata;
+    if (name === "read" && this.rangePython && args.pages === undefined) {
+      metadata = await this.connection.call("fs/getMetadata", {
+        path: pathToFileURL(path).href,
+      });
+      // Short files keep exactly the original two RPCs. Metadata is reused
+      // only within this call; it is never a cross-read freshness cache.
+      if (
+        metadata.isFile && metadata.size >= RANGE_FILE_THRESHOLD &&
+        metadata.size <= MAX_FILE
+      ) {
+        const range = await this.rangeRead(path, args);
+        if (range) return range;
+      }
+    }
+    const bytes = await this.bytes(path, name === "write", metadata);
     if (name === "read") {
       const remember = async (result) => {
-        this.state.reads[path] = hash(bytes);
-        await this.save();
+        await this.rememberRead(path, hash(bytes));
         return result;
       };
       const imageTypes = [["89504e470d0a1a0a", "image/png"], [
@@ -680,7 +854,7 @@ export class WorkspaceTools {
       path: pathToFileURL(path).href,
       dataBase64: Buffer.from(content).toString("base64"),
     });
-    this.state.reads[path] = hash(content);
+    this.remember(path, hash(content));
     await this.save();
     const originalFile = bytes && bytes.length <= MAX_OUTPUT
       ? decode(bytes)
