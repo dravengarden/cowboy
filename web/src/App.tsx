@@ -212,6 +212,8 @@ import {
     DESKTOP_CONVERSATION_MIN,
     DESKTOP_PROMPT_MIN,
     DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT,
+    clampPromptRatio,
+    collapsedSessionsPromptRatioStore,
     dragCollapses,
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
@@ -3223,6 +3225,14 @@ export function App({
     const [sessionsCollapseIntent, setSessionsCollapseIntent] = useState(false);
     const [workCollapseIntent, setWorkCollapseIntent] =
         useState<"prompt" | "conversation" | null>(null);
+    // With Sessions collapsed, Prompt and Conversation split by a remembered
+    // ratio (even by default) rather than the pixel width used beside the
+    // full Sessions list.
+    const [promptRatio, setPromptRatio] = useState<number>(collapsedSessionsPromptRatioStore.get);
+    const promptRatioRef = useRef(promptRatio);
+    promptRatioRef.current = promptRatio;
+    const sessionsCollapsedRef = useRef(sessionsCollapsed);
+    sessionsCollapsedRef.current = sessionsCollapsed;
     // Compact Desktop: the Sessions collapse command opens/closes the drawer.
     useEffect(() => {
         if (surface !== "desktop") return undefined;
@@ -3242,6 +3252,18 @@ export function App({
                     sidebarWidthStore.set(next);
                     return next;
                 });
+            } else if (
+                adjustment?.splitter === "prompt-conversation" && sessionsCollapsedRef.current
+            ) {
+                const width = document.querySelector<HTMLElement>(
+                    "[data-desktop-splitter='prompt-conversation']",
+                )?.parentElement?.getBoundingClientRect().width ?? 0;
+                if (width > 0) {
+                    const next = clampPromptRatio(promptRatioRef.current + adjustment.delta / width);
+                    promptRatioRef.current = next;
+                    setPromptRatio(next);
+                    collapsedSessionsPromptRatioStore.set(next);
+                }
             } else if (adjustment?.splitter === "prompt-conversation") {
                 setColWidth((current) => {
                     const next = clampComposerColWidth(current + adjustment.delta);
@@ -3503,6 +3525,8 @@ export function App({
         const renderedPrompt = el.previousElementSibling?.getBoundingClientRect().width ?? startWidth;
         const containerWidth = el.parentElement?.getBoundingClientRect().width ?? 0;
         let collapse: "prompt" | "conversation" | null = null;
+        const ratioLayout = sessionsCollapsed && containerWidth > 0;
+        const startRatio = promptRatioRef.current;
         const onMove = (ev: PointerEvent): void => {
             const dx = ev.clientX - startX;
             const rawPrompt = renderedPrompt + dx;
@@ -3517,7 +3541,13 @@ export function App({
                 collapse = next;
                 setWorkCollapseIntent(next);
             }
-            setColWidth(clampComposerColWidth(collapse ? startWidth : startWidth + dx));
+            if (ratioLayout) {
+                setPromptRatio(collapse
+                    ? startRatio
+                    : clampPromptRatio((renderedPrompt + dx) / containerWidth));
+            } else {
+                setColWidth(clampComposerColWidth(collapse ? startWidth : startWidth + dx));
+            }
         };
         const onUp = (): void => {
             el.releasePointerCapture(e.pointerId);
@@ -3525,7 +3555,8 @@ export function App({
             el.removeEventListener("pointerup", onUp);
             setColResizing(false);
             setWorkCollapseIntent(null);
-            composerColWidthStore.set(colWidthRef.current);
+            if (ratioLayout) collapsedSessionsPromptRatioStore.set(promptRatioRef.current);
+            else composerColWidthStore.set(colWidthRef.current);
             if (collapse) desktopWorkspace?.togglePane(collapse);
         };
         el.addEventListener("pointermove", onMove);
@@ -3783,7 +3814,10 @@ export function App({
                     minHeight: 0,
                     width: "100%",
                     position: "relative",
-                    overflow: mobile ? "hidden" : undefined,
+                    // Desktop uses `clip`: unlike `hidden` it is never a scroll
+                    // container, so focus/scrollIntoView cannot shift the whole
+                    // workspace (Sessions rail included) sideways.
+                    overflow: mobile ? "hidden" : "clip",
                     // Store notifications are already held during a drawer
                     // gesture. Collapse per-row paint tiles at rest so the
                     // first tracking frame only writes transform. Overflow
@@ -4649,6 +4683,7 @@ export function App({
                                 onProjectionChange={(projection): void =>
                                     changeTranscriptProjection(active.id, projection)}
                                 collapseIntent={workCollapseIntent}
+                                promptRatio={sessionsCollapsed ? promptRatio : null}
                                 conversationActivity={(
                                     <StatusDot
                                         status={active.status}

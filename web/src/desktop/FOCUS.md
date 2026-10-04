@@ -297,6 +297,12 @@ it.
   state, Conversation keeps streaming, and the Sessions list keeps owning
   slot switching and folder state. A Prompt that inherits the Conversation's
   width uses the full available writing canvas.
+- **Split.** Beside the full Sessions list, Prompt keeps its persisted pixel
+  width. With Sessions collapsed, Prompt and Conversation split the
+  workspace evenly by default; dragging or keyboard-resizing that splitter
+  stores a separate ratio (`cowboy:desktop-prompt-ratio-sessions-collapsed`,
+  25–75%), so neither layout's resize leaks into the other. Both still honour
+  the 360 px Prompt and 520 px Conversation floors.
 - **Focus.** Collapsing the focused pane moves focus to the remaining work
   pane; restoring one by its command focuses it. Explicit jumps (prefix
   `P/C`, Plan/Queue/Drafts, region focus) restore a collapsed Prompt or

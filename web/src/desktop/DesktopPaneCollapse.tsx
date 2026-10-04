@@ -286,7 +286,7 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
         position: "absolute",
         // Sits off the glyph's corner so the folder shape stays readable.
         top: -6,
-        right: -10,
+        right: -9,
         minWidth: 15,
         height: 15,
         px: "3px",
@@ -346,7 +346,11 @@ function RailGroupButton({
         onClick={(event): void => onOpen(event.currentTarget)}
         sx={{
           position: "relative",
-          width: 48,
+          // Fill the rail (minus its gutter) instead of a fixed width, so a
+          // larger font or minimum-font-size setting can never push a label
+          // past the rail's edge.
+          width: "100%",
+          minWidth: 0,
           minHeight: 50,
           py: 0.5,
           flexShrink: 0,
@@ -369,7 +373,7 @@ function RailGroupButton({
             "&::before": {
               content: '""',
               position: "absolute",
-              left: -4,
+              left: -3,
               top: 10,
               height: 20,
               width: 3,
@@ -387,14 +391,15 @@ function RailGroupButton({
               keyLabel={digit}
               variant="context"
               availability="available"
-              sx={{ position: "absolute", top: -6, left: -12 }}
+              sx={{ position: "absolute", top: -7, left: -14 }}
             />
           )}
         </Box>
         <Typography
           component="span"
           sx={{
-            maxWidth: 46,
+            width: "100%",
+            textAlign: "center",
             fontSize: 10.5,
             lineHeight: 1.15,
             fontWeight: group.current ? 700 : 550,
@@ -684,6 +689,8 @@ export function DesktopSessionsRail({
       data-desktop-pane="sessions"
       sx={{
         width: DESKTOP_SESSIONS_RAIL_WIDTH,
+        // Nothing inside may widen or scroll the rail sideways.
+        overflow: "clip",
         flexShrink: 0,
         height: "100%",
         display: "flex",
@@ -720,6 +727,7 @@ export function DesktopSessionsRail({
         spacing={0.5}
         sx={{
           outline: "none",
+          px: "3px",
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
