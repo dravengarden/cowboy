@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Cargo workspace wrapper for swift-rs 1.0.8's Xcode 27 runtime exports.
+"""Cargo compiler wrapper for swift-rs 1.0.8's Xcode 27 runtime exports.
 
-Registry sources stay untouched. Before compiling Cowboy's native library,
-export the three C ABI functions from exactly one build-local Swift archive.
+Registry sources stay untouched. Before Tauri embeds its native archive in an
+rlib, export three C ABI functions from exactly one build-local Swift archive.
 Remove this adapter when swift-rs exports one shared runtime upstream.
 """
 
@@ -50,7 +50,7 @@ def verify(exports, owner):
             raise RuntimeError(f"duplicate Swift runtime owner for {name}")
 
 
-def repair(arguments, target_root, objcopy):
+def repair(arguments, target_root, objcopy, consumer="cowboy_app_lib"):
     archives = {}
     for directory in native_paths(arguments):
         for name in ARCHIVES:
@@ -62,7 +62,8 @@ def repair(arguments, target_root, objcopy):
             if name in archives and archives[name] != archive:
                 raise RuntimeError(f"multiple Swift archives named {name}")
             archives[name] = archive
-    if set(archives) != set(ARCHIVES):
+    expected = set(ARCHIVES if consumer == "cowboy_app_lib" else ARCHIVES[:1])
+    if not expected.issubset(archives):
         raise RuntimeError(f"incomplete Swift archive inventory: {sorted(archives)}")
 
     def inspect(archive):
@@ -82,15 +83,22 @@ def repair(arguments, target_root, objcopy):
     report = dict(adapter="swift-rs-1.0.8-xcode27", owner=str(owner),
                   symbols=list(SYMBOLS), before_sha256=before,
                   after_sha256=hashlib.sha256(owner.read_bytes()).hexdigest(),
-                  other_archives=[str(archives[name]) for name in ARCHIVES[1:]])
-    (target_root.parent / "swift-rs-compat.json").write_text(json.dumps(report, indent=2) + "\n")
+                  validated_at=consumer,
+                  other_archives=[str(archives[name]) for name in ARCHIVES[1:] if name in archives])
+    receipt = target_root.parent / "swift-rs-compat.json"
+    if receipt.exists():
+        previous = json.loads(receipt.read_text())
+        if previous["owner"] == str(owner) and previous["after_sha256"] == before:
+            report["before_sha256"] = previous["before_sha256"]
+    receipt.write_text(json.dumps(report, indent=2) + "\n")
 
 
 def main():
     compiler, *arguments = sys.argv[1:]
-    # Cargo also probes rustc and compiles build.rs through a workspace wrapper.
-    # Only the final iOS product needs the compatibility step.
-    if "--crate-name" in arguments and arguments[arguments.index("--crate-name") + 1] == "cowboy_app_lib":
+    # Export before tauri bundles libTauri.a in its rlib; doing it at the final
+    # Cowboy link is too late. Then verify every plugin copy at the final crate.
+    consumer = arguments[arguments.index("--crate-name") + 1] if "--crate-name" in arguments else ""
+    if consumer in ("tauri", "cowboy_app_lib"):
         target = arguments[arguments.index("--target") + 1] if "--target" in arguments else ""
         if target in ("aarch64-apple-ios", "aarch64-apple-ios-sim"):
             version = subprocess.check_output(["xcodebuild", "-version"], text=True)
@@ -98,7 +106,7 @@ def main():
                 root = Path(os.environ["CARGO_TARGET_DIR"])
                 sysroot = subprocess.check_output([compiler, "--print", "sysroot"], text=True).strip()
                 objcopy = Path(sysroot) / "lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"
-                repair(arguments, root, objcopy)
+                repair(arguments, root, objcopy, consumer)
     os.execv(compiler, [compiler, *arguments])
 
 

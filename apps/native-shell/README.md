@@ -80,9 +80,10 @@ The build handles them as follows:
    `SwiftRs.o` is embedded in `libTauri.a`, `libtauri-plugin-haptics.a` and
    `libtauri-plugin-opener.a` alike, and promoting it in each produces duplicate
    globals that crash Xcode 27's `ld` with "malformed atom files with duplicate
-   names". Cowboy's `apple/swift-rs-compat.py` Cargo workspace wrapper exports
+   names". Cowboy's `apple/swift-rs-compat.py` Cargo compiler wrapper exports
    exactly those three functions from `SwiftRs.o` in the build's `libTauri.a`
-   before rustc embeds dependency archives into the native staticlib/cdylib.
+   before rustc embeds that archive into Tauri's rlib. A second check runs
+   before compiling Cowboy's native staticlib/cdylib.
    Haptics and opener copies remain local. Missing or ambiguous symbols,
    duplicate global runtime owners, borrowed archives and failed promotion
    abort the build instead of falling back to an old artifact.
@@ -95,7 +96,8 @@ decision.
 
 The adapter changes only artifacts inside this invocation's fresh target
 directory, never Cargo registry sources or the dependency lock. It runs only
-for Cowboy's iOS library under Xcode 27 or newer. The receipt records the
+for Tauri and Cowboy's iOS libraries under Xcode 27 or newer. Build-local Cargo
+configuration keeps the adapter active in Xcode's child build. The receipt records the
 owner archive, its before/after hashes, exact exports and other archive paths
 under `swift_rs_compat`. Remove the adapter when a checksummed upstream release
 exports one shared runtime correctly and passes the device and simulator builds.
