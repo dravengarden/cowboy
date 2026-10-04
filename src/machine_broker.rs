@@ -2044,15 +2044,32 @@ impl Broker {
         &self,
         session: &StartSession,
     ) -> Result<oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>> {
-        let provider = (!session.provider_generation_digest.is_empty())
-            .then(|| {
-                self.args.provider_store.launch_context(
-                    &session.provider,
-                    &session.provider_generation_digest,
-                    session.provider_auth_generation,
-                )
-            })
-            .transpose()?;
+        // Verification reads and hashes the retained runtime; keep that file
+        // work off the broker's async workers so other sessions keep flowing.
+        let verification_started = Instant::now();
+        let provider = if session.provider_generation_digest.is_empty() {
+            None
+        } else {
+            let store = Arc::clone(&self.args.provider_store);
+            let (provider_id, digest, auth_generation) = (
+                session.provider.clone(),
+                session.provider_generation_digest.clone(),
+                session.provider_auth_generation,
+            );
+            Some(
+                tokio::task::spawn_blocking(move || {
+                    store.launch_context(&provider_id, &digest, auth_generation)
+                })
+                .await
+                .context("Provider launch verification task failed")??,
+            )
+        };
+        tracing::info!(
+            session = %session.session_id,
+            provider = %session.provider,
+            verification_ms = verification_started.elapsed().as_millis(),
+            "worker launch context prepared"
+        );
         if let (Some(declared), Some(installed)) =
             (session.provider_behavior.as_ref(), provider.as_ref())
         {

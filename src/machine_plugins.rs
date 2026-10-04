@@ -265,8 +265,14 @@ pub(crate) struct MachinePluginStore {
     telemetry_export: tokio::sync::Mutex<()>,
     code_runtimes: CodeRuntimeHost,
     operations: operations::Journal,
+    /// Retained runtimes that passed a full digest and archive comparison,
+    /// keyed by content root and signed artifact set. See [`RuntimeStamp`]
+    /// for why an unchanged stamp proves the bytes are unchanged.
+    runtime_proofs: parking_lot::Mutex<std::collections::HashMap<String, Vec<RuntimeStamp>>>,
     #[cfg(test)]
     runtime_verifications: AtomicU64,
+    #[cfg(test)]
+    runtime_full_comparisons: AtomicU64,
 }
 
 enum PreparedProviderAuth {
@@ -332,8 +338,11 @@ impl MachinePluginStore {
             telemetry_export: tokio::sync::Mutex::new(()),
             code_runtimes: CodeRuntimeHost::default(),
             operations,
+            runtime_proofs: parking_lot::Mutex::new(std::collections::HashMap::new()),
             #[cfg(test)]
             runtime_verifications: AtomicU64::new(0),
+            #[cfg(test)]
+            runtime_full_comparisons: AtomicU64::new(0),
         })
     }
 
@@ -2451,7 +2460,7 @@ impl MachinePluginStore {
         let target = matching_runtime_artifacts(&binding, &self.platform, &self.architecture)?;
         let metadata = read_installed_runtime(content)?;
         ensure!(
-            installed_runtime_matches(content, target, &metadata)?,
+            self.retained_runtime_matches(content, target, &metadata)?,
             "retained legacy Provider runtime failed integrity verification"
         );
         Ok((package, binding, path))
@@ -2507,10 +2516,72 @@ impl MachinePluginStore {
         let staging = provider_staging_projection(target);
         let metadata = read_installed_runtime(&content)?;
         ensure!(
-            installed_runtime_matches(&content, &staging, &metadata)?,
+            self.retained_runtime_matches(&content, &staging, &metadata)?,
             "retained Plugin runtime failed integrity verification"
         );
         Ok((package, release, content))
+    }
+
+    /// Integrity check for an already-installed runtime on the launch path.
+    ///
+    /// The first check per process decompresses and hashes everything. After
+    /// it passes, the inode/size/mtime/ctime stamp of every entry is retained;
+    /// a later check whose stamp is identical skips the full comparison.
+    fn retained_runtime_matches(
+        &self,
+        content: &Path,
+        artifacts: &PlatformRuntimeArtifacts,
+        metadata: &InstalledRuntimeMetadata,
+    ) -> Result<bool> {
+        self.retained_runtime_matches_settled(
+            content,
+            artifacts,
+            metadata,
+            SystemTime::now() - RUNTIME_STAMP_SETTLE,
+        )
+    }
+
+    fn retained_runtime_matches_settled(
+        &self,
+        content: &Path,
+        artifacts: &PlatformRuntimeArtifacts,
+        metadata: &InstalledRuntimeMetadata,
+        settled_before: SystemTime,
+    ) -> Result<bool> {
+        let key = format!(
+            "{}\n{}",
+            content.display(),
+            serde_json::to_string(artifacts)?
+        );
+        let before = runtime_stamp(&content.join("runtime"))?;
+        if self.runtime_proofs.lock().get(&key) == Some(&before) {
+            return Ok(true);
+        }
+        #[cfg(test)]
+        self.runtime_full_comparisons
+            .fetch_add(1, Ordering::Relaxed);
+        let started = Instant::now();
+        let matches = installed_runtime_matches(content, artifacts, metadata)?;
+        tracing::info!(
+            content = %content.display(),
+            matches,
+            full_comparison_ms = started.elapsed().as_millis(),
+            "retained runtime compared against signed artifacts"
+        );
+        if matches {
+            // A write during the comparison, or a write in the same coarse
+            // timestamp tick as the stamp, must never be remembered as proven.
+            let after = runtime_stamp(&content.join("runtime"))?;
+            let settled = after.iter().all(|entry| entry.changed < settled_before);
+            if after == before && settled {
+                self.runtime_proofs.lock().insert(key, after);
+            } else {
+                self.runtime_proofs.lock().remove(&key);
+            }
+        } else {
+            self.runtime_proofs.lock().remove(&key);
+        }
+        Ok(matches)
     }
 
     // Credential observation trusts the signed contract, not executable bytes.
@@ -3600,6 +3671,69 @@ async fn stage_provider_runtime(
     result
 }
 
+/// Entries changed less than this long ago are not remembered as proven:
+/// file timestamps come from a coarse clock, so a write in the same tick as
+/// the proof could otherwise leave an identical stamp.
+const RUNTIME_STAMP_SETTLE: Duration = Duration::from_secs(2);
+
+/// Identity of one runtime directory entry, read without following links.
+///
+/// Rewriting, truncating, replacing, renaming, chmod-ing, adding or removing
+/// any entry changes the inode, size, mode, mtime or ctime here. The kernel
+/// sets ctime on every such change and unprivileged callers cannot set it
+/// back, so an identical stamp proves the bytes are the ones that passed the
+/// full comparison. Defeating it requires root, which already owns the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeStamp {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    size: u64,
+    modified: (i64, i64),
+    status_changed: (i64, i64),
+    changed: SystemTime,
+}
+
+fn runtime_stamp(root: &Path) -> Result<Vec<RuntimeStamp>> {
+    use std::os::unix::fs::MetadataExt as _;
+    let mut stamps = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)?;
+        let at = |seconds: i64, nanos: i64| {
+            let offset = Duration::new(
+                seconds.unsigned_abs(),
+                u32::try_from(nanos).unwrap_or_default(),
+            );
+            if seconds >= 0 {
+                SystemTime::UNIX_EPOCH + offset
+            } else {
+                SystemTime::UNIX_EPOCH
+            }
+        };
+        let changed = at(metadata.mtime(), metadata.mtime_nsec())
+            .max(at(metadata.ctime(), metadata.ctime_nsec()));
+        if metadata.is_dir() {
+            for child in fs::read_dir(&path)? {
+                pending.push(child?.path());
+            }
+        }
+        stamps.push(RuntimeStamp {
+            path: path.strip_prefix(root)?.to_path_buf(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            size: metadata.size(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            status_changed: (metadata.ctime(), metadata.ctime_nsec()),
+            changed,
+        });
+    }
+    stamps.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(stamps)
+}
+
 fn installed_runtime_matches(
     content: &Path,
     artifacts: &PlatformRuntimeArtifacts,
@@ -3608,47 +3742,69 @@ fn installed_runtime_matches(
     if metadata.schema_version != 2 || metadata.commands.len() != artifacts.components.len() {
         return Ok(false);
     }
-    for expected in &artifacts.components {
-        let Some(installed) = metadata.commands.get(&expected.command) else {
-            return Ok(false);
-        };
-        if installed.artifact_digest != expected.artifact_digest.to_ascii_lowercase() {
-            return Ok(false);
+    // Components are independent; compare them concurrently.
+    std::thread::scope(|scope| {
+        let checks: Vec<_> = artifacts
+            .components
+            .iter()
+            .map(|expected| {
+                scope.spawn(move || installed_component_matches(content, expected, metadata))
+            })
+            .collect();
+        let mut all = true;
+        for check in checks {
+            all &= check
+                .join()
+                .map_err(|_| anyhow::anyhow!("runtime comparison thread panicked"))??;
         }
-        let executable = content.join(&installed.executable);
-        let artifact = content.join(&installed.artifact);
-        let component_root =
-            content
-                .join("runtime")
-                .join(format!("{}-{}", expected.kind.as_str(), expected.slot));
-        let (expected_executable, expected_artifact) = match expected.artifact_format {
-            ProviderArtifactFormat::Raw => (component_root.join("bin"), component_root.join("bin")),
-            ProviderArtifactFormat::TarGz => (
-                component_root.join("content").join(
-                    expected
-                        .entrypoint
-                        .as_deref()
-                        .context("runtime archive requires an entrypoint")?,
-                ),
-                component_root.join("artifact.tar.gz"),
+        Ok(all)
+    })
+}
+
+fn installed_component_matches(
+    content: &Path,
+    expected: &ReleasedPrivateComponent,
+    metadata: &InstalledRuntimeMetadata,
+) -> Result<bool> {
+    let Some(installed) = metadata.commands.get(&expected.command) else {
+        return Ok(false);
+    };
+    if installed.artifact_digest != expected.artifact_digest.to_ascii_lowercase() {
+        return Ok(false);
+    }
+    let executable = content.join(&installed.executable);
+    let artifact = content.join(&installed.artifact);
+    let component_root =
+        content
+            .join("runtime")
+            .join(format!("{}-{}", expected.kind.as_str(), expected.slot));
+    let (expected_executable, expected_artifact) = match expected.artifact_format {
+        ProviderArtifactFormat::Raw => (component_root.join("bin"), component_root.join("bin")),
+        ProviderArtifactFormat::TarGz => (
+            component_root.join("content").join(
+                expected
+                    .entrypoint
+                    .as_deref()
+                    .context("runtime archive requires an entrypoint")?,
             ),
-        };
-        if executable != expected_executable || artifact != expected_artifact {
-            return Ok(false);
-        }
-        ensure_within(content, &executable)?;
-        ensure_within(content, &artifact)?;
-        if !fs::symlink_metadata(&executable).is_ok_and(|metadata| metadata.is_file())
-            || !fs::symlink_metadata(&artifact).is_ok_and(|metadata| metadata.is_file())
-            || digest_file(&artifact)? != expected.artifact_digest.to_ascii_lowercase()
-        {
-            return Ok(false);
-        }
-        if expected.artifact_format == ProviderArtifactFormat::TarGz
-            && !archive_runtime_matches(&artifact, &component_root.join("content"))?
-        {
-            return Ok(false);
-        }
+            component_root.join("artifact.tar.gz"),
+        ),
+    };
+    if executable != expected_executable || artifact != expected_artifact {
+        return Ok(false);
+    }
+    ensure_within(content, &executable)?;
+    ensure_within(content, &artifact)?;
+    if !fs::symlink_metadata(&executable).is_ok_and(|metadata| metadata.is_file())
+        || !fs::symlink_metadata(&artifact).is_ok_and(|metadata| metadata.is_file())
+        || digest_file(&artifact)? != expected.artifact_digest.to_ascii_lowercase()
+    {
+        return Ok(false);
+    }
+    if expected.artifact_format == ProviderArtifactFormat::TarGz
+        && !archive_runtime_matches(&artifact, &component_root.join("content"))?
+    {
+        return Ok(false);
     }
     Ok(true)
 }
@@ -6283,7 +6439,58 @@ mod tests {
         atomic_write(&extracted.join("lib/runtime.js"), library, 0o600).unwrap();
         atomic_write(&extracted.join("lib/injected.js"), b"extra module", 0o600).unwrap();
         assert!(!installed_runtime_matches(&root, &artifacts, &metadata).unwrap());
+        fs::remove_file(extracted.join("lib/injected.js")).unwrap();
+        assert_retained_runtime_proofs(&root, &artifacts, &metadata, library);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Launch-path proofs skip the full comparison only while every entry
+    /// keeps the exact stamp that was proven.
+    fn assert_retained_runtime_proofs(
+        root: &Path,
+        artifacts: &PlatformRuntimeArtifacts,
+        metadata: &InstalledRuntimeMetadata,
+        library: &[u8],
+    ) {
+        let extracted = root.join("runtime/provider_cli-fixture/content");
+        let store =
+            MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".into())
+                .unwrap();
+        let settled = SystemTime::now() + Duration::from_secs(3600);
+        let check = |settled_before| {
+            store
+                .retained_runtime_matches_settled(root, artifacts, metadata, settled_before)
+                .unwrap()
+        };
+        let comparisons = || store.runtime_full_comparisons.load(Ordering::Relaxed);
+        assert!(check(settled));
+        assert!(check(settled));
+        assert_eq!(comparisons(), 1, "an unchanged runtime is not re-hashed");
+        // Same-size, same-inode rewrite is still caught through ctime/mtime.
+        let tampered = b"export const version = 2;\n";
+        assert_eq!(tampered.len(), library.len());
+        OpenOptions::new()
+            .write(true)
+            .open(extracted.join("lib/runtime.js"))
+            .unwrap()
+            .write_all(tampered)
+            .unwrap();
+        assert!(!check(settled));
+        assert!(!check(settled), "a failed comparison is never remembered");
+        assert_eq!(comparisons(), 3);
+        atomic_write(&extracted.join("lib/runtime.js"), library, 0o600).unwrap();
+        atomic_write(&extracted.join("lib/injected.js"), b"extra module", 0o600).unwrap();
+        assert!(!check(settled), "an added module invalidates the proof");
+        fs::remove_file(extracted.join("lib/injected.js")).unwrap();
+        assert!(check(settled));
+        let proven = comparisons();
+        assert!(check(settled));
+        assert_eq!(comparisons(), proven);
+        // Entries changed within the timestamp settle window are not cached.
+        fs::write(extracted.join("lib/runtime.js"), library).unwrap();
+        assert!(check(SystemTime::UNIX_EPOCH));
+        assert!(check(SystemTime::UNIX_EPOCH));
+        assert_eq!(comparisons(), proven + 2);
     }
 
     #[test]
