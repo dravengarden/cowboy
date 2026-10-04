@@ -107,9 +107,7 @@ impl ComponentStore {
             payload.verify(&generation)?;
             // Retain the authenticated envelope bytes for offline startup
             // verification. Never reconstruct archive expectations from cache.
-            let temporary = generation.join(".artifact.partial");
-            std::fs::write(&temporary, &bytes)?;
-            std::fs::rename(temporary, generation.join("artifact"))?;
+            retain_host_artifact(&generation, &bytes)?;
         }
         std::fs::write(
             generation.join("manifest.json"),
@@ -266,6 +264,26 @@ impl ComponentStore {
         }
         Ok(())
     }
+}
+
+fn retain_host_artifact(generation: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // A cached predictable partial-file link must not redirect this new write.
+    let temporary = generation.join(format!(".artifact-{:032x}.partial", rand::random::<u128>()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    let result = file
+        .write_all(bytes)
+        .and_then(|()| std::fs::rename(&temporary, generation.join("artifact")));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.context("retaining authenticated Machine host artifact")
 }
 
 async fn spawn_staged_probe(
