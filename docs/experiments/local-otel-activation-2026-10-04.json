@@ -1,0 +1,526 @@
+{
+  "schema": "cowboy.local-otel-activation/v1",
+  "accepted": true,
+  "recorded_at": "2026-10-04T11:03:34.385469+00:00",
+  "revision": "660a714ba163a09a8dbc0afef6a30d89a6d431ef",
+  "worker_generation": "worker-748825b42b4302fe26ca",
+  "controller_release": "/nix/store/y7gi4gb4w9dvbrh7d50kpzii0w63hm0w-cowboy-controller-release",
+  "machine_release": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+  "gates": {
+    "check_compact": "passed",
+    "all_feature_rust_tests": {
+      "passed": 1843,
+      "ignored": 52
+    },
+    "web_tests_passed": 2029,
+    "final_legacy_compatibility": {
+      "logging_tests_passed": 21,
+      "fixture_ignored": 1,
+      "all_target_all_feature_clippy": "passed"
+    },
+    "note": "The last compatibility edit was separately tested and linted; the merged gate CLI/build phases also compiled it.",
+    "columbus_verify": "passed",
+    "docs_index_check": "passed",
+    "independent_product_findings_resolved": 11,
+    "native_execution": {
+      "codex": {
+        "schema": "cowboy.execution-worker-conformance/v1",
+        "accepted": true,
+        "checks": [
+          "machine_owned_worktree",
+          "long_state_path_uses_private_short_socket",
+          "machine_restart_reattaches_same_keeper_and_binding",
+          "provider_refuses_environment_override",
+          "target_image_read_reaches_native_model_input",
+          "background_job_survives_lost_reply_and_35_second_transport_gap",
+          "cancel_reaches_original_target_job_without_replay",
+          "output_backpressure_survives_35_second_transport_gap",
+          "native_apply_patch_and_command_use_target",
+          "runtime_files_unchanged",
+          "native_target_instructions",
+          "cold_native_resume_automatically_rebinds_each_turn",
+          "cold_resume_retains_history_without_effect_replay",
+          "global_environment_config_unchanged",
+          "packaged_acp_native_spawn_routes_target_tools",
+          "packaged_acp_cold_load_preserves_binding_history_and_effects",
+          "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+          "concurrent_large_input_and_output_do_not_deadlock",
+          "post_flood_commands_and_cancellation_keep_original_executor",
+          "target_image_bytes_cross_machine_transport",
+          "idempotent_close_stops_environment_and_preserves_worktree",
+          "closed_environment_cannot_be_recreated"
+        ],
+        "receipt_sha256": "b1f6c6861e91feec372363502cab1569b01d9b4ebe3877175b81c58796fa28d4"
+      },
+      "claude": {
+        "schema": "cowboy.claude-execution-worker-conformance/v1",
+        "accepted": true,
+        "checks": [
+          "machine_owned_worktree",
+          "machine_restart_reattaches_same_keeper_and_binding",
+          "native_control_cannot_replace_bound_execution",
+          "module_readiness_uses_no_model_request",
+          "native_tools_use_target_files_and_processes_without_mcp",
+          "runtime_context_and_guidance_are_replaced",
+          "unicode_quotes_crlf_bytes_preserved",
+          "stale_edit_is_refused",
+          "target_image_enters_model_context",
+          "background_cancel_settles",
+          "bounded_large_read_stays_in_target_tool_result",
+          "native_notebook_edit_preserves_metadata",
+          "native_read_observes_retained_task_output",
+          "lost_start_receipt_and_transport_outage_do_not_replay",
+          "cold_native_resume_preserves_context_reads_and_effects",
+          "background_process_handle_survives_native_resume",
+          "real_compaction_and_next_turn_preserve_target_context",
+          "cold_resume_after_compaction_has_no_runtime_file_locators",
+          "independent_native_searches_execute_concurrently",
+          "native_interrupt_stops_foreground_target_process",
+          "packaged_acp_native_spawn_routes_target_tools",
+          "packaged_acp_cold_load_preserves_binding_history_and_effects",
+          "hot_effort_configuration_preserves_bound_execution",
+          "broken_module_refused_before_model_request",
+          "bare_mode_refused_without_changing_authentication",
+          "malformed_result_denies_without_native_fallback",
+          "bridge_error_denies_without_native_fallback",
+          "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+          "concurrent_large_input_and_output_do_not_deadlock",
+          "post_flood_commands_and_cancellation_keep_original_executor",
+          "target_image_bytes_cross_machine_transport",
+          "idempotent_close_stops_environment_and_preserves_worktree",
+          "closed_environment_cannot_be_recreated"
+        ],
+        "receipt_sha256": "8b60aea6968aab94704e2a9e1bc667f7cd69a57c749afaf4fd39ff9ad9b2c8aa"
+      }
+    },
+    "provider_coexistence": {
+      "codex": {
+        "schema_version": 1,
+        "plugin_id": "codex",
+        "plugin_version": "3.3.2",
+        "artifact_digest": "sha256:a833d5b617922fc67938bd5ddf9a43bf9dd928caee2a3242a869014357c3e08f",
+        "platform": {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "probes": [
+          {
+            "command": "codex",
+            "version": "0.159.3",
+            "artifact_digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+            "status": "passed"
+          },
+          {
+            "command": "codex-acp",
+            "version": "2.1.0",
+            "artifact_digest": "sha256:8ce40a0cb5ff6e15d8fa0972072788cef9cecec3bfaa5fc43f78ab729ca9a708",
+            "status": "passed"
+          }
+        ],
+        "uses_service_credentials": false,
+        "sends_prompt": false,
+        "previous": {
+          "plugin_version": "3.3.1",
+          "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+        },
+        "worker": {
+          "executable_digest": "sha256:1838792ba788e54946bcb540aea75df0e52d492f6d75601de8751168c1f5c6e0",
+          "initialize_and_session_new": "passed",
+          "stop_and_descendant_drain": "passed",
+          "sidecar_count": 0,
+          "distinct_generation_coexistence": "passed"
+        }
+      },
+      "claude": {
+        "schema_version": 1,
+        "plugin_id": "claude-code",
+        "plugin_version": "3.4.5",
+        "artifact_digest": "sha256:acebb0153651c858b42c35ae93df0ac42fc038125a430a06f7bd35636d5cff49",
+        "platform": {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "probes": [
+          {
+            "command": "claude",
+            "version": "2.1.287",
+            "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+            "status": "passed"
+          },
+          {
+            "command": "claude-agent-acp",
+            "version": "0.84.0",
+            "artifact_digest": "sha256:60b56f5f0a5ecd7795e911743aaac6c8d1a47bd1ea49db67d50d1bd6e2eeeb57",
+            "status": "passed"
+          }
+        ],
+        "uses_service_credentials": false,
+        "sends_prompt": false,
+        "previous": {
+          "plugin_version": "3.4.4",
+          "artifact_digest": "sha256:51d13bf26ed9a9bfa5359cc08fb8da6034a178f45e501a46f2829128cefb894e"
+        },
+        "worker": {
+          "executable_digest": "sha256:1838792ba788e54946bcb540aea75df0e52d492f6d75601de8751168c1f5c6e0",
+          "initialize_and_session_new": "passed",
+          "stop_and_descendant_drain": "passed",
+          "sidecar_count": 0,
+          "distinct_generation_coexistence": "passed"
+        }
+      }
+    },
+    "real_cli_and_ssh": {
+      "schema": "cowboy.logs-conformance/v1",
+      "accepted": true,
+      "binary_sha256": "7be02941e906a4f4ecdb8458c49f3c4e5228fb67e52ef6cac453aa0a93ba3399",
+      "ssh_alias": "hawk",
+      "checks": [
+        "schema derives actual command arguments",
+        "RUST_LOG=off still records correlated redacted failure",
+        "analysis evidence identity is queryable",
+        "source aggregation is independent of page size",
+        "deterministic analysis returns evidence with coverage limits",
+        "tail drains pages and suppresses repeated evidence IDs",
+        "periodic analysis is bounded and emits JSONL",
+        "OTLP protobuf export refuses truncated evidence",
+        "RPC is read-only and refuses recursive remote execution",
+        "partial-source failure is explicit with nonzero default exit",
+        "short retention config resolves rotation and supports idle maintenance",
+        "real SSH source executes query and metrics at the source"
+      ],
+      "limits": "Isolated CLI fixture; not a production rollout or external Collector receipt."
+    },
+    "fatal_capture": {
+      "schema": "cowboy.local-otel-fatal-conformance/v1",
+      "accepted": true,
+      "release": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+      "failure_exit_code": 1,
+      "event": "cowboy.process.failed",
+      "error_type": "returned_error",
+      "checks": [
+        "real packaged adapter returns an error",
+        "RUST_LOG=off does not suppress failure evidence",
+        "failure is queryable from the host-local SQLite store"
+      ]
+    },
+    "maintenance_orchestration_mocks": [
+      "success",
+      "ambiguous_disable_response",
+      "logger_failure_rolls_back",
+      "unknown_rollback_keeps_placement_disabled"
+    ]
+  },
+  "component_receipts": {
+    "hawk_controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1791110810124907849-660a714ba163",
+      "revision": "660a714ba163a09a8dbc0afef6a30d89a6d431ef",
+      "published": true,
+      "release": "/nix/store/y7gi4gb4w9dvbrh7d50kpzii0w63hm0w-cowboy-controller-release",
+      "previousRelease": "/nix/store/s0b1rn8f41km1ch4mn0mcy87wrdny9fr-cowboy-controller-release",
+      "activeRelease": "/nix/store/y7gi4gb4w9dvbrh7d50kpzii0w63hm0w-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-04T10:46:50.124907849Z",
+      "recordedAt": "2026-10-04T10:47:05.715031431Z",
+      "recovered": false
+    },
+    "hawk_machine": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1791110910725591840-660a714ba163",
+      "revision": "660a714ba163a09a8dbc0afef6a30d89a6d431ef",
+      "workerGeneration": "worker-748825b42b4302fe26ca",
+      "published": true,
+      "release": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+      "previousRelease": "/nix/store/m86n5bf0vlqmcn6gk1jzcmlkqi5n15dm-cowboy-machine-release",
+      "activeRelease": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-04T10:48:30.72559184Z",
+      "recordedAt": "2026-10-04T10:48:39.2760548Z",
+      "recovered": false
+    },
+    "falcon_machine": {
+      "schema": 1,
+      "machine": "falcon",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1791111364696798453-660a714ba163",
+      "revision": "660a714ba163a09a8dbc0afef6a30d89a6d431ef",
+      "workerGeneration": "worker-748825b42b4302fe26ca",
+      "published": true,
+      "release": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+      "previousRelease": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "activeRelease": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-04T10:56:04.696798453Z",
+      "recordedAt": "2026-10-04T10:56:12.428357509Z",
+      "recovered": false
+    }
+  },
+  "ovh": {
+    "schema": "columbus.ovh-local-otel-activation/v1",
+    "accepted": true,
+    "cowboy_revision": "660a714ba163a09a8dbc0afef6a30d89a6d431ef",
+    "release": "/nix/store/zfxa4dx2xyqchfjl57h8sd0nqbrzqwc3-cowboy-machine-release",
+    "worker_generation": "worker-748825b42b4302fe26ca",
+    "protected_receipt": "/var/lib/columbus/ovh-cowboy-local-otel-20261004",
+    "committed": {
+      "previous_pid": 1080991,
+      "pid": 1125749,
+      "start": "38906850",
+      "parent": 1463,
+      "exe": "/nix/store/zfci0jh7n5nlbkh4hqslkxpaxjcap67h-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "worker_generation": "worker-748825b42b4302fe26ca",
+      "original_workers_preserved_until_host_start": true,
+      "accepted_at": 1791111331,
+      "configuration_sha256": "1d513f6395fcff90d76ba3a30e3ace517b72aa5782b7974b03d3d1a70933803d"
+    },
+    "original_worker_outcomes": {
+      "retained": 7
+    },
+    "kill_mode": "control-group",
+    "rollback_timer": "inactive",
+    "policy_restored": true,
+    "policy_revision_before": "placement-21022d2883c74f8be46301cf9efbd9c9",
+    "policy_revision_after": "placement-2f5fac89a1af40e85995609348020987",
+    "independent_orchestrator": {
+      "host": "hawk",
+      "unit": "cowboy-local-otel-ovh-20261004.service",
+      "result": "success",
+      "exit_status": 0
+    },
+    "archive_sha256": "0acf29c72ccf11fb34580f92fe3ffa5165d4e3c79a1e3c3ef6d7fb6185806bff",
+    "local_candidate_evidence": {
+      "id": "e546e089a82149e0950387501b01df39",
+      "observed_ms": 1791111284037,
+      "timestamp_ms": 1791111284037,
+      "signal": "logs",
+      "severity": 9,
+      "event": "cowboy.logs.writer.started",
+      "service": "cowboy-machine",
+      "session": "",
+      "machine": "ovh",
+      "environment": "",
+      "trace_id": "",
+      "duration_ms": null,
+      "body": "cowboy.logs.writer.started",
+      "attributes": {
+        "cowboy.execution.environment.id": "",
+        "cowboy.generation": "worker-748825b42b4302fe26ca",
+        "cowboy.session.id": "",
+        "host.id": "ovh",
+        "process.executable.path": "/nix/store/zfci0jh7n5nlbkh4hqslkxpaxjcap67h-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+        "service.instance.id": "2a03115a419b4dac883ab14bad2c994c",
+        "service.name": "cowboy-machine",
+        "service.version": "0.1.0"
+      }
+    },
+    "project_identity": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-748825b42b4302fe26ca",
+      "workspace_revision": "projects-21dee2e2568e528fa45e200604d2155f",
+      "workspace_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "workspace_owner": "cowboy"
+    },
+    "limits": [
+      "Busy workers adopt local logging at their normal generation boundary.",
+      "The host rollback timer does not restore Controller placement policy; the supervised orchestrator restores it with CAS. Its original input is preserved in protected original-placement.json."
+    ]
+  },
+  "before_health": {
+    "hawk": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-dc63f38423cbd1971eda",
+      "workspace_revision": "projects-0410346496a2ec677f145e3407b49beb",
+      "workspace_ids_sha256": "1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40",
+      "workspace_owner": "cowboy"
+    },
+    "falcon": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-9fce17441fdd1e8ca642",
+      "workspace_revision": "projects-fb5ed67ef8d427de4f98215fb35ed027",
+      "workspace_ids_sha256": "ff963bc4a9f47f42abfa5dd6f74b107eb5d6fd840ce945ea717e42b4678281e9",
+      "workspace_owner": "cowboy"
+    },
+    "ovh": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-9fce17441fdd1e8ca642",
+      "workspace_revision": "projects-21dee2e2568e528fa45e200604d2155f",
+      "workspace_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "workspace_owner": "cowboy"
+    }
+  },
+  "after_health": {
+    "hawk": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-748825b42b4302fe26ca",
+      "workspace_revision": "projects-0410346496a2ec677f145e3407b49beb",
+      "workspace_ids_sha256": "1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40",
+      "workspace_owner": "cowboy"
+    },
+    "falcon": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-748825b42b4302fe26ca",
+      "workspace_revision": "projects-fb5ed67ef8d427de4f98215fb35ed027",
+      "workspace_ids_sha256": "ff963bc4a9f47f42abfa5dd6f74b107eb5d6fd840ce945ea717e42b4678281e9",
+      "workspace_owner": "cowboy"
+    },
+    "ovh": {
+      "connected": true,
+      "status": "online",
+      "active_acp_generation": "worker-748825b42b4302fe26ca",
+      "workspace_revision": "projects-21dee2e2568e528fa45e200604d2155f",
+      "workspace_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "workspace_owner": "cowboy"
+    }
+  },
+  "hawk_original_worker_outcomes": {
+    "retained": 12,
+    "native_generation_handoff": 1
+  },
+  "falcon_original_workers": 0,
+  "log_stores": [
+    {
+      "source": "controller",
+      "policy": {
+        "schema": 1,
+        "retain_seconds": 604800,
+        "rotate_seconds": 86400,
+        "segment_bytes": 8388608,
+        "max_bytes": 134217728,
+        "forward_runtime": false
+      },
+      "retained_bytes": 155648,
+      "live_writers": [
+        {
+          "service": "cowboy-controller",
+          "pid": 2336663,
+          "instance": "72cb6017d3ee4146b7a48740537ac632",
+          "written": 34,
+          "dropped": 0,
+          "failures": 0
+        }
+      ]
+    },
+    {
+      "source": "hawk",
+      "policy": {
+        "schema": 1,
+        "retain_seconds": 604800,
+        "rotate_seconds": 86400,
+        "segment_bytes": 8388608,
+        "max_bytes": 134217728,
+        "forward_runtime": false
+      },
+      "retained_bytes": 69632,
+      "live_writers": [
+        {
+          "service": "cowboy-worker",
+          "pid": 2362817,
+          "instance": "5e44abec5c5645238b7fdd70ddc5a44e",
+          "written": 9,
+          "dropped": 0,
+          "failures": 0
+        },
+        {
+          "service": "cowboy-machine",
+          "pid": 2354418,
+          "instance": "b6d53982bfab4164aa627983cccee6bc",
+          "written": 37,
+          "dropped": 0,
+          "failures": 0
+        }
+      ]
+    },
+    {
+      "source": "falcon",
+      "policy": {
+        "schema": 1,
+        "retain_seconds": 604800,
+        "rotate_seconds": 86400,
+        "segment_bytes": 8388608,
+        "max_bytes": 134217728,
+        "forward_runtime": false
+      },
+      "retained_bytes": 28672,
+      "live_writers": [
+        {
+          "service": "cowboy-machine",
+          "pid": 2415446,
+          "instance": "817b2f0d166d482a9bb39be8327479f0",
+          "written": 5,
+          "dropped": 0,
+          "failures": 0
+        }
+      ]
+    },
+    {
+      "source": "ovh",
+      "policy": {
+        "schema": 1,
+        "retain_seconds": 604800,
+        "rotate_seconds": 86400,
+        "segment_bytes": 8388608,
+        "max_bytes": 134217728,
+        "forward_runtime": false
+      },
+      "retained_bytes": 28672,
+      "live_writers": [
+        {
+          "service": "cowboy-machine",
+          "pid": 1125749,
+          "instance": "2a03115a419b4dac883ab14bad2c994c",
+          "written": 5,
+          "dropped": 0,
+          "failures": 0
+        }
+      ]
+    }
+  ],
+  "fleet_cli": {
+    "sources": [
+      "controller",
+      "hawk",
+      "falcon",
+      "ovh"
+    ],
+    "status": "accepted",
+    "metrics": "accepted",
+    "analyze": "accepted",
+    "watch_frames": 2,
+    "source_configuration_on_hawk": "/home/draven/.config/cowboy/log-sources.json"
+  },
+  "first_analysis": {
+    "status": "incomplete_evidence",
+    "observations": [
+      "Retained Controller/browser reconnect warnings and previous-session fallback events.",
+      "Hawk worker generation handoff/fence warnings are queryable by evidence ID.",
+      "All accepted live local writers reported zero drops and zero storage failures."
+    ],
+    "interpretation": "The new stores lack a full historical comparison window; these observations do not establish root causes or fleet-wide error rates."
+  },
+  "limits": [
+    "No external Collector/Datadog interoperability deployment was performed.",
+    "No physical disk-exhaustion or power-loss experiment was performed on production.",
+    "Existing busy workers and keepers retain their executable until the native lifecycle boundary.",
+    "Provider accounting, business events and independently authorized Telemetry Plugins retain their existing delivery contract.",
+    "Periodic analysis is available through watch/native scheduling; no persistent analysis scheduler was installed."
+  ]
+}
