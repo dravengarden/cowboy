@@ -147,6 +147,8 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`cardea-operations.md`](cardea-operations.md) — Human-reviewed exact Plugin
+  installation through the shared Cardea CLI/SDK and Cowboy-owned authority
 - [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
   silent credential renewal, independent device keys, and revocation boundaries
 - [`matrix-memory.md`](matrix-memory.md) — Explicit Matrix enrollment, shared recall/capture, and native memory cutover

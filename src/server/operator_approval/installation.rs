@@ -39,7 +39,11 @@ impl OperatorApproval {
         operation_id: String,
         target: InstallTarget,
     ) -> Result<InstallationAuthority> {
-        let expires_at_ms = self.received.deadline_ms(Duration::from_mins(5));
+        ensure!(
+            self.cardea_installation_matches(machine, desired, &operation_id, &target),
+            "reviewed installation target changed"
+        );
+        let expires_at_ms = self.installation_expiry();
         let intent = InstallIntent {
             schema: 2,
             request_id: format!("plugin-install-{operation_id}"),
@@ -70,6 +74,7 @@ impl OperatorApproval {
         self,
         operation: &InstallOperation,
     ) -> Result<InstallationReconciliationAuthority> {
+        self.require_general_purpose()?;
         operation.validate()?;
         let expires_at_ms = self.received.deadline_ms(Duration::from_mins(2));
         let received = self.received;
@@ -83,10 +88,27 @@ impl OperatorApproval {
 }
 
 impl InstallationAuthority {
+    /// Authentication synchronization is also a write. Initial synchronization
+    /// must meet the original start deadline; post-install continuation retains
+    /// the original identity budget and current policy without renewing either.
+    pub(in crate::server) fn matches_auth_sync(&self, before_install: bool) -> bool {
+        let valid = self.within_budget() && self.approval.cardea_auth_sync_current(before_install);
+        if !valid {
+            self.revoke();
+        }
+        valid
+    }
+    #[cfg(test)]
+    pub(in crate::server) fn expire_cardea_start_for_test(&self) {
+        if let super::Credential::Cardea(grant) = &self.approval.credential {
+            grant.expire_start_for_test();
+        }
+    }
     /// Final synchronous identity/budget check at dispatch; this does not
     /// replace the continuous credential/connection checks in the coordinator.
     pub(in crate::server) fn matches_live_step(&self, step: &InstallStep) -> bool {
         let valid = self.within_budget()
+            && self.approval.cardea_dispatch_current()
             && self
                 .intent
                 .machine_step()

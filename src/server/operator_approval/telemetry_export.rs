@@ -15,6 +15,7 @@ impl OperatorApproval {
         self,
         attempt: &ExportAttempt,
     ) -> Result<TelemetryExportAuthority> {
+        self.require_general_purpose()?;
         ensure!(
             self.service == attempt.service_id,
             "export confirmation owner changed"

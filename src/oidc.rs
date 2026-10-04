@@ -597,6 +597,99 @@ impl OidcProvider {
         identity.validate(&self.client_id, &self.subject, expected_key, now_seconds()?)?;
         Ok(identity)
     }
+
+    /// Closed application-side transport for the generic authorization SDK.
+    /// The provider owns the issuer and private service key; caller input
+    /// cannot select a destination or obtain the service credential.
+    pub(crate) async fn cardea_authorization_post(
+        &self,
+        exchange: bool,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.cardea_device_configuration()?;
+        let mut form = vec![
+            ("grant_type".into(), "client_credentials".into()),
+            ("client_id".into(), self.client_id.clone()),
+        ];
+        self.append_client_authentication(&mut form, &self.token_endpoint, now_seconds()?)?;
+        let value = bounded_device_json(
+            self.http
+                .post(&self.token_endpoint)
+                .form(&form)
+                .send()
+                .await?,
+        )
+        .await?;
+        anyhow::ensure!(
+            value["token_type"]
+                .as_str()
+                .is_some_and(|v| v.eq_ignore_ascii_case("bearer")),
+            "invalid service token"
+        );
+        let token = value["access_token"]
+            .as_str()
+            .filter(|v| !v.is_empty() && v.len() <= 8192)
+            .context("invalid service token")?;
+        let path = if exchange {
+            "/v1/device-grant-exchanges"
+        } else {
+            "/v2/operations"
+        };
+        let mut response = self
+            .http
+            .post(format!("{}{path}", self.issuer.trim_end_matches('/')))
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            use cardea_authorization::Error;
+            return Err(match response.status().as_u16() {
+                401 => Error::AuthenticationRequired,
+                403 => Error::PermissionDenied,
+                409 => Error::Conflict,
+                400 => Error::InvalidContract,
+                _ => Error::Unavailable,
+            }
+            .into());
+        }
+        anyhow::ensure!(
+            response.status().is_success()
+                && response
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.split(';').next() == Some("application/json")),
+            "authorization request rejected"
+        );
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            anyhow::ensure!(
+                chunk.len()
+                    <= cardea_core::authorization::MAX_DOCUMENT_BYTES.saturating_sub(bytes.len()),
+                "authorization response too large"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        cardea_core::authorization::decode(&bytes)
+            .map_err(|_| anyhow::anyhow!("invalid authorization response"))
+    }
+
+    pub(crate) fn cardea_subject_matches(&self, subject: &str) -> bool {
+        self.id == "cardea" && constant_time_equal(subject.as_bytes(), self.subject.as_bytes())
+    }
+    pub(crate) fn cardea_product_device_id(&self, grant: &str) -> Result<String> {
+        let config = self.cardea_device_configuration()?;
+        Ok(
+            crate::admin::hex_sha256(&serde_json::to_vec(&serde_json::json!([
+                "cardea-device/v1",
+                config["issuer"],
+                config["client_id"],
+                grant,
+            ]))?)[..32]
+                .to_owned(),
+        )
+    }
     pub fn load(path: &Path) -> Result<Self> {
         let document: ProviderDocument = crate::auth_plugins::decode_private_json(
             &read_protected_file(path)?,
@@ -2167,6 +2260,81 @@ fn now_seconds() -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn cardea_authorization_transport_is_closed_bounded_and_strict() {
+        use axum::{Router, response::IntoResponse, routing::post};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let audience = format!("{origin}/oauth2/token");
+        let app = Router::new()
+            .route("/oauth2/token", post(move |axum::Form(form): axum::Form<std::collections::HashMap<String, String>>| {
+                let audience = audience.clone();
+                async move {
+                    assert_eq!(form["grant_type"], "client_credentials");
+                    assert!(!form.contains_key("client_secret"));
+                    let parts: Vec<_> = form["client_assertion"].split('.').collect();
+                    use base64::Engine as _;
+                    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                    let claims: serde_json::Value = serde_json::from_slice(&b64.decode(parts[1]).unwrap()).unwrap();
+                    assert_eq!(claims["aud"], audience);
+                    assert_eq!(claims["iss"], "cowboy-production");
+                    let signature = ed25519_dalek::Signature::from_slice(&b64.decode(parts[2]).unwrap()).unwrap();
+                    ed25519_dalek::SigningKey::from_bytes(&[7;32]).verifying_key().verify_strict(format!("{}.{}",parts[0],parts[1]).as_bytes(), &signature).unwrap();
+                    axum::Json(serde_json::json!({"access_token":"private-service-token","token_type":"Bearer"}))
+                }
+            }))
+            .route("/v2/operations", post(move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                assert_eq!(headers["authorization"], "Bearer private-service-token");
+                match body["case"].as_str().unwrap() {
+                    "ok" => (axum::http::StatusCode::OK, [("content-type", "application/json")], "{\"ok\":true}".to_string()).into_response(),
+                    "duplicate" => (axum::http::StatusCode::OK, [("content-type", "application/json")], "{\"ok\":true,\"ok\":false}".to_string()).into_response(),
+                    "large" => (axum::http::StatusCode::OK, [("content-type", "application/json")], "x".repeat(cardea_core::authorization::MAX_DOCUMENT_BYTES+1)).into_response(),
+                    "redirect" => (axum::http::StatusCode::TEMPORARY_REDIRECT, [("location", "/leak")]).into_response(),
+                    "unauthorized" => axum::http::StatusCode::UNAUTHORIZED.into_response(),
+                    _ => unreachable!(),
+                }
+            }))
+            .route("/leak", post(move || { let seen=seen.clone(); async move { seen.fetch_add(1, Ordering::SeqCst); "leaked" } }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = super::OidcProvider::cardea_device_fixture(&origin);
+        assert_eq!(
+            provider
+                .cardea_authorization_post(false, &serde_json::json!({"case":"ok"}))
+                .await
+                .unwrap(),
+            serde_json::json!({"ok":true})
+        );
+        for case in ["duplicate", "large", "redirect"] {
+            assert!(
+                provider
+                    .cardea_authorization_post(false, &serde_json::json!({"case":case}))
+                    .await
+                    .is_err()
+            );
+        }
+        let error = provider
+            .cardea_authorization_post(false, &serde_json::json!({"case":"unauthorized"}))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<cardea_authorization::Error>(),
+            Some(&cardea_authorization::Error::AuthenticationRequired)
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "service credentials must not follow redirects"
+        );
+        server.abort();
+    }
     use super::{
         IdTokenVerifier, NATIVE_CALLBACK_SCHEME, NativeHandoffs, OidcProvider, OidcTransactions,
         PushedAuthorizationResponse, RuntimeClientAuthentication, TRANSACTION_COOKIE,
