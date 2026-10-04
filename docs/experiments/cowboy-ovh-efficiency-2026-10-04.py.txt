@@ -1,0 +1,49 @@
+import concurrent.futures,json,os,subprocess,time,tempfile,statistics,select,shlex
+os.umask(0o077)
+base=['ssh','-oBatchMode=yes','-oForwardAgent=no','-oConnectTimeout=15','-oStrictHostKeyChecking=yes']
+result={'schema_version':1,'timer_location':'OVH agent execution account','temporary_connections_only':True,'samples':{},'timeouts_seconds':40}
+with tempfile.TemporaryDirectory(prefix='cowboy-efficiency-') as td:
+ for host in ['hawk','falcon','macbook-air']:
+  def call(extra,command,inp=None):
+   t=time.monotonic()
+   try:
+    p=subprocess.run(base+extra+[host,command],input=inp,capture_output=True,timeout=40)
+    return {'seconds':round(time.monotonic()-t,4),'exit_code':p.returncode,'stdout_bytes':len(p.stdout),'pass':p.returncode==0}
+   except subprocess.TimeoutExpired:return {'seconds':round(time.monotonic()-t,4),'pass':False,'timeout':True}
+  cfg=subprocess.run(['ssh','-G',host],capture_output=True,text=True,timeout=5)
+  allowed={'controlmaster','controlpersist','serveraliveinterval','serveralivecountmax','compression','forwardagent','stricthostkeychecking'}
+  settings={a:b for line in cfg.stdout.splitlines() if (parts:=line.split(' ',1)) and len(parts)==2 and (a:=parts[0]) in allowed for b in [parts[1]]}
+  cp=os.path.join(td,host);warm=['-oControlMaster=auto','-oControlPersist=60','-oControlPath='+cp]
+  cold=['-oControlMaster=no','-oControlPersist=no','-oControlPath=none']
+  samples={'effective_managed_settings':settings,'cold':[],'warm':[]}
+  samples['owned_master_creation']=call(warm,'true')
+  for i in range(3):
+   for label,opts in ([('cold',cold),('warm',warm)] if i%2==0 else [('warm',warm),('cold',cold)]):samples[label].append(call(opts,'true'))
+  samples['managed_alias']= [call([], 'true') for _ in range(3)]
+  echo=[]
+  p=subprocess.Popen(base+warm+[host,"bash -c "+shlex.quote("while IFS= read -r x; do printf '%s\\n' \"$x\"; done")],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+  try:
+   for i in range(5):
+    marker=('echo'+str(i)+'\n').encode();t=time.monotonic()
+    try:p.stdin.write(marker);p.stdin.flush()
+    except BrokenPipeError:echo.append({'pass':False,'closed_pipe':True});break
+    if not select.select([p.stdout],[],[],20)[0]:echo.append({'pass':False,'timeout':True});break
+    line=p.stdout.readline();echo.append({'pass':line==marker,'seconds':round(time.monotonic()-t,4),'startup_included':i==0})
+  finally:
+   try:p.stdin.close()
+   except BrokenPipeError:pass
+   try:p.wait(timeout=4)
+   except subprocess.TimeoutExpired:p.terminate();p.wait(timeout=4)
+  samples['established_echo']=echo
+  samples['generated_download_128k']=call(warm,'head -c 131072 /dev/zero')
+  samples['generated_upload_128k']=call(warm,'wc -c',b'\0'*131072)
+  samples['four_channel_concurrency']={}
+  t=time.monotonic()
+  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:cs=list(ex.map(lambda _:call(warm,'true'),range(4)))
+  samples['four_channel_concurrency']={'wall_seconds':round(time.monotonic()-t,4),'samples':cs}
+  subprocess.run(base+['-oControlPath='+cp,'-O','exit',host],capture_output=True,timeout=5)
+  for label in ['cold','warm','managed_alias']:
+   passed=[s['seconds'] for s in samples[label] if s.get('pass')]
+   samples[label+'_median_seconds']=statistics.median(passed) if passed else None
+  result['samples'][host]=samples
+print(json.dumps(result,indent=2))

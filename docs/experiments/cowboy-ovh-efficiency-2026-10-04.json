@@ -1,0 +1,726 @@
+{
+  "schema_version": 1,
+  "status": "read_only_research_not_optimization_acceptance",
+  "recorded_at": "2026-10-04T00:56:32.527753+00:00",
+  "cowboy_source_revision": "272182c8",
+  "production_mutations": false,
+  "provider_inference_requested": false,
+  "credentials_exported": false,
+  "measurement_limits": [
+    "Small sequential SSH samples, not daily p95 or peak throughput",
+    "128 KiB generated transfers include channel startup",
+    "Bounded journal window reached entry cap",
+    "Historical tool classifications overlap and intentional repetitions remain",
+    "Product session-list attempts returned errors; no live conversation export was obtained"
+  ],
+  "fleet_readback": {
+    "schema_version": 1,
+    "captured_at": "2026-10-04T00:50:54.593777+00:00",
+    "default_runtime_machine_id": "ovh",
+    "machines": [
+      {
+        "id": "falcon",
+        "platform": "linux",
+        "status": "online",
+        "connected": true,
+        "schedulable": true,
+        "active_sessions": 0,
+        "plugins": [
+          {
+            "plugin_id": "codex",
+            "plugin_version": "3.1.22",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          },
+          {
+            "plugin_id": "grok",
+            "plugin_version": "3.1.24",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          }
+        ],
+        "capacity": {
+          "max_sessions": 128,
+          "draining": false
+        }
+      },
+      {
+        "id": "hawk",
+        "platform": "linux",
+        "status": "online",
+        "connected": true,
+        "schedulable": true,
+        "active_sessions": 8,
+        "plugins": [
+          {
+            "plugin_id": "codex",
+            "plugin_version": "3.3.1",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          },
+          {
+            "plugin_id": "grok",
+            "plugin_version": "3.1.30",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          }
+        ],
+        "capacity": {
+          "max_sessions": 128,
+          "draining": false
+        }
+      },
+      {
+        "id": "macbook-air",
+        "platform": "macos",
+        "status": "online",
+        "connected": true,
+        "schedulable": true,
+        "active_sessions": 0,
+        "plugins": [
+          {
+            "plugin_id": "codex",
+            "plugin_version": "3.1.25",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          },
+          {
+            "plugin_id": "grok",
+            "plugin_version": "3.1.23",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          }
+        ],
+        "capacity": {
+          "max_sessions": 8,
+          "draining": false
+        }
+      },
+      {
+        "id": "ovh",
+        "platform": "linux",
+        "status": "online",
+        "connected": true,
+        "schedulable": true,
+        "active_sessions": 4,
+        "plugins": [
+          {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.3",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          },
+          {
+            "plugin_id": "codex",
+            "plugin_version": "3.3.1",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          },
+          {
+            "plugin_id": "grok",
+            "plugin_version": "3.1.26",
+            "state": "active",
+            "replica_state": "current",
+            "materialization_state": "current"
+          }
+        ],
+        "capacity": {
+          "max_sessions": 8,
+          "draining": false
+        }
+      }
+    ]
+  },
+  "ssh_benchmark": {
+    "schema_version": 1,
+    "timer_location": "OVH agent execution account",
+    "temporary_connections_only": true,
+    "samples": {
+      "hawk": {
+        "effective_managed_settings": {
+          "compression": "no",
+          "controlmaster": "auto",
+          "stricthostkeychecking": "true",
+          "serveralivecountmax": "3",
+          "serveraliveinterval": "15",
+          "forwardagent": "no",
+          "controlpersist": "600"
+        },
+        "cold": [
+          {
+            "seconds": 1.8818,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 1.8916,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 1.8874,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "warm": [
+          {
+            "seconds": 0.3524,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3514,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3499,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "owned_master_creation": {
+          "seconds": 1.8844,
+          "exit_code": 0,
+          "stdout_bytes": 0,
+          "pass": true
+        },
+        "managed_alias": [
+          {
+            "seconds": 0.3558,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3519,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3497,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "established_echo": [
+          {
+            "pass": true,
+            "seconds": 0.4966,
+            "startup_included": true
+          },
+          {
+            "pass": true,
+            "seconds": 0.1625,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1629,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1629,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1627,
+            "startup_included": false
+          }
+        ],
+        "generated_download_128k": {
+          "seconds": 0.8448,
+          "exit_code": 0,
+          "stdout_bytes": 131072,
+          "pass": true
+        },
+        "generated_upload_128k": {
+          "seconds": 1.0101,
+          "exit_code": 0,
+          "stdout_bytes": 7,
+          "pass": true
+        },
+        "four_channel_concurrency": {
+          "wall_seconds": 0.3579,
+          "samples": [
+            {
+              "seconds": 0.3523,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3531,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3524,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3522,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            }
+          ]
+        },
+        "cold_median_seconds": 1.8874,
+        "warm_median_seconds": 0.3514,
+        "managed_alias_median_seconds": 0.3519
+      },
+      "falcon": {
+        "effective_managed_settings": {
+          "compression": "no",
+          "controlmaster": "auto",
+          "stricthostkeychecking": "true",
+          "serveralivecountmax": "3",
+          "serveraliveinterval": "15",
+          "forwardagent": "no",
+          "controlpersist": "600"
+        },
+        "cold": [
+          {
+            "seconds": 1.9446,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 1.9455,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 1.939,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "warm": [
+          {
+            "seconds": 0.3461,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3507,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3489,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "owned_master_creation": {
+          "seconds": 2.117,
+          "exit_code": 0,
+          "stdout_bytes": 0,
+          "pass": true
+        },
+        "managed_alias": [
+          {
+            "seconds": 1.9423,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3514,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3515,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "established_echo": [
+          {
+            "pass": true,
+            "seconds": 0.5126,
+            "startup_included": true
+          },
+          {
+            "pass": true,
+            "seconds": 0.1677,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1677,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1674,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1678,
+            "startup_included": false
+          }
+        ],
+        "generated_download_128k": {
+          "seconds": 1.9364,
+          "exit_code": 0,
+          "stdout_bytes": 131072,
+          "pass": true
+        },
+        "generated_upload_128k": {
+          "seconds": 1.1724,
+          "exit_code": 0,
+          "stdout_bytes": 7,
+          "pass": true
+        },
+        "four_channel_concurrency": {
+          "wall_seconds": 0.3541,
+          "samples": [
+            {
+              "seconds": 0.3527,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3525,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3522,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3511,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            }
+          ]
+        },
+        "cold_median_seconds": 1.9446,
+        "warm_median_seconds": 0.3489,
+        "managed_alias_median_seconds": 0.3515
+      },
+      "macbook-air": {
+        "effective_managed_settings": {
+          "compression": "no",
+          "controlmaster": "auto",
+          "stricthostkeychecking": "true",
+          "serveralivecountmax": "3",
+          "serveraliveinterval": "15",
+          "forwardagent": "no",
+          "controlpersist": "600"
+        },
+        "cold": [
+          {
+            "seconds": 2.053,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 1.9827,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 1.9613,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "warm": [
+          {
+            "seconds": 0.3904,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.4203,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.4427,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "owned_master_creation": {
+          "seconds": 2.2417,
+          "exit_code": 0,
+          "stdout_bytes": 0,
+          "pass": true
+        },
+        "managed_alias": [
+          {
+            "seconds": 3.3904,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3687,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          },
+          {
+            "seconds": 0.3673,
+            "exit_code": 0,
+            "stdout_bytes": 0,
+            "pass": true
+          }
+        ],
+        "established_echo": [
+          {
+            "pass": true,
+            "seconds": 0.5151,
+            "startup_included": true
+          },
+          {
+            "pass": true,
+            "seconds": 0.1712,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1683,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1701,
+            "startup_included": false
+          },
+          {
+            "pass": true,
+            "seconds": 0.1701,
+            "startup_included": false
+          }
+        ],
+        "generated_download_128k": {
+          "seconds": 0.9553,
+          "exit_code": 0,
+          "stdout_bytes": 131072,
+          "pass": true
+        },
+        "generated_upload_128k": {
+          "seconds": 1.1444,
+          "exit_code": 0,
+          "stdout_bytes": 9,
+          "pass": true
+        },
+        "four_channel_concurrency": {
+          "wall_seconds": 0.3769,
+          "samples": [
+            {
+              "seconds": 0.3753,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3747,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3749,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            },
+            {
+              "seconds": 0.3742,
+              "exit_code": 0,
+              "stdout_bytes": 0,
+              "pass": true
+            }
+          ]
+        },
+        "cold_median_seconds": 1.9827,
+        "warm_median_seconds": 0.4203,
+        "managed_alias_median_seconds": 0.3687
+      }
+    },
+    "timeouts_seconds": 40
+  },
+  "usage_journal": {
+    "journal_exit_code": 0,
+    "entries_read": 12000,
+    "bounded_last_entries": 12000,
+    "window_start_us": 1790899278739542,
+    "window_end_us": 1791074991674366,
+    "event_counts": {
+      "plugin_preparation": 368,
+      "plugin_command": 368,
+      "connection_closed": 2
+    },
+    "possibly_truncated": true,
+    "plugin_timing_aggregates": {
+      "claude": {
+        "queue_ms": {
+          "count": 368,
+          "median": 0.0,
+          "p95_observed": 0,
+          "minimum": 0,
+          "maximum": 31651,
+          "sum": 67486
+        },
+        "preparation_ms": {
+          "count": 368,
+          "median": 27896.5,
+          "p95_observed": 28850,
+          "minimum": 24605,
+          "maximum": 60099,
+          "sum": 10321410
+        },
+        "command_ms": {
+          "count": 368,
+          "median": 1303.0,
+          "p95_observed": 1552,
+          "minimum": 1018,
+          "maximum": 9269,
+          "sum": 516588
+        },
+        "total_ms": {
+          "count": 368,
+          "median": 29213.5,
+          "p95_observed": 30275,
+          "minimum": 25769,
+          "maximum": 61332,
+          "sum": 10838294
+        }
+      }
+    },
+    "latest_plugin_timings": [
+      {
+        "queue_ms": 0,
+        "preparation_ms": 28339,
+        "operation": "CollectUsage",
+        "plugin": "claude"
+      },
+      {
+        "command_ms": 1331,
+        "total_ms": 29670,
+        "operation": "CollectUsage",
+        "plugin": "claude"
+      },
+      {
+        "queue_ms": 0,
+        "preparation_ms": 28633,
+        "operation": "CollectUsage",
+        "plugin": "claude"
+      },
+      {
+        "command_ms": 1329,
+        "total_ms": 29963,
+        "operation": "CollectUsage",
+        "plugin": "claude"
+      }
+    ],
+    "window_start_utc": "2026-10-02T00:01:18.739542+00:00",
+    "window_end_utc": "2026-10-04T00:49:51.674366+00:00"
+  },
+  "archived_tool_statistics": [
+    {
+      "archive": "ovh-trusted-ssh-2026-10-01",
+      "records": 25,
+      "ssh_text_matches": 24,
+      "read_text_matches": 13,
+      "git_text_matches": 8,
+      "repeated_identical_nonempty_command_entries": 4,
+      "classification": "command/title substring heuristic; repeated calls may be intentional"
+    },
+    {
+      "archive": "ovh-hawk-ssh-development-2026-10-01",
+      "records": 51,
+      "ssh_text_matches": 51,
+      "read_text_matches": 11,
+      "git_text_matches": 25,
+      "repeated_identical_nonempty_command_entries": 18,
+      "classification": "command/title substring heuristic; repeated calls may be intentional"
+    },
+    {
+      "archive": "ovh-sonnet-2026-10-01",
+      "records": 7,
+      "ssh_text_matches": 7,
+      "read_text_matches": 7,
+      "git_text_matches": 6,
+      "repeated_identical_nonempty_command_entries": 0,
+      "classification": "command/title substring heuristic; repeated calls may be intentional"
+    }
+  ],
+  "official_session_list_readback": {
+    "read_only": true,
+    "sessions_loaded": false,
+    "list_error_code": -32603,
+    "error_category": "unspecified",
+    "duration_seconds": 30.012
+  },
+  "reproducer": {
+    "path": "cowboy-ovh-efficiency-2026-10-04.py.txt",
+    "sha256": "733865171a1c448342d06995d18cc8ee16e0edc129a260f70213d8580da06b29"
+  },
+  "known_final_stability_failure_preserved": true,
+  "source_inspection_candidates": [
+    {
+      "surface": "usage preparation",
+      "source": "src/machine_plugins.rs",
+      "finding": "resolve_host_invocation and launch_context can repeat full generation runtime verification; lifecycle lock spans collector command",
+      "individual_stage_cost_profiled": false
+    },
+    {
+      "surface": "Matrix turn recall",
+      "source": "components/memory-client/index.mjs",
+      "finding": "sequential observe/context before prompt forwarding, each with 2000 ms request timeout",
+      "current_turn_cost_profiled": false
+    }
+  ]
+}
