@@ -122,3 +122,14 @@ Controller, Web, host configuration, installed Plugin or iOS component.
 The [machine-readable evidence](../experiments/plugin-signed-bootstrap-bundle-2026-10-04.json)
 contains exact source/build identities, owner and receipt, retained companion
 hashes, complete process/HTTPS samples and validation boundaries.
+
+While publishing these records, an independent full Machine release advanced
+production to descendant `c4f29d40ec3854546ab2bbe54ff7237105f1d353`, transaction
+`1791098241083314286-c4f29d40ec38`, committed at
+`2026-10-04T07:17:30.18438395Z`. It selects default generation
+`worker-9fce17441fdd1e8ca642` in its separate maintenance boundary and changes
+no bootstrap admission code. A follow-up sample retains the original eighteen
+worker/keeper IDs, states and PIDs, the same native Machine digest, sudoers and
+root floor; all five HTTPS checks remain 200. The current component receipt
+therefore supersedes this task's receipt. The before/after and six-companion
+identity claims above apply to this task's own activation window.

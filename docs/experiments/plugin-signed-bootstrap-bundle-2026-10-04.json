@@ -493,5 +493,168 @@
     "pluginOperationDispatched": false,
     "deletionWriterEnabled": false,
     "recoveryAdmitted": false
+  },
+  "laterIndependentRelease": {
+    "observedAt": "2026-10-04T07:23:00.682Z",
+    "machine": {
+      "Id": "cowboy-machine.service",
+      "ActiveState": "active",
+      "MainPID": "4090042"
+    },
+    "controller": {
+      "Id": "cowboy.service",
+      "ActiveState": "active",
+      "MainPID": "959309"
+    },
+    "workers": [
+      {
+        "Id": "cowboy-execution-120491c6d92bb2451719f175c83219cf.service",
+        "ActiveState": "active",
+        "MainPID": "1205307"
+      },
+      {
+        "Id": "cowboy-execution-51b563e0d8ca3e730ededa3c4ab30665.service",
+        "ActiveState": "active",
+        "MainPID": "3493936"
+      },
+      {
+        "Id": "cowboy-execution-6d2199617d2bde762e3592235f4f6e82.service",
+        "ActiveState": "active",
+        "MainPID": "1403710"
+      },
+      {
+        "Id": "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service",
+        "ActiveState": "active",
+        "MainPID": "893458"
+      },
+      {
+        "Id": "cowboy-execution-ca68728f73d0d0098e0e513dec590312.service",
+        "ActiveState": "active",
+        "MainPID": "404850"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176239.service",
+        "ActiveState": "active",
+        "MainPID": "2984204"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176240.service",
+        "ActiveState": "active",
+        "MainPID": "785167"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176241.service",
+        "ActiveState": "active",
+        "MainPID": "760569"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1789954176242.service",
+        "ActiveState": "active",
+        "MainPID": "785720"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790402700334.service",
+        "ActiveState": "active",
+        "MainPID": "320714"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075655.service",
+        "ActiveState": "active",
+        "MainPID": "785980"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075656.service",
+        "ActiveState": "active",
+        "MainPID": "786141"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075658.service",
+        "ActiveState": "active",
+        "MainPID": "964919"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075661.service",
+        "ActiveState": "active",
+        "MainPID": "2581969"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790563075662.service",
+        "ActiveState": "active",
+        "MainPID": "1109633"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790908795841.service",
+        "ActiveState": "active",
+        "MainPID": "2000229"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1790913572903.service",
+        "ActiveState": "active",
+        "MainPID": "2094923"
+      },
+      {
+        "Id": "cowboy-worker-5e3ad1bacf3c-sess-1791001940456.service",
+        "ActiveState": "active",
+        "MainPID": "1058780"
+      }
+    ],
+    "componentReceipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1791098241083314286-c4f29d40ec38",
+      "revision": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+      "workerGeneration": "worker-9fce17441fdd1e8ca642",
+      "published": true,
+      "release": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "previousRelease": "/nix/store/q3247pa0r325gh850pj8l4gs907q0p6c-cowboy-machine-release",
+      "activeRelease": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-04T07:17:21.083314286Z",
+      "recordedAt": "2026-10-04T07:17:30.18438395Z",
+      "recovered": false
+    },
+    "floorSha256": "26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017",
+    "deletionEntries": [
+      ".lock"
+    ],
+    "webProfile": "/nix/store/4kh9vhbscp9l8chj95c0ixqyp4irasgb-cowboy-web-release/share/cowboy/web",
+    "http": [
+      {
+        "path": "/healthz",
+        "status": 200,
+        "cacheControl": null,
+        "body": null
+      },
+      {
+        "path": "/version",
+        "status": 200,
+        "cacheControl": null,
+        "body": "{\"version\":\"0dcd935b8b1dea0c95e4e992de859044\"}"
+      },
+      {
+        "path": "/",
+        "status": 200,
+        "cacheControl": "no-store",
+        "body": null
+      },
+      {
+        "path": "/sw.js",
+        "status": 200,
+        "cacheControl": "no-store",
+        "body": null
+      },
+      {
+        "path": "/api/machines/hawk/deployment-health",
+        "status": 200,
+        "cacheControl": null,
+        "body": "{\"connected\":true,\"status\":\"online\",\"active_acp_generation\":\"worker-9fce17441fdd1e8ca642\",\"workspace_revision\":\"projects-0410346496a2ec677f145e3407b49beb\",\"workspace_ids_sha256\":\"1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40\",\"workspace_owner\":\"cowboy\"}"
+      }
+    ],
+    "original18ProcessesPreserved": true,
+    "sameNativeMachineDigest": true
   }
 }
