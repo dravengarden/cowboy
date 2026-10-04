@@ -29,6 +29,7 @@ primary phone/desktop product path.
 - [`unattended-release-adoption.md`](unattended-release-adoption.md) — Controller-owned Catalog observation, bounded fallback and shutdown drain; unattended installation intent and host policy remain designs
 - [`plugin-no-effect-resolution.md`](plugin-no-effect-resolution.md) — Independently confirmed, atomic resolution of proven pre-effect uninstall interruptions
 - [`telemetry-binding-resolution.md`](telemetry-binding-resolution.md) — Independently authorized Service binding resolution, schema-two audit reader and closed production admission
+- [`local-observability.md`](local-observability.md) — Host-local OTel storage, retention, bounded remote queries and AI diagnostic commands
 - [`telemetry-machine-recovery.md`](telemetry-machine-recovery.md) — Independently authorized reopened Prepared closure, protocol 17, atomic Machine audit and retained Service fence
 - [`core-security-client-boundary.md`](core-security-client-boundary.md) — Core-owned local authentication UI and typed native Passkey port; storage/SDK migration remains separate
 - [`core-security-storage-bridge.md`](core-security-storage-bridge.md) — Typed core Passkey storage, atomic legacy import and independent ceremony lifetimes; ownership cutover remains separate

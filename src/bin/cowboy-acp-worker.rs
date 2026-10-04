@@ -36,32 +36,32 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
     let args = Args::parse();
-    cowboy::worker::run(WorkerArgs {
-        socket: args.socket,
-        session_id: args.session_id,
-        provider: args.provider,
-        provider_version: args.provider_version,
-        provider_generation_digest: args.provider_generation_digest,
-        provider_auth_generation: args.provider_auth_generation,
-        cwd: args.cwd,
-        resume: args.resume,
-        system: args.system,
-        generation: args.generation,
-        worker_epoch: args.worker_epoch,
-        fallback_for: args.fallback_for,
-        execution_binding: args
-            .execution_binding
-            .map(|value| serde_json::from_str(&value))
-            .transpose()?,
-    })
-    .await
+    let mut context = cowboy::logs::Context::new("cowboy-worker");
+    context.session = args.session_id.clone();
+    context.generation = args.generation.clone();
+    context.machine = std::env::var("COWBOY_LOGS_MACHINE_ID").unwrap_or_default();
+    let root = args.socket.parent().unwrap_or(std::path::Path::new("."));
+    let logs = cowboy::logs::init(cowboy::logs::directory(root), context)?.track_outcome();
+    logs.finish(
+        cowboy::worker::run(WorkerArgs {
+            socket: args.socket,
+            session_id: args.session_id,
+            provider: args.provider,
+            provider_version: args.provider_version,
+            provider_generation_digest: args.provider_generation_digest,
+            provider_auth_generation: args.provider_auth_generation,
+            cwd: args.cwd,
+            resume: args.resume,
+            system: args.system,
+            generation: args.generation,
+            worker_epoch: args.worker_epoch,
+            fallback_for: args.fallback_for,
+            execution_binding: args
+                .execution_binding
+                .map(|value| serde_json::from_str(&value))
+                .transpose()?,
+        })
+        .await,
+    )
 }

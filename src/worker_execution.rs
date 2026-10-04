@@ -117,6 +117,11 @@ impl Client {
     }
 
     async fn call(&self, command: Command) -> Result<Response> {
+        let started = Instant::now();
+        let operation = match &command {
+            Command::Invoke { invocation, .. } => Some(invocation.operation_id.clone()),
+            _ => None,
+        };
         let id = format!("{:032x}", rand::random::<u128>());
         let request = RuntimeRequest {
             session_id: self.session.clone(),
@@ -165,10 +170,31 @@ impl Client {
         let response = tokio::time::timeout(Duration::from_secs(180), receiver).await;
         self.pending.lock().remove(&id);
         match response {
-            Ok(Ok(MachineResponse::Call { response })) => Ok(response),
-            _ => bail!(
-                "execution response unavailable; original operation was not replayed under a new identity"
-            ),
+            Ok(Ok(MachineResponse::Call { response })) => {
+                if let Some(operation) = operation {
+                    let failed = matches!(
+                        &response,
+                        Response::Refused { .. }
+                            | Response::Operation {
+                                outcome: Outcome::Unknown
+                                    | Outcome::Missing
+                                    | Outcome::ResultExpired
+                            }
+                    ) || matches!(&response, Response::Operation { outcome: Outcome::Completed { reply } } if reply.get("error").is_some());
+                    if failed {
+                        tracing::warn!(event_name = "cowboy.execution.call_failed", session = %self.session, environment_id = %self.binding.environment.id, %operation, reason = "native_or_keeper_refusal", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution call failed");
+                    } else {
+                        tracing::info!(event_name = "cowboy.execution.call_observed", session = %self.session, environment_id = %self.binding.environment.id, %operation, duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution invocation observed");
+                    }
+                }
+                Ok(response)
+            }
+            _ => {
+                tracing::warn!(event_name = "cowboy.execution.response_timeout", session = %self.session, environment_id = %self.binding.environment.id, reason = "response_unavailable", duration_ms = started.elapsed().as_secs_f64() * 1000.0, "execution response unavailable");
+                bail!(
+                    "execution response unavailable; original operation was not replayed under a new identity"
+                )
+            }
         }
     }
 
@@ -256,7 +282,7 @@ impl Endpoint {
                             if serve(socket, &token, client).await.is_err() {
                                 // Do not log frames, capabilities or arbitrary
                                 // native error text from the private endpoint.
-                                tracing::warn!(%session, reason = "endpoint_failed", "execution endpoint disconnected");
+                                tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
                             }
                         });
                     }
@@ -345,6 +371,7 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
     let mut calls = tokio::task::JoinSet::new();
     let mut ids = HashSet::new();
     let mut cursor = *client.event_cursor.lock().get_or_insert(event_cursor);
+    tracing::info!(event_name = "cowboy.execution.connected", session = %client.session, environment_id = %client.binding.environment.id, cursor, "execution endpoint connected");
     let mut events = Box::pin(client.call(Command::Events {
         after: cursor,
         wait_ms: wire::MAX_WAIT_MS,
@@ -363,6 +390,7 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                         let id = message.get("id").context("execution request id missing")?.clone();
                         ensure!(valid_id(&id) && !ids.contains(&id.to_string()), "invalid or duplicate execution request id");
                         if ids.len() >= 16 {
+                            tracing::warn!(event_name = "cowboy.execution.request_rejected", session = %client.session, reason = "request_capacity", pending = ids.len(), "execution request not admitted");
                             // No effect was admitted. Limit this request, not
                             // the transport carrying other commands/results.
                             writer.send(Message::Text(json!({"id":id,"error":{"code":-32000,"message":"Execution request capacity reached; this request was not admitted"}}).to_string().into())).await?;
@@ -401,7 +429,7 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                         // with process/read. Reusing the expired cursor poisons
                         // every reconnect, including unrelated future calls.
                         *client.event_cursor.lock() = None;
-                        tracing::warn!(session = %client.session, reason = "cursor_expired", "resuming native execution after an event gap");
+                        tracing::warn!(event_name = "cowboy.execution.cursor_expired", session = %client.session, environment_id = %client.binding.environment.id, cursor, reason = "cursor_expired", "resuming native execution after an event gap");
                         writer.send(Message::Close(Some(CloseFrame {
                             code: CloseCode::Restart,
                             reason: "Execution event history expired; resume the original session".into(),
