@@ -54,3 +54,41 @@ artifacts were building. No detached transaction was dispatched, no new receipt
 was written and no service was restarted by that refusal. The owner gate was
 retained; the task integrates fresh main and rebuilds immutable metadata before
 retrying. Final successful activation evidence, when obtained, is recorded below.
+
+Final source `406471a28de430debf6f8363b44abc3e621589d7` integrates that fresh
+main. The owning native-shell checks passed again; the Rust source and executable
+digests remain identical to the complete-gated initial candidate. Only immutable
+release metadata needed rebuilding. The final clean narrow artifacts are:
+
+- Controller: `/nix/store/8v8scdvvpslh2ivw3rbdl6j2inkfcb9p-cowboy-controller-release`.
+- Machine: `/nix/store/jxmq93y2ifqxvgslpk22j7i7dd1v2qxy-cowboy-machine-release`.
+
+The installed owner dispatched both components through their separate recipes.
+Controller transaction `1791079277476212104-406471a28de4` succeeded, published,
+at `2026-10-04T02:01:33.525825925Z`. Its receipt has `maintenance: false`.
+Machine transaction `1791079381270657298-406471a28de4` succeeded, published,
+at `2026-10-04T02:03:09.809841529Z`, with `maintenance: true`.
+Neither component retained an incomplete journal; no new failed unit was observed.
+No Web, host configuration or installed Plugin activation was performed.
+
+Samples at `2026-10-04T02:01:04.697Z`, `2026-10-04T02:02:11.157Z` and
+`2026-10-04T02:04:32.600Z` retain all 13 ACP worker and three keeper PIDs.
+Controller changed only in its own stage, from PID `486493` to `959309`;
+Machine retained PID `1928418` during that stage, then changed to `965129`
+during its separate maintenance. The running native paths/digests match the
+final artifacts. No worker pool generation changed: the release and public
+inventory both report `worker-6ede7a91cc8b8b3402d4`.
+
+HTTPS health/version/SPA/SW/deployment-health returned 200 after each stage;
+HTML/SW retained `no-store`. The resolved Web target and SPA version
+`798bda6db1a3a8958a6102125058e8e2` stayed unchanged, as did reader-floor and
+sudoers SHA-256 values. Deletion state remained only `.lock`. The new Machine
+logged zero deleted IDs with `writer_enabled=false` at
+`2026-10-04T02:03:01.355079Z`. These are bounded Linux process observations,
+not native-generation resume, portable installation or supported-device acceptance.
+
+The [machine-readable evidence](../experiments/plugin-portable-reader-claim-2026-10-04.json)
+contains both artifact identities and native digests, the unchanged installed
+owner, initial preflight refusal, two success receipts and three process/HTTP
+samples. Portable persistent floor, bootstrap/recovery reader verification,
+committed-state admission and production deletion writing remain closed.

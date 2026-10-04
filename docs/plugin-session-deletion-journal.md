@@ -193,6 +193,14 @@ reader still refuses committed portable state, and the production writer stays
 off. The publication transcript is specified in
 [Machine operations](machine-operations.md#component-publication).
 
+The [signed reader-claim release](releases/plugin-portable-reader-claim-2026-10-04.md)
+records complete gates, preserved v3 transcript/signature mutation fixtures and
+successful separate Controller/Machine activation at source `406471a2`. All
+16 observed worker/keeper PIDs were retained; only each owning daemon restarted
+in its own stage. A first stale candidate refused before dispatch and was rebuilt
+from fresh main. No new signed production component record or portable admission
+was published, and deletion writing remains disabled.
+
 ## Portable refusal gate
 
 Portable component declarations do not bind a Session deletion reader schema.
