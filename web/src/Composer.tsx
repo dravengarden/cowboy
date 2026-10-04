@@ -1,3 +1,4 @@
+import { DesktopDraftDestinationPicker } from "./desktop/DesktopDraftDestinationPicker";
 import { ProtectedImage } from "./ProtectedImage";
 import {
   lazy,
@@ -3331,8 +3332,19 @@ export function ComposerWorkspace({
           drafts panel) so the snackbar survives when moving the LAST draft
           unmounts that panel. */
       }
+      {desktop && moveSrcId !== null && (
+        <DesktopDraftDestinationPicker
+          sourceId={sessionId}
+          onClose={(): void => setMoveSrcId(null)}
+          onPick={(destination): void => {
+            moveDraft(sessionId, moveSrcId, destination.id);
+            setMoveUndo({ id: moveSrcId, toId: destination.id, toTitle: destination.title });
+            setMoveSrcId(null);
+          }}
+        />
+      )}
       <Sheet
-        open={moveSrcId !== null}
+        open={!desktop && moveSrcId !== null}
         onClose={(): void => setMoveSrcId(null)}
         title="Move draft to…"
         mobileDismiss="footer"
