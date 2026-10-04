@@ -187,7 +187,10 @@ Deno.test("the list component takes its direction from one shared helper", async
   );
   // A per-surface direction is what put the same session at opposite ends of
   // Desktop and Mobile; both call sites must stay on `displayedSessionOrder`.
-  assertEquals(/mobileDrawer\s*\?\s*\[\.\.\.\w+\]\.reverse\(\)/.test(source), false);
+  assertEquals(
+    /mobileDrawer\s*\?\s*\[\.\.\.\w+\]\.reverse\(\)/.test(source),
+    false,
+  );
   assertEquals(source.includes("displayedSessionOrder(sessions)"), true);
   assertEquals(source.includes("reorderSessions(displayedSessionOrder("), true);
 });
@@ -218,7 +221,9 @@ Deno.test("an expanded empty folder owns one empty body row", () => {
   const index = rows.findIndex((row) => row.kind === "empty");
   assertEquals(sessionTreeRowKey(rows[index]!), "empty:f-orphan");
   // Dropping onto the empty body files into that folder.
-  const without = rows.filter((row) => row.kind !== "session" || row.session.id !== "s2");
+  const without = rows.filter((row) =>
+    row.kind !== "session" || row.session.id !== "s2"
+  );
   assertEquals(dropTargetFolder(without, index + 1), "f-orphan");
 });
 
@@ -229,20 +234,69 @@ Deno.test("a drag projects its container from slot bounds and horizontal intent"
   // [0 f-cowboy, 1 f-ime, 2 s4, 3 s1, 4 s3, 5 f-orphan, 6 (empty), 7 f-garden+]
   assertEquals(projectSessionDrop(rows, 0, 0), { folder: null, depth: 0 });
   // Right below a header goes into that folder, collapsed or not.
-  assertEquals(projectSessionDrop(rows, 1, 0), { folder: "f-cowboy", depth: 1 });
-  assertEquals(projectSessionDrop(rows, 8, 0), { folder: "f-garden", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 1, 0), {
+    folder: "f-cowboy",
+    depth: 1,
+  });
+  assertEquals(projectSessionDrop(rows, 8, 0), {
+    folder: "f-garden",
+    depth: 1,
+  });
   // Between children the slot bounds clamp the depth.
-  assertEquals(projectSessionDrop(rows, 3, 0), { folder: "f-cowboy", depth: 1 });
-  assertEquals(projectSessionDrop(rows, 3, 0, 2), { folder: "f-ime", depth: 2 });
+  assertEquals(projectSessionDrop(rows, 3, 0), {
+    folder: "f-cowboy",
+    depth: 1,
+  });
+  assertEquals(projectSessionDrop(rows, 3, 0, 2), {
+    folder: "f-ime",
+    depth: 2,
+  });
   assertEquals(projectSessionDrop(rows, 3, 2), { folder: "f-ime", depth: 2 });
   // At the end of a folder block the drag keeps its own depth unless pushed.
   assertEquals(projectSessionDrop(rows, 5, 0), { folder: null, depth: 0 });
-  assertEquals(projectSessionDrop(rows, 5, 0, 1), { folder: "f-cowboy", depth: 1 });
-  assertEquals(projectSessionDrop(rows, 5, 1), { folder: "f-cowboy", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 5, 0, 1), {
+    folder: "f-cowboy",
+    depth: 1,
+  });
+  assertEquals(projectSessionDrop(rows, 5, 1), {
+    folder: "f-cowboy",
+    depth: 1,
+  });
   assertEquals(projectSessionDrop(rows, 5, 1, -3), { folder: null, depth: 0 });
   // Below the empty body: stay out unless pushed in.
   assertEquals(projectSessionDrop(rows, 7, 0), { folder: null, depth: 0 });
-  assertEquals(projectSessionDrop(rows, 7, 0, 1), { folder: "f-orphan", depth: 1 });
+  assertEquals(projectSessionDrop(rows, 7, 0, 1), {
+    folder: "f-orphan",
+    depth: 1,
+  });
   assertEquals(rowInsideFolder(rows[2]!, "f-cowboy", value), true);
   assertEquals(rowInsideFolder(rows[5]!, "f-cowboy", value), false);
+});
+
+Deno.test("explicit left drag can leave a branch without finding its last row", () => {
+  const rows = buildSessionTree(sessions, value, new Set()).rows;
+  const index = rows.findIndex((row) =>
+    row.kind === "session" && row.session.id === "s4"
+  );
+  // Before the first nested child: the next row must not trap the drag inside.
+  assertEquals(projectSessionDrop(rows, index, 2, -1), {
+    folder: "f-cowboy",
+    depth: 1,
+  });
+  assertEquals(projectSessionDrop(rows, index, 2, -2), {
+    folder: null,
+    depth: 0,
+  });
+  const between = rows.findIndex((row) =>
+    row.kind === "session" && row.session.id === "s3"
+  );
+  assertEquals(projectSessionDrop(rows, between, 1, -1), {
+    folder: null,
+    depth: 0,
+  });
+  // An ordinary vertical drag still stays in the surrounding folder.
+  assertEquals(projectSessionDrop(rows, between, 1, 0), {
+    folder: "f-cowboy",
+    depth: 1,
+  });
 });

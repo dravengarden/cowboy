@@ -45,6 +45,7 @@ import {
   folderIsWithin,
   normalizeSessionFolderName,
   type SessionFolder,
+  sessionFolderLocation,
   type SessionFoldersValue,
 } from "./sessionFolders";
 import { Sheet } from "./Sheet";
@@ -292,6 +293,11 @@ export function FolderPickerShell({
   const navbarAtBottom = useNavbarAtBottom();
   const desktop = useSurfaceProfile().kind === "desktop";
   const rows = flattenFolders(value, exclude);
+  const [query, setQuery] = useState("");
+  const matchingRows = rows.filter(({ folder }) =>
+    `${sessionFolderLocation(value, folder.id)} ${folder.project ?? ""}`
+      .toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
+  );
   const listRef = useRef<HTMLUListElement>(null);
   // Start on the current location so Enter is a no-op and j/k moves from
   // where the item already lives.
@@ -324,6 +330,23 @@ export function FolderPickerShell({
           </>
         }
       >
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ overflowWrap: "anywhere" }}
+        >
+          Current: {sessionFolderLocation(value, current)}
+        </Typography>
+        {rows.length > 8 && (
+          <TextField
+            size="small"
+            fullWidth
+            label="Find folder"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            sx={{ mt: 1 }}
+          />
+        )}
         <List
           dense
           ref={listRef}
@@ -333,29 +356,57 @@ export function FolderPickerShell({
           <ListItemButton
             data-folder-pick=""
             selected={current === null}
-            onClick={(): void => onPick(null)}
+            disabled={current === null}
+            onClick={(): void => {
+              if (current !== null) onPick(null);
+            }}
+            sx={{
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+              bgcolor: "background.paper",
+              borderBottom: 1,
+              borderColor: "divider",
+              "&&.Mui-disabled": { opacity: 1, color: "text.secondary" },
+              "&.Mui-selected": { bgcolor: "background.paper" },
+            }}
           >
             <ListItemIcon sx={{ minWidth: 36 }}>
               {current === null ? <CheckIcon /> : <ViewListOutlined />}
             </ListItemIcon>
-            <ListItemText primary="Top level" />
+            <ListItemText
+              primary="Global · top level"
+              secondary={current === null
+                ? "Current location"
+                : "Outside all folders"}
+            />
           </ListItemButton>
-          {rows.map(({ folder, depth }) => {
+          {matchingRows.map(({ folder, depth }) => {
             const isCurrent = folder.id === current;
             return (
               <ListItemButton
                 key={folder.id}
                 data-folder-pick={folder.id}
                 selected={isCurrent}
-                onClick={(): void => onPick(folder.id)}
-                sx={{ pl: 2 + depth * 2.5 }}
+                disabled={isCurrent}
+                onClick={(): void => {
+                  if (!isCurrent) onPick(folder.id);
+                }}
+                sx={{
+                  minHeight: desktop ? undefined : 44,
+                  pl: 2 + Math.min(depth, 4) * 2,
+                  "&&.Mui-disabled": { opacity: 1, color: "text.secondary" },
+                }}
               >
                 <ListItemIcon sx={{ minWidth: 36 }}>
                   {isCurrent ? <CheckIcon /> : <FolderOutlined />}
                 </ListItemIcon>
                 <ListItemText
-                  primary={folder.name}
-                  secondary={folder.project ?? undefined}
+                  primary={isCurrent ? `${folder.name} · Current` : folder.name}
+                  secondary={folder.parent
+                    ? sessionFolderLocation(value, folder.parent)
+                    : folder.project ?? undefined}
+                  title={sessionFolderLocation(value, folder.id)}
                   slotProps={{
                     primary: { noWrap: true },
                     secondary: { noWrap: true, variant: "caption" },
@@ -364,13 +415,15 @@ export function FolderPickerShell({
               </ListItemButton>
             );
           })}
-          {rows.length === 0 && (
+          {matchingRows.length === 0 && (
             <Typography
               variant="body2"
               color="text.secondary"
               sx={{ px: 2, py: 1.5 }}
             >
-              No folders yet.
+              {rows.length === 0
+                ? "No folders available."
+                : "No matching folders."}
             </Typography>
           )}
         </List>

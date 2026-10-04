@@ -8,10 +8,21 @@ import {
   mobileDrawerProgress,
   mobileDrawerRailOffset,
   mobileDrawerSettleDurationMs,
+  mobileSpatialDrawerWidth,
   predictDrawerOffset,
   sessionDrawerTargetScroll,
   stepDrawerSpring,
 } from "./mobileDrawerMotion.ts";
+
+Deno.test("Sessions leaves a 44px dismissal target while using the phone width", () => {
+  for (const width of [320, 375, 390, 430, 480]) {
+    assertEquals(mobileSpatialDrawerWidth(width, true, "left"), width - 44);
+  }
+  assertEquals(mobileSpatialDrawerWidth(740, true, "left"), 480);
+  assertEquals(mobileSpatialDrawerWidth(390, true, "right"), 390 * 0.84);
+  assertEquals(mobileSpatialDrawerWidth(834, false, "left"), 834 * 0.52);
+  assertEquals(mobileSpatialDrawerWidth(1024, false, "left"), 440);
+});
 
 Deno.test("mobile drawer prediction removes one-frame finger lag without running away", () => {
   assertEquals(predictDrawerOffset(120, 0.5, 8), 124);
@@ -40,7 +51,10 @@ Deno.test("drawer card recedes like an Obsidian workspace", () => {
   assertEquals(mobileDrawerCardVisual(180, 360, true).dim, 0.5);
   assertEquals(mobileDrawerCardVisual(360, 360, true).radiusPx, 16);
   assertEquals(mobileDrawerCardVisual(360, 360, false).radiusPx, 16);
-  assertEquals(Object.hasOwn(mobileDrawerCardVisual(360, 360, true), "scale"), false);
+  assertEquals(
+    Object.hasOwn(mobileDrawerCardVisual(360, 360, true), "scale"),
+    false,
+  );
 });
 
 Deno.test("drawer spring continues velocity toward the target", () => {
@@ -94,38 +108,50 @@ Deno.test("mobile drawer progress clamps rubber-band overscroll", () => {
 });
 
 Deno.test("session drawer preserves a current row already in the comfort band", () => {
-  assertEquals(sessionDrawerTargetScroll({
-    currentScroll: 400,
-    viewportHeight: 600,
-    contentHeight: 2000,
-    itemTop: 600,
-    itemHeight: 80,
-  }), 400);
+  assertEquals(
+    sessionDrawerTargetScroll({
+      currentScroll: 400,
+      viewportHeight: 600,
+      contentHeight: 2000,
+      itemTop: 600,
+      itemHeight: 80,
+    }),
+    400,
+  );
 });
 
 Deno.test("session drawer positions an offscreen current row above centre", () => {
-  assertEquals(sessionDrawerTargetScroll({
-    currentScroll: 0,
-    viewportHeight: 600,
-    contentHeight: 2000,
-    itemTop: 1000,
-    itemHeight: 80,
-  }), 824);
+  assertEquals(
+    sessionDrawerTargetScroll({
+      currentScroll: 0,
+      viewportHeight: 600,
+      contentHeight: 2000,
+      itemTop: 1000,
+      itemHeight: 80,
+    }),
+    824,
+  );
 });
 
 Deno.test("session drawer clamps current rows at both list edges", () => {
-  assertEquals(sessionDrawerTargetScroll({
-    currentScroll: 700,
-    viewportHeight: 600,
-    contentHeight: 2000,
-    itemTop: 0,
-    itemHeight: 80,
-  }), 0);
-  assertEquals(sessionDrawerTargetScroll({
-    currentScroll: 0,
-    viewportHeight: 600,
-    contentHeight: 2000,
-    itemTop: 1940,
-    itemHeight: 60,
-  }), 1400);
+  assertEquals(
+    sessionDrawerTargetScroll({
+      currentScroll: 700,
+      viewportHeight: 600,
+      contentHeight: 2000,
+      itemTop: 0,
+      itemHeight: 80,
+    }),
+    0,
+  );
+  assertEquals(
+    sessionDrawerTargetScroll({
+      currentScroll: 0,
+      viewportHeight: 600,
+      contentHeight: 2000,
+      itemTop: 1940,
+      itemHeight: 60,
+    }),
+    1400,
+  );
 });

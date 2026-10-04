@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
+mod admission;
 mod bootstrap_probe;
+mod signed_bootstrap;
 
 // Service IDs already consume 36 bytes. Compact socket basenames leave room
 // for ordinary Linux/macOS home paths without moving private runtime state.
@@ -49,8 +51,13 @@ pub struct InstallArgs {
     plugin_operation_admission: bool,
     #[arg(long)]
     artifact_public_key: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "bootstrap_manifest")]
     machine_binary: Option<PathBuf>,
+    /// Signed singleton Machine host manifest for an exact three-file bootstrap archive.
+    #[arg(long, requires_all = ["bootstrap_artifact", "artifact_public_key"])]
+    bootstrap_manifest: Option<PathBuf>,
+    #[arg(long, requires = "bootstrap_manifest")]
+    bootstrap_artifact: Option<PathBuf>,
     #[arg(long)]
     state_dir: Option<PathBuf>,
     #[arg(long, default_value_t = 8)]
@@ -63,6 +70,9 @@ pub struct InstallArgs {
 
 pub fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if std::env::args().nth(1).as_deref() == Some("--check-signed-bootstrap") {
+        return signed_bootstrap::run_check();
+    }
     let args = InstallArgs::parse();
     install(args)
 }
@@ -134,6 +144,8 @@ pub async fn register(
         host = host.display()
     );
     let bundle = bootstrap_probe::Bundle::prepare(&host)?;
+    crate::session_deletion_admission::require_empty_portable_namespace(&state_dir)?;
+    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state_dir)?;
     bind_service_origin(&state_dir, &controller_url)?;
     let identity = crate::machine_auth::MachineIdentity::load_or_create(&state_dir)?;
     let fingerprint = crate::machine_auth::fingerprint(identity.public_key())?;
@@ -152,6 +164,8 @@ pub async fn register(
         plugin_operation_admission: false,
         artifact_public_key: None,
         machine_binary: None,
+        bootstrap_manifest: None,
+        bootstrap_artifact: None,
         state_dir: Some(state_dir.clone()),
         max_sessions: 8,
         draining: false,
@@ -253,6 +267,13 @@ fn bind_service_origin(state_dir: &Path, origin: &str) -> Result<()> {
 
 fn install(args: InstallArgs) -> Result<()> {
     if args.refresh {
+        // Local refusal intent takes precedence over even read-only remote discovery.
+        let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+        let state = args.state_dir.clone().map_or_else(
+            || crate::service_identity::service_state_dir(&home, &args.service_id),
+            Ok,
+        )?;
+        admission::Admission::check(&args, &state)?;
         let origin = normalize_controller_url(&args.controller_url)?;
         let service_id = tokio::runtime::Runtime::new()?.block_on(fetch_service_id(&origin))?;
         anyhow::ensure!(
@@ -294,8 +315,7 @@ fn prepare_install_from_bundle(
         Ok,
     )?;
     validate_socket_paths(&state)?;
-    crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
-    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
+    let admission = admission::Admission::check(args, &state)?;
     let installed = if args.refresh {
         installed_launcher(args, &state, home)?
     } else {
@@ -305,9 +325,26 @@ fn prepare_install_from_bundle(
     let bundle = match bundle {
         Some(bundle) => bundle,
         None => {
-            bootstrap_probe::Bundle::prepare(&machine_host_binary(args.machine_binary.as_deref()))?
+            if let Some(manifest) = &args.bootstrap_manifest {
+                bootstrap_probe::Bundle::prepare_signed(
+                    manifest,
+                    args.bootstrap_artifact
+                        .as_deref()
+                        .context("signed bootstrap requires artifact")?,
+                    args.artifact_public_key
+                        .as_deref()
+                        .context("signed bootstrap requires publisher key")?,
+                )?
+            } else {
+                bootstrap_probe::Bundle::prepare(&machine_host_binary(
+                    args.machine_binary.as_deref(),
+                ))?
+            }
         }
     };
+    bundle.verify()?;
+    // The admitted probe is executable code; do not publish over new refusal state.
+    admission.recheck(args, &state)?;
     bind_service_origin(&state, &normalize_controller_url(&args.controller_url)?)?;
     let config = home
         .join(".config/cowboy-machine/services")
@@ -319,15 +356,17 @@ fn prepare_install_from_bundle(
     set_mode(&state, 0o700)?;
     set_mode(&config, 0o700)?;
 
-    for name in bootstrap_probe::PAYLOADS {
-        let path = bundle.payload(name);
-        atomic_replace(&state.join("bootstrap").join(name), 0o755, |file| {
-            let mut input = std::fs::File::open(&path)?;
-            std::io::copy(&mut input, file)?;
-            Ok(())
-        })?;
+    let signed_generation = bundle.install_signed(&state)?;
+    if signed_generation.is_none() {
+        for name in bootstrap_probe::PAYLOADS {
+            let path = bundle.payload(name);
+            atomic_replace(&state.join("bootstrap").join(name), 0o755, |file| {
+                let mut input = std::fs::File::open(&path)?;
+                std::io::copy(&mut input, file)?;
+                Ok(())
+            })?;
+        }
     }
-
     let token = state.join("enrollment-token");
     if let Some(value) = &args.enrollment_token {
         atomic_write(&token, value.as_bytes(), 0o600)?;
@@ -336,7 +375,8 @@ fn prepare_install_from_bundle(
         || runtime.join(format!("cowboy-machine-launch-{}", args.service_id)),
         |installed| installed.path.clone(),
     );
-    let mut script = launcher_script(args, &state, &token);
+    let mut script =
+        launcher_script_with_bootstrap(args, &state, &token, signed_generation.as_deref());
     if let Some(installed) = &installed {
         for (flag, relative) in [
             ("--socket", MACHINE_SOCKET),
@@ -352,6 +392,7 @@ fn prepare_install_from_bundle(
             }
         }
     }
+    admission.recheck(args, &state)?;
     atomic_write(&launcher, script.as_bytes(), 0o755)?;
 
     Ok((home.to_path_buf(), launcher))
@@ -516,7 +557,18 @@ fn install_background_service(
     }
 }
 
+#[cfg(test)]
 fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
+    launcher_script_with_bootstrap(args, state, token, None)
+}
+
+fn launcher_script_with_bootstrap(
+    args: &InstallArgs,
+    state: &Path,
+    token: &Path,
+    signed: Option<&Path>,
+) -> String {
+    let bootstrap_root = signed.map_or_else(|| state.join("bootstrap"), Path::to_path_buf);
     let mut command = vec![
         "--controller-url".to_owned(),
         args.controller_url.clone(),
@@ -567,6 +619,24 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         command.extend(["--workspace".to_owned(), workspace.clone()]);
     }
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
+    if let Some(generation) = signed {
+        let _ = writeln!(
+            script,
+            "{} --check-signed-bootstrap --state-dir {} --bundle-dir {} --artifact-public-key {} >/dev/null",
+            shell_quote(&generation.join("verifier").display().to_string()),
+            shell_quote(&state.display().to_string()),
+            shell_quote(&generation.display().to_string()),
+            shell_quote(
+                &args
+                    .artifact_public_key
+                    .as_ref()
+                    .expect("signed package publisher")
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
     // The installer-owned bootstrap is the guard, even when an active signed
     // host is selected later. An older bootstrap lacking the diagnostic fails
     // closed. It also authenticates cached host selection without running it.
@@ -574,7 +644,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let _ = writeln!(
         script,
         "{} --check-portable-session-deletion --state-dir {}{} >/dev/null",
-        shell_quote(&state.join("bootstrap/cowboy-machine").display().to_string()),
+        shell_quote(&bootstrap_root.join("cowboy-machine").display().to_string()),
         shell_quote(&state.display().to_string()),
         args.artifact_public_key
             .as_ref()
@@ -588,7 +658,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         script,
         "PATH={}:{}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
         shell_quote(&state.join("components/commands").display().to_string()),
-        shell_quote(&state.join("bootstrap").display().to_string())
+        shell_quote(&bootstrap_root.display().to_string())
     );
     for detect in crate::plugin_runtime_args::path_detect() {
         let cmd = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD");
@@ -615,7 +685,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         shell_quote(&state.join("run").display().to_string())
     );
     let active = state.join("components/commands/cowboy-machine");
-    let bootstrap = state.join("bootstrap/cowboy-machine");
+    let bootstrap = bootstrap_root.join("cowboy-machine");
     let _ = writeln!(
         script,
         "machine={}; [ -x {} ] && machine={}",
@@ -821,6 +891,54 @@ mod tests {
         );
         assert!(!root.path().join(".local/bin").exists());
         assert!(!state.join("service-origin").exists());
+    }
+
+    #[test]
+    fn probe_created_floor_refuses_install_before_publication() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let source = root.path().join("cowboy-machine");
+        let script = format!(
+            "#!/bin/sh\nprintf '{{}}' > '{}/portable-session-deletion-reader-floor.json'\nif [ -e \"$3/portable-session-deletion-reader-floor.json\" ]; then printf '%s' 'portable reader floor' >&2; exit 1; fi\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}}'\n",
+            state.display()
+        );
+        std::fs::write(&source, script).unwrap();
+        set_mode(&source, 0o755).unwrap();
+        for name in ["cowboy-code-adapter", "cowboy-acp-worker"] {
+            std::fs::write(root.path().join(name), "fixture").unwrap();
+        }
+        let args = InstallArgs::try_parse_from([
+            "installer",
+            "--controller-url",
+            "https://cowboy.example",
+            "--service-id",
+            "svc-0123456789abcdef0123456789abcdef",
+            "--workspace",
+            "main=/tmp",
+            "--enrollment-token",
+            "fixture",
+            "--no-start",
+            "--state-dir",
+            state.to_str().unwrap(),
+            "--machine-binary",
+            source.to_str().unwrap(),
+        ])
+        .unwrap();
+        assert!(
+            prepare_install_at(&args, root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("portable reader floor")
+        );
+        assert!(!state.join("bootstrap").exists());
+        assert!(!state.join("service-origin").exists());
+        assert!(!root.path().join(".local/bin").exists());
+        assert_eq!(
+            std::fs::read(state.join(crate::session_deletion_admission::reader_floor::NAME))
+                .unwrap(),
+            b"{}"
+        );
     }
 
     #[test]
@@ -1079,6 +1197,32 @@ mod tests {
     }
 
     #[test]
+    fn signed_bootstrap_cli_requires_package_and_publisher_and_excludes_caller_binary() {
+        let base = [
+            "installer",
+            "--controller-url",
+            "https://cowboy.example",
+            "--service-id",
+            "svc-0123456789abcdef0123456789abcdef",
+            "--workspace",
+            "main=/work",
+            "--refresh",
+        ];
+        let mut args = base.to_vec();
+        args.extend(["--bootstrap-manifest", "/manifest"]);
+        assert!(InstallArgs::try_parse_from(&args).is_err());
+        args.extend(["--bootstrap-artifact", "/artifact"]);
+        assert!(InstallArgs::try_parse_from(&args).is_err());
+        args.extend(["--artifact-public-key", "/publisher"]);
+        assert!(InstallArgs::try_parse_from(&args).is_ok());
+        args.extend(["--machine-binary", "/unsigned"]);
+        assert!(InstallArgs::try_parse_from(&args).is_err());
+        let mut args = base.to_vec();
+        args.extend(["--bootstrap-artifact", "/artifact"]);
+        assert!(InstallArgs::try_parse_from(&args).is_err());
+    }
+
+    #[test]
     fn launcher_prefers_the_active_signed_generation() {
         let args = InstallArgs {
             controller_url: "https://cowboy.example".to_owned(),
@@ -1091,6 +1235,8 @@ mod tests {
             plugin_operation_admission: true,
             artifact_public_key: None,
             machine_binary: None,
+            bootstrap_manifest: None,
+            bootstrap_artifact: None,
             state_dir: None,
             max_sessions: 8,
             draining: false,
@@ -1125,6 +1271,8 @@ mod tests {
             plugin_operation_admission: false,
             artifact_public_key: None,
             machine_binary: None,
+            bootstrap_manifest: None,
+            bootstrap_artifact: None,
             state_dir: None,
             max_sessions: 8,
             draining: false,

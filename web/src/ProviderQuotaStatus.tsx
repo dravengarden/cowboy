@@ -34,11 +34,13 @@ export function ProviderQuotaStatus({
   providerVersion,
   providerDigest,
   status,
+  desktop = false,
 }: {
   provider: string;
   providerVersion?: string;
   providerDigest?: string;
   status: Status;
+  desktop?: boolean;
 }): React.JSX.Element | null {
   const { catalog } = useProviderCatalog();
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
@@ -102,7 +104,8 @@ export function ProviderQuotaStatus({
         position: "relative",
         display: "flex",
         justifyContent: "center",
-        px: 2,
+        px: desktop ? 0 : 2,
+        ...(desktop && { flexShrink: 0 }),
         width: "100%",
         minWidth: 0,
         boxSizing: "border-box",
@@ -117,13 +120,14 @@ export function ProviderQuotaStatus({
         spacing={1}
         sx={(theme) => ({
           width: "100%",
-          maxWidth: 560,
+          maxWidth: desktop ? "none" : 560,
           minWidth: 0,
           px: 1.25,
-          py: 1,
-          border: 1,
+          py: desktop ? 0.5 : 1,
+          border: desktop ? 0 : 1,
+          ...(desktop && { borderBottom: 1 }),
           borderColor: alpha(theme.palette.warning.main, 0.42),
-          borderRadius: 2,
+          borderRadius: desktop ? 0 : 2,
           color: "warning.main",
           bgcolor: alpha(
             theme.palette.warning.main,

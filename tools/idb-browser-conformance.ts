@@ -2,6 +2,7 @@
  * No normal browser profile, auth, environment or product endpoint is used.
  */
 const browser = Deno.args[0];
+const chromium = browser?.endsWith("/bin/chromium");
 // Closed fixture selector; this runner never opens the deployed application.
 const suite = Deno.args[1] ?? "idb";
 const themeMode = Deno.args[2] ?? "light";
@@ -18,11 +19,16 @@ if (
   suite !== "review-destination" && suite !== "review-recovery" &&
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
   suite !== "workspace-picker" && suite !== "project-placement" &&
-  suite !== "sign-in"
+  suite !== "sign-in" && suite !== "desktop-composer" &&
+  suite !== "session-move"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "sign-in"
+const entry = suite === "session-move"
+  ? "runSessionMoveBrowserConformance"
+  : suite === "desktop-composer"
+  ? "runDesktopComposerBrowserConformance"
+  : suite === "sign-in"
   ? "runSignInBrowserConformance"
   : suite === "idb"
   ? "runIdbBrowserConformance"
@@ -61,9 +67,12 @@ const entry = suite === "sign-in"
   : suite === "review-recovery"
   ? "runReviewRecoveryBrowserConformance"
   : "runProviderManagementBrowserConformance";
-if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
+if (
+  !browser?.startsWith("/nix/store/") ||
+  (!browser.endsWith("/bin/firefox") && !chromium)
+) {
   throw new Error(
-    "pass the absolute .#cowboy-idb-test-browser /bin/firefox path",
+    "pass an absolute pinned /nix/store browser /bin/firefox or /bin/chromium path",
   );
 }
 const temporary = await Deno.makeTempDir({ prefix: "cowboy-idb-browser-" });
@@ -157,14 +166,27 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   }).output();
   if (!version.success) throw new Error("browser version probe failed");
   child = new Deno.Command(browser, {
-    args: [
-      "--headless",
-      "--no-remote",
-      "--new-instance",
-      "--profile",
-      profile,
-      `http://127.0.0.1:${server.addr.port}/${token}`,
-    ],
+    args: chromium
+      ? [
+        "--headless",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        `http://127.0.0.1:${server.addr.port}/${token}`,
+      ]
+      : [
+        "--headless",
+        "--no-remote",
+        "--new-instance",
+        "--profile",
+        profile,
+        `http://127.0.0.1:${server.addr.port}/${token}`,
+      ],
     clearEnv: true,
     env: environment,
     stdout: "null",
@@ -183,7 +205,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "sign-in"
+      (suite === "sign-in" || suite === "session-move"
         ? 4
         : suite === "project-placement"
         ? 11
@@ -233,6 +255,26 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   ));
 } finally {
   clearTimeout(deadline);
+  if (chromium && child) {
+    try {
+      const [port, path] =
+        (await Deno.readTextFile(`${temporary}/profile/DevToolsActivePort`))
+          .trim().split("\n");
+      const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          socket.close();
+          resolve();
+        }, 2000);
+        socket.onopen = () =>
+          socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+        socket.onclose = socket.onerror = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    } catch { /* An already-exited browser needs no graceful close. */ }
+  }
   if (child) {
     try {
       child.kill("SIGKILL");

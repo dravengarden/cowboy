@@ -40,6 +40,8 @@ mod code_cache;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_review;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+mod component_proof;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod composition;
 #[cfg(feature = "full")]
 mod core;

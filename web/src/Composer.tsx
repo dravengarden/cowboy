@@ -161,7 +161,7 @@ import {
 } from "./pendingEditStore";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
-import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ShortcutKeycap } from "./ShortcutKeycap";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
@@ -343,9 +343,9 @@ const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
   return { default: module.DesktopContextShortcut };
 });
-const DesktopComposerCommandBindings = lazy(async () => {
-  const module = await import("./desktop/commands/DesktopComposerShortcuts");
-  return { default: module.DesktopComposerCommandBindings };
+const DesktopComposerToolbar = lazy(async () => {
+  const module = await import("./desktop/DesktopComposerToolbar");
+  return { default: module.DesktopComposerToolbar };
 });
 const DesktopPendingEditCommandBindings = lazy(async () => {
   const module = await import("./desktop/commands/DesktopPendingEditShortcuts");
@@ -1035,25 +1035,6 @@ export function ComposerWorkspace({
     mobileKeyboardDismissed,
   );
   const preparing = status === "starting";
-  const desktopShortcut = (
-    child: ReactNode,
-    badge: string,
-    shortcut: string,
-    enabled = true,
-  ): ReactNode =>
-    desktop
-      ? (
-        <Suspense fallback={child}>
-          <DesktopContextShortcut
-            badge={badge}
-            shortcut={shortcut}
-            enabled={enabled}
-          >
-            {child}
-          </DesktopContextShortcut>
-        </Suspense>
-      )
-      : child;
   const editorRef = useRef<ComposerEditorHandle>(null);
   const {
     text,
@@ -1340,29 +1321,6 @@ export function ComposerWorkspace({
     return (): void =>
       globalThis.removeEventListener("keydown", closeOnEscape, true);
   }, [forceAnchor]);
-  const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<
-    HTMLElement | null
-  >(null);
-  const desktopMoreButtonRef = useRef<HTMLButtonElement | null>(null);
-  const desktopToolbarRef = useRef<HTMLDivElement | null>(null);
-  // The split Prompt pane is user-resizable, so viewport breakpoints cannot tell
-  // us whether its action row has room. Measure the row itself and expose every
-  // delivery action whenever it can fit; fold only below the real content width.
-  const [desktopActionsExpanded, setDesktopActionsExpanded] = useState(!column);
-  useEffect(() => {
-    if (!desktop) return undefined;
-    const el = desktopToolbarRef.current;
-    if (!el) return undefined;
-    const update = (): void => {
-      const expanded = el.getBoundingClientRect().width >= 540;
-      setDesktopActionsExpanded(expanded);
-      if (expanded) setDesktopMoreAnchor(null);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    return (): void => observer.disconnect();
-  }, [desktop]);
   // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
   // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -1822,7 +1780,7 @@ export function ComposerWorkspace({
         // the transcript boundary.
         "--mobile-composer-stack-gap": `${mobileComposerStackGap}px`,
         "--mobile-composer-boundary-gap": `${mobileComposerStackGap}px`,
-        pt: desktop ? 1 : "var(--mobile-composer-boundary-gap)",
+        pt: desktop ? 0 : "var(--mobile-composer-boundary-gap)",
         display: "flex",
         flexDirection: "column",
         alignItems: "stretch",
@@ -1896,8 +1854,7 @@ export function ComposerWorkspace({
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
-          pt: 1,
-          pb: 1,
+          p: 0,
         }),
         ...(desktop && {
           // Desktop is a focus-driven workspace, not the Mobile stacked touch
@@ -1937,6 +1894,7 @@ export function ComposerWorkspace({
         {...(providerVersion === undefined ? {} : { providerVersion })}
         {...(providerDigest === undefined ? {} : { providerDigest })}
         status={status}
+        desktop={desktop}
       />
       {
         /* Turn status remains an ordinary stack slot, not a second absolute
@@ -2165,11 +2123,9 @@ export function ComposerWorkspace({
           desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */
       }
       {
-        /* The composer CARD (Zed-style): one outlined Paper owning the box — the
-          editor sits borderless inside, the Send/Queue + Stop + ⋮ kebab overlay
-          its bottom-right (`endInset` reserves text room). Transparent fill so it
-          floats over the frosted bottom slab (a solid paper would hide the glass).
-          A flex column so a later step can pin an inline toolbar to the bottom. */
+        /* Desktop is a flat writing surface inside the Prompt pane. Mobile
+          retains its own input card and keyboard material. Both keep this same
+          editor owner mounted through width, state and focus changes. */
       }
       <Paper
         data-composer-stack-slot="primary"
@@ -2185,20 +2141,21 @@ export function ComposerWorkspace({
         data-mobile-keyboard-open={touchInput && mobileKeyboardPresentationOpen
           ? "true"
           : undefined}
-        // Column mode is a dedicated writing workspace. Its subtle card boundary
-        // makes an empty tall editor read as an intentional canvas, not a blank
-        // hole between the session rail and transcript.
-        variant="outlined"
+        variant={desktop ? "elevation" : "outlined"}
         elevation={0}
         {...fileDrop.handlers}
         sx={{
           position: "relative",
           display: !desktop && mobilePendingEditing ? "none" : "flex",
           flexDirection: "column",
-          ...(surface === "desktop" && {
-            ...desktopSurfaceSx({ interactive: false, focusWithin: true }),
+          ...(desktop && {
+            border: 0,
+            borderRadius: 0,
+            boxShadow: "none",
+            // Pane header and status line own focus; do not outline the canvas.
+            "&:focus-visible, &:focus-within": { outline: "none", boxShadow: "none" },
           }),
-          bgcolor: column
+          bgcolor: desktop ? "transparent" : column
             ? (t) =>
               alpha(
                 t.palette.background.paper,
@@ -2477,7 +2434,7 @@ export function ComposerWorkspace({
               flushRightScrollbar={desktop && column}
               // Reserve a top-right gutter so no line runs under the ↗/↙ expand
               // toggle the card overlays at its top-right corner.
-              endInset={36}
+              endInset={desktop && column ? 0 : 36}
               // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
               // long-press opens, anchored to that button.
               holdToForce={!preparing && (busy || starting)}
@@ -2567,280 +2524,50 @@ export function ComposerWorkspace({
             </Tooltip>
           ))}
         {
-          /* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
-            + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
-            cluster pinned to the card's right edge. This replaces BOTH the old
-            separate toolbar strip below the input AND the absolute send overlay —
-            one cohesive card. `px`/`pb` (not the nav gutters) inset the row to the
-            card's own edges. */
+          /* Desktop owns persistent editing and delivery rows below the
+            scrollport. Mobile retains its keyboard-aware input-card controls. */
         }
         {desktop
           ? (
-            <>
-              <Suspense fallback={null}>
-                <DesktopComposerCommandBindings
-                  sendable={sendable}
-                  canAttach={!dead}
-                  canJumpFront={queue.length > 0}
-                  canForce={forceable}
-                  canMore={!desktopActionsExpanded}
-                  onSlash={(): void => editorRef.current?.insertTrigger("/")}
-                  onReference={(): void =>
-                    editorRef.current?.insertTrigger("@")}
-                  onAttach={(): void => fileInputRef.current?.click()}
-                  onSaveDraft={saveDraft}
-                  onSchedule={(): void =>
-                    setScheduleTarget({ id: undefined, initial: null })}
-                  onJumpFront={jumpToFront}
-                  onForce={(): void => {
-                    if (queueBtnRef.current) {
-                      setForceAnchor(queueBtnRef.current);
-                    }
-                  }}
-                  onMore={(): void =>
-                    setDesktopMoreAnchor(desktopMoreButtonRef.current)}
-                />
-              </Suspense>
-              <Stack
-                ref={desktopToolbarRef}
-                direction="row"
-                alignItems="center"
-                spacing={0.25}
-                sx={{ px: 1, pb: 1, minHeight: 40 }}
-              >
-                <Tooltip title="Slash command / skill">
-                  <span>
-                    <IconButton
-                      size="small"
-                      aria-label="slash command"
-                      disabled={dead}
-                      onClick={(): void =>
-                        editorRef.current?.insertTrigger("/")}
-                    >
-                      <Box
-                        component="span"
-                        sx={{
-                          fontSize: "1.1rem",
-                          fontWeight: 700,
-                          lineHeight: 1,
-                        }}
-                      >
-                        /
-                      </Box>
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Reference a file (@)">
-                  <span>
-                    <IconButton
-                      size="small"
-                      aria-label="reference a file"
-                      disabled={dead}
-                      onClick={(): void =>
-                        editorRef.current?.insertTrigger("@")}
-                    >
-                      <AlternateEmail fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Attach image or file">
-                  <span>
-                    <IconButton
-                      size="small"
-                      aria-label="attach image or file"
-                      disabled={dead}
-                      onClick={(): void => fileInputRef.current?.click()}
-                    >
-                      <AttachFile fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Box sx={{ flex: 1 }} />
-
-                {desktopActionsExpanded && (
-                  <>
-                    <Tooltip title="Save as draft">
-                      <span>
-                        {desktopShortcut(
-                          <IconButton
-                            size="small"
-                            aria-label="save as draft"
-                            disabled={!sendable}
-                            onClick={saveDraft}
-                          >
-                            <EditNoteOutlined fontSize="small" />
-                          </IconButton>,
-                          `${MOD_LABEL}S`,
-                          `${MOD_LABEL}S · save as draft`,
-                          sendable,
-                        )}
-                      </span>
-                    </Tooltip>
-                    <Tooltip title="Schedule send">
-                      <span>
-                        <IconButton
-                          size="small"
-                          aria-label="schedule send"
-                          disabled={!sendable}
-                          onClick={(): void =>
-                            setScheduleTarget({
-                              id: undefined,
-                              initial: null,
-                            })}
-                        >
-                          <Schedule fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                    <Tooltip title="Jump to front of queue">
-                      <span>
-                        <IconButton
-                          size="small"
-                          aria-label="jump to front of queue"
-                          disabled={!sendable || queue.length === 0}
-                          onClick={jumpToFront}
-                        >
-                          <VerticalAlignTop fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                    <Tooltip title="Force push">
-                      <span>
-                        {desktopShortcut(
-                          <IconButton
-                            size="small"
-                            color="warning"
-                            aria-label="force push"
-                            disabled={!sendable || !forceable}
-                            onClick={(e): void =>
-                              setForceAnchor(e.currentTarget)}
-                          >
-                            <Bolt fontSize="small" />
-                          </IconButton>,
-                          `${ALT_LABEL}↵`,
-                          `${ALT_LABEL}Enter · force push`,
-                          sendable && forceable,
-                        )}
-                      </span>
-                    </Tooltip>
-                  </>
-                )}
-
-                {!desktopActionsExpanded && (
-                  <Tooltip title="More delivery options">
-                    <span>
-                      <IconButton
-                        ref={desktopMoreButtonRef}
-                        size="small"
-                        aria-label="more delivery options"
-                        aria-controls={desktopMoreAnchor
-                          ? "desktop-composer-more"
-                          : undefined}
-                        aria-expanded={desktopMoreAnchor ? "true" : undefined}
-                        onClick={(e): void =>
-                          setDesktopMoreAnchor(e.currentTarget)}
-                      >
-                        <MoreVert fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-                <Menu
-                  id="desktop-composer-more"
-                  anchorEl={desktopMoreAnchor}
-                  open={desktopMoreAnchor !== null}
-                  onClose={(): void => setDesktopMoreAnchor(null)}
-                  anchorOrigin={{ vertical: "top", horizontal: "right" }}
-                  transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-                >
-                  {!desktopActionsExpanded && (
-                    <MenuItem
-                      disabled={!sendable}
-                      onClick={(): void => {
-                        setDesktopMoreAnchor(null);
-                        saveDraft();
-                      }}
-                    >
-                      <EditNoteOutlined fontSize="small" sx={{ mr: 1.25 }} />
-                      Save as draft
-                    </MenuItem>
-                  )}
-                  {!desktopActionsExpanded && (
-                    <MenuItem
-                      disabled={!sendable}
-                      onClick={(): void => {
-                        setDesktopMoreAnchor(null);
-                        setScheduleTarget({ id: undefined, initial: null });
-                      }}
-                    >
-                      <Schedule fontSize="small" sx={{ mr: 1.25 }} />
-                      Schedule send
-                    </MenuItem>
-                  )}
-                  {!desktopActionsExpanded && <Divider />}
-                  {!desktopActionsExpanded && (
-                    <MenuItem
-                      disabled={!sendable || queue.length === 0}
-                      onClick={(): void => {
-                        setDesktopMoreAnchor(null);
-                        jumpToFront();
-                      }}
-                    >
-                      <VerticalAlignTop fontSize="small" sx={{ mr: 1.25 }} />
-                      Jump to front of queue
-                    </MenuItem>
-                  )}
-                  {!desktopActionsExpanded && (
-                    <MenuItem
-                      disabled={!sendable || !forceable}
-                      onClick={(): void => {
-                        setDesktopMoreAnchor(null);
-                        setForceAnchor(desktopMoreButtonRef.current);
-                      }}
-                    >
-                      <Bolt
-                        fontSize="small"
-                        color="warning"
-                        sx={{ mr: 1.25 }}
-                      />
-                      Force push…
-                    </MenuItem>
-                  )}
-                </Menu>
-
-                {desktopShortcut(
-                  <Button
-                    ref={queueBtnRef}
-                    variant="contained"
-                    size="small"
-                    disableElevation
-                    startIcon={<Send fontSize="small" />}
-                    aria-label={busy || starting || !serverConnected ? "queue message" : "send"}
-                    disabled={!sendable || submitFeedback.pending}
-                    aria-busy={submitFeedback.pending || undefined}
-                    onClick={(): void => submitWithFeedback()}
-                    sx={{
-                      ml: 0.5,
-                      minWidth: 86,
-                      borderRadius: 1.5,
-                      textTransform: "none",
-                      fontWeight: 650,
-                    }}
-                  >
-                    {submitFeedback.progress
-                      ? <CircularProgress size={16} color="inherit" />
-                      : busy || starting || !serverConnected
-                      ? "Queue"
-                      : "Send"}
-                  </Button>,
-                  `${MOD_LABEL}↵`,
-                  !serverConnected
-                    ? `Queue until Cowboy is reachable · ${MOD_LABEL}Enter`
-                    : `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`,
-                  sendable,
-                )}
-              </Stack>
-            </>
+            <Suspense fallback={<Box sx={{ minHeight: 80 }} />}>
+              <DesktopComposerToolbar
+                editorRef={editorRef}
+                sendButtonRef={queueBtnRef}
+                canInsert={!dead}
+                sendable={sendable}
+                canJumpFront={queue.length > 0}
+                canForce={forceable}
+                pending={submitFeedback.pending}
+                progress={submitFeedback.progress}
+                sendLabel={busy || starting || paused || !serverConnected
+                  ? "Queue"
+                  : "Send"}
+                sendDescription={!serverConnected
+                  ? "Queue until Cowboy is reachable"
+                  : paused
+                  ? "Queue until the paused queue is resumed"
+                  : busy || starting
+                  ? "Run after the current work finishes"
+                  : dead ? "Send to resume this session" : "Send message"}
+                unavailableReason={attachments.some((attachment) =>
+                    attachment.pending
+                  )
+                  ? "Wait for attachments to finish preparing"
+                  : "Write a message or attach a file first"}
+                overlayOpen={forceAnchor !== null || scheduleTarget !== null}
+                onAttach={(): void => fileInputRef.current?.click()}
+                onSaveDraft={saveDraft}
+                onSchedule={(): void =>
+                  setScheduleTarget({ id: undefined, initial: null })}
+                onJumpFront={jumpToFront}
+                onForce={(): void => {
+                  if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
+                }}
+                onSubmit={(): void => {
+                  submitWithFeedback();
+                }}
+              />
+            </Suspense>
           )
           : (
             <>

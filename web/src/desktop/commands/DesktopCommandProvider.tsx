@@ -991,6 +991,10 @@ export function DesktopCommandProvider(
         const disabled = command.when?.() === false;
         if (disabled && !command.consumeWhenDisabled) continue;
         event.preventDefault();
+        // This command owns the chord. CodeMirror's DOM handlers do not all
+        // consult defaultPrevented (Alt+Enter also means Save Draft there).
+        // Do not execute both the workspace action and an editor fallback.
+        event.stopImmediatePropagation();
         if (!disabled) command.run();
         return;
       }

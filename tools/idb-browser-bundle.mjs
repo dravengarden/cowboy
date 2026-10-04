@@ -14,7 +14,8 @@ if (
   suite !== "review-destination" && suite !== "review-recovery" &&
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
   suite !== "workspace-picker" && suite !== "project-placement" &&
-  suite !== "sign-in"
+  suite !== "sign-in" && suite !== "desktop-composer" &&
+  suite !== "session-move"
 ) {
   throw new Error("unknown suite");
 }
@@ -24,6 +25,9 @@ if (!outDir?.startsWith("/")) {
 await build({
   root: new URL("../web", import.meta.url).pathname,
   configFile: false,
+  // Dependency "use client" diagnostics can exceed the remote output budget.
+  // Keep build failures visible; the runner reports the actual browser result.
+  logLevel: "error",
   envDir: false,
   publicDir: false,
   define: {
@@ -36,7 +40,8 @@ await build({
         suite === "review-diff" || suite === "review-destination" ||
         suite === "review-recovery" || suite === "workspace-extensions" ||
         suite === "sheet-keyboard" || suite === "workspace-picker" ||
-        suite === "project-placement"
+        suite === "project-placement" || suite === "desktop-composer" ||
+        suite === "session-move"
         ? "development"
         : "production",
     ),
@@ -73,12 +78,17 @@ await build({
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
     ...(suite === "review-diff" || suite === "review-document-refresh" ||
         suite === "review-destination" || suite === "review-recovery" ||
-        suite === "workspace-extensions"
+        suite === "workspace-extensions" || suite === "desktop-composer" ||
+        suite === "session-move"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "sign-in"
+        suite === "session-move"
+          ? "../web/src/sessionMoveBrowserConformance.tsx"
+          : suite === "desktop-composer"
+          ? "../web/src/desktopComposerBrowserConformance.tsx"
+          : suite === "sign-in"
           ? "../web/src/auth/signInBrowserConformance.tsx"
           : suite === "project-placement"
           ? "../web/src/projectPlacementBrowserConformance.tsx"

@@ -37,7 +37,9 @@ Deno.test("Chrome tab, window, address, and numbered-tab chords are rejected", (
       "F12",
     ]
   ) {
-    assertThrows(() => assertChromeShortcutAllowed("test.command", shortcut, false));
+    assertThrows(() =>
+      assertChromeShortcutAllowed("test.command", shortcut, false)
+    );
   }
 });
 
@@ -45,12 +47,20 @@ Deno.test("workspace prefix follows Chrome's platform-specific K behavior", () =
   assertEquals(desktopWorkspacePrefix(true), "Mod+K");
   assertEquals(desktopWorkspacePrefix(false), "Alt+K");
   assertEquals(chromeShortcutConflict("workspace.prefix", "Mod+K", true), null);
-  assertThrows(() => assertChromeShortcutAllowed("workspace.prefix", "Mod+K", false));
-  assertEquals(chromeShortcutConflict("workspace.prefix", "Alt+K", false), null);
+  assertThrows(() =>
+    assertChromeShortcutAllowed("workspace.prefix", "Mod+K", false)
+  );
+  assertEquals(
+    chromeShortcutConflict("workspace.prefix", "Alt+K", false),
+    null,
+  );
 });
 
 Deno.test("native save is the only registered semantic Chrome override", () => {
-  assertEquals(chromeShortcutConflict("composer.saveDraft", "Mod+S", true), null);
+  assertEquals(
+    chromeShortcutConflict("composer.saveDraft", "Mod+S", true),
+    null,
+  );
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+S", true));
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+F", true));
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+J", true));
@@ -64,13 +74,43 @@ Deno.test("direct product chords and Alt session slots remain browser-safe", () 
 
 Deno.test("workspace navigation has no global bare-letter shortcut", () => {
   assertEquals(Object.keys(DESKTOP_WORKSPACE_COMMANDS).sort(), [
-    ",", "[", "\\", "]", "c", "d", "e", "l", "n", "p", "q", "r", "s", "t", "w",
+    ",",
+    "/",
+    "[",
+    "\\",
+    "]",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "h",
+    "i",
+    "j",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "w",
+    "x",
+    "y",
+    "z",
   ]);
   // Windows/Linux held-prefix pane folds (Alt + [ ] \) are not Chrome chords.
   // macOS Cmd+[ / Cmd+] are Chrome Back/Forward, which are not reserved
   // accelerators; the claimed continuation cancels them (FOCUS.md).
   for (const key of ["[", "]", "\\"]) {
-    assertEquals(chromeShortcutConflict("test.command", `Alt+${key}`, false), null);
+    assertEquals(
+      chromeShortcutConflict("test.command", `Alt+${key}`, false),
+      null,
+    );
   }
   for (const shortcut of Object.values(DESKTOP_SHORTCUTS)) {
     assert(!/^[a-z]$/i.test(shortcut));
@@ -78,7 +118,11 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
 });
 
 Deno.test("every registered Desktop command passes browser and product policy", () => {
-  assert(providerSource.includes("assertChromeShortcutAllowed(command.id, command.shortcut, isMac)"));
+  assert(
+    providerSource.includes(
+      "assertChromeShortcutAllowed(command.id, command.shortcut, isMac)",
+    ),
+  );
   assert(providerSource.includes("assertShortcutRegistrationAllowed(command"));
   assert(providerSource.includes("matchesDesktopWorkspacePrefix(event)"));
 });
