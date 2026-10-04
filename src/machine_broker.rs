@@ -2536,20 +2536,23 @@ async fn run(args: MachineBrokerArgs) -> Result<()> {
     run_broker(args, None).await
 }
 
-/// Reader-first production cutover. The persistent writer remains unadmitted
-/// until old component rollback/recovery readers are fenced by their owner.
+/// Default production builds stay read-only. The dedicated writer build must
+/// pass its component owner's exact selection and reader-floor admission.
 pub(crate) async fn run_with_deletion_reader(
     args: MachineBrokerArgs,
     path: PathBuf,
     owner: deletions::Owner,
 ) -> Result<()> {
+    let writer_enabled =
+        crate::session_deletion_admission::owner_writer::admitted(&path, &owner.machine_id)
+            .context("admitting component Session deletion writer")?;
     let journal =
-        tokio::task::spawn_blocking(move || deletions::Journal::open(&path, owner, false))
+        tokio::task::spawn_blocking(move || deletions::Journal::open(&path, owner, writer_enabled))
             .await
             .context("joining Session deletion reader open")??;
     tracing::info!(
         deleted_sessions = journal.deleted().len(),
-        writer_enabled = false,
+        writer_enabled,
         "Session deletion journal reader ready"
     );
     run_broker(args, Some(journal)).await
