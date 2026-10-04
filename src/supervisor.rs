@@ -441,7 +441,12 @@ impl Supervisor {
         // lifecycle already reached Exited). Always let the Machine broker
         // make the final idempotent decision: a healthy worker is a no-op,
         // while a terminal owner is fenced and replaced.
-        runtime.ensure(self.start_session(session_id)?);
+        let session = self.start_session(session_id)?;
+        if !has_worker && meta.status == Status::Exited {
+            runtime.revive(session);
+        } else {
+            runtime.ensure(session);
+        }
         Ok(!has_worker)
     }
 
@@ -984,7 +989,7 @@ mod tests {
                 .contains("not connected")
         );
 
-        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
         router.install("hawk".to_owned(), Arc::clone(&runtime));
         assert!(supervisor.ensure_alive("s").expect("queued ensure"));
         assert!(runtime.pending_for_test().iter().any(|command| {
@@ -993,6 +998,8 @@ mod tests {
                 CoreCommand::EnsureSession { session } if session.session_id == "s"
             )
         }));
+        // Progress is visible before the Machine verifies and spawns.
+        assert_eq!(hub.status("s"), Some(Status::Starting));
     }
 
     #[test]
@@ -1160,13 +1167,15 @@ mod tests {
         let mut worker = worker_snapshot(prepared.to_string_lossy().as_ref());
         worker.state = WorkerState::Running;
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
-        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+        let supervisor = remote_supervisor(hub.clone(), runtime.clone(), root.0.clone());
 
         assert!(
             !supervisor
                 .ensure_alive("s")
                 .expect("open divergent exited session")
         );
+        // A live worker may be kept as-is; leave its status to the Machine.
+        assert_eq!(hub.status("s"), Some(Status::Exited));
 
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(|command| {

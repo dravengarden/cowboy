@@ -93,6 +93,10 @@ struct Shared {
     /// a late `Running` edge cannot drain a force-pushed prompt into the worker
     /// that is being fenced.
     resetting: Mutex<HashSet<String>>,
+    /// Dormant sessions projected as `Starting` when the client opened them,
+    /// before the Machine reported its launch. A rejected declaration
+    /// restores `Exited`; any worker snapshot replaces the projection.
+    optimistic_revivals: Mutex<HashSet<String>>,
     highwaters: Mutex<HashMap<(String, String), u64>>,
     notify: mpsc::UnboundedSender<()>,
     command_counter: AtomicU64,
@@ -161,6 +165,7 @@ impl RemoteRuntime {
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
                 resetting: Mutex::new(HashSet::new()),
+                optimistic_revivals: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
                 command_counter: AtomicU64::new(seed_counter()),
@@ -219,6 +224,7 @@ impl RemoteRuntime {
                         .collect(),
                 ),
                 resetting: Mutex::new(HashSet::new()),
+                optimistic_revivals: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
                 command_counter: AtomicU64::new(seed_counter()),
@@ -394,6 +400,22 @@ impl RemoteRuntime {
         // truly fresh session has no snapshot yet, so its provider-authored
         // defaults are queued optimistically until ACP answers authoritatively.
         queue_persisted_config_for_session(&self.shared, &session_id, false);
+    }
+
+    /// Revive a dormant session the client just opened. The Machine reports
+    /// `Starting` only after Provider verification and worker spawn, which
+    /// takes seconds on slower hosts; project it now so the client shows
+    /// progress for the whole launch instead of an idle session.
+    pub fn revive(&self, session: StartSession) {
+        let session_id = session.session_id.clone();
+        self.shared
+            .optimistic_revivals
+            .lock()
+            .insert(session_id.clone());
+        self.shared
+            .hub
+            .set_status(&session_id, Status::Starting, None);
+        self.ensure(session);
     }
 
     #[cfg(test)]
@@ -1173,6 +1195,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     None,
                 );
             }
+            if !accepted
+                && matches!(&command, Some(CoreCommand::EnsureSession { .. }))
+                && shared.optimistic_revivals.lock().remove(&session_id)
+                && shared.hub.status(&session_id) == Some(Status::Starting)
+            {
+                shared.hub.set_status(&session_id, Status::Exited, None);
+            }
             if !accepted {
                 if matches!(&command, Some(CoreCommand::EnsureSession { .. })) || reset_stop {
                     fail_config_startup(
@@ -1546,6 +1575,7 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     if !shared.hub.accept_runtime_snapshot(worker) {
         return false;
     }
+    shared.optimistic_revivals.lock().remove(&worker.session_id);
     shared.hub.reconcile_provider_release(worker);
     if matches!(worker.state, WorkerState::Crashed | WorkerState::Exited) {
         fail_config_startup(
@@ -2620,6 +2650,58 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn opened_dormant_session_projects_starting_until_machine_answers() {
+        for accepted_launch in [false, true] {
+            let hub = Hub::new();
+            hub.create_local_session(
+                "s".to_owned(),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                "test".to_owned(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+            hub.set_status("s", Status::Exited, None);
+            let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+            let launch = snapshot("s").launch.expect("launch");
+
+            runtime.revive(launch);
+            assert_eq!(hub.status("s"), Some(Status::Starting));
+            assert!(runtime.pending_for_test().iter().any(|command| {
+                matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
+            }));
+
+            let frame = if accepted_launch {
+                let mut worker = snapshot("s");
+                worker.state = WorkerState::Starting;
+                worker.current_turn_id = None;
+                Frame::Snapshot {
+                    worker: Box::new(worker),
+                }
+            } else {
+                Frame::CommandAck {
+                    session_id: "s".to_owned(),
+                    command_id: "ensure:s".to_owned(),
+                    accepted: false,
+                    reason: Some("Session deletion reader unavailable".to_owned()),
+                }
+            };
+            handle_frame(&runtime.shared, frame, &mut tokio::io::sink())
+                .await
+                .expect("Machine answer");
+            assert!(!runtime.shared.optimistic_revivals.lock().contains("s"));
+            assert_eq!(
+                hub.status("s"),
+                Some(if accepted_launch {
+                    Status::Starting
+                } else {
+                    Status::Exited
+                })
+            );
         }
     }
 
