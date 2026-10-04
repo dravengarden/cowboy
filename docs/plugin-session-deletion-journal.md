@@ -167,9 +167,19 @@ open; production writing remains disabled. Release metadata is a build-owned
 claim, not authorization.
 
 The [activation authority audit](plugin-activation-authority.md) identifies the
-actual unrestricted-root and same-user write bypasses and a concrete owner
-separation proposal. No old-tool permission fence is implemented by that audit;
-the existing administrator policy needs an explicit scope decision.
+actual unrestricted-root and same-user write bypasses. The user selected keeping
+sudo rights: administrators stay trusted, and supported deployment is constrained
+to the installed owner. Independent old root-capable tools and same-user portable
+installers are outside that guarantee; strong actor isolation is not selected.
+
+The [installed-owner release](releases/plugin-installed-owner-2026-10-04.md)
+now pins supported dispatch to the installed immutable owner and retires the
+caller-built `candidate` transaction option before fetch/build/dispatch.
+Controller failed-rollback repair defaults to `installed`; owner changes use
+host releases. Hawk source `e4a2b363` activated successfully with unchanged
+sudoers hashes, Machine/Controller PIDs and all 16 observed worker/keeper PIDs.
+This selected administrator boundary does not fence independent old root tools,
+and it opens no production writer or portable compatible-reader admission.
 
 ## Portable refusal gate
 
