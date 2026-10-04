@@ -34,6 +34,7 @@ pub(crate) struct TelemetryFile {
     day: i64,
     segment_bytes: u64,
     retained_files: usize,
+    retention_ms: i64,
 }
 
 // flock belongs to an open-file description, including descriptors briefly
@@ -177,7 +178,84 @@ impl TelemetryFile {
             day,
             segment_bytes,
             retained_files,
+            retention_ms: 7 * DAY_MS,
         })
+    }
+
+    pub(crate) fn with_retention_seconds(mut self, seconds: u64) -> Result<Self> {
+        ensure!(
+            (60..=90 * 86400).contains(&seconds),
+            "telemetry retention must be between one minute and 90 days"
+        );
+        self.retention_ms = i64::try_from(seconds)? * 1000;
+        Ok(self)
+    }
+
+    fn maintain(&mut self, now_ms: i64) -> Result<()> {
+        private_metadata(&self.directory, true)?.context("telemetry directory disappeared")?;
+        for index in 0..self.retained_files {
+            let path = segment_path(&self.directory, index);
+            let Some(metadata) = private_metadata(&path, false)? else {
+                continue;
+            };
+            let modified = metadata
+                .modified()?
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis();
+            if index == 0 {
+                let actual = self.file.metadata()?;
+                ensure!(
+                    actual.ino() == metadata.ino() && actual.dev() == metadata.dev(),
+                    "telemetry file replaced"
+                );
+            }
+            let cutoff = now_ms.saturating_sub(self.retention_ms).max(0);
+            let bytes = crate::logs::storage::private_read(&path, self.segment_bytes)?;
+            let mut kept = Vec::with_capacity(bytes.len());
+            for line in bytes.split_inclusive(|b| *b == b'\n') {
+                // Existing files predate ingestion timestamps; mtime is the
+                // conservative fallback. New writes carry an owned local stamp.
+                let observed = serde_json::from_slice::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v["_cowboy_observed_ms"].as_i64())
+                    .unwrap_or(modified as i64);
+                if observed >= cutoff {
+                    kept.extend_from_slice(line);
+                }
+            }
+            if kept.len() != bytes.len() {
+                if kept.is_empty() && index > 0 {
+                    fs::remove_file(&path)?;
+                } else {
+                    let temporary = self
+                        .directory
+                        .join(format!(".expiry-{}.tmp", uuid::Uuid::new_v4().simple()));
+                    let result = (|| -> Result<()> {
+                        let mut next = OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .mode(0o600)
+                            .custom_flags(libc::O_NOFOLLOW)
+                            .open(&temporary)?;
+                        next.write_all(&kept)?;
+                        next.sync_all()?;
+                        fs::rename(&temporary, &path)?;
+                        File::open(&self.directory)?.sync_all()?;
+                        Ok(())
+                    })();
+                    if result.is_err() {
+                        let _ = fs::remove_file(&temporary);
+                    }
+                    result?;
+                    if index == 0 {
+                        self.file = open_private(&path)?;
+                        self.bytes = kept.len() as u64;
+                        self.day = now_ms / DAY_MS;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn write(&mut self, records: &str, now_ms: i64) -> Result<()> {
@@ -210,7 +288,17 @@ impl TelemetryFile {
                 .all(|line| line.len() as u64 <= self.segment_bytes),
             "telemetry record exceeds segment capacity"
         );
-        for line in records.split_inclusive('\n') {
+        for original in records.split_inclusive('\n') {
+            let mut value: serde_json::Value = serde_json::from_str(original)?;
+            let object = value
+                .as_object_mut()
+                .context("telemetry record must be an object")?;
+            object.insert("_cowboy_observed_ms".into(), now_ms.into());
+            let line = format!("{value}\n");
+            ensure!(
+                line.len() as u64 <= self.segment_bytes,
+                "telemetry record and retention stamp exceed segment capacity"
+            );
             let day = now_ms / DAY_MS;
             if self.bytes > 0
                 && (self.bytes.saturating_add(line.len() as u64) > self.segment_bytes
@@ -228,7 +316,7 @@ impl TelemetryFile {
             }
             self.bytes += line.len() as u64;
         }
-        self.file.flush().context("flushing local telemetry")
+        self.file.sync_data().context("syncing local telemetry")
     }
 
     fn rotate(&mut self) -> Result<()> {
@@ -255,6 +343,15 @@ impl TelemetryFile {
     }
 }
 
+impl crate::logs::EvidenceSink for TelemetryFile {
+    fn write(&mut self, records: &str, now: i64) -> Result<()> {
+        TelemetryFile::write(self, records, now)
+    }
+    fn maintain(&mut self, now: i64) -> Result<()> {
+        TelemetryFile::maintain(self, now)
+    }
+}
+
 fn segment_path(directory: &Path, index: usize) -> PathBuf {
     directory.join(if index == 0 {
         "telemetry.jsonl".to_owned()
@@ -275,6 +372,26 @@ mod tests {
         ));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn idle_expiry_removes_old_rows_from_a_mixed_current_segment() {
+        let path = directory();
+        let mut writer = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1000)
+            .unwrap()
+            .with_retention_seconds(60)
+            .unwrap();
+        writer.write("{\"old\":true}\n", 1000).unwrap();
+        writer.write("{\"new\":true}\n", 50000).unwrap();
+        writer.maintain(62000).unwrap();
+        let contents = fs::read_to_string(segment_path(&path, 0)).unwrap();
+        assert!(!contents.contains("old"));
+        assert!(contents.contains("new"));
+        writer.write("{\"after\":true}\n", 63000).unwrap();
+        writer.maintain(124000).unwrap();
+        assert_eq!(writer.bytes, 0);
+        drop(writer);
+        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -317,10 +434,15 @@ mod tests {
         drop(writer);
         let mut writer = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1).unwrap();
         writer.write("{\"next\":true}\n", 1).unwrap();
-        assert_eq!(
-            fs::read_to_string(segment_path(&path, 0)).unwrap(),
-            "{\"ok\":true}\n{\"next\":true}\n"
-        );
+        let contents = fs::read_to_string(segment_path(&path, 0)).unwrap();
+        let rows: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["ok"], true);
+        assert_eq!(rows[1]["next"], true);
+        assert_eq!(rows[0]["_cowboy_observed_ms"], 1);
         drop(writer);
         fs::remove_dir_all(path).unwrap();
     }

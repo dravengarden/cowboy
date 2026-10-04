@@ -341,14 +341,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     // SQLx first. Make the shared TLS provider explicit instead of depending
     // on another subsystem's initialization order.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    crate::logs::init_stderr();
     let args =
         Args::parse_from(std::iter::once(command_name.to_owned()).chain(std::env::args().skip(1)));
     run_args(args).await
@@ -447,7 +440,17 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     );
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
-    let worker_environment = managed_provider_environment(&components, &worker_command)?;
+    let log_directory = crate::logs::directory(&args.state_dir);
+    let mut log_context = crate::logs::Context::new("cowboy-machine");
+    log_context.machine = resolve_runtime_machine_id(&args.machine_id, &args.state_dir, None);
+    log_context.generation = desired_generation.clone();
+    let _log_guard = crate::logs::init(log_directory.clone(), log_context)?;
+    let mut worker_environment = managed_provider_environment(&components, &worker_command)?;
+    worker_environment.insert(
+        "COWBOY_LOGS_DIR".into(),
+        log_directory.display().to_string(),
+    );
+    worker_environment.insert("COWBOY_LOGS_MACHINE_ID".into(), args.machine_id.clone());
     let worktree_root = args.state_dir.join("worktrees");
     let broker = MachineBrokerArgs {
         socket: args.socket,
@@ -571,6 +574,8 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         args.state_dir.join("bootstrap/cowboy-code-adapter"),
         args.state_dir.join("worktrees"),
         Arc::clone(&workspaces),
+        log_directory,
+        machine_id.clone(),
     );
     let zed_adapter = supervise_zed_adapter(
         Arc::clone(&components),
@@ -849,6 +854,8 @@ async fn supervise_code_adapter(
     bootstrap: PathBuf,
     worktree_root: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
+    logs: PathBuf,
+    machine_id: String,
 ) -> anyhow::Result<()> {
     let Some(socket) = socket else {
         return std::future::pending().await;
@@ -863,6 +870,9 @@ async fn supervise_code_adapter(
         let workspace_snapshot = workspaces.snapshot();
         let mut process = tokio::process::Command::new(&executable);
         process.arg("--socket").arg(&socket);
+        process
+            .env("COWBOY_LOGS_DIR", &logs)
+            .env("COWBOY_LOGS_MACHINE_ID", &machine_id);
         for root in code_adapter_trusted_roots(&worktree_root, &workspace_snapshot.workspaces) {
             process.arg("--workspace").arg(root);
         }

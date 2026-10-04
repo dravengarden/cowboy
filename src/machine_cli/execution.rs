@@ -48,6 +48,7 @@ pub struct Manager {
     machine_id: String,
     root: PathBuf,
     worktrees: PathBuf,
+    logs: PathBuf,
     configuration: Option<Configuration>,
     systemd: bool,
     prepare: Mutex<()>,
@@ -138,6 +139,7 @@ impl Manager {
             machine_id,
             root: state_dir.join("execution").join(namespace),
             worktrees: state_dir.join("worktrees"),
+            logs: crate::logs::directory(state_dir),
             configuration,
             systemd,
             prepare: Mutex::new(()),
@@ -479,6 +481,8 @@ impl Manager {
             .arg(contract)
             .args(["--state-dir"])
             .arg(directory)
+            .arg("--logs-dir")
+            .arg(&self.logs)
             .arg("--socket")
             .arg(control_socket(directory, binding)?)
             .stdin(Stdio::null())

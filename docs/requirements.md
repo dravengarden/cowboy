@@ -107,13 +107,19 @@ lifecycle. Installation alone grants no egress: Controller policy selects an
 exact Machine/Plugin/version/digest and Machine-private policy independently
 binds that release to endpoints. Private policy is not published package data.
 
-Client diagnostic telemetry defaults to private rotating JSONL under `/tmp`,
-without a network dependency. Files remain enabled alongside an optional
-backend. Remote queues, requests and retries are bounded independently from
+Diagnostic telemetry defaults to private, host-local, rotating SQLite segments
+containing official OTel protobuf records, without a network dependency. Legacy
+JSONL remains selectable through a shared evidence interface. Each Machine keeps
+its process logs and sampled runtime spans locally by default; explicit remote
+queries filter and aggregate at the source. Retention, time/size rotation and
+idle expiry are configurable. Local recording remains enabled alongside an
+optional export backend. Remote queues, requests and retries are bounded independently from
 local evidence and durable incident persistence. Conversation history,
 accounting, authentication, and incident lifecycle state remain durable and
 are never rotated with diagnostic files. See `docs/telemetry-plugins.md` for
-configuration, delivery limits, operational failure counters and rollout.
+configuration, delivery limits, operational failure counters and rollout. The
+AI-facing CLI, source adapters and retention contract are specified in
+[`local-observability.md`](local-observability.md).
 
 Authentication payload schema 1 selects OIDC. Schema 2 also selects the closed
 `local_password` and `webauthn` drivers, with an empty public configuration;

@@ -589,7 +589,13 @@ test:
 test-postgres:
     bash tools/test-postgres.sh
 
-check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres logs-conformance build
+
+# Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.
+# An optional explicit --ssh in the standalone tool adds same-host SSH acceptance.
+logs-conformance:
+    cargo build --locked --bin cowboy
+    python3 tools/logs_conformance.py --cowboy target/debug/cowboy --receipt target/logs-conformance.json
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

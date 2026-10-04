@@ -18,7 +18,9 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Duration;
 
+use crate::logs::EvidenceSink;
 use crate::store::{RuntimeIncidentWrite, Store};
+#[cfg(test)]
 use crate::telemetry_file::TelemetryFile;
 
 const QUEUE_CAPACITY: usize = 64;
@@ -236,7 +238,7 @@ pub struct Observability {
 impl Observability {
     pub(crate) fn start(
         store: Option<Store>,
-        file: TelemetryFile,
+        file: impl EvidenceSink + 'static,
         exporter: Option<TelemetryExporter>,
     ) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
@@ -262,7 +264,7 @@ impl Observability {
             tx
         });
         jobs.push(tokio::spawn(run_writer(
-            file,
+            Box::new(file),
             rx,
             export_tx,
             incident_tx,
@@ -818,7 +820,7 @@ pub(crate) fn sanitize_attributes(value: &serde_json::Value) -> serde_json::Valu
 }
 
 async fn run_writer(
-    file: TelemetryFile,
+    file: Box<dyn EvidenceSink>,
     mut rx: mpsc::Receiver<PendingBatch>,
     export_tx: Option<mpsc::Sender<ExportBatch>>,
     incident_tx: Option<mpsc::Sender<TelemetryBatch>>,
@@ -827,12 +829,21 @@ async fn run_writer(
 ) {
     let file = Arc::new(Mutex::new(file));
     let mut closing = false;
+    let mut maintenance = tokio::time::interval(Duration::from_secs(30));
     loop {
         let pending = tokio::select! {
             biased;
             _ = shutdown.changed(), if !closing => {
                 closing = true;
                 rx.close();
+                continue;
+            }
+            _ = maintenance.tick(), if !closing => {
+                let writer = Arc::clone(&file);
+                if !matches!(tokio::task::spawn_blocking(move || writer.lock().maintain(chrono::Utc::now().timestamp_millis())).await, Ok(Ok(()))) {
+                    health.failed_file_batches.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(event_name = "cowboy.logs.maintenance_failed", reason = "local_storage", "local telemetry maintenance failed");
+                }
                 continue;
             }
             pending = rx.recv() => pending,
@@ -888,7 +899,11 @@ async fn run_writer(
         .await;
         if !matches!(written, Ok(Ok(()))) {
             health.failed_file_batches.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!("local telemetry write failed");
+            tracing::warn!(
+                event_name = "cowboy.logs.write_failed",
+                reason = "local_storage",
+                "local telemetry write failed"
+            );
         }
         if let Some(tx) = export_tx.as_ref()
             && tx.try_send(export).is_err()

@@ -36,7 +36,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::EnvFilter;
 
 use agent_client_protocol::schema::v1::ContentBlock;
 
@@ -1038,6 +1037,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         &args.data_dir,
     ));
     init_tracing();
+    let log_directory = crate::logs::directory(&args.data_dir);
+    let _log_guard = crate::logs::init(
+        log_directory.clone(),
+        crate::logs::Context::new("cowboy-controller"),
+    )?;
     if args.cardea_oidc_config.is_some() && !args.product_auth_enabled {
         tracing::warn!("Cardea OIDC is configured but product authentication is disabled");
     }
@@ -1478,16 +1482,35 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         session_id_floor,
         Arc::clone(&runtime_router),
     ));
+    let mut local_sinks: Vec<Box<dyn crate::logs::EvidenceSink>> = Vec::new();
+    if matches!(
+        args.telemetry_local_backend,
+        crate::logs::LocalBackend::Sqlite | crate::logs::LocalBackend::Both
+    ) {
+        local_sinks.push(Box::new(crate::logs::SqliteStore::open(
+            log_directory,
+            false,
+        )?));
+    }
+    if matches!(
+        args.telemetry_local_backend,
+        crate::logs::LocalBackend::Jsonl | crate::logs::LocalBackend::Both
+    ) {
+        local_sinks.push(Box::new(
+            crate::telemetry_file::TelemetryFile::open(
+                args.telemetry_dir
+                    .unwrap_or_else(|| crate::telemetry_file::default_directory(&args.data_dir)),
+                args.telemetry_segment_bytes,
+                args.telemetry_retained_files,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .context("opening local telemetry")?
+            .with_retention_seconds(args.telemetry_retain_seconds)?,
+        ));
+    }
     let observability = Observability::start(
         store.clone(),
-        crate::telemetry_file::TelemetryFile::open(
-            args.telemetry_dir
-                .unwrap_or_else(|| crate::telemetry_file::default_directory(&args.data_dir)),
-            args.telemetry_segment_bytes,
-            args.telemetry_retained_files,
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .context("opening local telemetry")?,
+        crate::logs::Fanout(local_sinks),
         match managed_export_activation {
             Some(crate::telemetry_plugin::background_policy::Activation::Active(policy)) => {
                 Some(telemetry_binding::background::exporter(
@@ -9998,16 +10021,7 @@ async fn shutdown_signal(shutdown: watch::Sender<bool>) {
 }
 
 pub(crate) fn init_tracing() {
-    tracing_subscriber::fmt()
-        // ACP is newline-delimited JSON-RPC over stdout. A single log line on
-        // stdout corrupts the transport, so keep every command's diagnostics
-        // on stderr (which systemd and Zed both capture separately).
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    crate::logs::init_stderr();
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Response {
