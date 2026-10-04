@@ -194,7 +194,10 @@ when that budget is reported as exhausted.
 One unavailable source makes the command fail after reporting the others, unless
 `--allow-partial` is explicit. Records from different hosts are not silently
 deduplicated or merged into an invented global success rate. Legacy JSONL is a
-bounded best-effort snapshot, without cursor guarantees.
+bounded best-effort snapshot, without cursor guarantees. Both original batch
+metrics and logs retain their session/Machine/trace context. Opaque legacy trace
+tokens remain searchable and are exported as namespaced attributes; only valid
+OTel trace IDs populate the canonical protobuf trace field.
 
 Remote authorization is the SSH host account. Use the service account, an
 existing diagnostic wrapper, or explicitly select `--sudo-user ubuntu` (source

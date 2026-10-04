@@ -470,6 +470,50 @@ fn storage_failure_is_visible_after_recovery_without_claiming_durability() {
 }
 
 #[test]
+fn original_batch_metric_context_and_opaque_log_trace_remain_queryable() {
+    let (_root, store) = fixture();
+    let metric = serde_json::json!({"schema_version":1,"kind":"metric","name":"queue_size","value":12.5,"occurred_at_ms":1000,
+        "context":{"session_id":"s1","machine_id":"ovh","trace_id":"legacy-trace"},
+        "dimensions":{"capacity":64,"cowboy.session.id":"wrong"}});
+    let log = serde_json::json!({"kind":"log","event_name":"old.failure","level":"error","occurred_at_ms":1000,
+        "session_id":"s1","machine_id":"ovh","trace_id":"legacy-trace"});
+    store
+        .append(
+            &[
+                Entry::legacy(&metric, 1000).unwrap(),
+                Entry::legacy(&log, 1000).unwrap(),
+            ],
+            1000,
+        )
+        .unwrap();
+    let mut q = query(0, 2000);
+    q.session = Some("s1".into());
+    q.machine = Some("ovh".into());
+    q.trace_id = Some("legacy-trace".into());
+    q.include_protobuf = true;
+    let page = store.query(&q).unwrap();
+    assert_eq!(page.items.len(), 2);
+    for entry in page.items {
+        assert_eq!(entry.attributes["cowboy.session.id"], "s1");
+        assert_eq!(entry.attributes["cowboy.legacy.trace_id"], "legacy-trace");
+        if entry.signal == "logs" {
+            let exported = ExportLogsServiceRequest::decode(entry.protobuf.as_slice()).unwrap();
+            assert!(
+                exported.resource_logs[0].scope_logs[0].log_records[0]
+                    .trace_id
+                    .is_empty()
+            );
+        } else {
+            assert_eq!(entry.attributes["capacity"], 64);
+            assert!(entry.metric.unwrap().to_string().contains("legacy-trace"));
+        }
+    }
+    let mut invalid = metric;
+    invalid["context"]["session_id"] = "x".repeat(129).into();
+    assert!(Entry::legacy(&invalid, 1000).is_err());
+}
+
+#[test]
 fn standard_metric_points_and_scalar_legacy_attributes_remain_queryable() {
     use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
     let (_root, store) = fixture();

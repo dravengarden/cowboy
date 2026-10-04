@@ -105,6 +105,35 @@ fn number_attr(attributes: &[KeyValue], name: &str) -> Option<f64> {
             _ => None,
         })
 }
+
+fn legacy_context(row: &Value, attributes: &mut Vec<KeyValue>) -> Result<String> {
+    let mut trace = String::new();
+    for (old, new) in [
+        ("session_id", "cowboy.session.id"),
+        ("machine_id", "cowboy.machine.id"),
+        ("trace_id", "cowboy.legacy.trace_id"),
+    ] {
+        if let Some(value) = row
+            .get("context")
+            .and_then(|c| c.get(old))
+            .and_then(Value::as_str)
+            .or_else(|| row.get(old).and_then(Value::as_str))
+        {
+            ensure!(
+                value.len() <= 128 && !value.chars().any(char::is_control),
+                "invalid legacy correlation"
+            );
+            // Batch context is authoritative even if dimensions/attributes
+            // contain the same key. Legacy trace tokens need not be OTel IDs.
+            attributes.retain(|a| a.key != new);
+            attributes.push(text(new, value));
+            if old == "trace_id" {
+                trace = value.into();
+            }
+        }
+    }
+    Ok(trace)
+}
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -405,15 +434,17 @@ impl Entry {
                 .as_f64()
                 .filter(|v| v.is_finite())
                 .ok_or_else(|| anyhow::anyhow!("invalid legacy metric value"))?;
-            let attributes: Vec<KeyValue> = row["dimensions"]
+            let mut attributes: Vec<KeyValue> = row["dimensions"]
                 .as_object()
                 .map(|m| m.iter().filter_map(|(k, v)| scalar(k, v)).collect())
                 .unwrap_or_default();
+            let trace = legacy_context(row, &mut attributes)?;
             let at = row["occurred_at_ms"].as_i64().unwrap_or(now);
             let mut entry = Self::base(&resource, &attributes, now);
             entry.signal = "metrics".into();
             entry.event = row["name"].as_str().unwrap_or("legacy.metric").into();
             entry.timestamp_ms = at;
+            entry.trace_id = trace;
             let metric = Metric {
                 name: entry.event.clone(),
                 data: Some(metric::Data::Gauge(Gauge {
@@ -512,14 +543,8 @@ impl Entry {
                     })
                     .unwrap_or(now);
                 let mut attrs = vec![];
-                for (old, new) in [
-                    ("session_id", "cowboy.session.id"),
-                    ("machine_id", "cowboy.machine.id"),
-                    ("event_id", "cowboy.legacy.event_id"),
-                ] {
-                    if let Some(v) = row[old].as_str() {
-                        attrs.push(text(new, v));
-                    }
+                if let Some(value) = row["event_id"].as_str() {
+                    attrs.push(text("cowboy.legacy.event_id", value));
                 }
                 if let Some(values) = row["attributes"].as_object() {
                     for (k, v) in values {
@@ -528,6 +553,12 @@ impl Entry {
                         }
                     }
                 }
+                let trace = legacy_context(row, &mut attrs)?;
+                let trace_bytes = if trace.len() == 32 && trace.bytes().any(|b| b != b'0') {
+                    unhex(&trace)
+                } else {
+                    Vec::new()
+                };
                 let log = LogRecord {
                     time_unix_nano: at.max(0) as u64 * 1_000_000,
                     observed_time_unix_nano: now.max(0) as u64 * 1_000_000,
@@ -543,10 +574,12 @@ impl Entry {
                         )),
                     }),
                     attributes: attrs,
-                    trace_id: unhex(row["trace_id"].as_str().unwrap_or("")),
+                    trace_id: trace_bytes,
                     ..Default::default()
                 };
-                Ok(Self::log(resource, scope, log, now))
+                let mut entry = Self::log(resource, scope, log, now);
+                entry.trace_id = trace;
+                Ok(entry)
             }
         }
     }
