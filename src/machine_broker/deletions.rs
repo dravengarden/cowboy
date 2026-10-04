@@ -70,11 +70,15 @@ impl Journal {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
-        let root = path.canonicalize()?;
+        // Retain the caller's namespace path without resolving links. Resolving
+        // it first would both admit a linked directory and erase the path whose
+        // replacement must end this journal's ownership.
+        let root = std::path::absolute(path)?;
         let root_handle = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(&root)?;
+            .open(&root)
+            .context("opening deletion journal directory without following namespace links")?;
         File::open(root.parent().context("deletion namespace has no parent")?)?.sync_all()?;
         let lock = OpenOptions::new()
             .read(true)
@@ -308,6 +312,50 @@ mod tests {
         )
         .unwrap();
         assert!(Journal::open(root.path(), owner(), false).is_err());
+    }
+
+    #[test]
+    fn linked_namespace_refuses_before_lock_or_record_changes() {
+        for writer in [false, true] {
+            let parent = tempfile::tempdir().unwrap();
+            let target = parent.path().join("target");
+            std::fs::create_dir(&target).unwrap();
+            let retained = b"unrelated evidence";
+            std::fs::write(target.join("retained"), retained).unwrap();
+            let root = parent.path().join("journal");
+            std::os::unix::fs::symlink(&target, &root).unwrap();
+            assert!(Journal::open(&root, owner(), writer).is_err());
+            assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+            assert_eq!(std::fs::read(target.join("retained")).unwrap(), retained);
+            assert_eq!(std::fs::read_link(&root).unwrap(), target);
+        }
+    }
+
+    #[test]
+    fn replacing_a_parent_alias_ends_original_namespace_admission() {
+        for writer in [false, true] {
+            let parent = tempfile::tempdir().unwrap();
+            let original = parent.path().join("original");
+            let replacement = parent.path().join("replacement");
+            std::fs::create_dir(&original).unwrap();
+            std::fs::create_dir(&replacement).unwrap();
+            std::fs::create_dir(replacement.join("journal")).unwrap();
+            let alias = parent.path().join("alias");
+            std::os::unix::fs::symlink(&original, &alias).unwrap();
+            let mut journal = Journal::open(&alias.join("journal"), owner(), writer).unwrap();
+            journal.check().unwrap();
+            std::fs::remove_file(&alias).unwrap();
+            std::os::unix::fs::symlink(&replacement, &alias).unwrap();
+            assert!(journal.check().is_err());
+            assert!(journal.mark_deleted("sess-1").is_err());
+            assert!(!original.join("journal/deletions.json").exists());
+            assert_eq!(
+                std::fs::read_dir(replacement.join("journal"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
     }
 
     #[test]

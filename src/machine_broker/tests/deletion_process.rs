@@ -302,6 +302,26 @@ async fn acknowledged_delete_survives_sigkill_and_a_second_reader_death() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn linked_reader_and_writer_namespaces_refuse_before_broker_admission() {
+    for mode in ["reader", "writer"] {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("retained");
+        std::fs::create_dir(&target).unwrap();
+        let evidence = b"unrelated retained evidence";
+        std::fs::write(target.join("evidence"), evidence).unwrap();
+        std::os::unix::fs::symlink(&target, root.path().join("deletions")).unwrap();
+        Process::spawn(root.path(), mode, "").refused("without following namespace links");
+        assert!(!root.path().join("runtime.sock").exists());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+        assert_eq!(std::fs::read(target.join("evidence")).unwrap(), evidence);
+        assert_eq!(
+            std::fs::read_link(root.path().join("deletions")).unwrap(),
+            target
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn process_storage_failure_refuses_ack_and_cold_adoption() {
     let root = tempfile::tempdir().unwrap();
     let mut process = Process::spawn(root.path(), "writer", "");

@@ -252,6 +252,64 @@ fn namespace(state: &Path) -> PathBuf {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires COWBOY_TEST_OLD_MACHINE_RELEASE and COWBOY_TEST_NEW_MACHINE_RELEASE"]
+async fn immutable_namespace_link_refusal_and_preceding_admission() {
+    let old = Release::supplied("COWBOY_TEST_OLD_MACHINE_RELEASE");
+    let new = Release::supplied("COWBOY_TEST_NEW_MACHINE_RELEASE");
+    assert_ne!(old.revision, new.revision);
+    assert_ne!(old.digest, new.digest);
+    let mut observations = Vec::new();
+    for (release, preceding) in [(&old, true), (&new, false)] {
+        for committed in [false, true] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let target = state.path().join("retained-namespace");
+            std::fs::create_dir(&target).unwrap();
+            let retained = serde_json::to_vec(&record()).unwrap();
+            if committed {
+                write(target.join("deletions.json"), &retained).unwrap();
+            }
+            let root = state.path().join("session-deletions");
+            std::os::unix::fs::symlink(&target, &root).unwrap();
+            let mut machine = Machine::spawn(release, state.path());
+            if preceding {
+                machine.ready().await;
+                assert!(target.join(".lock").is_file());
+                machine.kill();
+            } else {
+                machine.refused("without following namespace links").await;
+                assert!(!target.join(".lock").exists());
+                assert_eq!(
+                    std::fs::read_dir(&target).unwrap().count(),
+                    usize::from(committed)
+                );
+            }
+            assert_eq!(std::fs::read_link(root).unwrap(), target);
+            if committed {
+                assert_eq!(read(target.join("deletions.json")).unwrap(), retained);
+            }
+            observations.push(json!({
+                "release": release.root, "revision": release.revision,
+                "nativeSha256": release.digest, "committed": committed,
+                "precedingReaderAdmittedLink": preceding,
+                "newReaderRefusedBeforeBinding": !preceding,
+                "targetRecordAndLinkUnchanged": true,
+            }));
+        }
+    }
+    if let Ok(path) = std::env::var("COWBOY_TEST_DELETION_NAMESPACE_RECEIPT") {
+        write(
+            path,
+            serde_json::to_vec_pretty(&json!({
+                "schema": 1, "accepted": true, "observations": observations,
+                "productionWriterEnabled": false,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires COWBOY_TEST_OLD_MACHINE_RELEASE and COWBOY_TEST_NEW_MACHINE_RELEASE"]
 async fn immutable_reader_upgrade_rollback_and_refusal_matrix() {
     let old = Release::supplied("COWBOY_TEST_OLD_MACHINE_RELEASE");
     let new = Release::supplied("COWBOY_TEST_NEW_MACHINE_RELEASE");
