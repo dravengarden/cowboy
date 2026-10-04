@@ -418,5 +418,10 @@
   "finalPortableLog": {
     "path": "/tmp/cowboy-anchor-acceptance/final-portable.log",
     "sha256": "0bfcbddfbd6da5f064a7a114c6b32709518ae94eb4a7c02ddb4f60657f020d1e"
+  },
+  "sessionDeletionStartup": {
+    "observedJournalLine": "Oct 04 17:41:04 hawk cowboy-machine[1434181]: 2026-10-04T09:41:04.700086Z  INFO cowboy::machine_broker: Session deletion journal reader ready deleted_sessions=0 writer_enabled=false",
+    "deletedSessions": 0,
+    "writerEnabled": false
   }
 }
