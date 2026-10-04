@@ -81,6 +81,14 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     );
     click('[role="combobox"]');
     await settle();
+    if (document.querySelector(".MuiBreadcrumbs-root")) {
+      check(
+        document.querySelector("[role='menuitem'].Mui-selected"),
+        "Opening reveals the selected directory without changing it",
+      );
+      click(".MuiBreadcrumbs-root button");
+      await settle();
+    }
     check(
       document.querySelector<HTMLInputElement>('input[type="checkbox"]')
         ?.checked,
@@ -122,6 +130,14 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     );
     click('[role="combobox"]');
     await settle();
+    if (document.querySelector(".MuiBreadcrumbs-root")) {
+      check(
+        document.querySelector("[role='menuitem'].Mui-selected"),
+        "Opening reveals the selected directory without changing it",
+      );
+      click(".MuiBreadcrumbs-root button");
+      await settle();
+    }
     click('[role="menuitem"]', "hawk");
     await settle();
     click('[role="menuitem"]', "columbus");
@@ -134,6 +150,14 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     );
     click('[role="combobox"]');
     await settle();
+    if (document.querySelector(".MuiBreadcrumbs-root")) {
+      check(
+        document.querySelector("[role='menuitem'].Mui-selected"),
+        "Opening reveals the selected directory without changing it",
+      );
+      click(".MuiBreadcrumbs-root button");
+      await settle();
+    }
     click('[role="menuitem"]', "hawk");
     await settle();
     const count = selections.length;
@@ -171,6 +195,14 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     await closed();
     click('[role="combobox"]');
     await settle();
+    if (document.querySelector(".MuiBreadcrumbs-root")) {
+      check(
+        document.querySelector("[role='menuitem'].Mui-selected"),
+        "Opening reveals the selected directory without changing it",
+      );
+      click(".MuiBreadcrumbs-root button");
+      await settle();
+    }
     click('input[type="checkbox"]');
     await settle();
     click('[role="menuitem"]', "hawk/columbus/cowboy");
@@ -178,6 +210,14 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     check(selections.at(-1) === "child-id", "Flat mode selects the full path");
     click('[role="combobox"]');
     await settle();
+    if (document.querySelector(".MuiBreadcrumbs-root")) {
+      check(
+        document.querySelector("[role='menuitem'].Mui-selected"),
+        "Opening reveals the selected directory without changing it",
+      );
+      click(".MuiBreadcrumbs-root button");
+      await settle();
+    }
     check(
       !document.querySelector<HTMLInputElement>('input[type="checkbox"]')
         ?.checked,
@@ -194,6 +234,14 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
     flushSync(() => root.render(<Harness key="project" label="Project" />));
     click('[role="combobox"]');
     await settle();
+    if (document.querySelector(".MuiBreadcrumbs-root")) {
+      check(
+        document.querySelector("[role='menuitem'].Mui-selected"),
+        "Opening reveals the selected directory without changing it",
+      );
+      click(".MuiBreadcrumbs-root button");
+      await settle();
+    }
     check(
       document.querySelector<HTMLInputElement>('input[type="checkbox"]')
         ?.checked,
