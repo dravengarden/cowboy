@@ -100,3 +100,38 @@ fetching; GitHub's unauthenticated archive returned 404. No credential is copied
 into an artifact. The final host-only artifact must retain all six accepted
 companion paths and digests and carry the candidate's exact retained source.
 Production activation evidence follows after that artifact is built and checked.
+
+
+Production activation completed from clean published source
+`76f53d0b33897d0929b121498da52e5ef52ae450` using host artifact
+`/nix/store/fbvj2g8lja3qsvlh4l7f4iryzv1rlpdn-cowboy-machine-release`.
+The installed Machine-owned activator remained
+`/nix/store/a4jpv2prm56mvkcfy8f0w969hdm4srmc-columbus-machine-activate-1da44eb/bin/cowboy-release-activate`
+(SHA-256 `9e1294320f0242363dc426aa856b602c3e55816a250544334e2a353bae545f8f`).
+Its independent root transaction `1791106864576617390-76f53d0b3389`
+started at `2026-10-04T09:41:04.57661739Z` and committed successfully at
+`2026-10-04T09:41:15.935862929Z`; published true, maintenance true,
+recovered false. The receipt selects `worker-dc63f38423cbd1971eda` and preserves
+all six companion paths and digests from the independently accepted source
+`90ec4edae56349cb06b9f39f13a0086197b5356b`.
+
+The bounded before/after observations, `09:40:33.259Z` and `09:41:37.838Z`,
+are in [the production receipt](../experiments/plugin-anchor-package-recovery-2026-10-04.json).
+Machine PID changed `706832` → `1434181`. All 13 detached worker and 5 keeper
+unit IDs, active states and PIDs remained equal. Controller PID `812989` and its
+component receipt remained equal; Web profile remained equal. `/healthz`,
+`/version`, `/`, `/sw.js` and Hawk deployment health all returned HTTP 200;
+the Hawk Machine reports online with the accepted default generation. Root reader
+floor SHA-256 remains
+`26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`;
+the portable deletion namespace still contains only `.lock`, with no portable
+floor initialized or production recovery command invoked. `/etc/sudoers`
+SHA-256 remains
+`149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69`
+and `sudo -n true` succeeds. No Controller/Web/OS activation or active-session
+recycle belongs to this transaction. The Machine deletion writer remains closed.
+
+Remaining boundaries: existing damaged generations still refuse; recovery needs
+locally retained original signed evidence and a surviving floor. Publisher-key
+rotation, committed deletion datasets, non-Linux package publication and writer
+activation have no recovery admission in this slice.
