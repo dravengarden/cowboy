@@ -21,13 +21,14 @@ async fn main() -> anyhow::Result<()> {
         .socket
         .parent()
         .ok_or_else(|| anyhow::anyhow!("adapter socket needs a parent"))?;
-    let _logs = cowboy::logs::init(
+    let logs = cowboy::logs::init(
         cowboy::logs::directory(root),
         cowboy::logs::Context {
             service: "cowboy-code-adapter".into(),
             machine: std::env::var("COWBOY_LOGS_MACHINE_ID").unwrap_or_default(),
             ..Default::default()
         },
-    )?;
-    cowboy::code_adapter::serve(&args.socket, args.workspaces).await
+    )?
+    .track_outcome();
+    logs.finish(cowboy::code_adapter::serve(&args.socket, args.workspaces).await)
 }

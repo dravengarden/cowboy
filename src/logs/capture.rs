@@ -69,7 +69,7 @@ struct Pending {
 struct Capture {
     normal: mpsc::SyncSender<Pending>,
     critical: mpsc::SyncSender<Pending>,
-    context: Context,
+    context: parking_lot::RwLock<Context>,
     instance: String,
     pending: AtomicUsize,
     admitted: AtomicU64,
@@ -143,16 +143,17 @@ impl Capture {
     }
     fn entry(&self, name: &str, severity: i32, attributes: Vec<KeyValue>) -> Entry {
         let now = now_ms();
+        let context = self.context.read();
         let mut attrs = vec![
-            text("cowboy.session.id", &self.context.session),
-            text("cowboy.execution.environment.id", &self.context.environment),
+            text("cowboy.session.id", &context.session),
+            text("cowboy.execution.environment.id", &context.environment),
         ];
         for attribute in attributes {
             attrs.retain(|a| a.key != attribute.key);
             attrs.push(attribute);
         }
         Entry::log(
-            self.context.resource(&self.instance),
+            context.resource(&self.instance),
             InstrumentationScope {
                 name: "cowboy.runtime".into(),
                 version: "1".into(),
@@ -180,9 +181,60 @@ pub struct Guard {
     capture: Arc<Capture>,
     job: Option<std::thread::JoinHandle<()>>,
     finished: mpsc::Receiver<()>,
+    outcome_pending: bool,
+}
+impl Guard {
+    /// Track the owning process result, including early returns or unwinding.
+    #[must_use]
+    pub fn track_outcome(mut self) -> Self {
+        self.outcome_pending = true;
+        self
+    }
+
+    /// Record only a closed error category; arbitrary error chains may include
+    /// credentials, command arguments or provider response bodies.
+    pub fn finish<T>(mut self, result: Result<T>) -> Result<T> {
+        self.outcome_pending = false;
+        if let Err(error) = &result {
+            let reason = error
+                .downcast_ref::<std::io::Error>()
+                .map(|e| format!("io_{:?}", e.kind()))
+                .unwrap_or_else(|| "returned_error".into());
+            self.capture.submit(self.capture.entry(
+                "cowboy.process.failed",
+                17,
+                vec![text("error.type", &reason)],
+            ));
+        }
+        result
+    }
+
+    /// Enrollment may resolve the Machine identity after logging has started.
+    pub fn set_machine(&self, machine: &str) -> Result<()> {
+        ensure!(
+            machine.len() <= 256 && !machine.chars().any(char::is_control),
+            "invalid log Machine identity"
+        );
+        self.capture.context.write().machine = machine.into();
+        Ok(())
+    }
 }
 impl Drop for Guard {
     fn drop(&mut self) {
+        if self.outcome_pending {
+            self.capture.submit(self.capture.entry(
+                "cowboy.process.outcome_missing",
+                13,
+                vec![text(
+                    "error.type",
+                    if std::thread::panicking() {
+                        "panic"
+                    } else {
+                        "early_return_or_cancellation"
+                    },
+                )],
+            ));
+        }
         self.capture
             .submit(self.capture.entry("cowboy.logs.writer.stopping", 9, vec![]));
         self.capture.stopping.store(true, Ordering::Release);
@@ -246,13 +298,19 @@ pub fn init(directory: PathBuf, context: Context) -> Result<Guard> {
     );
     let store = SqliteStore::open(directory, true)?;
     let policy = store.policy()?;
-    store.maintain_if_due(now_ms())?;
+    // Queries can own the lock for seconds. Defer routine startup cleanup to
+    // the writer instead of making logging contention prevent execution.
+    if let Err(error) = store.maintain_if_due(now_ms())
+        && !error.is::<super::storage::Busy>()
+    {
+        return Err(error);
+    }
     let (normal, rx) = mpsc::sync_channel(1024);
     let (critical, errors) = mpsc::sync_channel(256);
     let capture = Arc::new(Capture {
         normal,
         critical,
-        context,
+        context: parking_lot::RwLock::new(context),
         instance: uuid::Uuid::new_v4().simple().to_string(),
         pending: AtomicUsize::new(0),
         admitted: AtomicU64::new(0),
@@ -281,6 +339,7 @@ pub fn init(directory: PathBuf, context: Context) -> Result<Guard> {
         capture,
         job: Some(job),
         finished,
+        outcome_pending: false,
     })
 }
 
@@ -353,7 +412,9 @@ fn run(
             capture.pending.fetch_sub(bytes, Ordering::Relaxed);
         }
         if maintenance.elapsed() >= Duration::from_secs(30) {
-            if let Err(error) = store.maintain_if_due(now_ms()) {
+            if let Err(error) = store.maintain_if_due(now_ms())
+                && !error.is::<super::storage::Busy>()
+            {
                 capture.failed(&error);
             }
             match store.policy() {
@@ -373,7 +434,7 @@ fn run(
             let health = Health {
                 schema: 1,
                 instance: capture.instance.clone(),
-                service: capture.context.service.clone(),
+                service: capture.context.read().service.clone(),
                 pid: std::process::id(),
                 updated_ms: now_ms(),
                 stopped: stop,
@@ -399,9 +460,12 @@ fn run(
         }
     }
 }
-fn health_paths(directory: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+fn health_paths(directory: &Path, limit: usize) -> Result<(Vec<PathBuf>, bool)> {
     let mut paths = Vec::new();
-    for entry in std::fs::read_dir(directory)? {
+    for (index, entry) in std::fs::read_dir(directory)?.enumerate() {
+        if index >= 16384 {
+            return Ok((paths, true));
+        }
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -411,60 +475,126 @@ fn health_paths(directory: &Path, limit: usize) -> Result<Vec<PathBuf>> {
             && id.len() == 32
             && id.bytes().all(|b| b.is_ascii_hexdigit())
         {
+            if paths.len() == limit {
+                return Ok((paths, true));
+            }
             paths.push(entry.path());
         }
-        ensure!(
-            paths.len() <= limit,
-            "writer health inventory exceeds limit"
-        );
     }
-    Ok(paths)
+    Ok((paths, false))
 }
-pub(crate) fn read_health(directory: &Path) -> Result<Vec<Health>> {
-    health_paths(directory, 4096)?
-        .iter()
-        .map(|path| Ok(serde_json::from_slice(&private_read(path, 8192)?)?))
-        .collect()
+
+#[derive(Default, Serialize, Deserialize)]
+pub(crate) struct HealthSummary {
+    compacted_records: u64,
+    oldest_ms: i64,
+    newest_ms: i64,
+    issues: Vec<String>,
+}
+#[derive(Serialize)]
+pub(crate) struct HealthReport {
+    pub(crate) writers: Vec<Health>,
+    pub(crate) summary: HealthSummary,
+    pub(crate) inventory_truncated: bool,
+}
+fn health_summary(directory: &Path) -> Result<HealthSummary> {
+    let path = directory.join("writer-history.json");
+    if !path.try_exists()? {
+        return Ok(HealthSummary::default());
+    }
+    Ok(serde_json::from_slice(&private_read(&path, 8192)?)?)
+}
+pub(crate) fn read_health(directory: &Path) -> Result<HealthReport> {
+    let (paths, inventory_truncated) = health_paths(directory, 4096)?;
+    Ok(HealthReport {
+        writers: paths
+            .iter()
+            .map(|path| Ok(serde_json::from_slice(&private_read(path, 8192)?)?))
+            .collect::<Result<_>>()?,
+        summary: health_summary(directory)?,
+        inventory_truncated,
+    })
+}
+
+impl Health {
+    fn issues(&self, now: i64) -> Vec<String> {
+        let mut issues = Vec::new();
+        if self.dropped > 0 {
+            issues.push("writer_reported_queue_loss".into());
+        }
+        if self.failures > 0 {
+            issues.push("writer_reported_storage_failures".into());
+        }
+        if self.stopped && self.pending_bytes > 0 {
+            issues.push("writer_shutdown_flush_incomplete".into());
+        }
+        if !self.stopped && now.saturating_sub(self.updated_ms) > 30_000 {
+            issues.push("writer_health_stale".into());
+        }
+        issues
+    }
 }
 
 pub(crate) fn health_issues(directory: &Path, from: i64) -> Result<Vec<String>> {
+    let report = read_health(directory)?;
     let mut issues = Vec::new();
-    for h in read_health(directory)?
-        .into_iter()
-        .filter(|h| h.updated_ms >= from)
-    {
-        if h.dropped > 0 && !issues.iter().any(|s| s == "writer_reported_queue_loss") {
-            issues.push("writer_reported_queue_loss".into());
-        }
-        if h.failures > 0
-            && !issues
-                .iter()
-                .any(|s| s == "writer_reported_storage_failures")
-        {
-            issues.push("writer_reported_storage_failures".into());
-        }
-        if !h.stopped
-            && now_ms().saturating_sub(h.updated_ms) > 30_000
-            && !issues.iter().any(|s| s == "writer_health_stale")
-        {
-            issues.push("writer_health_stale".into());
+    if report.inventory_truncated {
+        issues.push("writer_health_inventory_truncated".into());
+    }
+    if report.summary.compacted_records > 0 && report.summary.newest_ms >= from {
+        issues.push("writer_history_compacted".into());
+        issues.extend(report.summary.issues);
+    }
+    for h in report.writers.into_iter().filter(|h| h.updated_ms >= from) {
+        for issue in h.issues(now_ms()) {
+            if !issues.contains(&issue) {
+                issues.push(issue);
+            }
         }
     }
     Ok(issues)
 }
 pub(crate) fn cleanup_health(directory: &Path, cutoff: i64) -> Result<()> {
     let mut records = Vec::new();
-    for path in health_paths(directory, 8192)? {
+    for path in health_paths(directory, 8192)?.0 {
         let record: Health = serde_json::from_slice(&private_read(&path, 8192)?)?;
-        records.push((record.updated_ms, record.stopped, path));
+        records.push((record, path));
     }
-    records.sort_by_key(|r| r.0);
+    records.sort_by_key(|r| r.0.updated_ms);
+    let mut summary = health_summary(directory)?;
+    if summary.newest_ms < cutoff {
+        summary = HealthSummary::default();
+    }
     let mut overflow = records.len().saturating_sub(4096);
-    for (updated, stopped, path) in records {
-        if updated < cutoff || (overflow > 0 && stopped) {
-            std::fs::remove_file(path)?;
+    let now = now_ms();
+    let mut removals = Vec::new();
+    for (record, path) in records {
+        if record.updated_ms < cutoff
+            || (overflow > 0 && (record.stopped || now.saturating_sub(record.updated_ms) > 30_000))
+        {
+            if record.updated_ms >= cutoff {
+                summary.oldest_ms = if summary.compacted_records == 0 {
+                    record.updated_ms
+                } else {
+                    summary.oldest_ms.min(record.updated_ms)
+                };
+                summary.newest_ms = summary.newest_ms.max(record.updated_ms);
+                summary.compacted_records = summary.compacted_records.saturating_add(1);
+                for issue in record.issues(now) {
+                    if !summary.issues.contains(&issue) {
+                        summary.issues.push(issue);
+                    }
+                }
+            }
+            removals.push(path);
             overflow = overflow.saturating_sub(1);
         }
+    }
+    // Persist uncertainty before removing its detailed record. A crash can
+    // conservatively count it twice, but cannot turn unknown loss into health.
+    atomic_json(&directory.join("writer-history.json"), &summary)?;
+    for path in removals {
+        std::fs::remove_file(path)?;
     }
     Ok(())
 }
@@ -624,7 +754,7 @@ pub(crate) fn runtime_spans(session: &str, records: &[crate::runtime_trace::Span
             ..Default::default()
         };
         capture.submit(Entry::span(
-            capture.context.resource(&capture.instance),
+            capture.context.read().resource(&capture.instance),
             InstrumentationScope {
                 name: "cowboy.runtime".into(),
                 ..Default::default()

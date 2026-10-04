@@ -18,14 +18,17 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let context = cowboy::execution_host::log_context(&args.contract)?;
-    let _logs = cowboy::logs::init(
+    let logs = cowboy::logs::init(
         args.logs_dir.unwrap_or_else(|| args.state_dir.join("logs")),
         context,
-    )?;
-    cowboy::execution_host::run(cowboy::execution_host::Args {
-        contract: args.contract,
-        state_dir: args.state_dir,
-        socket: args.socket,
-    })
-    .await
+    )?
+    .track_outcome();
+    logs.finish(
+        cowboy::execution_host::run(cowboy::execution_host::Args {
+            contract: args.contract,
+            state_dir: args.state_dir,
+            socket: args.socket,
+        })
+        .await,
+    )
 }

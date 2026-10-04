@@ -32,6 +32,9 @@ pub(crate) fn accumulate(groups: &mut BTreeMap<String, Series>, entry: &Entry) {
     if series.evidence_ids.len() < 4 {
         series.evidence_ids.push(entry.id.clone());
     }
+    if entry.severity >= 13 && series.failure_evidence_ids.len() < 4 {
+        series.failure_evidence_ids.push(entry.id.clone());
+    }
 }
 
 fn p95(series: &Series) -> Option<f64> {
@@ -74,7 +77,7 @@ pub(crate) fn analyze(current: Metrics, baseline: Option<Metrics>) -> Value {
             } else {
                 "Query the referenced records and their session/trace. The event count is evidence, not a root-cause conclusion."
             };
-            findings.push(json!({"kind":if old.is_none(){"new_failure_group"}else{"observed_failure_group"},"group":key,"errors":series.errors,"warnings":series.warnings,"evidence_ids":series.evidence_ids,"next_step":hint}));
+            findings.push(json!({"kind":if old.is_none(){"new_failure_group"}else{"observed_failure_group"},"group":key,"errors":series.errors,"warnings":series.warnings,"evidence_ids":series.failure_evidence_ids,"next_step":hint}));
         }
         if let (Some(mean), Some(old_mean), Some(old)) = (mean, old_mean, old)
             && key != "__other_groups__"

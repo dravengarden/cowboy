@@ -170,7 +170,7 @@ impl TelemetryFile {
             .rposition(|byte| *byte == b'\n')
             .map_or(0, |index| index + 1);
         file.set_len(u64::try_from(complete)?)?;
-        Ok(Self {
+        let writer = Self {
             directory,
             lock,
             file,
@@ -179,7 +179,9 @@ impl TelemetryFile {
             segment_bytes,
             retained_files,
             retention_ms: 7 * DAY_MS,
-        })
+        };
+        writer.cleanup_expiry_files()?;
+        Ok(writer)
     }
 
     pub(crate) fn with_retention_seconds(mut self, seconds: u64) -> Result<Self> {
@@ -192,7 +194,8 @@ impl TelemetryFile {
     }
 
     fn maintain(&mut self, now_ms: i64) -> Result<()> {
-        private_metadata(&self.directory, true)?.context("telemetry directory disappeared")?;
+        self.validate_owner()?;
+        self.cleanup_expiry_files()?;
         for index in 0..self.retained_files {
             let path = segment_path(&self.directory, index);
             let Some(metadata) = private_metadata(&path, false)? else {
@@ -258,7 +261,7 @@ impl TelemetryFile {
         Ok(())
     }
 
-    pub(crate) fn write(&mut self, records: &str, now_ms: i64) -> Result<()> {
+    fn validate_owner(&self) -> Result<()> {
         // An external /tmp cleaner can unlink an open file or writer lock.
         // Do not silently claim success while writing invisible evidence.
         private_metadata(&self.directory, true)?.context("telemetry directory disappeared")?;
@@ -278,6 +281,32 @@ impl TelemetryFile {
             self.file.metadata()?.len() == self.bytes,
             "telemetry segment changed or a failed record could not be repaired"
         );
+        Ok(())
+    }
+
+    fn cleanup_expiry_files(&self) -> Result<()> {
+        self.validate_owner()?;
+        // This writer holds the lifetime lock: any recognized compaction
+        // temporary is from an interrupted earlier owner, never a live peer.
+        for entry in fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(id) = name
+                .strip_prefix(".expiry-")
+                .and_then(|s| s.strip_suffix(".tmp"))
+                && id.len() == 32
+                && id.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                private_metadata(&entry.path(), false)?.context("expiry file disappeared")?;
+                fs::remove_file(entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write(&mut self, records: &str, now_ms: i64) -> Result<()> {
+        self.validate_owner()?;
         ensure!(
             records.is_empty() || records.ends_with('\n'),
             "telemetry records must end with a newline"
@@ -372,6 +401,58 @@ mod tests {
         ));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn maintenance_refuses_a_missing_or_replaced_lock_and_preserves_both_writers() {
+        let path = directory();
+        let mut writer = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1000)
+            .unwrap()
+            .with_retention_seconds(60)
+            .unwrap();
+        writer.write("{\"old\":true}\n", 1000).unwrap();
+        fs::remove_file(path.join(".writer.lock")).unwrap();
+        let original = fs::read(segment_path(&path, 0)).unwrap();
+        assert!(writer.maintain(62000).is_err());
+        assert_eq!(fs::read(segment_path(&path, 0)).unwrap(), original);
+        let mut next = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 62000).unwrap();
+        next.write("{\"new_owner\":true}\n", 62000).unwrap();
+        let current = fs::read(segment_path(&path, 0)).unwrap();
+        assert!(writer.maintain(63000).is_err());
+        assert_eq!(fs::read(segment_path(&path, 0)).unwrap(), current);
+        drop(writer);
+        next.write("{}\n", 63000).unwrap();
+        drop(next);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn restart_and_idle_maintenance_reap_only_owned_compaction_temporaries() {
+        let path = directory();
+        let temporary = path.join(".expiry-00000000000000000000000000000001.tmp");
+        let other = path.join(".expiry-user.tmp");
+        fs::write(&other, b"preserved").unwrap();
+        for restart in [true, false] {
+            let mut writer = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1000).unwrap();
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary)
+                .unwrap();
+            file.write_all(b"expired private contents").unwrap();
+            drop(file);
+            if restart {
+                drop(writer);
+                writer = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1000).unwrap();
+            } else {
+                writer.maintain(62000).unwrap();
+            }
+            assert!(!temporary.exists());
+            assert_eq!(fs::read(&other).unwrap(), b"preserved");
+            drop(writer);
+        }
+        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

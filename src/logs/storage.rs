@@ -70,31 +70,34 @@ struct State {
 
 pub(crate) fn private(path: &Path, directory: bool) -> Result<fs::Metadata> {
     let m = fs::symlink_metadata(path).context("log path unavailable")?;
+    validate_private(&m, directory)?;
+    Ok(m)
+}
+
+fn validate_private(m: &fs::Metadata, directory: bool) -> Result<()> {
     ensure!(
         !m.is_symlink()
             && (if directory { m.is_dir() } else { m.is_file() })
             && m.uid() == rustix::process::geteuid().as_raw()
             && m.mode() & 0o077 == 0
-            && (directory || m.nlink() == 1),
+            && (directory || m.nlink() <= 1),
         "log paths must be private, owned, and free of links"
     );
-    Ok(m)
+    Ok(())
 }
 
 pub(crate) fn private_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
-    let metadata = private(path, false)?;
-    ensure!(
-        metadata.len() <= limit,
-        "private log configuration exceeds limit"
-    );
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
     let actual = file.metadata()?;
+    // Configuration and health are replaced atomically. Validate the opened
+    // descriptor, so either complete owned version is accepted during rename.
+    validate_private(&actual, false)?;
     ensure!(
-        actual.ino() == metadata.ino() && actual.dev() == metadata.dev(),
-        "log path changed during read"
+        actual.len() <= limit,
+        "private log configuration exceeds limit"
     );
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
@@ -155,6 +158,29 @@ struct Segment {
     bytes: u64,
 }
 
+fn query_deadline(db: &Connection, started: Instant) {
+    // Enforce the budget inside SQLite too: a filter with no matches may do
+    // substantial work without ever yielding a row to the outer scan loop.
+    db.progress_handler(
+        1000,
+        Some(move || started.elapsed() >= Duration::from_secs(5)),
+    );
+}
+
+fn query_step<T>(result: rusqlite::Result<T>, coverage: &mut Coverage) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.code == rusqlite::ErrorCode::OperationInterrupted =>
+        {
+            coverage.truncated = true;
+            coverage.issues.push("query_budget_exhausted".into());
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 impl SqliteStore {
     pub(crate) fn open(directory: PathBuf, create: bool) -> Result<Self> {
         ensure!(
@@ -162,15 +188,22 @@ impl SqliteStore {
             "log directory must be an absolute child directory"
         );
         if create && !directory.try_exists()? {
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&directory)
-                .context("creating private log directory")?;
+            match fs::DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).context("creating private log directory"),
+            }
         }
         private(&directory, true)?;
         let store = Self { directory };
-        if create {
-            let _lock = store.lock(true)?;
+        // Opening an established store never waits behind a diagnostic scan.
+        // Only first initialization needs serialization with other creators.
+        if create && !store.directory.join("store.json").try_exists()? {
+            let _lock = match store.lock(true) {
+                Ok(lock) => lock,
+                Err(error) if error.is::<Busy>() && store.state().is_ok() => return Ok(store),
+                Err(error) => return Err(error),
+            };
             if !store.directory.join("store.json").try_exists()? {
                 store.save(&State {
                     schema: 1,
@@ -248,7 +281,7 @@ impl SqliteStore {
     fn segments(&self) -> Result<Vec<Segment>> {
         let mut segments = Vec::new();
         for (index, entry) in fs::read_dir(&self.directory)?.enumerate() {
-            ensure!(index < 8192, "log directory inventory exceeds bounds");
+            ensure!(index < 16384, "log directory inventory exceeds bounds");
             let entry = entry?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
@@ -515,8 +548,9 @@ impl SqliteStore {
         let _lock = self.lock(false)?;
         let state = self.state()?;
         let segments = self.segments()?;
+        let health = super::capture::read_health(&self.directory)?;
         Ok(
-            serde_json::json!({"schema":"cowboy.logs.status/v1","store_id":state.id,"directory":self.directory,"policy":state.policy,"retained_bytes":segments.iter().map(|s|s.bytes).sum::<u64>(),"segments":segments.len(),"expired_records":state.expired_records,"capacity_evicted_segments":state.capacity_evicted_segments,"maintained_ms":state.maintained_ms,"maintenance_interval_seconds":30,"writers":super::capture::read_health(&self.directory)?}),
+            serde_json::json!({"schema":"cowboy.logs.status/v1","store_id":state.id,"directory":self.directory,"policy":state.policy,"retained_bytes":segments.iter().map(|s|s.bytes).sum::<u64>(),"segments":segments.len(),"expired_records":state.expired_records,"capacity_evicted_segments":state.capacity_evicted_segments,"maintained_ms":state.maintained_ms,"maintenance_interval_seconds":30,"writers":health.writers,"writer_history":health.summary,"writer_inventory_truncated":health.inventory_truncated}),
         )
     }
     pub(crate) fn query(&self, query: &Query) -> Result<Page> {
@@ -591,12 +625,21 @@ impl SqliteStore {
         let start = Instant::now();
         let mut bytes = 0usize;
         for segment in segments.iter().rev() {
+            if start.elapsed() >= Duration::from_secs(5) {
+                coverage.truncated = true;
+                coverage.issues.push("query_budget_exhausted".into());
+                return Ok(coverage);
+            }
             let db = Self::connection(&segment.path, false)?;
-            let (lo, hi): (Option<i64>, Option<i64>) = db.query_row(
+            query_deadline(&db, start);
+            let limits: rusqlite::Result<(Option<i64>, Option<i64>)> = db.query_row(
                 "SELECT min(observed_ms),max(observed_ms) FROM entries",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
+            );
+            let Some((lo, hi)) = query_step(limits, &mut coverage)? else {
+                return Ok(coverage);
+            };
             if let Some(lo) = lo {
                 coverage.oldest_observed_ms =
                     Some(coverage.oldest_observed_ms.map_or(lo, |v| v.min(lo)));
@@ -654,7 +697,9 @@ impl SqliteStore {
                     coverage.truncated = true;
                     break;
                 }
-                let mut row = row?;
+                let Some(mut row) = query_step(row, &mut coverage)? else {
+                    return Ok(coverage);
+                };
                 if blobs {
                     row.project_attributes()?;
                 }
@@ -681,6 +726,20 @@ impl SqliteStore {
         }
         Ok(coverage)
     }
+}
+
+#[test]
+fn sqlite_deadline_interrupts_work_that_never_yields_a_matching_record() {
+    let db = Connection::open_in_memory().unwrap();
+    query_deadline(&db, Instant::now() - Duration::from_secs(6));
+    let result: rusqlite::Result<i64> = db.query_row(
+        "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT count(*) FROM n WHERE x<0",
+        [], |row| row.get(0),
+    );
+    let mut coverage = Coverage::default();
+    assert!(query_step(result, &mut coverage).unwrap().is_none());
+    assert!(coverage.truncated);
+    assert_eq!(coverage.issues, ["query_budget_exhausted"]);
 }
 
 #[derive(Serialize, Deserialize)]

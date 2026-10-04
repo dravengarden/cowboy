@@ -1039,10 +1039,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     ));
     init_tracing();
     let log_directory = crate::logs::directory(&args.data_dir);
-    let _log_guard = crate::logs::init(
+    let log_guard = crate::logs::init(
         log_directory.clone(),
         crate::logs::Context::new("cowboy-controller"),
-    )?;
+    )?
+    .track_outcome();
     if args.cardea_oidc_config.is_some() && !args.product_auth_enabled {
         tracing::warn!("Cardea OIDC is configured but product authentication is disabled");
     }
@@ -1740,7 +1741,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             Err(_) => tracing::error!("store writer did not drain within shutdown deadline"),
         }
     }
-    result
+    log_guard.finish(result)
 }
 
 async fn run_machine_presence_sweeper(

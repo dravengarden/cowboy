@@ -78,6 +78,11 @@ the total byte budget is at least two segments and at most 4 GiB, with at most
 64 segments. Defaults are 7 days, 1 day, 8 MiB and 128 MiB. SQLite journals can
 temporarily require one additional segment of working space. Writer health files
 are small, separately bounded records and expire with the policy.
+At most 4,096 detailed writer states are returned. Overflow is explicit in
+coverage; idle cleanup compacts old stopped/stale states into a bounded history
+summary before deleting them. That summary retains loss/uncertainty flags and
+its covered time range until expiry, rather than making killed processes appear
+healthy. It is conservative history, not exact per-window failure accounting.
 
 Expiry uses **observed ingestion time**, preserving source timestamps separately;
 cleanup deletes individual expired rows and returns pages to the filesystem.
@@ -215,6 +220,13 @@ and an 8 MiB total admission budget. Local evidence is independent of the
 writer heartbeats are observable in `status` and query/analysis coverage; fallback
 stderr diagnostics are nonrecursive and rate limited. Admission is not commit.
 Invalid private storage refuses startup, rather than claiming logging is enabled.
+An ordinary diagnostic query lock defers maintenance without preventing process
+startup. Returned process errors emit `cowboy.process.failed`; early returns,
+unwinding or cancellation without an observed result emit
+`cowboy.process.outcome_missing`. Error bodies are excluded; stderr retains the
+existing human-readable detail. Failure analysis references WARN/ERROR evidence
+separately from successful observations. JSONL maintenance verifies the lifetime
+writer lock and reclaims only recognized interrupted compaction files.
 
 Start with `status`, then `analyze`, then fetch referenced records. Correlate the
 runtime worker, execution keeper and native process separately. A disconnect is

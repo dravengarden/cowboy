@@ -243,9 +243,15 @@ impl Entry {
             service: attr(&resource.attributes, "service.name"),
             session: attr(attributes, "cowboy.session.id"),
             machine: projected
-                .get("host.id")
-                .or_else(|| projected.get("cowboy.machine.id"))
+                .get("cowboy.machine.id")
                 .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    projected
+                        .get("host.id")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                })
                 .unwrap_or_default()
                 .into(),
             environment: attr(attributes, "cowboy.execution.environment.id"),
@@ -296,6 +302,24 @@ impl Entry {
                                 Self::base(
                                     &r.resource.clone().unwrap_or_default(),
                                     &l.attributes,
+                                    self.observed_ms,
+                                )
+                                .attributes
+                            })
+                        })
+                    })
+                    .unwrap_or_default()
+            }
+            "metrics" => {
+                let r = ExportMetricsServiceRequest::decode(self.protobuf.as_slice())?;
+                r.resource_metrics
+                    .first()
+                    .and_then(|r| {
+                        r.scope_metrics.first().and_then(|s| {
+                            s.metrics.first().map(|metric| {
+                                Self::base(
+                                    &r.resource.clone().unwrap_or_default(),
+                                    metric_point(metric).1,
                                     self.observed_ms,
                                 )
                                 .attributes
@@ -448,20 +472,27 @@ impl Entry {
                             .unwrap_or(0) as i32,
                     })
                 };
-                let mut entry = Self::base(&resource, &[], now);
+                let metric = Metric {
+                    name: row["name"].as_str().unwrap_or("legacy.metric").into(),
+                    unit: row["unit"].as_str().unwrap_or("").into(),
+                    data: Some(data),
+                    ..Default::default()
+                };
+                let (at, attributes) = metric_point(&metric);
+                let mut entry = Self::base(&resource, attributes, now);
                 entry.signal = "metrics".into();
-                entry.event = row["name"].as_str().unwrap_or("legacy.metric").into();
+                entry.event = metric.name.clone();
+                entry.timestamp_ms = if at == 0 {
+                    now
+                } else {
+                    (at / 1_000_000) as i64
+                };
                 entry.protobuf = ExportMetricsServiceRequest {
                     resource_metrics: vec![ResourceMetrics {
                         resource: Some(resource),
                         scope_metrics: vec![ScopeMetrics {
                             scope: Some(scope),
-                            metrics: vec![Metric {
-                                name: entry.event.clone(),
-                                unit: row["unit"].as_str().unwrap_or("").into(),
-                                data: Some(data),
-                                ..Default::default()
-                            }],
+                            metrics: vec![metric],
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -609,6 +640,36 @@ pub(crate) struct Page {
     pub coverage: Coverage,
 }
 
+// Each retained metric entry contains one original point. Preserve its source
+// clock and correlation instead of inventing a fresh timestamp during reads.
+fn metric_point(metric: &Metric) -> (u64, &[KeyValue]) {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    match &metric.data {
+        Some(Data::Gauge(v)) => v
+            .data_points
+            .first()
+            .map(|p| (p.time_unix_nano, p.attributes.as_slice())),
+        Some(Data::Sum(v)) => v
+            .data_points
+            .first()
+            .map(|p| (p.time_unix_nano, p.attributes.as_slice())),
+        Some(Data::Histogram(v)) => v
+            .data_points
+            .first()
+            .map(|p| (p.time_unix_nano, p.attributes.as_slice())),
+        Some(Data::ExponentialHistogram(v)) => v
+            .data_points
+            .first()
+            .map(|p| (p.time_unix_nano, p.attributes.as_slice())),
+        Some(Data::Summary(v)) => v
+            .data_points
+            .first()
+            .map(|p| (p.time_unix_nano, p.attributes.as_slice())),
+        None => None,
+    }
+    .unwrap_or((0, &[]))
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Series {
     pub count: u64,
@@ -620,6 +681,8 @@ pub(crate) struct Series {
     /// Fixed OTel explicit histogram boundaries; counts include +Inf.
     pub duration_buckets: Vec<u64>,
     pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub failure_evidence_ids: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Metrics {

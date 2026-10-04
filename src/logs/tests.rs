@@ -345,6 +345,24 @@ fn capture_child() {
     assert!(!super::forward_runtime());
     tracing::error!(target:"cowboy::fixture",event_name="cowboy.execution.fixture_failure",reason="cursor_expired",token="secret-token","secret-body");
     match std::env::var("COWBOY_TEST_LOG_FAULT").as_deref() {
+        Ok("initialization") => {
+            let dir =
+                std::path::PathBuf::from(std::env::var_os("COWBOY_TEST_LOG_DIRECTORY").unwrap());
+            std::fs::write(dir.join("initialized"), b"ready").unwrap();
+        }
+        Ok("returned_error") => {
+            assert!(
+                guard
+                    .track_outcome()
+                    .finish(Err::<(), _>(anyhow::anyhow!("secret-error-body")))
+                    .is_err()
+            );
+            return;
+        }
+        Ok("early_return") => {
+            drop(guard.track_outcome());
+            return;
+        }
         Ok("queue") => {
             let dir =
                 std::path::PathBuf::from(std::env::var_os("COWBOY_TEST_LOG_DIRECTORY").unwrap());
@@ -502,4 +520,215 @@ fn interrupted_segment_initialization_is_cleaned_without_touching_unowned_files(
     assert!(!partial.exists());
     assert_eq!(std::fs::read(unrelated).unwrap(), b"preserved");
     store.append(&[entry(1001, 1)], 1001).unwrap();
+}
+
+#[test]
+fn established_store_startup_tolerates_a_diagnostic_reader_lock() {
+    let (_root, store) = fixture();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(store.directory.join(".logs.lock"))
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&lock).unwrap();
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "logs::tests::capture_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("COWBOY_TEST_LOG_DIRECTORY", &store.directory)
+        .env("COWBOY_TEST_LOG_FAULT", "initialization")
+        .env("RUST_LOG", "off")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !store.directory.join("initialized").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let started_while_locked = store.directory.join("initialized").exists();
+    fs2::FileExt::unlock(&lock).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started_while_locked);
+    let mut q = query(now_ms() - 60000, now_ms() + 1000);
+    q.event = Some("cowboy.execution.fixture_failure".into());
+    assert_eq!(store.query(&q).unwrap().items.len(), 1);
+    assert_eq!(store.status().unwrap()["writers"][0]["failures"], 0);
+}
+
+#[test]
+fn fatal_return_and_unobserved_outcome_leave_safe_failure_evidence() {
+    for (mode, event, level) in [
+        ("returned_error", "cowboy.process.failed", 17),
+        ("early_return", "cowboy.process.outcome_missing", 13),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logs::tests::capture_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("COWBOY_TEST_LOG_DIRECTORY", root.path().join("logs"))
+            .env("COWBOY_TEST_LOG_FAULT", mode)
+            .env("RUST_LOG", "off")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let store = SqliteStore::open(root.path().join("logs"), false).unwrap();
+        let mut q = query(now_ms() - 60000, now_ms() + 1000);
+        q.event = Some(event.into());
+        let page = store.query(&q).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].severity, level);
+        assert!(
+            !serde_json::to_string(&page)
+                .unwrap()
+                .contains("secret-error-body")
+        );
+    }
+}
+
+#[test]
+fn historical_metric_time_and_correlation_survive_legacy_projection() {
+    use opentelemetry_proto::tonic::metrics::v1::{
+        HistogramDataPoint, NumberDataPoint, number_data_point,
+    };
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let attrs = vec![
+        text("cowboy.machine.id", "ovh"),
+        text("cowboy.session.id", "s1"),
+    ];
+    let sum = NumberDataPoint {
+        time_unix_nano: 1_000_000_000,
+        attributes: attrs.clone(),
+        value: Some(number_data_point::Value::AsInt(3)),
+        ..Default::default()
+    };
+    let histogram = HistogramDataPoint {
+        time_unix_nano: 1_000_000_000,
+        attributes: attrs,
+        count: 1,
+        bucket_counts: vec![1],
+        ..Default::default()
+    };
+    let resource = Resource {
+        attributes: vec![text("service.name", "old"), text("host.id", "")],
+        ..Default::default()
+    };
+    let mut records = String::new();
+    for point in [
+        serde_json::json!({"sum":sum}),
+        serde_json::json!({"histogram":histogram}),
+    ] {
+        let row = serde_json::json!({"signal":"metrics","name":"old.metric","resource":resource,"point":point});
+        records.push_str(&format!("{row}\n"));
+    }
+    let path = root.path().join("telemetry.jsonl");
+    std::fs::write(&path, records).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut q = query(0, 2000);
+    q.machine = Some("ovh".into());
+    q.session = Some("s1".into());
+    let page = JsonlSource {
+        directory: root.path().into(),
+    }
+    .query(&q)
+    .unwrap();
+    assert_eq!(page.items.len(), 2);
+    for entry in page.items {
+        assert_eq!(entry.timestamp_ms, 1000);
+        assert_eq!(entry.observed_ms, 1000);
+        assert_eq!(entry.attributes["cowboy.machine.id"], "ovh");
+    }
+}
+
+#[test]
+fn analysis_links_to_failure_records_after_a_run_of_successful_events() {
+    let (_root, store) = fixture();
+    for n in 0..6 {
+        let mut e = entry(1000, n);
+        e.severity = if n == 0 { 17 } else { 9 };
+        store.append(&[e], 1000).unwrap();
+    }
+    let analysis = super::analysis::analyze(store.metrics(&query(0, 2000)).unwrap(), None);
+    assert_eq!(
+        analysis["findings"][0]["evidence_ids"],
+        serde_json::json!([format!("{:032x}", 0)])
+    );
+}
+
+#[test]
+fn stale_writer_overflow_remains_queryable_and_compacts_with_loss_evidence() {
+    let (_root, store) = fixture();
+    let now = now_ms();
+    store.append(&[entry(now, 1)], now).unwrap();
+    for n in 0..4097 {
+        let health = serde_json::json!({"schema":1,"instance":format!("{n:032x}"),"service":"fixture","pid":0,"updated_ms":now-60000,"stopped":false,"admitted":1,"written":0,"dropped":0,"failures":0,"pending_bytes":2048});
+        let path = store.directory.join(format!("writer-{n:032x}.json"));
+        std::fs::write(&path, serde_json::to_vec(&health).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let q = query(now - 120000, now + 1000);
+    let before = store.query(&q).unwrap();
+    assert_eq!(before.items.len(), 1);
+    assert!(
+        before
+            .coverage
+            .issues
+            .contains(&"writer_health_inventory_truncated".into())
+    );
+    store.maintain(now).unwrap();
+    let status = store.status().unwrap();
+    assert_eq!(status["writers"].as_array().unwrap().len(), 4096);
+    assert_eq!(status["writer_history"]["compacted_records"], 1);
+    let after = store.query(&q).unwrap();
+    assert!(
+        after
+            .coverage
+            .issues
+            .contains(&"writer_history_compacted".into())
+    );
+    assert!(
+        after
+            .coverage
+            .issues
+            .contains(&"writer_health_stale".into())
+    );
+}
+
+#[test]
+fn incomplete_shutdown_flush_is_explicit_in_coverage() {
+    let (_root, store) = fixture();
+    let now = now_ms();
+    let health = serde_json::json!({"schema":1,"instance":"00000000000000000000000000000001","service":"fixture","pid":0,"updated_ms":now,"stopped":true,"admitted":1,"written":0,"dropped":0,"failures":0,"pending_bytes":2048});
+    atomic_json(
+        &store
+            .directory
+            .join("writer-00000000000000000000000000000001.json"),
+        &health,
+    )
+    .unwrap();
+    assert!(
+        store
+            .query(&query(now - 1000, now + 1000))
+            .unwrap()
+            .coverage
+            .issues
+            .contains(&"writer_shutdown_flush_incomplete".into())
+    );
 }

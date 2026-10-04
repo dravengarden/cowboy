@@ -444,15 +444,14 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
     let mut log_context = crate::logs::Context::new("cowboy-machine");
     log_context.machine = resolve_runtime_machine_id(&args.machine_id, &args.state_dir, None);
     log_context.generation = desired_generation.clone();
-    let _log_guard = crate::logs::init(log_directory.clone(), log_context)?;
+    let log_guard = crate::logs::init(log_directory.clone(), log_context)?.track_outcome();
     let mut worker_environment = managed_provider_environment(&components, &worker_command)?;
     worker_environment.insert(
         "COWBOY_LOGS_DIR".into(),
         log_directory.display().to_string(),
     );
-    worker_environment.insert("COWBOY_LOGS_MACHINE_ID".into(), args.machine_id.clone());
     let worktree_root = args.state_dir.join("worktrees");
-    let broker = MachineBrokerArgs {
+    let mut broker = MachineBrokerArgs {
         socket: args.socket,
         worker_command,
         desired_generation,
@@ -515,6 +514,10 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         &args.state_dir,
         enrolled_machine_id.as_deref(),
     );
+    log_guard.set_machine(&machine_id)?;
+    broker
+        .worker_environment
+        .insert("COWBOY_LOGS_MACHINE_ID".into(), machine_id.clone());
     let code_adapter_socket = args.code_adapter_socket.clone();
     let zed_adapter_socket = args.zed_adapter_socket.clone();
     let provider_usage = crate::provider_usage_spool::ProviderUsageSpool::open(
@@ -582,7 +585,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         zed_adapter_socket,
         args.state_dir.join("zed"),
     );
-    tokio::try_join!(
+    let result = tokio::try_join!(
         crate::machine_broker::run_with_deletion_reader(
             broker,
             args.state_dir.join("session-deletions"),
@@ -595,8 +598,9 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         provider_usage_listener,
         code_adapter,
         zed_adapter
-    )?;
-    Ok(())
+    )
+    .map(|_| ());
+    log_guard.finish(result)
 }
 
 fn managed_provider_environment(
