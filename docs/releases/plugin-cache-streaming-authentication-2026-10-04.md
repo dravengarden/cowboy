@@ -40,5 +40,39 @@ immutable release must fail allocation; the new diagnostic must succeed and
 report writer false. Tampered artifacts must refuse without changing the floor
 or executing publisher code. Production limits and cache are not modified.
 
-This uses `cowboy-machine-host-release` and retains the accepted worker source
-`90ec4edae56349cb06b9f39f13a0086197b5356b` with all six companion paths/digests.
+The initial host-only candidate retained accepted worker source
+`90ec4edae56349cb06b9f39f13a0086197b5356b`. Latest-main integration subsequently
+changed the common rusqlite feature and worker/Code observability sources, which
+correctly refuses that retained-worker guard. The new pool therefore requires
+independent maintenance acceptance before advancing its exact source.
+
+
+The original streaming candidate `8258662f0fc0cc70cce8b1e49005626c541298d3`
+passed 1,821 all-feature and 505 Machine-host tests, both Clippy configurations,
+formatting and Provider checks. Its exact immutable Machine passed all four large
+raw/archive and floor/no-floor diagnostics under the 192 MiB address-space limit;
+the preceding immutable release reported `Error: out of memory` in each case.
+Raw artifact length is 251,658,240 bytes and archive length 251,699,434 bytes.
+Tampering refused twice without floor changes or publisher execution.
+
+Integrated source `b97c2724bea23834944ded8af98e2de6729f4256`, full candidate
+`/nix/store/25iq12zllfa6hqbcacdgyc0sp7k6p6gj-cowboy-machine-release`,
+passed 1,845 all-feature tests (53 explicit native/fixture ignores), 526 standalone
+Machine-host tests (15 ignores), both Clippy configurations, formatting and the
+complete Provider gate. The large-cache native proof passed again after integration.
+All preceding portable acceptance also passed: 58 quarantine cases, 36 absent
+anchor cases, 28 selection-pointer cases, 5 signed refresh cases, 9 signed startup
+cases, 24 cached startup cases and the bootstrap old-package negative control.
+
+Independent maintenance acceptance is in
+[the native pool receipt](../experiments/plugin-cache-streaming-maintenance-2026-10-04.json):
+Codex and Claude signed-generation coexistence/descendant drain passed on the exact
+new worker; native execution passed 22 and 33 checks; real remote-session
+admission/recovery passed 15 checks; connected Code passed 38 checks with cleanup
+complete; exact immutable diagnostic CLI log conformance passed 11 checks. These
+are disposable local fixtures and fake API/auth inputs, not production Provider
+upgrades or external-target coverage. Only after that acceptance is the worker pin
+advanced to this exact source, generation `worker-748825b42b4302fe26ca`.
+The final host-only package must retain every one of the six accepted companion
+paths/digests and the accepted native Machine/installer bytes. Production receipt
+follows after final artifact verification and activation.
