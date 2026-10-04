@@ -367,6 +367,15 @@ the trusted loopback TLS proxy boundary and does not test external TLS
 termination. It uses no production credentials or model requests. Retained
 Controllers predating device binding can use the original fixture mode.
 
+The [production receipt](experiments/execution-transport-deployment-2026-10-04.json)
+records the October 4 activation of `c4f29d40` on Falcon, Hawk and OVH, selecting
+`worker-9fce17441fdd1e8ca642`. All 13 original Hawk workers and seven OVH workers
+retained their PID, start time and executable at acceptance. Busy workers adopt
+the new generation at their native safe boundary. Existing keepers retain their
+original environment; the new worker's legacy recovery path covers event gaps.
+New environments use the backpressure keeper. Previously discarded output cannot
+be reconstructed, and recovery never replays uncertain effects.
+
 Do not merely increase a timeout or open a replacement upstream session and call
 that recovery. If the target keeper or executor is lost, expose that loss and
 retain the worktree; surviving processes require independent ownership evidence.

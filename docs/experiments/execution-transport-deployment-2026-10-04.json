@@ -1,0 +1,429 @@
+{
+  "schema": "cowboy.execution-transport-deployment/v1",
+  "date": "2026-10-04",
+  "root_cause_fix": "d84e391391d81e4f2aaee8e32bd65a16d44f25cb",
+  "release": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+  "source": {
+    "component": "cowboy",
+    "dirty": false,
+    "lane": "machine",
+    "repository": "git@github.com:dravengarden/cowboy.git",
+    "revision": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+    "schema": 1,
+    "sessionDeletionJournal": {
+      "readerSchema": 1,
+      "writerSchema": 0
+    },
+    "workerGeneration": "worker-9fce17441fdd1e8ca642"
+  },
+  "release_executables": {
+    "machine_entrypoint": {
+      "path": "/nix/store/pn8fyh11p700m7lzrw3jbmjr0r45gvlv-cowboy-machine-0.1.0/bin/cowboy-machine",
+      "sha256": "b382f1033d3ba1b51a80861da7f456cec815defe6234b938f8b83cfb152347c2"
+    },
+    "machine_native": {
+      "path": "/nix/store/pn8fyh11p700m7lzrw3jbmjr0r45gvlv-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "275f8dbc50be379562f9975c14bc01e58734a136d49634c29a4840c4a57e535e"
+    },
+    "worker": {
+      "path": "/nix/store/15g5pm1mdy61jc044rawhafdaqy0kxai-cowboy-0.1.0/bin/cowboy-acp-worker",
+      "sha256": "1c82896e3c01e6f962399bc08248e35d5900fb073f153308017b3962a1dab932"
+    },
+    "keeper": {
+      "path": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release/bin/cowboy-execution-host",
+      "sha256": "4b9cc495bb3bca376f7b2fa86a9bf0f695cd471593fa73498d43c1f06bf7c04e"
+    }
+  },
+  "verification": {
+    "full_gate": {
+      "command": "nix develop -c env RUST_TEST_THREADS=4 just check-compact",
+      "result": "passed",
+      "core_tests_passed": 1808
+    },
+    "native_worker_acceptance": {
+      "codex": {
+        "schema": "cowboy.execution-worker-conformance/v1",
+        "accepted": true,
+        "checks": [
+          "machine_owned_worktree",
+          "long_state_path_uses_private_short_socket",
+          "machine_restart_reattaches_same_keeper_and_binding",
+          "provider_refuses_environment_override",
+          "target_image_read_reaches_native_model_input",
+          "background_job_survives_lost_reply_and_35_second_transport_gap",
+          "cancel_reaches_original_target_job_without_replay",
+          "output_backpressure_survives_35_second_transport_gap",
+          "native_apply_patch_and_command_use_target",
+          "runtime_files_unchanged",
+          "native_target_instructions",
+          "cold_native_resume_automatically_rebinds_each_turn",
+          "cold_resume_retains_history_without_effect_replay",
+          "global_environment_config_unchanged",
+          "packaged_acp_native_spawn_routes_target_tools",
+          "packaged_acp_cold_load_preserves_binding_history_and_effects",
+          "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+          "concurrent_large_input_and_output_do_not_deadlock",
+          "post_flood_commands_and_cancellation_keep_original_executor",
+          "target_image_bytes_cross_machine_transport",
+          "idempotent_close_stops_environment_and_preserves_worktree",
+          "closed_environment_cannot_be_recreated"
+        ],
+        "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+        "launcher_sha256": "bb5360dae4551a880220022c248af8a477d3f7713e3236cd56c6d6805ca37738",
+        "packaged_bridge_sha256": "9528b2fe5ea8c9947f48e7a89d6e08c7ef3dea2358f62cb52ea21501f3702153",
+        "packaged_adapter_sha256": "2fa6ed1a85b8e95b5919828200a59c5dd184b88d1e89066cc56fd5c868d4dedf",
+        "scripted_api_requests": 13,
+        "real_model_requests": 0,
+        "production_credentials": false,
+        "production_activation": false,
+        "not_checked": [
+          "authenticated_enrolled_transport",
+          "cross_host_network",
+          "signed_provider_release",
+          "subscription_inference",
+          "inline_user_attachments",
+          "native_nested_agents"
+        ],
+        "cursor_expirations": 0
+      },
+      "claude-code": {
+        "schema": "cowboy.claude-execution-worker-conformance/v1",
+        "accepted": true,
+        "checks": [
+          "machine_owned_worktree",
+          "machine_restart_reattaches_same_keeper_and_binding",
+          "native_control_cannot_replace_bound_execution",
+          "module_readiness_uses_no_model_request",
+          "native_tools_use_target_files_and_processes_without_mcp",
+          "runtime_context_and_guidance_are_replaced",
+          "unicode_quotes_crlf_bytes_preserved",
+          "stale_edit_is_refused",
+          "target_image_enters_model_context",
+          "background_cancel_settles",
+          "bounded_large_read_stays_in_target_tool_result",
+          "native_notebook_edit_preserves_metadata",
+          "native_read_observes_retained_task_output",
+          "lost_start_receipt_and_transport_outage_do_not_replay",
+          "cold_native_resume_preserves_context_reads_and_effects",
+          "background_process_handle_survives_native_resume",
+          "real_compaction_and_next_turn_preserve_target_context",
+          "cold_resume_after_compaction_has_no_runtime_file_locators",
+          "independent_native_searches_execute_concurrently",
+          "native_interrupt_stops_foreground_target_process",
+          "packaged_acp_native_spawn_routes_target_tools",
+          "packaged_acp_cold_load_preserves_binding_history_and_effects",
+          "hot_effort_configuration_preserves_bound_execution",
+          "broken_module_refused_before_model_request",
+          "bare_mode_refused_without_changing_authentication",
+          "malformed_result_denies_without_native_fallback",
+          "bridge_error_denies_without_native_fallback",
+          "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+          "concurrent_large_input_and_output_do_not_deadlock",
+          "post_flood_commands_and_cancellation_keep_original_executor",
+          "target_image_bytes_cross_machine_transport",
+          "idempotent_close_stops_environment_and_preserves_worktree",
+          "closed_environment_cannot_be_recreated"
+        ],
+        "claude_version": "2.1.287",
+        "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+        "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+        "executor_version": "0.159.3",
+        "packaged_launcher_sha256": "18c51695c82821b8b11ed36a0496c02745de9879962ec96d6f5cbb8c5a673797",
+        "scripted_api_requests": 40,
+        "native_title_requests": 1,
+        "production_credentials": false,
+        "production_activation": false,
+        "not_checked": [
+          "real_subscription_inference",
+          "cross_host_latency",
+          "native_subagents_and_project_hooks"
+        ],
+        "cursor_expirations": 0
+      },
+      "legacy": {
+        "schema": "cowboy.execution-worker-conformance/v1",
+        "accepted": true,
+        "checks": [
+          "machine_owned_worktree",
+          "long_state_path_uses_private_short_socket",
+          "machine_restart_reattaches_same_keeper_and_binding",
+          "provider_refuses_environment_override",
+          "native_codex_recovers_legacy_event_gap_without_poisoning_session_or_replaying_effects",
+          "target_image_read_reaches_native_model_input",
+          "background_job_survives_lost_reply_and_35_second_transport_gap",
+          "cancel_reaches_original_target_job_without_replay",
+          "native_apply_patch_and_command_use_target",
+          "runtime_files_unchanged",
+          "native_target_instructions",
+          "cold_native_resume_automatically_rebinds_each_turn",
+          "cold_resume_retains_history_without_effect_replay",
+          "global_environment_config_unchanged",
+          "packaged_acp_native_spawn_routes_target_tools",
+          "packaged_acp_cold_load_preserves_binding_history_and_effects",
+          "target_image_bytes_cross_machine_transport",
+          "idempotent_close_stops_environment_and_preserves_worktree",
+          "closed_environment_cannot_be_recreated"
+        ],
+        "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+        "launcher_sha256": "bb5360dae4551a880220022c248af8a477d3f7713e3236cd56c6d6805ca37738",
+        "packaged_bridge_sha256": "9528b2fe5ea8c9947f48e7a89d6e08c7ef3dea2358f62cb52ea21501f3702153",
+        "packaged_adapter_sha256": "2fa6ed1a85b8e95b5919828200a59c5dd184b88d1e89066cc56fd5c868d4dedf",
+        "scripted_api_requests": 15,
+        "real_model_requests": 0,
+        "production_credentials": false,
+        "production_activation": false,
+        "not_checked": [
+          "authenticated_enrolled_transport",
+          "cross_host_network",
+          "signed_provider_release",
+          "subscription_inference",
+          "inline_user_attachments",
+          "native_nested_agents"
+        ],
+        "cursor_expirations": 1
+      }
+    },
+    "signed_provider_coexistence": {
+      "codex": {
+        "schema_version": 1,
+        "plugin_id": "codex",
+        "plugin_version": "3.3.2",
+        "artifact_digest": "sha256:a833d5b617922fc67938bd5ddf9a43bf9dd928caee2a3242a869014357c3e08f",
+        "platform": {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "probes": [
+          {
+            "command": "codex",
+            "version": "0.159.3",
+            "artifact_digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+            "status": "passed"
+          },
+          {
+            "command": "codex-acp",
+            "version": "2.1.0",
+            "artifact_digest": "sha256:8ce40a0cb5ff6e15d8fa0972072788cef9cecec3bfaa5fc43f78ab729ca9a708",
+            "status": "passed"
+          }
+        ],
+        "uses_service_credentials": false,
+        "sends_prompt": false,
+        "previous": {
+          "plugin_version": "3.3.1",
+          "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+        },
+        "worker": {
+          "executable_digest": "sha256:1c82896e3c01e6f962399bc08248e35d5900fb073f153308017b3962a1dab932",
+          "initialize_and_session_new": "passed",
+          "stop_and_descendant_drain": "passed",
+          "sidecar_count": 0,
+          "distinct_generation_coexistence": "passed"
+        }
+      },
+      "claude": {
+        "schema_version": 1,
+        "plugin_id": "claude-code",
+        "plugin_version": "3.4.5",
+        "artifact_digest": "sha256:acebb0153651c858b42c35ae93df0ac42fc038125a430a06f7bd35636d5cff49",
+        "platform": {
+          "os": "linux",
+          "architecture": "x86_64"
+        },
+        "probes": [
+          {
+            "command": "claude",
+            "version": "2.1.287",
+            "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+            "status": "passed"
+          },
+          {
+            "command": "claude-agent-acp",
+            "version": "0.84.0",
+            "artifact_digest": "sha256:60b56f5f0a5ecd7795e911743aaac6c8d1a47bd1ea49db67d50d1bd6e2eeeb57",
+            "status": "passed"
+          }
+        ],
+        "uses_service_credentials": false,
+        "sends_prompt": false,
+        "previous": {
+          "plugin_version": "3.4.4",
+          "artifact_digest": "sha256:51d13bf26ed9a9bfa5359cc08fb8da6034a178f45e501a46f2829128cefb894e"
+        },
+        "worker": {
+          "executable_digest": "sha256:1c82896e3c01e6f962399bc08248e35d5900fb073f153308017b3962a1dab932",
+          "initialize_and_session_new": "passed",
+          "stop_and_descendant_drain": "passed",
+          "sidecar_count": 0,
+          "distinct_generation_coexistence": "passed"
+        }
+      }
+    },
+    "enrolled_session_acceptance": {
+      "schema": "cowboy.execution-session-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "current_browser_device_login_and_bound_api_credentials",
+        "real_product_setup_login_and_two_signed_machine_handshakes",
+        "signed_fixture_installed_through_public_operator_lifecycle",
+        "runtime_without_projects_is_schedulable_in_browser_machine_inventory",
+        "native_project_registry_cas_and_operator_authorization",
+        "remote_only_policy_enforced_by_legacy_and_native_creation",
+        "placement_needs_no_runtime_project_or_directory_mapping",
+        "public_creation_persists_exact_binding_and_isolated_target_worktree",
+        "worker_tools_cross_both_enrolled_machine_connections",
+        "runtime_and_stable_source_remain_unchanged",
+        "project_removal_retires_new_admission_and_preserves_bound_session_and_files",
+        "controller_restart_retains_binding_and_resumes_original_environment_without_replay",
+        "native_project_registry_and_policy_survive_machine_and_controller_restart",
+        "target_machine_restart_reattaches_original_keeper_without_replay",
+        "public_deletion_waits_for_target_stop_and_preserves_work"
+      ],
+      "inputs": {
+        "controller": {
+          "path": "/nix/store/s4dsd8zbcrn18995krfwciiszhz27nwn-cowboy-0.1.0/bin/cowboy",
+          "sha256": "d6499c4ae83cbc56a86d6a3f5836448ac44f09110684155baf2bc1c800e020ab"
+        },
+        "machine": {
+          "path": "/nix/store/pn8fyh11p700m7lzrw3jbmjr0r45gvlv-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "b382f1033d3ba1b51a80861da7f456cec815defe6234b938f8b83cfb152347c2"
+        },
+        "worker": {
+          "path": "/nix/store/15g5pm1mdy61jc044rawhafdaqy0kxai-cowboy-0.1.0/bin/cowboy-acp-worker",
+          "sha256": "1c82896e3c01e6f962399bc08248e35d5900fb073f153308017b3962a1dab932"
+        },
+        "keeper": {
+          "path": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release/bin/cowboy-execution-host",
+          "sha256": "4b9cc495bb3bca376f7b2fa86a9bf0f695cd471593fa73498d43c1f06bf7c04e"
+        },
+        "pack": {
+          "path": "/srv/storage/fast0/agent/worktrees/cowboy/remote-execution-recovery-20261004/target/debug/cowboy-plugin-pack",
+          "sha256": "642bbecbe8187e88f3d83a004c1425d1a986174198311c39f25ecdface89df24"
+        },
+        "native_cli": {
+          "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+          "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+        }
+      },
+      "fixture_release": {
+        "release_schema": 4,
+        "plugin_id": "execution-fixture",
+        "plugin_version": "1.0.0",
+        "artifact_digest": "sha256:caf65311f2d69a65b56c519c962a896a6f234ae33e6d5a583e56145c80f3771c"
+      },
+      "harness_sha256": "ad078472cdf2727313990ea968a33095df38a73d3205c23ef088c9a35b8142ca",
+      "real_model_requests": 0,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "native_codex_turns_covered_by_separate_gate",
+        "cross_host_latency",
+        "production_subscription_inference",
+        "external_tls_termination_fixture_uses_trusted_loopback_proxy_boundary"
+      ],
+      "device_fixture_sha256": "187ef0605032f68e6cfc3c72e3c9d6104b47e8526cf9c054a4e7f9dd08bfad47"
+    },
+    "independent_read_only_review": "passed; control-byte-budget finding fixed and verified"
+  },
+  "production": {
+    "falcon": {
+      "schema": 1,
+      "machine": "falcon",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1791098155762660157-c4f29d40ec38",
+      "revision": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+      "workerGeneration": "worker-9fce17441fdd1e8ca642",
+      "published": true,
+      "release": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "previousRelease": "/nix/store/1qbhcdgwxyc18fhm95phqnqda0hjg86s-cowboy-machine-release",
+      "activeRelease": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-04T07:15:55.762660157Z",
+      "recordedAt": "2026-10-04T07:16:04.523422563Z",
+      "recovered": false
+    },
+    "hawk": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1791098241083314286-c4f29d40ec38",
+      "revision": "c4f29d40ec3854546ab2bbe54ff7237105f1d353",
+      "workerGeneration": "worker-9fce17441fdd1e8ca642",
+      "published": true,
+      "release": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "previousRelease": "/nix/store/q3247pa0r325gh850pj8l4gs907q0p6c-cowboy-machine-release",
+      "activeRelease": "/nix/store/vhwiwp321mr44hry5csrr9c9lkd4yb07-cowboy-machine-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-04T07:17:21.083314286Z",
+      "recordedAt": "2026-10-04T07:17:30.18438395Z",
+      "recovered": false,
+      "worker_continuity": {
+        "original_workers": 13,
+        "unchanged_workers": 13,
+        "changed_sessions": []
+      }
+    },
+    "ovh": {
+      "previous_pid": 1066606,
+      "pid": 1080991,
+      "start": "37609953",
+      "parent": 1463,
+      "exe": "/nix/store/pn8fyh11p700m7lzrw3jbmjr0r45gvlv-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "worker_generation": "worker-9fce17441fdd1e8ca642",
+      "original_workers_preserved_until_host_start": true,
+      "accepted_at": 1791098393,
+      "configuration_sha256": "6f2e6435053908b3b11edec810aa19f7abfd4032ee4e3fe47b72be0cc88b731a",
+      "original_workers": 7,
+      "retained_workers": 7,
+      "native_generation_handoffs": 0,
+      "protected_receipt": "/var/lib/columbus/ovh-cowboy-execution-recovery-20261004/committed.json",
+      "normal_kill_mode": "control-group",
+      "rollback_timer": "inactive",
+      "remote_session_policy_restored": true
+    },
+    "health": {
+      "falcon": {
+        "connected": true,
+        "status": "online",
+        "active_acp_generation": "worker-9fce17441fdd1e8ca642",
+        "workspace_revision": "projects-fb5ed67ef8d427de4f98215fb35ed027",
+        "workspace_ids_sha256": "ff963bc4a9f47f42abfa5dd6f74b107eb5d6fd840ce945ea717e42b4678281e9",
+        "workspace_owner": "cowboy"
+      },
+      "hawk": {
+        "connected": true,
+        "status": "online",
+        "active_acp_generation": "worker-9fce17441fdd1e8ca642",
+        "workspace_revision": "projects-0410346496a2ec677f145e3407b49beb",
+        "workspace_ids_sha256": "1757550a9b3557d78dee8ec0c239c6d88c46e6e14e4dd678bc27fa38584a4f40",
+        "workspace_owner": "cowboy"
+      },
+      "ovh": {
+        "connected": true,
+        "status": "online",
+        "active_acp_generation": "worker-9fce17441fdd1e8ca642",
+        "workspace_revision": "projects-21dee2e2568e528fa45e200604d2155f",
+        "workspace_ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "workspace_owner": "cowboy"
+      }
+    },
+    "project_identities_unchanged": true
+  },
+  "upgrade_boundaries": [
+    "busy ACP workers retain their original process and adopt the new worker at a native safe boundary",
+    "existing execution keepers retain their environment and executable; new workers recover legacy cursor gaps through native process recovery",
+    "new environments on Hawk and Falcon use the acknowledged backpressure keeper",
+    "previously discarded output cannot be reconstructed; uncertain effects are never replayed"
+  ],
+  "not_claimed": [
+    "production subscription inference",
+    "external TLS termination acceptance",
+    "recovery of already discarded legacy process output"
+  ]
+}
