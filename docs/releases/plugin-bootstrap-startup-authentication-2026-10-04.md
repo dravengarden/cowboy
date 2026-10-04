@@ -61,5 +61,60 @@ SDK and dependency source guards are retained without bypass. Build output is
 
 ## Validation and production receipt
 
-Source and immutable release acceptance, the exact artifact comparison and the
-production activation receipt are appended after their checks complete.
+Source gates at `ec52587ad5a54a2123b47986db2b305d4b6098c7` passed all-feature
+library tests (1,809 passed, 46 ignored), integrations, standalone Machine tests
+(498 passed, 9 ignored), all-feature and default Clippy with warnings denied,
+Rust formatting and Plugin/Provider checks. The final merge incorporated only
+independent Web changes and its production receipt. Final immutable source-boundary
+and worker-registry checks passed; the default Nix package passed 1,330 tests,
+with 27 ignored, without retry. Its Rust package derivation was unchanged by that
+Web merge. No signature, warning, assertion or source guard was disabled.
+
+The exact final release passed four native tests: nine signed startup cases
+(healthy; mutated host, Code, worker, manifest or archive; missing or linked
+archive evidence; invalid floor), signed native installation and offline floored
+refresh refusal, all twenty-four raw/archive cached-launcher cases, and current
+versus preceding cache-only bootstrap guard admission. In the signed startup
+matrix a marker at the first instruction of publisher code appears only for the
+healthy case. Every refusal leaves the marker and runtime directory absent.
+The matrix uses disposable signed fixtures and does not claim provider inference
+or a production signed bootstrap publication.
+
+Published source `ae9d08c8881c56e1f742a75826cbe7ecc735b3dd` was activated from
+`/nix/store/6af4mb660ry4crpb4gazshhn5fdm2d9q-cowboy-machine-release` by the
+unchanged installed owner. Transaction `1791100992954474633-ae9d08c8881c`
+succeeded, published and committed at `2026-10-04T08:03:23.586767353Z`, with
+maintenance enabled and no recovery. Its predecessor is the already accepted
+`vhwiwp321mr44hry5csrr9c9lkd4yb07` release. The actual running native is
+`/nix/store/f8w80j9l2r3bbii3wdjnylhip8cph6hv-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped`,
+SHA-256 `92b3458f7cab1e2749c1c7ad89f27e7d0af6ba1b40218b577a8c64aa9cf7cf40`.
+The installer entrypoint SHA-256 is
+`f31a06c20068b375e8d3eb812b6e1b9c4f7423430c03ad440a8c6a5ab684b3ef`.
+
+Both the immutable comparison and production receipt retain the same six
+companion paths/digests and `worker-9fce17441fdd1e8ca642`. The separately aligned
+pin is recorded as the accepted full Machine source in
+`retained-worker-source.json`. This is retention of that existing generation,
+not a new worker rollout.
+
+Before/after samples retain all thirteen workers and five execution keepers with
+the same IDs, states and PIDs. Resident Machine PID changed from `4090042` to
+`303991`; its `/proc` executable and digest match the artifact. Controller PID
+`959309` and receipt, Web profile/version, root reader-floor bytes and sudoers
+bytes remain unchanged. `/healthz`, `/version`, SPA, service worker and Machine
+deployment health returned 200; HTML/SW retain `no-store`, and Machine reports
+connected/online with the retained generation. Both component in-progress files
+are absent; no failed system/user unit was observed or reset. These are bounded
+process samples, not proof of a new native-generation swap or session resume.
+
+The deletion namespace remains only `.lock`, no portable floor is initialized,
+and the actual new Machine startup reports zero deleted sessions with
+`writer_enabled=false`. The independent Plugin-incarnation writer's true flag
+does not describe the deletion writer. Sudo remains available and its policy
+SHA-256 remains
+`149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69`.
+No Controller/Web restart, Plugin operation or production signed bootstrap
+publication was performed by this slice.
+
+Exact executable digests, process timestamps and activation receipts are in the
+[machine-readable evidence](../experiments/plugin-bootstrap-startup-authentication-2026-10-04.json).
