@@ -41,6 +41,12 @@ require the exact successful build receipt and published SideStore version.
   `retained-worker-source.json`; native wire/SDK/dependency source changes
   refuse this output. Advancing that pin or using `.#cowboy-machine-release`
   changes the pool/adapter boundary and needs separate maintenance acceptance.
+- Targets with an active schema-one Session deletion writer use
+  `.#cowboy-machine-writer-host-release` for resident fixes. This retains the
+  same accepted worker/Code/Zed bundle and the installed writer capability.
+  Its startup admission requires the fixed root component selection, exact
+  native build and existing Hawk reader floor. Ordinary/bootstrap builds stay
+  read-only; reader-only artifacts remain compatible explicit recovery targets.
 - Web releases atomically move only `/run/cowboy-web` and restart no process.
   Controller releases restart only `cowboy.service`. Machine releases are a
   separate explicit maintenance boundary for the resident Machine, worker
