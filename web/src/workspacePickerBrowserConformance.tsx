@@ -1,3 +1,4 @@
+import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 import { StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -10,6 +11,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
 > {
   localStorage.removeItem("cowboy.workspaceHierarchy");
   localStorage.removeItem("cowboy.projectHierarchy");
+  localStorage.removeItem("cowboy.sessionDirectoryHierarchy");
   const container = document.createElement("div");
   container.style.width = "360px";
   container.style.display = "flex";
@@ -30,6 +32,37 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
         <WorkspacePicker
           label={label}
           entries={entries}
+          value={value}
+          onChange={(id) => {
+            selections.push(id);
+            setValue(id);
+          }}
+        />
+      </ThemeProvider>
+    );
+  }
+  function DirectoryHarness() {
+    const [value, setValue] = useState("");
+    const { theme } = useThemeMode();
+    const directoryEntries = sessionDirectoryChoices({
+      folders: [
+        { id: "work", name: "Work", parent: null, position: 0, project: null },
+        {
+          id: "nested",
+          name: "Nested",
+          parent: "work",
+          position: 0,
+          project: null,
+        },
+      ],
+      placement: {},
+    });
+    return (
+      <ThemeProvider theme={theme}>
+        <WorkspacePicker
+          label="Sessions directory (optional)"
+          hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+          entries={directoryEntries}
           value={value}
           onChange={(id) => {
             selections.push(id);
@@ -272,6 +305,40 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       selections.at(-1) === "child-id",
       "Search preserves project identity",
     );
+    flushSync(() => root.render(<DirectoryHarness />));
+    click('[role="combobox"]');
+    await settle();
+    check(
+      item("Global").classList.contains("Mui-selected"),
+      "Empty directory defaults to Global",
+    );
+    click('[role="menuitem"]', "Work");
+    await settle();
+    click('[data-current-directory="true"]', "Work");
+    await closed();
+    check(
+      selections.at(-1) === "work",
+      "A Sessions directory itself is selectable",
+    );
+    click('[role="combobox"]');
+    await settle();
+    check(
+      item("Work").classList.contains("Mui-selected") && item("Nested"),
+      "Selected directory opens its own branch",
+    );
+    click('[role="menuitem"]', "Nested");
+    await closed();
+    click('[role="combobox"]');
+    await settle();
+    check(
+      item("Nested").classList.contains("Mui-selected"),
+      "Selected nested directory is revealed",
+    );
+    click(".MuiBreadcrumbs-root button");
+    await settle();
+    click('[role="menuitem"]', "Global");
+    await closed();
+    check(selections.at(-1) === "", "Global clears the directory value");
     return [
       "default hierarchy",
       "parent browsing preserves selection",
@@ -282,11 +349,13 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       "saved preference",
       "project hierarchy independent of old directory preference",
       "cross-Machine project search by source path",
+      "optional Sessions directory: empty Global, parent/child selection and automatic reveal",
     ];
   } finally {
     flushSync(() => root.unmount());
     container.remove();
     localStorage.removeItem("cowboy.workspaceHierarchy");
     localStorage.removeItem("cowboy.projectHierarchy");
+    localStorage.removeItem("cowboy.sessionDirectoryHierarchy");
   }
 }

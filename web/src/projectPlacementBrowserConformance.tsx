@@ -131,6 +131,9 @@ export async function runProjectPlacementBrowserConformance(): Promise<
           label="Project"
           entries={placement.projects}
           value={placement.project?.value ?? ""}
+          defaultValue={placement.defaultProjectValue}
+          configuredDefault={placement.configuredDefaultProject}
+          onDefaultChange={placement.setDefaultProject}
           onChange={placement.selectProject}
         />
         <AiInstallationPicker
@@ -322,6 +325,16 @@ export async function runProjectPlacementBrowserConformance(): Promise<
       current?.ready && !current.separate,
       "explicit local installation selection remains available",
     );
+    flushSync(() => current!.setDefaultProject(JSON.stringify(["falcon", "stable-id"])));
+    check(current?.configuredDefaultProject === JSON.stringify(["falcon", "stable-id"]) && current.machineId === "hawk", "Default setting preserves the current explicit selection");
+    const useDefault = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "Use as default");
+    check(useDefault, "Selected project can be made the default");
+    flushSync(() => useDefault!.click());
+    check(current?.configuredDefaultProject === JSON.stringify(["hawk", "stable-id"]), "Default control stores the selected stable Machine/project identity");
+    const resetDefault = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "Reset default");
+    check(resetDefault, "Configured defaults have a reset action");
+    flushSync(() => resetDefault!.click());
+    check(current?.configuredDefaultProject === "", "Reset restores automatic default selection");
     let picked = 0;
     let inspected = 0;
     function SessionRow({ cwd = "/runtime" }: { cwd?: string }) {

@@ -277,3 +277,19 @@ complete paths are available through the row tooltip. The source session is
 excluded, duplicate titles still select by session ID, and selecting moves
 without sending. Search owns IME candidate keys; arrows navigate eligible rows,
 Enter selects and Escape cancels. Mobile retains its existing picker.
+
+### New session defaults
+
+Project and Sessions directory are independent. With no configured default,
+New Session prefers the registered `columbus` project on the connected local
+Machine, retaining the existing connected/local fallback when it is absent.
+“Use as default” stores the exact Machine/project identity on this device;
+“Reset default” restores automatic selection. A configured identity that is
+removed does not silently select another project.
+
+The optional Sessions directory starts empty (Global) on ordinary creation.
+Creation from a folder preselects that folder. Choosing a directory does not
+change the source project or executor. Successful creation writes an explicit
+placement, including Global, so project bindings cannot override this choice.
+The picker reveals the selected directory on reopening and keeps its hierarchy
+preference separate from the Project and legacy working-directory pickers.

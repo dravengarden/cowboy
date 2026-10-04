@@ -29,18 +29,32 @@ import {
 } from "./workspaceHierarchy";
 
 export function WorkspacePicker(
-  { entries, value, onChange, label = "Working directory" }: {
+  {
+    entries,
+    value,
+    onChange,
+    label = "Working directory",
+    defaultValue,
+    configuredDefault,
+    onDefaultChange,
+    hierarchyPreferenceKey,
+  }: {
     label?: string;
+    hierarchyPreferenceKey?: string;
     entries: readonly WorkspaceEntry[];
     value: string;
     onChange: (value: string) => void;
+    defaultValue?: string | undefined;
+    configuredDefault?: string | undefined;
+    onDefaultChange?: ((value: string) => void) | undefined;
   },
 ): React.JSX.Element {
   // Project placement is shared by local and remote execution. Its display
   // preference must not inherit a flat directory picker from an older flow.
-  const preferenceKey = label === "Project"
-    ? "cowboy.projectHierarchy"
-    : "cowboy.workspaceHierarchy";
+  const preferenceKey = hierarchyPreferenceKey ??
+    (label === "Project"
+      ? "cowboy.projectHierarchy"
+      : "cowboy.workspaceHierarchy");
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -133,7 +147,11 @@ export function WorkspacePicker(
         </Typography>
         {currentParent && (
           <Typography variant="caption" display="block" color="text.secondary">
-            {label === "Project" ? "Select this project" : "Use this directory"}
+            {entry.value === ""
+              ? entry.help
+              : label === "Project"
+              ? "Select this project"
+              : "Use this directory"}
           </Typography>
         )}
       </Box>
@@ -174,6 +192,43 @@ export function WorkspacePicker(
           }
         }}
       />
+      {onDefaultChange && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          flexWrap="wrap"
+          sx={{ gap: 1, mt: -0.5 }}
+        >
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mr: "auto" }}
+          >
+            Default:{" "}
+            {entries.find((entry) => entry.value === defaultValue)?.label ??
+              (configuredDefault
+                ? "Unavailable — choose another project"
+                : "Automatic")} · this device
+          </Typography>
+          {selected && selected.value !== defaultValue && (
+            <Button
+              size="small"
+              onClick={() => onDefaultChange(selected.value)}
+            >
+              Use as default
+            </Button>
+          )}
+          {configuredDefault && (
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => onDefaultChange("")}
+            >
+              Reset default
+            </Button>
+          )}
+        </Stack>
+      )}
       <Popover
         open={Boolean(anchor)}
         anchorEl={anchor}
@@ -330,7 +385,7 @@ export function WorkspacePicker(
           {grouped
             ? [
               ...branch.entries.map((entry) =>
-                entryRow(entry, branch.label, undefined, true)
+                entryRow(entry, branch.label || entry.label, undefined, true)
               ),
               ...[...branch.children.values()].flatMap((child) => {
                 if (child.entries.length === 1) {

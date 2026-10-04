@@ -1,3 +1,4 @@
+import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
 import { AiInstallationPicker } from "./AiInstallationPicker";
@@ -2482,11 +2483,13 @@ function NewSessionDialog({
     open,
     onClose,
     onCreated,
+    initialFolder = null,
 }: {
     open: boolean;
     onClose: () => void;
     /** Called with a local projection so the UI can focus it before the WS list catches up. */
-    onCreated: (session: SessionMeta) => void;
+    onCreated: (session: SessionMeta, folder: string | null) => void;
+    initialFolder?: string | null;
 }): React.JSX.Element {
     const keyboardOpen = useKeyboardOpen();
     const machines = useStoreSelector((snapshot) => snapshot.machines);
@@ -2495,6 +2498,9 @@ function NewSessionDialog({
     const cwd = placement.project?.projectId ?? "";
     const provider = placement.installation?.provider ?? "";
     const desktop = useSurfaceProfile().kind === "desktop";
+    const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    const [directory, setDirectory] = useState("");
+    const directoryChoices = useMemo(() => sessionDirectoryChoices(sessionDirectories), [sessionDirectories]);
     const [workItemId, setWorkItemId] = useState("");
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState("");
@@ -2527,6 +2533,7 @@ function NewSessionDialog({
     useEffect(() => {
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
+        setDirectory(initialFolder ?? "");
         setWorkItemId("");
         setCreating(false);
         setCreateError("");
@@ -2540,6 +2547,10 @@ function NewSessionDialog({
     const theme = useTheme();
     const create = (): void => {
         if (creating || !placement.ready || !providerAvailable(provider) || !machineId || !cwd) return;
+        if (directory && !sessionDirectories.folders.some((folder) => folder.id === directory)) {
+            setCreateError("The Sessions directory was removed. Choose another directory or Global.");
+            return;
+        }
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
         // id back synchronously and can focus the new session the moment it's
         // created.
@@ -2617,7 +2628,7 @@ function NewSessionDialog({
                             workspace_source_path: selectedWorkspace.help,
                         }
                         : {}),
-                });
+                }, directory || null);
                 onClose();
             } catch (error) {
                 // Creating a session is live-only (docs/offline-first-sync.md,
@@ -2678,11 +2689,24 @@ function NewSessionDialog({
                     label="Project"
                     entries={placement.projects}
                     value={placement.project?.value ?? ""}
+                    defaultValue={placement.defaultProjectValue}
+                    configuredDefault={placement.configuredDefaultProject}
+                    onDefaultChange={placement.setDefaultProject}
                     onChange={(value): void => {
                         placement.selectProject(value);
                         setWorkItemId("");
                     }}
                 />
+                <WorkspacePicker
+                    label="Sessions directory (optional)"
+                    hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+                    entries={directoryChoices}
+                    value={directory}
+                    onChange={setDirectory}
+                />
+                <Typography variant="caption" color="text.secondary">
+                    Empty means Global. This organizes the session list; Project determines the working directory.
+                </Typography>
                 <AiInstallationPicker
                     installations={placement.installations}
                     value={placement.installation?.value ?? ""}
@@ -4954,11 +4978,12 @@ export function App({
 
             <NewSessionDialog
                 open={dialogOpen}
+                initialFolder={newSessionFolderRef.current}
                 onClose={(): void => {
                     newSessionFolderRef.current = null;
                     setDialogOpen(false);
                 }}
-                onCreated={(session): void => {
+                onCreated={(session, folder): void => {
                     // The daemon returns a durable Starting session before its
                     // Machine workspace and worker are ready. Select it now so
                     // preparation belongs to the destination page, not to the
@@ -4966,10 +4991,9 @@ export function App({
                     // animation: the id already names a real persisted session.
                     setPendingCreatedSession(session);
                     setActiveId(session.id);
-                    if (newSessionFolderRef.current) {
-                        placeSessions([session.id], newSessionFolderRef.current);
-                        newSessionFolderRef.current = null;
-                    }
+                    // Explicit Global overrides automatic project binding.
+                    placeSessions([session.id], folder);
+                    newSessionFolderRef.current = null;
                     if (mobile && settleMobileDrawerRef.current) {
                         settleMobileDrawerRef.current(false, 0);
                     } else {

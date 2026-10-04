@@ -1,3 +1,6 @@
+import { useStore as usePreference } from "@cowboy/state-store";
+import { defaultNewSessionProject } from "./newSessionProject";
+import { newSessionProjectPreference } from "./newSessionProjectPreference";
 import { useEffect, useMemo, useState } from "react";
 import { projectAgentPluginInventory } from "@cowboy/provider-ui";
 import type { MachineSummary } from "./protocol";
@@ -37,14 +40,15 @@ export function useProjectPlacement(
     () => policies ? projectChoices(machines, policies) : [],
     [machines, policies],
   );
+  const preferredProject = usePreference(newSessionProjectPreference);
+  const defaultProject = defaultNewSessionProject(
+    projects,
+    machines,
+    preferredProject,
+  );
   const project = projectKey
     ? projects.find((p) => p.value === projectKey)
-    : projects.find((p) =>
-      machines.some((m) => m.id === p.machineId && m.local && m.connected)
-    ) ??
-      projects.find((p) =>
-        machines.some((m) => m.id === p.machineId && m.connected)
-      ) ?? projects[0];
+    : defaultProject;
   const machineId = project?.machineId ?? "";
   // Inventory changes revalidate readiness without resetting the user's project.
   const inventoryRevision = JSON.stringify(
@@ -129,6 +133,10 @@ export function useProjectPlacement(
   return {
     projects,
     project,
+    defaultProjectValue: defaultProject?.value ?? "",
+    configuredDefaultProject: preferredProject,
+    setDefaultProject: (value: string): void =>
+      newSessionProjectPreference.set(value),
     installations,
     installation,
     selectProject: (value: string): void => {
