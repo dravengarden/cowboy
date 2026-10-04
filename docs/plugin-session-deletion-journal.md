@@ -400,3 +400,13 @@ can then recover to that original anchor. This never selects a new version, chan
 the floor, fetches an unsigned URL, probes publisher code or enables the writer.
 Non-Linux package rebuilding, damaged-generation replacement, key rotation and
 committed deletion admission remain closed.
+
+The subsequent [explicit damaged-anchor quarantine](releases/plugin-anchor-quarantine-recovery-2026-10-04.md)
+adds `--quarantine-damaged-anchor` to that command only with both original evidence
+inputs. Default recovery still refuses damage. The explicit path verifies the
+original proof, stages a complete authenticated replacement and atomically
+exchanges it with a regular damaged anchor directory on Linux. Retained damage
+lives under a private state-level quarantine outside ordinary cache pruning, and
+the successful command reports its path. No damaged bytes or links are executed;
+missing-floor reconstruction, publisher rotation, committed deletion admission,
+non-Linux exchange and writer activation remain closed.

@@ -2,7 +2,9 @@
 //! Existing damaged generations and unrelated selections are never replaced.
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::restore_portable_host_anchor;
+pub(crate) use linux::{
+    restore_portable_host_anchor, restore_portable_host_anchor_with_quarantine,
+};
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn restore_portable_host_anchor(
@@ -14,12 +16,24 @@ pub(crate) fn restore_portable_host_anchor(
     anyhow::bail!("anchor package restoration requires Linux no-replace publication")
 }
 
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn restore_portable_host_anchor_with_quarantine(
+    _state: &std::path::Path,
+    _key: &std::path::Path,
+    _manifest: &std::path::Path,
+    _artifact: &std::path::Path,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    anyhow::bail!("anchor quarantine restoration requires Linux atomic exchange")
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::collections::BTreeMap;
     use std::fs::{DirBuilder, File, OpenOptions};
     use std::io::{Read as _, Write as _};
-    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    use std::os::unix::fs::{
+        DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+    };
     use std::path::{Component, Path, PathBuf};
 
     use anyhow::{Context as _, Result, ensure};
@@ -262,112 +276,183 @@ mod linux {
         manifest: &Path,
         artifact: &Path,
     ) -> Result<()> {
-        #[cfg(not(target_os = "linux"))]
-        anyhow::bail!("anchor package restoration requires Linux no-replace publication");
-        #[cfg(target_os = "linux")]
-        {
-            session_deletion_admission::require_empty_portable_namespace(state)?;
-            let state = state.canonicalize()?;
-            let floor = reader_floor::read(&state)?
-                .context("anchor recovery requires an existing floor")?;
-            let floor_bytes = read_regular(&state.join(reader_floor::NAME), Some(8192))?;
-            let publisher = String::from_utf8(read_regular(key, Some(16 * 1024))?)?;
-            floor.check_publisher(&publisher)?;
-            let manifest_bytes = read_regular(manifest, Some(64 * 1024))?;
-            let desired: DesiredComponent =
-                serde_json::from_slice::<Manifest>(&manifest_bytes)?.into();
-            desired
-                .validate_session_deletion_declaration()
-                .map_err(anyhow::Error::msg)?;
-            let proof = crate::component_proof::component_proof(&desired);
-            ensure!(
-                desired.version == floor.anchor_version
-                    && desired.generation == floor.anchor_generation
-                    && desired.digest.to_ascii_lowercase() == floor.anchor_digest
-                    && format!("{:x}", Sha256::digest(&proof)) == floor.anchor_proof_sha256,
-                "recovery candidate differs from original floor proof"
-            );
-            ensure!(
-                crate::machine_auth::verify(
-                    &publisher,
-                    &proof,
-                    desired.signature.as_deref().expect("signature present")
-                )?,
-                "recovery publisher signature rejected"
-            );
-            let artifact_bytes = read_regular(artifact, Some(256 * 1024 * 1024))?;
-            ensure!(
-                format!("{:x}", Sha256::digest(&artifact_bytes)) == floor.anchor_digest,
-                "recovery artifact digest mismatch"
-            );
-            let (tree, relative_executable) = contents(&desired, &artifact_bytes)?;
-            let root = state.join("components");
-            let generation = floor.anchor_path(&root);
-            let executable = generation.join(&relative_executable);
-            check_paths(&state, &generation, &executable)?;
-            match std::fs::symlink_metadata(&generation) {
-                Ok(_) => {
-                    authenticate_floor(&root, &floor, &publisher)?;
-                    return Ok(());
+        restore_anchor(state, key, manifest, artifact, false).map(|_| ())
+    }
+
+    pub(crate) fn restore_portable_host_anchor_with_quarantine(
+        state: &Path,
+        key: &Path,
+        manifest: &Path,
+        artifact: &Path,
+    ) -> Result<Option<PathBuf>> {
+        restore_anchor(state, key, manifest, artifact, true)
+    }
+
+    fn private_quarantine(path: &Path) -> Result<()> {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) => ensure!(
+                m.is_dir()
+                    && m.uid() == rustix::process::geteuid().as_raw()
+                    && m.permissions().mode() & 0o077 == 0,
+                "anchor quarantine must be an owned private regular directory"
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+
+    fn restore_anchor(
+        state: &Path,
+        key: &Path,
+        manifest: &Path,
+        artifact: &Path,
+        quarantine_damage: bool,
+    ) -> Result<Option<PathBuf>> {
+        session_deletion_admission::require_empty_portable_namespace(state)?;
+        let state = state.canonicalize()?;
+        let floor =
+            reader_floor::read(&state)?.context("anchor recovery requires an existing floor")?;
+        let floor_bytes = read_regular(&state.join(reader_floor::NAME), Some(8192))?;
+        let publisher = String::from_utf8(read_regular(key, Some(16 * 1024))?)?;
+        floor.check_publisher(&publisher)?;
+        let manifest_bytes = read_regular(manifest, Some(64 * 1024))?;
+        let desired: DesiredComponent = serde_json::from_slice::<Manifest>(&manifest_bytes)?.into();
+        desired
+            .validate_session_deletion_declaration()
+            .map_err(anyhow::Error::msg)?;
+        let proof = crate::component_proof::component_proof(&desired);
+        ensure!(
+            desired.version == floor.anchor_version
+                && desired.generation == floor.anchor_generation
+                && desired.digest.to_ascii_lowercase() == floor.anchor_digest
+                && format!("{:x}", Sha256::digest(&proof)) == floor.anchor_proof_sha256,
+            "recovery candidate differs from original floor proof"
+        );
+        ensure!(
+            crate::machine_auth::verify(
+                &publisher,
+                &proof,
+                desired.signature.as_deref().expect("signature present")
+            )?,
+            "recovery publisher signature rejected"
+        );
+        let artifact_bytes = read_regular(artifact, Some(256 * 1024 * 1024))?;
+        ensure!(
+            format!("{:x}", Sha256::digest(&artifact_bytes)) == floor.anchor_digest,
+            "recovery artifact digest mismatch"
+        );
+        let (tree, relative_executable) = contents(&desired, &artifact_bytes)?;
+        let root = state.join("components");
+        let generation = floor.anchor_path(&root);
+        let executable = generation.join(&relative_executable);
+        check_paths(&state, &generation, &executable)?;
+        let damaged = match std::fs::symlink_metadata(&generation) {
+            Ok(m) => {
+                if authenticate_floor(&root, &floor, &publisher).is_ok() {
+                    return Ok(None);
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                ensure!(
+                    quarantine_damage,
+                    "damaged anchor requires explicit quarantine restoration"
+                );
+                ensure!(m.is_dir(), "damaged anchor must be a regular directory");
+                Some((m.dev(), m.ino()))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let quarantine = state.join("component-anchor-quarantine");
+        if damaged.is_some() {
+            private_quarantine(&quarantine)?;
+        }
+        let recheck = || -> Result<()> {
+            session_deletion_admission::require_empty_portable_namespace(&state)?;
+            ensure!(
+                reader_floor::read(&state)?.as_ref() == Some(&floor)
+                    && read_regular(&state.join(reader_floor::NAME), Some(8192))? == floor_bytes,
+                "floor changed during anchor recovery"
+            );
+            let current_key = String::from_utf8(read_regular(key, Some(16 * 1024))?)?;
+            floor.check_publisher(&current_key)?;
+            check_paths(&state, &generation, &executable)
+        };
+        recheck()?;
+        let parent = generation.parent().expect("validated anchor parent");
+        let mut directory = state.clone();
+        for part in parent.strip_prefix(&state)?.components() {
+            ensure!(
+                matches!(part, Component::Normal(_)),
+                "unsafe recovery parent"
+            );
+            directory.push(part);
+            match DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => ensure!(
+                    std::fs::symlink_metadata(&directory)?.is_dir(),
+                    "recovery parent is not regular"
+                ),
                 Err(e) => return Err(e.into()),
             }
-            let recheck = || -> Result<()> {
-                session_deletion_admission::require_empty_portable_namespace(&state)?;
-                ensure!(
-                    reader_floor::read(&state)?.as_ref() == Some(&floor)
-                        && read_regular(&state.join(reader_floor::NAME), Some(8192))?
-                            == floor_bytes,
-                    "floor changed during anchor recovery"
-                );
-                let current_key = String::from_utf8(read_regular(key, Some(16 * 1024))?)?;
-                floor.check_publisher(&current_key)?;
-                check_paths(&state, &generation, &executable)
-            };
-            recheck()?;
-            let parent = generation.parent().expect("validated anchor parent");
-            let mut directory = state.clone();
-            for part in parent.strip_prefix(&state)?.components() {
-                ensure!(
-                    matches!(part, Component::Normal(_)),
-                    "unsafe recovery parent"
-                );
-                directory.push(part);
-                match DirBuilder::new().mode(0o700).create(&directory) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => ensure!(
-                        std::fs::symlink_metadata(&directory)?.is_dir(),
-                        "recovery parent is not regular"
-                    ),
-                    Err(e) => return Err(e.into()),
-                }
-                File::open(directory.parent().context("recovery parent missing")?)?.sync_all()?;
+            File::open(directory.parent().context("recovery parent missing")?)?.sync_all()?;
+        }
+        let staging_parent = if damaged.is_some() {
+            match DirBuilder::new().mode(0o700).create(&quarantine) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.into()),
             }
-            let staged = parent.join(format!(
-                ".anchor-recovery-{:032x}.partial",
+            private_quarantine(&quarantine)?;
+            File::open(&state)?.sync_all()?;
+            &quarantine
+        } else {
+            parent
+        };
+        let staged = staging_parent.join(if damaged.is_some() {
+            format!(
+                "anchor-{}-{:032x}.retained",
+                floor.anchor_digest,
                 rand::random::<u128>()
-            ));
-            DirBuilder::new().mode(0o700).create(&staged)?;
-            for (relative, payload) in tree {
-                let path = staged.join(relative);
-                if let Some(payload) = payload {
-                    write_file(&path, &payload.bytes, payload.mode)?;
-                } else {
-                    DirBuilder::new().mode(0o700).create(path)?;
-                }
+            )
+        } else {
+            format!(".anchor-recovery-{:032x}.partial", rand::random::<u128>())
+        });
+        DirBuilder::new().mode(0o700).create(&staged)?;
+        for (relative, payload) in tree {
+            let path = staged.join(relative);
+            if let Some(payload) = payload {
+                write_file(&path, &payload.bytes, payload.mode)?;
+            } else {
+                DirBuilder::new().mode(0o700).create(path)?;
             }
-            std::fs::set_permissions(
-                staged.join(&relative_executable),
-                std::fs::Permissions::from_mode(0o755),
+        }
+        std::fs::set_permissions(
+            staged.join(&relative_executable),
+            std::fs::Permissions::from_mode(0o755),
+        )?;
+        write_file(&staged.join("manifest.json"), &manifest_bytes, 0o600)?;
+        write_file(&staged.join("artifact"), &artifact_bytes, 0o600)?;
+        super::super::host_payload::HostPayload::from_authenticated(&desired, &artifact_bytes)?
+            .context("recovery candidate is not a host")?
+            .verify(&staged)?;
+        sync_tree(&staged)?;
+        File::open(staging_parent)?.sync_all()?;
+        recheck()?;
+        if let Some(identity) = damaged {
+            private_quarantine(&quarantine)?;
+            let current = std::fs::symlink_metadata(&generation)?;
+            ensure!(
+                current.is_dir() && (current.dev(), current.ino()) == identity,
+                "damaged anchor changed before quarantine exchange"
+            );
+            rustix::fs::renameat_with(
+                rustix::fs::CWD,
+                &staged,
+                rustix::fs::CWD,
+                &generation,
+                rustix::fs::RenameFlags::EXCHANGE,
             )?;
-            write_file(&staged.join("manifest.json"), &manifest_bytes, 0o600)?;
-            write_file(&staged.join("artifact"), &artifact_bytes, 0o600)?;
-            super::super::host_payload::HostPayload::from_authenticated(&desired, &artifact_bytes)?
-                .context("recovery candidate is not a host")?
-                .verify(&staged)?;
-            sync_tree(&staged)?;
-            recheck()?;
+        } else {
             rustix::fs::renameat_with(
                 rustix::fs::CWD,
                 &staged,
@@ -375,11 +460,12 @@ mod linux {
                 &generation,
                 rustix::fs::RenameFlags::NOREPLACE,
             )?;
-            File::open(parent)?.sync_all()?;
-            recheck()?;
-            authenticate_floor(&root, &floor, &publisher)?;
-            Ok(())
         }
+        File::open(parent)?.sync_all()?;
+        File::open(staging_parent)?.sync_all()?;
+        recheck()?;
+        authenticate_floor(&root, &floor, &publisher)?;
+        Ok(damaged.map(|_| staged))
     }
 
     fn sync_tree(path: &Path) -> Result<()> {
