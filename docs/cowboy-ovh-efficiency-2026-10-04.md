@@ -1,7 +1,8 @@
 # Cowboy and OVH efficiency analysis
 
-Status: read-only production research on 2026-10-04. No deployment, policy
-change, Provider inference request, installation or worker restart occurred.
+The initial production research on 2026-10-04 was read-only. No deployment,
+policy change, Provider inference request, installation or worker restart occurred
+in that research. The scoped implementation below has separate release acceptance.
 Temporary, authenticated SSH benchmark connections were used; only their own
 control sockets were closed. Existing production masters and sessions were not
 closed. See the [sanitized measurements](experiments/cowboy-ovh-efficiency-2026-10-04.json).
@@ -203,3 +204,59 @@ Still open: peak/OOM and saturated concurrency, actual physical iPhone send and
 network regression, native remote macOS acceptance, new production faults/cold
 starts, and the failed four-host 30-minute stability window. Healthy production
 remains retained under the operator's prior release decision.
+
+## Scoped optimization implementation
+
+The implementation removes repeated verification within one executable-host
+request. Admission first checks the actual active link and current sealed auth
+generation. It then verifies the signed Plugin, runtime artifacts, Provider
+projection and host bundle once, reconstructs uncached inventory from those
+request-local verified bytes, and prepares the launch from the same package.
+There is no cross-request executable, digest, timestamp or inventory trust cache.
+Ordinary session launches and every subsequent host request still perform full
+verification. Installation journal authority is never supplied by artifact cache
+metadata. Resolution logs separate verification, inventory and launch timings.
+
+Read-only collection/activity release the lifecycle lock only after successful
+child spawn. Result admission reacquires the lock and checks the actual active
+link, installation incarnation, operation fence and authentication generation.
+A same-artifact reinstall or auth rotation rejects the old result as an already
+started observation; it does not rerun the command. Reset remains serialized
+through completion. Process-group cleanup and command bounds are unchanged.
+Completion-fence timing is separate from collector time.
+
+Regression fixtures check one full verification for an uncached request, slow
+read-only collection concurrent with lifecycle work, serialized reset, auth
+rotation, same-bytes reinstall/removal, failed spawn, timeout and retained
+tamper rejection. These are hermetic fixtures, not production fault injection.
+
+Matrix memory-client 0.1.1 reserves the current-user outbox path before atomic
+publication, so its own background flush cannot duplicate the foreground
+observation. A successful observation receipt retires only that file even if
+context retrieval subsequently fails. Missing receipts retain durable retry;
+completed-turn learning remains a separate observation. Other processes may
+still deliver idempotently, and observe precedes context as before. No evidence,
+binding, context budget, unavailable-memory behavior or native-memory ownership
+is weakened. Claude 3.4.5 and Codex 3.3.2 carry that shared change; private CLI,
+adapter and execution pins stay unchanged. Component release 3.40.0 appends
+history and advances only this affected closure.
+
+Fresh OVH context-only reads used the existing private configuration internally,
+without exporting tokens or context text: Claude samples 6.1/2.5/2.1 ms and
+Codex samples 2.8/2.5/2.2 ms, all HTTP 200 with 282-byte responses. This small
+read-only sample does not measure a complete turn or memory usefulness. It
+does not justify another API, parallelizing dependent observe/context calls,
+changing timeouts or attributing historical 30-second sends to Matrix.
+
+Fresh pre-change collection logs show 30.708/29.154 seconds preparation and
+1.454/1.383 seconds collector time, with zero queue time. One authenticated CLI
+refresh took 45.758 seconds and returned available Anthropic usage. These
+point-in-time samples and the historical 27.8965-second preparation median are
+distinct baselines. Production activation and before/after acceptance must be
+recorded separately; source and fixture success alone are not deployment.
+
+Message delivery already has Controller dispatch/queue/delivery and Machine/
+worker queue/prompt/first-output correlation. This work does not change durable
+message IDs, acknowledgement semantics or resend policy. Current physical-client
+timing and complete-turn traces remain necessary to isolate confirmation delay;
+neither a faster usage query nor a larger confirmation deadline proves it fixed.

@@ -118,6 +118,29 @@ struct ResolvedPluginHostInvocation {
     command: Vec<String>,
     environment: BTreeMap<String, String>,
     collector_sidecars: Vec<PluginUsageSidecar>,
+    installation_revision:
+        Option<crate::machine_protocol::installation_revision::InstallationRevision>,
+}
+
+fn decode_host_response(
+    output: &crate::plugin_process::PluginCommandOutput,
+) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+    if !output.status.success() {
+        return Err(PluginHostInvocationFailure {
+            started: true,
+            error: anyhow::anyhow!(
+                "Plugin host command exited {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        });
+    }
+    serde_json::from_slice(&output.stdout)
+        .context("parsing Plugin host command response")
+        .map_err(|error| PluginHostInvocationFailure {
+            started: true,
+            error,
+        })
 }
 
 pub(crate) struct ExportedAuthCandidate {
@@ -222,6 +245,8 @@ pub(crate) struct MachinePluginStore {
     telemetry_export: tokio::sync::Mutex<()>,
     code_runtimes: CodeRuntimeHost,
     operations: operations::Journal,
+    #[cfg(test)]
+    runtime_verifications: AtomicU64,
 }
 
 enum PreparedProviderAuth {
@@ -287,6 +312,8 @@ impl MachinePluginStore {
             telemetry_export: tokio::sync::Mutex::new(()),
             code_runtimes: CodeRuntimeHost::default(),
             operations,
+            #[cfg(test)]
+            runtime_verifications: AtomicU64::new(0),
         })
     }
 
@@ -930,7 +957,7 @@ impl MachinePluginStore {
             mut payload,
         } = request;
         let admitted_at = Instant::now();
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut lifecycle = Some(self.lifecycle.lock().await);
         let queue_ms = admitted_at.elapsed().as_millis();
         let resolved = self
             .resolve_host_invocation(
@@ -981,11 +1008,19 @@ impl MachinePluginStore {
         let preparation_ms = admitted_at.elapsed().as_millis();
         tracing::info!(%plugin_id, ?operation, queue_ms, preparation_ms, "Plugin host preparation completed");
         let command_started = Instant::now();
-        let output = crate::plugin_process::run_plugin_command_with_environment(
+        let output = crate::plugin_process::run_plugin_command_with_environment_on_started(
             program,
             command_args,
             &input,
             &environment,
+            || {
+                // Read-only observations may finish after a lifecycle change,
+                // but their result must pass the fence below. Reset is a
+                // mutation: retain its existing serialization until completion.
+                if operation != PluginHostOperation::ResetUsage {
+                    drop(lifecycle.take());
+                }
+            },
         )
         .await;
         tracing::info!(%plugin_id, ?operation, command_ms = command_started.elapsed().as_millis(), total_ms = admitted_at.elapsed().as_millis(), completed = output.is_ok(), "Plugin host command completed");
@@ -996,22 +1031,23 @@ impl MachinePluginStore {
             started: failure.started,
             error: failure.error,
         })?;
-        if !output.status.success() {
-            return Err(PluginHostInvocationFailure {
-                started: true,
-                error: anyhow::anyhow!(
-                    "Plugin host command exited {}: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-            });
-        }
-        serde_json::from_slice(&output.stdout)
-            .context("parsing Plugin host command response")
+        if lifecycle.is_none() {
+            let fence_started = Instant::now();
+            let _lifecycle = self.lifecycle.lock().await;
+            self.validate_host_observation(
+                &plugin_id,
+                &generation_digest,
+                auth_generation,
+                resolved.installation_revision.as_ref(),
+            )
             .map_err(|error| PluginHostInvocationFailure {
                 started: true,
                 error,
-            })
+            })?;
+            tracing::info!(%plugin_id, ?operation, fence_ms = fence_started.elapsed().as_millis(),
+                total_ms = admitted_at.elapsed().as_millis(), "Plugin host observation accepted");
+        }
+        decode_host_response(&output)
     }
 
     fn resolve_host_invocation(
@@ -1025,8 +1061,34 @@ impl MachinePluginStore {
     ) -> Result<ResolvedPluginHostInvocation> {
         validate_plugin_id(plugin_id)?;
         self.operations.ensure_unfenced(plugin_id)?;
+        ensure!(
+            read_link_name(&self.plugin_root(plugin_id).join("active")).as_deref()
+                == Some(digest_generation_name(generation_digest)?.as_str())
+                && self
+                    .latest_auth_envelope(plugin_id)?
+                    .as_ref()
+                    .map(|envelope| envelope.auth_generation)
+                    == auth_generation,
+            "active Plugin or authentication generation changed before host invocation"
+        );
+        let verification_started = Instant::now();
+        let (plugin, release, content) =
+            self.verified_plugin_generation(plugin_id, generation_digest)?;
+        let package_path = content.join("package.cowboy-provider");
+        let package = plugin
+            .agent_provider()
+            .context("usage host is not attached to an Agent Provider")?;
+        ensure!(
+            package.canonical_bytes()? == fs::read(&package_path)?,
+            "stored Agent Provider projection does not match Plugin payload"
+        );
+        let verification_ms = verification_started.elapsed().as_millis();
+        let inventory_started = Instant::now();
         let active = self
-            .inventory_one(plugin_id)?
+            .inventory_one_with_verified_provider(
+                plugin_id,
+                Some((package, generation_digest, &plugin.contract_fingerprint)),
+            )?
             .context("Plugin is not active on this Machine")?;
         ensure!(
             active.state == PluginInstallationState::Active
@@ -1035,8 +1097,7 @@ impl MachinePluginStore {
                 && active.auth_generation == auth_generation,
             "active Plugin or authentication generation changed before host invocation"
         );
-        let (plugin, release, content) =
-            self.verified_plugin_generation(plugin_id, generation_digest)?;
+        let inventory_ms = inventory_started.elapsed().as_millis();
         ensure!(
             plugin.manifest.version == plugin_version,
             "stored Plugin version does not match host invocation"
@@ -1064,10 +1125,13 @@ impl MachinePluginStore {
                 "operation".to_owned(),
                 serde_json::Value::String(operation_name.to_owned()),
             );
-        plugin
-            .agent_provider()
-            .context("usage host is not attached to an Agent Provider")?;
-        let launch = self.launch_context(plugin_id, generation_digest, auth_generation)?;
+        let launch_started = Instant::now();
+        // This request already verified the signed generation, all executable
+        // artifacts and the Provider projection under the lifecycle lock. Reuse
+        // only those request-local bytes; later requests verify from disk again.
+        let launch = self.launch_context_from_package(package, package_path, auth_generation)?;
+        tracing::info!(%plugin_id, ?operation, verification_ms, inventory_ms,
+            launch_ms = launch_started.elapsed().as_millis(), "Plugin host resolution completed");
         let host_root = content.join("host").to_string_lossy().into_owned();
         Ok(ResolvedPluginHostInvocation {
             command: command
@@ -1076,7 +1140,35 @@ impl MachinePluginStore {
                 .collect(),
             environment: plugin_host_environment(&launch)?,
             collector_sidecars: usage.collector_sidecars,
+            installation_revision: active.installation_revision,
         })
+    }
+
+    fn validate_host_observation(
+        &self,
+        plugin_id: &str,
+        digest: &str,
+        auth_generation: Option<u64>,
+        revision: Option<&crate::machine_protocol::installation_revision::InstallationRevision>,
+    ) -> Result<()> {
+        self.operations.ensure_unfenced(plugin_id)?;
+        ensure!(
+            read_link_name(&self.plugin_root(plugin_id).join("active"))
+                .is_some_and(|name| format!("sha256:{name}") == digest)
+                && self
+                    .operations
+                    .installations
+                    .revision(plugin_id, digest)?
+                    .as_ref()
+                    == revision
+                && self
+                    .latest_auth_envelope(plugin_id)?
+                    .as_ref()
+                    .map(|envelope| envelope.auth_generation)
+                    == auth_generation,
+            "Plugin installation or authentication changed during host observation"
+        );
+        Ok(())
     }
 
     async fn prepare_usage_sidecars(
@@ -1189,11 +1281,21 @@ impl MachinePluginStore {
         self.operations.ensure_unfenced(provider_id)?;
         let (package, package_path) =
             self.package_for_generation(provider_id, generation_digest)?;
-        let payload = matching_payload(&package, &self.platform, &self.architecture)?;
+        self.launch_context_from_package(&package, package_path, auth_generation)
+    }
+
+    fn launch_context_from_package(
+        &self,
+        package: &ProviderPackage,
+        package_path: PathBuf,
+        auth_generation: Option<u64>,
+    ) -> Result<ProviderLaunchContext> {
+        let provider_id = &package.manifest.id;
+        let payload = matching_payload(package, &self.platform, &self.architecture)?;
         let auth = &package.manifest.authentication;
         let home = if auth.required {
             let generation = auth_generation.context("session has no Provider auth generation")?;
-            Some(self.prepare_launch_auth_home(provider_id, &package, generation)?)
+            Some(self.prepare_launch_auth_home(provider_id, package, generation)?)
         } else {
             None
         };
@@ -1223,7 +1325,7 @@ impl MachinePluginStore {
         // One credential source is shared by every auth-generation runtime
         // home. Bind its directory so a Provider CLI locks and re-reads
         // rotations there instead of inside its private generation home.
-        let credential_directories = self.credential_directories(&package)?;
+        let credential_directories = self.credential_directories(package)?;
         if !credential_directories.is_empty() {
             environment.insert(
                 crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV.to_owned(),
@@ -2121,7 +2223,17 @@ impl MachinePluginStore {
     }
 
     fn inventory_one(&self, provider_id: &str) -> Result<Option<PluginInventory>> {
-        let Some(mut inventory) = self.inventory_one_untracked(provider_id)? else {
+        self.inventory_one_with_verified_provider(provider_id, None)
+    }
+
+    fn inventory_one_with_verified_provider(
+        &self,
+        provider_id: &str,
+        verified: Option<(&ProviderPackage, &str, &str)>,
+    ) -> Result<Option<PluginInventory>> {
+        let Some(mut inventory) =
+            self.inventory_one_untracked_with_verified_provider(provider_id, verified)?
+        else {
             return Ok(None);
         };
         // The artifact's cached inventory must never supply installation authority.
@@ -2140,6 +2252,14 @@ impl MachinePluginStore {
     }
 
     fn inventory_one_untracked(&self, provider_id: &str) -> Result<Option<PluginInventory>> {
+        self.inventory_one_untracked_with_verified_provider(provider_id, None)
+    }
+
+    fn inventory_one_untracked_with_verified_provider(
+        &self,
+        provider_id: &str,
+        verified: Option<(&ProviderPackage, &str, &str)>,
+    ) -> Result<Option<PluginInventory>> {
         let active = self.plugin_root(provider_id).join("active");
         if let Some(generation) = read_link_name(&active) {
             let path = self
@@ -2159,8 +2279,18 @@ impl MachinePluginStore {
             return Ok(None);
         };
         let digest = format!("sha256:{generation}");
-        let (package, _, _, contract_fingerprint) =
-            self.verified_generation(provider_id, &digest)?;
+        let (package, contract_fingerprint) = if let Some((package, verified_digest, fingerprint)) =
+            verified
+        {
+            ensure!(
+                verified_digest == digest && package.manifest.id == provider_id,
+                "active Plugin changed during host resolution"
+            );
+            (package.clone(), fingerprint.to_owned())
+        } else {
+            let (package, _, _, fingerprint) = self.verified_generation(provider_id, &digest)?;
+            (package, fingerprint)
+        };
         let rollback = read_link_name(&self.plugin_root(provider_id).join("rollback"))
             .map(|name| format!("sha256:{name}"));
         let replica = self.latest_auth_envelope(provider_id)?;
@@ -2356,6 +2486,8 @@ impl MachinePluginStore {
         plugin_id: &str,
         digest: &str,
     ) -> Result<(PluginPackage, cowboy_plugin_sdk::PluginRelease, PathBuf)> {
+        #[cfg(test)]
+        self.runtime_verifications.fetch_add(1, Ordering::Relaxed);
         let (package, release, content) = self.verified_plugin_descriptor(plugin_id, digest)?;
         let target = matching_plugin_runtime_artifacts(
             &release.runtime_artifacts,
@@ -4415,6 +4547,60 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn host_observation_rejects_same_bytes_reinstallation_and_uninstall() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let active = store.plugin_root("gemini").join("active");
+        restore_generation_link(&active, Some(&"a".repeat(64))).unwrap();
+        store
+            .operations
+            .installations
+            .enable(&[("gemini".to_owned(), digest.clone())])
+            .unwrap();
+        let revision = store
+            .operations
+            .installations
+            .revision("gemini", &digest)
+            .unwrap();
+        store
+            .validate_host_observation("gemini", &digest, None, revision.as_ref())
+            .unwrap();
+        let pending = store
+            .operations
+            .installations
+            .begin(
+                "gemini",
+                Some(&digest),
+                Some(&digest),
+                operations::installations::Effect::Install,
+                None,
+            )
+            .unwrap();
+        store.operations.installations.finish(pending).unwrap();
+        assert!(
+            store
+                .validate_host_observation("gemini", &digest, None, revision.as_ref())
+                .is_err()
+        );
+        let revision = store
+            .operations
+            .installations
+            .revision("gemini", &digest)
+            .unwrap();
+        store
+            .validate_host_observation("gemini", &digest, None, revision.as_ref())
+            .unwrap();
+        restore_generation_link(&active, None).unwrap();
+        assert!(
+            store
+                .validate_host_observation("gemini", &digest, None, revision.as_ref())
+                .is_err()
+        );
+    }
+
     async fn assert_installation_cas(store: &MachinePluginStore, desired: &DesiredPlugin) {
         use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
         store.enable_installation_tracking().await.unwrap();
@@ -5127,7 +5313,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let host_bundle = PluginHostBundle {
+        let mut host_bundle = PluginHostBundle {
             schema: crate::plugin_host_bundle::HOST_BUNDLE_SCHEMA.to_owned(),
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
@@ -5140,11 +5326,18 @@ mod tests {
                 ),
                 (
                     "collector/index.js".to_owned(),
-                    r#"const request = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(JSON.stringify({operation: request.operation, command: Deno.env.get("COWBOY_PLUGIN_COMMAND_GEMINI"), home: Deno.env.get("HOME")}));"#
+                    r#"const request = JSON.parse(await new Response(Deno.stdin.readable).text()); if (request.delay_ms) await new Promise(resolve => setTimeout(resolve, request.delay_ms)); console.log(JSON.stringify({operation: request.operation, command: Deno.env.get("COWBOY_PLUGIN_COMMAND_GEMINI"), home: Deno.env.get("HOME")}));"#
                         .to_owned(),
                 ),
             ]),
         };
+        let mut host_spec: serde_json::Value =
+            serde_json::from_str(&host_bundle.files["host.json"]).unwrap();
+        host_spec["usage"]["reset_argv"] = host_spec["usage"]["collector_argv"].clone();
+        host_bundle.files.insert(
+            "host.json".to_owned(),
+            serde_json::to_string(&host_spec).unwrap(),
+        );
         host_bundle.validate().unwrap();
         let host_bundle_bytes = serde_json::to_vec(&host_bundle).unwrap();
         release.host_bundle_digest = Some(format!(
@@ -5192,6 +5385,7 @@ mod tests {
         let envelope = seal_auth_for_test(&store, &package, &service_signer, 1, &bundle);
         let first_receipt = store.apply_auth(&envelope).await.unwrap();
         assert!(first_receipt.auth_generation_advanced);
+        let verifications = store.runtime_verifications.load(Ordering::Relaxed);
         let collected = store
             .invoke_host_for_test(
                 "gemini",
@@ -5204,6 +5398,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(collected["operation"], "collect");
+        assert_eq!(
+            store.runtime_verifications.load(Ordering::Relaxed) - verifications,
+            1,
+            "one host request must not decompress/hash the same runtime repeatedly"
+        );
+        // The signed collector is deliberately slow. Its network wait must not
+        // serialize unrelated lifecycle work after spawn admission.
+        let slow = store.invoke_host_for_test(
+            "gemini",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(1),
+            PluginHostOperation::CollectUsage,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let unlocked = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _guard = tokio::time::timeout(Duration::from_millis(500), store.lifecycle.lock())
+                .await
+                .expect("read-only collector held the lifecycle lock across its wait");
+        };
+        let (slow, ()) = tokio::join!(slow, unlocked);
+        assert_eq!(slow.unwrap()["operation"], "collect");
+        let reset = store.invoke_host_for_test(
+            "gemini",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(1),
+            PluginHostOperation::ResetUsage,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let serialized = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), store.lifecycle.lock())
+                    .await
+                    .is_err(),
+                "usage reset must retain lifecycle authority while mutating state"
+            );
+        };
+        let (reset, ()) = tokio::join!(reset, serialized);
+        assert_eq!(reset.unwrap()["operation"], "consume_reset");
         assert!(
             collected["command"].as_str().is_some_and(
                 |command| command.contains("/generations/") && command.ends_with("/bin")
@@ -5266,8 +5502,6 @@ mod tests {
         );
         let legacy_session =
             auth_root.join("materialized/generations/1/home/.gemini/sessions/native-session.json");
-        fs::create_dir_all(legacy_session.parent().unwrap()).unwrap();
-        fs::write(&legacy_session, b"legacy-native-session").unwrap();
         let refreshed_bundle = PortableCredentialBundle {
             portable_schema: bundle.portable_schema.clone(),
             method_id: bundle.method_id.clone(),
@@ -5278,8 +5512,33 @@ mod tests {
         };
         let refreshed_envelope =
             seal_auth_for_test(&store, &package, &service_signer, 2, &refreshed_bundle);
-        let refreshed_receipt = store.apply_auth(&refreshed_envelope).await.unwrap();
+        let slow = store.invoke_host_for_test(
+            "gemini",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(1),
+            PluginHostOperation::CollectUsage,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let rotate = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            store.apply_auth(&refreshed_envelope).await.unwrap()
+        };
+        let (stale, refreshed_receipt) = tokio::join!(slow, rotate);
+        let stale = stale.unwrap_err();
+        assert!(stale.started);
+        assert!(
+            stale
+                .error
+                .to_string()
+                .contains("changed during host observation")
+        );
         assert!(refreshed_receipt.auth_generation_advanced);
+        // Seed legacy state after the concurrent collector, before testing the
+        // historical-home repair below. Do not delete state already migrated
+        // by a successful launch in this fixture.
+        fs::create_dir_all(legacy_session.parent().unwrap()).unwrap();
+        fs::write(&legacy_session, b"legacy-native-session").unwrap();
         assert!(!auth_root.join("replicas/1.sealed.json").exists());
         assert_eq!(
             read_link_name(&auth_root.join("materialized/current")).as_deref(),
