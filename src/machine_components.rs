@@ -15,6 +15,9 @@ mod anchor_recovery;
 mod cached_host;
 mod host_payload;
 
+#[cfg(all(test, target_os = "linux"))]
+mod streaming_tests;
+
 pub(crate) use anchor_recovery::{
     restore_portable_host_anchor, restore_portable_host_anchor_with_quarantine,
 };

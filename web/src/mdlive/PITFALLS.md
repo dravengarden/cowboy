@@ -2758,3 +2758,13 @@ Desktop Vim + IME checks:
     No CM6, IME, caret, attachment or swipe recognizer changes. Browser checks
     cover both themes, 320–1200px and enlarged fonts, including Mobile restoration;
     physical iPhone acceptance is not established by them, and #69 remains open.
+
+115. **Desktop draft destinations use the Sessions tree.** Mount the live
+    destination subscription only while the Desktop dialog is open, so other
+    agents' status updates cannot repaint the active writing canvas. Reuse
+    `buildSessionTree`, `displayedSessionOrder`, explicit Global placement and
+    project bindings; directories disclose sessions, never receive a draft
+    themselves. Search includes folder ancestry and stable project context;
+    generated execution paths remain in tooltips. Keep IME ownership of candidate
+    arrows, id-based selection, and source-session exclusion. Mobile keeps its
+    existing picker. No editor, native keyboard or image/caret code changes.

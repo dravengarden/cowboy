@@ -211,14 +211,7 @@ pub(super) fn verify_generation(
         )?,
         "cached Machine host signature is invalid"
     );
-    let artifact = read_regular(&generation.join("artifact"), None)?;
-    ensure!(
-        format!("{:x}", Sha256::digest(&artifact)) == desired.digest.to_ascii_lowercase(),
-        "cached Machine host artifact digest mismatch"
-    );
-    HostPayload::from_authenticated(&desired, &artifact)?
-        .context("cached component is not a host")?
-        .verify(&generation)?;
+    HostPayload::verify_cached(&desired, &generation.join("artifact"), &generation)?;
     Ok(desired)
 }
 
