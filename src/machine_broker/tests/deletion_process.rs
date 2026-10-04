@@ -126,17 +126,36 @@ async fn child() {
     let mode = std::env::var("COWBOY_TEST_DELETION_MODE").unwrap();
     assert!(matches!(
         mode.as_str(),
-        "writer" | "reader" | "foreign-machine" | "foreign-service"
+        "writer"
+            | "reader"
+            | "foreign-machine"
+            | "foreign-service"
+            | "release-writer"
+            | "release-reader"
     ));
     let mut owner = deletion_fixture_owner();
+    let release_compatible = mode.starts_with("release-");
+    if release_compatible {
+        owner.machine_id = "release-fixture".into();
+        owner.service_id = Some("svc-0123456789abcdef0123456789abcdef".into());
+    }
     if mode == "foreign-machine" {
         owner.machine_id = "foreign-machine".into();
     }
     if mode == "foreign-service" {
         owner.service_id = Some("foreign-service".into());
     }
-    let mut journal = deletions::Journal::open(&root.join("deletions"), owner, mode == "writer")
-        .expect("fixture journal admission");
+    let namespace = if release_compatible {
+        "session-deletions"
+    } else {
+        "deletions"
+    };
+    let mut journal = deletions::Journal::open(
+        &root.join(namespace),
+        owner,
+        matches!(mode.as_str(), "writer" | "release-writer"),
+    )
+    .expect("fixture journal admission");
     let checkpoint = std::env::var("COWBOY_TEST_DELETION_CHECKPOINT").unwrap();
     if !checkpoint.is_empty() {
         journal.set_checkpoint(move |stage| {

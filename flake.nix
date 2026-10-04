@@ -431,9 +431,18 @@
         doCheck = false;
         buildPhase = ''
           runHook preBuild
-          cargo test --offline --locked --release --no-default-features \
+          if ! cargo test --offline --locked --release --no-default-features \
             --features machine-host --lib --no-run --message-format=json \
-            > conformance-build.json
+            > conformance-build.json; then
+            python3 - <<'PY'
+          import json, pathlib, sys
+          for line in pathlib.Path("conformance-build.json").read_text().splitlines():
+              message = json.loads(line).get("message", {})
+              if message.get("rendered"):
+                  print(message["rendered"], file=sys.stderr)
+          PY
+            exit 1
+          fi
           runHook postBuild
         '';
         installPhase = ''
