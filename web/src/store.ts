@@ -1,3 +1,4 @@
+import { createBootstrapPresentation } from "./bootstrapPresentation";
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
 import { createAuthoredSendGate } from "./authoredSendGate";
@@ -2102,16 +2103,23 @@ function connect(): void {
   }
   didHydrate = true;
   openSocket();
-  void hydrateReplica();
+  const states = [...syncClients.keys()];
+  const restorations = [...syncClients.values()].map((entry) => entry.hydrate());
+  // The cached list and its presentation overlays form one screen. Waiting
+  // only for these local reads keeps boot independent of the network and of
+  // unrelated queue outboxes; failed reads still settle and allow the list.
+  const layoutRestored = Promise.allSettled(restorations.filter((_, index) =>
+    ["title", "order", "folders"].includes(states[index] ?? "")
+  ));
+  void hydrateReplica(layoutRestored);
   void (async (): Promise<void> => {
     try {
       // Queue outboxes carry authored prompts and must not wait behind an
       // unrelated title/order cache whose IndexedDB read is blocked. Hydrate
       // both classes concurrently; each client merges safely if live state
       // arrives before its cached snapshot.
-      const states = [...syncClients.keys()];
       const [restored] = await Promise.all([
-        Promise.allSettled([...syncClients.values()].map((e) => e.hydrate())),
+        Promise.allSettled(restorations),
         Promise.allSettled([...qClients.keys()].map((session) => restoreQueue(session))),
         hydrateCachedQueues(),
       ]);
@@ -2334,12 +2342,13 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     startLiveness(ws);
     armBootstrapGuard();
   };
+  const presentBootstrap = createBootstrapPresentation<Outbound>(handle);
   ws.onmessage = (e: MessageEvent<string>): void => {
     if (socket !== ws || ws.protocol !== PRODUCT_SYNC_SUBPROTOCOL) return;
     markAlive(); // any frame (incl. the heartbeat) proves the socket is alive
     try {
       const message = JSON.parse(e.data) as Outbound;
-      handle(message);
+      presentBootstrap(message);
       if (message.type === "bootstrap_complete") markSocketReady();
       else if (!ready) {
         // Capacity waiting is intentional admission, not a wedged bootstrap.
@@ -2539,7 +2548,7 @@ function withoutReplicaSyncedAt(current: State): Omit<State, "replicaSyncedAt"> 
 /** Paint the last known session list, machines and (through `openSession`)
  * the active transcript before the Hub answers. A live broadcast that arrives
  * first wins; the replica never overwrites live state. */
-async function hydrateReplica(): Promise<void> {
+async function hydrateReplica(layoutRestored: Promise<unknown>): Promise<void> {
   void replica.listTailSessions().then((ids) => {
     if (!productSessionAbandoned && ids.length > 0) {
       setCachedTailSessions(new Set([...cachedTailSessions, ...ids]));
@@ -2548,6 +2557,7 @@ async function hydrateReplica(): Promise<void> {
   const [sessionsResult, machinesResult] = await Promise.allSettled([
     replica.loadSessions(),
     replica.loadMachines(),
+    layoutRestored,
   ]);
   if (productSessionAbandoned) return;
   if (

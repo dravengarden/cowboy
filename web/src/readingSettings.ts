@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect } from "react";
+import { useLayoutEffect } from "react";
 import { DEFAULT_FONT_ID, getFontPreset } from "./fonts";
 import { persisted, useStore } from "@cowboy/state-store";
 
@@ -172,7 +172,7 @@ export function useGlobalFontScale(): void {
  */
 export function useReadingFontFaces(): void {
   const { fontVariant } = useReadingSettings();
-  useEffect(() => {
+  useLayoutEffect(() => {
     const preset = getFontPreset(fontVariant);
     globalThis.document?.documentElement.style.setProperty(
       "--cowboy-reading-font",
