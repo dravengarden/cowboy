@@ -82,6 +82,8 @@
           ./Cargo.lock
           ./build.rs
           ./src
+          ./tools/worker-registry-input.ts
+          ./components/worker-registry-input.json
           ./migrations
           ./web/src/protocol.ts
           ./contracts/code-buffer-client.fixture.json
@@ -222,10 +224,15 @@
       ] ++ plugin-contract-files ++ [
         (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
       ]));
+      worker-registry-input = builtins.fromJSON (builtins.readFile ./components/worker-registry-input.json);
+      worker-registry-digest = assert worker-registry-input.schema == 1;
+        assert builtins.match "[0-9a-f]{64}" worker-registry-input.registry_sha256 != null;
+        worker-registry-input.registry_sha256;
       worker-generation = "worker-" + builtins.substring 0 20 (
         builtins.hashString "sha256" (
           pkgs.lib.concatMapStringsSep ":"
-            (path: builtins.hashFile "sha256" path)
+            (path: if path == ./components/registry.json then worker-registry-digest
+              else builtins.hashFile "sha256" path)
             worker-generation-files
         )
       );
@@ -309,6 +316,11 @@
           "cowboy-codex-app-server"
         ];
         nativeBuildInputs = [ pkgs.pkg-config ];
+        # This derived digest must never become a stale worker-generation pin.
+        # Enforce it inside the immutable worker build as well as the root gate.
+        preBuild = ''
+          ${deno}/bin/deno run --allow-read tools/worker-registry-input.ts
+        '';
         buildInputs = [ pkgs.openssl ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh deno ];
         preCheck = ''

@@ -214,6 +214,9 @@ plugin-check: component-package-check
     deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
     deno test --allow-read --allow-write --allow-run --allow-env plugins/claude-code/usage.test.js
     deno run --allow-read --allow-run tools/check-plugin-components.ts
+    deno fmt --check tools/worker-registry-input.ts tools/worker-registry-input_test.ts
+    deno test --allow-read --allow-write --allow-run tools/worker-registry-input_test.ts
+    deno run --allow-read tools/worker-registry-input.ts
 
 plugin-build PLUGIN:
     #!/usr/bin/env bash

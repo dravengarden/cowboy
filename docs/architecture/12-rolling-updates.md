@@ -55,6 +55,17 @@ activation is healthy only after `/api/machines` reports that exact active ACP
 generation; this prevents a superficially healthy host restart from beginning
 a stale worker rollout after the release receipt is written.
 
+The generation hash uses a derived component-registry input for detached
+workers. Consecutive registry releases changing only an app shell with no
+internal component or Plugin consumer retain the last worker-relevant registry
+prefix, encoded with its historical two-space JSON bytes. Other component,
+Plugin source/version/pin or dependency-graph changes retain the latest input.
+`components/worker-registry-input.json` stores that derived release and checksum;
+the root component gate and immutable worker build both recompute it and refuse
+stale or manually pinned values. This preserves pool identity across a Web-only
+registry repair without overriding the desired generation or changing rollout
+authority. An internal app-shell consumer closes the exemption.
+
 ## Runtime invariants
 
 1. One worker epoch owns a session at a time. A second epoch is rejected until
