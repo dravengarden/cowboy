@@ -83,5 +83,83 @@ and the production deletion writer stays disabled. Existing remote portable
 installations need the new bootstrap/launcher and a verified declared component
 before this floor can be established; Hawk activation does not refresh them.
 
-Exact build/native acceptance and production receipts will be recorded after
-completion.
+## Accepted source and immutable release
+
+Source `a2a5360ec58714c206213dc2d449ff0843b45c15` passed formatting,
+all-feature and default-feature Clippy with warnings denied, 1,799 all-feature
+library tests (44 ignored), integration tests, 491 standalone Machine tests
+(7 ignored), Machine/Code feature checks and Plugin/Provider checks. The
+immutable default Cowboy package, Machine host output, source-boundary check
+and worker-registry input check built with their existing warnings and test
+gates. No signature, namespace, floor or production writer gate was relaxed.
+
+The actual accepted native matrix used
+`/nix/store/xcrfzrwdp6k04lccs6fmjp6hgbc5ywhz-cowboy-machine-release` against
+the preceding cache-only bootstrap release
+`/nix/store/9rqny80agvhq8s5ni7ddacj8bps1m18b-cowboy-machine-release` and
+pre-guard legacy installer release
+`/nix/store/n6b8rxna00v77pyqkyk9658xcwnqnh61-cowboy-machine-release`.
+All twenty-four launcher cases and new/old bootstrap controls passed. The exact
+new installer passed both legacy layouts, both captured mutable-bundle cases
+and both independent old-installer negative controls. The old guard's two
+absent-selection floor acceptances were observed explicitly, not described as
+fenced authorities.
+
+Remote main advanced with an independent native-shell Scene-lifecycle change.
+It was integrated at `ff6e51264540e61122c317bbd786782b0c106523`; merged
+Plugin and native-shell source checks passed. This merge changed no Machine
+Rust sources or retained companions. The rebuilt final host artifact's native
+path/digest and installer entrypoint digest equal the exact acceptance artifact;
+only immutable metadata changed. Final source is published on remote main.
+No native device build or release is claimed by this task.
+
+The activated output of `.#cowboy-machine-host-release` is
+`/nix/store/nhdfwgfsz63ji462cgp264v51ihsmp7g-cowboy-machine-release`. Its
+native executable is
+`/nix/store/qppsrwahzh9b34ibby863gf7qyw7hp65-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped`,
+SHA-256 `5bd07c701799d5e3f647fcf006ec3fc5ab5c12cf67cb28a997c49ffe0b57e406`.
+The installer entrypoint SHA-256 is
+`00a57c927bb751358b36e05463238cd77996e8aabf8db11fce9153524460fb94`.
+All six worker/proxy/Code/Zed/JS companion paths and digests equal the preceding
+active bundle. Their separately retained source remains
+`406471a28de430debf6f8363b44abc3e621589d7`, generation
+`worker-6ede7a91cc8b8b3402d4`.
+
+## Production receipt
+
+Installed-owner transaction `1791093948961277128-ff6e51264540` succeeded,
+published and committed at `2026-10-04T06:05:59.624767715Z`, with
+`maintenance: true` and no recovery. Its predecessor is the exact preceding
+`9rqny80agvhq8s5ni7ddacj8bps1m18b` release. The independently installed owner
+and host configuration stayed unchanged; its root systemd unit finished
+successfully. Both component in-progress journals are absent and no failed
+system unit was observed or reset.
+
+Samples at `2026-10-04T06:05:34.810Z` and `2026-10-04T06:06:33.631Z`
+preserve all thirteen worker and five keeper unit IDs, states and PIDs exactly.
+Only the resident Machine changed, from PID `2088278` to `3171975`.
+`/proc/3171975/exe` matches the accepted native path and SHA-256. Controller
+PID `959309` and receipt `1791079277476212104-406471a28de4` stayed unchanged.
+This is bounded Linux process continuity, not general native Session resume.
+
+All five public HTTPS checks returned 200; the Machine reports connected and
+online on the retained worker generation. HTML/SW kept `no-store`; Web profile
+and SPA version stayed unchanged. The independent root reader-floor SHA-256
+`26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`
+and sudoers SHA-256
+`149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69`
+were preserved. At `2026-10-04T06:05:49.039569Z` the Machine logged zero deleted
+IDs and `writer_enabled=false`; deletion entries remain only `.lock`.
+
+No production portable floor was initialized and no new signed production
+component record was published. The persistent-floor implementation ships in
+the Machine/installer code; an actual portable installation establishes it only
+after authenticating its first declared signed host. Signed bootstrap/recovery,
+publisher-key rotation, committed portable state and production deletion writing
+remain unadmitted. No Controller, Web, host configuration, installed Plugin or
+iOS activation was performed by this task.
+
+The [machine-readable evidence](../experiments/plugin-portable-reader-floor-2026-10-04.json)
+records exact sources, builds, native/installer/retained identities, immutable
+acceptance controls, owner, success transaction, and complete before/after process
+and HTTPS samples.
