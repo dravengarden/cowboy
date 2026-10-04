@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1791116203455239055-e7f2f6962e78",
+    "revision": "e7f2f6962e7813f41b6d3ab7b0ef7568c16c7236",
+    "published": true,
+    "release": "/nix/store/inlhlysjgkn0ly9b1ya5c4y6mxd9l7ac-cowboy-web-release",
+    "previousRelease": "/nix/store/yhjsc50q4318a0r7xzds12a2ny5q5r1i-cowboy-web-release",
+    "activeRelease": "/nix/store/inlhlysjgkn0ly9b1ya5c4y6mxd9l7ac-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-04T12:16:43.455239055Z",
+    "recordedAt": "2026-10-04T12:16:43.494751831Z",
+    "recovered": false
+  },
+  "verification": {
+    "healthz": "ok",
+    "version": "8d6aac9d6faa9ab33532f04604a020a2",
+    "service_worker": "cowboy-v1831",
+    "spa_http_status": 200,
+    "spa_cache_control": "no-store",
+    "deno_check": "passed",
+    "typecheck": "passed",
+    "lint": "passed with existing warnings",
+    "unit_tests": {
+      "passed": 3,
+      "failed": 0
+    },
+    "browser": {
+      "suite": "desktop-composer",
+      "engine": "Firefox 151.0.1",
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "fixture_sha256": "650a5fefb8be2d718ac818c5b9417b3b75cb31eb6c2d7253f2b5c16e631b2f28",
+      "root_font_px": [
+        8,
+        10.4,
+        16,
+        24
+      ],
+      "panel_width_px": [
+        320,
+        430,
+        600,
+        1200
+      ],
+      "grip_and_slot_dimensions": "passed for Drafts and Queue on Desktop and Mobile",
+      "desktop_icon_padding_fit": "passed"
+    }
+  },
+  "change": {
+    "desktop_grip_size": "2.75rem",
+    "desktop_hint_slot_width": "1.75rem",
+    "desktop_grip_padding": "0.5rem",
+    "mobile_grip_size": "44px unchanged"
+  },
+  "scope": "Web activation only"
+}
