@@ -351,7 +351,18 @@ three-program archive through `--bootstrap-manifest`, `--bootstrap-artifact` and
 any bundled code runs, and captured payload bytes are checked after the required
 guard probe and before publication. Floor and committed namespace absence are
 rechecked after that probe. Existing floors still refuse signed installation or
-refresh. This does not retain a bootstrap recovery anchor, authenticate bootstrap
-bytes before their own future startup, create a floor or enable the writer. See
+refresh. This does not create a floor or enable the writer. See
 the [signed package release](releases/plugin-signed-bootstrap-bundle-2026-10-04.md)
 for bounds, native acceptance and remaining selection/recovery authority.
+
+The subsequent [startup authentication release](releases/plugin-bootstrap-startup-authentication-2026-10-04.md)
+retains the original manifest, archive and all three payloads in a fresh private
+generation. Its launcher first runs a captured installer-owned verifier, outside
+the publisher package, to authenticate those bytes and independently check local
+namespace/cache/floor admission. Only then does publisher code run. Refresh never
+overwrites the selected generation. Existing installations need an explicit
+pre-floor signed refresh to adopt this launcher; there is no automatic migration.
+Floor-bearing install/refresh, missing-cache recovery, publisher rotation and
+committed portable deletion admission remain closed. The verifier, launcher and
+configured key remain administrator-owned authority; same-user mutation is not
+fenced and signed probes are not sandboxes.

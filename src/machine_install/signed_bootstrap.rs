@@ -70,12 +70,16 @@ pub(super) fn read_regular(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn authenticate(
-    manifest: &Path,
-    artifact: &Path,
-    key: &Path,
-) -> Result<BTreeMap<String, Vec<u8>>> {
-    let manifest: Manifest = serde_json::from_slice(&read_regular(manifest, 64 * 1024)?)
+#[derive(Debug)]
+pub(super) struct Authenticated {
+    pub(super) payloads: BTreeMap<String, Vec<u8>>,
+    pub(super) manifest: Vec<u8>,
+    pub(super) artifact: Vec<u8>,
+}
+
+pub(super) fn authenticate(manifest: &Path, artifact: &Path, key: &Path) -> Result<Authenticated> {
+    let manifest_bytes = read_regular(manifest, 64 * 1024)?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
         .context("decoding closed signed bootstrap manifest")?;
     let desired = DesiredComponent {
         id: crate::machine_protocol::ComponentId {
@@ -159,7 +163,121 @@ pub(super) fn authenticate(
         payloads.len() == 3,
         "signed bootstrap archive is missing payloads"
     );
-    Ok(payloads)
+    Ok(Authenticated {
+        payloads,
+        manifest: manifest_bytes,
+        artifact: bytes,
+    })
+}
+
+// This executable is installer-owned, outside the signed publisher payload.
+#[derive(clap::Parser)]
+struct CheckArgs {
+    #[arg(long)]
+    check_signed_bootstrap: bool,
+    #[arg(long)]
+    state_dir: std::path::PathBuf,
+    #[arg(long)]
+    bundle_dir: std::path::PathBuf,
+    #[arg(long)]
+    artifact_public_key: std::path::PathBuf,
+}
+
+pub(super) fn run_check() -> Result<()> {
+    use clap::Parser as _;
+    let args = CheckArgs::parse();
+    ensure!(
+        args.check_signed_bootstrap,
+        "signed bootstrap check required"
+    );
+    check_installed(&args.state_dir, &args.bundle_dir, &args.artifact_public_key)
+}
+
+pub(super) fn check_installed(state: &Path, bundle: &Path, key: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    crate::session_deletion_admission::require_empty_portable_namespace(state)?;
+    let root = state.canonicalize()?.join("signed-bootstrap");
+    ensure!(
+        std::fs::symlink_metadata(&root)?.is_dir() && std::fs::symlink_metadata(bundle)?.is_dir(),
+        "signed bootstrap directories must be regular"
+    );
+    ensure!(
+        bundle.canonicalize()?.parent() == Some(root.as_path()),
+        "signed bootstrap generation is outside its state directory"
+    );
+    let entries: std::collections::BTreeSet<_> = std::fs::read_dir(bundle)?
+        .map(|e| e.map(|e| e.file_name()))
+        .collect::<std::io::Result<_>>()?;
+    let expected: std::collections::BTreeSet<_> = [
+        "cowboy-machine",
+        "cowboy-code-adapter",
+        "cowboy-acp-worker",
+        "manifest.json",
+        "artifact",
+        "verifier",
+    ]
+    .map(std::ffi::OsString::from)
+    .into_iter()
+    .collect();
+    ensure!(
+        entries == expected,
+        "signed bootstrap generation has unexpected entries"
+    );
+    let authenticated = authenticate(&bundle.join("manifest.json"), &bundle.join("artifact"), key)?;
+    for (name, bytes) in &authenticated.payloads {
+        let path = bundle.join(name);
+        ensure!(
+            read_regular(&path, bytes.len() as u64)? == *bytes,
+            "installed bootstrap bytes differ from signed package"
+        );
+        ensure!(
+            std::fs::metadata(&path)?.permissions().mode() & 0o111 != 0,
+            "signed bootstrap payload is not executable"
+        );
+        rustix::fs::accessat(
+            rustix::fs::CWD,
+            &path,
+            rustix::fs::Access::EXEC_OK,
+            rustix::fs::AtFlags::EACCESS,
+        )?;
+    }
+    #[cfg(feature = "machine-host")]
+    crate::machine_components::check_portable_host_cache(state, Some(key))?;
+    #[cfg(not(feature = "machine-host"))]
+    crate::session_deletion_admission::reader_floor::require_absent_for_install(state)?;
+    Ok(())
+}
+
+pub(super) fn verifier_digest(path: &Path) -> Result<Vec<u8>> {
+    ensure!(
+        std::fs::symlink_metadata(path)?.is_file(),
+        "bootstrap verifier is not regular"
+    );
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    ensure!(
+        file.metadata()?.is_file(),
+        "bootstrap verifier is not regular"
+    );
+    let mut reader = file.take(PAYLOAD_LIMIT + 1);
+    let mut digest = Sha256::new();
+    let mut total = 0;
+    let mut buffer = [0_u8; 65536];
+    loop {
+        let size = reader.read(&mut buffer)?;
+        if size == 0 {
+            break;
+        }
+        total += size as u64;
+        ensure!(
+            total <= PAYLOAD_LIMIT,
+            "bootstrap verifier exceeds size limit"
+        );
+        digest.update(&buffer[..size]);
+    }
+    Ok(digest.finalize().to_vec())
 }
 
 #[cfg(test)]
@@ -365,6 +483,171 @@ mod tests {
     }
 
     #[test]
+    fn retained_generation_authenticates_original_evidence_and_all_payloads() {
+        let root = tempfile::tempdir_in("/tmp").unwrap();
+        let bytes = archive(&[
+            ("cowboy-machine", GUARD.as_bytes()),
+            ("cowboy-code-adapter", b"code"),
+            ("cowboy-acp-worker", b"worker"),
+        ]);
+        let (manifest, artifact, key, _) = package(root.path(), &bytes);
+        let bundle =
+            super::super::bootstrap_probe::Bundle::prepare_signed(&manifest, &artifact, &key)
+                .unwrap();
+        let state = root.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let generation = bundle.install_signed(&state).unwrap().unwrap();
+        std::fs::write(&manifest, b"caller manifest replaced").unwrap();
+        std::fs::write(&artifact, b"caller artifact replaced").unwrap();
+        check_installed(&state, &generation, &key).unwrap();
+        for name in [
+            "cowboy-machine",
+            "cowboy-code-adapter",
+            "cowboy-acp-worker",
+            "manifest.json",
+            "artifact",
+        ] {
+            let path = generation.join(name);
+            let original = std::fs::read(&path).unwrap();
+            std::fs::write(&path, b"tampered").unwrap();
+            assert!(check_installed(&state, &generation, &key).is_err());
+            std::fs::write(&path, original).unwrap();
+        }
+        std::fs::write(generation.join("extra"), b"extra").unwrap();
+        assert!(check_installed(&state, &generation, &key).is_err());
+        std::fs::remove_file(generation.join("extra")).unwrap();
+        std::fs::write(
+            state.join(crate::session_deletion_admission::reader_floor::NAME),
+            b"{}",
+        )
+        .unwrap();
+        assert!(check_installed(&state, &generation, &key).is_err());
+        std::fs::remove_file(state.join(crate::session_deletion_admission::reader_floor::NAME))
+            .unwrap();
+        std::fs::remove_file(generation.join("artifact")).unwrap();
+        std::os::unix::fs::symlink(&artifact, generation.join("artifact")).unwrap();
+        assert!(check_installed(&state, &generation, &key).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires exact immutable Machine release"]
+    fn immutable_signed_launcher_refuses_tampering_before_any_publisher_code() {
+        let release = std::path::PathBuf::from(
+            std::env::var("COWBOY_TEST_PORTABLE_HOST_RELEASE").expect("release required"),
+        );
+        for case in [
+            "healthy",
+            "host",
+            "code",
+            "worker",
+            "manifest",
+            "artifact",
+            "missing-proof",
+            "linked-proof",
+            "floor",
+        ] {
+            let root = tempfile::tempdir_in("/tmp").unwrap();
+            let marker = root.path().join("ran");
+            let script = GUARD.replace(
+                "#!/bin/sh\n",
+                &format!("#!/bin/sh\nprintf ran > '{}'\n", marker.display()),
+            );
+            let bytes = archive(&[
+                ("cowboy-machine", script.as_bytes()),
+                ("cowboy-code-adapter", b"code"),
+                ("cowboy-acp-worker", b"worker"),
+            ]);
+            let (manifest, artifact, key, _) = package(root.path(), &bytes);
+            let state = root.path().join("s");
+            let output = std::process::Command::new(release.join("bin/cowboy-machine-install"))
+                .env("HOME", root.path())
+                .args([
+                    "--controller-url",
+                    "https://cowboy.invalid",
+                    "--service-id",
+                    "svc-0123456789abcdef0123456789abcdef",
+                    "--workspace",
+                    "main=/tmp",
+                    "--enrollment-token",
+                    "fixture",
+                    "--no-start",
+                    "--state-dir",
+                ])
+                .arg(&state)
+                .arg("--bootstrap-manifest")
+                .arg(&manifest)
+                .arg("--bootstrap-artifact")
+                .arg(&artifact)
+                .arg("--artifact-public-key")
+                .arg(&key)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let generation = std::fs::read_dir(state.join("signed-bootstrap"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            std::fs::remove_file(&marker).unwrap();
+            match case {
+                "healthy" => {}
+                "host" | "code" | "worker" | "manifest" | "artifact" => {
+                    let name = match case {
+                        "host" => "cowboy-machine",
+                        "code" => "cowboy-code-adapter",
+                        "worker" => "cowboy-acp-worker",
+                        "manifest" => "manifest.json",
+                        _ => "artifact",
+                    };
+                    std::fs::write(generation.join(name), b"tampered").unwrap();
+                }
+                "missing-proof" => {
+                    std::fs::remove_file(generation.join("artifact")).unwrap();
+                }
+                "linked-proof" => {
+                    std::fs::remove_file(generation.join("artifact")).unwrap();
+                    std::os::unix::fs::symlink(&artifact, generation.join("artifact")).unwrap();
+                }
+                "floor" => {
+                    std::fs::write(
+                        state.join(crate::session_deletion_admission::reader_floor::NAME),
+                        b"{}",
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let launcher = root
+                .path()
+                .join(".local/bin/cowboy-machine-launch-svc-0123456789abcdef0123456789abcdef");
+            let output = std::process::Command::new("/bin/sh")
+                .arg(&launcher)
+                .env("HOME", root.path())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                case == "healthy",
+                "{case}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                marker.exists(),
+                case == "healthy",
+                "{case} executed package code before refusal"
+            );
+            if case != "healthy" {
+                assert!(!state.join("run").exists());
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "requires exact immutable Machine release"]
     fn immutable_signed_bundle_installs_without_admitting_floor_refresh() {
         let release = std::path::PathBuf::from(
@@ -423,11 +706,14 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let generation = std::fs::read_dir(state.join("signed-bootstrap"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         for (name, expected) in &payloads {
-            assert_eq!(
-                std::fs::read(state.join("bootstrap").join(name)).unwrap(),
-                *expected
-            );
+            assert_eq!(std::fs::read(generation.join(name)).unwrap(), *expected);
         }
         assert!(
             !state
@@ -443,10 +729,7 @@ mod tests {
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("portable reader floor"));
         for (name, expected) in &payloads {
-            assert_eq!(
-                std::fs::read(state.join("bootstrap").join(name)).unwrap(),
-                *expected
-            );
+            assert_eq!(std::fs::read(generation.join(name)).unwrap(), *expected);
         }
     }
 }

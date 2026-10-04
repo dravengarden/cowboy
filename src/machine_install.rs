@@ -69,6 +69,9 @@ pub struct InstallArgs {
 
 pub fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if std::env::args().nth(1).as_deref() == Some("--check-signed-bootstrap") {
+        return signed_bootstrap::run_check();
+    }
     let args = InstallArgs::parse();
     install(args)
 }
@@ -355,15 +358,17 @@ fn prepare_install_from_bundle(
     set_mode(&state, 0o700)?;
     set_mode(&config, 0o700)?;
 
-    for name in bootstrap_probe::PAYLOADS {
-        let path = bundle.payload(name);
-        atomic_replace(&state.join("bootstrap").join(name), 0o755, |file| {
-            let mut input = std::fs::File::open(&path)?;
-            std::io::copy(&mut input, file)?;
-            Ok(())
-        })?;
+    let signed_generation = bundle.install_signed(&state)?;
+    if signed_generation.is_none() {
+        for name in bootstrap_probe::PAYLOADS {
+            let path = bundle.payload(name);
+            atomic_replace(&state.join("bootstrap").join(name), 0o755, |file| {
+                let mut input = std::fs::File::open(&path)?;
+                std::io::copy(&mut input, file)?;
+                Ok(())
+            })?;
+        }
     }
-
     let token = state.join("enrollment-token");
     if let Some(value) = &args.enrollment_token {
         atomic_write(&token, value.as_bytes(), 0o600)?;
@@ -372,7 +377,8 @@ fn prepare_install_from_bundle(
         || runtime.join(format!("cowboy-machine-launch-{}", args.service_id)),
         |installed| installed.path.clone(),
     );
-    let mut script = launcher_script(args, &state, &token);
+    let mut script =
+        launcher_script_with_bootstrap(args, &state, &token, signed_generation.as_deref());
     if let Some(installed) = &installed {
         for (flag, relative) in [
             ("--socket", MACHINE_SOCKET),
@@ -388,6 +394,8 @@ fn prepare_install_from_bundle(
             }
         }
     }
+    crate::session_deletion_admission::require_empty_portable_namespace(&state)?;
+    crate::session_deletion_admission::reader_floor::require_absent_for_install(&state)?;
     atomic_write(&launcher, script.as_bytes(), 0o755)?;
 
     Ok((home.to_path_buf(), launcher))
@@ -552,7 +560,18 @@ fn install_background_service(
     }
 }
 
+#[cfg(test)]
 fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
+    launcher_script_with_bootstrap(args, state, token, None)
+}
+
+fn launcher_script_with_bootstrap(
+    args: &InstallArgs,
+    state: &Path,
+    token: &Path,
+    signed: Option<&Path>,
+) -> String {
+    let bootstrap_root = signed.map_or_else(|| state.join("bootstrap"), Path::to_path_buf);
     let mut command = vec![
         "--controller-url".to_owned(),
         args.controller_url.clone(),
@@ -603,6 +622,24 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         command.extend(["--workspace".to_owned(), workspace.clone()]);
     }
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
+    if let Some(generation) = signed {
+        let _ = writeln!(
+            script,
+            "{} --check-signed-bootstrap --state-dir {} --bundle-dir {} --artifact-public-key {} >/dev/null",
+            shell_quote(&generation.join("verifier").display().to_string()),
+            shell_quote(&state.display().to_string()),
+            shell_quote(&generation.display().to_string()),
+            shell_quote(
+                &args
+                    .artifact_public_key
+                    .as_ref()
+                    .expect("signed package publisher")
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
     // The installer-owned bootstrap is the guard, even when an active signed
     // host is selected later. An older bootstrap lacking the diagnostic fails
     // closed. It also authenticates cached host selection without running it.
@@ -610,7 +647,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let _ = writeln!(
         script,
         "{} --check-portable-session-deletion --state-dir {}{} >/dev/null",
-        shell_quote(&state.join("bootstrap/cowboy-machine").display().to_string()),
+        shell_quote(&bootstrap_root.join("cowboy-machine").display().to_string()),
         shell_quote(&state.display().to_string()),
         args.artifact_public_key
             .as_ref()
@@ -624,7 +661,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         script,
         "PATH={}:{}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
         shell_quote(&state.join("components/commands").display().to_string()),
-        shell_quote(&state.join("bootstrap").display().to_string())
+        shell_quote(&bootstrap_root.display().to_string())
     );
     for detect in crate::plugin_runtime_args::path_detect() {
         let cmd = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD");
@@ -651,7 +688,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         shell_quote(&state.join("run").display().to_string())
     );
     let active = state.join("components/commands/cowboy-machine");
-    let bootstrap = state.join("bootstrap/cowboy-machine");
+    let bootstrap = bootstrap_root.join("cowboy-machine");
     let _ = writeln!(
         script,
         "machine={}; [ -x {} ] && machine={}",
