@@ -1,5 +1,8 @@
 # Session worktree preparation containment
 
+The [October 4 Hawk release](releases/plugin-session-worktree-containment-2026-10-04.md)
+records the activated writer-host artifact and bounded continuity evidence.
+
 Machine preparation refuses a reused session checkout when the destination is
 a symbolic link or not a directory. Its canonical parent must be the canonical
 managed worktree root. Matching the source Git common directory alone cannot
