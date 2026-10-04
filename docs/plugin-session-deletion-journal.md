@@ -232,8 +232,9 @@ signed reader anchor before selection publication, and prevents downgrade or
 bootstrap fallback even over an empty namespace. It binds the canonical state
 namespace, fixed deletion dataset, normalized publisher key and exact signed
 anchor proof. The private, bounded floor is not replaced or cleared by updated
-tools; cache pruning retains its anchor. Installation/refresh remains closed
-once a floor exists until signed bootstrap/recovery admission is established.
+tools; cache pruning retains its anchor. Floor-bearing installation and recovery
+remain closed; the signed enrolled refresh described below preserves a complete
+authenticated selected cache and the existing floor.
 The current bootstrap diagnostic advertises `host_cache_guard: 2` and is checked
 against both committed-state and floor refusal fixtures before installation.
 See the [portable floor release](releases/plugin-portable-reader-floor-2026-10-04.md).
@@ -362,7 +363,17 @@ the publisher package, to authenticate those bytes and independently check local
 namespace/cache/floor admission. Only then does publisher code run. Refresh never
 overwrites the selected generation. Existing installations need an explicit
 pre-floor signed refresh to adopt this launcher; there is no automatic migration.
-Floor-bearing install/refresh, missing-cache recovery, publisher rotation and
+Floor-bearing installation, missing-cache recovery, publisher rotation and
 committed portable deletion admission remain closed. The verifier, launcher and
 configured key remain administrator-owned authority; same-user mutation is not
 fenced and signed probes are not sandboxes.
+
+The later [signed refresh release](releases/plugin-floored-signed-refresh-2026-10-04.md)
+admits refresh of an enrolled Machine with a valid existing floor, signed retained
+anchor and complete authenticated selected cache. It authenticates the candidate
+package before contacting the Controller or executing its guard, then rechecks
+the floor's exact bytes and both pointer targets after the probe and before
+launcher publication. The publisher must match the existing floor. New enrollment,
+unsigned refresh, missing-cache recovery, damaged anchor/floor, key rotation and
+committed deletion state still refuse. Refresh does not select a different cached
+host, replace the floor or enable the writer.
