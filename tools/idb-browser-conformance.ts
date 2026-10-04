@@ -219,6 +219,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 10
         : suite === "settings-recovery"
         ? 9
+        : suite === "desktop-composer"
+        ? 7
         : suite === "code-buffer-cleanup"
         ? 7
         : suite === "code-buffers"
