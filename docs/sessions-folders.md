@@ -114,14 +114,34 @@ EMPTY)` beside `titleSync`/`orderSync`; `ProductSyncScope` gains
 `service:folders`. `State.sessionFolders` exposes the raw value; a pure
 `sessionTree.ts` builds display rows from `(sessions, folders, placement,
 collapsed, direction)`: folder rows carry depth, expanded flag, direct and
-nested counts, and an aggregated status (`busy` › `interrupted`/`crashed` ›
-`running` › idle) computed from every descendant session, so a collapsed
-folder still shows that an agent inside needs attention.
+nested counts, an aggregated status (`busy` › `interrupted`/`crashed` ›
+`running` › idle) and an **activity** count (`working` = busy or idle but
+waiting on its own background work, `attention` = crashed/interrupted,
+`live` = up and idle) over every descendant session, so a collapsed folder
+says how many agents inside are doing something. An expanded folder with no
+children emits one `empty` row (`empty:<folder>` key) as its body.
+
+### Folder row and tree presentation (2026-10-04)
+
+- **Counts, not one dot.** A single aggregated dot could not say how many
+  agents run, and an empty folder left a hole where it sat. Folder rows have
+  no leading status slot; a trailing capsule shows each non-zero live state
+  with the session row's own glyph and its count (spinner = working, amber =
+  needs attention, green = ready), with the total beside the name. A folder
+  of dormant sessions shows no capsule.
+- **Indent guides.** Obsidian-style hairlines, one per ancestor level, centred
+  under that ancestor's chevron and joined across row margins, fence a
+  folder's body off from the unfiled rows that follow it.
+- **Empty body.** An expanded empty folder renders a quiet "Empty — drag a
+  session here" row inside its guide. It is not a keyboard item; it is a drop
+  slot.
+- All three are paint-only and remain inside the Mobile swipe compositor
+  contract.
 
 ## Mobile
 
 - Folder row: disclosure glyph (icon swap, never a rotating `transform`),
-  name, aggregated `StatusDot`, count. Tap toggles collapse; the row is
+  name, count, activity capsule. Tap toggles collapse; the row is
   paint-only chrome inside the peek (mobile-spatial-presentation §2.1).
 - Folder kebab (`ObsidianSheet` compact card, matching Rename/Delete):
   New session here (opens New Session with the bound project preselected),
@@ -134,11 +154,8 @@ folder still shows that an agent inside needs attention.
 - Drawer footer "+" is unchanged; the New Session sheet gains an optional
   Folder row defaulting to the folder bound to the chosen workspace, else the
   folder of the current session, else Root.
-- The grip still reorders. Dropping a session lands it in the container of
-  the row above the drop position; directly below a folder header (expanded
-  or collapsed) files it into that folder, so "drop onto the folder" works
-  without a hover timer. Obsidian mobile has no drag-into-folder either, so
-  "Move to…" remains the primary path.
+- The grip reorders and files; see [Drag into folders](#drag-into-folders).
+  "Move to…" remains available for long distances.
 - The footer's leading island gains **New folder** beside New session. The
   name prompt offers **By project (N)** while unbound project labels exist:
   one tap creates one bound folder per project that has none yet, writes no
@@ -173,17 +190,39 @@ Session Folders, Reveal Current Session. No workspace-prefix continuation is
 added; `Cmd/Alt+K N` still creates a session. A folder button beside New
 session opens the same folder-wide actions with the pointer.
 
-Pointer: dropping a dragged session directly below a folder header files it
-into that folder (see Mobile); the same rule drives Order mode, so `j/k`
-across a header moves a session in or out. The folder actions modal offers
+Pointer: see [Drag into folders](#drag-into-folders). Order mode keeps the
+row-above rule, so `j/k` across a header moves a session in or out. The folder actions modal offers
 the Mobile actions with lettered slots (`N` new session here, `F` new folder
 inside, `R` rename, `M` move, `B` bind project, `X` delete).
+
+## Drag into folders
+
+Both surfaces share one projection (`projectSessionDrop`), the outliner
+model used by Obsidian-style trees:
+
+- The vertical slot bounds the legal depth: never deeper than the row above
+  can parent, never shallower than the row below requires.
+- Right below a folder header (collapsed, expanded or empty) the session goes
+  into that folder: dropping "onto" a folder needs no hover timer.
+- Elsewhere the session keeps its own depth inside those bounds, and
+  horizontal movement changes it: drag right to nest, left to step out (one
+  step = the visual indent plus 12 px, so a vertical drag never wobbles). This
+  is how a session leaves a folder whose block is followed by nothing else.
+- Feedback while dragging: the target folder's header is outlined and its
+  whole body tinted, the lifted row slides to the indent it will take and
+  carries a tag naming the destination (folder name or Top level), empty
+  folders read "Drop here to file into this folder", and a light haptic marks
+  each change of destination. Root shows no tint.
+- `useSortable` measures every row at pickup and moves the slot when the
+  lifted row's centre crosses a neighbour's own midpoint, so mixed folder and
+  session row heights no longer drift; shifted rows open exactly the lifted
+  row's height.
 
 ## Implementation notes
 
 - No 750 ms hover auto-expand: the bespoke sortable measures row slots at
-  pickup, so rows must not appear mid-drag. "Below the header files into the
-  folder" replaces it and also covers collapsed folders.
+  pickup, so rows must not appear mid-drag. The header slot files into the
+  folder instead and also covers collapsed folders.
 - Folder rename uses the shared name prompt (`FolderNameShell`) rather than
   an inline editor; it is mounted inside the opening tap like session rename
   so iOS raises the keyboard.
@@ -195,8 +234,8 @@ inside, `R` rename, `M` move, `B` bind project, `X` delete).
 ## Not in v1
 
 Multi-selection and bulk move, a search/filter box, folder icons or colors,
-machine-based grouping, and drag-into-folder on Mobile beyond the inferred
-placement above.
+machine-based grouping, and dragging folders themselves (folders reorder via
+Order mode and Move to…).
 
 ## Verification
 
