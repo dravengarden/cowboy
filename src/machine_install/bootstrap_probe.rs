@@ -100,14 +100,21 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
         .context("resolving bootstrap probe executable")?;
     let scratch = Scratch::new()?;
     let state = scratch.0.join("state");
-    for committed in [false, true] {
+    for case in ["empty", "committed", "floor"] {
+        let committed = case == "committed";
         if committed {
             let journal = state.join("session-deletions");
             std::fs::create_dir_all(&journal)?;
             std::fs::write(journal.join("deletions.json"), b"{}")?;
+        } else if case == "floor" {
+            std::fs::create_dir(&state)?;
+            std::fs::write(
+                state.join(crate::session_deletion_admission::reader_floor::NAME),
+                b"{}",
+            )?;
         }
-        let stdout_path = scratch.0.join(format!("stdout-{committed}"));
-        let stderr_path = scratch.0.join(format!("stderr-{committed}"));
+        let stdout_path = scratch.0.join(format!("stdout-{case}"));
+        let stderr_path = scratch.0.join(format!("stderr-{case}"));
         let output_file = |path: &Path| {
             OpenOptions::new()
                 .write(true)
@@ -168,6 +175,27 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
                     == 1,
                 "bootstrap guard probe changed the deletion namespace"
             );
+            std::fs::remove_file(state.join("session-deletions/deletions.json"))?;
+            std::fs::remove_dir(state.join("session-deletions"))?;
+            std::fs::remove_dir(&state)?;
+        } else if case == "floor" {
+            ensure!(
+                status.code() == Some(1),
+                "bootstrap did not refuse portable reader floor"
+            );
+            ensure!(
+                String::from_utf8_lossy(&stderr).contains("portable reader floor"),
+                "bootstrap returned the wrong reader-floor refusal"
+            );
+            ensure!(
+                bounded_output(&state.join(crate::session_deletion_admission::reader_floor::NAME))?
+                    == b"{}",
+                "bootstrap probe changed the reader floor"
+            );
+            ensure!(
+                std::fs::read_dir(&state)?.take(2).count() == 1,
+                "bootstrap floor probe opened Machine stores"
+            );
         } else {
             ensure!(
                 status.success(),
@@ -178,7 +206,7 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
                 serde_json::from_slice(&stdout).context("decoding bootstrap guard report")?;
             ensure!(
                 report
-                    == serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 1}),
+                    == serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 2}),
                 "bootstrap guard report is incompatible"
             );
             ensure!(
@@ -222,6 +250,22 @@ mod tests {
     }
 
     #[test]
+    fn advertised_floor_capability_without_floor_refusal_is_incompatible() {
+        let root = tempfile::tempdir().unwrap();
+        let source = script(
+            root.path(),
+            "#!/bin/sh\nif [ -e \"$3/session-deletions/deletions.json\" ]; then printf '%s' 'portable Session deletion reader admission' >&2; exit 1; fi\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}'\n",
+        );
+        assert!(
+            check(&source)
+                .unwrap_err()
+                .root_cause()
+                .to_string()
+                .contains("did not refuse portable reader floor")
+        );
+    }
+
+    #[test]
     fn deletion_guard_without_cache_authentication_cannot_be_installed() {
         let root = tempfile::tempdir().unwrap();
         let source = script(
@@ -242,7 +286,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let source = script(
             root.path(),
-            "#!/bin/sh\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":1}'\n",
+            "#!/bin/sh\nprintf '%s' '{\"admitted\":true,\"writer\":false,\"host_cache_guard\":2}'\n",
         );
         assert!(
             check(&source)

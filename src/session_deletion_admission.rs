@@ -1,8 +1,11 @@
-//! Temporary closed gate for portable host selection, not reader admission.
+//! Committed portable deletion state stays closed; empty-state selection also
+//! honors the separately retained monotonic reader floor.
 
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
+
+pub(crate) mod reader_floor;
 
 pub(crate) fn require_empty_portable_namespace(state: &Path) -> Result<()> {
     let namespace = state.join("session-deletions");

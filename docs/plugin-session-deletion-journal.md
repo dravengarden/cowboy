@@ -227,15 +227,25 @@ before exec. Missing legacy package proofs refuse; they need a fresh signed
 reconciliation. The bootstrap diagnostic advertises `host_cache_guard: 1`, and
 install/refresh refuse an older deletion-only bootstrap before changing an
 installation. The installer-selected bootstrap and configured publisher key
-remain trusted; this supplies neither a persistent floor nor signed recovery.
+remain trusted. Subsequent portable floor support retains the first declared
+signed reader anchor before selection publication, and prevents downgrade or
+bootstrap fallback even over an empty namespace. It binds the canonical state
+namespace, fixed deletion dataset, normalized publisher key and exact signed
+anchor proof. The private, bounded floor is not replaced or cleared by updated
+tools; cache pruning retains its anchor. Installation/refresh remains closed
+once a floor exists until signed bootstrap/recovery admission is established.
+The current bootstrap diagnostic advertises `host_cache_guard: 2` and is checked
+against both committed-state and floor refusal fixtures before installation.
+See the [portable floor release](releases/plugin-portable-reader-floor-2026-10-04.md).
 See the [cached-startup release](releases/plugin-host-startup-integrity-2026-10-04.md). The [staged-host integrity release](releases/plugin-host-cache-integrity-2026-10-04.md)
 records that narrower boundary.
 
 Installation and refresh check the same gate before changing bootstrap payloads,
 identity or launcher configuration. Newly generated launchers run the
 installer-owned bootstrap's `--check-portable-session-deletion` diagnostic
-before selecting active or bootstrap hosts. The diagnostic only inspects
-namespace entries; it opens no Machine stores or Controller connection. A
+before selecting active or bootstrap hosts. The diagnostic checks namespace entries and authenticates selected cached host
+bytes and any retained floor anchor; it opens no Machine stores or Controller
+connection. A
 bootstrap without this diagnostic fails closed. A healthy empty or staging-only
 namespace retains existing behavior. Committed files, directories and dangling
 symlinks all refuse; invalid namespace entries and inspection errors do not

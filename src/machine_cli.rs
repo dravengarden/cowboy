@@ -363,7 +363,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         )?;
         println!(
             "{}",
-            serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 1})
+            serde_json::json!({"admitted": true, "writer": false, "host_cache_guard": 2})
         );
         return Ok(());
     }

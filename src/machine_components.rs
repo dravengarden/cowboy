@@ -52,6 +52,16 @@ impl ComponentStore {
     }
 
     pub async fn reconcile(&self, desired: DesiredComponent) -> anyhow::Result<ComponentInventory> {
+        let floor_at_start =
+            if desired.id.kind == crate::machine_protocol::ComponentKind::MachineHost {
+                crate::session_deletion_admission::reader_floor::read(
+                    self.root
+                        .parent()
+                        .context("component store has no Machine state parent")?,
+                )?
+            } else {
+                None
+            };
         self.check_session_deletion_host_selection(&desired)?;
         let publisher_key = self
             .publisher_key
@@ -82,6 +92,7 @@ impl ComponentStore {
             bail!("component signature is invalid");
         }
         self.check_session_deletion_host_selection(&desired)?;
+        self.check_retained_floor(floor_at_start.as_ref())?;
         let host_payload = host_payload::HostPayload::from_authenticated(&desired, &bytes)?;
         let slot = component_slot(&desired);
         let generation = self
@@ -135,6 +146,7 @@ impl ComponentStore {
             }
         }
         self.check_session_deletion_host_selection(&desired)?;
+        self.check_retained_floor(floor_at_start.as_ref())?;
         // A signed probe may mutate its own staging directory. Verify again
         // before publishing, without repairing or executing substituted bytes.
         if let Some(payload) = &host_payload {
@@ -143,6 +155,7 @@ impl ComponentStore {
             if cached != desired {
                 bail!("staged Machine host manifest changed during probe");
             }
+            cached_host::retain_reader_floor(&self.root, &desired, publisher_key)?;
         }
         let active = self.root.join("active").join(&slot);
         let prior_generation = std::fs::read_link(&active).ok();
@@ -198,6 +211,25 @@ impl ComponentStore {
                     .parent()
                     .context("component store has no Machine state parent")?,
             )?;
+            cached_host::check_floor_candidate(&self.root, desired, self.publisher_key.as_deref())?;
+        }
+        Ok(())
+    }
+
+    fn check_retained_floor(
+        &self,
+        retained: Option<&crate::session_deletion_admission::reader_floor::Floor>,
+    ) -> anyhow::Result<()> {
+        if let Some(retained) = retained {
+            let current = crate::session_deletion_admission::reader_floor::read(
+                self.root
+                    .parent()
+                    .context("component store has no Machine state parent")?,
+            )?;
+            anyhow::ensure!(
+                current.as_ref() == Some(retained),
+                "portable reader floor changed or disappeared during reconciliation"
+            );
         }
         Ok(())
     }
@@ -236,6 +268,13 @@ impl ComponentStore {
 
     fn prune(&self) -> anyhow::Result<()> {
         let mut protected = Vec::new();
+        if let Some(floor) = crate::session_deletion_admission::reader_floor::read(
+            self.root
+                .parent()
+                .context("component store has no Machine state parent")?,
+        )? {
+            protected.push(floor.anchor_path(&self.root));
+        }
         for root in [self.root.join("active"), self.root.join("rollback")] {
             for entry in std::fs::read_dir(root)? {
                 if let Ok(target) = std::fs::canonicalize(entry?.path()) {
@@ -523,6 +562,283 @@ mod tests {
             archive.append_data(&mut header, path, bytes).unwrap();
         }
         archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn portable_host(
+        identity: &MachineIdentity,
+        url: String,
+        bytes: &[u8],
+        version: &str,
+        archive: bool,
+        reader: bool,
+    ) -> DesiredComponent {
+        let mut desired = signed_component(identity, url, bytes, version);
+        desired.id.kind = ComponentKind::MachineHost;
+        desired.id.slot.clear();
+        if archive {
+            desired.artifact_format = ArtifactFormat::TarGz;
+            desired.entrypoint = Some("bin/host".into());
+        }
+        if reader {
+            desired.session_deletion_journal =
+                Some(crate::machine_protocol::SessionDeletionReader {
+                    reader_schema: 1,
+                    writer_schema: 0,
+                });
+        }
+        desired.signature = Some(identity.sign(&component_proof(&desired)).unwrap());
+        desired
+    }
+
+    #[tokio::test]
+    async fn reader_floor_survives_updates_and_pruning_and_refuses_signed_downgrades() {
+        use crate::session_deletion_admission::reader_floor::{self, NAME};
+        for archive in [false, true] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+            let key = state.path().join("publisher.pub");
+            std::fs::write(&key, identity.public_key()).unwrap();
+            let mut store = ComponentStore::new(
+                state.path().join("components"),
+                Some(&key),
+                "fixture".into(),
+            )
+            .unwrap();
+            let bytes = if archive {
+                host_archive(b"#!/bin/sh\nexit 0\n", b"signed companion")
+            } else {
+                b"#!/bin/sh\nexit 0\n".to_vec()
+            };
+            let legacy = portable_host(
+                &identity,
+                serve_once(&bytes).await,
+                &bytes,
+                "legacy",
+                archive,
+                false,
+            );
+            store.reconcile(legacy.clone()).await.unwrap();
+            assert!(!state.path().join(NAME).exists());
+            let legacy_generation = store
+                .root
+                .join("active/machine_host")
+                .canonicalize()
+                .unwrap();
+            let anchor = portable_host(
+                &identity,
+                serve_once(&bytes).await,
+                &bytes,
+                "anchor",
+                archive,
+                true,
+            );
+            store.reconcile(anchor.clone()).await.unwrap();
+            let retained = std::fs::read(state.path().join(NAME)).unwrap();
+            let floor = reader_floor::read(state.path()).unwrap().unwrap();
+            assert_eq!(floor.anchor_generation, anchor.generation);
+            check_portable_host_cache(state.path(), Some(&key)).unwrap();
+            for version in ["second", "third"] {
+                store
+                    .reconcile(portable_host(
+                        &identity,
+                        serve_once(&bytes).await,
+                        &bytes,
+                        version,
+                        archive,
+                        true,
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(std::fs::read(state.path().join(NAME)).unwrap(), retained);
+                check_portable_host_cache(state.path(), Some(&key)).unwrap();
+            }
+            let active = std::fs::read_link(store.root.join("active/machine_host")).unwrap();
+            let command = std::fs::read_link(store.command_path("cowboy-machine")).unwrap();
+            let mut downgrade = legacy.clone();
+            downgrade.artifact_url = "http://127.0.0.1:1/must-not-fetch".into();
+            assert!(
+                store
+                    .reconcile(downgrade)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("portable reader floor")
+            );
+            let mut replacement = anchor.clone();
+            replacement.automatic = false;
+            replacement.signature = Some(identity.sign(&component_proof(&replacement)).unwrap());
+            assert!(
+                store
+                    .reconcile(replacement)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("accepted anchor proof")
+            );
+            replace_symlink(
+                &store.root.join("active/machine_host"),
+                &legacy_generation,
+                ".test-active",
+            )
+            .unwrap();
+            replace_symlink(
+                &store.command_path("cowboy-machine"),
+                &component_executable(&legacy_generation, &legacy).unwrap(),
+                ".test-command",
+            )
+            .unwrap();
+            assert!(
+                check_portable_host_cache(state.path(), Some(&key))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("undeclared")
+            );
+            replace_symlink(
+                &store.root.join("active/machine_host"),
+                &active,
+                ".test-active",
+            )
+            .unwrap();
+            replace_symlink(
+                &store.command_path("cowboy-machine"),
+                &command,
+                ".test-command",
+            )
+            .unwrap();
+            store.max_cache_bytes = 0;
+            store.max_unused_age = std::time::Duration::ZERO;
+            store.prune().unwrap();
+            assert!(!legacy_generation.exists());
+            assert!(floor.anchor_path(&store.root).exists());
+            check_portable_host_cache(state.path(), Some(&key)).unwrap();
+            for path in [
+                store.root.join("active/machine_host"),
+                store.command_path("cowboy-machine"),
+            ] {
+                std::fs::remove_file(path).unwrap();
+            }
+            assert!(
+                check_portable_host_cache(state.path(), Some(&key))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("bootstrap fallback")
+            );
+            assert_eq!(std::fs::read(state.path().join(NAME)).unwrap(), retained);
+            assert!(reader_floor::require_absent_for_install(state.path()).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn floor_commit_precedes_pointer_publication_and_survives_publication_failure() {
+        use crate::session_deletion_admission::reader_floor;
+        let state = tempfile::tempdir_in("/tmp").unwrap();
+        let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+        let key = state.path().join("publisher.pub");
+        std::fs::write(&key, identity.public_key()).unwrap();
+        let store = ComponentStore::new(
+            state.path().join("components"),
+            Some(&key),
+            "fixture".into(),
+        )
+        .unwrap();
+        std::fs::create_dir(store.root.join("active/machine_host")).unwrap();
+        let bytes = b"#!/bin/sh\nexit 0\n";
+        let candidate = portable_host(
+            &identity,
+            serve_once(bytes).await,
+            bytes,
+            "anchor",
+            false,
+            true,
+        );
+        assert!(store.reconcile(candidate).await.is_err());
+        let floor = reader_floor::read(state.path()).unwrap().unwrap();
+        assert!(floor.anchor_path(&store.root).exists());
+        cached_host::authenticate_floor(&store.root, &floor, identity.public_key()).unwrap();
+        assert!(!store.command_path("cowboy-machine").exists());
+        assert!(check_portable_host_cache(state.path(), Some(&key)).is_err());
+    }
+
+    #[tokio::test]
+    async fn anchor_corruption_or_probe_floor_removal_refuses_without_pointer_changes() {
+        use crate::session_deletion_admission::reader_floor::{self, NAME};
+        for remove in [false, true] {
+            let state = tempfile::tempdir_in("/tmp").unwrap();
+            let identity = MachineIdentity::load_or_create(&state.path().join("signer")).unwrap();
+            let key = state.path().join("publisher.pub");
+            std::fs::write(&key, identity.public_key()).unwrap();
+            let store = ComponentStore::new(
+                state.path().join("components"),
+                Some(&key),
+                "fixture".into(),
+            )
+            .unwrap();
+            let bytes = b"#!/bin/sh\nexit 0\n";
+            store
+                .reconcile(portable_host(
+                    &identity,
+                    serve_once(bytes).await,
+                    bytes,
+                    "anchor",
+                    false,
+                    true,
+                ))
+                .await
+                .unwrap();
+            let floor = reader_floor::read(state.path()).unwrap().unwrap();
+            let active = std::fs::read_link(store.root.join("active/machine_host")).unwrap();
+            let command = std::fs::read_link(store.command_path("cowboy-machine")).unwrap();
+            if remove {
+                let script = format!("#!/bin/sh\nrm '{}'\n", state.path().join(NAME).display());
+                assert!(
+                    store
+                        .reconcile(portable_host(
+                            &identity,
+                            serve_once(script.as_bytes()).await,
+                            script.as_bytes(),
+                            "candidate",
+                            false,
+                            true
+                        ))
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("floor changed or disappeared")
+                );
+                assert!(
+                    !state.path().join(NAME).exists(),
+                    "signed probe effects were repaired"
+                );
+            } else {
+                std::fs::write(
+                    floor.anchor_path(&store.root).join("artifact"),
+                    "corrupt proof",
+                )
+                .unwrap();
+                assert!(check_portable_host_cache(state.path(), Some(&key)).is_err());
+                let candidate = portable_host(
+                    &identity,
+                    "http://127.0.0.1:1/must-not-fetch".into(),
+                    bytes,
+                    "candidate",
+                    false,
+                    true,
+                );
+                assert!(store.reconcile(candidate).await.is_err());
+                assert_eq!(
+                    std::fs::read(floor.anchor_path(&store.root).join("artifact")).unwrap(),
+                    b"corrupt proof"
+                );
+            }
+            assert_eq!(
+                std::fs::read_link(store.root.join("active/machine_host")).unwrap(),
+                active
+            );
+            assert_eq!(
+                std::fs::read_link(store.command_path("cowboy-machine")).unwrap(),
+                command
+            );
+        }
     }
 
     #[tokio::test]
@@ -927,6 +1243,11 @@ mod tests {
                 "legacy",
                 "pointer",
                 "committed",
+                "floor-healthy",
+                "floor-absent",
+                "floor-legacy",
+                "floor-corrupt",
+                "floor-anchor",
             ] {
                 let state = tempfile::tempdir_in("/tmp").unwrap();
                 let identity =
@@ -967,6 +1288,82 @@ mod tests {
                     .canonicalize()
                     .unwrap();
                 let executable = component_executable(&generation, &desired).unwrap();
+                if case.starts_with("floor-") {
+                    let mut reader = desired.clone();
+                    reader.version = "reader-anchor".into();
+                    reader.generation = "reader-anchor".into();
+                    reader.artifact_url = serve_once(&bytes).await;
+                    reader.session_deletion_journal =
+                        Some(crate::machine_protocol::SessionDeletionReader {
+                            reader_schema: 1,
+                            writer_schema: 0,
+                        });
+                    reader.signature = Some(identity.sign(&component_proof(&reader)).unwrap());
+                    store.reconcile(reader.clone()).await.unwrap();
+                    match case {
+                        "floor-healthy" => {}
+                        "floor-absent" => {
+                            std::fs::remove_file(store.root.join("active/machine_host")).unwrap();
+                            std::fs::remove_file(store.command_path("cowboy-machine")).unwrap();
+                            // The preceding independent guard ignores this floor;
+                            // installing that bootstrap is refused by the new installer.
+                            let old = PathBuf::from(
+                                std::env::var("COWBOY_TEST_PORTABLE_OLD_HOST_RELEASE")
+                                    .expect("old guard required"),
+                            );
+                            let old_output =
+                                tokio::process::Command::new(old.join("bin/cowboy-machine"))
+                                    .args(["--check-portable-session-deletion", "--state-dir"])
+                                    .arg(state.path())
+                                    .output()
+                                    .await
+                                    .unwrap();
+                            assert!(
+                                old_output.status.success(),
+                                "old guard negative control did not reach bootstrap selection"
+                            );
+                        }
+                        "floor-legacy" => {
+                            replace_symlink(
+                                &store.root.join("active/machine_host"),
+                                &generation,
+                                ".test-active",
+                            )
+                            .unwrap();
+                            replace_symlink(
+                                &store.command_path("cowboy-machine"),
+                                &executable,
+                                ".test-command",
+                            )
+                            .unwrap();
+                        }
+                        "floor-corrupt" => std::fs::write(
+                            state
+                                .path()
+                                .join(crate::session_deletion_admission::reader_floor::NAME),
+                            b"{}",
+                        )
+                        .unwrap(),
+                        "floor-anchor" => {
+                            let floor =
+                                crate::session_deletion_admission::reader_floor::read(state.path())
+                                    .unwrap()
+                                    .unwrap();
+                            reader.version = "reader-second".into();
+                            reader.generation = "reader-second".into();
+                            reader.artifact_url = serve_once(&bytes).await;
+                            reader.signature =
+                                Some(identity.sign(&component_proof(&reader)).unwrap());
+                            store.reconcile(reader).await.unwrap();
+                            std::fs::write(
+                                floor.anchor_path(&store.root).join("artifact"),
+                                b"substituted proof",
+                            )
+                            .unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 std::fs::create_dir(state.path().join("bootstrap")).unwrap();
                 let bootstrap = state.path().join("bootstrap/cowboy-machine");
                 // The real immutable bootstrap runs the diagnostic. The shim's
@@ -974,7 +1371,8 @@ mod tests {
                 std::fs::write(&bootstrap, format!("#!/bin/sh\nif [ \"${{1-}}\" = --check-portable-session-deletion ]; then exec '{}' \"$@\"; fi\ntouch '{}'\n", native.display(), fallback.display())).unwrap();
                 set_executable(&bootstrap).unwrap();
                 match case {
-                    "healthy" => {}
+                    "healthy" | "floor-healthy" | "floor-absent" | "floor-legacy"
+                    | "floor-corrupt" | "floor-anchor" => {}
                     "bytes" => {
                         let target = if archive {
                             generation.join("content/lib/companion")
@@ -1026,19 +1424,19 @@ mod tests {
                     .unwrap();
                 assert_eq!(
                     output.status.success(),
-                    case == "healthy",
+                    matches!(case, "healthy" | "floor-healthy"),
                     "{archive}/{case}: {}",
                     String::from_utf8_lossy(&output.stderr)
                 );
                 assert_eq!(
                     selected.exists(),
-                    case == "healthy",
+                    matches!(case, "healthy" | "floor-healthy"),
                     "{archive}/{case}: selected code executed"
                 );
                 assert!(!fallback.exists(), "{archive}/{case}: fallback executed");
                 assert_eq!(
                     state.path().join("run").exists(),
-                    case == "healthy",
+                    matches!(case, "healthy" | "floor-healthy"),
                     "refusal created runtime directory"
                 );
             }
