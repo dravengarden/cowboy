@@ -156,7 +156,7 @@ children emits one `empty` row (`empty:<folder>` key) as its body.
   scrolling folder list (including filtered results), disables the current
   location and names ancestor paths to distinguish duplicate folder names.
   Moves expand every destination ancestor and scroll the moved item into view
-  on either surface, with an informational destination notice. They do not
+  on either surface, without a success snackbar. They do not
   switch the active session.
 - Drawer footer "+" is unchanged; the New Session sheet gains an optional
   Folder row defaulting to the folder bound to the chosen workspace, else the
