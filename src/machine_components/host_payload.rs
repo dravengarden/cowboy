@@ -2,6 +2,7 @@
 //! The caller authenticates the envelope; this is not a concurrent-writer fence.
 
 use std::collections::BTreeMap;
+use std::io::{Read as _, Seek as _};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context as _, bail};
@@ -15,6 +16,29 @@ pub(super) enum HostPayload {
 }
 
 impl HostPayload {
+    // Hash before parsing, then bind the parsed compressed stream to the same
+    // digest again. Keep the same descriptor; no whole-artifact allocation.
+    pub(super) fn verify_cached(
+        desired: &DesiredComponent,
+        artifact: &Path,
+        generation: &Path,
+    ) -> anyhow::Result<()> {
+        let mut file = regular_file(artifact)?;
+        let digest = reader_digest(&mut file)?;
+        let expected = desired.digest.to_ascii_lowercase();
+        if hex_digest(&digest) != expected {
+            bail!("cached Machine host artifact digest mismatch");
+        }
+        let payload = match desired.artifact_format {
+            ArtifactFormat::Raw => Self::Raw(digest),
+            ArtifactFormat::TarGz => {
+                file.rewind()?;
+                Self::Archive(verified_archive(file, &expected)?)
+            }
+        };
+        payload.verify(generation)
+    }
+
     // Caller has already verified the publisher signature and artifact digest.
     // Prepare expectations before extraction, refusing ambiguous host archives.
     pub(super) fn from_authenticated(
@@ -53,7 +77,23 @@ impl HostPayload {
 
 type Contents = BTreeMap<PathBuf, Option<Vec<u8>>>;
 
-fn archive_contents(bytes: &[u8]) -> anyhow::Result<Contents> {
+fn verified_archive(reader: impl std::io::Read, expected: &str) -> anyhow::Result<Contents> {
+    let mut observed = Observed {
+        reader,
+        hash: Sha256::new(),
+    };
+    let contents = archive_contents(&mut observed)?;
+    // Decoder read-ahead has already crossed Observed. Hash every remaining
+    // compressed/trailing byte too, even when tar parsing stops before EOF.
+    let mut buffer = [0_u8; 64 * 1024];
+    while observed.read(&mut buffer)? != 0 {}
+    if format!("{:x}", observed.hash.finalize()) != expected {
+        bail!("cached Machine host artifact changed during archive verification");
+    }
+    Ok(contents)
+}
+
+fn archive_contents(bytes: impl std::io::Read) -> anyhow::Result<Contents> {
     let mut contents = Contents::new();
     let decoder = flate2::read::GzDecoder::new(bytes);
     for entry in tar::Archive::new(decoder).entries()? {
@@ -122,12 +162,16 @@ fn directory_contents(root: &Path, relative: &Path, contents: &mut Contents) -> 
 }
 
 fn regular_digest(path: &Path) -> anyhow::Result<Vec<u8>> {
+    reader_digest(&mut regular_file(path)?)
+}
+
+fn regular_file(path: &Path) -> anyhow::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     if !std::fs::symlink_metadata(path)?.is_file() {
         bail!("staged Machine host payload is not a regular file");
     }
-    let mut file = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
@@ -135,7 +179,24 @@ fn regular_digest(path: &Path) -> anyhow::Result<Vec<u8>> {
     if !file.metadata()?.is_file() {
         bail!("staged Machine host payload is not a regular file");
     }
-    reader_digest(&mut file)
+    Ok(file)
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+struct Observed<R> {
+    reader: R,
+    hash: Sha256,
+}
+
+impl<R: std::io::Read> std::io::Read for Observed<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let length = self.reader.read(bytes)?;
+        self.hash.update(&bytes[..length]);
+        Ok(length)
+    }
 }
 
 fn reader_digest(reader: &mut impl std::io::Read) -> anyhow::Result<Vec<u8>> {
@@ -153,6 +214,34 @@ fn reader_digest(reader: &mut impl std::io::Read) -> anyhow::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_archive_authentication_includes_trailing_bytes_and_refuses_changed_pass() {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(7);
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "bin/host", b"payload".as_slice())
+            .unwrap();
+        let mut bytes = archive.into_inner().unwrap().finish().unwrap();
+        bytes.extend(std::iter::repeat_n(0x53, 128 * 1024));
+        let authenticated = format!("{:x}", Sha256::digest(&bytes));
+        let contents = verified_archive(bytes.as_slice(), &authenticated).unwrap();
+        assert_eq!(
+            contents[Path::new("bin/host")],
+            Some(Sha256::digest(b"payload").to_vec())
+        );
+        *bytes.last_mut().unwrap() ^= 1;
+        let error = verified_archive(bytes.as_slice(), &authenticated).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed during archive verification")
+        );
+    }
 
     #[test]
     fn ambiguous_and_special_archive_entries_are_not_host_payloads() {
@@ -188,7 +277,7 @@ mod tests {
                 archive.append_data(&mut header, path, bytes).unwrap();
             }
             let bytes = archive.into_inner().unwrap().finish().unwrap();
-            assert!(archive_contents(&bytes).is_err(), "{case}");
+            assert!(archive_contents(bytes.as_slice()).is_err(), "{case}");
         }
     }
 }

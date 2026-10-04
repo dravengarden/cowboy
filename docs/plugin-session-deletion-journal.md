@@ -410,3 +410,12 @@ lives under a private state-level quarantine outside ordinary cache pruning, and
 the successful command reports its path. No damaged bytes or links are executed;
 missing-floor reconstruction, publisher rotation, committed deletion admission,
 non-Linux exchange and writer activation remain closed.
+
+The subsequent [streaming startup verifier](releases/plugin-cache-streaming-authentication-2026-10-04.md)
+removes whole-artifact allocation from ordinary cached startup authentication.
+It hashes the regular artifact before parsing and binds the archive's observed
+compressed stream, including trailing bytes, to a second digest check on the same
+descriptor. Fixed byte buffers preserve valid large-package admission; archive
+path/hash metadata still scales with entry count. Publisher, floor, directory,
+payload and pointer authentication remain unchanged, with no additional recovery
+or deletion-writer authority.
