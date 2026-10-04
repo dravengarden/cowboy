@@ -53,8 +53,10 @@ pub(crate) fn check_portable_host_cache(state: &Path, key: Option<&Path>) -> any
     let generation = active
         .canonicalize()
         .context("resolving cached Machine host")?;
-    let publisher =
-        std::fs::read_to_string(key.context("cached Machine host requires a publisher key")?)?;
+    let publisher = String::from_utf8(read_regular(
+        key.context("cached Machine host requires a publisher key")?,
+        Some(16 * 1024),
+    )?)?;
     let desired = verify_generation(&root, &generation, &publisher)?;
     if let Some(floor) = &floor {
         authenticate_floor(&root, floor, &publisher)?;
