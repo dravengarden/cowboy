@@ -343,3 +343,39 @@ observation records from that PID's journal. Separate queue time and result
 fence from verification, inventory, launch and collector time. Retain unsuccessful
 requests and the exact source/generation alongside successful timing samples;
 never export account fields, credentials, authored prompts or raw logs.
+
+## Final host guard and deployment follow-up
+
+The final optimized host is clean Cowboy
+`b78d6af5f14db12544b482b99ed72acc91e01bd2`, artifact
+`/nix/store/5vrd78rjm8d4za5qk51x5mva9fh2hkwy-cowboy-machine-release`.
+It adds the legacy-slot serialization guard and retains the independently
+accepted `worker-6ede7a91cc8b8b3402d4` bundle. Columbus candidate `f8ce80a4`
+selected it in a fresh host-only transaction, with no worker-generation change.
+After acceptance PID 1066606 matches the artifact's exact native executable,
+all seven original workers survive, containment is `control-group`, and the
+independent rollback timer is disarmed. The signed Provider versions and
+credential readiness remain unchanged. A final fresh refresh after acceptance
+returned HTTP 200 / available in 11.480 seconds; a preceding cached refresh is
+explicitly excluded from latency measurements.
+
+The first acceptance attempt refused a wrapper executable captured before its
+native exec. Actual PID/start identity, expected final ELF and usage were already
+healthy. Columbus `3a15adb4` fixes this deployment-helper race: activation waits
+for the declared native ELF; acceptance independently verifies clean immutable
+candidate provenance and the final ELF while retaining the original launch
+observation. It preserves the original admission receipt, records the old
+wrapper as `launch_exe`, and rejects foreign executables and PID reuse. All 17
+helper tests and native diff review passed. The finite timer was rearmed during
+this repair and disarmed only after successful acceptance of the unchanged host.
+No application rollback occurred. The original helper, its replacement hashes,
+and the refused observation remain in the protected receipt directory.
+
+Publication also integrates unrelated upstream portable-reader and native-shell
+changes; these are not claimed as deployed by this host artifact. The final
+integrated full gate passed 1,799 all-feature tests and 491 standalone Machine
+tests, plus the native release builds. Detailed follow-up provenance, timings,
+and the retained acceptance failure are in the `final_host_followup` section of
+the JSON evidence. Send-confirmation and per-turn Matrix context redesign remain
+measurement-led follow-ups; no model-response or physical-client latency benefit
+is claimed by this account-usage optimization.

@@ -1170,5 +1170,186 @@
     "native-review": "f3a0ac80a836a32ff3ff4fc4dde57b1ac33161b5553160897c52e41dc3aece80",
     "columbus-gate-final": "75c76c99bef007e4e291e291679fc9e7c0225e5bb6ed552db9cf9fe30d2a7464",
     "columbus-review-final": "d8ccd88cdbebad4179a44a3c698f266cdac6aace5360d19da3b7c24dde79a4b1"
+  },
+  "final_host_followup": {
+    "schema": "cowboy.ovh-usage-host-followup/v1",
+    "source_revision": "b78d6af5f14db12544b482b99ed72acc91e01bd2",
+    "artifact": "/nix/store/5vrd78rjm8d4za5qk51x5mva9fh2hkwy-cowboy-machine-release",
+    "columbus_candidate": "f8ce80a46503281291f4220713cb4376622a028e",
+    "worker_generation": "worker-6ede7a91cc8b8b3402d4",
+    "receipt_directory": "/var/lib/columbus/ovh-usage-efficiency-legacy-20261004",
+    "acceptance": {
+      "accepted": {
+        "previous_pid": 1051336,
+        "pid": 1066606,
+        "start": "37215121",
+        "parent": 1463,
+        "exe": "/nix/store/1g46qaq8vjgfj4bf7jq32il5nayw8rhm-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+        "launch_exe": "/nix/store/gik3rh1vz2jlgnifb9dh6vc6sxwwz9jj-bash-5.3p9/bin/bash",
+        "accepted_at": 1791094803,
+        "configuration_sha256": "a88db6a726594d2586ffe404d2928216a33a9643f44e8651f6cd4218f85e3f5d"
+      },
+      "maintenance_update": {
+        "source": "3a15adb4a8270b23ec475e6982dadd75bd26f281",
+        "previous_sha256": "f52f449c50bb3ee47c07eba6c40e35ba7e7f71c1eef93f17da8116b580f9a122",
+        "sha256": "6e304c92c39798e1462a98a6eaf8dda8aa727bba66d13df79c29eefa25c153d7",
+        "reason": "native exec acceptance fence; original admission observation preserved"
+      },
+      "rollback_timer_disarmed": true
+    },
+    "actual_host": {
+      "host": {
+        "pid": 1066606,
+        "start": "37215121",
+        "parent": 1463,
+        "exe": "/nix/store/1g46qaq8vjgfj4bf7jq32il5nayw8rhm-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped"
+      },
+      "original_workers": 7,
+      "workers_preserved": true,
+      "unit_active": "active",
+      "kill_mode": "control-group",
+      "restarts": "0"
+    },
+    "transfer": {
+      "release": "/nix/store/5vrd78rjm8d4za5qk51x5mva9fh2hkwy-cowboy-machine-release",
+      "transferred_paths": 3,
+      "bytes": 52797440,
+      "archive_sha256": "1bbde46d4e32bd8c38dd89da56c0c9c0de071d81ac0105ef423e109e98ea299d",
+      "remote_verified": true
+    },
+    "queries": [
+      {
+        "began_unix": 1791094423.5324624,
+        "elapsed_s": 11.588,
+        "http_status": 200,
+        "provider": "anthropic",
+        "status": "available",
+        "observed_at_ms": 1791094435000,
+        "phase": "after-legacy"
+      },
+      {
+        "began_unix": 1791094833.5990155,
+        "elapsed_s": 1.075,
+        "http_status": 200,
+        "provider": "anthropic",
+        "status": "available",
+        "observed_at_ms": 1791094805560,
+        "phase": "after-legacy-accepted"
+      },
+      {
+        "began_unix": 1791094867.6007674,
+        "elapsed_s": 11.48,
+        "http_status": 200,
+        "provider": "anthropic",
+        "status": "available",
+        "observed_at_ms": 1791094878973,
+        "phase": "after-legacy-final"
+      }
+    ],
+    "cached_queries_excluded": [
+      {
+        "began_unix": 1791094833.5990155,
+        "elapsed_s": 1.075,
+        "http_status": 200,
+        "provider": "anthropic",
+        "status": "available",
+        "observed_at_ms": 1791094805560,
+        "phase": "after-legacy-accepted"
+      }
+    ],
+    "stages": [
+      {
+        "unix_us": 1791094433586753,
+        "verification_ms": 9953,
+        "inventory_ms": 0,
+        "launch_ms": 2,
+        "stage": "resolution"
+      },
+      {
+        "unix_us": 1791094433588363,
+        "queue_ms": 0,
+        "preparation_ms": 9957,
+        "stage": "preparation"
+      },
+      {
+        "unix_us": 1791094435007367,
+        "command_ms": 1420,
+        "total_ms": 11377,
+        "stage": "command"
+      },
+      {
+        "unix_us": 1791094435008280,
+        "fence_ms": 0,
+        "total_ms": 11377,
+        "stage": "observation"
+      },
+      {
+        "unix_us": 1791094803728499,
+        "verification_ms": 10916,
+        "inventory_ms": 0,
+        "launch_ms": 2,
+        "stage": "resolution"
+      },
+      {
+        "unix_us": 1791094803729930,
+        "queue_ms": 0,
+        "preparation_ms": 10920,
+        "stage": "preparation"
+      },
+      {
+        "unix_us": 1791094805567748,
+        "command_ms": 1839,
+        "total_ms": 12759,
+        "stage": "command"
+      },
+      {
+        "unix_us": 1791094805568507,
+        "fence_ms": 0,
+        "total_ms": 12760,
+        "stage": "observation"
+      },
+      {
+        "unix_us": 1791094877635755,
+        "verification_ms": 9928,
+        "inventory_ms": 0,
+        "launch_ms": 1,
+        "stage": "resolution"
+      },
+      {
+        "unix_us": 1791094877638563,
+        "queue_ms": 0,
+        "preparation_ms": 9931,
+        "stage": "preparation"
+      },
+      {
+        "unix_us": 1791094878981976,
+        "command_ms": 1346,
+        "total_ms": 11277,
+        "stage": "command"
+      },
+      {
+        "unix_us": 1791094878983138,
+        "fence_ms": 0,
+        "total_ms": 11277,
+        "stage": "observation"
+      }
+    ],
+    "unit_validation": "systemd-analyze --user verify passed",
+    "provider_readiness": "Claude 3.4.5, Codex 3.3.2 and Grok 3.1.26 active; replica and materialization current",
+    "retained_failure": {
+      "first_acceptance": "Candidate host is not the retained live process",
+      "cause": "host-only activation captured bash wrapper before native exec",
+      "repair": "versioned Columbus 3a15adb4 native executable fence; original admission unchanged; launch_exe retained",
+      "helper_regressions": 17,
+      "helper_review": "no material regressions identified",
+      "timer": "finite four-minute timer rearmed during repair, disarmed after acceptance",
+      "application_rollback": false
+    },
+    "publication_gate": {
+      "all_feature_passed": 1799,
+      "standalone_machine_passed": 491,
+      "failed": 0,
+      "full_check_compact": "passed; source integrates unrelated upstream changes not deployed by this host artifact"
+    }
   }
 }
