@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "status": "current_adapter_generated_fixture_not_wan_benchmark",
+  "production_mutations": false,
+  "provider_inference_requested": false,
+  "file_reads": [
+    {
+      "requested_lines": 10,
+      "source_bytes": 1048576,
+      "returned_content_bytes": 1279,
+      "file_rpc_calls": [
+        "fs/getMetadata",
+        "fs/readFile"
+      ],
+      "file_base64_response_bytes": 1398104
+    },
+    {
+      "requested_lines": 10,
+      "source_bytes": 1048576,
+      "returned_content_bytes": 1279,
+      "file_rpc_calls": [
+        "fs/getMetadata",
+        "fs/readFile"
+      ],
+      "file_base64_response_bytes": 1398104
+    }
+  ],
+  "quiet_process_simulation": {
+    "duration_ms": 60000,
+    "process_read_requests": 60,
+    "wait_ms": [
+      1000
+    ],
+    "clock_is_simulated": true
+  },
+  "cowboy_source_revision": "c0a999fe"
+}

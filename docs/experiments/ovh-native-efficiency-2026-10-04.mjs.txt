@@ -1,0 +1,82 @@
+// Run in the pinned shell: nix develop -c deno run -A /tmp/probe.mjs "$PWD"
+// Copy this file to /tmp/probe.mjs first. No network, inference or fleet writes.
+import { strict as assert } from "node:assert";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const root = process.argv[2];
+const { WorkspaceTools } = await import(
+  pathToFileURL(join(root, "plugins/claude-code/runtime/tools.mjs")).href
+);
+const temporary = await mkdtemp(join(tmpdir(), "cowboy-native-probe-"));
+try {
+  const data = Buffer.from("x".repeat(127) + "\n");
+  const file = Buffer.concat(Array(8192).fill(data));
+  const calls = [];
+  const tools = new WorkspaceTools({
+    async call(method) {
+      calls.push(method);
+      if (method === "fs/getMetadata") {
+        return { isFile: true, size: file.length };
+      }
+      assert.equal(method, "fs/readFile");
+      return { dataBase64: file.toString("base64") };
+    },
+  }, { workspace: { cwd: "/fixture" } }, join(temporary, "state.json"));
+  const reads = [];
+  for (const offset of [1, 101]) {
+    const result = await tools.invoke("read", {
+      file_path: "generated.txt", offset, limit: 10,
+    });
+    assert.equal(result.isError, false);
+    assert.equal(result.native.file.numLines, 10);
+    reads.push({
+      requested_lines: 10,
+      source_bytes: file.length,
+      returned_content_bytes: Buffer.byteLength(result.native.file.content),
+      file_rpc_calls: calls.splice(0),
+      file_base64_response_bytes: Buffer.byteLength(file.toString("base64")),
+    });
+  }
+  let clock = 0;
+  const originalNow = Date.now;
+  const waits = [];
+  const output = new WorkspaceTools({
+    async call(method, params) {
+      assert.equal(method, "process/read");
+      waits.push(params.waitMs);
+      clock += params.waitMs;
+      return {
+        chunks: [], exited: clock >= 60000, closed: clock >= 60000,
+        exitCode: clock >= 60000 ? 0 : null,
+      };
+    },
+  }, { workspace: { cwd: "/fixture" } }, join(temporary, "jobs.json"));
+  output.state.jobs.fixture = { afterSeq: null, exited: false };
+  let collected;
+  try {
+    Date.now = () => clock;
+    collected = await output.collectOutput("fixture", 120000);
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(collected.exitCode, 0);
+  assert.equal(waits.length, 60);
+  console.log(JSON.stringify({
+    schema_version: 1,
+    status: "current_adapter_generated_fixture_not_wan_benchmark",
+    production_mutations: false,
+    provider_inference_requested: false,
+    file_reads: reads,
+    quiet_process_simulation: {
+      duration_ms: clock,
+      process_read_requests: waits.length,
+      wait_ms: [...new Set(waits)],
+      clock_is_simulated: true,
+    },
+  }, null, 2));
+} finally {
+  await rm(temporary, { recursive: true, force: true });
+}

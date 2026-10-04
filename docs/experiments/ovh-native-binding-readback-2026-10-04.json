@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-04T01:12:45.347059+00:00",
+  "observation": "descriptor-bearing bridge processes, not session count; native children can scrub descriptor variables",
+  "production_mutations": false,
+  "processes": [
+    {
+      "pid": 843600,
+      "provider": "codex",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    },
+    {
+      "pid": 843608,
+      "provider": "codex",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    },
+    {
+      "pid": 843619,
+      "provider": "codex",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    },
+    {
+      "pid": 1003301,
+      "provider": "codex",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    },
+    {
+      "pid": 1003313,
+      "provider": "codex",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    },
+    {
+      "pid": 1003537,
+      "provider": "claude-code",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    },
+    {
+      "pid": 1003571,
+      "provider": "claude-code",
+      "runtime_machine": "ovh",
+      "environment_machine": "hawk"
+    }
+  ]
+}
