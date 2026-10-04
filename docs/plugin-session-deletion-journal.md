@@ -431,3 +431,11 @@ retains the caller's absolute namespace path without resolving its final link
 before no-follow directory admission. Initial linked namespaces refuse before
 lock creation or broker binding; replacing a parent alias invalidates the held
 logical directory identity. It changes no production writer admission or schema.
+
+The [immutable private-writer acceptance](experiments/plugin-deletion-immutable-writer-2026-10-04.md)
+now supplies two independently built Nix test ELFs for real writer IPC, ACK/dedup,
+exclusive ownership, four SIGKILL commit boundaries, storage/lock failures and
+old/new/old fixture reader reopen. Actual production readers also reopen original
+writer-produced schema-1 evidence. The fixture component/lane is nondeployable
+and refused by the installed owner. This closes an immutable test prerequisite,
+not production writer release/admission, power-loss or portable writer authority.

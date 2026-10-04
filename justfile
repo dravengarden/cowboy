@@ -593,6 +593,10 @@ test:
 test-postgres:
     bash tools/test-postgres.sh
 
+# Actual immutable private writer ELFs; no production writer or host namespace.
+session-deletion-writer-conformance OLD NEW READER RECEIPT:
+    unshare --user --map-root-user --mount --pid --net --fork --mount-proc python3 tools/session_deletion_writer_conformance.py --old-fixture "{{OLD}}" --new-fixture "{{NEW}}" --reader-release "{{READER}}" --receipt "{{RECEIPT}}"
+
 check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres logs-conformance build
 
 # Real diagnostic CLI, typed OTel fixture, query/metrics/tail/watch/RPC contracts.

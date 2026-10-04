@@ -290,6 +290,9 @@ def main():
                     peer, welcome = connect(process, "core")
                     with peer:
                         require(welcome["type"] == "welcome", "core admission failed")
+                        replay = receive(worker)
+                        require(replay["type"] == "replay" and replay["session_id"] == "sess-1",
+                                "missing initial Controller reconnect replay")
                         (root / "deletions/deletions.json").mkdir()
                         stop(peer)
                         outcome = ack(peer, False)
@@ -303,8 +306,9 @@ def main():
                         pass
                     rejected, outcome = connect(process, "worker")
                     with rejected:
-                        require(outcome["type"] == "reject" and "reader unavailable" in outcome["reason"],
-                                "poisoned owner admitted reconnect")
+                        require(outcome["type"] == "reject"
+                                and "fenced after a storage failure" in outcome["reason"],
+                                f"wrong poisoned-owner reconnect outcome: {outcome}")
             for reopener in [old, new]:
                 with Process(reopener, root) as process:
                     process.refused("not a regular file")
