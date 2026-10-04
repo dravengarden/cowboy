@@ -56,7 +56,56 @@ journal after drop, and `empty_success_alone_cannot_admit_a_bootstrap` did not
 reach its expected refusal assertion. Neither was suppressed. The entire
 Machine suite was rerun serially: 476 passed, five ignored; both failures did
 not recur. This is consistent with transient concurrent subprocess interaction,
-not proof of its cause or a fix to those tests. Code-adapter and Zed suites, merged Web tests, isolated PostgreSQL fixtures
+not proof of its cause or a fix to those tests. Code-adapter and Zed suites,
+merged Web tests, isolated PostgreSQL fixtures
 and release builds all passed in the resumed gate. The gate was completed in
 these stages; the initially failing `just check-compact` invocation itself is
 not reported as a successful run. No production guards or tests were relaxed.
+
+The initial Nix package from `0fbaf9e5` failed because the isolated Machine
+source list omitted the new Rust submodule directory. Commit `fc40fafe` adds
+that directory; its Machine release and source-boundary check built. This
+candidate was not activated: verification found that the app-shell registry
+repair changed the conservative whole-registry worker hash to
+`worker-cf06753db70e910f6c60`. The existing release wrapper and Machine hello
+would select that generation, unnecessarily rolling detached workers. Neither
+candidate dispatched a component transaction or changed the production receipt.
+
+The final change derives a worker-relevant registry prefix from the current
+append-only registry. Only consecutive app-shell-only records with no internal
+component or Plugin shell consumer can be excluded. Other component identities,
+Plugin versions/source/pins and dependency changes retain the latest input.
+Before the subsequent Claude merge, the derived descriptor records release
+3.37.0 and its genuine historical JSON
+SHA-256 `5c6f56d976ffe38e51b578f22facee92f4bd2bcc7b9827fd8f8152db270c1e72`.
+The root component gate and immutable worker build independently recompute it;
+stale checksums, manually pinned releases and extra fields refuse without writes.
+No desired-generation override or startup/rollout authority change is made.
+That source's Nix evaluation retained `worker-6ede7a91cc8b8b3402d4`.
+
+The five new Deno tests cover exact historical byte preservation across one and
+multiple shell-only releases, unchanged derived input, changed SDK/Plugin source,
+version, pin and graph inputs, shell consumers, invalid registry heads, the real
+repository descriptor and actual CLI success/refusal in isolated temporary
+directories with a cleared environment. The complete component gate passed with
+this checker. These are generation-input checks, not native resume acceptance.
+
+Fresh-main integration subsequently includes the independent Claude range-read
+Plugin release and registry 3.39.0. Its changed Plugin source/pins legitimately
+advance the derived registry input to 3.39.0 with SHA-256
+`3f6457f1a1cfeb77888f4af4f88f653fc3297f15cf6ea4e1fdfa0c6b7a112d99`;
+the shell-only exemption does not hide that change. Component and Provider gates
+passed after integration. This task publishes or installs no Plugin artifact.
+
+The new `.#cowboy-machine-host-release` is the narrower resident-host output.
+It retains the separately accepted worker/Code/Zed/JS bundle from the exact
+Cowboy `406471a28de430debf6f8363b44abc3e621589d7` flake input, pinned with its
+Nar hash. Current Machine, installer and execution-host binaries are built
+normally. The selected worker generation comes from that genuine retained
+package; this does not relabel a new worker or read a mutable production profile
+as a build input. Both source receipts are packaged. SDK, Cargo dependencies,
+runtime/execution wire and Machine protocol bytes must match before this output
+can evaluate. The current retained source passes; overriding it with pre-reader
+claim source `abbbd77a` fails the actual Nix assertion without writing the lock
+file or dispatching a transaction. Pool/adapter upgrades keep their independent
+maintenance boundary. No general native compatibility or resume is claimed.

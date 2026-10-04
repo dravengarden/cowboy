@@ -84,6 +84,13 @@ installed-bundle version comparison (`eebf0a5c`). No component or Plugin depends
 on app-shell, so all other versions, Plugin pins and historical release records
 remain unchanged. This registry repair allows the complete gate to validate
 fresh main; it is not a Web, native-device or Plugin activation receipt.
+The derived worker-registry input retains 3.37.0 for this app-shell-only tail;
+the subsequent real Claude release 3.39.0 advances it normally.
+Both the root gate and immutable worker build verify that derivation. After a
+registry edit, regenerate it from the repository root in the pinned shell with
+`nix develop -c deno run --allow-read --allow-write tools/worker-registry-input.ts --write`.
+SDK, Plugin and consumed component changes remain release-causing worker inputs;
+the derived file is not an administrator-selected generation pin.
 
 The component registry records the minimum Plugin version tested when a shared
 component release is cut. A Plugin may subsequently increase its own version
