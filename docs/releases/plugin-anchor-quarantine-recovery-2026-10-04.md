@@ -49,3 +49,36 @@ Source gates, exact immutable installer acceptance and production observations
 are appended after completion. This slice uses `cowboy-machine-host-release`
 and preserves the independently accepted worker pin
 `90ec4edae56349cb06b9f39f13a0086197b5356b` and its six companion paths/digests.
+
+
+The source gate passed on integrated implementation
+`576dc04095affa87cb3d106fb801da1dac6c6ff3`: all-feature and default Clippy,
+formatting, 1,820 all-feature tests (51 native/fixture ignores), 504 standalone
+Machine-host tests (13 ignores), and the complete Provider gate. The first
+interleaved run recompiled the same test executable while it was executing;
+two self-launching child fixtures reported ENOENT. The complete final gate then
+passed with no overlapping recompilation of that executable.
+
+The immutable installer in
+`/nix/store/gb7rkvrj99wqqgm941ycamx9ybd1xpsl-cowboy-machine-release`
+passed 58 quarantine cases across raw/archive packages. These cover default
+refusal, retained byte/mode/link evidence, partial and damaged manifests,
+artifacts and executable payloads, unexpectedly enlarged artifacts, extra archive
+files, empty-cache restoration, original dangling pointers, intact idempotence,
+repeat quarantine retention, cache-pruning exclusion, closed proof inputs,
+committed-state refusal, unsafe destinations and private quarantine requirements.
+The preceding immutable installer refuses the new flag without changing the
+complete disposable state. Success receipts identify the retained path and
+writer false. Current ordinary startup authentication passes after each accepted
+recovery, and no publisher execution marker appears.
+
+The same native candidate also passed the preceding 36 absent-anchor cases,
+28 pointer cases, 5 signed-refresh cases, 9 signed startup cases, 24 cached startup
+cases and bootstrap old-package negative control. Damaged-cache classification
+checks file sizes and archive shape against the captured signed replacement
+before normal cache authentication, avoiding unbounded reads of enlarged or
+unexpected cached payloads during this command. The implementation and tests do
+not change ordinary startup authentication bounds.
+
+Production artifact and bounded observations follow after latest-main
+integration and metadata rebuild. No live floor-bearing recovery is performed.
