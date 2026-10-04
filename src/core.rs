@@ -1523,6 +1523,9 @@ pub struct Hub {
     inner: std::sync::Arc<HubInner>,
 }
 
+/// Unanswered client-set config values of one session, with when each was set.
+type InFlightConfig = HashMap<String, (serde_json::Value, std::time::Instant)>;
+
 struct HubInner {
     sessions: Mutex<HashMap<String, Session>>,
     /// Internal auth/admin state restored from the durable settings table.
@@ -1533,6 +1536,12 @@ struct HubInner {
     /// do not settle this set; a bounded server-side grace timer finalizes the
     /// remainder as genuine interruptions.
     runtime_reconciliation: Mutex<HashSet<String>>,
+    /// Config values a client set that the agent has not yet reported back,
+    /// per session. A preset sends several options in a row and the agent
+    /// answers each with a full snapshot; the answer to the first still
+    /// carries the old values of the rest. Overlaying these keeps that stale
+    /// snapshot from flipping the selection back. Lock after `sessions`.
+    config_in_flight: Mutex<HashMap<String, InFlightConfig>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
@@ -1725,6 +1734,7 @@ impl Hub {
                 settings: Mutex::new(HashMap::new()),
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
+                config_in_flight: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
@@ -4043,6 +4053,15 @@ impl Hub {
                 .as_object_mut()
                 .expect("config preferences are an object")
                 .insert(config_id.clone(), value.clone());
+            self.inner
+                .config_in_flight
+                .lock()
+                .entry(session_id.to_owned())
+                .or_default()
+                .insert(
+                    config_id.clone(),
+                    (value.clone(), std::time::Instant::now()),
+                );
             let mut options = projected_config_options(
                 &session.meta.provider,
                 session.meta.provider_behavior.as_ref(),
@@ -4079,6 +4098,37 @@ impl Hub {
         Ok(())
     }
 
+    /// Keep client-set values the agent has not answered yet in an agent
+    /// snapshot. An entry settles once the agent reports that value, is
+    /// dropped if the agent no longer offers it, and expires so a lost
+    /// command cannot pin a value the agent never applied.
+    fn overlay_config_in_flight(&self, session_id: &str, options: &mut serde_json::Value) {
+        const SETTLE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+        let mut in_flight = self.inner.config_in_flight.lock();
+        let Some(pending) = in_flight.get_mut(session_id) else {
+            return;
+        };
+        pending.retain(|config_id, (value, set_at)| {
+            let Some(option) = options.as_array().and_then(|options| {
+                options.iter().find(|option| {
+                    option.get("id").and_then(serde_json::Value::as_str) == Some(config_id)
+                })
+            }) else {
+                return false;
+            };
+            if config_current_value(option) == Some(&*value)
+                || !config_option_accepts(option, value)
+                || set_at.elapsed() > SETTLE_DEADLINE
+            {
+                return false;
+            }
+            set_config_option_current_value(options, config_id, value)
+        });
+        if pending.is_empty() {
+            in_flight.remove(session_id);
+        }
+    }
+
     /// Store the latest agent-advertised config options for a session and
     /// fan them out to every client. Called from acp.rs when the upstream
     /// emits a `config_option_update` notification, and from the
@@ -4108,6 +4158,7 @@ impl Hub {
                 )
                 .expect("agent config options remain present after projection");
             }
+            self.overlay_config_in_flight(session_id, &mut options);
             s.config_options = Some(options.clone());
             (options, corrected.then(|| s.config_preferences.clone()))
         };
@@ -5701,6 +5752,46 @@ mod config_preference_tests {
                 .and_then(|value| value[0].get("currentValue").cloned()),
             Some(serde_json::json!("gpt-5.6-luna"))
         );
+    }
+
+    #[test]
+    fn a_preset_does_not_flip_back_on_the_agents_answer_to_its_first_option() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        let snapshot = |model: &str, effort: &str| {
+            serde_json::json!([
+                {"id": "model", "currentValue": model,
+                 "options": [{"value": "opus"}, {"value": "sonnet"}]},
+                {"id": "effort", "currentValue": effort,
+                 "options": [{"value": "default"}, {"value": "high"}]},
+            ])
+        };
+        let current = |id: usize| {
+            hub.config_options("s")
+                .and_then(|options| options[id].get("currentValue").cloned())
+        };
+        hub.set_config_options("s", snapshot("opus", "default"));
+        // A preset sends both options before the agent answers either.
+        for (id, value) in [("model", "sonnet"), ("effort", "high")] {
+            hub.set_config_preference("s", id.to_owned(), serde_json::json!(value))
+                .expect("preference");
+        }
+        // The answer to the model change still carries the old effort.
+        hub.set_config_options("s", snapshot("sonnet", "default"));
+        assert_eq!(current(1), Some(serde_json::json!("high")));
+        hub.set_config_options("s", snapshot("sonnet", "high"));
+        assert_eq!(current(1), Some(serde_json::json!("high")));
+        // Settled: a later agent-side change is authoritative again.
+        hub.set_config_options("s", snapshot("sonnet", "default"));
+        assert_eq!(current(1), Some(serde_json::json!("default")));
+        assert_eq!(current(0), Some(serde_json::json!("sonnet")));
     }
 
     #[test]
