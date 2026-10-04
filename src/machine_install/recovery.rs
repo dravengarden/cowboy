@@ -13,6 +13,10 @@ struct Args {
     state_dir: PathBuf,
     #[arg(long)]
     artifact_public_key: PathBuf,
+    #[arg(long, requires = "anchor_artifact")]
+    anchor_manifest: Option<PathBuf>,
+    #[arg(long, requires = "anchor_manifest")]
+    anchor_artifact: Option<PathBuf>,
 }
 
 pub(super) fn run() -> Result<()> {
@@ -23,6 +27,16 @@ pub(super) fn run() -> Result<()> {
     );
     #[cfg(feature = "machine-host")]
     {
+        if let Some(manifest) = &args.anchor_manifest {
+            crate::machine_components::restore_portable_host_anchor(
+                &args.state_dir,
+                &args.artifact_public_key,
+                manifest,
+                args.anchor_artifact
+                    .as_deref()
+                    .expect("paired anchor artifact"),
+            )?;
+        }
         crate::machine_components::restore_portable_host_selection(
             &args.state_dir,
             &args.artifact_public_key,

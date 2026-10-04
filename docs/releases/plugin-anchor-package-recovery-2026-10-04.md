@@ -1,0 +1,65 @@
+# Restore an absent package from the original floor proof — October 4
+
+The preceding recovery command restored missing selection pointers only while
+the accepted anchor package remained intact. An absent package or entire lost
+component cache could not be reconstructed from locally retained original proof.
+
+Linux Machine-host installers now accept paired local evidence inputs:
+
+```sh
+cowboy-machine-install --restore-floor-selection \
+  --state-dir /absolute/machine/state \
+  --artifact-public-key /absolute/publisher.pub \
+  --anchor-manifest /absolute/original-manifest.json \
+  --anchor-artifact /absolute/original-artifact
+```
+
+The existing private floor must bind the canonical state, publisher and uncommitted
+deletion dataset. A closed manifest (including ID, reader and optional probe)
+must declare reader 1/writer 0. Its version, generation, artifact digest and exact
+canonical proof hash must match the first accepted floor; the configured publisher
+must verify its signature. This is the same signed selection, not authorization
+for a replacement version. JSON formatting and the unsigned artifact URL do not
+grant identity or selection authority; no URL is fetched and no probe is executed.
+The authenticated supplied manifest/archive bytes are captured before staging.
+
+Regular no-follow/nonblocking reads cap manifest at 64 KiB, key at 16 KiB and
+artifact at 256 MiB. Raw packages leave entrypoint unset. Archive recovery accepts
+only regular files/directories, a safe existing entrypoint, no duplicate/conflicting
+files, at most 512 MiB exposed payloads, a decoded stream bounded to that limit plus
+64 KiB, 65,536 tree entries, 4,096-byte paths and 128 components. Paths normalize
+the existing archive's current-directory components but refuse traversal and
+absolute prefixes. Permissions exclude special bits and group/other write access;
+the selected executable is mode 0755. All unpacked bytes are verified against the
+signed artifact again before publication.
+
+A completely absent canonical generation is staged in a fresh mode-0700 private
+directory beside its eventual destination. Regular files are created exclusively,
+proof files mode 0600, and files/directories are synced. Floor bytes, publisher and
+selection evidence are checked again before Linux atomic no-replace publication.
+Existing intact generations authenticate idempotently; any damaged, partial, linked
+or conflicting destination refuses without replacement. Staging failures retain
+their unselected directories; this command performs no cleanup or global retention
+management. Missing regular cache parents may be recreated after authentication.
+
+Existing selection pointers must use the exact absolute original anchor targets;
+other pointers or linked/non-directory parents refuse before staging. Thus exact
+dangling pointers can resume after package publication, and an entirely absent
+cache can be rebuilt before the existing pointer recovery runs. Interruption after
+package publication is idempotently resumable; publication never exposes an
+incomplete package. The two selection pointers remain separately synced and
+fail-closed between updates. This is not a full power-loss recovery proof or a
+same-user/admin mutation fence. Non-Linux package restoration refuses while the
+preceding selection-only command remains available.
+
+The command does not rewrite floor, bootstrap, identity, token or launcher, and
+does not admit committed deletion records, rotate publisher keys, repair a damaged
+generation, select current inventory or enable the deletion writer. Administrator
+sudo rights remain intact. A local retained original signed package is required;
+there is no automatic network recovery or migration.
+
+## Verification and production receipt
+
+Exact source/native acceptance and activation evidence are appended after checks
+complete. This uses `cowboy-machine-host-release` with the unchanged accepted
+worker pin; no new worker/adapter generation is part of this slice.
