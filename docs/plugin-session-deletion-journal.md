@@ -39,20 +39,26 @@ Historical volatile deletes are not reconstructed or migrated automatically.
 
 Older Machine artifacts ignore this namespace. Before enabling the writer,
 the component owner must enforce a compatible reader on activation, fallback
-and independently authorized recovery, then accept exact old/new readers and
-real-process crash/reopen/failure cases. A startup refusal by the new reader
-alone does not fence rollback to an older component. This separate admission
-is still open; the private candidate must not be enabled by simply changing
-the constructor boolean.
+and independently authorized recovery, then accept exact old/new writer releases
+and real-process crash/reopen/failure cases. The installed component owner's
+floor, fallback and recovery guards are now implemented; exact production
+writer artifact and runtime admission acceptance remain open. The private
+candidate must not be enabled by simply changing the constructor boolean.
 
 Machine release metadata now declares `sessionDeletionJournal` with
-`readerSchema: 1` and `writerSchema: 0`. The Columbus component owner rejects
-nonzero writer declarations and requires a declared schema-1 reader whenever
+`readerSchema: 1` and `writerSchema: 0`. The Columbus component owner accepts
+schema-1 writer declarations only behind an already established valid root
+reader floor; a writer candidate cannot originate that floor. Unsupported
+schemas and foreign lanes refuse. It requires a declared schema-1 reader whenever
 a committed deletion entry exists. Its checks cover dispatch, locked candidate
 and fallback admission, profile restoration and interrupted recovery, including
 already-healthy predecessor and Git-pinned candidate paths. Corrupt or dangling
-entries cannot be treated as absent state. Empty reader namespaces remain
-compatible with a legacy fallback; pending files are not committed evidence.
+entries cannot be treated as absent state. Before a root floor is established,
+empty reader namespaces remain compatible with a legacy fallback; pending files
+are not committed evidence. The
+[owner writer-admission release](releases/plugin-deletion-owner-writer-admission-2026-10-04.md)
+records source guards and actual host activation while retaining the writer-disabled
+Machine. Release metadata does not enable its runtime writer.
 
 The component owner now persists a root-owned reader floor after retaining an
 already accepted compatible fallback. It syncs that floor before profile
