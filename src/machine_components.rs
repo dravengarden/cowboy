@@ -988,6 +988,8 @@ mod tests {
                     "damaged-payload",
                     "damaged-manifest",
                     "damaged-artifact",
+                    "oversized-artifact",
+                    "extra-payload",
                     "internal-link",
                     "anchor-link",
                     "anchor-file",
@@ -1044,6 +1046,8 @@ mod tests {
                         | "damaged-payload"
                         | "damaged-manifest"
                         | "damaged-artifact"
+                        | "oversized-artifact"
+                        | "extra-payload"
                         | "internal-link"
                 ) {
                     std::fs::remove_dir_all(&generation).unwrap();
@@ -1055,6 +1059,8 @@ mod tests {
                         | "damaged-payload"
                         | "damaged-manifest"
                         | "damaged-artifact"
+                        | "oversized-artifact"
+                        | "extra-payload"
                         | "internal-link"
                 ) {
                     std::fs::remove_file(store.root.join("active/machine_host")).unwrap();
@@ -1071,6 +1077,8 @@ mod tests {
                             | "damaged-payload"
                             | "damaged-manifest"
                             | "damaged-artifact"
+                            | "oversized-artifact"
+                            | "extra-payload"
                             | "internal-link"
                             | "anchor-link"
                             | "anchor-file"
@@ -1093,6 +1101,25 @@ mod tests {
                     }
                     "damaged-manifest" => {
                         std::fs::write(generation.join("manifest.json"), b"{}").unwrap();
+                    }
+                    "extra-payload" => {
+                        if archive {
+                            std::fs::write(
+                                generation.join("content/unexpected"),
+                                vec![0; 512 * 1024],
+                            )
+                            .unwrap();
+                        } else {
+                            std::fs::write(generation.join("bin"), b"retained damage").unwrap();
+                        }
+                    }
+                    "oversized-artifact" => {
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(generation.join("artifact"))
+                            .unwrap()
+                            .set_len(64 * 1024 * 1024)
+                            .unwrap();
                     }
                     "damaged-artifact" => {
                         std::fs::write(generation.join("artifact"), b"retained damaged artifact")
@@ -1224,6 +1251,8 @@ mod tests {
                                 | "damaged-payload"
                                 | "damaged-manifest"
                                 | "damaged-artifact"
+                                | "oversized-artifact"
+                                | "extra-payload"
                                 | "internal-link"
                         ));
                 if quarantine
@@ -1299,6 +1328,8 @@ mod tests {
                                 | "damaged-payload"
                                 | "damaged-manifest"
                                 | "damaged-artifact"
+                                | "oversized-artifact"
+                                | "extra-payload"
                                 | "internal-link"
                         ) {
                             let retained = PathBuf::from(receipt["quarantine"].as_str().unwrap());
@@ -1335,6 +1366,8 @@ mod tests {
                                 | "damaged-payload"
                                 | "damaged-manifest"
                                 | "damaged-artifact"
+                                | "oversized-artifact"
+                                | "extra-payload"
                                 | "internal-link"
                         )
                     {

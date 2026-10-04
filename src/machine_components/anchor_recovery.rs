@@ -302,6 +302,27 @@ mod linux {
         Ok(())
     }
 
+    fn archive_shape(generation: &Path, relative: &Path, tree: &Contents) -> Result<bool> {
+        for entry in std::fs::read_dir(generation.join(relative))? {
+            let entry = entry?;
+            let relative = relative.join(entry.file_name());
+            let Some(expected) = tree.get(&relative) else {
+                return Ok(false);
+            };
+            let metadata = entry.path().symlink_metadata()?;
+            match expected {
+                None if metadata.is_dir() => {
+                    if !archive_shape(generation, &relative, tree)? {
+                        return Ok(false);
+                    }
+                }
+                Some(p) if metadata.is_file() && metadata.len() == p.bytes.len() as u64 => {}
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     fn restore_anchor(
         state: &Path,
         key: &Path,
@@ -349,7 +370,24 @@ mod linux {
         check_paths(&state, &generation, &executable)?;
         let damaged = match std::fs::symlink_metadata(&generation) {
             Ok(m) => {
-                if authenticate_floor(&root, &floor, &publisher).is_ok() {
+                // The authenticated replacement gives exact expected sizes. Do
+                // not load an arbitrarily enlarged damaged cache into memory
+                // just to classify it before quarantine.
+                let expected_sizes = std::fs::symlink_metadata(generation.join("artifact"))
+                    .is_ok_and(|m| m.is_file() && m.len() == artifact_bytes.len() as u64)
+                    && tree.iter().all(|(relative, payload)| {
+                        std::fs::symlink_metadata(generation.join(relative)).is_ok_and(|m| {
+                            payload.as_ref().map_or_else(
+                                || m.is_dir(),
+                                |p| m.is_file() && m.len() == p.bytes.len() as u64,
+                            )
+                        })
+                    });
+                let bounded_shape = expected_sizes
+                    && (desired.artifact_format == ArtifactFormat::Raw
+                        || archive_shape(&generation, Path::new("content"), &tree)
+                            .unwrap_or(false));
+                if bounded_shape && authenticate_floor(&root, &floor, &publisher).is_ok() {
                     return Ok(None);
                 }
                 ensure!(
