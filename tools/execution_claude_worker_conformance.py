@@ -82,6 +82,7 @@ def main():
     (args.target / "pixel.png").write_bytes(pixel)
     random_text = "".join(random.Random(7).choices("abcdefghijklmnopqrstuvwxyz0123456789", k=58000))
     (args.target / "large.txt").write_text(random_text)
+    (args.target / "range-large.txt").write_text(("x" * 127 + "\n") * 8192)
     (args.target / "book.ipynb").write_text(json.dumps({
         "nbformat": 4, "nbformat_minor": 5, "metadata": {"preserve": True},
         "cells": [{"id": "cell", "cell_type": "code", "metadata": {}, "source": ["before"],
@@ -100,6 +101,7 @@ def main():
         tool("Read", {"file_path": quoted}), conflict,
         tool("Read", {"file_path": "pixel.png"}),
         tool("Read", {"file_path": "large.txt"}),
+        tool("Read", {"file_path": "range-large.txt", "offset": 101, "limit": 10}),
         tool("Read", {"file_path": "book.ipynb"}),
         tool("NotebookEdit", {"notebook_path": "book.ipynb", "cell_id": "cell", "new_source": "print('target')\n"}),
         tool("Glob", {"pattern": "*.txt"}),
