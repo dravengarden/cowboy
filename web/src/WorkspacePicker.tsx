@@ -6,6 +6,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
+  IconButton,
   InputAdornment,
   MenuItem,
   MenuList,
@@ -17,6 +18,7 @@ import {
 import {
   Check,
   ChevronRight,
+  Close,
   ExpandMore,
   FolderOpenOutlined,
   FolderOutlined,
@@ -29,18 +31,34 @@ import {
 } from "./workspaceHierarchy";
 
 export function WorkspacePicker(
-  { entries, value, onChange, label = "Working directory" }: {
+  {
+    entries,
+    value,
+    onChange,
+    label = "Working directory",
+    defaultValue,
+    configuredDefault,
+    onDefaultChange,
+    hierarchyPreferenceKey,
+    clearable = false,
+  }: {
     label?: string;
+    clearable?: boolean;
+    hierarchyPreferenceKey?: string;
     entries: readonly WorkspaceEntry[];
     value: string;
     onChange: (value: string) => void;
+    defaultValue?: string | undefined;
+    configuredDefault?: string | undefined;
+    onDefaultChange?: ((value: string) => void) | undefined;
   },
 ): React.JSX.Element {
   // Project placement is shared by local and remote execution. Its display
   // preference must not inherit a flat directory picker from an older flow.
-  const preferenceKey = label === "Project"
-    ? "cowboy.projectHierarchy"
-    : "cowboy.workspaceHierarchy";
+  const preferenceKey = hierarchyPreferenceKey ??
+    (label === "Project"
+      ? "cowboy.projectHierarchy"
+      : "cowboy.workspaceHierarchy");
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -133,7 +151,11 @@ export function WorkspacePicker(
         </Typography>
         {currentParent && (
           <Typography variant="caption" display="block" color="text.secondary">
-            {label === "Project" ? "Select this project" : "Use this directory"}
+            {entry.value === ""
+              ? entry.help
+              : label === "Project"
+              ? "Select this project"
+              : "Use this directory"}
           </Typography>
         )}
       </Box>
@@ -152,7 +174,26 @@ export function WorkspacePicker(
         slotProps={{
           input: {
             readOnly: true,
-            endAdornment: <ExpandMore />,
+            endAdornment: (
+              <InputAdornment position="end">
+                {clearable && value && (
+                  <IconButton
+                    aria-label={`Clear ${label}`}
+                    title="Clear selection"
+                    size="small"
+                    sx={{ minWidth: 44, minHeight: 44 }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      choose("");
+                    }}
+                  >
+                    <Close fontSize="small" />
+                  </IconButton>
+                )}
+                <ExpandMore />
+              </InputAdornment>
+            ),
           },
           htmlInput: {
             role: "combobox",
@@ -174,6 +215,43 @@ export function WorkspacePicker(
           }
         }}
       />
+      {onDefaultChange && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          flexWrap="wrap"
+          sx={{ gap: 1, mt: -0.5 }}
+        >
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mr: "auto" }}
+          >
+            Default:{" "}
+            {entries.find((entry) => entry.value === defaultValue)?.label ??
+              (configuredDefault
+                ? "Unavailable — choose another project"
+                : "Automatic")} · this device
+          </Typography>
+          {selected && selected.value !== defaultValue && (
+            <Button
+              size="small"
+              onClick={() => onDefaultChange(selected.value)}
+            >
+              Use as default
+            </Button>
+          )}
+          {configuredDefault && (
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => onDefaultChange("")}
+            >
+              Reset default
+            </Button>
+          )}
+        </Stack>
+      )}
       <Popover
         open={Boolean(anchor)}
         anchorEl={anchor}
@@ -220,6 +298,16 @@ export function WorkspacePicker(
               if (event.key === "Enter") event.stopPropagation();
             }}
           />
+          {clearable && value && (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => choose("")}
+              sx={{ alignSelf: "flex-start", minHeight: 44 }}
+            >
+              Clear selection
+            </Button>
+          )}
           {hasGroups && (
             <FormControlLabel
               label={label === "Project"
@@ -330,7 +418,7 @@ export function WorkspacePicker(
           {grouped
             ? [
               ...branch.entries.map((entry) =>
-                entryRow(entry, branch.label, undefined, true)
+                entryRow(entry, branch.label || entry.label, undefined, true)
               ),
               ...[...branch.children.values()].flatMap((child) => {
                 if (child.entries.length === 1) {
@@ -383,6 +471,11 @@ export function WorkspacePicker(
             ]
             : matches.map((entry) => entryRow(entry))}
         </MenuList>
+        {clearable && entries.length === 0 && !query && (
+          <Typography sx={{ p: 2 }} color="text.secondary">
+            No directories available
+          </Typography>
+        )}
         {query && matches.length === 0 &&
           (
             <Typography sx={{ p: 2 }} color="text.secondary">

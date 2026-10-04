@@ -1,3 +1,4 @@
+import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 import { StrictMode, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -10,6 +11,7 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
 > {
   localStorage.removeItem("cowboy.workspaceHierarchy");
   localStorage.removeItem("cowboy.projectHierarchy");
+  localStorage.removeItem("cowboy.sessionDirectoryHierarchy");
   const container = document.createElement("div");
   container.style.width = "360px";
   container.style.display = "flex";
@@ -30,6 +32,38 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
         <WorkspacePicker
           label={label}
           entries={entries}
+          value={value}
+          onChange={(id) => {
+            selections.push(id);
+            setValue(id);
+          }}
+        />
+      </ThemeProvider>
+    );
+  }
+  function DirectoryHarness() {
+    const [value, setValue] = useState("");
+    const { theme } = useThemeMode();
+    const directoryEntries = sessionDirectoryChoices({
+      folders: [
+        { id: "work", name: "Work", parent: null, position: 0, project: null },
+        {
+          id: "nested",
+          name: "Nested",
+          parent: "work",
+          position: 0,
+          project: null,
+        },
+      ],
+      placement: {},
+    });
+    return (
+      <ThemeProvider theme={theme}>
+        <WorkspacePicker
+          label="Sessions directory (optional)"
+          clearable
+          hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+          entries={directoryEntries}
           value={value}
           onChange={(id) => {
             selections.push(id);
@@ -272,6 +306,58 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       selections.at(-1) === "child-id",
       "Search preserves project identity",
     );
+    flushSync(() => root.render(<DirectoryHarness />));
+    click('[role="combobox"]');
+    await settle();
+    check(
+      !document.querySelector('[role="menu"]')?.textContent?.includes(
+        "Global",
+      ) &&
+        container.querySelector<HTMLInputElement>('[role="combobox"]')
+            ?.value === "",
+      "Optional directory starts blank with no synthetic Global row",
+    );
+    click('[role="menuitem"]', "Work");
+    await settle();
+    click('[data-current-directory="true"]', "Work");
+    await closed();
+    check(
+      selections.at(-1) === "work",
+      "A Sessions directory itself is selectable",
+    );
+    click('[role="combobox"]');
+    await settle();
+    check(
+      item("Work").classList.contains("Mui-selected") && item("Nested"),
+      "Selected directory opens its own branch",
+    );
+    click('[role="menuitem"]', "Nested");
+    await closed();
+    click('[role="combobox"]');
+    await settle();
+    check(
+      item("Nested").classList.contains("Mui-selected"),
+      "Selected nested directory is revealed",
+    );
+    click("button", "Clear selection");
+    await closed();
+    check(
+      selections.at(-1) === "" &&
+        container.querySelector<HTMLInputElement>('[role="combobox"]')
+            ?.value === "",
+      "Popup clear returns to a genuinely empty directory",
+    );
+    click('[role="combobox"]');
+    await settle();
+    click('[role="menuitem"]', "Work");
+    await settle();
+    click('[role="menuitem"]', "Nested");
+    await closed();
+    click('button[aria-label="Clear Sessions directory (optional)"]');
+    check(
+      selections.at(-1) === "" && !document.querySelector('[role="menu"]'),
+      "Field clear empties selection without opening the dropdown",
+    );
     return [
       "default hierarchy",
       "parent browsing preserves selection",
@@ -282,11 +368,13 @@ export async function runWorkspacePickerBrowserConformance(): Promise<
       "saved preference",
       "project hierarchy independent of old directory preference",
       "cross-Machine project search by source path",
+      "optional Sessions directory: blank, real directories only, parent/child reveal and clear in field/popup",
     ];
   } finally {
     flushSync(() => root.unmount());
     container.remove();
     localStorage.removeItem("cowboy.workspaceHierarchy");
     localStorage.removeItem("cowboy.projectHierarchy");
+    localStorage.removeItem("cowboy.sessionDirectoryHierarchy");
   }
 }

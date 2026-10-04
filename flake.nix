@@ -819,7 +819,11 @@
         # deno's npm interop can't shim).
         COWBOY_DENO_VERSION = deno.version;
         COWBOY_NODE_VERSION = cowboy-nodejs.version;
+        # Match the Rust packages' OpenSSL inputs even when the caller has no
+        # inherited developer environment (for example a remote executor).
+        buildInputs = [ pkgs.openssl ];
         nativeBuildInputs = with pkgs; [
+          pkg-config
           rustToolchain
           sccache
           cargo-nextest

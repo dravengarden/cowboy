@@ -243,3 +243,26 @@ Rust-produced fixture and records `target/logs-conformance.json`; the complete
 `just check-compact` gate includes it. The standalone `tools/logs_conformance.py`
 also accepts an explicit `--ssh` alias for same-host SSH acceptance. Production
 and external Collector acceptance require their own exact release receipts.
+
+The [October 4 activation receipt](experiments/local-otel-activation-2026-10-04.json)
+records Cowboy `660a714b` on Hawk, Falcon and OVH, including live local writers
+and four-source query/metrics/analysis acceptance. Hawk retained 12 original
+workers and handed one idle session to the exact new generation; OVH retained
+all seven. Every accepted live writer reported zero drops and storage failures.
+This is a point-in-time acceptance, not a promise of complete historical evidence.
+
+On Hawk, the private `/home/draven/.config/cowboy/log-sources.json` selects the
+Controller and all three Machine stores. It reuses existing SSH authorization;
+OVH selects the explicitly accepted immutable CLI. Update that command when
+the owning OVH release is advanced. For example:
+
+```sh
+CW=/nix/var/nix/profiles/columbus-components/cowboy-controller/bin/cowboy
+"$CW" logs --sources ~/.config/cowboy/log-sources.json analyze --from 1h
+"$CW" logs --sources ~/.config/cowboy/log-sources.json watch --every 5m
+```
+
+No persistent analysis scheduler was installed. Initial analysis correctly
+reported an incomplete comparison window while retaining reconnect and worker
+handoff warnings with queryable evidence IDs. External Collector interoperability
+and physical production disk/power fault experiments remain unverified.
