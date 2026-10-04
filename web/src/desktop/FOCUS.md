@@ -299,10 +299,22 @@ it.
   width uses the full available writing canvas.
 - **Focus.** Collapsing the focused pane moves focus to the remaining work
   pane; restoring one by its command focuses it. Explicit jumps (prefix
-  `S/P/C`, Plan/Queue/Drafts, region focus) restore a collapsed pane first.
-  `H/L`, region cycling and Resize mode skip collapsed panes and their
-  splitters. `Alt/Option+1…0` never unfolds Sessions; it lands in Prompt (or
-  Conversation when Prompt is collapsed).
+  `P/C`, Plan/Queue/Drafts, region focus) restore a collapsed Prompt or
+  Conversation first. Collapsed Sessions is different because its rail is
+  still a navigable pane: prefix `S` focuses the rail (`sessions.rail`) on
+  the folder holding the open Session and keeps the layout; only `[`
+  unfolds the list. Region cycling and Resize mode skip collapsed panes and
+  their splitters. `Alt/Option+1…0` never unfolds Sessions; it lands in
+  Prompt (or Conversation when Prompt is collapsed).
+- **Rail keys.** In `sessions.rail`: `J/K`, `gg`/`G` move between folders;
+  `L` or `Enter` opens the focused folder's menu; `1…9` open a folder
+  directly (contextual digit keycaps appear on the folders only while the
+  rail owns focus). The menu opens on the open Session (or its first) and
+  owns the keyboard: `J/K` or arrows move, `L`/`Enter` opens the Session and
+  focuses Prompt (Conversation when Prompt is collapsed), `H`/`Esc` returns
+  to the same folder in the rail, and its footer lists those keys. MUI's
+  first-letter type-ahead is suppressed for `J/K/H/L`. The status line shows
+  the rail map, Switch (`Alt/Option+1…0`) and Expand list (prefix `[`).
 - **Pointer.** Dragging a splitter more than 96 px past a pane's minimum
   previews the collapse by dimming that pane and collapses it on release; the
   stored width is kept for the restore. Panes switch instantly: animating the
