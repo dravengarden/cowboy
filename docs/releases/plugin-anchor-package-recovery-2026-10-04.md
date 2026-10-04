@@ -60,6 +60,11 @@ there is no automatic network recovery or migration.
 
 ## Verification and production receipt
 
-Exact source/native acceptance and activation evidence are appended after checks
-complete. This uses `cowboy-machine-host-release` with the unchanged accepted
-worker pin; no new worker/adapter generation is part of this slice.
+The source gate passed before integration: all-feature Clippy, default Clippy,
+1,814 all-feature tests, 503 standalone Machine-host tests and the Provider gate.
+
+Exact native acceptance and activation evidence are appended after integration.
+Incoming main changes common dependencies, so the retained-worker interface guard
+must refuse a host-only release. Any full Machine candidate needs separate
+worker/Code maintenance acceptance before activation; source checks alone do not
+accept the new pool generation.
