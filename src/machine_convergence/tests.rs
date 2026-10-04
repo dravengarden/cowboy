@@ -30,6 +30,7 @@ fn desired(automatic: bool, digest: &str) -> DesiredComponent {
         artifact_format: crate::machine_protocol::ArtifactFormat::Raw,
         entrypoint: None,
         signature: Some("signature".to_owned()),
+        session_deletion_journal: None,
         probe: Some(ComponentProbe {
             args: vec!["--version".to_owned()],
             timeout_ms: 5_000,
@@ -401,6 +402,78 @@ fn a_broken_reload_keeps_the_last_accepted_desired_state() {
     let current = source.current();
     assert_eq!(current.components[0].digest, DIGEST);
     assert!(current.error.is_none());
+}
+
+#[test]
+fn reader_claim_requires_a_closed_read_only_host_declaration() {
+    let mut host = desired(false, DIGEST);
+    host.id.kind = ComponentKind::MachineHost;
+    host.id.slot.clear();
+    host.session_deletion_journal = Some(crate::machine_protocol::SessionDeletionReader {
+        reader_schema: 1,
+        writer_schema: 0,
+    });
+    assert_eq!(
+        parse_manifest(&serde_json::to_vec(&vec![host.clone()]).unwrap()).unwrap(),
+        vec![host.clone()]
+    );
+    for mutation in ["kind", "slot", "reader", "writer"] {
+        let mut changed = host.clone();
+        match mutation {
+            "kind" => changed.id.kind = ComponentKind::AcpRuntime,
+            "slot" => changed.id.slot = "other".into(),
+            "reader" => {
+                changed
+                    .session_deletion_journal
+                    .as_mut()
+                    .unwrap()
+                    .reader_schema = 2
+            }
+            "writer" => {
+                changed
+                    .session_deletion_journal
+                    .as_mut()
+                    .unwrap()
+                    .writer_schema = 1
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            parse_manifest(&serde_json::to_vec(&vec![changed]).unwrap())
+                .unwrap_err()
+                .contains("Session deletion declaration"),
+            "{mutation}"
+        );
+    }
+    for claim in [
+        serde_json::json!({"reader_schema":1}),
+        serde_json::json!({"reader_schema":1,"writer_schema":0,"extra":true}),
+        serde_json::json!({"reader_schema":-1,"writer_schema":0}),
+    ] {
+        let mut value = serde_json::to_value(&host).unwrap();
+        value["session_deletion_journal"] = claim;
+        assert!(parse_manifest(&serde_json::to_vec(&vec![value]).unwrap()).is_err());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("manifest.json");
+    let accepted = serde_json::to_vec(&vec![host.clone()]).unwrap();
+    std::fs::write(&path, accepted).unwrap();
+    let source = DesiredComponentSource::load(Some(&path), 0).unwrap();
+    host.session_deletion_journal
+        .as_mut()
+        .unwrap()
+        .writer_schema = 1;
+    std::fs::write(&path, serde_json::to_vec(&vec![host]).unwrap()).unwrap();
+    assert!(source.reload(1).is_err());
+    assert_eq!(source.current().generation, 1);
+    assert_eq!(
+        source.current().components[0]
+            .session_deletion_journal
+            .as_ref()
+            .unwrap()
+            .writer_schema,
+        0
+    );
 }
 
 #[test]

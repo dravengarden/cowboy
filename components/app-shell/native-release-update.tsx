@@ -11,6 +11,8 @@ import {
 } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useEffect, useMemo, useState } from "react";
+import { getNativeAppVersion } from "./native-app-version.ts";
+export { getNativeAppVersion } from "./native-app-version.ts";
 
 export type NativeReleaseChannelKind = "sidestore" | "app_store";
 
@@ -47,26 +49,6 @@ const UPDATE_PROTOCOLS = new Set(["https:", "sidestore:", "itms-apps:"]);
 
 function tauri(): TauriGlobal | undefined {
   return (globalThis as { __TAURI__?: TauriGlobal }).__TAURI__;
-}
-
-export async function getNativeAppVersion(): Promise<string | null> {
-  const api = tauri();
-  if (api?.app?.getVersion) {
-    try {
-      return await api.app.getVersion();
-    } catch {
-      return null;
-    }
-  }
-  if (api?.core?.invoke) {
-    try {
-      const version = await api.core.invoke("plugin:app|version");
-      return typeof version === "string" ? version : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
 
 export async function openNativeReleaseUrl(url: string): Promise<void> {

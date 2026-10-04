@@ -400,6 +400,23 @@ cowboy-component-v3
 <automatic boolean>
 ```
 
+A singleton `machine_host` may additionally declare
+`session_deletion_journal: {"reader_schema":1,"writer_schema":0}`. The nested
+object is closed and both numbers are required. Other component kinds, named
+host slots, unsupported readers and any writer claim refuse at Controller
+manifest acceptance and Machine preflight. A declaration changes the signature
+domain to `cowboy-component-v4` and appends one ninth length-prefixed field:
+the compact canonical JSON `{"reader_schema":1,"writer_schema":0}` (37 bytes).
+All preceding fields retain the version-three order. An absent/null declaration
+keeps the exact version-three transcript; no v3-signature fallback is attempted
+for a declared reader. Older receivers that discard the new field cannot verify
+its v4 signature, rather than silently treating it as a legacy claim.
+
+This signed declaration is only a prerequisite. Portable selection still refuses
+committed Session deletion state, including for a correctly signed declared
+reader, until persistent floor and recovery admission exist. No writer, floor,
+bootstrap replacement or automatic host update is authorized by this field.
+
 Each field is encoded as `<byte-length>:<value>\n`; this prevents delimiter
 ambiguity and binds both the readiness command and activation policy to the
 publisher signature. An automatic component must declare a bounded `probe`

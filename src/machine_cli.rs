@@ -4095,6 +4095,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            session_deletion_journal: None,
             probe: None,
             automatic: true,
         };
@@ -4144,6 +4145,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            session_deletion_journal: None,
             probe: None,
             automatic: true,
         };

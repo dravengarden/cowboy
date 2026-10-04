@@ -160,6 +160,9 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Vec<DesiredComponent>, String> {
     let mut seen: HashSet<ComponentId> = HashSet::new();
     for component in &components {
         let id = &component.id;
+        component
+            .validate_session_deletion_declaration()
+            .map_err(|error| format!("{}: {error}", component_label(id)))?;
         if !seen.insert(id.clone()) {
             return Err(format!("{}: duplicate component", component_label(id)));
         }

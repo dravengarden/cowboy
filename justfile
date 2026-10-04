@@ -173,6 +173,7 @@ native-shell-check:
     deno check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
     deno test --allow-read --allow-write --allow-run --allow-env=PATH tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
+    python3 -m unittest discover -s tools -p 'native_swift_rs_compat_test.py'
     deno run --allow-read tools/check-native-shell.ts
     bash -n tools/build-native-shell.sh tools/sign-android-apk.sh tools/cowboysim.sh tools/cowboysim-remote.sh
     bash tools/check-keyboard-geometry.sh
