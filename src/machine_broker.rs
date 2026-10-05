@@ -26,6 +26,7 @@ use crate::runtime_wire::{
     StartSession, WorkerCommand, WorkerSnapshot, WorkerState, negotiate, read_frame, write_frame,
 };
 
+mod cleanups;
 pub(crate) mod deletions;
 
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -277,6 +278,10 @@ struct Broker {
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
     deletion_journal: Mutex<Option<deletions::Journal>>,
+    /// Advisory nominations of deleted Sessions' original worktree roots, so a
+    /// resident restart can finish artifact cleanup. Present only on a Machine
+    /// admitted to write the deletion journal.
+    cleanup_continuations: Mutex<Option<cleanups::Store>>,
     /// Session workspaces awaiting generated-artifact cleanup after their
     /// process owner has been stopped and collected. Source worktrees and
     /// branches are retained.
@@ -379,6 +384,7 @@ impl Broker {
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
+            cleanup_continuations: Mutex::new(None),
             deleted_session_workspaces: Mutex::new(HashMap::new()),
             session_lifecycle_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
@@ -1080,6 +1086,122 @@ impl Broker {
         .context("joining Session deletion journal write")?
     }
 
+    fn attach_cleanup_continuations(&self, store: cleanups::Store) {
+        *self.cleanup_continuations.lock() = Some(store);
+    }
+
+    /// Best effort: the committed deletion journal, not this advisory record,
+    /// decides the deletion. A failed write only means cleanup cannot resume
+    /// after a restart, which is the behaviour before the record existed.
+    async fn record_cleanup_continuation(
+        self: &Arc<Self>,
+        session_id: &str,
+        root: crate::session_workspace::RootIdentity,
+    ) {
+        let broker = Arc::clone(self);
+        let owned = session_id.to_owned();
+        let outcome = tokio::task::spawn_blocking(move || {
+            match broker.cleanup_continuations.lock().as_mut() {
+                Some(store) => store.record(&owned, root),
+                None => Ok(()),
+            }
+        })
+        .await;
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(session = %session_id, %error,
+                "deleted session cleanup will not resume after a Machine restart"),
+            Err(error) => tracing::warn!(session = %session_id, %error,
+                "joining cleanup continuation write failed"),
+        }
+    }
+
+    async fn retire_cleanup_continuation(self: &Arc<Self>, session_id: &str) {
+        let broker = Arc::clone(self);
+        let owned = session_id.to_owned();
+        let outcome = tokio::task::spawn_blocking(move || {
+            match broker.cleanup_continuations.lock().as_mut() {
+                Some(store) => store.retire(&owned),
+                None => Ok(()),
+            }
+        })
+        .await;
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(session = %session_id, %error,
+                "retaining cleanup continuation; a later restart will observe it again"),
+            Err(error) => tracing::warn!(session = %session_id, %error,
+                "joining cleanup continuation retirement failed"),
+        }
+    }
+
+    /// Finish cleanup that a previous resident process accepted but did not
+    /// complete. Each nomination needs the committed terminal deletion, then
+    /// the exact original root object; Cargo targets are always rescanned.
+    fn resume_cleanup_continuations(self: &Arc<Self>) {
+        let broker = Arc::clone(self);
+        tokio::spawn(async move {
+            let pending = broker
+                .cleanup_continuations
+                .lock()
+                .as_ref()
+                .map(cleanups::Store::pending)
+                .unwrap_or_default();
+            if pending.is_empty() {
+                return;
+            }
+            tracing::info!(sessions = pending.len(), "resuming deleted session cleanup");
+            for (session_id, root) in pending {
+                if !broker.cancelled_sessions.lock().contains(&session_id) {
+                    tracing::warn!(session = %session_id,
+                        "cleanup continuation has no committed terminal deletion; leaving it untouched");
+                    continue;
+                }
+                let worktree_root = broker.args.worktree_root.clone();
+                let observed = {
+                    let session_id = session_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::session_workspace::resume_cleanup_workspace(
+                            &worktree_root,
+                            &session_id,
+                            &root,
+                        )
+                    })
+                    .await
+                };
+                match observed {
+                    Ok(Ok(workspace)) => {
+                        let command_id = format!("resume-{session_id}");
+                        broker.deleted_session_workspaces.lock().insert(
+                            session_id.clone(),
+                            DeletedWorkspace {
+                                workspace,
+                                command_id: command_id.clone(),
+                            },
+                        );
+                        let attempt = broker.cleanup_deleted_session(&session_id, &command_id);
+                        // Start sessions one at a time without letting a
+                        // persistently failing one starve the rest.
+                        let _ = tokio::time::timeout(Duration::from_secs(120), attempt).await;
+                    }
+                    Ok(Err(error))
+                        if error
+                            .downcast_ref::<crate::session_workspace::CleanupRootChanged>()
+                            .is_some() =>
+                    {
+                        tracing::warn!(session = %session_id,
+                            "preserving artifacts: the original worktree root is gone or was replaced; retiring cleanup continuation");
+                        broker.retire_cleanup_continuation(&session_id).await;
+                    }
+                    Ok(Err(error)) => tracing::warn!(session = %session_id, %error,
+                        "deleted session cleanup could not be resumed; keeping its continuation"),
+                    Err(error) => tracing::warn!(session = %session_id, %error,
+                        "joining cleanup resume observation failed"),
+                }
+            }
+        });
+    }
+
     fn has_deleted_session_owner_exit_proof(&self) -> bool {
         #[cfg(test)]
         if self.deleted_session_owner_collected.load(Ordering::Acquire) {
@@ -1098,7 +1220,11 @@ impl Broker {
         prepare_transient_unit(&worker_unit_name(&self.args.socket, session_id)).await
     }
 
-    fn cleanup_deleted_session(self: &Arc<Self>, session_id: &str, command_id: &str) {
+    fn cleanup_deleted_session(
+        self: &Arc<Self>,
+        session_id: &str,
+        command_id: &str,
+    ) -> tokio::task::JoinHandle<()> {
         let broker = Arc::clone(self);
         let session_id = session_id.to_owned();
         let command_id = command_id.to_owned();
@@ -1174,6 +1300,7 @@ impl Broker {
                     Ok(None) => return,
                     Ok(Some(removed)) if removed.is_empty() => {
                         tracing::debug!(session = %session_id, "deleted session had no marked Cargo targets");
+                        broker.retire_cleanup_continuation(&session_id).await;
                         return;
                     }
                     Ok(Some(removed)) => {
@@ -1182,6 +1309,7 @@ impl Broker {
                             targets = removed.len(),
                             "reclaimed deleted session Cargo targets"
                         );
+                        broker.retire_cleanup_continuation(&session_id).await;
                         return;
                     }
                     Err(error)
@@ -1195,6 +1323,7 @@ impl Broker {
                         broker.deleted_session_workspaces.lock().remove(&session_id);
                         tracing::warn!(session = %session_id, %error,
                             "preserving artifacts after observed cleanup directory or marker change; retiring cleanup");
+                        broker.retire_cleanup_continuation(&session_id).await;
                         return;
                     }
                     Err(error) => {
@@ -1210,7 +1339,7 @@ impl Broker {
                 tokio::time::sleep(retry_delay).await;
                 retry_delay = (retry_delay * 2).min(Duration::from_secs(60));
             }
-        });
+        })
     }
 
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
@@ -2542,7 +2671,7 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
 
 #[cfg(test)]
 async fn run(args: MachineBrokerArgs) -> Result<()> {
-    run_broker(args, None).await
+    run_broker(args, None, None).await
 }
 
 /// Default production builds stay read-only. The dedicated writer build must
@@ -2550,11 +2679,13 @@ async fn run(args: MachineBrokerArgs) -> Result<()> {
 pub(crate) async fn run_with_deletion_reader(
     args: MachineBrokerArgs,
     path: PathBuf,
+    cleanup_path: PathBuf,
     owner: deletions::Owner,
 ) -> Result<()> {
     let writer_enabled =
         crate::session_deletion_admission::owner_writer::admitted(&path, &owner.machine_id)
             .context("admitting component Session deletion writer")?;
+    let cleanup_owner = owner.clone();
     let journal =
         tokio::task::spawn_blocking(move || deletions::Journal::open(&path, owner, writer_enabled))
             .await
@@ -2564,13 +2695,46 @@ pub(crate) async fn run_with_deletion_reader(
         writer_enabled,
         "Session deletion journal reader ready"
     );
-    run_broker(args, Some(journal)).await
+    // Cleanup effects resume from durable state only on a Machine already
+    // admitted to write terminal deletions. The advisory namespace can never
+    // keep the resident Machine from starting.
+    let continuations = if writer_enabled {
+        match tokio::task::spawn_blocking(move || {
+            cleanups::Store::open(&cleanup_path, cleanup_owner)
+        })
+        .await
+        .context("joining cleanup continuation open")
+        {
+            Ok(Ok(store)) => {
+                tracing::info!(
+                    pending = store.pending().len(),
+                    "durable Session cleanup continuations ready"
+                );
+                Some(store)
+            }
+            Ok(Err(error)) | Err(error) => {
+                tracing::warn!(%error, "durable Session cleanup continuations unavailable");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    run_broker(args, Some(journal), continuations).await
 }
 
-async fn run_broker(args: MachineBrokerArgs, journal: Option<deletions::Journal>) -> Result<()> {
+async fn run_broker(
+    args: MachineBrokerArgs,
+    journal: Option<deletions::Journal>,
+    continuations: Option<cleanups::Store>,
+) -> Result<()> {
     let broker = Arc::new(Broker::new(args));
     if let Some(journal) = journal {
         broker.attach_deletion_journal(journal);
+    }
+    if let Some(store) = continuations {
+        broker.attach_cleanup_continuations(store);
+        broker.resume_cleanup_continuations();
     }
     let listener = match inherited_systemd_listener()? {
         Some(listener) => {
@@ -3041,16 +3205,19 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 broker.revoke_cache_protection(&session, &session_id, "session_deleted");
             }
             broker.resetting_sessions.lock().remove(&session_id);
-            let mut cancelled = broker.cancelled_sessions.lock();
-            cancelled.insert(session_id.clone());
-            broker.clear_generation_failures_for_session(&session_id);
-            broker.sessions.lock().remove(&session_id);
-            broker.awaiting_reconnect.lock().remove(&session_id);
-            broker.session_states.lock().remove(&session_id);
-            broker.pending_commands.lock().remove(&session_id);
-            broker.startup_failures.lock().remove(&session_id);
-            broker.unpin_fallback(&session_id);
-            drop(cancelled);
+            {
+                // Scoped, not dropped: the guard must not be live across the
+                // continuation write below.
+                let mut cancelled = broker.cancelled_sessions.lock();
+                cancelled.insert(session_id.clone());
+                broker.clear_generation_failures_for_session(&session_id);
+                broker.sessions.lock().remove(&session_id);
+                broker.awaiting_reconnect.lock().remove(&session_id);
+                broker.session_states.lock().remove(&session_id);
+                broker.pending_commands.lock().remove(&session_id);
+                broker.startup_failures.lock().remove(&session_id);
+                broker.unpin_fallback(&session_id);
+            }
             if let Some(cwd) = cleanup_cwd {
                 match crate::session_workspace::capture_cleanup_workspace(
                     &broker.args.worktree_root,
@@ -3058,6 +3225,13 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                     Path::new(&cwd),
                 ) {
                     Ok(workspace) => {
+                        match workspace.root_identity() {
+                            Ok(root) => {
+                                broker.record_cleanup_continuation(&session_id, root).await;
+                            }
+                            Err(error) => tracing::warn!(session = %session_id, %error,
+                                "deleted session cleanup will not resume after a Machine restart"),
+                        }
                         broker.deleted_session_workspaces.lock().insert(
                             session_id.clone(),
                             DeletedWorkspace {
@@ -4354,7 +4528,7 @@ mod tests {
         args.worktree_root = root.path().join("worktrees");
         let journal =
             deletions::Journal::open(&journal_root, deletion_fixture_owner(), true).unwrap();
-        let server = tokio::spawn(run_broker(args.clone(), Some(journal)));
+        let server = tokio::spawn(run_broker(args.clone(), Some(journal), None));
         tokio::time::timeout(Duration::from_secs(2), async {
             while !socket.exists() {
                 tokio::task::yield_now().await;
@@ -4402,7 +4576,7 @@ mod tests {
         .await
         .expect("old namespace owner exits");
         assert!(journal.deleted().contains("sess-1"));
-        let server = tokio::spawn(run_broker(args, Some(journal)));
+        let server = tokio::spawn(run_broker(args, Some(journal), None));
         let (deleted_reader, deleted_writer, reply) =
             tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
@@ -5936,6 +6110,280 @@ mod tests {
         assert!(workspace.join("source.rs").is_file());
         assert!(workspace.is_dir());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn continuation_broker(root: &Path, collected: bool) -> Arc<Broker> {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: root.join("unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: root.join("worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        broker
+            .deleted_session_owner_collected
+            .store(collected, Ordering::Release);
+        // A sibling test may be between fork and exec with an inherited copy of
+        // a just-closed namespace lock; only that window is retried.
+        broker.attach_deletion_journal(retry_while_owned(|| {
+            deletions::Journal::open(&root.join("deletions"), deletion_fixture_owner(), true)
+        }));
+        broker.attach_cleanup_continuations(retry_while_owned(|| {
+            cleanups::Store::open(&root.join("cleanups"), deletion_fixture_owner())
+        }));
+        broker
+    }
+
+    fn retry_while_owned<T>(mut open: impl FnMut() -> Result<T>) -> T {
+        for _ in 0..300 {
+            match open() {
+                Ok(opened) => return opened,
+                Err(error) if format!("{error:#}").contains("already owned") => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("opening durable namespace: {error:#}"),
+            }
+        }
+        panic!("durable namespace stayed owned");
+    }
+
+    /// Release the durable namespaces as process exit would. Detached tasks may
+    /// still hold the broker `Arc`, so waiting for a drop is not deterministic.
+    fn end_resident(broker: &Broker) {
+        drop(broker.deletion_journal.lock().take());
+        drop(broker.cleanup_continuations.lock().take());
+    }
+
+    fn write_continuation_target(root: &Path) {
+        let target = root.join("target");
+        std::fs::create_dir_all(target.join("debug")).unwrap();
+        std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        std::fs::write(target.join("debug/artifact"), "generated").unwrap();
+    }
+
+    fn pending_continuations(broker: &Broker) -> Vec<String> {
+        broker
+            .cleanup_continuations
+            .lock()
+            .as_ref()
+            .unwrap()
+            .pending()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    async fn wait_for_no_continuations(broker: &Broker) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !pending_continuations(broker).is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("continuation retired");
+    }
+
+    fn stop_fixture_session(broker: &Broker, id: &str, cwd: &Path) {
+        broker.sessions.lock().insert(
+            id.to_owned(),
+            StartSession {
+                session_id: id.to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: cwd.display().to_string(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+                execution_binding: None,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_deletion_resumes_cleanup_after_a_resident_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("worktrees/sess-restart");
+        write_continuation_target(&workspace);
+        std::fs::write(workspace.join("source.rs"), "fn main() {}\n").unwrap();
+
+        // The first resident accepts deletion but has no process-exit proof, so
+        // it preserves the artifacts and leaves its continuation pending.
+        let first = continuation_broker(temp.path(), false);
+        stop_fixture_session(&first, "sess-restart", &workspace);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        first.install_controller(tx);
+        handle_core_command(
+            &first,
+            CoreCommand::StopSession {
+                session_id: "sess-restart".into(),
+                command_id: "delete-restart".into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert_eq!(pending_continuations(&first), ["sess-restart"]);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(workspace.join("target/debug/artifact").is_file());
+        drop(rx);
+        end_resident(&first);
+
+        // The next resident reads the committed deletion and continuation.
+        let second = continuation_broker(temp.path(), true);
+        assert!(second.cancelled_sessions.lock().contains("sess-restart"));
+        assert_eq!(pending_continuations(&second), ["sess-restart"]);
+        second.resume_cleanup_continuations();
+        wait_for_no_continuations(&second).await;
+        assert!(workspace.join("target").is_dir());
+        assert!(!workspace.join("target/debug/artifact").exists());
+        assert!(!workspace.join("target/CACHEDIR.TAG").exists());
+        assert!(workspace.join("source.rs").is_file());
+        assert!(second.deleted_session_workspaces.lock().is_empty());
+        end_resident(&second);
+
+        // Completion is durable: a later resident has nothing to resume.
+        let third = continuation_broker(temp.path(), true);
+        assert!(pending_continuations(&third).is_empty());
+    }
+
+    #[tokio::test]
+    async fn replaced_root_retires_the_continuation_without_touching_either_tree() {
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join("worktrees");
+        let workspace = managed.join("sess-swapped");
+        write_continuation_target(&workspace);
+        let first = continuation_broker(temp.path(), false);
+        stop_fixture_session(&first, "sess-swapped", &workspace);
+        handle_core_command(
+            &first,
+            CoreCommand::StopSession {
+                session_id: "sess-swapped".into(),
+                command_id: "delete-swapped".into(),
+            },
+        )
+        .await;
+        assert_eq!(pending_continuations(&first), ["sess-swapped"]);
+        end_resident(&first);
+
+        // While no resident is running the root is replaced by a new object.
+        std::fs::rename(&workspace, managed.join("original")).unwrap();
+        write_continuation_target(&workspace);
+
+        let second = continuation_broker(temp.path(), true);
+        second.resume_cleanup_continuations();
+        wait_for_no_continuations(&second).await;
+        assert!(workspace.join("target/debug/artifact").is_file());
+        assert!(managed.join("original/target/debug/artifact").is_file());
+    }
+
+    #[tokio::test]
+    async fn missing_or_linked_root_retires_and_foreign_nomination_is_left_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join("worktrees");
+        let kept = temp.path().join("kept");
+        write_continuation_target(&kept);
+        std::fs::create_dir_all(&managed).unwrap();
+        let identity = |dir: &Path| {
+            crate::session_workspace::capture_cleanup_workspace(
+                dir.parent().unwrap(),
+                dir.file_name().unwrap().to_str().unwrap(),
+                dir,
+            )
+            .unwrap()
+            .root_identity()
+            .unwrap()
+        };
+        let gone = managed.join("sess-gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        let gone_identity = identity(&gone);
+        std::fs::remove_dir_all(&gone).unwrap();
+        let linked = managed.join("sess-linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        let linked_identity = identity(&linked);
+        std::fs::remove_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(&kept, &linked).unwrap();
+        let foreign = managed.join("sess-foreign");
+        write_continuation_target(&foreign);
+        let foreign_identity = identity(&foreign);
+
+        let broker = continuation_broker(temp.path(), true);
+        {
+            let mut journal = broker.deletion_journal.lock();
+            let journal = journal.as_mut().unwrap();
+            journal.mark_deleted("sess-gone").unwrap();
+            journal.mark_deleted("sess-linked").unwrap();
+        }
+        {
+            let mut store = broker.cleanup_continuations.lock();
+            let store = store.as_mut().unwrap();
+            store.record("sess-gone", gone_identity).unwrap();
+            store.record("sess-linked", linked_identity).unwrap();
+            // No committed terminal deletion names this Session.
+            store.record("sess-foreign", foreign_identity).unwrap();
+        }
+        broker
+            .cancelled_sessions
+            .lock()
+            .extend(["sess-gone".to_owned(), "sess-linked".to_owned()]);
+        broker.resume_cleanup_continuations();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while pending_continuations(&broker) != ["sess-foreign"] {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("both observed-gone roots retire");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(pending_continuations(&broker), ["sess-foreign"]);
+        assert!(foreign.join("target/debug/artifact").is_file());
+        assert!(kept.join("target/debug/artifact").is_file());
+    }
+
+    #[tokio::test]
+    async fn reader_only_or_unavailable_namespace_keeps_deletion_working() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("worktrees/sess-no-store");
+        write_continuation_target(&workspace);
+        let broker = continuation_broker(temp.path(), false);
+        *broker.cleanup_continuations.lock() = None;
+        stop_fixture_session(&broker, "sess-no-store", &workspace);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-no-store".into(),
+                command_id: "delete-no-store".into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(broker.cancelled_sessions.lock().contains("sess-no-store"));
+        broker.resume_cleanup_continuations();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(workspace.join("target/debug/artifact").is_file());
+        assert!(!temp.path().join("cleanups/cleanups.json").exists());
     }
 
     #[tokio::test]

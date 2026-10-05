@@ -219,8 +219,9 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_KEYS,
+  desktopWorkspaceSequence,
 } from "./desktop/commands/workspaceShortcuts";
-import { listJumpKey } from "./desktop/commands/listNavigation";
 import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
   type Attachment,
@@ -748,6 +749,10 @@ function ComposeBar(
         </Suspense>
       )
       : child;
+  // Leader slots (`␣/`, `␣F`, `␣A`, `␣Z`) for the row editor; the badge
+  // lights with the leader while this editor owns focus.
+  const leaderSlot = (child: ReactNode, key: string, title: string): ReactNode =>
+    desktopShortcut(child, desktopWorkspaceSequence(key), `␣ ${key} · ${title}`, !dead);
   return (
     <Stack
       direction="column"
@@ -791,44 +796,56 @@ function ComposeBar(
       >
         <Tooltip title="Slash command / skill">
           <span>
-            <IconButton
-              aria-label="slash command"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => onTrigger("/")}
-            >
-              <Box
-                component="span"
-                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+            {leaderSlot(
+              <IconButton
+                aria-label="slash command"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => onTrigger("/")}
               >
-                /
-              </Box>
-            </IconButton>
+                <Box
+                  component="span"
+                  sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+                >
+                  /
+                </Box>
+              </IconButton>,
+              DESKTOP_WORKSPACE_KEYS.composerSlash,
+              "Slash command",
+            )}
           </span>
         </Tooltip>
         <Tooltip title="Reference a file (@)">
           <span>
-            <IconButton
-              aria-label="reference a file"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => onTrigger("@")}
-            >
-              <AlternateEmail />
-            </IconButton>
+            {leaderSlot(
+              <IconButton
+                aria-label="reference a file"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => onTrigger("@")}
+              >
+                <AlternateEmail />
+              </IconButton>,
+              DESKTOP_WORKSPACE_KEYS.composerReference,
+              "Reference a file",
+            )}
           </span>
         </Tooltip>
         {onAttach && (
           <Tooltip title="Attach image or file">
             <span>
-              <IconButton
-                aria-label="attach image or file"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onAttach}
-              >
-                <AttachFile />
-              </IconButton>
+              {leaderSlot(
+                <IconButton
+                  aria-label="attach image or file"
+                  disabled={dead}
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={onAttach}
+                >
+                  <AttachFile />
+                </IconButton>,
+                DESKTOP_WORKSPACE_KEYS.composerAttach,
+                "Attach",
+              )}
             </span>
           </Tooltip>
         )}
@@ -945,13 +962,17 @@ function ComposeBar(
         {onExpand && (
           <Tooltip title="Expand editor">
             <span>
-              <IconButton
-                aria-label="expand editor"
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onExpand}
-              >
-                <OpenInFull />
-              </IconButton>
+              {leaderSlot(
+                <IconButton
+                  aria-label="expand editor"
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={onExpand}
+                >
+                  <OpenInFull />
+                </IconButton>,
+                DESKTOP_WORKSPACE_KEYS.editorExpand,
+                "Expand editor",
+              )}
             </span>
           </Tooltip>
         )}
@@ -4297,7 +4318,7 @@ export function PendingPanel({
               <Suspense
                 fallback={
                   <ShortcutKeycap
-                    keyLabel="G"
+                    keyLabel="'"
                     variant="context"
                     availability="inactive"
                     sx={{ ml: 0.75 }}
@@ -4306,7 +4327,7 @@ export function PendingPanel({
               >
                 <DesktopListJumpKeycap
                   region={`prompt.${kind}`}
-                  keyLabel="G"
+                  keyLabel="'"
                   prefix
                   sx={{ ml: 0.75 }}
                 />
@@ -4557,33 +4578,15 @@ export function PendingPanel({
             }),
           }}
         >
-          {sortable.order.map((id, index) => {
+          {sortable.order.map((id) => {
             const m = byId.get(id);
             if (!m) return null;
-            const jumpKey = desktop ? listJumpKey(index) : null;
             // A LOCAL optimistic draft (carries `status`) renders a lightweight
             // row with no grip / edit / reorder — it isn't a server item yet.
             const optimistic = m.status !== undefined;
             const leadingHandle = editingId !== m.id && !optimistic &&
               count > 1;
             const gripSize = desktop ? "2.75rem" : 44;
-            const hintWidth = desktop ? "1.75rem" : 44;
-            const jumpBadgeSx = {
-              position: "absolute",
-              zIndex: 1,
-              pointerEvents: desktop ? "auto" : "none",
-              ...(reordering ? { top: 0, right: 0 } : {
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-              }),
-              [ROW_ACTIONS_INLINE]: {
-                top: 0,
-                right: 0,
-                left: "auto",
-                transform: "none",
-              },
-            } as const;
             const arrivalFlashActive = pendingRowMatchesArrival(
               m,
               arrivalFlash,
@@ -4619,21 +4622,19 @@ export function PendingPanel({
                   : undefined}
               >
                 {
-                  /* One leading slot owns both reorder and the G+number jump hint.
-                    On wide rows the number overlays the six-dot grip instead of
-                    consuming a separate column. Narrow Desktop rows retain a quiet
-                    scaled jump hint until reorder mode reveals the grip; Mobile
-                    still allocates nothing until its reorder mode is active. A
-                    single row needs neither ordering affordance nor ordinal. */
+                  /* The leading slot is the reorder grip. Wide rows show it; narrow
+                    rows and Mobile allocate nothing until reorder mode. Jumping
+                    uses transient `'` labels (FOCUS.md "Labels"), never a
+                    per-row number. A single row needs no ordering affordance. */
                 }
                 {leadingHandle && (
                   <Box
                     sx={{
                       position: "relative",
-                      width: reordering ? gripSize : hintWidth,
+                      width: gripSize,
                       height: gripSize,
                       flexShrink: 0,
-                      display: reordering || desktop ? "inline-flex" : "none",
+                      display: reordering ? "inline-flex" : "none",
                       [ROW_ACTIONS_INLINE]: {
                         display: "inline-flex",
                         width: gripSize,
@@ -4657,24 +4658,6 @@ export function PendingPanel({
                     >
                       <DragIndicator fontSize="small" />
                     </IconButton>
-                    {jumpKey && (
-                      <Suspense
-                        fallback={
-                          <ShortcutKeycap
-                            keyLabel={jumpKey}
-                            variant="context"
-                            availability="inactive"
-                            sx={jumpBadgeSx}
-                          />
-                        }
-                      >
-                        <DesktopListJumpKeycap
-                          region={`prompt.${kind}`}
-                          keyLabel={jumpKey}
-                          sx={jumpBadgeSx}
-                        />
-                      </Suspense>
-                    )}
                   </Box>
                 )}
                 <Box

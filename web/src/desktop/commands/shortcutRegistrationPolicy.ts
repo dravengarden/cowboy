@@ -48,7 +48,7 @@ function isBareProductLetter(shortcut: string): boolean {
 /**
  * Enforce the product-level shortcut rules that browser/OS inventories cannot:
  * global letters need a prefix, overlapping direct chords cannot shadow one
- * another, and a prefix continuation has exactly one stable meaning.
+ * another, and a leader continuation runs exactly one command in any scope.
  */
 export function shortcutRegistrationConflict(
   command: RegisteredShortcut,
@@ -77,7 +77,8 @@ export function shortcutRegistrationConflict(
       command.sequence.every((stroke, index) =>
         canonicalShortcut(stroke) ===
           canonicalShortcut(existing.sequence?.[index] ?? "")
-      )
+      ) &&
+      scopesOverlap(command, existing)
     ) {
       return `${
         command.sequence.join(" then ")

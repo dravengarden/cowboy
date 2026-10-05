@@ -30,6 +30,78 @@ These rules are the canonical Desktop-mode primitive contract. New controls,
 modals, product modes, and shortcut hints must reuse them rather than creating
 component-local keyboard semantics.
 
+### The primitive set
+
+Every Desktop surface is built from the same six primitives. Learning them is
+learning Cowboy; a new feature only picks which ones it uses.
+
+1. **Modes.** A text field or Vim Insert owns its keys. `Esc`/`Ctrl-[` leaves
+   it for Normal on the owning item or region; `i`/`Enter` goes back.
+2. **Motions.** `J/K` vertical, `H/L` horizontal, `gg/G` ends,
+   `Ctrl-D/U/F/B` pages, in every list, tree, reader, tablist and form.
+3. **Item verbs.** On the focused item: `L`/`Enter` open, `I` edit or
+   rename, `M` move, `S` settings, `O` order mode, `Shift-J/K` reorder.
+4. **Leader.** `␣` then one key for everything else (below). Its slots are
+   drawn on the controls they run.
+5. **Labels.** When a choice is among many visible targets, the targets get
+   letter labels for the next key instead of fixed numbers: `␣␣` opens a
+   session, `'` (Vim's mark jump) moves the cursor to a row of the focused
+   list, and the leader inside a modal labels every control of that modal.
+   Labels are scoped to one list or one modal, appear only while armed and
+   are painted by `DesktopHintLayer`; there is no page-wide hint layer.
+6. **Direct chords.** Only established semantics: `Mod+Enter` send/confirm,
+   `Mod+S` save, `Mod+.` stop, `Mod+Shift+P` palette, `Mod+/` help.
+
+Components declare commands through `useDesktopCommand` (with a `sequence`
+for leader keys) and draw slots with `LeaderKeycap`/`DesktopShortcut`; they
+never read raw keys. `desktopKeyIntent` decides ownership first.
+
+### Leader
+
+`Space` (`␣`) arms the leader wherever Cowboy owns the key: Vim Normal,
+lists, the reader, tablists and chrome. `Cmd+K` (macOS) / `Alt+K` arms the
+same layer from Insert and native fields, where Space must type. Space never
+arms inside text fields or native toggles, during IME composition (Space picks
+a candidate), on auto-repeat, with a modifier (`Ctrl/Cmd+Space` switch input
+sources, `Shift+Space` pages), inside an exclusive modal or menu, or in Resize
+mode. A consumed Space also swallows its keyup, so a focused button is not
+activated; `Enter` still activates buttons.
+
+Once armed, like which-key it waits: `Esc`, a pointer press, window blur or
+the next key ends it; `Backspace` climbs out of a sub-layer. After 180 ms the
+which-key panel (`DesktopLeaderMenu`) appears bottom-right with every key that
+runs in the current focus, the focused surface's own actions first under
+"Here". At the same instant every on-screen leader slot lights
+(`data-shortcut-state="active"`), so the panel is optional for a user who can
+already see the key. Entries are clickable.
+
+A leader slot is one keycap holding the glyph and the key: `␣N`, never
+`⌘K → N`. At rest it is `available` while its scope owns focus and
+`inactive` otherwise; armed, it is `active`. A leader key has one meaning;
+scoped editors may each register it in disjoint regions (`␣/` in the Composer
+and in a queued-message editor), and the focused one runs.
+
+| Key | Meaning |
+| --- | --- |
+| `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
+| ``␣` `` | Previous session |
+| `␣N` | Create (Session / Draft / Folder) |
+| `␣K` | Command Palette |
+| `␣S` `␣P` `␣C` `␣T` | Focus Sessions, Prompt, Conversation, Top bar |
+| `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
+| `␣W` `␣R` | Cycle regions, Resize mode |
+| `␣[` `␣]` `␣\` | Fold Sessions, Prompt, Conversation |
+| `␣,` | Settings |
+| `␣E` | Source / live preview (Prompt) |
+| `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
+| `␣H` `␣J` `␣M` | Schedule, run next, more formatting (Composer) |
+| `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list |
+| `␣V` `␣G` | Copy Draft to a Session, Draft history |
+
+Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
+Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
+so Option+digit types its character again in text fields.
+
 ### Product letters ignore case; Vim motions do not
 
 Bare contextual product shortcuts (`F` Follow, `Z` Reading, `V`
@@ -151,7 +223,7 @@ wrapping into a second toolbar.
 
 ### Sequential chords
 
-A scoped sequence such as `G` then `1…0` has a three-state transition:
+A scoped sequence such as `'` then a row label has a three-state transition:
 
 1. outside its scope, prefix and continuations are `inactive`;
 2. in scope, the prefix is `available` and continuations remain `inactive`;
@@ -164,11 +236,10 @@ key is consumed so it cannot trigger a row action accidentally. A modified
 global chord cancels the sequence and continues normally. Auto-repeat must not
 turn one held prefix into a completed double-key command.
 
-The global workspace sequence is a separate two-second transaction: `Cmd+K` on
-macOS and `Alt+K` on Windows/Linux. It is available from Normal, Insert, Visual,
-native inputs, and product modes, but never escapes an IME composition, modal,
-menu, or other exclusive shortcut scope. Releasing the prefix modifier before
-the continuation is optional.
+The leader is the separate global sequence described above. It does not time
+out, and it never escapes an IME composition, modal, menu, or other exclusive
+shortcut scope. Releasing the `Cmd/Alt` prefix modifier before the
+continuation is optional.
 
 ## Navigation
 
@@ -186,7 +257,7 @@ the continuation is optional.
 - Workspace prefix then `[` / `]` / `\`: collapse or expand Sessions, Prompt,
   or Conversation. The three adjacent keys sit in the same left-to-right
   order as the panes. See [Pane collapse](#pane-collapse).
-- `Alt/Option+1…0`: switch to one of the first ten Sessions globally.
+- `␣␣` then a label switches session; ``␣` `` returns to the previous one.
 - `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
   turn, `Mod+Shift+P` opens Command Palette, and `Mod+/` opens shortcut help.
 - `Alt/Option+Enter` force-pushes a prompt. On macOS, no other product action
@@ -196,10 +267,10 @@ the continuation is optional.
 - In the main Composer, workspace prefix then `/`, `F`, `A`, `H`, `J`, `M`
   opens slash commands, file references, attachments, scheduling, queue priority,
   or More formatting. Formatting uses the same prefix: `B` bold, `I` italic,
-  `X` inline code, `U` link, `O` bulleted list, `Z` undo, `Y` redo. These are
+  `X` inline code, `U` link, `O` bulleted list; `Z` zooms the editor. These are
   scoped to `prompt.composer`; `E` Source mode retains its whole-Prompt scope.
-  Toolbar letters become available only after the prefix; tooltips and the
-  Command Palette show the complete sequence. A claimed direct chord stops
+  Every toolbar button carries its `␣` slot, which lights while the leader is
+  armed; tooltips and the Command Palette show the same keycap. A claimed direct chord stops
   propagation to editor fallbacks. In particular, `Alt+Enter` must never also
   save a draft, even when Force push is unavailable.
 - In Resize mode, `H/L` moves the selected split.
@@ -227,9 +298,9 @@ the continuation is optional.
   folder header files into that folder, a folder moves among its siblings, and
   `Esc` releases the mode. The trailing three-dot menu retains secondary
   actions such as Rename, Move to folder and Delete.
-- `Alt/Option+1…0` number sessions by their flat displayed order (the one the
-  Mobile drawer also renders), never by the folded view, so the keycaps read
-  1…0 down the rail; a target hidden inside a collapsed folder is revealed.
+- `␣␣` labels sessions by their flat displayed order (the one the Mobile
+  drawer also renders), never by the folded view; labels show on visible rows
+  and in the switcher panel. Rows show no keycap at rest.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
@@ -322,7 +393,7 @@ it.
   attention in amber, else working in green; ready and dormant never badge)
   and the group holding the open Session gets the edge pill. Clicking an
   entry opens a menu with real titles, subfolder headings, status,
-  `Alt/Option+1…0` slots and Show all sessions; the rail ignores this
+  and Show all sessions (`␣␣` still switches directly); the rail ignores this
   device's folder folds. The rail head aligns with the 44 px top bar;
   in an installed window-controls-overlay PWA the head becomes a drag region
   and the expand control moves below it.
@@ -344,8 +415,8 @@ it.
   still a navigable pane: prefix `S` focuses the rail (`sessions.rail`) on
   the folder holding the open Session and keeps the layout; only `[`
   unfolds the list. Region cycling and Resize mode skip collapsed panes and
-  their splitters. `Alt/Option+1…0` never unfolds Sessions; it lands in
-  Prompt (or Conversation when Prompt is collapsed).
+  their splitters. `␣␣` never unfolds Sessions; it lands in Prompt (or
+  Conversation when Prompt is collapsed).
 - **Rail keys.** In `sessions.rail`: `J/K`, `gg`/`G` move between folders;
   `L` or `Enter` opens the focused folder's menu; `1…9` open a folder
   directly (contextual digit keycaps appear on the folders only while the
@@ -354,7 +425,7 @@ it.
   focuses Prompt (Conversation when Prompt is collapsed), `H`/`Esc` returns
   to the same folder in the rail, and its footer lists those keys. MUI's
   first-letter type-ahead is suppressed for `J/K/H/L`. The status line shows
-  the rail map, Switch (`Alt/Option+1…0`) and Expand list (prefix `[`).
+  the rail map, Switch (`␣␣`) and Expand list (`␣[`).
 - **Pointer.** Dragging a splitter more than 96 px past a pane's minimum
   previews the collapse by dimming that pane and collapses it on release; the
   stored width is kept for the restore. Panes switch instantly: animating the
@@ -381,9 +452,8 @@ Command Palette; Conversation keeps `F` for Following.
 Shortcut hints implement the core state machine above with three discovery
 levels:
 
-1. global shortcuts are always visible but quiet (workspace-prefix sequences,
-   direct semantic chords, and `Alt/Option+1…0`) because they work without first
-   focusing a region;
+1. global shortcuts are always visible but quiet (leader slots and direct
+   semantic chords) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
    focused (Prompt subregions and list item actions), so they add no layout
    width and disappear when attention moves elsewhere;
@@ -400,13 +470,21 @@ approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
 semantics remain identical across Desktop.
 
-Queue and Draft headers show their sequential `G` prefix and their first ten
-visible rows show `1` through `9`, then `0`. Outside the list all are inactive;
-while the list owns Normal-mode focus, `G` is available and the numeric slots
-remain inactive. Pressing `G` makes the prefix active and numeric slots
-available. A valid slot focuses that exact row and a second `G` focuses the
-first row. Cancellation follows the shared sequential-chord law, so a modified
-global command such as `Alt/Option+1` still switches sessions immediately.
+Queue and Draft headers show their `'` label trigger; rows carry no ordinal.
+Outside the list the trigger is inactive; while the list owns Normal-mode
+focus it is available. Pressing it makes it active and paints a letter on
+every visible row (home row first, top to bottom). A label focuses that exact
+row and clears every label. Cancellation follows the shared sequential-chord
+law, so a modified global command such as `Cmd/Alt+K` still arms the leader
+immediately. The same `'` works in Sessions and the collapsed Sessions rail.
+
+Inside a modal, `Space` (on a non-text control) or `Cmd/Alt+K` (anywhere)
+arms the modal's own leader. Every operable control of the topmost modal gets
+a stable mnemonic letter (an explicit `data-leader-key` first, then word
+initials, then any free letter), painted on the control and listed in the
+which-key panel. The next key activates it the way a pointer would: fields
+focus, Selects open, buttons and tabs click. Menus, listboxes and popovers
+keep their own keys and never get labels.
 
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the
@@ -451,10 +529,9 @@ and installed PWAs. Every registered command must pass both checked-in audits:
   modal/menu scopes always win. A direct shortcut cannot overlap a global and a
   contextual command; contextual reuse is allowed only across provably disjoint
   scopes. Each prefix continuation has one stable command meaning.
-- Session slots are the deliberate cross-platform modifier exception:
-  `Alt+1…0` on Windows/Linux and `Option+1…0` on macOS. All ten slots are
-  reserved even when a slot is empty, so the key never changes meaning with
-  session count.
+- Space is not a browser or system chord; Cowboy takes it only where no
+  text, toggle or IME owns it (see Leader), giving up page scrolling by Space
+  in the reader in favour of `Ctrl-D/F`.
 - Pane-collapse continuations `[` `]` `\` are free under the prefix. When the
   prefix modifier is still held, Windows/Linux `Alt+[ ] \` are not Chrome
   chords; macOS `Cmd+[` / `Cmd+]` are Chrome Back/Forward, which Chromium does
@@ -555,9 +632,8 @@ transcript widgets, or destructive actions. Pointer dragging keeps working and
 selecting a bar with the pointer enters the same visible state.
 
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
-`G` jump to the ends, and `1` through `0` jump to one of the first ten visible
-slots once that list owns focus. Clicking a visible number does the same jump.
-`G` then `1…0` remains available as the sequential form. `L`/`Enter` opens the
+`G` jump to the ends, and `'` then a label jumps to any visible row.
+`L`/`Enter` opens the
 selected message editor. `O` pins Order reorder mode
 so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+S`
 saves and `Esc` cancels, with both returning focus to the originating list row.

@@ -1,39 +1,20 @@
-import { Box, Tooltip } from "@mui/material";
-import { isMac } from "../platform";
-import { DesktopKeycap } from "./commands/DesktopKeycap";
-import { useDesktopWorkspace } from "./DesktopWorkspaceController";
+import { Box } from "@mui/material";
+import { ShortcutKeycap } from "../ShortcutKeycap";
 
-export function DesktopSessionShortcut({
-  digit,
-  active,
-  title,
-}: {
-  digit: string;
-  active: boolean;
-  title: string;
-}): React.JSX.Element {
-  const workspace = useDesktopWorkspace();
-  const modifier = isMac ? "⌥" : "Alt+";
+/**
+ * A session row's `␣␣` jump label. It exists only while the switcher layer is
+ * armed, so rows stay clean at rest and every label on screen is a key that
+ * works right now.
+ */
+export function DesktopSessionShortcut({ label }: { label: string }): React.JSX.Element {
   return (
-    <Tooltip title={`Switch to ${title} · ${modifier}${digit}`} enterDelay={450}>
-      <Box
-        component="span"
-        className="cowboy-session-shortcut"
-        sx={{
-          display: "inline-flex",
-          // Alt/Option+1…0 is global navigation, so its affordance must not disappear
-          // merely because another pane owns keyboard focus. Focus strengthens
-          // the hint; it no longer determines whether the hint exists.
-          opacity: active
-            ? 0.84
-            : workspace.focusedRegion === "sessions.list"
-            ? 0.62
-            : 0.48,
-          transition: "opacity 120ms ease",
-        }}
-      >
-        <DesktopKeycap keyLabel={`${modifier}${digit}`} accent={active} quiet />
-      </Box>
-    </Tooltip>
+    <Box
+      component="span"
+      className="cowboy-session-shortcut"
+      data-session-jump-label={label}
+      sx={{ display: "inline-flex", flexShrink: 0 }}
+    >
+      <ShortcutKeycap keyLabel={label} variant="context" accent availability="active" />
+    </Box>
   );
 }

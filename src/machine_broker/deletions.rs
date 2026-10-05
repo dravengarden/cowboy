@@ -265,7 +265,18 @@ mod tests {
         journal.mark_deleted("sess-1").unwrap();
         journal.mark_deleted("sess-1").unwrap();
         drop(journal);
-        let mut reader = Journal::open(root.path(), owner(), false).unwrap();
+        // A sibling test can be between fork and exec with an inherited copy of
+        // the just-closed lock descriptor; retry only that window.
+        let mut reader = (0..300)
+            .find_map(|_| match Journal::open(root.path(), owner(), false) {
+                Ok(journal) => Some(journal),
+                Err(error) if format!("{error:#}").contains("already owned") => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    None
+                }
+                Err(error) => panic!("reopening deletion journal: {error:#}"),
+            })
+            .expect("journal namespace stayed owned");
         assert!(reader.deleted().contains("sess-1"));
         assert!(reader.mark_deleted("sess-2").is_err());
         assert!(!reader.deleted().contains("sess-2"));

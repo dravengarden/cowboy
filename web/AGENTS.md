@@ -90,23 +90,27 @@ the peek, or freeze the session list to make a swipe cheaper.
   and parallel context. Minimalism must never hide useful capability or add
   interaction layers merely to make the surface look clean.
 - A user who knows basic Vim must be productive without memorising Cowboy-only
-  shortcuts. Prefer standard Vim motion, convenient bare contextual keys, the
-  platform workspace prefix (`Cmd+K` on macOS, `Alt+K` elsewhere), contextual
-  status-line hints, and a searchable `Mod+Shift+P` command palette. The prefix
-  works in Vim Insert/Normal/Visual and native inputs but never during IME
-  composition or through an exclusive modal/menu. Global bare product letters
-  are forbidden. Chrome non-conflict is a core requirement; every new binding
-  follows the executable policy in
-  [`src/desktop/FOCUS.md`](src/desktop/FOCUS.md). Do not add a Space leader
-  layer: it proved slower than direct, visible commands here.
+  shortcuts. Desktop keys come from one primitive set (FOCUS.md "The primitive
+  set"): modes, Vim motions, item verbs, the LazyVim-style leader, letter
+  labels and a few semantic chords. The leader is `Space` (`␣`) wherever
+  Cowboy owns the key and `Cmd+K` (macOS) / `Alt+K` from Insert and native
+  fields; it shows a which-key panel and lights every live `␣X` slot drawn on
+  the controls. (The 2026-10-05 user decision replaced the earlier "no Space
+  leader" rule.) Never during IME composition or through an exclusive
+  modal/menu. Global bare product letters are forbidden. Chrome non-conflict is
+  a core requirement; every new binding follows the executable policy in
+  [`src/desktop/FOCUS.md`](src/desktop/FOCUS.md) and is declared as a command,
+  never as a component-local key handler.
 - Prefer MUI's native component semantics and composition for Desktop UI:
   AppBar/Toolbar, Tabs, Menu, List, Select, Dialog, Tooltip, theme tokens, and
   `sx`. Build custom primitives only where MUI has no suitable interaction
   model, such as pane splitters and the Vim status line.
 - Desktop must never render a page-wide Vimium-style target-hint overlay or
   reserve bare `f` for one. It duplicates Cowboy's own navigation model and
-  obscures the working surface. Keep actions reachable through native focus,
-  direct Vim motions, visible contextual shortcuts, and the Command Palette.
+  obscures the working surface. Scoped labels are the exception: `'` in the
+  focused list and the leader inside one modal (FOCUS.md "Labels"). Keep
+  actions reachable through native focus, direct Vim motions, visible
+  contextual shortcuts, and the Command Palette.
 - Share protocol, stores, API clients, domain logic, attachments, and markdown
   machinery. Desktop and mobile may intentionally duplicate layout, component,
   and interaction code so either product can evolve without responsive-UI

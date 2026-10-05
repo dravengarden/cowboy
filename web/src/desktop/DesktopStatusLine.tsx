@@ -23,9 +23,7 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_HINT,
-  DESKTOP_SESSION_SLOTS_LABEL,
   DESKTOP_SHORTCUTS,
-  DESKTOP_WORKSPACE_KEYS,
 } from "./commands/workspaceShortcuts";
 
 function Segment({
@@ -118,7 +116,7 @@ function regionHints(
     case "sessions.rail":
       return [
         { keys: "J/K", label: "Folder" },
-        { keys: "1…9", label: "Open folder" },
+        { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Open" },
         { keys: DESKTOP_SHORTCUTS.toggleSessions, label: "Expand list" },
       ];
@@ -126,6 +124,7 @@ function regionHints(
       return [
         { keys: "J/K", label: "Row" },
         { keys: "GG/G", label: "First/last" },
+        { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Open" },
         { keys: "H", label: "Collapse/up" },
         { keys: "S", label: "Actions" },
@@ -145,7 +144,7 @@ function regionHints(
       return [
         { keys: "J/K", label: "Message" },
         { keys: "GG/G", label: "First/last" },
-        { keys: "G→1…0", label: "Direct jump" },
+        { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Edit" },
         { keys: "O", label: "Order mode" },
       ];
@@ -246,7 +245,7 @@ export function DesktopStatusLine({
     ...promptRegions,
     ...regionHints(focusedRegion, status, projection, sourceMode, rawSync.phase === "live"),
     ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && itemCount > 0
-      ? [{ keys: DESKTOP_SESSION_SLOTS_LABEL, label: "Switch" }]
+      ? [{ keys: DESKTOP_SHORTCUTS.switchSession, label: "Switch" }]
       : []),
     ...(regionElement?.dataset.desktopReorderable === "true" &&
         focusedRegion !== "sessions.list"
@@ -277,29 +276,10 @@ export function DesktopStatusLine({
       { keys: "Esc/Enter", label: "Done" },
     ]
     : workspaceCommandMode
+    // The which-key panel lists every armed key; the status line only says
+    // how to leave the layer.
     ? [
-      { keys: "S/P/T/C", label: "Workspace", availability: "available" },
-      // Pane folds sit next to the pane jumps they mirror, ahead of the
-      // lower-frequency entries the status line may clip on narrow windows.
-      {
-        keys: [
-          DESKTOP_WORKSPACE_KEYS.toggleSessions,
-          DESKTOP_WORKSPACE_KEYS.togglePrompt,
-          DESKTOP_WORKSPACE_KEYS.toggleConversation,
-        ].join(" "),
-        label: "Fold panes",
-        availability: "available",
-      },
-      { keys: "L/Q/D", label: "Plan/queue/drafts", availability: "available" },
-      { keys: "N", label: "New", availability: "available" },
-      { keys: "W", label: "Next region", availability: "available" },
-      { keys: "R", label: "Resize", availability: "available" },
-      {
-        keys: DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
-        label: sourceMode ? "Live preview" : "Source",
-        availability: focusedPane === "prompt" ? "available" : "inactive",
-      },
-      { keys: ",", label: "Settings", availability: "available" },
+      { keys: "Backspace", label: "Back", availability: "available" },
       { keys: "Esc", label: "Cancel", availability: "available" },
     ]
     : ordinaryHints;

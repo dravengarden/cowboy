@@ -1,4 +1,4 @@
-import { ALT_LABEL, isMac } from "../../platform";
+import { isMac } from "../../platform";
 import { matchesShortcut, parseShortcut } from "./shortcut";
 import { workspaceCommandKey } from "./workspaceCommandKey";
 
@@ -13,7 +13,25 @@ export function desktopWorkspacePrefix(mac: boolean): "Mod+K" | "Alt+K" {
 
 export const DESKTOP_WORKSPACE_PREFIX = desktopWorkspacePrefix(isMac);
 
+/**
+ * The leader (FOCUS.md "Leader"). Space arms it wherever Cowboy owns the key
+ * (Vim Normal, lists, readers, chrome); the platform prefix above arms the
+ * same layer from Insert and native fields. Every continuation is drawn as
+ * one keycap: the leader glyph plus its key.
+ */
+export const DESKTOP_LEADER_GLYPH = "␣";
+
+export function desktopLeaderLabel(key: string): string {
+  return `${DESKTOP_LEADER_GLYPH}${key === " " ? DESKTOP_LEADER_GLYPH : key.toUpperCase()}`;
+}
+
+/** Labels for the `␣␣` session switcher: home row first, then the rest. */
+export const DESKTOP_JUMP_LABELS = "asdfghjklqwertyuiopzxcvbnm";
+
 export const DESKTOP_WORKSPACE_KEYS = {
+  switchSession: " ",
+  alternateSession: "`",
+  commandPalette: "K",
   focusSessions: "S",
   focusPrompt: "P",
   focusTopbar: "T",
@@ -37,6 +55,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerSchedule: "H",
   composerJumpFront: "J",
   composerMore: "M",
+  // Zoom the focused editor into the fullscreen composer.
+  editorExpand: "Z",
   documentCopy: "V",
   documentHistory: "G",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
@@ -48,10 +68,9 @@ export const DESKTOP_WORKSPACE_KEYS = {
   toggleConversation: "\\",
 } as const;
 
-/** Formatting shares the workspace prefix; bare letters remain editor input. */
+/** Formatting shares the leader; bare letters remain editor input. Undo and
+ *  redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`). */
 export const DESKTOP_COMPOSER_FORMAT_KEYS: Readonly<Record<string, string>> = {
-  undo: "Z",
-  redo: "Y",
   bold: "B",
   italic: "I",
   code: "X",
@@ -92,10 +111,11 @@ export const DESKTOP_SHORTCUTS = {
   toggleConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.toggleConversation,
   ),
-  sessionSlots: "Alt+1…0",
+  switchSession: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.switchSession),
+  alternateSession: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.alternateSession,
+  ),
 } as const;
-
-export const DESKTOP_SESSION_SLOTS_LABEL = `${ALT_LABEL}${isMac ? "" : "+"}1…0`;
 
 export const DESKTOP_FOCUS_PROMPT_SHORTCUT = DESKTOP_SHORTCUTS.focusPrompt;
 export const DESKTOP_FOCUS_PLAN_SHORTCUT = DESKTOP_SHORTCUTS.focusPlan;
@@ -133,7 +153,33 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   "]": "workspace.togglePrompt",
   "\\": "workspace.toggleConversation",
   ",": "settings.open",
+  " ": "session.switch",
+  "`": "session.alternate",
+  k: "commandPalette.open",
+  // Scoped editors register their own `<id>.expand` under this one meaning.
+  z: "editor.expand",
 };
+
+/** The leader key a command answers to, derived from its declared sequence. */
+export function desktopLeaderKey(
+  command: { sequence?: readonly string[] },
+): string | null {
+  const [prefix, key] = command.sequence ?? [];
+  return prefix === DESKTOP_WORKSPACE_PREFIX && key !== undefined
+    ? key.toLowerCase()
+    : null;
+}
+
+/** Space arms the leader only where Cowboy, not a text field, owns the key. */
+export function isDesktopLeaderSpace(
+  event: Pick<
+    KeyboardEvent,
+    "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "repeat"
+  >,
+): boolean {
+  return event.code === "Space" && !event.metaKey && !event.ctrlKey &&
+    !event.altKey && !event.shiftKey && !event.repeat;
+}
 
 type WorkspaceKeyEvent = Pick<
   KeyboardEvent,

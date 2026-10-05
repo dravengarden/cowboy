@@ -177,6 +177,7 @@ def main():
                     ipc.stop(peer)
                     ipc.ack(peer, True)
                 ipc.require(not (state / 'session-deletions/deletions.json').exists(), 'default reader wrote a terminal record')
+                ipc.require(not (state / 'session-cleanups').exists(), 'default reader opened the cleanup continuation namespace')
             observations.append({'case': 'default-build-runtime-env-cannot-enable-writer', 'writerEnabled': False})
         for writer in (old, new):
             with tempfile.TemporaryDirectory(prefix='cw-ack-', dir='/tmp') as temporary:
@@ -198,6 +199,10 @@ def main():
                         ipc.ack(peer, True, 'duplicate-delete')
                         ipc.require(record.read_bytes() == captured and record.stat().st_ino == inode,
                                     'dedup rewrote committed evidence')
+                        if writer is new:
+                            namespace = state / 'session-cleanups'
+                            ipc.require((namespace / '.lock').is_file() and not (namespace / 'cleanups.json').exists(),
+                                        'admitted writer did not own an empty cleanup continuation namespace')
                     contender = new if writer is old else old
                     authority.select(contender)
                     with NativeProcess(contender, state, fixture=False) as rejected:

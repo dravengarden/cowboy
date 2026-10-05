@@ -25,7 +25,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import type { SessionMeta } from "../protocol";
 import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
 import { type DesktopPane, useDesktopWorkspace } from "./DesktopWorkspaceController";
-import { DesktopShortcut } from "./commands/DesktopKeycap";
+import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
 import { DESKTOP_SHORTCUTS, DESKTOP_WORKSPACE_KEYS } from "./commands/workspaceShortcuts";
 import type { RailGroup } from "./sessionsRailGroups";
 
@@ -65,22 +65,11 @@ function CollapseGlyph(
 }
 
 /**
- * The continuation keycap obeys the sequential-chord law: quiet/inactive at
- * rest, available while the workspace prefix is armed. Pressing Cmd/Alt+K
- * therefore lights `[` `]` `\` across the three panes, left to right.
+ * The pane's leader slot (`␣[` `␣]` `␣\`). Arming the leader lights all three
+ * across the screen, left to right.
  */
 function PaneKeycap({ pane }: { pane: DesktopPane }): React.JSX.Element {
-  const workspace = useDesktopWorkspace();
-  const armed = workspace.mode === "command";
-  return (
-    <ShortcutKeycap
-      keyLabel={PANE_KEY[pane]}
-      variant="global"
-      accent={armed}
-      availability={armed ? "available" : "inactive"}
-      sx={{ flexShrink: 0 }}
-    />
-  );
+  return <LeaderKeycap leaderKey={PANE_KEY[pane]} />;
 }
 
 function PaneTooltip(
@@ -311,20 +300,14 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
 
 function RailGroupButton({
   group,
-  index,
   open,
   onOpen,
 }: {
   group: RailGroup;
-  index: number;
   open: boolean;
   onOpen: (anchor: HTMLElement) => void;
 }): React.JSX.Element {
-  const workspace = useDesktopWorkspace();
-  // Contextual slots: only while the rail owns keyboard focus, like every
-  // other region-scoped hint. Digits 1…9 open that folder directly.
-  const digit = index < 9 ? String(index + 1) : null;
-  const hint = digit !== null && workspace.focusedRegion === "sessions.rail";
+  // Folders are reached with J/K or transient ' labels, never fixed digits.
   const Icon = group.kind === "folder"
     ? (open ? FolderOpenOutlined : FolderOutlined)
     : ListAltOutlined;
@@ -338,7 +321,6 @@ function RailGroupButton({
         data-desktop-rail-group={group.id}
         data-desktop-item={group.id}
         data-desktop-current={group.current ? "true" : undefined}
-        aria-keyshortcuts={digit ?? undefined}
         aria-label={`${group.name}: ${activitySummary(group)}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -387,14 +369,6 @@ function RailGroupButton({
         <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
           <Icon sx={{ fontSize: desktopSize(22) }} />
           <GroupBadge group={group} />
-          {hint && digit && (
-            <ShortcutKeycap
-              keyLabel={digit}
-              variant="context"
-              availability="available"
-              sx={{ position: "absolute", top: -7, left: -14 }}
-            />
-          )}
         </Box>
         <Typography
           component="span"
@@ -416,12 +390,11 @@ function RailGroupButton({
   );
 }
 
-/** The opened group: real titles, subfolder headings, slots and status. */
+/** The opened group: real titles, subfolder headings and status. */
 function RailGroupMenu({
   group,
   anchor,
   activeId,
-  slots,
   onClose,
   onExited,
   onPick,
@@ -431,7 +404,6 @@ function RailGroupMenu({
   group: RailGroup | null;
   anchor: HTMLElement | null;
   activeId: string | null;
-  slots: ReadonlyMap<string, number>;
   /** `back`: the user stepped back out (Esc / h) — return focus to the rail. */
   onClose: (back: boolean) => void;
   /** The close transition finished and the menu items are gone. */
@@ -530,8 +502,6 @@ function RailGroupMenu({
           );
         }
         for (const session of section.sessions) {
-          const slot = slots.get(session.id);
-          const digit = slot !== undefined && slot < 10 ? (slot === 9 ? "0" : String(slot + 1)) : null;
           items.push(
             <MenuItem
               key={session.id}
@@ -569,7 +539,6 @@ function RailGroupMenu({
               <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
                 {session.title}
               </Typography>
-              {digit && <DesktopShortcut shortcut={`Alt+${digit}`} compact quiet />}
             </MenuItem>,
           );
         }
@@ -635,14 +604,13 @@ function RailGroupMenu({
  * user's own structure: one entry per top-level folder (plus Unfiled), each
  * with a label and a single actionable badge (needs attention, else working).
  * Opening an entry lists its sessions with real titles, subfolders, status
- * and `Alt/Option+1…0` slots. The group holding the open session carries the
- * edge pill. The full list stays mounted (hidden) beside it, so keyboard
- * slots and folder state are unaffected.
+ * and status; `␣␣` labels still switch directly. The group holding the open
+ * session carries the edge pill. The full list stays mounted (hidden) beside
+ * it, so the session switcher and folder state are unaffected.
  */
 export function DesktopSessionsRail({
   groups,
   activeId,
-  slots,
   allowNewSession,
   onPick,
   onNew,
@@ -650,7 +618,6 @@ export function DesktopSessionsRail({
 }: {
   groups: readonly RailGroup[];
   activeId: string | null;
-  slots: ReadonlyMap<string, number>;
   allowNewSession: boolean;
   onPick: (id: string) => void;
   onNew: () => void;
@@ -790,11 +757,10 @@ export function DesktopSessionsRail({
         {groups.length > 0 && (
           <Box aria-hidden sx={{ width: 24, height: "1px", bgcolor: "divider", my: 0.5, flexShrink: 0 }} />
         )}
-        {groups.map((group, index) => (
+        {groups.map((group) => (
           <RailGroupButton
             key={group.id}
             group={group}
-            index={index}
             open={menu?.id === group.id}
             onOpen={(anchor): void => setMenu({ id: group.id, anchor })}
           />
@@ -804,7 +770,6 @@ export function DesktopSessionsRail({
         group={openGroup}
         anchor={menu?.anchor ?? null}
         activeId={activeId}
-        slots={slots}
         onClose={(back): void => {
           returnFocus.current = back ? menu?.anchor ?? null : null;
           setMenu(null);

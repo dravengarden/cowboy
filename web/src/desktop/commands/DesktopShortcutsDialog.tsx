@@ -14,7 +14,6 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_SELECT_SHORTCUT,
-  DESKTOP_SESSION_SLOTS_LABEL,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   desktopWorkspaceSequence,
@@ -78,14 +77,14 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },
   {
-    keys: ["1…0"],
-    title: "Jump to a Queue or Draft item while that list is focused",
-    description: "Clicking the visible number does the same jump. G then 1–0 remains available",
+    keys: ["'"],
+    title: "Label every visible row of the focused list, then press a label to jump",
+    description: "Works in Sessions, the collapsed Sessions rail, Queue and Drafts. Labels start on the home row and disappear after the jump",
   },
   {
-    keys: ["G", "1…0"],
-    title: "Jump to a Queue or Draft item after pressing G",
-    description: "The first ten visible rows use 1–9, then 0",
+    keys: ["Space"],
+    title: "Leader: which-key for every command in the current focus",
+    description: "Cmd/Alt+K opens the same leader from a text field. Inside a dialog it labels every control of that dialog",
   },
   { keys: ["Enter"], title: "Open or activate the focused item" },
   { keys: ["I"], title: "Edit the focused item" },
@@ -103,8 +102,12 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
   { keys: ["Alt+Enter"], title: "Force push the current prompt" },
   { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
   {
-    keys: [DESKTOP_SESSION_SLOTS_LABEL],
-    title: "Switch directly to one of the first ten visible sessions",
+    keys: [DESKTOP_SHORTCUTS.switchSession],
+    title: "Switch session: every session gets a letter label, press it to open",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.alternateSession],
+    title: "Return to the previously open session",
   },
 ];
 
