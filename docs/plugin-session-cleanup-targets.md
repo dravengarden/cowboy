@@ -114,3 +114,6 @@ records root-relative Linux scan admission and actual bind-mount acceptance.
 The [descendant-handle release](releases/plugin-session-cleanup-descendants-2026-10-05.md)
 records recursive handle-based content removal, retained directory structure and
 mounts introduced before/after child opens.
+The [leaf-identity release](releases/plugin-session-cleanup-leaves-2026-10-05.md)
+records nondirectory handle retention, replacement refusal and actual file-mount
+acceptance before unlink.
