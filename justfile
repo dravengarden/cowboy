@@ -58,7 +58,7 @@ desktop-browser-gate CDP_ENDPOINT="http://127.0.0.1:9222" OUT="/tmp/cowboy-deskt
           echo "== $(basename "$browser") $suite $theme"
           unshare --user --map-current-user --keep-caps --net bash -euc \
             'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" "$2" "$3"' \
-            conformance "$browser" "$suite" "$theme" | grep -E '"ok"|"browser"'
+            conformance "$browser" "$suite" "$theme" </dev/null | grep -E '"ok"|"browser"'
         done
       done
     done
