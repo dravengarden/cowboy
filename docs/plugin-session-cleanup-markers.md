@@ -1,5 +1,8 @@
 # Bounded Cargo cleanup markers
 
+The [October 5 Hawk release](releases/plugin-session-cleanup-markers-2026-10-05.md)
+records the activated artifact and bounded continuity evidence.
+
 Deleted-session cleanup recognizes a Cargo `target` only when both
 `.rustc_info.json` and `CACHEDIR.TAG` are regular files opened with no-follow and
 nonblocking flags. Both marker names resolve relative to the same opened target
@@ -10,7 +13,7 @@ also bound a file that grows during reading.
 
 Previously a tag FIFO could leave the cleanup thread waiting for a writer while
 it retained the Session lifecycle gate. Marker symlinks were followed and tag
-content had no size bound. Linked, nonregular, unreadable, oversized or invalid
+content had no size bound. Symbolically linked, nonregular, unreadable, oversized or invalid
 markers now leave the target ineligible for removal. Ordinary marked targets
 remain eligible, including a tag at the exact byte limit. No journal format,
 worker protocol, SDK or dependency changes are required.
