@@ -223,9 +223,15 @@ def main():
             checks.append("output_backpressure_survives_35_second_transport_gap")
         checks.extend(["native_apply_patch_and_command_use_target", "runtime_files_unchanged", "native_target_instructions"])
         client.close()
+        # A cold resume (what waking a hibernated session does) restores state
+        # only. Restarting the native process and resuming the thread must not
+        # reach the model; tokens are spent only by the next real turn.
+        before_resume = len(api.requests)
         client = native()
         resumed = client.request("thread/resume", {"threadId": thread, "excludeTurns": True})
         require(resumed["thread"]["id"] == thread, "native thread changed")
+        require(len(api.requests) == before_resume, "cold native resume called the model")
+        checks.append("cold_native_resume_makes_zero_model_requests")
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted resume failed")
         require((args.target / "once.txt").read_text() == "once", "cold resume repeated a command")
@@ -346,10 +352,15 @@ def main():
                     not (args.runtime / "parent-after-child.txt").exists(), "packaged ACP child or continuation used runtime files")
             checks.append("packaged_acp_child_completion_does_not_finish_parent_prompt")
             client.close()
+            # Waking a hibernated session is exactly this: a new packaged ACP
+            # process, session/load and the configuration replay, with no prompt.
+            before_wake = len(api.requests)
             client = acp()
             client.request("session/load", {"sessionId": acp_session, "cwd": str(args.runtime), "mcpServers": []})
             client.request("session/set_config_option", {"sessionId": acp_session,
                 "configId": "mode", "value": "agent-full-access"})
+            require(len(api.requests) == before_wake, "packaged ACP wake called the model")
+            checks.append("packaged_acp_wake_makes_zero_model_requests")
             result = client.request("session/prompt", prompt)
             require(result["stopReason"] == "end_turn", "packaged ACP resume failed")
             require((args.target / "acp-once.txt").read_text() == "acp_once", "packaged ACP resume replayed an effect")
