@@ -155,7 +155,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
         right: 16,
         bottom: 44,
         zIndex: (theme) => theme.zIndex.modal + 2,
-        width: sessionsLayer || modalLayer
+        width: sessionsLayer || modalLayer || groupKey !== null
           ? "min(26rem, calc(100vw - 32px))"
           : "min(72rem, calc(100vw - 32px))",
         maxHeight: "min(50vh, 30rem)",
