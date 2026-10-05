@@ -34,6 +34,7 @@ import {
     useRef,
     useState,
 } from "react";
+import type { ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import {
     Alert,
@@ -382,14 +383,34 @@ const DesktopRegionShortcut = lazy(async () => {
     const module = await import("./desktop/DesktopRegionShortcut");
     return { default: module.DesktopRegionShortcut };
 });
+// The Sessions header's collapse button loads this module long before the
+// first collapse, but a React.lazy that has never rendered still suspends
+// once even for a cached module. The rail is mounted by the collapse itself,
+// so that one suspension committed its null fallback: for a frame the hidden
+// list and the unresolved rail left no Sessions column at all and the work
+// panes reflowed across it. Once the module is here, render the rail directly.
+let desktopPaneCollapseModule: typeof import("./desktop/DesktopPaneCollapse") | null = null;
+const loadDesktopPaneCollapse = async (): Promise<typeof import("./desktop/DesktopPaneCollapse")> => {
+    desktopPaneCollapseModule = await import("./desktop/DesktopPaneCollapse");
+    return desktopPaneCollapseModule;
+};
 const DesktopPaneCollapseButton = lazy(async () => {
-    const module = await import("./desktop/DesktopPaneCollapse");
+    const module = await loadDesktopPaneCollapse();
     return { default: module.DesktopPaneCollapseButton };
 });
-const DesktopSessionsRail = lazy(async () => {
-    const module = await import("./desktop/DesktopPaneCollapse");
+const LazyDesktopSessionsRail = lazy(async () => {
+    const module = await loadDesktopPaneCollapse();
     return { default: module.DesktopSessionsRail };
 });
+function DesktopSessionsRail(
+    props: ComponentProps<typeof LazyDesktopSessionsRail>,
+): React.JSX.Element {
+    // Fixed at mount: swapping component types later would remount the rail.
+    const [Rail] = useState(() =>
+        desktopPaneCollapseModule?.DesktopSessionsRail ?? LazyDesktopSessionsRail
+    );
+    return <Rail {...props} />;
+}
 const DesktopContextShortcut = lazy(async () => {
     const module = await import("./desktop/commands/DesktopContextShortcut");
     return { default: module.DesktopContextShortcut };

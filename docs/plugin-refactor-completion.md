@@ -718,6 +718,16 @@ content removal uses held parent handles and retains directory structure within
 depth/entry bounds. Nondirectory name replacement, general I/O deadlines and
 continuous ownership remain open.
 
+Linux cleanup additionally pins each nondirectory node with a no-follow `O_PATH`
+handle and refuses observed replacement or file mount crossing before unlink.
+The final comparison/name unlink remains non-atomic; this does not complete
+continuous ownership or freeze filesystem mutations.
+
+Linux cleanup defers root marker removal until its streamed content walk
+succeeds, retaining eligibility across partial content I/O failures. Successful
+retry is covered by a real-filesystem failure fixture. Marker finalization is
+not transactional, and this does not add a durable cleanup journal or I/O deadline.
+
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Advertised-root and accepted-configuration identity are adopted by Hawk's October 2 protocol-24 Machine; the colocated Controller root fence is active. Protocol-25 Session filesystem read observations are adopted; continuous Session/worktree ownership remains open. The [worker snapshot placement fence](plugin-session-snapshot-placement.md) protects declared runtime placement and staged reset from worker observations. The [process-local lifecycle fence](plugin-session-lifecycle-fence.md) serializes launch declarations with deletion/reset/cleanup and refuses late declarations after deletion. The [reader-first terminal deletion journal](plugin-session-deletion-journal.md) adds bounded cold-reader and IPC fixtures; its Hawk's [production writer](releases/plugin-deletion-production-writer-2026-10-04.md) is active after exact native/IPC/startup-authority acceptance; installed component-owner activation, fallback and recovery enforce the durable reader floor. Portable writer admission and continuous ownership remain open. Durable Session incarnation remains open | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |
