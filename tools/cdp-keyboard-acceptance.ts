@@ -277,6 +277,33 @@ try {
       "Insert: trusted Space types a space and never arms the leader",
     );
 
+    // 1b. A Session switch may focus the editable twice within CodeMirror's
+    // 10ms focus-report window. Normal must still hand
+    // focus to the non-editable sink, or the first `i` reaches the OS IME.
+    await key("Escape");
+    await page.evaluate(`new Promise((resolve) => {
+      const content = () => document.querySelector(".cm-content").focus();
+      content();
+      setTimeout(() => { content(); setTimeout(resolve, 200); }, 14);
+    })`);
+    check(
+      await page.evaluate<boolean>(
+        "document.activeElement?.matches('[data-vim-command-sink]') === true",
+      ),
+      "A repeated Prompt focus in Normal settles on the Vim command sink",
+    );
+    await page.evaluate(`document.addEventListener("keydown", (event) => {
+      globalThis.__firstKeyTarget = event.target.matches?.("[data-vim-command-sink]") ? "sink" : "editable";
+    }, { capture: true, once: true })`);
+    await key("i");
+    check(
+      await page.evaluate<string>("globalThis.__firstKeyTarget") === "sink",
+      "The first Normal `i` after a repeated focus reaches the command sink",
+    );
+    results.push(
+      "Repeated Prompt focus in Normal: focus settles on the Vim sink; the first `i` never reaches the editable",
+    );
+
     // 2. Vim Normal: Space arms the leader, which-key appears, slots light.
     await key("Escape");
     const normalState = await page.evaluate<string>(

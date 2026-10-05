@@ -155,15 +155,23 @@ export function createImeAutoInsertVim(): {
       // alone cannot protect a queued Selection rewrite.
       view.contentDOM.addEventListener("keydown", this.onNativeInput, true);
       view.contentDOM.addEventListener("beforeinput", this.onNativeInput, true);
+      // Hand Normal-mode focus to the sink from the native focus event, not
+      // from CodeMirror's focusChanged update. CM6 reports focus changes from a
+      // 10ms timer that compares against the last notified state: a second
+      // focus of contentDOM inside that window (a Session switch hands focus
+      // to the new Prompt through more than one rAF path) makes the pending
+      // blur report a no-op, so no update ever arrives and
+      // the editable keeps focus in Normal. The next `i` then reaches macOS
+      // as editable input and opens the candidate window.
+      view.contentDOM.addEventListener("focus", this.onContentFocus);
       view.dom.addEventListener("focusout", this.onFocusOut);
       view.dom.append(this.sink);
       finishPendingFocusExit = this.onCompositionSettled;
       queueMicrotask(() => this.connect());
     }
 
-    update(update: ViewUpdate): void {
+    update(): void {
       if (!this.cm) this.connect();
-      if (update.focusChanged && update.view.hasFocus) this.focusSinkIfNormal();
     }
 
     destroy(): void {
@@ -183,6 +191,7 @@ export function createImeAutoInsertVim(): {
       this.sink.removeEventListener("keydown", this.onKeyDown);
       this.view.contentDOM.removeEventListener("keydown", this.onNativeInput, true);
       this.view.contentDOM.removeEventListener("beforeinput", this.onNativeInput, true);
+      this.view.contentDOM.removeEventListener("focus", this.onContentFocus);
       this.view.dom.removeEventListener("focusout", this.onFocusOut);
       if (this.cm && this.originalOpenDialog) {
         this.cm.openDialog = this.originalOpenDialog;
@@ -395,6 +404,14 @@ export function createImeAutoInsertVim(): {
       if (enteredInsert && (STRUCTURAL_INSERT_KEYS.has(key) || wasVisual || changing)) {
         this.scheduleNativeCaretStabilization();
       }
+    };
+
+    private readonly onContentFocus = (): void => {
+      // A direct Insert command focuses contentDOM before Vim enters Insert in
+      // the same keydown; focusSinkIfNormal re-checks the mode in a microtask,
+      // after that command has run, so it leaves Insert focus alone.
+      if (!this.cm) this.connect();
+      else this.focusSinkIfNormal();
     };
 
     private readonly onNativeInput = (): void => {
