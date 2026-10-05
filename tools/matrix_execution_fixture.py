@@ -24,6 +24,9 @@ class MatrixFixture:
         access = load(instance / ".matrix/access.json")
         self.codeact = bool(os.environ.get("MATRIX_TEST_RUNTIME"))
         if self.codeact:
+            # This gate owns a PID namespace; the host manager's private socket
+            # cannot validate its peer PID there. Use the authenticated user bus.
+            os.environ["SYSTEMCTL_FORCE_BUS"] = "1"
             (instance / ".matrix/runtime.json").write_bytes(Path(os.environ["MATRIX_TEST_RUNTIME"]).read_bytes())
         self.server = Server(("127.0.0.1", 0), Application(self.store, access))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
