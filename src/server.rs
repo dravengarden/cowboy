@@ -18494,6 +18494,15 @@ fn connect_bootstrap(
     messages
 }
 
+/// An Owner sees every session, so a broadcast usually reaches its socket as
+/// the shared pre-serialized frame. `workspace-order` is stored for every user
+/// at once (`{user_id: [...]}`) and must still be narrowed to the receiving
+/// principal's own list; the raw map would replace the client's array.
+fn fanout_sends_shared_frame(principal: &ProductPrincipal, outbound: &Outbound) -> bool {
+    principal.sees_every_session()
+        && !matches!(outbound, Outbound::SyncPatch { state, .. } if state == "workspace-order")
+}
+
 fn project_outbound(
     hub: &Hub,
     principal: &ProductPrincipal,
@@ -19085,7 +19094,7 @@ async fn handle_ws(
                 }
                 msg = rx.recv() => match msg {
                     Ok(msg) => {
-                        let result = if fanout_principal.sees_every_session() {
+                        let result = if fanout_sends_shared_frame(&fanout_principal, msg.outbound()) {
                             send_frame(&mut sink, msg.as_ref()).await
                         } else {
                             let visible = visible_session_ids(&fanout_state.hub, &fanout_principal);
@@ -20345,9 +20354,12 @@ mod zed_adapter_tests {
 
 #[cfg(test)]
 mod bootstrap_tests {
-    use super::{connect_bootstrap, focused_session_bootstrap};
+    use super::{
+        connect_bootstrap, fanout_sends_shared_frame, focused_session_bootstrap, project_outbound,
+    };
     use crate::core::{Event, Hub, Outbound, SessionOrigin};
     use crate::product_auth::ProductPrincipal;
+    use std::collections::HashSet;
 
     fn test_owner_principal() -> ProductPrincipal {
         ProductPrincipal {
@@ -20376,6 +20388,38 @@ mod bootstrap_tests {
             );
         }
         hub
+    }
+
+    #[test]
+    fn owner_fanout_projects_its_own_workspace_order() {
+        let hub = Hub::new();
+        let owner = test_owner_principal();
+        let patch = Outbound::SyncPatch {
+            state: "workspace-order".to_owned(),
+            version: 3,
+            value: serde_json::json!({
+                "owner": ["session:a", "draft:b"],
+                "other": ["session:c"],
+            }),
+            confirmed: vec!["c-1".to_owned()],
+            resync: false,
+        };
+        assert!(!fanout_sends_shared_frame(&owner, &patch));
+        let Some(Outbound::SyncPatch { value, .. }) =
+            project_outbound(&hub, &owner, &HashSet::new(), patch)
+        else {
+            panic!("workspace order patch must reach its owner");
+        };
+        assert_eq!(value, serde_json::json!(["session:a", "draft:b"]));
+
+        let title = Outbound::SyncPatch {
+            state: "title".to_owned(),
+            version: 1,
+            value: serde_json::json!({}),
+            confirmed: Vec::new(),
+            resync: false,
+        };
+        assert!(fanout_sends_shared_frame(&owner, &title));
     }
 
     #[test]
