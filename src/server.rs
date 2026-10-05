@@ -18830,13 +18830,16 @@ fn project_outbound(
                 })
             } else if state == "drafts" {
                 // Another user's document change is not even announced.
-                value.get(&principal.user_id).cloned().map(|value| Outbound::SyncPatch {
-                    value,
-                    state,
-                    version,
-                    confirmed,
-                    resync,
-                })
+                value
+                    .get(&principal.user_id)
+                    .cloned()
+                    .map(|value| Outbound::SyncPatch {
+                        value,
+                        state,
+                        version,
+                        confirmed,
+                        resync,
+                    })
             } else if state == "folders" {
                 Some(Outbound::SyncPatch {
                     value: project_folders_value(value, visible, |owner| principal.can_see(owner)),
@@ -20755,12 +20758,17 @@ mod bootstrap_tests {
         let Some(Outbound::SyncPatch { value, .. }) = hub
             .sync_resync()
             .into_iter()
-            .find(|message| matches!(message, Outbound::SyncPatch { state, .. } if state == "drafts"))
+            .find(
+                |message| matches!(message, Outbound::SyncPatch { state, .. } if state == "drafts"),
+            )
             .and_then(|message| project_outbound(&hub, &owner, &HashSet::new(), message))
         else {
             panic!("resync must carry the owner's announcements");
         };
-        assert_eq!(value, serde_json::json!({"d2": {"id": "d2", "revision": 5}}));
+        assert_eq!(
+            value,
+            serde_json::json!({"d2": {"id": "d2", "revision": 5}})
+        );
     }
 
     #[test]
