@@ -94,6 +94,7 @@ import {
   scheduleNearestReset,
 } from "../usageApi";
 import { PluginSlot } from "../pluginHost";
+import { useProviderCatalog } from "../providerCatalog";
 import {
   formatCompactCurrency,
   usageWidgetHasBalance,
@@ -1416,10 +1417,18 @@ export function DesktopTopBarControls({
     return (): void =>
       globalThis.removeEventListener("keydown", onKeyDown, true);
   }, [loadUsage, refreshing, usageOpen, usagePanel]);
+  // Widget shape, window, label and card order come from the Plugin host
+  // usage maps, which the Catalog applies independently of /api/usage. A
+  // snapshot that wins that race projected to no widget and, keyed on the
+  // snapshot alone, stayed hidden until the next snapshot (never, without a
+  // manual refresh). Recompute on every Catalog observation as well.
+  const { catalog } = useProviderCatalog();
   const widgetProviders = useMemo(() => usageWidgetProviders(snapshot), [
+    catalog,
     snapshot,
   ]);
   const usageProviders = useMemo(() => usageCardProviders(snapshot), [
+    catalog,
     snapshot,
   ]);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
