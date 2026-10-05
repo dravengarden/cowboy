@@ -20,10 +20,13 @@ import {
   projectSessionDrop,
   sessionTreeRowKey,
 } from "./sessionTree";
-import { useSortable } from "./useSortable";
+import { TOUCH_HOLD_MS, useSortable } from "./useSortable";
 import type { SessionMeta } from "./protocol";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 35));
+// A touch grip lifts its row only after a short still hold.
+const hold = () =>
+  new Promise<void>((resolve) => setTimeout(resolve, TOUCH_HOLD_MS + 40));
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
@@ -249,14 +252,21 @@ export async function runSessionMoveBrowserConformance(): Promise<string[]> {
     const rect = grip.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
+    // A finger brushing the grip (moving before the hold) never lifts it.
     flushSync(() => pointer(grip, "pointerdown", x, y));
+    pointer(window, "pointermove", x - 30, y);
+    await hold();
+    pointer(window, "pointerup", x - 30, y);
     await tick();
+    check(dropCount === 0, "A brushed touch grip started a drag");
+    flushSync(() => pointer(grip, "pointerdown", x, y));
+    await hold();
     // Same event turn: no React commit between final horizontal intent and release.
     pointer(window, "pointermove", x - 30, y);
     pointer(window, "pointerup", x - 30, y);
     await tick();
     check(
-      latest.placement.b === "" && dropCount === 1,
+      latest.placement.b === "" && Number(dropCount) === 1,
       "Fast left release did not escape to Global",
     );
     const canonical = buildSessionTree(
@@ -278,12 +288,12 @@ export async function runSessionMoveBrowserConformance(): Promise<string[]> {
     flushSync(() =>
       pointer(nextGrip, "pointerdown", nextRect.x + 10, nextRect.y + 10)
     );
-    await tick();
+    await hold();
     pointer(window, "pointermove", nextRect.x - 35, nextRect.y + 10);
     pointer(window, "pointercancel", nextRect.x - 35, nextRect.y + 10);
     await tick();
     check(
-      latest.placement.a === "parent" && dropCount === 1,
+      latest.placement.a === "parent" && Number(dropCount) === 1,
       "Cancelled drag committed a move",
     );
     const rootGrip = document.querySelector<HTMLElement>(
@@ -294,11 +304,11 @@ export async function runSessionMoveBrowserConformance(): Promise<string[]> {
     flushSync(() =>
       pointer(rootGrip, "pointerdown", rootRect.x + 10, rootRect.y + 10)
     );
-    await tick();
+    await hold();
     pointer(window, "pointerup", rootRect.x + 10, rootRect.y + 10);
     await tick();
     check(
-      latest.placement.b === "" && dropCount === 1,
+      latest.placement.b === "" && Number(dropCount) === 1,
       "Tapping a Global row's grip filed it into the preceding collapsed folder",
     );
     results.push(
