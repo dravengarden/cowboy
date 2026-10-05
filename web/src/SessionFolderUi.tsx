@@ -113,6 +113,26 @@ export function useCollapsedSessionFolders(): readonly [
   return [collapsed, update] as const;
 }
 
+/** Create (outside the Sessions list) tells the list which folder it made so
+ *  the list can expand its ancestors and scroll the new row into view. */
+export const SESSION_FOLDER_CREATED_EVENT = "cowboy:session-folder-created";
+
+export interface SessionFolderCreated {
+  readonly id: string;
+  readonly parent: string | null;
+}
+
+export function announceSessionFolderCreated(
+  id: string,
+  parent: string | null,
+): void {
+  globalThis.dispatchEvent(
+    new CustomEvent<SessionFolderCreated>(SESSION_FOLDER_CREATED_EVENT, {
+      detail: { id, parent },
+    }),
+  );
+}
+
 export function withFoldersCollapsed(
   collapsed: ReadonlySet<string>,
   ids: readonly string[],

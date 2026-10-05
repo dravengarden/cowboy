@@ -338,19 +338,13 @@ export interface MobileSheetAction {
  * without a second glass layer flashing in or out.
  */
 export function MobileSheetActionGroup(
-  { actions, compact = false }: {
-    readonly actions: readonly MobileSheetAction[];
-    /** 44px slots for a footer that must fit two three-action islands. */
-    readonly compact?: boolean;
-  },
+  { actions }: { readonly actions: readonly MobileSheetAction[] },
 ): ReactNode {
   const visibleCount = Math.max(
     1,
     actions.reduce((count, action) => count + (action.visible === false ? 0 : 1), 0),
   );
-  const slot = compact ? 44 : 46;
-  const gap = compact ? 2 : 4;
-  const width = slot + 8 + (visibleCount - 1) * (slot + gap);
+  const width = 54 + (visibleCount - 1) * 50;
   return (
     <Box
       data-mobile-sheet-footer-shield
@@ -376,7 +370,7 @@ export function MobileSheetActionGroup(
           <Box
             sx={{
               minWidth: 0,
-              height: slot,
+              height: 46,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -392,8 +386,8 @@ export function MobileSheetActionGroup(
                   sx={{
                     position: "relative",
                     flex: "0 0 auto",
-                    width: visible ? slot : 0,
-                    ml: visible && index > 0 ? `${String(gap)}px` : 0,
+                    width: visible ? 46 : 0,
+                    ml: visible && index > 0 ? 0.5 : 0,
                     opacity: visible ? 1 : 0,
                     transform: visible ? "scale(1)" : "scale(0.72)",
                     overflow: "hidden",
@@ -420,8 +414,8 @@ export function MobileSheetActionGroup(
                     onPointerDown={(event) => event.stopPropagation()}
                     sx={{
                       color: "text.primary",
-                      width: slot,
-                      height: slot,
+                      width: 46,
+                      height: 46,
                       borderRadius: 999,
                       display: "inline-flex",
                       alignItems: "center",
