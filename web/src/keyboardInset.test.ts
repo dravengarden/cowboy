@@ -179,10 +179,10 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
 Deno.test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {
   const appSource = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
   const dialog = appSource.slice(
-    appSource.indexOf("function NewSessionDialog("),
+    appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
-  assertEquals(dialog.includes('ariaLabel="New session"'), true);
+  assertEquals(dialog.includes('ariaLabel="Create"'), true);
   assertEquals(dialog.includes("cover"), true);
   const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
   assertEquals(html.includes("--vv-height"), true);

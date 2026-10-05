@@ -15,7 +15,7 @@ const composerSource = await Deno.readTextFile(
 
 Deno.test("mobile new session actions stay in the non-overlay sheet footer", () => {
   const dialog = appSource.slice(
-    appSource.indexOf("function NewSessionDialog("),
+    appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes("<MobileDecisionActions"), true);
@@ -26,7 +26,7 @@ Deno.test("mobile new session actions stay in the non-overlay sheet footer", () 
   assertEquals(dialog.includes('position: "sticky"'), false);
   assertEquals(dialog.includes("footer={"), true);
   assertEquals(dialog.includes("SHEET_THUMB_CLEARANCE"), false);
-  assertEquals(dialog.includes('title="New session"'), true);
+  assertEquals(dialog.includes('title="Create"'), true);
 });
 
 Deno.test("new session navigation precedes Machine preparation completion", () => {
@@ -71,7 +71,11 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   // Running edge. A local guard here would make the placeholder a lie.
   assertEquals(composerSource.includes("if (preparing) return false;"), false);
   assertEquals(composerSource.includes("if (preparing) return;"), false);
-  assertEquals(appSource.includes("if (mobile) claimKeyboard();"), true);
+  const opener = appSource.slice(
+    appSource.indexOf("const openNewSession = (): void => {"),
+    appSource.indexOf("const [pendingCreatedSession"),
+  );
+  assertEquals(opener.includes("claimKeyboard()"), false);
   assertEquals(
     appSource.includes("const openNewSession = (): void => {"),
     true,
