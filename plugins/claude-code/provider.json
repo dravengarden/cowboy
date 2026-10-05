@@ -55,7 +55,7 @@
       "id": "sonnet-high",
       "name": "Sonnet · High",
       "detail": "Sonnet 5.5 · High effort",
-      "is_default": true,
+      "is_default": false,
       "values": {
         "model": "sonnet",
         "effort": "high"
@@ -85,7 +85,7 @@
       "id": "opus-default",
       "name": "Opus · Recommended",
       "detail": "Opus 5.5 (1M context) · Model default effort",
-      "is_default": false,
+      "is_default": true,
       "values": {
         "model": "opus",
         "effort": "default"
@@ -154,8 +154,8 @@
       "configuration": "portable_v1",
       "default_preferences": {
         "mode": "bypassPermissions",
-        "model": "sonnet",
-        "effort": "high"
+        "model": "opus",
+        "effort": "default"
       },
       "error_rules": [
         {

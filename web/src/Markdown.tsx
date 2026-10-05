@@ -57,10 +57,13 @@ export const Markdown = memo(function Markdown({
   invert = false,
   centerCopy = false,
   touchWrap = false,
+  streaming = false,
   onLinkClick,
 }: {
   text: string;
   invert?: boolean;
+  /** The text is still being produced; an unclosed code fence is not final. */
+  streaming?: boolean;
   /** Vertically center the copy control in compact single-line code cards. */
   centerCopy?: boolean;
   /** Soft-wrap fenced code on touch surfaces. */
@@ -78,6 +81,7 @@ export const Markdown = memo(function Markdown({
           invert={invert}
           centerCopy={centerCopy}
           touchWrap={touchWrap}
+          streaming={streaming}
           {...(onLinkClick ? { onLinkClick } : {})}
         />
       </Suspense>

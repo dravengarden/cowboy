@@ -1,6 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
-import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
+import { CreateVariantPicker, createVariantTabId, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
 import { SegmentedTabs } from "./SegmentedTabs";
 import { draftRepository } from "./documents/store";
 import { openDrafts } from "./documents/navigation";
@@ -305,6 +305,8 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "@cowboy/state-store";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+import { desktopKeyIntent, installNativeCompositionTracker } from "./desktop/commands/keyIntent";
+import { isTextEditingTarget } from "./desktop/commands/shortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
@@ -2582,6 +2584,10 @@ export function CreateDialog({
     const cwd = placement.project?.projectId ?? "";
     const provider = placement.installation?.provider ?? "";
     const desktop = useSurfaceProfile().kind === "desktop";
+    // Desktop keyboard layer (FOCUS.md "Create"): a text field is Insert, the
+    // type tablist is Normal, anything else (Select, buttons) is plain modal
+    // chrome where Esc closes. Drives both dispatch and the visible slots.
+    const [focusZone, setFocusZone] = useState<"tabs" | "text" | "other">("text");
     const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
     // Session and Folder share one Sessions-tree location: both place an
     // item in the same tree, so switching between them keeps the choice.
@@ -2619,6 +2625,8 @@ export function CreateDialog({
     // Touch transfers the opener's in-gesture keyboard claim after mounting.
     useEffect(() => {
         if (!open) return undefined;
+        installNativeCompositionTracker();
+        setFocusZone("text");
         setVariant("session");
         setDraftTitle(defaultDraftTitle());
         selectDraftTitleOnFocus.current = true;
@@ -2791,13 +2799,70 @@ export function CreateDialog({
     // focused Create button suppress their own native bare-Enter activation.
     // Mobile retains its established single-Enter form behaviour.
     useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
+    // Vim layers, as in Vimium/qutebrowser: Esc (or Ctrl-[) leaves a text
+    // field for the type tablist, where h/l and 1…3 choose the type and
+    // j/i/Enter return to the title; Esc there closes. Keys are classified by
+    // desktopKeyIntent, so a composing IME keeps every key, including Esc.
+    const onDesktopFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+        if (!desktop || e.defaultPrevented) return;
+        const intent = desktopKeyIntent(e.nativeEvent);
+        if (intent.owner === "ime") {
+            // Esc cancels the marked text, never the modal.
+            if (e.key === "Escape") e.stopPropagation();
+            return;
+        }
+        const vimEscape = intent.owner === "command" && e.ctrlKey && !e.metaKey &&
+            !e.altKey && !e.shiftKey && intent.key === "[";
+        if (
+            isTextEditingTarget(e.target) &&
+            ((intent.owner === "text" && intent.key === "Escape") || vimEscape)
+        ) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById(createVariantTabId(variant))?.focus();
+            return;
+        }
+        const inTabs = e.target instanceof Element && e.target.closest("[role='tablist']") !== null;
+        if (
+            inTabs && intent.owner === "command" && !intent.modified &&
+            ["j", "i", "Enter", "ArrowDown"].includes(intent.key)
+        ) {
+            e.preventDefault();
+            titleRef.current?.focus({ preventScroll: true });
+        }
+    };
     const form = (
-            <Stack spacing={2} sx={{ mt: 1 }}>
+            <Stack
+                spacing={2}
+                sx={{ mt: 1 }}
+                onKeyDown={onDesktopFormKeyDown}
+                onFocus={(e): void => {
+                    setFocusZone(
+                        e.target instanceof Element && e.target.closest("[role='tablist']")
+                            ? "tabs"
+                            : isTextEditingTarget(e.target) ? "text" : "other",
+                    );
+                }}
+                onBlur={(e): void => {
+                    if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) {
+                        setFocusZone("other");
+                    }
+                }}
+            >
                 {createError ? <Alert severity="error">{createError}</Alert> : null}
                 <CreateVariantPicker
                     value={variant}
                     disabled={creating}
-                    onChange={(next): void => {
+                    keyboard={desktop}
+                    keysAvailable={focusZone === "tabs"}
+                    onChange={(next, source): void => {
+                        if (source === "roving") {
+                            // The keyboard cursor stays on the tablist; j/i/Enter
+                            // enters the title when the user is ready.
+                            setVariant(next);
+                            setCreateError("");
+                            return;
+                        }
                         // Flush the new title while still inside the tap gesture:
                         // WebKit can raise the keyboard only for this synchronous focus.
                         globalThis.clearTimeout(titleFocusTimer.current);
@@ -2817,6 +2882,35 @@ export function CreateDialog({
                         }
                     }}
                 />
+                {desktop ? (
+                    // The tablist's status line: it names only the keys of the
+                    // current layer and keeps its height so focus never shifts
+                    // the form.
+                    <Stack
+                        data-create-key-hint={focusZone}
+                        direction="row"
+                        alignItems="center"
+                        flexWrap="wrap"
+                        sx={{ mt: "4px !important", minHeight: 20, px: 1, color: "text.secondary", typography: "caption" }}
+                    >
+                        {focusZone === "tabs" ? (
+                            <>
+                                <Kbd keys="H" variant="context" />
+                                <Kbd keys="L" variant="context" />
+                                <Box component="span" sx={{ ml: 0.75, mr: 1 }}>switch</Box>
+                                <Kbd keys="I" variant="context" />
+                                <Box component="span" sx={{ ml: 0.75, mr: 1 }}>edit</Box>
+                                <Kbd keys="Esc" variant="context" />
+                                <Box component="span" sx={{ ml: 0.75 }}>close</Box>
+                            </>
+                        ) : focusZone === "text" ? (
+                            <>
+                                <Kbd keys="Esc" variant="context" />
+                                <Box component="span" sx={{ ml: 0.75 }}>choose type (Ctrl+[ also works)</Box>
+                            </>
+                        ) : null}
+                    </Stack>
+                ) : null}
                 <Stack spacing={2} id="create-variant-panel" role="tabpanel" aria-labelledby={`create-${variant}-tab`}>
                     {variant === "session" && placement.error ? <Alert severity="error">{placement.error}</Alert> : null}
                     <TextField
@@ -3001,7 +3095,7 @@ export function CreateDialog({
                 <>
                     <Button onClick={onClose} color="inherit" disabled={creating}>
                         Cancel
-                        <Kbd keys="Esc" />
+                        <Kbd keys="Esc" availability={focusZone === "text" ? "inactive" : "available"} />
                     </Button>
                     <Button
                         onClick={create}

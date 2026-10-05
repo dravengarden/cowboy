@@ -404,7 +404,7 @@ export async function runDraftDocumentsBrowserConformance(
       await tick(180);
       const tab = (name: string) => {
         const item = [...document.querySelectorAll<HTMLElement>("[role=tab]")]
-          .find((element) => element.textContent === name);
+          .find((element) => element.getAttribute("aria-label") === name);
         check(item, `Create variant ${name}`);
         item.focus();
         return item;
@@ -413,6 +413,104 @@ export async function runDraftDocumentsBrowserConformance(
         button("Create session").hasAttribute("disabled"),
         "No Machine disables Session only",
       );
+      if (!touch) {
+        // Desktop Vim layers. Letters arrive as a CJK input source reports
+        // them (`Process`) so only physical codes can resolve them.
+        const press = (
+          target: Element,
+          code: string,
+          init: KeyboardEventInit = {},
+        ): void => {
+          target.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              code,
+              key: "Process",
+              bubbles: true,
+              cancelable: true,
+              ...init,
+            }),
+          );
+        };
+        const selected = () =>
+          document.querySelector<HTMLElement>("[role=tab][aria-selected=true]")
+            ?.getAttribute("aria-label");
+        const sessionTitle = document.querySelector<HTMLInputElement>("input");
+        check(
+          sessionTitle && document.activeElement === sessionTitle,
+          "Create opens in the title field",
+        );
+        check(
+          document.querySelector('[data-create-key-hint="text"]') &&
+            document.querySelectorAll(
+                '[role=tab] [data-shortcut-state="inactive"]',
+              ).length === 3,
+          "Insert advertises Esc and keeps type slots inactive",
+        );
+        press(sessionTitle, "Escape", { key: "Escape", isComposing: true });
+        await tick();
+        check(
+          !closed && document.activeElement === sessionTitle,
+          "Esc during composition stays with the IME",
+        );
+        press(sessionTitle, "Escape", { key: "Escape" });
+        await tick();
+        check(!closed, "Esc in the title does not close Create");
+        check(
+          document.activeElement?.getAttribute("aria-label") === "Session",
+          "Esc leaves the title for the selected type tab",
+        );
+        check(
+          document.querySelectorAll(
+              '[role=tab] [data-shortcut-state="available"]',
+            ).length === 3 &&
+            document.querySelector('[data-create-key-hint="tabs"]'),
+          "Type slots and the Normal hint become available on the tablist",
+        );
+        press(document.activeElement!, "KeyL");
+        await tick();
+        check(
+          selected() === "Draft" &&
+            document.activeElement?.getAttribute("aria-label") === "Draft",
+          "l selects the next type and keeps the keyboard on the tablist",
+        );
+        press(document.activeElement!, "Digit3", { key: "3" });
+        await tick();
+        check(selected() === "Folder", "3 picks Folder directly");
+        press(document.activeElement!, "KeyH");
+        await tick();
+        check(selected() === "Draft", "h selects the previous type");
+        press(document.activeElement!, "KeyH");
+        await tick();
+        check(selected() === "Session", "h returns to Session");
+        // Stay out of the Draft title: its first focus consumes the one-time
+        // generated-name selection that the pointer flow below verifies.
+        press(document.activeElement!, "KeyJ");
+        await tick();
+        const keyboardTitle = document.querySelector<HTMLInputElement>("input");
+        check(
+          keyboardTitle && document.activeElement === keyboardTitle,
+          "j enters the title from the tablist",
+        );
+        press(keyboardTitle, "BracketLeft", { key: "[", ctrlKey: true });
+        await tick();
+        check(
+          !closed &&
+            document.activeElement?.getAttribute("aria-label") === "Session",
+          "Ctrl-[ is the Vim Esc alias",
+        );
+        press(document.activeElement!, "Escape", { key: "Escape" });
+        await tick();
+        check(closed, "Esc on the tablist closes Create");
+        closed = false;
+        press(document.activeElement!, "Enter", { key: "Enter" });
+        await tick();
+        check(
+          document.activeElement === document.querySelector("input"),
+          "Enter on the tablist returns to the title",
+        );
+        tab("Session").click();
+        await tick();
+      }
       tab("Draft").click();
       await tick();
       const title = document.querySelector<HTMLInputElement>("input");
