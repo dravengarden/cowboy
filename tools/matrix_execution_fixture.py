@@ -56,7 +56,13 @@ class MatrixFixture:
         require(bool(self.store.status()["jobs"]), "Native remote turn was not captured")
         checks = ["matrix_memory_uses_runtime_service_with_bound_target_scope", "matrix_remote_turns_are_durably_captured"]
         if self.codeact:
-            require(self.store.sequence == 2, "Remote CodeAct batch was not committed once")
+            outputs = [item for request in requests for item in request.get("input", [])
+                       if item.get("type") in ("custom_tool_call_output", "function_call_output")]
+            outputs += [block for request in requests for message in request.get("messages", [])
+                        for block in (message.get("content") if isinstance(message.get("content"), list) else [])
+                        if block.get("type") == "tool_result"]
+            require(self.store.sequence == 2, "Remote CodeAct batch was not committed once: "
+                    + json.dumps({"sequence": self.store.sequence, "fixture_outputs": outputs})[:6000])
             require("MATRIX_REMOTE_PROOF" in json.dumps(requests[1:]), "Remote CodeAct returned no scoped data")
             checks.append("matrix_remote_native_codeact_reads_shell_and_atomic_commit")
         return checks
