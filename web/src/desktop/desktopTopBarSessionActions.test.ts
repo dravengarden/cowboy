@@ -16,7 +16,7 @@ const focusContract = await Deno.readTextFile(
   new URL("./FOCUS.md", import.meta.url),
 );
 
-Deno.test("desktop session verification lives in Top Bar with a scoped shortcut", () => {
+Deno.test("desktop session verification lives in Top Bar with a ␣TA slot", () => {
   const auth = topBarSource.indexOf("data-product-session-alert-control");
   const reload = topBarSource.indexOf('data-desktop-item="topbar-reload"');
 
@@ -25,7 +25,8 @@ Deno.test("desktop session verification lives in Top Bar with a scoped shortcut"
   assert(topBarSource.includes("data-product-session-alert-host"));
   assert(topBarSource.includes('id: "topbar.reauthenticate"'));
   assert(topBarSource.includes('shortcut: "A"'));
-  assert(topBarSource.includes('keyLabel="A"'));
+  assert(topBarSource.includes('sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "A"]'));
+  assert(topBarSource.includes('<LeaderKeycap leaderKey="TA" />'));
   assert(topBarSource.includes("desktopSessionActionSx({ minWidth: 112 })"));
   assert(
     shortcutDialogSource.includes(

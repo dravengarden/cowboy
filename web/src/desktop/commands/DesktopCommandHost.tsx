@@ -228,7 +228,11 @@ export function DesktopCommandHost({
       title: "Focus Top Bar",
       description: "Move keyboard focus to session controls and usage",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusTopbar],
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.focusTopbar,
+        DESKTOP_WORKSPACE_KEYS.focusTopbar,
+      ],
       when: () => document.querySelector("[data-desktop-region='topbar.controls']") !== null,
       run: () => workspace.focusRegion("topbar.controls"),
     },

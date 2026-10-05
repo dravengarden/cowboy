@@ -16,8 +16,11 @@ DOM integration uses `data-desktop-pane`, `data-desktop-region`, and
 `data-desktop-focus-default`. Mouse focus and keyboard navigation update the
 same controller state.
 
-The Top Bar is a workspace region, not a fourth pane. Focusing it (workspace
-prefix `T`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
+The Top Bar is a workspace region, not a fourth pane. Its actions do not need
+focus: `␣T` opens the Top bar group and the next key runs Run Configuration
+(`R`), Usage (`U`), session verification (`A`), Reload (`L`), Compact (`C`)
+or Clear (`X`) directly; each control shows its `␣TR`-style slot. Focusing
+the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
 Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
 plus a primary underline, and only the focused control receives the keyboard
 cursor. Do not set `color: primary` on the Toolbar; `color="inherit"` children
@@ -75,6 +78,12 @@ runs in the current focus, the focused surface's own actions first under
 (`data-shortcut-state="active"`), so the panel is optional for a user who can
 already see the key. Entries are clickable.
 
+Groups follow LazyVim: a group key (`␣T`) opens a which-key layer whose
+commands run from any focus, because the group is their scope; `Backspace`
+returns to the root. A grouped slot is drawn as one keycap (`␣TR`) and lights
+both at the root and inside its group. New families of actions become groups
+rather than taking the last free root letters.
+
 A leader slot is one keycap holding the glyph and the key: `␣N`, never
 `⌘K → N`. At rest it is `available` while its scope owns focus and
 `inactive` otherwise; armed, it is `active`. A leader key has one meaning;
@@ -87,7 +96,8 @@ and in a queued-message editor), and the focused one runs.
 | ``␣` `` | Previous session |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
-| `␣S` `␣P` `␣C` `␣T` | Focus Sessions, Prompt, Conversation, Top bar |
+| `␣S` `␣P` `␣C` | Focus Sessions, Prompt, Conversation |
+| `␣T` + `R/U/A/L/C/X/T` | Top bar group: run config, usage, verify, reload, compact, clear; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣W` `␣R` | Cycle regions, Resize mode |
 | `␣[` `␣]` `␣\` | Fold Sessions, Prompt, Conversation |
@@ -198,10 +208,11 @@ Create follows the browser-Vim layering of Vimium and qutebrowser. It opens in
 the title field (Insert). `Esc` or `Ctrl-[` leaves a text field for the
 selected type tab (Normal) instead of closing; a composing IME keeps `Esc`.
 On the tablist, `H/L` (or arrows) moves between Session, Draft and Folder
-without leaving it, `1…3` picks one directly, `I`, `J`, `↓` or `Enter`
-returns to the title, and `Esc` closes. `Mod+Enter` creates from either layer.
-The tab digit keycaps and the hint row under the tablist are live slots:
-available only while the tablist owns focus. Pointer activation still selects
+without leaving it, `I`, `J`, `↓` or `Enter` returns to the title, and
+`Esc` closes. `Mod+Enter` creates from either layer. A direct pick of any
+control (Session, Draft, Folder, Project, …) is the dialog leader
+(`Cmd/Alt+K` or `Space`, then its letter); the tabs carry no digits. The hint
+row under the tablist names only the current layer's keys. Pointer activation still selects
 and focuses the title in one step. The Cancel `Esc` keycap is inactive while a
 text field owns `Esc`.
 
@@ -418,9 +429,8 @@ it.
   their splitters. `␣␣` never unfolds Sessions; it lands in Prompt (or
   Conversation when Prompt is collapsed).
 - **Rail keys.** In `sessions.rail`: `J/K`, `gg`/`G` move between folders;
-  `L` or `Enter` opens the focused folder's menu; `1…9` open a folder
-  directly (contextual digit keycaps appear on the folders only while the
-  rail owns focus). The menu opens on the open Session (or its first) and
+  `L` or `Enter` opens the focused folder's menu; `'` labels the folders
+  for a direct jump. The menu opens on the open Session (or its first) and
   owns the keyboard: `J/K` or arrows move, `L`/`Enter` opens the Session and
   focuses Prompt (Conversation when Prompt is collapsed), `H`/`Esc` returns
   to the same folder in the rail, and its footer lists those keys. MUI's
@@ -460,9 +470,10 @@ levels:
 3. modal actions use their surface-owned shortcut bar, while simple
    confirmations show the real confirmation/dismissal chord next to the button.
 
-Embedded contextual shortcuts are the persistent exception to visibility
-gating. Controls such as Top Bar Run Configuration, Usage, session verification, Compact, and Clear
-keep their one-key badge visible for discovery, but the shared keycap
+Top Bar controls show their `␣T` group slot, available whenever the control
+itself is enabled. Other embedded contextual shortcuts are the persistent
+exception to visibility gating: they keep their one-key badge visible for
+discovery, but the shared keycap
 primitive must render it as `data-shortcut-state="inactive"` whenever its
 owning region is not focused. Once the region owns focus it becomes
 `data-shortcut-state="available"` and gains the normal accent treatment. Do not

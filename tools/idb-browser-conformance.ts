@@ -209,6 +209,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         "--headless",
         "--no-sandbox",
         "--disable-gpu",
+        // Match headless Firefox's 1366x768 Desktop viewport so both engines
+        // exercise the same layout branch.
+        "--window-size=1366,768",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",
@@ -232,7 +235,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   }).spawn();
   deadline = setTimeout(
     () => report.reject(new Error("browser conformance timed out")),
-    suite === "draft-documents" ? 60_000 : 30_000,
+    // The integrated-App suite is long; a loaded build host must not turn
+    // scheduling latency into a spurious failure.
+    suite === "draft-documents" ? 150_000 : 30_000,
   );
   void child.status.then(() =>
     report.reject(new Error("browser exited before report"))

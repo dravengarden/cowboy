@@ -3,8 +3,13 @@ import type { DesktopHint } from "./hintTargets";
 
 /** `root` lists every leader command in scope; `sessions` turns the next key
  *  into a session label (the `␣␣` switcher); `modal` labels the controls of
- *  the topmost modal. */
-export type DesktopLeaderLayer = "root" | "sessions" | "modal";
+ *  the topmost modal; `group:t` holds a group's commands (`␣T…`). */
+export type DesktopLeaderLayer =
+  | "root"
+  | "sessions"
+  | "modal"
+  /** A which-key group such as `␣T` (Top bar); the key is lower case. */
+  | `group:${string}`;
 
 export interface DesktopLeaderState {
   armed: boolean;

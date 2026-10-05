@@ -78,8 +78,10 @@ intervening writer had rotated. It therefore follows the deletion journal's
 reader-first discipline:
 
 - Release metadata declares `sessionIncarnations {readerSchema, writerSchema}`.
-  The installed owner's strict source decoding refuses an unknown declaration,
-  so the owner learns it first.
+  The installed owner decodes a release's `source.json` leniently, so an owner
+  that does not know the declaration silently ignores it instead of refusing the
+  release. The owner must therefore be activated on a host first; sequencing, not
+  a decoding error, is the protection.
 - A root-owned, per-dataset reader floor binds Machine, dataset path and exact
   reader anchor. Once it exists, an undeclared Machine refuses. A writer
   declaration requires an existing floor and a writer-capable build that also
@@ -131,7 +133,9 @@ for it.
 
 ## Order of work
 
-1. Owner dataset-key generalization, reader-only, on Hawk and Falcon.
+1. Owner dataset-key generalization, reader-only, on Hawk and Falcon. Hawk is
+   active (Columbus `5af9f70b`); Falcon still needs its own host activation and
+   must have it before any release declaring the dataset reaches Falcon.
 2. Machine reader and declaration with the writer disabled.
 3. Writer admission, mint/rotate/end rules and negative acknowledgements.
 4. Protocol carriage, Controller scope and refusal vectors, then Web diagnostics.
