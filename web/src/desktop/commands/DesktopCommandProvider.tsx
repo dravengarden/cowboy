@@ -228,21 +228,6 @@ export function desktopRegionInDirection(
   return index === null ? null : candidates[index]!.dataset.desktopRegion ?? null;
 }
 
-/** A brief ring on the region a window motion reached. */
-function flashDesktopRegion(region: string): void {
-  const element = document.querySelector<HTMLElement>(
-    `[data-desktop-region="${CSS.escape(region)}"]`,
-  );
-  if (!element) return;
-  element.removeAttribute("data-desktop-region-flash");
-  void element.offsetWidth;
-  element.setAttribute("data-desktop-region-flash", "");
-  globalThis.setTimeout(
-    () => element.removeAttribute("data-desktop-region-flash"),
-    400,
-  );
-}
-
 /** The scope test shared by dispatch, which-key and live keycaps. */
 export function desktopCommandInScope(
   command: DesktopCommand,
@@ -476,10 +461,7 @@ export function DesktopCommandProvider(
         event.stopImmediatePropagation();
         clearPendingJumpChord();
         const next = desktopRegionInDirection(workspace.focusedRegion, motion);
-        if (next) {
-          workspace.focusRegion(next);
-          flashDesktopRegion(next);
-        }
+        if (next) workspace.focusRegion(next);
         return;
       }
       const eventElement = event.target instanceof Element ? event.target : null;
@@ -1380,17 +1362,6 @@ export function DesktopCommandProvider(
                   outline: `2px solid ${theme.palette.primary.main}`,
                   outlineOffset: 2,
                   borderRadius: 12,
-                },
-                // The region a window motion reached rings once.
-                "[data-desktop-region-flash]": {
-                  animation: "cowboyRegionFlash 380ms ease-out",
-                },
-                "@keyframes cowboyRegionFlash": {
-                  from: { boxShadow: `inset 0 0 0 2px ${theme.palette.primary.main}` },
-                  to: { boxShadow: "inset 0 0 0 2px transparent" },
-                },
-                "@media (prefers-reduced-motion: reduce)": {
-                  "[data-desktop-region-flash]": { animation: "none" },
                 },
                 // Vim Normal in a text field: the one-character selection
                 // is the block cursor; no caret blinks beside it.

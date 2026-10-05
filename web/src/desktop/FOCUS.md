@@ -406,8 +406,10 @@ candidate must lie wholly beyond the current edge; one overlapping on the
 other axis wins, then the smaller gap. So `H/L` cross Sessions, Prompt and
 Conversation, and `J/K` move inside a column (Composer, Queue, Drafts,
 Plan) and up to the top bar. At the edge nothing moves; collapsed panes are
-skipped (`␣W[` `␣W]` `␣W\\` restore them). The reached region rings once.
-Entering Prompt keeps its Vim mode and caret.
+skipped (`␣W[` `␣W]` `␣W\\` restore them). Focus moves without any
+transition: the focused pane's header and status line already show where it
+is, so an extra flash would only add noise. Entering Prompt keeps its Vim
+mode and caret.
 
 It works wherever Cowboy owns the key: Vim Normal (the editors' sink and
 native fields), lists, the reader, bars. A field in Vim Insert keeps
