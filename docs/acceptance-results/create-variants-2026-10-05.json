@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "feature": "Unified Create variants",
+  "behavior": [
+    "Sessions plus button, desktop Create button and empty-workspace entrance open one Create dialog with Session and Draft tabs.",
+    "Start on Session for the existing shortcut workflow; preserve separate titles and directory selections when switching variants.",
+    "Draft uses optional title (Untitled fallback) and its own optional folder selector; clear selects the true top level.",
+    "Draft creation requires durable device persistence, but never requires a Machine, project, Provider or server connectivity.",
+    "Touch opens without claiming the keyboard, keeping both creation variants discoverable; tapping Title raises the keyboard. Desktop retains selected-title focus and Mod+Enter.",
+    "Explicit Create session/Create draft confirmation labels; disabled variant switching during creation and synchronous double-submit guard.",
+    "No creation snackbar: opening the persisted destination supplies the success feedback."
+  ],
+  "validation": {
+    "web_typecheck": "passed",
+    "web_lint": "passed with pre-existing warnings",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "firefox": {
+      "suite": "draft-documents",
+      "light": 9,
+      "dark": 9,
+      "create_coverage": [
+        "Actual production Create dialog under StrictMode on Desktop and touch branches",
+        "Empty Machine inventory disables Session but leaves Draft usable",
+        "Title and Draft folder survive variant switches",
+        "Session folder does not leak into Draft placement",
+        "Select a Draft folder, clear to root, create both placements",
+        "IME candidate Enter cannot create",
+        "Offline creation stores locally before navigating",
+        "Double click creates exactly one Draft"
+      ]
+    },
+    "limits": [
+      "Firefox touch-branch checks are not iOS native keyboard or physical-device acceptance.",
+      "Existing physical iPhone/WeType issue #69 remains open.",
+      "No editor implementation was changed by this entrance fix."
+    ]
+  },
+  "delivery": {
+    "service_worker": "cowboy-v1834",
+    "component": "web",
+    "controller_restart": false,
+    "machine_restart": false
+  }
+}

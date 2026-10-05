@@ -1,4 +1,5 @@
 import { StrictMode } from "react";
+import { CreateDialog } from "./App";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { CssBaseline } from "@mui/material";
@@ -39,7 +40,9 @@ function button(label: string): HTMLElement {
   ].find((item) =>
     item.getClientRects().length &&
     (item.getAttribute("aria-label") === label ||
-      item.textContent?.trim() === label)
+      item.textContent?.trim() === label ||
+      (label.startsWith("Create ") &&
+        item.textContent?.trim().startsWith(label)))
   );
   check(element, `Missing button: ${label}`);
   return element;
@@ -52,13 +55,24 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
   const originalMatchMedia = globalThis.matchMedia;
   // Headless Firefox defaults to pointer:none. Exercise the actual Desktop
   // product branch while keeping the real viewport/theme media queries.
+  let touchCreate = false;
   globalThis.matchMedia = (query) => {
     const pointer = query.includes("(pointer: fine)") ||
       query.includes("(hover: hover)");
     const coarse = query.includes("(any-pointer: coarse)");
+    if (touchCreate && /max-width: (599|1199)/.test(query)) {
+      return {
+        ...originalMatchMedia.call(globalThis, query),
+        matches: true,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+      };
+    }
     if (!pointer && !coarse) return originalMatchMedia.call(globalThis, query);
     return {
-      matches: pointer,
+      matches: touchCreate ? coarse : pointer,
       media: query,
       onchange: null,
       addListener() {},
@@ -139,6 +153,138 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
   try {
     await repo.start();
     const folder = await repo.create("Research", null, "folder");
+    // The actual Create dialog must not gate Draft creation on Machine/AI
+    // readiness. Exercise Desktop and touch with an empty Machine store.
+    for (const touch of [false, true]) {
+      touchCreate = touch;
+      let closed = false;
+      flushSync(() =>
+        root.render(
+          <StrictMode>
+            <SurfaceProvider>
+              <BrowserProductTheme>
+                <CssBaseline />
+                <CreateDialog
+                  initialFolder="session-folder-fixture"
+                  open
+                  onClose={() => {
+                    closed = true;
+                  }}
+                  onCreated={() => {
+                    throw new Error("Draft must not create a Session");
+                  }}
+                />
+              </BrowserProductTheme>
+            </SurfaceProvider>
+          </StrictMode>,
+        )
+      );
+      await tick(180);
+      const tab = (name: string) => {
+        const item = [...document.querySelectorAll<HTMLElement>("[role=tab]")]
+          .find((element) => element.textContent === name);
+        check(item, `Create variant ${name}`);
+        return item;
+      };
+      check(
+        button("Create session").hasAttribute("disabled"),
+        "No Machine disables Session only",
+      );
+      tab("Draft").click();
+      await tick();
+      const title = document.querySelector<HTMLInputElement>("input");
+      check(title, "Draft title field");
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(title, "独立 draft 🌏");
+      title.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      check(
+        ![...document.querySelectorAll("label")].some((label) =>
+          label.textContent === "AI installation"
+        ),
+        "Draft hides AI configuration",
+      );
+      check(
+        document.body.textContent?.includes("Draft directory (optional)"),
+        "Draft uses its own optional directory",
+      );
+      check(
+        !button("Create draft").hasAttribute("disabled"),
+        "Draft creates without a Machine",
+      );
+      const directoryInput = document.querySelector<HTMLInputElement>(
+        'input[role="combobox"]',
+      );
+      check(
+        directoryInput?.value === "",
+        "Session directory never becomes Draft directory",
+      );
+      directoryInput.click();
+      await tick();
+      const folderChoice = [
+        ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ]
+        .find((item) => item.textContent?.includes("Research"));
+      check(folderChoice, "Existing Draft folder is selectable");
+      folderChoice.click();
+      await tick();
+      if (touch) {
+        button("Clear Draft directory (optional)").click();
+        await tick();
+      }
+      tab("Session").click();
+      await tick();
+      tab("Draft").click();
+      await tick();
+      check(
+        document.querySelector<HTMLInputElement>("input")?.value ===
+          "独立 draft 🌏",
+        "Switching variants preserves entered title",
+      );
+      // IME candidate confirmation must never create either variant.
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          isComposing: true,
+          bubbles: true,
+        }),
+      );
+      await tick();
+      check(!closed, "IME candidate does not create a Draft");
+      const countBefore = repo.get().entries.length;
+      offline = true;
+      button("Create draft").click();
+      button("Create draft").click();
+      await until(() => closed, "local-first Draft created offline");
+      const createdId = globalThis.location.hash.split("/")[1];
+      check(
+        createdId &&
+          repo.document(createdId).get().document?.title === "独立 draft 🌏",
+        "Create opens the persisted Draft",
+      );
+      check(
+        repo.document(createdId).get().document?.parent_id ===
+          (touch ? null : folder),
+        "Draft folder survives variant switch; cleared selection creates at root",
+      );
+      check(
+        repo.get().entries.length === countBefore + 1,
+        "Double tap creates only one Draft",
+      );
+      offline = false;
+      await repo.document(createdId).retry();
+      await repo.document(createdId).whenSynced();
+      flushSync(() => root.render(<></>));
+      await tick();
+    }
+    touchCreate = false;
+    results.push(
+      "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+    );
     const id = await repo.create(
       "独立笔记",
       folder,

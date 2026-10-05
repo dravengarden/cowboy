@@ -24,13 +24,13 @@ Deno.test("mobile decisions use a shared labeled action footer", () => {
 
 Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
   const dialog = appSource.slice(
-    appSource.indexOf("function NewSessionDialog("),
+    appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes("<MobileDecisionActions"), true);
   assertEquals(dialog.includes("shelf"), true);
   assertEquals(
-    dialog.includes('confirmLabel={creating ? "Creating…" : "Create"}'),
+    dialog.includes('confirmLabel={creating ? "Creating…" : createLabel}'),
     true,
   );
   assertEquals(dialog.includes("footerOverlay"), false);
