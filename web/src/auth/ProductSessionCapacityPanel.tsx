@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import DevicesRounded from "@mui/icons-material/DevicesRounded";
 import RefreshRounded from "@mui/icons-material/RefreshRounded";
 import {
@@ -243,7 +244,7 @@ export function ProductSessionCapacityPanel(): React.JSX.Element {
           </Button>
           <Button
             size="small"
-            startIcon={loading ? <CircularProgress size={14} /> : <RefreshRounded />}
+            startIcon={loading ? <CircularProgress size={desktopSize(14)} /> : <RefreshRounded />}
             disabled={loading || busyId !== null}
             onClick={() => {
               setLoading(true);

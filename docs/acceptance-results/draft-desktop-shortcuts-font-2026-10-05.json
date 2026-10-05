@@ -1,0 +1,146 @@
+{
+  "date": "2026-10-05",
+  "change": "Desktop Draft keyboard-first command host, native Save for Queue/Draft edits, global font size audit",
+  "checks": {
+    "typescript": "passed",
+    "oxlint": "passed; pre-existing warnings",
+    "unit_tests": "2051 passed, 0 failed"
+  },
+  "browser_matrix": [
+    {
+      "ok": true,
+      "suite": "desktop-composer",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "dbd793813de0adfd10a6363dfa1a87b1e64e1fb87a09aab5b60d788d3dc8a09e",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+        "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+        "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+        "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+        "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+        "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
+        "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed",
+        "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection",
+        "Desktop Queue/Draft inline and expanded edits save only with Mod+S; repeats/IME fenced; independent Draft uses scoped formatting/attachment/copy/history commands and wraps at 320–960px across 8–32px fonts"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "desktop-composer",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "dbd793813de0adfd10a6363dfa1a87b1e64e1fb87a09aab5b60d788d3dc8a09e",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+        "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+        "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+        "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+        "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+        "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
+        "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed",
+        "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection",
+        "Desktop Queue/Draft inline and expanded edits save only with Mod+S; repeats/IME fenced; independent Draft uses scoped formatting/attachment/copy/history commands and wraps at 320–960px across 8–32px fonts"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "80ebd1dfeba536908440ffe78aa942f83cb52bfd22a4685a43f9747ebeb441bd",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 86ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–32px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Session destinations use a shared ordered directory tree; context expansion, folds/search, root leaves, duplicate identities, keyboard/IME guards, busy selection and font fit pass",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "80ebd1dfeba536908440ffe78aa942f83cb52bfd22a4685a43f9747ebeb441bd",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 80ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–32px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Session destinations use a shared ordered directory tree; context expansion, folds/search, root leaves, duplicate identities, keyboard/IME guards, busy selection and font fit pass",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "session-fold",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "7da2b69580cdce963717cedd10a933bf2f6be31e4c2632ca3a57b9f85bf6b51c",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "an off-screen current session arms Focus",
+        "Focus folds off-path folders, scrolls and rings the row",
+        "scrolling away re-arms Focus without unfolding",
+        "Expand all keeps the current row anchored",
+        "a flat list only locates",
+        "Create's Folder tab names, places and announces a folder"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "session-fold",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "7da2b69580cdce963717cedd10a933bf2f6be31e4c2632ca3a57b9f85bf6b51c",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "an off-screen current session arms Focus",
+        "Focus folds off-path folders, scrolls and rings the row",
+        "scrolling away re-arms Focus without unfolding",
+        "Expand all keeps the current row anchored",
+        "a flat list only locates",
+        "Create's Folder tab names, places and announces a folder"
+      ],
+      "physical_device": "not_checked"
+    }
+  ],
+  "coverage": [
+    "Real CodeMirror Desktop branch forced and asserted for shortcut acceptance; scoped command dispatcher; Mod+S inline/expanded save; Mod+Enter does not commit/send edits; repeat and shared/marked IME fences",
+    "Independent Draft prefix formatting/attachment/Copy V/History G/More M; closing More releases keyboard scope; every document/format command is searchable",
+    "Desktop toolbar wraps at 320–960px and 8–32px root fonts; independent document workspace preserves >200px writing canvas at 320–1440px and 8–32px; actual shared sidebar Create label/folder/fold controls scale without overflow",
+    "Touch fixed-size CSS unit retains original geometry; Mobile cards/targets preserved; no editor extension or Vim/IME state-machine change"
+  ],
+  "limits": [
+    "No physical iPhone/WeType acceptance claim; pitfall #69 remains open",
+    "Browser acceptance does not establish client PWA reload"
+  ],
+  "release": null
+}

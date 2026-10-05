@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import {
   Alert,
   AlertTitle,
@@ -280,11 +281,11 @@ export function ProviderAssetGraphic({
 }): React.JSX.Element {
   const gradientId = `provider-gradient-${useId().replaceAll(":", "")}`;
   // Cards and chrome follow the global font scale. Transcript status marks
-  // stay at their authored optical size so a Grok signal does not become a
-  // heading glyph when reading text is enlarged.
+  // retain their authored optical size on touch; Desktop scales them with its
+  // root font so small status marks stay legible alongside enlarged text.
   const scaledSize = scaleWithFont
     ? `calc(${size}px * var(--cowboy-font-scale, 1))`
-    : `${size}px`;
+    : desktopSize(size);
   if (asset.content.kind === "vector_path") {
     const gradient = asset.content.gradient;
     return (
@@ -582,7 +583,7 @@ function ProviderNode({
     case "progress":
       return (
         <Stack direction="row" spacing={1} alignItems="center">
-          <CircularProgress size={18} />
+          <CircularProgress size={desktopSize(18)} />
           <Typography variant="body2">
             {resolveText(node.label, state, host)}
           </Typography>
@@ -620,7 +621,7 @@ function ProviderNode({
           color={destructive ? "error" : "primary"}
           data-provider-destructive-action={destructive ? "true" : undefined}
           disabled={disabled}
-          startIcon={busy ? <CircularProgress size={14} /> : undefined}
+          startIcon={busy ? <CircularProgress size={desktopSize(14)} /> : undefined}
           onClick={() => void owner.emit(node).catch(() => undefined)}
         >
           {resolveText(node.label, state, host)}
@@ -670,7 +671,7 @@ function LegacyProviderActivity(): React.JSX.Element {
       alignItems="center"
       sx={{ py: 0, alignSelf: "flex-start", color: "text.secondary" }}
     >
-      <CircularProgress size={13} thickness={5} color="inherit" aria-hidden />
+      <CircularProgress size={desktopSize(13)} thickness={5} color="inherit" aria-hidden />
       <Typography variant="caption" aria-hidden>
         Thinking…
       </Typography>

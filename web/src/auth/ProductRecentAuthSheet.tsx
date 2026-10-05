@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   Alert,
   Box,
@@ -413,7 +414,7 @@ export function ProductRecentAuthSheet({
               disabled={busy}
               onClick={verifyWithPasskey}
               startIcon={busy
-                ? <CircularProgress color="inherit" size={18} />
+                ? <CircularProgress color="inherit" size={desktopSize(18)} />
                 : undefined}
             >
               {busy ? "Waiting for Passkey…" : "Verify with Passkey"}

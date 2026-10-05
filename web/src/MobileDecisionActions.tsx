@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Box, Button, CircularProgress } from "@mui/material";
 import type { ButtonProps } from "@mui/material";
@@ -78,7 +79,7 @@ export function MobileDecisionActions({
         onPointerDown={preserveInput}
         onClick={onConfirm}
         startIcon={confirmBusy
-          ? <CircularProgress size={16} color="inherit" />
+          ? <CircularProgress size={desktopSize(16)} color="inherit" />
           : undefined}
         sx={{ minHeight: 44, px: 2.25, textTransform: "none", fontWeight: 650 }}
       >

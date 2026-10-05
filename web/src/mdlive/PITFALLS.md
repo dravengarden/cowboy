@@ -2843,3 +2843,19 @@ Mobile keeps its existing targets and horizontal toolbar flow. No editor,
 composition handler, Vim binding, keyboard adapter or gesture changed. Browser
 layout checks cover both themes and 8–24px root sizes; this CSS-only Desktop
 change supplies no new physical iOS/WeType acceptance or fix for #69.
+
+### 2026-10-05 Desktop save and document commands
+
+Queue/Session Draft transactional edits use Mod+S; Mod+Enter retains send
+semantics in the new-prompt composer. Desktop row mounts omit the CM6 submit
+callback, and the expanded Desktop row dialog owns its Mod+S locally (exclusive
+modals suppress workspace commands). It consumes Mod+Enter without committing;
+IME/native-service markers and nested dialogs are fenced. Mobile keeps its
+existing submit callbacks and live-save/keyboard actions. No editor extensions,
+Vim/IME logic, native focus transfer, or Mobile geometry were changed. Independent
+Draft Desktop commands reuse the existing command host and actual editor handle;
+Mod+S flushes existing local persistence without awaiting network delivery.
+Shared fixed-size glyphs use a SurfaceProvider unit: 1rem on Desktop, 16px on
+touch, so global reading size affects Desktop without changing touch pixels.
+Physical iPhone/WeType pitfall #69 remains open; browser checks are not native
+input acceptance.

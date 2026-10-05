@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { Box, LinearProgress, Stack, Typography } from "@mui/material";
 import {
   assessAdminPassword,
@@ -21,7 +22,7 @@ function CheckLine({ ok, label }: { ok: boolean; label: string }) {
   return (
     <Typography
       sx={{
-        fontSize: 13,
+        fontSize: desktopSize(13),
         color: ok ? "success.main" : "text.secondary",
       }}
     >
@@ -42,12 +43,12 @@ export function PasswordStrength({
   return (
     <Stack spacing={0.75} aria-live="polite">
       <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-        <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
+        <Typography sx={{ fontSize: desktopSize(13), color: "text.secondary" }}>
           Password strength
         </Typography>
         <Typography
           sx={{
-            fontSize: 13,
+            fontSize: desktopSize(13),
             fontWeight: 600,
             color: assessed.level === "empty" ? "text.secondary" : `${color}.main`,
           }}
@@ -62,7 +63,7 @@ export function PasswordStrength({
         sx={{ height: 6, borderRadius: 999, bgcolor: "action.hover" }}
       />
       {assessed.checks.generated ? (
-        <Typography sx={{ fontSize: 13, color: "success.main" }}>
+        <Typography sx={{ fontSize: desktopSize(13), color: "success.main" }}>
           ✓ Looks like a Chrome or Apple generated password
         </Typography>
       ) : (

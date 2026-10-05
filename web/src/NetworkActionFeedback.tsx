@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import {
   type ReactNode,
   useCallback,
@@ -103,7 +104,7 @@ function ProgressOverlay(
   return (
     <CircularProgress
       aria-hidden
-      size={size}
+      size={typeof size === "number" ? desktopSize(size) : size}
       thickness={4.5}
       sx={{
         position: "absolute",
@@ -123,7 +124,7 @@ function ProgressOverlay(
  * machine actions can share the same fast-path behaviour. */
 export function DelayedNetworkProgress(
   { size = 18, color = "inherit" }: {
-    size?: number;
+    size?: number | string;
     color?:
       | "inherit"
       | "primary"
@@ -136,7 +137,7 @@ export function DelayedNetworkProgress(
 ): React.JSX.Element {
   return (
     <CircularProgress
-      size={size}
+      size={typeof size === "number" ? desktopSize(size) : size}
       color={color}
       sx={{
         opacity: 0,

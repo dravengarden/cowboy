@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { isImeKeyEvent } from "./imeKey";
 import { useMemo, useState } from "react";
 import {
@@ -343,7 +344,7 @@ export function WorkspacePicker(
                 ? "Project path"
                 : "Directory path"}
               separator={
-                <ChevronRight sx={{ fontSize: 16, color: "text.secondary" }} />
+                <ChevronRight sx={{ fontSize: desktopSize(16), color: "text.secondary" }} />
               }
               sx={{
                 px: 0.5,

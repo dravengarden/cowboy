@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   ArrowBack,
   ChevronLeft,
@@ -71,7 +72,7 @@ function useRead(context: string, query: string | null, refresh: number) {
 function Loading(): React.JSX.Element {
   return (
     <Stack role="status" alignItems="center" sx={{ p: 4 }}>
-      <CircularProgress size={24} />
+      <CircularProgress size={desktopSize(24)} />
       <Typography sx={{ mt: 1 }} color="text.secondary">
         Loading resources…
       </Typography>
@@ -150,7 +151,7 @@ function ResourceDetail(
                 gridTemplateColumns: "max-content minmax(0,1fr)",
                 gap: 1,
                 m: 0,
-                fontSize: 13,
+                fontSize: desktopSize(13),
               }}
             >
               {detail.metadata.map((row, index) => (
@@ -433,7 +434,7 @@ function ResourceList(
                     }`}
                     slotProps={{
                       primary: {
-                        sx: { overflowWrap: "anywhere", fontSize: 14 },
+                        sx: { overflowWrap: "anywhere", fontSize: desktopSize(14) },
                       },
                       secondary: { sx: { mt: 0.5 } },
                     }}

@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { Refresh } from "@mui/icons-material";
 import {
   Alert,
@@ -194,7 +195,7 @@ export function ExtensionManagerView(
       {error && <Alert severity="warning">{error}</Alert>}
       {message && <Alert severity="success">{message}</Alert>}
       {loading && (
-        <CircularProgress size={24} aria-label="Loading extension catalog" />
+        <CircularProgress size={desktopSize(24)} aria-label="Loading extension catalog" />
       )}
       {loading && !ids.length
         ? null

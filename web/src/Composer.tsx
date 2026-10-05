@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
 import { DesktopDraftDestinationPicker } from "./desktop/DesktopDraftDestinationPicker";
 import { ProtectedImage } from "./ProtectedImage";
@@ -683,6 +684,7 @@ function ComposeBar(
     onForcePush,
     onJumpFront,
     submitLabel = "Send",
+    submitShortcut = "send",
     submitIcon,
     desktop = false,
   }: {
@@ -707,9 +709,9 @@ function ComposeBar(
     /** "Jump to front of queue" (no interrupt) — provided only when there's a
      *  queue to jump ahead of. */
     readonly onJumpFront?: (() => void) | undefined;
-    /** Semantic label/icon for the primary commit action. Row editors are
-     *  live-saved, so their action is Done rather than Send. */
+    /** Semantic label/icon for the primary commit action. Desktop row editors save explicitly; Mobile row editors finish their live-saved edit. */
     readonly submitLabel?: string;
+    readonly submitShortcut?: "send" | "save";
     readonly submitIcon?: React.ReactNode;
     /** Desktop-only floating shortcut hints. Mobile keeps the touch toolbar. */
     readonly desktop?: boolean;
@@ -921,8 +923,8 @@ function ComposeBar(
               >
                 {submitIcon ?? <Send />}
               </IconButton>,
-              `${MOD_LABEL}↵`,
-              `${MOD_LABEL}Enter · ${submitLabel}`,
+              submitShortcut === "save" ? `${MOD_LABEL}S` : `${MOD_LABEL}↵`,
+              `${MOD_LABEL}${submitShortcut === "save" ? "S" : "Enter"} · ${submitLabel}`,
               sendable,
             )}
           </span>
@@ -2824,7 +2826,7 @@ export function ComposerWorkspace({
                           onPointerCancel={clearLongPress}
                         >
                           {submitFeedback.progress
-                            ? <CircularProgress size={18} color="inherit" />
+                            ? <CircularProgress size={desktopSize(18)} color="inherit" />
                             : <Send fontSize="small" />}
                         </IconButton>
                         {holding && (
@@ -2885,7 +2887,7 @@ export function ComposerWorkspace({
                             onClick={sendTap.onClick}
                           >
                             {submitFeedback.progress
-                              ? <CircularProgress size={18} color="inherit" />
+                              ? <CircularProgress size={desktopSize(18)} color="inherit" />
                               : <Send fontSize="small" />}
                           </IconButton>
                         </span>
@@ -3578,7 +3580,7 @@ function AttachmentPreviews({
               "&:hover": { bgcolor: "rgba(0,0,0,0.72)" },
             }}
           >
-            <Close sx={{ fontSize: 13 }} />
+            <Close sx={{ fontSize: desktopSize(13) }} />
           </IconButton>
         </Box>
       ))}
@@ -3647,7 +3649,7 @@ const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
                 cursor: "pointer",
               }}
             >
-              <InsertDriveFileOutlined sx={{ fontSize: 15, flexShrink: 0 }} />
+              <InsertDriveFileOutlined sx={{ fontSize: desktopSize(15), flexShrink: 0 }} />
               <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
                 {a.name}
               </Typography>
@@ -3716,7 +3718,7 @@ function OptimisticDraftRow({
     >
       {(saving || sending) && (
         <CircularProgress
-          size={13}
+          size={desktopSize(13)}
           thickness={5}
           sx={{ color: "primary.main", mt: 0.25, flexShrink: 0 }}
         />
@@ -3725,7 +3727,7 @@ function OptimisticDraftRow({
         <CloudUpload
           aria-hidden
           sx={{
-            fontSize: 16,
+            fontSize: desktopSize(16),
             color: "info.main",
             mt: 0.25,
             flexShrink: 0,
@@ -4207,8 +4209,8 @@ export function PendingPanel({
           minHeight: desktop ? 32 : mobileComposerPanelHeaderMinHeight,
           ...(desktop && {
             "& > .MuiIconButton-root": {
-              width: 32,
-              height: 32,
+              width: desktopSize(32),
+              height: desktopSize(32),
               minHeight: 32,
             },
           }),
@@ -4778,7 +4780,7 @@ export function PendingPanel({
 }
 
 // One queued prompt. Read mode shows the (clamped) text + a primary action +
-// Edit / Delete. Desktop edit mode is transactional: Mod+Enter saves and Esc
+// Edit / Delete. Desktop edit mode is transactional: Mod+S saves and Esc
 // asks before discarding. The primary action depends on whether the session can take a turn
 // right now: dispatchable → a plain "Send now" (sends immediately, revives a
 // dead session); busy → a warning-coloured "Force push" that interrupts the
@@ -5374,7 +5376,7 @@ function PendingRow({
         },
       });
     // Editing reuses the composer surface, but Desktop treats it as a transaction:
-    // Mod+Enter commits and Esc asks before throwing away the local buffer.
+    // Mod+S saves and Esc asks before throwing away the local buffer.
     const desktopEditBar = (
       <ComposeBar
         desktop={desktop}
@@ -5386,7 +5388,8 @@ function PendingRow({
         onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
         onAttach={(): void => editFileInputRef.current?.click()}
         onSend={requestSaveEdit}
-        submitLabel="Done editing"
+        submitLabel="Save changes"
+        submitShortcut="save"
         submitIcon={<Check />}
         onExpand={(): void => setOverlayOpen(true)}
       />
@@ -5554,7 +5557,7 @@ function PendingRow({
                 focusEndOnMount={desktop}
                 onVimMode={setVimMode}
                 onChange={updateEditDraft}
-                onSubmit={requestSaveEdit}
+                onSubmit={desktop ? undefined : requestSaveEdit}
                 sessionId={sessionId}
                 commands={commands}
                 placeholder="Edit message…"
@@ -5686,7 +5689,8 @@ function PendingRow({
             autoFocus={false}
             focusEndOnMount={desktop}
             showCollapse={false}
-            submitLabel={touchInput ? "Collapse editor" : "Done editing"}
+            submitLabel={touchInput ? "Collapse editor" : "Save changes"}
+            saveOnly={desktop}
             submitIcon={touchInput ? <CloseFullscreen /> : <Check />}
             vim={vim}
             onVimMode={setVimMode}
@@ -5944,7 +5948,7 @@ function PendingRow({
             data-pending-content-action="schedule"
             size="small"
             clickable
-            icon={<Schedule sx={{ fontSize: 15 }} />}
+            icon={<Schedule sx={{ fontSize: desktopSize(15) }} />}
             label={`${fireLabel(message.schedule.fire_at_ms)} · ${
               message.schedule.delivery === "front" ? "队首" : "队尾"
             }`}
@@ -5953,7 +5957,7 @@ function PendingRow({
               mt: 0.75,
               height: 24,
               borderRadius: 999,
-              fontSize: 12,
+              fontSize: desktopSize(12),
               fontWeight: 600,
               color: "info.main",
               bgcolor: (t) => alpha(t.palette.info.main, 0.14),
@@ -6291,9 +6295,9 @@ export function AutoScrollAndStop({
           }}
           sx={dense
             ? {
-              width: 32,
-              height: 32,
-              "& .MuiSvgIcon-root": { fontSize: 18 },
+              width: desktopSize(32),
+              height: desktopSize(32),
+              "& .MuiSvgIcon-root": { fontSize: desktopSize(18) },
             }
             : undefined}
         >
@@ -6315,9 +6319,9 @@ export function AutoScrollAndStop({
             onClick={(): void => setCancelOpen(true)}
             sx={dense
               ? {
-                width: 32,
-                height: 32,
-                "& .MuiSvgIcon-root": { fontSize: 18 },
+                width: desktopSize(32),
+                height: desktopSize(32),
+                "& .MuiSvgIcon-root": { fontSize: desktopSize(18) },
               }
               : undefined}
           >
@@ -6643,8 +6647,8 @@ function RecommendedRunConfigPresetButton({
         }}
       >
         {progress ? (
-          <CircularProgress size={14} thickness={4.5} color="inherit" />
-        ) : selected ? <Check sx={{ fontSize: 18 }} /> : null}
+          <CircularProgress size={desktopSize(14)} thickness={4.5} color="inherit" />
+        ) : selected ? <Check sx={{ fontSize: desktopSize(18) }} /> : null}
       </Box>
     </ButtonBase>
   );
@@ -6903,7 +6907,7 @@ function ComposerSheet({
                   alignItems="center"
                   sx={{ py: 1, color: "text.secondary" }}
                 >
-                  <CircularProgress size={16} />
+                  <CircularProgress size={desktopSize(16)} />
                   <Typography variant="body2">
                     Loading agent options…
                   </Typography>

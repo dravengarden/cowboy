@@ -85,6 +85,7 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
     "d",
     "e",
     "f",
+    "g",
     "h",
     "i",
     "j",
@@ -98,6 +99,7 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
     "s",
     "t",
     "u",
+    "v",
     "w",
     "x",
     "y",
@@ -134,4 +136,16 @@ Deno.test("intentional Chrome overrides are limited to reader Vim motions", () =
     "Ctrl+F",
     "Ctrl+B",
   ]);
+});
+
+Deno.test("transactional edits and independent documents own native Save", () => {
+  for (
+    const id of [
+      "pendingEdit.queued.done",
+      "pendingEdit.draft.done",
+      "document.save",
+    ]
+  ) {
+    assertEquals(chromeShortcutConflict(id, "Mod+S", true), null);
+  }
 });

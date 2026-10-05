@@ -37,6 +37,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerSchedule: "H",
   composerJumpFront: "J",
   composerMore: "M",
+  documentCopy: "V",
+  documentHistory: "G",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
   // matches the panes on screen: Sessions | Prompt | Conversation. They are
   // free under the prefix, and their held-prefix forms (Cmd/Alt + [ ] \) are
@@ -119,6 +121,8 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   h: "composer.schedule",
   j: "composer.jumpFront",
   m: "composer.more",
+  v: "document.copyToSession",
+  g: "document.history",
   ...Object.fromEntries(
     Object.entries(DESKTOP_COMPOSER_FORMAT_KEYS).map(([id, key]) => [
       key.toLowerCase(),

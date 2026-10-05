@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { Box, IconButton, Stack, Typography } from "@mui/material";
 import type { PaletteColor, Theme } from "@mui/material";
 import type { Status } from "./protocol";
@@ -101,7 +102,7 @@ export function TurnStatusOverlay({
               width: "auto",
               height: 28,
               borderRadius: 999,
-              fontSize: 12,
+              fontSize: desktopSize(12),
               fontWeight: 600,
             }}
           >

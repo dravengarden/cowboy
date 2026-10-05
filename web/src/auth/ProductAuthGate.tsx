@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   Alert,
   Box,
@@ -136,7 +137,7 @@ function RetryButton({
       onClick={onRetry}
       disabled={probing}
       startIcon={probing
-        ? <CircularProgress size={16} color="inherit" />
+        ? <CircularProgress size={desktopSize(16)} color="inherit" />
         : undefined}
     >
       {probing ? "Retrying…" : label}
@@ -165,7 +166,7 @@ function ProductControllerUnavailablePage({
     >
       <Stack spacing={2} sx={{ width: "100%", maxWidth: 420 }}>
         <Typography
-          sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}
+          sx={{ fontSize: desktopSize(14), letterSpacing: "0.06em", opacity: 0.75 }}
         >
           cowboy
         </Typography>
@@ -204,7 +205,7 @@ function ProductAuthRetryPage({
     >
       <Stack spacing={2} sx={{ width: "100%", maxWidth: 420 }}>
         <Typography
-          sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}
+          sx={{ fontSize: desktopSize(14), letterSpacing: "0.06em", opacity: 0.75 }}
         >
           cowboy
         </Typography>

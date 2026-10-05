@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { ExtensionOutlined } from "@mui/icons-material";
 import { Box, CircularProgress, IconButton } from "@mui/material";
 import { lazy, Suspense, useState } from "react";
@@ -29,7 +30,7 @@ export function WorkspaceExtensionsButton(
           overflow: "hidden",
         }}
       >
-        <Suspense fallback={<CircularProgress sx={{ m: 3 }} size={24} />}>
+        <Suspense fallback={<CircularProgress sx={{ m: 3 }} size={desktopSize(24)} />}>
           <WorkspaceExtensions
             key={context}
             context={context}

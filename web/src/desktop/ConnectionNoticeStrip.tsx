@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import CheckIcon from "@mui/icons-material/Check";
 import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
@@ -32,8 +33,8 @@ export function ConnectionNoticeStrip({
       }}
     >
       {notice.tone === "success"
-        ? <CheckIcon sx={{ fontSize: 16, mt: "2px", color }} />
-        : <CloudOffOutlinedIcon sx={{ fontSize: 16, mt: "2px", color }} />}
+        ? <CheckIcon sx={{ fontSize: desktopSize(16), mt: "2px", color }} />
+        : <CloudOffOutlinedIcon sx={{ fontSize: desktopSize(16), mt: "2px", color }} />}
       <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
         <Typography
           variant="body2"

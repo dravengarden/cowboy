@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v1842";
+const VERSION = "cowboy-v1845";
 importScripts("/device-proof.js");
 self.CowboyDeviceProof.install();
 const ASSET_CACHE = `${VERSION}-assets`;

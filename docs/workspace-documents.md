@@ -72,3 +72,20 @@ imports, owner isolation, repeated startup, folder deletion and preserved body
 writes/history. Native acceptance uses an isolated account-free WKWebView
 fixture of the integrated Mobile shell; it is not a production login or a
 physical WeType acceptance. Pitfall #69 remains open.
+
+## Desktop editor commands
+
+Independent Drafts use the same command host, workspace prefix and actual
+editor handle as Session prompts. Mod+S flushes local document persistence;
+autosave and background synchronization remain independent. In Queue and
+Session Draft edit mode, Mod+S saves changes and closes editing, including the
+expanded editor. Mod+Enter sends/queues a new prompt, never commits a row edit.
+IME transactions and nested/exclusive dialogs retain keyboard ownership.
+
+The Draft toolbar shows actual scoped/armed shortcut states. Formatting,
+attachments, Source, Copy to Session (prefix V) and History (prefix G) have
+visible hints. More (prefix M) and the Command Palette expose all formatting
+and document actions. Available pane width, measured in rem, controls density
+so enlarged fonts retain useful writing space. Shared fixed-size chrome uses
+the SurfaceProvider size unit: rem on Desktop, original pixels on touch.
+The sidebar Create label and folder/fold targets also scale with reading size.

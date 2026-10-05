@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { Box, CircularProgress, Typography, useTheme } from "@mui/material";
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import type { MermaidConfig } from "mermaid";
@@ -175,7 +176,7 @@ export function MermaidDiagram({
   if (!svg) {
     return (
       <Box sx={{ display: "grid", placeItems: "center", flex: 1, py: 6 }}>
-        <CircularProgress size={24} />
+        <CircularProgress size={desktopSize(24)} />
       </Box>
     );
   }
@@ -253,7 +254,7 @@ export function MermaidDiagram({
             pointerEvents: "none",
           }}
         >
-          <OpenInFullRounded sx={{ fontSize: 18 }} />
+          <OpenInFullRounded sx={{ fontSize: desktopSize(18) }} />
         </Box>
       </Box>
       <ImageLightbox

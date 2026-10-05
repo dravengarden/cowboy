@@ -76,7 +76,8 @@ export function DesktopContextShortcut({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        height: 40,
+        minHeight: "max(40px, 2.75rem)",
+        height: "auto",
         gap: inline ? 0.25 : 0,
         flexShrink: 0,
         // Top-bar hints belong beside their control, not below the bar. Inline

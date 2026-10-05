@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
 // Paged transcript. One row per canonical `RenderItem`; every row remains in
 // normal layout so native scroll anchoring can track streamed markdown / code
@@ -347,7 +348,7 @@ function TranscriptSkeleton({
         sx={{ color: "text.secondary" }}
       >
         <CircularProgress
-          size={14}
+          size={desktopSize(14)}
           thickness={4}
           color="inherit"
           aria-hidden
@@ -456,7 +457,7 @@ function TranscriptLoadingFill({
       >
         {paused ? null : (
           <CircularProgress
-            size={13}
+            size={desktopSize(13)}
             thickness={4}
             color="inherit"
             aria-hidden
@@ -774,10 +775,10 @@ function ConversationEmptyState({
         })}
       >
         {kind === "preparing"
-          ? <Terminal sx={{ fontSize: 22 }} />
+          ? <Terminal sx={{ fontSize: desktopSize(22) }} />
           : kind === "cleared"
-          ? <CleaningServices sx={{ fontSize: 22 }} />
-          : <ChatBubbleOutline sx={{ fontSize: 22 }} />}
+          ? <CleaningServices sx={{ fontSize: desktopSize(22) }} />
+          : <ChatBubbleOutline sx={{ fontSize: desktopSize(22) }} />}
       </Box>
       <Typography
         variant="body1"
@@ -877,7 +878,7 @@ function ConversationEmptyState({
             ))}
             <Tune
               aria-hidden
-              sx={{ fontSize: 16, color: "text.secondary", opacity: 0.78 }}
+              sx={{ fontSize: desktopSize(16), color: "text.secondary", opacity: 0.78 }}
             />
           </Stack>
         </ButtonBase>
@@ -943,7 +944,7 @@ function ThinkingIndicator({
         providerVersion={providerVersion}
         providerDigest={providerDigest}
         slot="loading"
-        fallback={<CircularProgress size={13} thickness={5} />}
+        fallback={<CircularProgress size={desktopSize(13)} thickness={5} />}
       />
       <Typography
         data-agent-waiting-label
@@ -1078,7 +1079,7 @@ function CompactingWidget({
       <UnfoldLess
         aria-hidden
         sx={{
-          fontSize: 16,
+          fontSize: desktopSize(16),
           color: active ? accent : muted,
           ...(active &&
             !reducedMotion && {
@@ -1332,7 +1333,7 @@ function CollapsibleUserBody({
               py: 0,
               opacity: 0.85,
               "& .MuiButton-endIcon": { ml: 0.25 },
-              "& .MuiButton-endIcon > svg": { fontSize: 18 },
+              "& .MuiButton-endIcon > svg": { fontSize: desktopSize(18) },
               "&:hover": { bgcolor: "transparent", opacity: 1 },
             }}
           >
@@ -1433,7 +1434,7 @@ function OptimisticUserBubble({
           sx={{ pr: 0.25 }}
         >
           <CircularProgress
-            size={11}
+            size={desktopSize(11)}
             thickness={5}
             sx={{ color: "text.secondary" }}
           />
@@ -1451,7 +1452,7 @@ function OptimisticUserBubble({
           alignItems="center"
           sx={{ pr: 0.25 }}
         >
-          <CloudUpload sx={{ fontSize: 14, color: "info.main" }} />
+          <CloudUpload sx={{ fontSize: desktopSize(14), color: "info.main" }} />
           <Typography variant="caption" sx={{ color: "info.main" }}>
             {connected ? "Waiting for Cowboy…" : "Waiting for connection…"}
           </Typography>
@@ -1917,7 +1918,7 @@ function ToolTranscriptContext({
           >
             {label}
             {phase === "running" && (
-              <CircularProgress size={10} thickness={5} color="inherit" />
+              <CircularProgress size={desktopSize(10)} thickness={5} color="inherit" />
             )}
           </Typography>
           {!open && (
@@ -3136,7 +3137,7 @@ const ItemView = memo(function ItemView({
               bgcolor: alpha(theme.palette.primary.main, 0.09),
             })}
           >
-            <CleaningServices sx={{ fontSize: 13 }} />
+            <CleaningServices sx={{ fontSize: desktopSize(13) }} />
           </Box>
           <Typography
             variant="caption"
@@ -5641,7 +5642,7 @@ export function Transcript({
                     size="small"
                     variant="contained"
                     color="error"
-                    startIcon={<Stop sx={{ fontSize: 16 }} />}
+                    startIcon={<Stop sx={{ fontSize: desktopSize(16) }} />}
                     onClick={(): void => {
                       importantHaptic();
                       cancelTurn(sessionId);
@@ -5704,7 +5705,7 @@ export function Transcript({
                   alignItems="center"
                   sx={{ py: 0.625, color: "text.secondary" }}
                 >
-                  <CircularProgress size={13} thickness={4} color="inherit" />
+                  <CircularProgress size={desktopSize(13)} thickness={4} color="inherit" />
                   <Typography variant="caption">
                     Restoring earlier conversation…
                   </Typography>

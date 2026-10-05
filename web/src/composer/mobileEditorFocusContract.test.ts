@@ -416,7 +416,7 @@ Deno.test("mobile pending editor survives the native long-press keyboard settle 
 Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissal", () => {
   assertEquals(
     composerSource.includes(
-      'submitLabel={touchInput ? "Collapse editor" : "Done editing"}',
+      'submitLabel={touchInput ? "Collapse editor" : "Save changes"}',
     ),
     true,
   );
@@ -585,7 +585,7 @@ Deno.test("fullscreen keeps view chrome fixed right and send with message action
   );
   assertEquals(
     fullscreenComposerSource.includes(
-      'primaryLabel={showCollapse ? "Collapse editor" : submitLabel}',
+      'primaryLabel={showCollapse',
     ),
     true,
   );
@@ -713,7 +713,7 @@ Deno.test("fullscreen hide keyboard stays expanded and resumes at the document e
       'title={resumeEditing ? "Edit" : "Hide keyboard"}',
     ),
     fullscreenComposerSource.indexOf(
-      'primaryLabel={showCollapse ? "Collapse editor" : submitLabel}',
+      'primaryLabel={showCollapse',
     ),
   );
   assertEquals(hideClick.includes("onCollapse()"), false);

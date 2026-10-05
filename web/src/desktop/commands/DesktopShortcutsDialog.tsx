@@ -99,7 +99,7 @@ const DISCOVERY: ShortcutRow[] = [
 
 const DIRECT_ACTIONS: ShortcutRow[] = [
   { keys: ["Mod+Enter"], title: "Send or queue the current prompt" },
-  { keys: [DESKTOP_SHORTCUTS.saveDraft], title: "Save the current prompt as a draft" },
+  { keys: [DESKTOP_SHORTCUTS.saveDraft], title: "Save edited Queue/Draft changes, save a document, or save the new prompt as a draft" },
   { keys: ["Alt+Enter"], title: "Force push the current prompt" },
   { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
   {

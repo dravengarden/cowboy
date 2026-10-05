@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import Refresh from "@mui/icons-material/Refresh";
 import {
   Button,
@@ -97,7 +98,7 @@ export function SessionReloadDialog({
             variant="contained"
             color={activeTurn ? "warning" : "primary"}
             startIcon={action.progress
-              ? <CircularProgress size={16} color="inherit" />
+              ? <CircularProgress size={desktopSize(16)} color="inherit" />
               : <Refresh />}
             aria-busy={action.pending || undefined}
             disabled={action.pending || (!activeTurn && !result)}

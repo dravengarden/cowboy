@@ -553,7 +553,7 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      "pl: signalHeader ? `${geometry.paddingLeft}px` : 0",
+      "pl: signalHeader ? desktopSize(geometry.paddingLeft) : 0",
     ),
     true,
   );

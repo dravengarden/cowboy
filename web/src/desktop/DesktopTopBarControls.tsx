@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   alpha,
   Box,
@@ -513,7 +514,7 @@ function DesktopUsageExtras(
                         {schedule ? "Scheduled" : "Schedule"}
                       </Typography>
                       {!schedule && (
-                        <ArrowForwardRounded sx={{ fontSize: 15 }} />
+                        <ArrowForwardRounded sx={{ fontSize: desktopSize(15) }} />
                       )}
                       {!schedule && <Kbd keys="S" />}
                     </Stack>

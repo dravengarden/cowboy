@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import {
   Alert,
   AlertTitle,
@@ -1398,7 +1399,7 @@ function ProviderManagement(
                         variant="contained"
                         disabled={Boolean(authentication.busy)}
                         startIcon={authenticationPendingMethod === method.id
-                          ? <CircularProgress size={16} color="inherit" />
+                          ? <CircularProgress size={desktopSize(16)} color="inherit" />
                           : undefined}
                         onClick={() => void startAuthentication(method.id)}
                       >
@@ -1485,7 +1486,7 @@ function ProviderManagement(
                               !loginInput.trim()}
                             {...authenticationSubmitTap}
                             startIcon={authentication.busy === "submit"
-                              ? <CircularProgress size={16} color="inherit" />
+                              ? <CircularProgress size={desktopSize(16)} color="inherit" />
                               : undefined}
                           >
                             {authentication.busy === "submit"
@@ -1518,7 +1519,7 @@ function ProviderManagement(
                 ? (
                   <Alert
                     severity="info"
-                    icon={<CircularProgress size={20} color="inherit" />}
+                    icon={<CircularProgress size={desktopSize(20)} color="inherit" />}
                     aria-live="polite"
                   >
                     <AlertTitle>{flowCopy?.promotingTitle}</AlertTitle>
@@ -1575,7 +1576,7 @@ function ProviderManagement(
                 (Boolean(uninstallPlan.active_session_ids.length) &&
                   !confirmActive)}
               startIcon={uninstall.busy === "confirm"
-                ? <CircularProgress size={16} color="inherit" />
+                ? <CircularProgress size={desktopSize(16)} color="inherit" />
                 : undefined}
               onClick={() => void confirmUninstall()}
             >

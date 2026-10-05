@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 // cowboy's MUI theme. The dark/light/system *selection* is shared (app-shell
 // SDK's useThemeMode — persistence + OS resolution); this file only builds the
 // theme object and the status-bar colour from the resolved mode.
@@ -222,8 +223,8 @@ export function useThemeMode(): ThemeControls {
             },
             styleOverrides: {
               root: {
-                width: 44,
-                height: 44,
+                width: `max(32px, ${desktopSize(44)})`,
+                height: `max(32px, ${desktopSize(44)})`,
                 "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
                 // WebKit synthesizes hover/focus after a finger tap. A later
                 // unscoped MUI v6 color variant sets --IconButton-hoverBg and

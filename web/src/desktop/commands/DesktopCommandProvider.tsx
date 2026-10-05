@@ -1062,3 +1062,8 @@ export function useDesktopCommands(): DesktopCommandContextValue {
 export function useDesktopListJumpChord(region: string): boolean {
   return useContext(DesktopListJumpContext) === region;
 }
+
+/** Isolated editor fixtures may omit the Desktop command host. */
+export function useOptionalDesktopCommands(): DesktopCommandContextValue | null {
+  return useContext(DesktopCommandContext);
+}

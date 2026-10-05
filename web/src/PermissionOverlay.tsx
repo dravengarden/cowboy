@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { type ReactNode, useMemo } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
@@ -214,10 +215,10 @@ export function PermissionOverlay({
           })}
         >
           {isQuestion
-            ? <HelpOutlineRounded sx={{ fontSize: 18, color: accent, flexShrink: 0 }} />
+            ? <HelpOutlineRounded sx={{ fontSize: desktopSize(18), color: accent, flexShrink: 0 }} />
             : (
               <WarningAmberRounded
-                sx={{ fontSize: 18, color: accent, flexShrink: 0 }}
+                sx={{ fontSize: desktopSize(18), color: accent, flexShrink: 0 }}
               />
             )}
           <Typography

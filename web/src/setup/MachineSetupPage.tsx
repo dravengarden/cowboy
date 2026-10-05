@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   ArrowBackRounded,
   Check,
@@ -128,7 +129,7 @@ function CopyBlock({
           {displayedValue}
         </Typography>
       </Box>
-      <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+      <Typography color="text.secondary" sx={{ fontSize: desktopSize(13) }}>
         {hint}
       </Typography>
     </Stack>
@@ -225,7 +226,7 @@ function SetupSettings({
             <Close />
           </IconButton>
         </Stack>
-        <Typography color="text.secondary" sx={{ mb: 3, fontSize: 14 }}>
+        <Typography color="text.secondary" sx={{ mb: 3, fontSize: desktopSize(14) }}>
           Appearance and account only. Session, Provider, and machine settings
           appear after a computer is connected.
         </Typography>
@@ -478,7 +479,7 @@ export function MachineSetupPage(): React.JSX.Element {
         <Box>
           <Typography
             component="p"
-            sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}
+            sx={{ fontSize: desktopSize(14), letterSpacing: "0.06em", opacity: 0.75 }}
           >
             cowboy
           </Typography>
@@ -533,7 +534,7 @@ export function MachineSetupPage(): React.JSX.Element {
                 : waiting
                 ? (
                   <Stack direction="row" spacing={1.25} alignItems="center">
-                    <CircularProgress size={18} />
+                    <CircularProgress size={desktopSize(18)} />
                     <Typography color="text.secondary">
                       Waiting for {issued.display_name} to come online…
                     </Typography>
@@ -561,7 +562,7 @@ export function MachineSetupPage(): React.JSX.Element {
                     >
                       {busy ? "Discarding…" : "Back"}
                     </Button>
-                    <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+                    <Typography color="text.secondary" sx={{ fontSize: desktopSize(13) }}>
                       Discard this code and edit the computer name.
                     </Typography>
                   </Stack>
@@ -588,21 +589,21 @@ export function MachineSetupPage(): React.JSX.Element {
               >
                 {busy ? "Creating…" : "Create code"}
               </Button>
-              <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+              <Typography color="text.secondary" sx={{ fontSize: desktopSize(13) }}>
                 You will get{" "}
                 <Box
                   component="span"
                   sx={{
                     fontFamily:
                       "ui-monospace, SFMono-Regular, Menlo, monospace",
-                    fontSize: 13,
+                    fontSize: desktopSize(13),
                   }}
                 >
                   cowboy register {globalThis.location.origin}
                 </Box>{" "}
                 and a one-time token to paste.
               </Typography>
-              <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+              <Typography color="text.secondary" sx={{ fontSize: desktopSize(13) }}>
                 The default command runs in the current terminal. Add{" "}
                 <Box
                   component="span"
@@ -617,7 +618,7 @@ export function MachineSetupPage(): React.JSX.Element {
               </Typography>
               <Typography
                 color="text.secondary"
-                sx={{ fontSize: 13, opacity: 0.8 }}
+                sx={{ fontSize: desktopSize(13), opacity: 0.8 }}
               >
                 Signed in as {me.account}
               </Typography>
