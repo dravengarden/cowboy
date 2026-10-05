@@ -2876,3 +2876,17 @@ and not composing. Touch, the native textarea and every iOS path are unchanged.
 No physical iPhone or real input method was available to this change, so it
 adds no evidence for #69, which remains open; the Desktop chords and paste were
 exercised with synthetic events only.
+
+118. **A mobile Draft is a focus-on-writing page (Obsidian).** The bottom
+    session nav and its glass slab are not rendered for a Draft; the page owns
+    a floating Sessions button and an actions capsule at the top, and the
+    format capsule (plus a hide-keyboard control) appears only while the
+    Draft body has focus, via a CSS `:has(:focus-within)` rule rather than
+    keyboard geometry. Format buttons keep `preventDefault` on pointer/mouse
+    down so the editor never loses focus. The native textarea still carries
+    `data-mobile-drawer-ignore` so caret and selection drags stay native; the
+    Draft body adds `data-mobile-drawer-idle-swipe`, which lets a swipe on an
+    unfocused editor open Sessions (`drawerIgnoresTouch`). While editing, the
+    textarea keeps the gesture. No editor extension, IME or composition code
+    changed. Verified in Chrome touch emulation (idle, focused, swipe to
+    Sessions); physical iPhone keyboard placement is not yet accepted.

@@ -4526,7 +4526,10 @@ export function App({
                         }}
                     />
                 )}
-                {mobile && !splitActive && (
+                {/* A mobile Draft is a focus-on-writing page (Obsidian): its
+                    own floating top controls replace the bottom nav and the
+                    glass slab behind it. */}
+                {mobile && !splitActive && !draftRoute.id && (
                     <Box
                         ref={mobileFrostFollowRef}
                         aria-hidden
@@ -4768,6 +4771,7 @@ export function App({
                         pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 18px), 12px)" : 0,
                         pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
+                        ...(mobile && draftRoute.id && { display: "none" }),
                     }}
                 >
         <Toolbar
@@ -5069,7 +5073,10 @@ export function App({
                         data-mobile-drawer-surface={mobile ? "true" : undefined}
                         sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "env(safe-area-inset-top)" : 0 }}>
                         <WorkspaceDraftPane id={draftRoute.id} beforeLeave={draftBeforeLeave}
-                            onAction={(action) => flushSync(() => setDraftAction(action))} />
+                            onAction={(action) => flushSync(() => setDraftAction(action))}
+                            onOpenSessions={mobile
+                                ? () => settleMobileDrawerRef.current?.(true)
+                                : undefined} />
                     </Box>
                 ) : active ? (
                     splitActive ? (

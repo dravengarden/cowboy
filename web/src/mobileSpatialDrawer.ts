@@ -25,6 +25,7 @@ import {
   pushDrawerVelocitySample,
 } from "./obsidianDrawerGesture";
 import {
+  drawerIgnoresTouch,
   expandedSelection,
   followDetachedTouchStream,
   hasHorizontalScroller,
@@ -408,7 +409,7 @@ export function bindMobileSpatialDrawer({
       !touch ||
       expandedSelection(globalThis.getSelection?.() ?? null) ||
       focusedInputOverlayOwnsGesture ||
-      target?.closest(ignoreSelector) ||
+      drawerIgnoresTouch(target, ignoreSelector) ||
       hasHorizontalScroller(event.target, gestureTarget)
     ) {
       gesture = null;

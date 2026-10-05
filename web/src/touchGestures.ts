@@ -101,6 +101,19 @@ export function inputOverlayOwnsDrawerGesture(
   return keyboardOpen && focusWithin;
 }
 
+/** An editor marked `data-mobile-drawer-ignore` keeps horizontal drags for
+ *  its caret and selection. A writing page that is all editor marks its body
+ *  `data-mobile-drawer-idle-swipe`: while nothing inside is focused, the
+ *  editor there yields the swipe to the drawer, as in Obsidian. */
+export function drawerIgnoresTouch(
+  target: Element | null,
+  ignoreSelector: string,
+): boolean {
+  if (!target?.closest(ignoreSelector)) return false;
+  const idle = target.closest("[data-mobile-drawer-idle-swipe]");
+  return idle === null || idle.matches(":focus-within");
+}
+
 /** Native selection-handle drags own the touch stream until the range collapses. */
 export function expandedSelection(
   selection: Pick<Selection, "isCollapsed" | "rangeCount"> | null,

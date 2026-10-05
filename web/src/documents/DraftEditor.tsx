@@ -12,9 +12,13 @@ import {
 import {
   AttachFile,
   HistoryOutlined,
+  KeyboardHideOutlined,
+  MoreHoriz,
   OpenInNew,
   SaveAlt,
+  ViewSidebarOutlined,
 } from "@mui/icons-material";
+import { alpha, type Theme } from "@mui/material/styles";
 import {
   lazy,
   type MutableRefObject,
@@ -79,11 +83,21 @@ const desktopDraftActionSx = {
 const positions = new Map<string, ComposerEditorSelection>();
 export type DraftFlush = () => Promise<void>;
 
-export function DraftEditor({ id, beforeLeave, onCopyToSession }: {
-  id: string;
-  beforeLeave: MutableRefObject<DraftFlush>;
-  onCopyToSession: () => void;
-}): React.JSX.Element {
+/** Mobile focus-on-writing chrome (Obsidian): the page owns its Sessions and
+ *  actions controls at the top, and formatting floats above the keyboard. */
+export interface DraftMobileChrome {
+  onOpenSessions: () => void;
+  onMenu: () => void;
+}
+
+export function DraftEditor(
+  { id, beforeLeave, onCopyToSession, mobileChrome }: {
+    id: string;
+    beforeLeave: MutableRefObject<DraftFlush>;
+    onCopyToSession: () => void;
+    mobileChrome?: DraftMobileChrome | undefined;
+  },
+): React.JSX.Element {
   const snapshot = useDraftDocument(id);
   const [epoch, setEpoch] = useState(0);
   useBootReady(snapshot.phase !== "loading");
@@ -112,6 +126,7 @@ export function DraftEditor({ id, beforeLeave, onCopyToSession }: {
       syncError={snapshot.error}
       beforeLeave={beforeLeave}
       onCopyToSession={onCopyToSession}
+      mobileChrome={mobileChrome}
       onReload={() => setEpoch((n) => n + 1)}
     />
   );
@@ -149,6 +164,7 @@ function DraftEditingSession(
     syncError,
     beforeLeave,
     onCopyToSession,
+    mobileChrome,
     onReload,
   }: {
     initial: DraftDocument;
@@ -157,6 +173,7 @@ function DraftEditingSession(
     syncError: string | null;
     beforeLeave: MutableRefObject<DraftFlush>;
     onCopyToSession: () => void;
+    mobileChrome?: DraftMobileChrome | undefined;
     onReload: () => void;
   },
 ): React.JSX.Element {
@@ -191,6 +208,7 @@ function DraftEditingSession(
   const mounted = useRef(true);
   const composing = useRef(false);
   const desktop = useSurfaceProfile().kind === "desktop";
+  const focusLayout = !desktop && mobileChrome !== undefined;
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
   const flush = async (): Promise<void> => {
@@ -376,6 +394,118 @@ function DraftEditingSession(
     : phase === "error"
     ? "Needs attention"
     : "Saved on this device";
+  const titleField = (
+    <TextField
+      variant="standard"
+      value={title}
+      placeholder="Untitled"
+      fullWidth
+      sx={{ flex: 1, minWidth: 0 }}
+      inputProps={{ "aria-label": "Draft title", maxLength: 160 }}
+      onChange={(e) => {
+        setTitle(e.target.value);
+        titleRef.current = e.target.value;
+        schedule();
+      }}
+      onBlur={() => void flush().catch((e: Error) => setError(e.message))}
+      slotProps={{
+        input: {
+          disableUnderline: true,
+          sx: focusLayout
+            ? { fontSize: "1.75rem", fontWeight: 700, lineHeight: 1.25 }
+            : { fontSize: "1.4rem", fontWeight: 600 },
+        },
+      }}
+    />
+  );
+  // Obsidian's floating controls: opaque paper capsules with a soft lift,
+  // so the writing surface itself carries no bars.
+  const floatingMaterialSx = {
+    bgcolor: "background.paper",
+    borderRadius: 999,
+    border: 1,
+    borderColor: "divider",
+    boxShadow: (t: Theme) =>
+      `0 2px 10px ${
+        alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.4 : 0.08)
+      }`,
+  } as const;
+  const formatCommands = toolbar
+    .filter((id) => !["mention", "slash", "attach"].includes(id))
+    .flatMap((id) => {
+      const command = COMPOSER_COMMANDS_BY_ID[id];
+      return command ? [{ id, command }] : [];
+    });
+  const keepEditorFocus = {
+    onPointerDown: (e: { preventDefault: () => void }) => e.preventDefault(),
+    onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault(),
+  };
+  // Shown only while the body is being edited (see the root's :has rule):
+  // a scrolling capsule of formatting above the keyboard, and a separate
+  // control that puts the keyboard away.
+  const focusToolbar = (
+    <Stack
+      data-draft-mobile-toolbar
+      direction="row"
+      alignItems="center"
+      spacing={1}
+      sx={{ display: "none", px: 1, py: 0.75, flexShrink: 0 }}
+    >
+      <Stack
+        data-draft-format-toolbar
+        direction="row"
+        alignItems="center"
+        sx={{
+          ...floatingMaterialSx,
+          flex: 1,
+          minWidth: 0,
+          overflowX: "auto",
+          px: 0.5,
+          scrollbarWidth: "none",
+          "&::-webkit-scrollbar": { display: "none" },
+        }}
+      >
+        {formatCommands.map(({ id, command }) => (
+          <IconButton
+            key={id}
+            data-draft-tool
+            aria-label={command.label}
+            {...keepEditorFocus}
+            onClick={() => {
+              if (!composing.current && editor.current) {
+                command.run({
+                  editor: editor.current,
+                  attach: () => filePicker.current?.click(),
+                });
+              }
+            }}
+            sx={{ flexShrink: 0, width: 44, height: 44 }}
+          >
+            {command.icon}
+          </IconButton>
+        ))}
+        <IconButton
+          aria-label="Attach file"
+          {...keepEditorFocus}
+          onClick={() => filePicker.current?.click()}
+          sx={{ flexShrink: 0, width: 44, height: 44 }}
+        >
+          <AttachFile />
+        </IconButton>
+      </Stack>
+      <IconButton
+        aria-label="Hide keyboard"
+        {...keepEditorFocus}
+        onClick={() => {
+          const active = globalThis.document.activeElement;
+          if (active instanceof HTMLElement) active.blur();
+        }}
+        sx={{ ...floatingMaterialSx, width: 44, height: 44, flexShrink: 0 }}
+      >
+        <KeyboardHideOutlined />
+      </IconButton>
+    </Stack>
+  );
   const toolbarView = (
     <Stack
       direction="row"
@@ -552,6 +682,11 @@ function DraftEditingSession(
         ...(desktop
           ? { containerType: "inline-size", containerName: "draft-editor" }
           : {}),
+        ...(focusLayout && {
+          "&:has([data-draft-body]:focus-within) [data-draft-mobile-toolbar]": {
+            display: "flex",
+          },
+        }),
       }}
       data-draft-editor={initial.id}
       data-desktop-region={desktop ? "prompt.composer" : undefined}
@@ -562,75 +697,106 @@ function DraftEditingSession(
         composing.current = false;
       }}
     >
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={desktop ? "0.25rem" : 1}
-        sx={{
-          ...(desktop
-            ? {
-              "& .MuiIconButton-root": desktopDraftActionSx,
-              "@container draft-editor (max-width: 20rem)": {
-                "& .MuiIconButton-root": { display: "none" },
-              },
-            }
-            : {}),
-          px: desktop ? "1rem" : 1,
-          py: desktop ? "0.375rem" : 0.5,
-          borderBottom: 1,
-          borderColor: "divider",
-        }}
-      >
-        <TextField
-          variant="standard"
-          value={title}
-          placeholder="Untitled"
-          fullWidth
-          sx={{ flex: 1, minWidth: 0 }}
-          inputProps={{ "aria-label": "Draft title", maxLength: 160 }}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            titleRef.current = e.target.value;
-            schedule();
-          }}
-          onBlur={() => void flush().catch((e: Error) => setError(e.message))}
-          slotProps={{
-            input: {
-              disableUnderline: true,
-              sx: { fontSize: "1.4rem", fontWeight: 600 },
-            },
-          }}
-        />
-        <Tooltip title="Copy to Session drafts">
-          <IconButton
-            aria-label="Copy to Session drafts"
-            onClick={() =>
-              void flush().then(onCopyToSession).catch((e: Error) =>
-                setError(e.message)
-              )}
+      {focusLayout && mobileChrome
+        ? (
+          <Box sx={{ px: "18px", pt: 1, flexShrink: 0 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ mx: "-8px" }}
+            >
+              <IconButton
+                aria-label="Open sessions"
+                onClick={mobileChrome.onOpenSessions}
+                sx={{ ...floatingMaterialSx, width: 44, height: 44 }}
+              >
+                <ViewSidebarOutlined sx={{ transform: "scaleX(-1)" }} />
+              </IconButton>
+              <Stack direction="row" sx={{ ...floatingMaterialSx, px: 0.25 }}>
+                <IconButton
+                  disabled={historyLoading}
+                  aria-label="Recovery history"
+                  onClick={() => void openHistory()}
+                >
+                  <HistoryOutlined />
+                </IconButton>
+                <IconButton
+                  aria-label="Export Markdown"
+                  onClick={() =>
+                    exportDraft(title, textRef.current, attachmentsRef.current)}
+                >
+                  <SaveAlt />
+                </IconButton>
+                <IconButton
+                  aria-label="Draft actions"
+                  onClick={() =>
+                    void flush().then(mobileChrome.onMenu).catch((e: Error) =>
+                      setError(e.message)
+                    )}
+                >
+                  <MoreHoriz />
+                </IconButton>
+              </Stack>
+            </Stack>
+            <Box sx={{ mt: 2 }}>{titleField}</Box>
+            <Typography variant="caption" color="text.disabled" role="status">
+              {saveStatus}
+            </Typography>
+          </Box>
+        )
+        : (
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={desktop ? "0.25rem" : 1}
+            sx={{
+              ...(desktop
+                ? {
+                  "& .MuiIconButton-root": desktopDraftActionSx,
+                  "@container draft-editor (max-width: 20rem)": {
+                    "& .MuiIconButton-root": { display: "none" },
+                  },
+                }
+                : {}),
+              px: desktop ? "1rem" : 1,
+              py: desktop ? "0.375rem" : 0.5,
+              borderBottom: 1,
+              borderColor: "divider",
+            }}
           >
-            <OpenInNew />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Recovery history">
-          <IconButton
-            disabled={historyLoading}
-            aria-label="Recovery history"
-            onClick={() => void openHistory()}
-          >
-            <HistoryOutlined />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Export Markdown">
-          <IconButton
-            aria-label="Export Markdown"
-            onClick={() =>
-              exportDraft(title, textRef.current, attachmentsRef.current)}
-          >
-            <SaveAlt />
-          </IconButton>
-        </Tooltip>
-      </Stack>
+            {titleField}
+            <Tooltip title="Copy to Session drafts">
+              <IconButton
+                aria-label="Copy to Session drafts"
+                onClick={() =>
+                  void flush().then(onCopyToSession).catch((e: Error) =>
+                    setError(e.message)
+                  )}
+              >
+                <OpenInNew />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Recovery history">
+              <IconButton
+                disabled={historyLoading}
+                aria-label="Recovery history"
+                onClick={() => void openHistory()}
+              >
+                <HistoryOutlined />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Export Markdown">
+              <IconButton
+                aria-label="Export Markdown"
+                onClick={() =>
+                  exportDraft(title, textRef.current, attachmentsRef.current)}
+              >
+                <SaveAlt />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        )}
       {current.deleted && (
         <Alert
           severity="warning"
@@ -703,7 +869,10 @@ function DraftEditingSession(
           minHeight: 0,
           minWidth: 0,
           px: desktop ? 1.5 : 0.5,
+          ...(focusLayout && { pb: "env(safe-area-inset-bottom, 0px)" }),
         }}
+        data-draft-body
+        data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
         data-desktop-region={desktop ? "prompt.composer" : undefined}
       >
         <Box
@@ -799,6 +968,8 @@ function DraftEditingSession(
             />
           </Suspense>
         )
+        : focusLayout
+        ? focusToolbar
         : toolbarView}
       <input
         ref={filePicker}
