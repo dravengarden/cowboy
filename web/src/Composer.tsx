@@ -4004,6 +4004,53 @@ export function PendingPanel({
   // only in this opt-in "reorder mode" (iOS list-Edit pattern). Local + ephemeral
   // like `collapsed`. Per-panel state → drafts and queue toggle independently.
   const [reordering, setReordering] = useState(false);
+  // Disclosure, arrival flash and reorder mode re-render this panel but never
+  // change a row. Every fold used to re-render every PendingRow, the heaviest
+  // subtree here; the first fold after a load runs that code cold and cost
+  // about twice the later ones. Rows are memoized (PendingPanelRow), so their
+  // callbacks must keep one identity; the parent's inline closures are read
+  // through this ref instead.
+  const rowCallbacksRef = useRef({
+    commands,
+    onMoveDraft,
+    onScheduleDraft,
+    onResumeKeyboardSurface,
+  });
+  rowCallbacksRef.current = {
+    commands,
+    onMoveDraft,
+    onScheduleDraft,
+    onResumeKeyboardSurface,
+  };
+  const rowCommands = useCallback(
+    (): AvailableCommand[] => rowCallbacksRef.current.commands(),
+    [],
+  );
+  const resumeRowKeyboardSurface = useCallback((): void => {
+    rowCallbacksRef.current.onResumeKeyboardSurface?.();
+  }, []);
+  const moveRow = useCallback((id: string): void => {
+    rowCallbacksRef.current.onMoveDraft?.(id);
+  }, []);
+  const scheduleRow = useCallback((id: string): void => {
+    rowCallbacksRef.current.onScheduleDraft?.(id);
+  }, []);
+  const editRow = useCallback((id: string): void => {
+    setReordering(false);
+    setEditingId(id);
+  }, []);
+  const finishRowEdit = useCallback((id: string): void => {
+    const restoreFocus = !suppressEditFocusRestoreRef.current;
+    suppressEditFocusRestoreRef.current = false;
+    setEditingId(null);
+    if (restoreFocus) {
+      requestAnimationFrame(() =>
+        scrollRef.current?.querySelector<HTMLElement>(
+          `[data-desktop-item="${CSS.escape(id)}"]`,
+        )?.focus({ preventScroll: true })
+      );
+    }
+  }, []);
   const count = items.length;
   // The manual queue pause holds the QUEUE drain only (drafts never auto-drain),
   // so the "Paused" badge shows on the queued panel — that's why its messages
@@ -4672,40 +4719,23 @@ export function PendingPanel({
                   {optimistic
                     ? <OptimisticDraftRow sessionId={sessionId} kind={kind} message={m} />
                     : (
-                      <PendingRow
+                      <PendingPanelRow
                         desktop={desktop}
                         kind={kind}
                         sessionId={sessionId}
                         message={m}
                         status={status}
-                        commands={commands}
+                        commands={rowCommands}
                         editing={editingId === m.id}
                         keyboardOpen={keyboardOpen}
-                        onResumeKeyboardSurface={onResumeKeyboardSurface}
-                        onEdit={(): void => {
-                          setReordering(false);
-                          setEditingId(m.id);
-                        }}
-                        onEditDone={(): void => {
-                          const restoreFocus = !suppressEditFocusRestoreRef
-                            .current;
-                          suppressEditFocusRestoreRef.current = false;
-                          setEditingId(null);
-                          if (restoreFocus) {
-                            requestAnimationFrame(() =>
-                              scrollRef.current?.querySelector<HTMLElement>(
-                                `[data-desktop-item="${CSS.escape(m.id)}"]`,
-                              )?.focus({ preventScroll: true })
-                            );
-                          }
-                        }}
+                        onResumeKeyboardSurface={onResumeKeyboardSurface
+                          ? resumeRowKeyboardSurface
+                          : undefined}
+                        onEditRow={editRow}
+                        onEditRowDone={finishRowEdit}
                         onEditController={registerEditController}
-                        onMove={onMoveDraft
-                          ? (): void => onMoveDraft(m.id)
-                          : undefined}
-                        onSchedule={onScheduleDraft
-                          ? (): void => onScheduleDraft(m.id)
-                          : undefined}
+                        onMoveRow={onMoveDraft ? moveRow : undefined}
+                        onScheduleRow={onScheduleDraft ? scheduleRow : undefined}
                       />
                     )}
                 </Box>
@@ -4799,6 +4829,34 @@ function pendingContentCleared(
 ): boolean {
   return stripImageTokens(text).trim() === "" && attachments.length === 0;
 }
+
+type PendingRowProps = Parameters<typeof PendingRow>[0];
+
+// A row only re-renders when its own inputs change. The panel passes id-taking
+// callbacks with a stable identity; the per-row closures are built here.
+const PendingPanelRow = memo(function PendingPanelRow({
+  onEditRow,
+  onEditRowDone,
+  onMoveRow,
+  onScheduleRow,
+  ...row
+}: Omit<PendingRowProps, "onEdit" | "onEditDone" | "onMove" | "onSchedule"> & {
+  onEditRow: (id: string) => void;
+  onEditRowDone: (id: string) => void;
+  onMoveRow?: ((id: string) => void) | undefined;
+  onScheduleRow?: ((id: string) => void) | undefined;
+}): React.JSX.Element {
+  const id = row.message.id;
+  return (
+    <PendingRow
+      {...row}
+      onEdit={(): void => onEditRow(id)}
+      onEditDone={(): void => onEditRowDone(id)}
+      onMove={onMoveRow ? (): void => onMoveRow(id) : undefined}
+      onSchedule={onScheduleRow ? (): void => onScheduleRow(id) : undefined}
+    />
+  );
+});
 
 function PendingRow({
   desktop,

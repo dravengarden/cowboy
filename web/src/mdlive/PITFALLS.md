@@ -2934,6 +2934,21 @@ not on a physical iPad/iPhone.
     Chrome; the lightbox's Desktop key map (H/L or ←/→ image or pan, J/K pan,
     + − zoom, 0 fit, 1 2x, Esc close) is shown only on the Desktop surface.
 
+120. **A Queue/Draft fold must not re-render its rows.** Field report: the
+    first disclosure tap sometimes stalls, later ones do not. Disclosure state
+    lives in `PendingPanel`, and every fold re-rendered every `PendingRow`
+    (the heaviest subtree, all MUI `sx`) through fresh inline callbacks; the
+    first fold after a load runs that code cold. In an 8-row fixture at 4x
+    CPU throttle, script per fold fell from 50–63 ms first / 37–56 ms later to
+    27–33 ms / 10–16 ms once rows were memoized (`PendingPanelRow`, stable
+    id-taking callbacks, parent closures read through a ref). Ruled out:
+    CodeMirror previews measure only on the first expansion and take ~1–3 ms;
+    full-size inline images do stall a first *instant* reveal in iOS
+    Simulator WebKit, but in the real panel, revealed by `Collapse` from zero
+    height, box-sized thumbnails gave no measurable gain (`decoding="async"`
+    and `img.decode()` did not help the instant case either). Measured in
+    Chrome and the iOS 26.5 Simulator, not on a physical iPhone.
+
 ### 2026-10-05 Touch Draft drops the navigation capsule
 
 User request: the touch Draft page has no Back/Forward/Create/Settings capsule.
