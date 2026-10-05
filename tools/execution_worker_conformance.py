@@ -62,6 +62,14 @@ def main():
         return {"type": "function_call", "call_id": "fixture_cancel", "name": "write_stdin",
                 "arguments": json.dumps({"session_id": int(match[1]), "chars": "\u0003", "yield_time_ms": 1000})}
 
+    def wait_codeact(requests):
+        output = [item for item in requests[-1].get("input", [])
+                  if item.get("call_id") == "fixture-native-codeact-yield" and item.get("type") == "custom_tool_call_output"]
+        match = re.search(r"Script running with cell ID ([a-zA-Z0-9_-]+)", json.dumps(output))
+        require(match is not None, "native CodeAct did not yield a resumable cell: " + json.dumps(output)[-2000:])
+        return {"type": "function_call", "call_id": "fixture-native-codeact-wait", "namespace": "functions", "name": "wait",
+                "arguments": json.dumps({"cell_id": match[1], "yield_time_ms": 10000})}
+
     def png_chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
@@ -83,6 +91,21 @@ def main():
         command("fixture_resume", "pwd; cat fixture.txt; cat once.txt"),
         final("fixture_final_two"),
     ])
+    (args.target / "codeact.txt").write_text("target before\n")
+    (args.runtime / "codeact.txt").write_text("runtime remains untouched\n")
+    (args.target / "codeact-pixel.png").write_bytes((args.target / "pixel.png").read_bytes())
+    patch = "*** Begin Patch\n*** Update File: codeact.txt\n@@\n-target before\n+native codeact target\n*** End Patch"
+    program = "text(await tools.apply_patch(" + json.dumps(patch) + ")); "
+    program += "const results = await Promise.all(["
+    program += "tools.exec_command(" + json.dumps({"cmd": "pwd; cat codeact.txt; printf once >> codeact-once.txt", "max_output_tokens": 1000}) + "),"
+    program += "tools.exec_command(" + json.dumps({"cmd": "printf native_codeact_expected_failure >&2; exit 37", "max_output_tokens": 1000}) + ")]); "
+    program += "for (const result of results) text(result);"
+    program += "const picture = await tools.view_image(" + json.dumps({"path": str(args.target / "codeact-pixel.png")}) + "); image(picture.image_url);"
+    api.steps.insert(5, {"type": "custom_tool_call", "call_id": "fixture-native-codeact", "namespace": "functions", "name": "exec", "input": program})
+    api.steps[6:6] = [{"type": "custom_tool_call", "call_id": "fixture-native-codeact-yield", "namespace": "functions", "name": "exec",
+                       "input": '// @exec: {"yield_time_ms": 1}\ntext(await tools.exec_command({cmd:"sleep 2; printf yielded >> codeact-yielded.txt; cat codeact-yielded.txt",yield_time_ms:3000,max_output_tokens:1000}));'}, wait_codeact]
+    api.steps.insert(-1, {"type": "custom_tool_call", "call_id": "fixture-native-codeact-resume", "namespace": "functions", "name": "exec",
+                         "input": "text(await tools.exec_command({cmd:'cat codeact.txt; cat codeact-once.txt',max_output_tokens:1000}));"})
     if inputs.get("legacy_event_gap"):
         api.steps[0:0] = [
             command("fixture_legacy_flood", "printf once >> legacy-starts; head -c 8388608 /dev/zero"),
@@ -140,9 +163,11 @@ def main():
         require("TARGET_GUIDANCE_MUST_REACH_MODEL" in json.dumps(api.requests[0]), "target instructions missing")
         require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(api.requests), "runtime instructions leaked")
         require((args.target / "jobs.txt").read_text() == "background_startedcancelled", "background process replayed or cancellation did not reach target")
-        require("data:image/" in json.dumps(api.requests), "target image did not reach native model input: " + json.dumps([
-            item for item in api.requests[-1].get("input", []) if item.get("call_id") == "fixture_image"
-        ])[:1500])
+        direct_images = [item for request in api.requests for item in request.get("input", [])
+                         if item.get("call_id") == "fixture_image" and item.get("type") == "function_call_output"]
+        require(any(block.get("type") == "input_image" and str(block.get("image_url", "")).startswith("data:image/")
+                    for item in direct_images for block in item.get("output", []) if isinstance(block, dict)),
+                "direct target image did not reach native model input: " + json.dumps(direct_images)[:1500])
         checks.extend(["target_image_read_reaches_native_model_input", "background_job_survives_lost_reply_and_35_second_transport_gap", "cancel_reaches_original_target_job_without_replay"])
         if not inputs.get("legacy_event_gap"):
             checks.append("output_backpressure_survives_35_second_transport_gap")
@@ -154,10 +179,44 @@ def main():
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted resume failed")
         require((args.target / "once.txt").read_text() == "once", "cold resume repeated a command")
+        resumed_outputs = [item for request in api.requests for item in request.get("input", [])
+                           if item.get("type") == "function_call_output" and item.get("call_id") == "fixture_resume"]
+        require(any("target after" in str(item.get("output")) for item in resumed_outputs),
+                "cold resumed command did not actually read target bytes: " + json.dumps(resumed_outputs)[-1500:])
         require("TARGET_GUIDANCE_MUST_REACH_MODEL" in json.dumps(api.requests[-2]), "resume target instructions missing")
         require("RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(api.requests), "resume runtime instructions leaked")
         require(not (home / "environments.toml").exists(), "global environments changed")
-        checks.extend(["cold_native_resume_automatically_rebinds_each_turn", "cold_resume_retains_history_without_effect_replay", "global_environment_config_unchanged"])
+        checks.extend(["cold_native_resume_automatically_rebinds_each_turn", "cold_resume_retains_history_without_effect_replay", "cold_native_resumed_command_returns_target_bytes", "global_environment_config_unchanged"])
+        require((args.target / "codeact.txt").read_text() == "native codeact target\n", "native CodeAct patch missed target")
+        require((args.target / "codeact-once.txt").read_text() == "once", "native CodeAct shell missed target or replayed")
+        require((args.target / "codeact-yielded.txt").read_text() == "yielded", "yielded CodeAct effect was lost or replayed")
+        waited = [item for request in api.requests for item in request.get("input", [])
+                  if item.get("call_id") == "fixture-native-codeact-wait" and item.get("type") == "function_call_output"]
+        require("yielded" in json.dumps(waited), "CodeAct wait did not return the completed target result: " + json.dumps(waited)[-2000:])
+        require((args.runtime / "codeact.txt").read_text() == "runtime remains untouched\n" and
+                not (args.runtime / "codeact-once.txt").exists(), "native CodeAct mutated runtime files")
+        results = [item for request in api.requests for item in request.get("input", [])
+                   if item.get("type") == "custom_tool_call_output" and item.get("call_id") in
+                   ["fixture-native-codeact", "fixture-native-codeact-resume"]]
+        command_results = []
+        for item in results:
+            for block in item.get("output", []):
+                if not isinstance(block, dict) or block.get("type") != "input_text":
+                    continue
+                try:
+                    value = json.loads(block["text"])
+                except (ValueError, KeyError):
+                    continue
+                if isinstance(value, dict):
+                    command_results.append(value)
+        require(any(value.get("exit_code") == 37 and "native_codeact_expected_failure" in value.get("output", "")
+                    for value in command_results), "nested failed command lost its output or exit code")
+        require(any(block.get("type") == "input_image" for item in results
+                    for block in item.get("output", []) if isinstance(block, dict)),
+                "native CodeAct did not return target image content: " + json.dumps(results)[-2000:])
+        require(any(item.get("call_id") == "fixture-native-codeact-resume" and "native codeact target" in str(item.get("output"))
+                    for item in results), "cold resumed CodeAct result missing: " + json.dumps(results)[-4000:])
+        checks.extend(["native_codeact_patch_parallel_shell_and_failure_use_target", "native_codeact_target_image_reaches_model", "native_codeact_yield_and_wait_keep_target_and_single_effect", "native_codeact_cold_resume_preserves_binding_and_single_effect"])
         if packaged:
             client.close()
             client = None
@@ -216,6 +275,9 @@ def main():
         receipt = {
             "schema": "cowboy.execution-worker-conformance/v1", "accepted": False, "checks": checks,
             "native_sha256": hashlib.sha256(args.native_cli.read_bytes()).hexdigest(),
+            "sandbox_helper_sha256": hashlib.sha256((args.native_cli.parent.parent / "codex-resources/bwrap").read_bytes()).hexdigest(),
+            "code_mode_host_sha256": hashlib.sha256((args.native_cli.parent / "codex-code-mode-host").read_bytes()).hexdigest()
+                if (args.native_cli.parent / "codex-code-mode-host").is_file() else None,
             "launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
             "packaged_bridge_sha256": hashlib.sha256((packaged.parent / "cowboy-execution.mjs").read_bytes()).hexdigest() if packaged else None,
             "packaged_adapter_sha256": hashlib.sha256((packaged.parent / "node_modules/@agentclientprotocol/codex-acp/dist/index.js").read_bytes()).hexdigest() if packaged else None,

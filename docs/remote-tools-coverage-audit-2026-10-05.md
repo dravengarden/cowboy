@@ -95,7 +95,7 @@ to introduce more restrictions.
 | Surface | Current evidence / gap | Reliable direction and required proof |
 | --- | --- | --- |
 | Basic commands and edits | Both recorded against target, runtime files unchanged | Keep native environment binding and exact target identity; test every exported tool schema |
-| Native CodeAct | Codex has native orchestration; Matrix execution tests are not proof of arbitrary native nested-tool parity | Force nested shell, patch, image, parallel and failed calls through scripted native API; inspect actual target effects |
+| Native CodeAct | Native nested shell, patch, image, parallel/error results, yield/wait and cold resume now have pinned scripted evidence | Keep these in default native acceptance; separately test child agents and runtime failure while a cell is pending |
 | Claude tool dispatch | `context-mod.js` replaces native tool bodies with a facade | Restore native ownership where a lower-level boundary exists; retain independently tested file adapters |
 | Native Bash lifecycle | Facade retains processes but does not establish native background task registration | Explore shell prefix bridge preserving original Bash tool and native task registry |
 | Background completion | Native activity UI support exists; facade handles are a separate system | Validate completion after prompt return, native autonomous continuation, output retrieval, task count and cancellation |
@@ -122,6 +122,34 @@ to introduce more restrictions.
 | Observability/cost | Local telemetry exists; full causal coverage not established | Correlate session/binding/operation/native tool/child IDs; distinguish lost telemetry from success; no model polling for status |
 
 ## Implementation candidates
+
+### Native CodeAct acceptance follow-up
+
+The default Codex worker conformance now exercises native `functions.exec` and
+`functions.wait`, independently of Matrix MCP. Nested patch and parallel shell
+calls preserve target placement, stderr and exit code 37. Image bytes reach the
+scripted model input. A yielded cell completes through `wait` with one target
+effect, and a cold native resume reads the same target state without replay.
+The relay observes the nested shell and image requests crossing the actual
+worker/keeper transport, in addition to checking unchanged runtime files.
+Review caught an image assertion shared by both paths: CodeAct success could
+mask a failed direct image call. Each call now needs its own image result and
+distinct relay pathname. A negative control with a missing direct image was
+rejected by the direct-image assertion; the restored fixture passes.
+Exact hashes and limitations are in the
+[native CodeAct receipt](experiments/codex-native-codeact-2026-10-05.json).
+
+This also repaired two acceptance-fixture defects: its copied native package
+omitted `codex-resources/bwrap`, and namespace setup left capabilities that the
+real sandbox helper rejects. The fixture now preserves the pinned helper and
+drops setup capabilities before executing native tests. The shipped package
+already included that helper. The cold-resume check now requires returned
+target bytes, rather than only unchanged mutation markers. These are test
+corrections, not a new runtime release or a weakened sandbox policy.
+
+The fixture remains same-host with separate runtime/target directories and a
+real transport. It does not prove cross-host latency behavior, arbitrary nested
+agents, or survival of a pending V8 cell after native-runtime death.
 
 ### Follow-up native probes
 

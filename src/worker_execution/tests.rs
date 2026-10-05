@@ -148,6 +148,21 @@ async fn native_worker_execution() {
     if code_mode.is_file() {
         std::fs::copy(code_mode, owned.join("codex-code-mode-host")).unwrap();
     }
+    // A cold native resume may select a sandboxed policy. Keep the pinned
+    // package's sandbox helper: copying only the main executable makes that
+    // path fail before it can exercise the remote execution binding.
+    let resources = owned.parent().unwrap().join("codex-resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    std::fs::copy(
+        original
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("codex-resources/bwrap"),
+        resources.join("bwrap"),
+    )
+    .unwrap();
     std::fs::copy(
         original
             .parent()
@@ -230,6 +245,8 @@ async fn native_worker_execution() {
     let relay_outage = Arc::clone(&outage);
     let image_read = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let relay_image_read = Arc::clone(&image_read);
+    let codeact_calls = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let relay_codeact_calls = Arc::clone(&codeact_calls);
     let slow_events = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let relay_slow_events = Arc::clone(&slow_events);
     let event_gaps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -254,9 +271,26 @@ async fn native_worker_execution() {
                 let outage = Arc::clone(&relay_outage);
                 let slow_events = Arc::clone(&relay_slow_events);
                 let event_gaps = Arc::clone(&relay_event_gaps);
-                if matches!(&request.command, Command::Invoke { invocation, .. } if invocation.method == "fs/readFile" && invocation.params.to_string().contains("pixel.png"))
-                {
-                    relay_image_read.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Command::Invoke { invocation, .. } = &request.command {
+                    let params = invocation.params.to_string();
+                    let filename = invocation.params["path"]
+                        .as_str()
+                        .and_then(|path| std::path::Path::new(path).file_name());
+                    if invocation.method == "fs/readFile"
+                        && filename.is_some_and(|name| name == "pixel.png")
+                    {
+                        relay_image_read.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if invocation.method == "process/start"
+                        && params.contains("native_codeact_expected_failure")
+                    {
+                        relay_codeact_calls.fetch_or(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if invocation.method == "fs/readFile"
+                        && filename.is_some_and(|name| name == "codeact-pixel.png")
+                    {
+                        relay_codeact_calls.fetch_or(2, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 tasks.spawn(async move {
                     if matches!(request.command, Command::Events { .. }) && slow_events.load(std::sync::atomic::Ordering::Relaxed) {
@@ -352,6 +386,13 @@ async fn native_worker_execution() {
         image_read.load(std::sync::atomic::Ordering::Relaxed),
         "native image reads must cross the target transport"
     );
+    if input["provider"] != "claude-code" {
+        assert_eq!(
+            codeact_calls.load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "CodeAct shell and image calls must cross the target transport"
+        );
+    }
     assert!(
         outage.lock().is_some(),
         "real native start must cross injected outage"
@@ -417,6 +458,11 @@ async fn native_worker_execution() {
         json!("closed_environment_cannot_be_recreated"),
     ]);
     receipt["cursor_expirations"] = gaps.into();
+    if input["provider"] != "claude-code" {
+        receipt["checks"].as_array_mut().unwrap().push(json!(
+            "native_codeact_shell_and_image_cross_target_transport"
+        ));
+    }
     receipt["accepted"] = true.into();
     std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
 }

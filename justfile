@@ -461,7 +461,8 @@ execution-keeper-conformance KEEPER CLI VERSION SHA256 RECEIPT:
 execution-worker-conformance INPUT RECEIPT:
     cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
     cargo test --locked --all-features --lib --no-run
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+    # Namespace setup needs capabilities; native sandbox helpers expect an ordinary user afterward.
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 # Actual public login, signed fixture installation and two enrolled Machines.
 # All state is disposable; the fixture Agent makes no model requests.

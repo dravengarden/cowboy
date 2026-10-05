@@ -65,7 +65,13 @@ entry point, demonstrated through a separate executor on the same host; it
 still needs a production cross-host bridge preserving shell snapshots, native
 task ownership, cancellation and recovery. Native agents/skills, permission
 modes and target-dependent hook discovery require separate implementation and
-acceptance. Codex's native binding remains in use, but the recorded hook probe
-does not establish arbitrary CodeAct, nested-agent or project-hook parity.
+acceptance. A subsequent test-only follow-up verifies native Codex CodeAct
+patch/shell/image routing, parallel error results, yield/wait and cold resume
+against the installed 3.3.2 package. It also corrects sandbox-helper packaging
+and setup-capability handling in the fixture. No additional production update
+is needed for these test changes. See the
+[native CodeAct evidence](../experiments/codex-native-codeact-2026-10-05.json).
+This does not establish arbitrary nested-agent or project-hook parity, or
+pending-cell recovery after native-runtime death.
 Unverified behavior stays explicitly identified; no capability was newly
 disabled to make this audit pass.
