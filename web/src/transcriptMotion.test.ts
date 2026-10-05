@@ -72,6 +72,20 @@ Deno.test("repeated Markdown copy controls do not create backdrop blur layers", 
   assertEquals(codeBlock.includes("WebkitBackdropFilter"), false);
 });
 
+Deno.test("a streamed code block keeps one copy control until its fence closes", () => {
+  // Keying the block by its content remounted the copy button on every chunk:
+  // it flickered and a click (down and up on one element) never landed.
+  assertEquals(markdownSource.includes("key={`${lang}:${text}`}"), false);
+  assert(markdownSource.includes("<MarkdownCodeBoundary code={text} dark={dark}>"));
+  assert(markdownSource.includes("fencedCodeIsOpen(renderedTextRef.current.slice(start, end))"));
+  assert(markdownSource.includes("disabled={pending && !copied}"));
+  assert(
+    transcriptSource.includes(
+      "streaming={!!streaming && i === lastChunkIdx}",
+    ),
+  );
+});
+
 Deno.test("drawer swipe does not React-render on transcript finger-down", () => {
   assert(transcriptSource.includes("renderPausedRef.current = true"));
   assert(

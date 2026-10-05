@@ -56,6 +56,7 @@ import {
   shouldUseLightweightCode,
 } from "./codeRendering";
 import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
+import { fencedCodeIsOpen } from "./markdownFence";
 import { normalizeMarkdownMath } from "./markdownMath";
 import { bindMarkdownTableFit, markdownTableFitSx } from "./markdownTableFit";
 import remarkLineBreakTags from "./markdownLineBreaks";
@@ -222,6 +223,7 @@ function CodeBlock({
   dark,
   centerCopy,
   touchWrap,
+  pending = false,
 }: {
   code: string;
   lang: string;
@@ -229,6 +231,8 @@ function CodeBlock({
   dark: boolean;
   centerCopy: boolean;
   touchWrap: boolean;
+  /** The fence is still streaming; copying now would capture partial code. */
+  pending?: boolean;
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -310,7 +314,7 @@ function CodeBlock({
         maxWidth: "100%",
         position: "relative",
         // Mouse: reveal the button on block hover (keeps the code clean).
-        "&:hover .cowboy-copy-btn": { opacity: 1 },
+        "&:hover .cowboy-copy-btn:not(.Mui-disabled)": { opacity: 1 },
         // `wrapLongLines={false}` keeps lines intact; the pre scrolls sideways
         // (touch momentum) instead of overflowing the bubble.
         "& pre": {
@@ -464,7 +468,8 @@ function CodeBlock({
       <IconButton
         className="cowboy-copy-btn"
         onClick={onCopy}
-        aria-label={copied ? "Copied" : "Copy code"}
+        disabled={pending && !copied}
+        aria-label={copied ? "Copied" : pending ? "Copy available when output finishes" : "Copy code"}
         size="small"
         sx={{
           position: "absolute",
@@ -520,6 +525,12 @@ function CodeBlock({
               bgcolor: dark ? "rgba(40,44,52,0.95)" : "rgba(255,255,255,0.98)",
             },
           }),
+          // Streaming: a muted, inert control in the same place, so the button
+          // does not appear to jump in when the fence closes.
+          "&.Mui-disabled": {
+            opacity: 0.3,
+            color: dark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.55)",
+          },
         }}
       >
         {copied ? <Check sx={{ fontSize: desktopSize(16) }} /> : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
@@ -541,6 +552,13 @@ class MarkdownCodeBoundary extends Component<
 
   override componentDidCatch(error: Error): void {
     console.warn("Markdown code highlighting fell back to source", error);
+  }
+
+  // Retry highlighting when the code changes instead of keying the boundary by
+  // its content: a content key remounted the block (and its copy button) on
+  // every streamed chunk, so the button flickered and a click never landed.
+  override componentDidUpdate(previous: Readonly<{ code: string }>): void {
+    if (this.state.failed && previous.code !== this.props.code) this.setState({ failed: false });
   }
 
   override render(): ReactNode {
@@ -626,10 +644,13 @@ const MarkdownImpl = memo(function MarkdownImpl({
   invert = false,
   centerCopy = false,
   touchWrap = false,
+  streaming = false,
   onLinkClick,
 }: {
   /** Raw markdown source. */
   text: string;
+  /** The text is still being produced; its unclosed code fence is not final. */
+  streaming?: boolean;
   /** When true, render on a primary-colored bubble (the user's own
    *  messages). Switches code-block theme to light-on-dark inverse. */
   invert?: boolean;
@@ -670,6 +691,10 @@ const MarkdownImpl = memo(function MarkdownImpl({
   galleryImagesRef.current = galleryImages;
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
+  const renderedTextRef = useRef(renderedText);
+  renderedTextRef.current = renderedText;
+  const streamingRef = useRef(streaming);
+  streamingRef.current = streaming;
 
   const components = useMemo((): Components => ({
     img({ src, alt }) {
@@ -708,7 +733,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
     // ReactMarkdown's default `<pre>` (no overflow handling → clipped by the
     // transcript's `overflow-x: hidden`). Treat any multi-line content as a
     // block too, so an un-tagged fence still gets the scrollable highlighter.
-    code({ className, children, ...rest }) {
+    code({ className, children, node, ...rest }) {
       const text = String(children).replace(/\n$/, "");
       const inline = !className?.startsWith("language-") && !text.includes("\n");
       if (inline) {
@@ -751,8 +776,13 @@ const MarkdownImpl = memo(function MarkdownImpl({
           />
         );
       }
+      // A fence still being streamed is not final, so it cannot be copied yet.
+      const start = node?.position?.start.offset;
+      const end = node?.position?.end.offset;
+      const pending = streamingRef.current && start !== undefined && end !== undefined &&
+        fencedCodeIsOpen(renderedTextRef.current.slice(start, end));
       return (
-        <MarkdownCodeBoundary key={`${lang}:${text}`} code={text} dark={dark}>
+        <MarkdownCodeBoundary code={text} dark={dark}>
           <CodeBlock
             code={text}
             lang={lang}
@@ -760,6 +790,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
             dark={dark}
             centerCopy={centerCopy}
             touchWrap={touchWrap}
+            pending={pending}
           />
         </MarkdownCodeBoundary>
       );

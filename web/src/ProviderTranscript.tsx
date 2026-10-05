@@ -440,7 +440,7 @@ export function ProviderThoughtSteps({
                 },
               }}
             >
-              <Markdown text={section} />
+              <Markdown text={section} streaming={current} />
               {current &&
                 (presentation.variant === "timeline" ||
                   presentation.variant === "terminal") &&

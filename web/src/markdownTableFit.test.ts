@@ -97,7 +97,7 @@ Deno.test("transcript prose scrolls wide code and tables instead of fitting them
   );
   assert(
     transcript.includes(
-      "return <Markdown text={chunk.text} invert={invert} />;",
+      "return <Markdown text={chunk.text} invert={invert} streaming={streaming} />;",
     ),
   );
   assert(

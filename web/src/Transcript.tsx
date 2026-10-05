@@ -1221,9 +1221,12 @@ function TranscriptImage(
 function ChunkView({
   chunk,
   invert,
+  streaming = false,
 }: {
   chunk: ContentChunk;
   invert: boolean;
+  /** This is the text the model is still producing. */
+  streaming?: boolean;
 }): React.JSX.Element {
   if (chunk.type === "image") {
     return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
@@ -1242,7 +1245,7 @@ function ChunkView({
   // scrolls sideways only when it really overflows (`hasHorizontalScroller`
   // then gives that pan to the block; prose still drives the drawer). The
   // live row window bounds how many such scrollers the peek carries.
-  return <Markdown text={chunk.text} invert={invert} />;
+  return <Markdown text={chunk.text} invert={invert} streaming={streaming} />;
 }
 
 // A user-message body that collapses when it's very tall — a pasted log / big
@@ -1561,7 +1564,7 @@ function MessageBubble({
   const lastChunkIdx = displayChunks.length - 1;
   const body = displayChunks.map((c, i) => (
     <Box key={i} sx={{ position: "relative" }}>
-      <ChunkView chunk={c} invert={mine && human} />
+      <ChunkView chunk={c} invert={mine && human} streaming={!!streaming && i === lastChunkIdx} />
       {streaming && i === lastChunkIdx && c.type === "text" && (
         <StreamingCaret />
       )}
