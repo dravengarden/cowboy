@@ -57,7 +57,8 @@ class MatrixFixture:
         checks = ["matrix_memory_uses_runtime_service_with_bound_target_scope", "matrix_remote_turns_are_durably_captured"]
         if self.codeact:
             outputs = [item for request in requests for item in request.get("input", [])
-                       if item.get("type") in ("custom_tool_call_output", "function_call_output")]
+                       if item.get("type") in ("custom_tool_call_output", "function_call_output")
+                       and item.get("call_id") == "fixture-memory"]
             outputs += [block for request in requests for message in request.get("messages", [])
                         for block in (message.get("content") if isinstance(message.get("content"), list) else [])
                         if block.get("type") == "tool_result"]
