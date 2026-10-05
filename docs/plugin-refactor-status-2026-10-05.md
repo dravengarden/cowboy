@@ -73,7 +73,12 @@ The full contract is the [incarnation design](plugin-session-incarnation-design.
 
 1. Generalize the owner's floor and admission to a dataset key, reader-only first,
    without changing the deletion dataset's bytes or behaviour (Columbus work,
-   separate maintenance acceptance).
+   separate maintenance acceptance). **Done on Hawk** (Columbus `5af9f70b`,
+   host transaction `1791181417007228582-5af9f70b5281`): the owner now knows an
+   optional `sessionIncarnations` declaration, a per-dataset floor and
+   committed-state admission; undeclared artifacts stay valid until a floor or
+   state exists. Not exercised by a Cowboy release yet and **not activated on
+   Falcon**, which keeps its older owner until its own host activation.
 2. Ship a Machine reader for the incarnation namespace with the writer disabled.
 3. Admit a writer behind the floor; mint and persist an incarnation per Session
    slot before launch, rotate it on reset, supersede it on deletion.
