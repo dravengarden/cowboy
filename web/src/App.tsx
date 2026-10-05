@@ -4058,6 +4058,10 @@ export function App({
                     pointerEvents: "none",
                 },
                 ...(surface === "desktop" && {
+                    // The installed-app title bar and the top bar share one
+                    // surface color; a hairline keeps them two layers.
+                    borderTop: 1,
+                    borderColor: "divider",
                     "& [data-desktop-region]": {
                         position: "relative",
                         outline: "none",
