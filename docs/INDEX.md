@@ -144,6 +144,7 @@ primary phone/desktop product path.
 - [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
 - [`plugin-session-cleanup-root.md`](plugin-session-cleanup-root.md) — Terminal cleanup retains the original directory handle and retires after observed root replacement
 - [`plugin-session-cleanup-markers.md`](plugin-session-cleanup-markers.md) — Directory-relative regular-file marker probes, FIFO refusal and 8 KiB tag bounds
+- [`plugin-session-cleanup-targets.md`](plugin-session-cleanup-targets.md) — Bounded retained target handles, replacement/marker refusal and Linux content anchoring
 - [`releases/plugin-session-cleanup-markers-2026-10-05.md`](releases/plugin-session-cleanup-markers-2026-10-05.md) — Hawk bounded-marker activation, 1865/540 Rust tests, 32 native writer groups and 18 retained worker/keeper processes
 - [`releases/plugin-session-cleanup-root-2026-10-05.md`](releases/plugin-session-cleanup-root-2026-10-05.md) — Hawk cleanup-root activation, integrated Rust checks, 32 native writer groups and 18 retained worker/keeper processes
 - [`releases/plugin-session-worktree-containment-2026-10-04.md`](releases/plugin-session-worktree-containment-2026-10-04.md) — Hawk writer-host activation, 535 Machine tests, 32 native writer groups and 18 retained worker/keeper processes
