@@ -134,9 +134,9 @@ import {
 } from "./sessionSettingsPresentation";
 import {
   providerUsage,
-  type UsageSnapshot,
+  providerUsageAccount,
+  usageRefreshing,
 } from "./usageLimits";
-import { readUsage, refreshSessionUsage } from "./usageApi";
 import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
@@ -268,6 +268,8 @@ import {
   setSessionConfigOptions,
   setPaused,
   setQueueEditing,
+  loadUsageSnapshot,
+  requestUsageRefresh,
   submitPrompt,
   unscheduleDraft,
   useConnected,
@@ -7898,35 +7900,34 @@ function SessionProviderUsage({
   providerVersion?: string;
   providerDigest?: string;
 }): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  // Controller-owned usage shared by every surface and device.
+  const snapshot = useStoreSelector((state) => state.usage);
   const [error, setError] = useState<string | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
     const timer = globalThis.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => globalThis.clearInterval(timer);
   }, []);
+  useEffect(() => setClock(Date.now()), [snapshot]);
+  const account = providerUsageAccount(provider, providerVersion, providerDigest);
+  const refreshing = account !== undefined && usageRefreshing(snapshot, account);
   const load = useCallback(async (manual: boolean): Promise<void> => {
-    setSnapshot(
-      await (manual
-        ? refreshSessionUsage(provider, providerVersion, providerDigest)
-        : readUsage()),
-    );
+    if (manual) {
+      if (!account) {
+        throw new Error("Usage is unavailable for this session's Provider.");
+      }
+      await requestUsageRefresh(account);
+    } else {
+      await loadUsageSnapshot();
+    }
     setError(null);
-    setClock(Date.now());
-  }, [provider, providerVersion, providerDigest]);
+  }, [account]);
   useEffect(() => {
     const ctrl = new AbortController();
-    void readUsage(ctrl.signal)
-      .then((snapshot) => {
-        setSnapshot(snapshot);
-        setError(null);
-      })
-      .catch((cause: unknown) => {
-        if (ctrl.signal.aborted) return;
-        setError(
-          cause instanceof Error ? cause.message : "Could not load usage",
-        );
-      });
+    void loadUsageSnapshot(ctrl.signal).catch((cause: unknown) => {
+      if (ctrl.signal.aborted) return;
+      setError(cause instanceof Error ? cause.message : "Could not load usage");
+    });
     return (): void => ctrl.abort();
   }, [provider]);
   const usage = providerUsage(
@@ -7942,6 +7943,7 @@ function SessionProviderUsage({
       size="small"
       reliableTouch
       networkAction={() => load(true)}
+      disabled={refreshing}
       sx={{
         width: "2.75em",
         height: "2.75em",

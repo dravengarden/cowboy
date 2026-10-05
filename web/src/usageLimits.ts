@@ -47,6 +47,17 @@ export interface UsageSnapshot {
   refresh_interval_ms: number;
   providers: ProviderUsage[];
   reset_schedules?: Record<string, { fire_at_ms: number }>;
+  /** Accounts the Controller is collecting now; absent when idle. */
+  refreshing?: string[];
+}
+
+/** Whether the Controller is refreshing `account`, or any account. */
+export function usageRefreshing(
+  snapshot: Pick<UsageSnapshot, "refreshing"> | null | undefined,
+  account?: string,
+): boolean {
+  const refreshing = snapshot?.refreshing ?? [];
+  return account === undefined ? refreshing.length > 0 : refreshing.includes(account);
 }
 
 /** Display name for an account-usage provider id. Unknown ids pass through. */

@@ -62,6 +62,29 @@ export async function refreshUsage(
   return await response.json() as UsageSnapshot;
 }
 
+/** Ask the Controller to refresh and return at once with its refreshing
+ *  state; the result reaches every client through the usage broadcast. The
+ *  Controller rate-limits and joins concurrent requests. */
+export async function startUsageRefresh(
+  accountProvider?: string,
+): Promise<UsageSnapshot> {
+  const response = await fetch(
+    `${
+      accountProvider
+        ? `/api/usage/${encodeURIComponent(accountProvider)}`
+        : "/api/usage"
+    }?wait=false`,
+    { method: "POST" },
+  );
+  await expectHttpOk(
+    response,
+    accountProvider
+      ? `Could not refresh ${accountProviderLabel(accountProvider)} usage`
+      : "Could not refresh usage",
+  );
+  return await response.json() as UsageSnapshot;
+}
+
 export function refreshSessionUsage(
   provider: string,
   providerVersion?: string,

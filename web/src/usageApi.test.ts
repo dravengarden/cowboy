@@ -5,13 +5,18 @@ import {
   loadProviderCatalog,
   resetProviderCatalog,
 } from "./providerCatalogRegistry.ts";
-import { providerUsage, type UsageSnapshot } from "./usageLimits.ts";
+import {
+  providerUsage,
+  type UsageSnapshot,
+  usageRefreshing,
+} from "./usageLimits.ts";
 import {
   readUsage,
   readUsageExecutors,
   refreshSessionUsage,
   refreshUsage,
   setUsageExecutor,
+  startUsageRefresh,
 } from "./usageApi.ts";
 
 Deno.test("usage placement pins an account and can restore automatic routing", async () => {
@@ -244,6 +249,32 @@ Deno.test("global usage refresh and cancellable reads retain their HTTP semantic
       Error,
       "Could not refresh usage (HTTP 503): Machine is reconnecting",
     );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+Deno.test("a started refresh returns at once and lets the Controller own progress", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests: Array<[string, string]> = [];
+  globalThis.fetch = (input, init) => {
+    requests.push([String(input), init?.method ?? "GET"]);
+    return Promise.resolve(
+      Response.json({ ...usageSnapshot("openai"), refreshing: ["openai"] }),
+    );
+  };
+  try {
+    const started = await startUsageRefresh("openai");
+    await startUsageRefresh();
+    assertEquals(requests, [
+      ["/api/usage/openai?wait=false", "POST"],
+      ["/api/usage?wait=false", "POST"],
+    ]);
+    assertEquals(usageRefreshing(started), true);
+    assertEquals(usageRefreshing(started, "openai"), true);
+    assertEquals(usageRefreshing(started, "anthropic"), false);
+    assertEquals(usageRefreshing(usageSnapshot("openai")), false);
+    assertEquals(usageRefreshing(null), false);
   } finally {
     globalThis.fetch = previousFetch;
   }

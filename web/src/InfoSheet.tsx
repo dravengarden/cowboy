@@ -48,16 +48,15 @@ import {
   usageOmitEmptyLimits,
   usagePluginId,
   usageResetProvider,
+  usageRefreshing,
   usageResetSchedule,
-  type UsageSnapshot,
 } from "./usageLimits";
 import {
   cancelNearestResetSchedule,
   consumeNearestReset,
-  readUsage,
-  refreshUsage,
   scheduleNearestReset,
 } from "./usageApi";
+import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
 import { ConfirmSheet } from "./Sheet";
 import { desktopPanelSx } from "./desktop/DesktopEmbeddedControl";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
@@ -187,6 +186,7 @@ function ProviderUsageCard({
   now,
   onUsageChanged,
   onRefresh,
+  refreshing = false,
   children,
 }: {
   children?: React.ReactNode;
@@ -195,6 +195,8 @@ function ProviderUsageCard({
   now: number;
   onUsageChanged: () => Promise<void>;
   onRefresh?: (() => Promise<void>) | undefined;
+  /** The Controller is collecting this account now. */
+  refreshing?: boolean;
 }): React.JSX.Element {
   return (
     <ProviderUsageCardBody
@@ -203,6 +205,7 @@ function ProviderUsageCard({
       now={now}
       onUsageChanged={onUsageChanged}
       onRefresh={onRefresh}
+      refreshing={refreshing}
       children={children}
     />
   );
@@ -214,6 +217,7 @@ function ProviderUsageCardBody({
   now,
   onUsageChanged,
   onRefresh,
+  refreshing,
   children,
 }: {
   children?: React.ReactNode;
@@ -222,13 +226,17 @@ function ProviderUsageCardBody({
   now: number;
   onUsageChanged: () => Promise<void>;
   onRefresh?: (() => Promise<void>) | undefined;
+  refreshing: boolean;
 }): React.JSX.Element {
   const [resetOpen, setResetOpen] = useState(false);
   const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
-  const [refreshBusy, setRefreshBusy] = useState(false);
+  // Only the short request is local; collection progress is the Controller's
+  // and survives closing and reopening this sheet on any device.
+  const [requesting, setRequesting] = useState(false);
+  const refreshBusy = refreshing || requesting;
   const [resetError, setResetError] = useState<string | null>(null);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const usageContext = useMemo(
@@ -333,11 +341,11 @@ function ProviderUsageCardBody({
   useConfirmEnter(resetOpen, () => void submitReset());
   const refresh = async (): Promise<void> => {
     if (!onRefresh || refreshBusy) return;
-    setRefreshBusy(true);
+    setRequesting(true);
     try {
       await onRefresh();
     } finally {
-      setRefreshBusy(false);
+      setRequesting(false);
     }
   };
 
@@ -675,30 +683,28 @@ function ProviderUsageCardBody({
 }
 
 function UsageInfoSection(): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  // Usage and its refresh progress belong to the Controller and are pushed to
+  // every client, so closing and reopening this sheet keeps showing a refresh.
+  const snapshot = useStoreSelector((state) => state.usage);
+  const refreshing = usageRefreshing(snapshot);
   const [execution, setExecution] = useState<UsageExecutionSettings | null>(
     null,
   );
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   const load = useCallback(async (manual: boolean): Promise<void> => {
-    if (refreshing) return;
-    setRefreshing(true);
     setError(null);
     try {
-      setSnapshot(await (manual ? refreshUsage() : readUsage()));
+      await (manual ? requestUsageRefresh() : loadUsageSnapshot());
       setExecution(await readUsageExecutors());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
-    } finally {
-      setRefreshing(false);
     }
-  }, [refreshing]);
+  }, []);
   const loadProvider = useCallback(async (provider: string): Promise<void> => {
     setError(null);
     try {
-      setSnapshot(await refreshUsage(provider));
+      await requestUsageRefresh(provider);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
       throw cause;
@@ -753,6 +759,7 @@ function UsageInfoSection(): React.JSX.Element {
           now={clock}
           onUsageChanged={() => load(false)}
           onRefresh={() => loadProvider(provider.provider)}
+          refreshing={usageRefreshing(snapshot, provider.provider)}
         >
           {execution && (
             <UsageExecutorPicker

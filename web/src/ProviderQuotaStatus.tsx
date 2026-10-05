@@ -11,10 +11,11 @@ import {
   exhaustedAccountUsageLimits,
   providerUsage,
   shortResetTime,
+  providerUsageAccount,
   type UsageLimit,
-  type UsageSnapshot,
+  usageRefreshing,
 } from "./usageLimits";
-import { readUsage, refreshSessionUsage } from "./usageApi";
+import { loadUsageSnapshot, requestUsageRefresh, useStoreSelector } from "./store";
 
 const USAGE_POLL_MS = 60_000;
 
@@ -44,21 +45,16 @@ export function ProviderQuotaStatus({
   desktop?: boolean;
 }): React.JSX.Element | null {
   const { catalog } = useProviderCatalog();
-  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  // Shared Controller-owned usage: a refresh from any device updates it.
+  const snapshot = useStoreSelector((state) => state.usage);
   const [clock, setClock] = useState(() => Date.now());
 
   useEffect(() => {
     const controller = new AbortController();
     const load = (): void => {
       if (document.visibilityState === "hidden") return;
-      void readUsage(controller.signal).then((next) => {
-        if (!controller.signal.aborted) {
-          setSnapshot(next);
-          setClock(Date.now());
-        }
-      }).catch(() => undefined);
+      void loadUsageSnapshot(controller.signal).catch(() => undefined);
     };
-    setSnapshot(null);
     load();
     const timer = globalThis.setInterval(load, USAGE_POLL_MS);
     document.addEventListener("visibilitychange", load);
@@ -68,6 +64,7 @@ export function ProviderQuotaStatus({
       document.removeEventListener("visibilitychange", load);
     };
   }, [provider, providerDigest, providerVersion]);
+  useEffect(() => setClock(Date.now()), [snapshot]);
 
   useEffect(() => {
     const timer = globalThis.setInterval(() => setClock(Date.now()), 30_000);
@@ -82,15 +79,14 @@ export function ProviderQuotaStatus({
     () => exhaustedAccountUsageLimits(usage, clock),
     [clock, usage],
   );
+  const account = providerUsageAccount(provider, providerVersion, providerDigest);
+  const refreshing = account !== undefined && usageRefreshing(snapshot, account);
   const refresh = useCallback(async (): Promise<void> => {
-    const next = await refreshSessionUsage(
-      provider,
-      providerVersion,
-      providerDigest,
-    );
-    setSnapshot(next);
-    setClock(Date.now());
-  }, [provider, providerDigest, providerVersion]);
+    if (!account) {
+      throw new Error("Usage is unavailable for this session's Provider.");
+    }
+    await requestUsageRefresh(account);
+  }, [account]);
 
   if (exhausted.length === 0) return null;
   const activeTurn = status === "busy";
@@ -159,6 +155,7 @@ export function ProviderQuotaStatus({
           size="small"
           reliableTouch
           networkAction={refresh}
+          disabled={refreshing}
           sx={{ flexShrink: 0, color: "warning.main" }}
         >
           <RefreshRounded fontSize="small" />

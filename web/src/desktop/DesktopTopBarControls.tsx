@@ -59,7 +59,14 @@ import {
   runConfigPresetChanges,
   runConfigPresets,
 } from "../runConfigPresets";
-import { resetSession, send, submitPrompt, useStoreSelector } from "../store";
+import {
+  loadUsageSnapshot,
+  requestUsageRefresh,
+  resetSession,
+  send,
+  submitPrompt,
+  useStoreSelector,
+} from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
@@ -84,14 +91,13 @@ import {
   usageLimits,
   usagePluginId,
   usageResetProvider,
+  usageRefreshing,
   usageResetSchedule,
-  type UsageSnapshot,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
 import {
   cancelNearestResetSchedule,
   consumeNearestReset,
-  readUsage,
   scheduleNearestReset,
 } from "../usageApi";
 import { PluginSlot } from "../pluginHost";
@@ -1127,8 +1133,10 @@ export function DesktopTopBarControls({
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
   const configPanelRef = useRef<HTMLDivElement>(null);
   const usagePanelRef = useRef<HTMLDivElement>(null);
-  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  // The Controller owns usage and its refresh progress; every device reads
+  // the same pushed snapshot, so a refresh started anywhere shows here.
+  const snapshot = useStoreSelector((state) => state.usage);
+  const refreshing = usageRefreshing(snapshot);
   const [clock, setClock] = useState(() => Date.now());
   // How much width the toolbar actually has. Measured on the scroller App.tsx
   // owns, because that element is the viewport this strip must fit inside — the
@@ -1206,30 +1214,19 @@ export function DesktopTopBarControls({
     .map((_, index) => String(index + 1))
     .join("/");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      const response = await fetch("/api/usage", {
-        method: manual ? "POST" : "GET",
-      });
-      if (response.ok) setSnapshot(await response.json() as UsageSnapshot);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshing]);
-  useEffect(() => {
-    void loadUsage(false);
+    await (manual ? requestUsageRefresh() : loadUsageSnapshot());
   }, []);
-  // The widget is persistent, so it follows the server's snapshot instead of
-  // freezing at mount. A quiet GET only reads the collector's cache (which
-  // schedules its own due refreshes) and never shows the refresh spinner.
+  useEffect(() => {
+    void loadUsage(false).catch(() => undefined);
+  }, []);
+  // Refreshes and their results arrive as Controller broadcasts. This slow
+  // read only covers session-derived usage and frames missed while hidden; it
+  // reads the collector's cache, which schedules its own due refreshes.
   useEffect(() => {
     const controller = new AbortController();
     const poll = (): void => {
       if (document.visibilityState === "hidden") return;
-      void readUsage(controller.signal).then((next) => {
-        if (!controller.signal.aborted) setSnapshot(next);
-      }).catch(() => undefined);
+      void loadUsageSnapshot(controller.signal).catch(() => undefined);
     };
     const timer = window.setInterval(poll, USAGE_POLL_MS);
     document.addEventListener("visibilitychange", poll);
