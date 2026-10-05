@@ -18,6 +18,10 @@ import {
   DesktopShortcutBar,
   type DesktopShortcutGroup,
 } from "./DesktopShortcutBar";
+import {
+  desktopModalShortcutGroups,
+  useDesktopModalMode,
+} from "./DesktopModalKeyHint";
 
 export function DesktopModal({
   open,
@@ -87,9 +91,15 @@ export function DesktopModal({
       <Divider />
       <Box sx={{ minHeight: 0, overflow: "auto" }}>{children}</Box>
       {footer && <><Divider />{footer}</>}
-      <DesktopShortcutBar
-        groups={shortcutGroups ?? [{ slots: [{ shortcut: "Esc", label: "Close" }] }]}
-      />
+      {shortcutGroups
+        ? <DesktopShortcutBar groups={shortcutGroups} />
+        : <DesktopModalGrammarBar />}
     </Dialog>
   );
+}
+
+/** A dialog without its own keymap advertises the shared modal grammar. */
+function DesktopModalGrammarBar(): React.JSX.Element {
+  const mode = useDesktopModalMode();
+  return <DesktopShortcutBar groups={desktopModalShortcutGroups(mode)} />;
 }

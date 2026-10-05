@@ -1,4 +1,4 @@
-import { Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import {
   ChatBubbleOutline,
   DescriptionOutlined,
@@ -6,6 +6,7 @@ import {
 } from "@mui/icons-material";
 import { useMemo } from "react";
 import { type SegmentedTabChangeSource, SegmentedTabs } from "./SegmentedTabs";
+import { Kbd } from "./Kbd";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { useStoreSelector } from "./store";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
@@ -27,13 +28,15 @@ export function createVariantTabId(variant: CreateVariant): string {
 }
 
 export function CreateVariantPicker(
-  { value, disabled, onChange, keyboard = false }: {
+  { value, disabled, onChange, keyboard = false, digitsAvailable = false }: {
     value: CreateVariant;
     disabled: boolean;
     onChange: (value: CreateVariant, source: SegmentedTabChangeSource) => void;
-    /** Desktop: Vim tablist grammar (h/l). Direct picks come from the
-     *  dialog's leader labels, so the tabs carry no digits. */
+    /** Desktop: the modal grammar's tab keys (FOCUS.md "Modals"): `1`–`3`
+     *  and `H/L`, each tab showing its digit. */
     keyboard?: boolean;
+    /** The dialog is in Normal, where digits pick a tab. */
+    digitsAvailable?: boolean;
   },
 ): React.JSX.Element {
   return (
@@ -43,10 +46,21 @@ export function CreateVariantPicker(
       aria-label="Create type"
       disabled={disabled}
       vimKeys={keyboard}
-      options={CREATE_VARIANTS.map(({ value, label, icon }) => ({
+      options={CREATE_VARIANTS.map(({ value, label, icon }, index) => ({
         value,
         icon,
-        label,
+        label: keyboard
+          ? (
+            <Box component="span" sx={{ display: "inline-flex", alignItems: "center" }}>
+              {label}
+              <Kbd
+                keys={String(index + 1)}
+                availability={digitsAvailable ? "available" : "inactive"}
+              />
+            </Box>
+          )
+          : label,
+        ...(keyboard ? { keyShortcuts: String(index + 1) } : {}),
         id: createVariantTabId(value),
         controls: "create-variant-panel",
         ariaLabel: label,

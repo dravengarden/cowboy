@@ -17,6 +17,7 @@ import {
 import { DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopLeaderOptional } from "./leaderContext";
 import { DesktopRecentDialog } from "./DesktopRecentDialog";
+import { useDesktopModalMode } from "../DesktopModalKeyHint";
 import type { DesktopRecentItem } from "../sessionVisits";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { DesktopLeaderMenu } from "./DesktopLeaderMenu";
@@ -105,6 +106,7 @@ export function DesktopCommandHost({
   const [selected, setSelected] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
+  const paletteMode = useDesktopModalMode();
   // Commands are memoized; read the live jump list and handlers at run time.
   const live = useRef({ recent, onOpenRecent, onRenameSession });
   live.current = { recent, onOpenRecent, onRenameSession };
@@ -604,7 +606,9 @@ export function DesktopCommandHost({
             label: "Navigate",
             slots: [
               {
-                shortcut: "↑/↓",
+                // Insert: arrows drive the highlight; Normal: the modal
+                // grammar's J/K move the cursor over the results.
+                shortcut: paletteMode === "insert" ? "↑/↓" : "J/K",
                 label: "Move",
                 availability: available.length > 0 ? "available" : "inactive",
               },
@@ -613,9 +617,17 @@ export function DesktopCommandHost({
                 label: "Run",
                 availability: selectedAvailable ? "available" : "inactive",
               },
+              ...(paletteMode === "normal"
+                ? [{ shortcut: "I", label: "Search" }]
+                : []),
             ],
           },
-          { slots: [{ shortcut: "Esc", label: "Close" }] },
+          {
+            slots: [{
+              shortcut: "Esc",
+              label: paletteMode === "insert" ? "Normal" : "Close",
+            }],
+          },
         ]}
       >
       <Box sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>

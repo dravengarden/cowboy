@@ -430,16 +430,20 @@ export async function runDraftDocumentsBrowserConformance(
             <SurfaceProvider>
               <BrowserProductTheme>
                 <CssBaseline />
-                <CreateDialog
-                  initialFolder={folder}
-                  open
-                  onClose={() => {
-                    closed = true;
-                  }}
-                  onCreated={() => {
-                    throw new Error("Draft must not create a Session");
-                  }}
-                />
+                <DesktopWorkspaceProvider>
+                  <DesktopCommandProvider>
+                    <CreateDialog
+                      initialFolder={folder}
+                      open
+                      onClose={() => {
+                        closed = true;
+                      }}
+                      onCreated={() => {
+                        throw new Error("Draft must not create a Session");
+                      }}
+                    />
+                  </DesktopCommandProvider>
+                </DesktopWorkspaceProvider>
               </BrowserProductTheme>
             </SurfaceProvider>
           </StrictMode>,
@@ -483,10 +487,11 @@ export async function runDraftDocumentsBrowserConformance(
           sessionTitle && document.activeElement === sessionTitle,
           "Create opens in the title field",
         );
+        // The shared modal grammar (FOCUS.md "Modals").
         check(
           document.querySelector('[data-create-key-hint="text"]') &&
-            !document.querySelector("[role=tab] [data-shortcut-state]"),
-          "Insert advertises Esc; type tabs carry no digit slots",
+            document.querySelectorAll("[role=tab] [data-shortcut-state='inactive']").length === 3,
+          "Insert advertises Esc; the type digits wait for Normal",
         );
         press(sessionTitle, "Escape", { key: "Escape", isComposing: true });
         await tick();
@@ -497,55 +502,113 @@ export async function runDraftDocumentsBrowserConformance(
         press(sessionTitle, "Escape", { key: "Escape" });
         await tick();
         check(!closed, "Esc in the title does not close Create");
+        const cursor = () => document.activeElement as HTMLElement;
         check(
-          document.activeElement?.getAttribute("aria-label") === "Session",
-          "Esc leaves the title for the selected type tab",
+          cursor().hasAttribute("data-desktop-field-cursor") &&
+            cursor().contains(sessionTitle),
+          "Esc leaves Insert with the Normal cursor on the title",
         );
         check(
-          document.querySelector('[data-create-key-hint="tabs"]'),
-          "The Normal hint appears on the tablist",
+          document.querySelectorAll("[role=tab] [data-shortcut-state='available']").length === 3,
+          "Normal lights the 1–3 type digits",
         );
-        press(document.activeElement!, "KeyL");
+        press(cursor(), "Digit2");
         await tick();
         check(
-          selected() === "Draft" &&
-            document.activeElement?.getAttribute("aria-label") === "Draft",
-          "l selects the next type and keeps the keyboard on the tablist",
+          selected() === "Draft" && cursor().hasAttribute("data-desktop-field-cursor"),
+          "2 picks Draft and the cursor stays on the title",
         );
-        press(document.activeElement!, "KeyL");
+        press(cursor(), "KeyL");
         await tick();
-        check(selected() === "Folder", "l reaches Folder");
-        press(document.activeElement!, "KeyH");
+        check(selected() === "Folder", "l on a single-field row steps the tabs");
+        press(cursor(), "KeyH");
         await tick();
-        check(selected() === "Draft", "h selects the previous type");
-        press(document.activeElement!, "KeyH");
+        check(selected() === "Draft", "h steps back");
+        press(cursor(), "Digit1");
         await tick();
-        check(selected() === "Session", "h returns to Session");
-        // Stay out of the Draft title: its first focus consumes the one-time
-        // generated-name selection that the pointer flow below verifies.
-        press(document.activeElement!, "KeyJ");
+        check(selected() === "Session", "1 returns to Session");
+        press(cursor(), "KeyK");
+        await tick();
+        check(
+          cursor().getAttribute("aria-label") === "Session",
+          "k moves up to the selected tab",
+        );
+        press(cursor(), "KeyL");
+        await tick();
+        check(
+          selected() === "Draft" && cursor().getAttribute("aria-label") === "Draft",
+          "l on the tab row selects and follows the next tab",
+        );
+        press(cursor(), "BracketLeft", { key: "[" });
+        await tick();
+        check(selected() === "Session", "[ steps the tabs back");
+        press(cursor(), "BracketRight", { key: "]" });
+        await tick();
+        check(selected() === "Draft", "] steps the tabs forward");
+        press(cursor(), "KeyJ");
+        await tick();
+        check(
+          cursor().hasAttribute("data-desktop-field-cursor"),
+          "j moves down to the title",
+        );
+        press(cursor(), "KeyJ");
+        await tick();
+        check(
+          !cursor().hasAttribute("data-desktop-field-cursor") &&
+            cursor().closest("[role='dialog']") !== null,
+          "j continues to the next control",
+        );
+        press(cursor(), "KeyG", { key: "G", shiftKey: true });
+        await tick();
+        check(
+          cursor().textContent?.includes("Create draft"),
+          "G reaches the last control, the confirm button",
+        );
+        press(cursor(), "KeyH");
+        await tick();
+        check(
+          cursor().textContent?.includes("Cancel"),
+          "h moves across the button row",
+        );
+        press(cursor(), "KeyG", { key: "g" });
+        press(cursor(), "KeyG", { key: "g" });
+        await tick();
+        check(
+          cursor().getAttribute("role") === "tab",
+          "gg returns to the first control, the tabs",
+        );
+        // Back to Session before editing: the Draft title's first focus
+        // consumes its one-time name selection, verified below.
+        press(cursor(), "Digit1");
+        await tick();
+        check(
+          selected() === "Session" && cursor().getAttribute("aria-label") === "Session",
+          "A digit on the tab row moves the cursor with the tab",
+        );
+        press(cursor(), "KeyJ");
+        await tick();
+        press(cursor(), "KeyI");
         await tick();
         const keyboardTitle = document.querySelector<HTMLInputElement>("input");
         check(
           keyboardTitle && document.activeElement === keyboardTitle,
-          "j enters the title from the tablist",
+          "i edits the field under the cursor",
         );
         press(keyboardTitle, "BracketLeft", { key: "[", ctrlKey: true });
         await tick();
         check(
-          !closed &&
-            document.activeElement?.getAttribute("aria-label") === "Session",
+          !closed && cursor().hasAttribute("data-desktop-field-cursor"),
           "Ctrl-[ is the Vim Esc alias",
         );
-        press(document.activeElement!, "Escape", { key: "Escape" });
+        press(cursor(), "Escape", { key: "Escape" });
         await tick();
-        check(closed, "Esc on the tablist closes Create");
+        check(closed, "Esc in Normal closes Create");
         closed = false;
-        press(document.activeElement!, "Enter", { key: "Enter" });
+        press(cursor(), "Enter", { key: "Enter" });
         await tick();
         check(
           document.activeElement === document.querySelector("input"),
-          "Enter on the tablist returns to the title",
+          "Enter on the title cursor edits it",
         );
         tab("Session").click();
         await tick();

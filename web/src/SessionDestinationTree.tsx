@@ -341,6 +341,8 @@ export function SessionDestinationTree(
         size="small"
         placeholder="Search sessions…"
         onChange={(event) => setQuery(event.target.value)}
+        // Its Esc leaves the search for the tree, this picker's Normal.
+        data-desktop-keys="own"
         onFocus={() => setSearchFocused(true)}
         onBlur={() => setSearchFocused(false)}
         sx={{ mb: 1, flexShrink: 0 }}

@@ -275,19 +275,53 @@ local `isComposing`/229 check; extend the classifier and its tests instead.
 Older handlers (`desktopImeOwnsKey`, `workspaceCommandKey`) retain their
 established behavior and should move onto it when touched.
 
+### Modals
+
+Every Desktop dialog runs one grammar, implemented once in
+`commands/modalNavigation.ts` and read from the dialog's DOM, so a new dialog
+needs no keyboard code. It is Vim's two modes:
+
+- **Insert**: a text field owns every key. `Esc` or `Ctrl-[` leaves it for
+  Normal with the cursor on that field (its outlined box); a composing IME
+  keeps `Esc`. A dialog therefore never closes from inside a field.
+- **Normal** (anywhere else):
+
+| Key | Action |
+| --- | --- |
+| `J` / `K` | Next / previous row; lands on the selected tab of a tab row, else the control nearest in x |
+| `H` / `L` | Left / right inside the row (tabs, a field and its button, the button bar); on a row with nothing beside it, the top tabs |
+| `1`–`9` | Pick that top tab (each tab shows its digit); the cursor stays put unless it was on the tabs |
+| `[` / `]` | Previous / next top tab |
+| `gg` / `G` | First / last control |
+| `I` / `A` / `Enter` | Edit the field under the cursor (`A` at its end) |
+| `Enter` | Activate the control (opens a picker or select; toggles a checkbox) |
+| `Mod+Enter` | Confirm (the dialog's primary action) |
+| `Esc` | Close |
+| `␣` / `Cmd/Alt+K` | Dialog leader: a letter on every control |
+
+Rows come from geometry: controls whose vertical centres share a band are
+one row. A read-only input is a picker, not a field. A region with its own
+keymap (tree, listbox, editor, `[data-desktop-keys='own']`, an exclusive
+popover) is one stop on the way and keeps its keys once focused; Recent and
+the destination tree are such regions. A dialog that already runs this
+grammar itself marks `[data-desktop-modal-keys='own']`: the control center
+(digits and `[`/`]` for sections, `J/K` rows, `H/L` choices, `Esc` from a
+field to its row). A dialog without its own shortcut bar shows the grammar
+for the current mode in its footer (`DesktopModalKeyHint`), and the Command
+Palette follows it too: `Esc` from the search leaves for its results
+(`J/K`, `Enter` runs, `I` searches again), a second `Esc` closes.
+
 ### Create
 
-Create follows the browser-Vim layering of Vimium and qutebrowser. It opens in
-the title field (Insert). `Esc` or `Ctrl-[` leaves a text field for the
-selected type tab (Normal) instead of closing; a composing IME keeps `Esc`.
-On the tablist, `H/L` (or arrows) moves between Session, Draft and Folder
-without leaving it, `I`, `J`, `↓` or `Enter` returns to the title, and
-`Esc` closes. `Mod+Enter` creates from either layer. A direct pick of any
-control (Session, Draft, Folder, Project, …) is the dialog leader
-(`Cmd/Alt+K` or `Space`, then its letter); the tabs carry no digits. The hint
-row under the tablist names only the current layer's keys. Pointer activation still selects
-and focuses the title in one step. The Cancel `Esc` keycap is inactive while a
-text field owns `Esc`.
+Create is the reference dialog for the grammar above. It opens in the title
+field (Insert). `Esc` puts the Normal cursor on the title; `1` `2` `3` pick
+Session, Draft or Folder from anywhere in Normal and `H/L` step them while
+the cursor stays on the title, so `Esc 2 I` makes a Draft and edits its
+name. `K` reaches the tabs, `J` walks the fields down to Cancel and Create,
+`I` edits, `Esc` closes, `Mod+Enter` creates from either mode. The hint row
+under the tabs names only the current mode's keys, and the tab digits light
+in Normal. Pointer activation still selects and focuses the title in one
+step. The Cancel `Esc` keycap is inactive while a text field owns `Esc`.
 
 ### Shortcut slots and bars
 

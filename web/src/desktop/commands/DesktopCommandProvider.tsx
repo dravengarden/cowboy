@@ -56,6 +56,8 @@ import {
   popupOwnsKeys,
   topmostModal,
 } from "./hintTargets";
+import { handleDesktopModalKey } from "./modalNavigation";
+import { GlobalStyles } from "@mui/material";
 import {
   DesktopHintContext,
   DesktopLeaderContext,
@@ -378,6 +380,20 @@ export function DesktopCommandProvider(
       // stale Ctrl-W / gg chord move focus while marked text exists. The sole
       // exception is the non-editable Vim Normal sink when no real shared
       // composition exists; it deliberately receives physical Vim commands.
+      // The modal grammar (FOCUS.md "Modals"): Insert/Normal, hjkl, digits
+      // for tabs. It resolves keys with desktopKeyIntent, so an idle CJK
+      // input source on dialog chrome still moves by physical key while a
+      // real composition keeps every key. An armed dialog leader goes first.
+      if (
+        !leaderArmed.current && desktopOverlayOwnsShortcuts(document) &&
+        desktopKeyIntent(event).owner !== "ime"
+      ) {
+        const modal = popupOwnsKeys() ? null : topmostModal();
+        if (modal && handleDesktopModalKey(event, modal)) {
+          clearPendingJumpChord();
+          return;
+        }
+      }
       if (
         desktopImeOwnsKey(event) && !workspaceSequenceOwnsKey
       ) {
@@ -1211,6 +1227,17 @@ export function DesktopCommandProvider(
       <DesktopLeaderContext.Provider value={leader}>
         <DesktopHintContext.Provider value={hints}>
           <DesktopListJumpContext.Provider value={pendingJumpRegion}>
+            {/* The modal Normal cursor on a text field (modalNavigation). */}
+            <GlobalStyles
+              styles={(theme) => ({
+                "[data-desktop-field-cursor]": { outline: "none" },
+                "[data-desktop-field-cursor]:focus": {
+                  outline: `2px solid ${theme.palette.primary.main}`,
+                  outlineOffset: 2,
+                  borderRadius: 12,
+                },
+              })}
+            />
             {children}
           </DesktopListJumpContext.Provider>
         </DesktopHintContext.Provider>

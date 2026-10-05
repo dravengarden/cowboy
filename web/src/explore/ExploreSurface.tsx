@@ -995,6 +995,8 @@ function PageList({
   return (
     <Stack
       data-question-directory
+      // Its list keeps its own Vim map inside the Page Index modal.
+      data-desktop-keys="own"
       onKeyDown={onVimKeyDown}
       sx={{ minHeight: 0, height: "100%" }}
     >

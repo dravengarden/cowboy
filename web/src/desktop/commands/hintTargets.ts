@@ -185,6 +185,8 @@ export function topmostModal(): HTMLElement | null {
 /** A menu, listbox or popover owns its own keys (type-ahead, arrows). */
 export function popupOwnsKeys(): boolean {
   return document.querySelector(
-    ".MuiPopover-root, .MuiAutocomplete-popper, [role='menu'], [role='listbox']",
+    // A listbox that is part of a dialog's own layout (Recent) is a region of
+    // that dialog, not a popup over it.
+    ".MuiPopover-root, .MuiAutocomplete-popper, [role='menu'], [role='listbox']:not([role='dialog'] [role='listbox'])",
   ) !== null;
 }

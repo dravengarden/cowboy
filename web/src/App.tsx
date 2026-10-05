@@ -1,6 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
-import { CreateVariantPicker, createVariantTabId, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
+import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
 import { SegmentedTabs } from "./SegmentedTabs";
 import { draftRepository } from "./documents/store";
 import { openDrafts } from "./documents/navigation";
@@ -296,6 +296,7 @@ function markDesktopUpdateSwapping(): void {
 }
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
+import { DesktopModalKeyHint } from "./desktop/DesktopModalKeyHint";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
@@ -2519,9 +2520,9 @@ export function CreateDialog({
     const cwd = placement.project?.projectId ?? "";
     const provider = placement.installation?.provider ?? "";
     const desktop = useSurfaceProfile().kind === "desktop";
-    // Desktop keyboard layer (FOCUS.md "Create"): a text field is Insert, the
-    // type tablist is Normal, anything else (Select, buttons) is plain modal
-    // chrome where Esc closes. Drives both dispatch and the visible slots.
+    // Desktop keyboard layer (FOCUS.md "Modals"): a text field is Insert,
+    // everything else is Normal, where the shared modal grammar runs (digits
+    // and H/L pick the type, J/K move, I edits). Drives the visible slots.
     const [focusZone, setFocusZone] = useState<"tabs" | "text" | "other">("text");
     const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
     // Session and Folder share one Sessions-tree location: both place an
@@ -2741,36 +2742,13 @@ export function CreateDialog({
     // focused Create button suppress their own native bare-Enter activation.
     // Mobile retains its established single-Enter form behaviour.
     useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
-    // Vim layers, as in Vimium/qutebrowser: Esc (or Ctrl-[) leaves a text
-    // field for the type tablist, where h/l choose the type and
-    // j/i/Enter return to the title; Esc there closes. Keys are classified by
-    // desktopKeyIntent, so a composing IME keeps every key, including Esc.
+    // The shared modal grammar (modalNavigation) owns Insert/Normal and hjkl.
+    // A composing IME keeps every key: its Esc cancels the marked text, never
+    // the modal.
     const onDesktopFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
         if (!desktop || e.defaultPrevented) return;
-        const intent = desktopKeyIntent(e.nativeEvent);
-        if (intent.owner === "ime") {
-            // Esc cancels the marked text, never the modal.
-            if (e.key === "Escape") e.stopPropagation();
-            return;
-        }
-        const vimEscape = intent.owner === "command" && e.ctrlKey && !e.metaKey &&
-            !e.altKey && !e.shiftKey && intent.key === "[";
-        if (
-            isTextEditingTarget(e.target) &&
-            ((intent.owner === "text" && intent.key === "Escape") || vimEscape)
-        ) {
-            e.preventDefault();
+        if (desktopKeyIntent(e.nativeEvent).owner === "ime" && e.key === "Escape") {
             e.stopPropagation();
-            document.getElementById(createVariantTabId(variant))?.focus();
-            return;
-        }
-        const inTabs = e.target instanceof Element && e.target.closest("[role='tablist']") !== null;
-        if (
-            inTabs && intent.owner === "command" && !intent.modified &&
-            ["j", "i", "Enter", "ArrowDown"].includes(intent.key)
-        ) {
-            e.preventDefault();
-            titleRef.current?.focus({ preventScroll: true });
         }
     };
     const form = (
@@ -2796,10 +2774,11 @@ export function CreateDialog({
                     value={variant}
                     disabled={creating}
                     keyboard={desktop}
+                    digitsAvailable={focusZone !== "text"}
                     onChange={(next, source): void => {
                         if (source === "roving") {
-                            // The keyboard cursor stays on the tablist; j/i/Enter
-                            // enters the title when the user is ready.
+                            // A keyboard pick (digit, H/L) keeps the Normal
+                            // cursor where it is; I edits the title.
                             setVariant(next);
                             setCreateError("");
                             return;
@@ -2834,22 +2813,7 @@ export function CreateDialog({
                         flexWrap="wrap"
                         sx={{ mt: "4px !important", minHeight: 20, px: 1, color: "text.secondary", typography: "caption" }}
                     >
-                        {focusZone === "tabs" ? (
-                            <>
-                                <Kbd keys="H" variant="context" />
-                                <Kbd keys="L" variant="context" />
-                                <Box component="span" sx={{ ml: 0.75, mr: 1 }}>switch</Box>
-                                <Kbd keys="I" variant="context" />
-                                <Box component="span" sx={{ ml: 0.75, mr: 1 }}>edit</Box>
-                                <Kbd keys="Esc" variant="context" />
-                                <Box component="span" sx={{ ml: 0.75 }}>close</Box>
-                            </>
-                        ) : focusZone === "text" ? (
-                            <>
-                                <Kbd keys="Esc" variant="context" />
-                                <Box component="span" sx={{ ml: 0.75 }}>choose type (Ctrl+[ also works)</Box>
-                            </>
-                        ) : null}
+                        <DesktopModalKeyHint mode={focusZone === "text" ? "insert" : "normal"} tabs={3} />
                     </Stack>
                 ) : null}
                 <Stack spacing={2} id="create-variant-panel" role="tabpanel" aria-labelledby={`create-${variant}-tab`}>
@@ -6947,6 +6911,9 @@ function SettingsShell({
                 : undefined}
         >
             <GlobalStyles styles={controlCenterViewTransitionStyles} />
+            {/* The control center runs the modal grammar itself: digits and
+                [ ] for sections, J/K rows, H/L choices (FOCUS.md "Modals"). */}
+            {desktop && <Box component="span" hidden data-desktop-modal-keys="own" />}
             {/* Touch is one mutually exclusive accordion list. Desktop keeps
                 native tabs so Machines / Info / Logs remain first-class. */}
             {desktop && (

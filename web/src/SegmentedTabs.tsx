@@ -1,8 +1,9 @@
-import { type KeyboardEvent, type ReactNode, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
 import { Box, ButtonBase } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { desktopKeyIntent } from "./desktop/commands/keyIntent";
+import { DESKTOP_TAB_SELECT_EVENT } from "./desktop/commands/modalNavigation";
 
 // The one Cowboy segmented switcher: equal pill
 // segments with no track, the selected one filled with `action.selected` and
@@ -72,6 +73,33 @@ export function SegmentedTabs<T extends string>({
       enabled.some((option) => option.value === value)
     ? value
     : enabled[0]?.value;
+  // The Desktop modal grammar selects a tab by digit or `H/L` from anywhere
+  // in the dialog; it is the same roving change as an arrow on the tab.
+  const root = useRef<HTMLDivElement>(null);
+  const latest = useRef({ value, onChange, enabled });
+  latest.current = { value, onChange, enabled };
+  useEffect(() => {
+    const node = root.current;
+    if (!node || !tabs) return undefined;
+    const onSelect = (event: Event): void => {
+      const button = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-segmented-tab]")
+        : null;
+      const option = latest.current.enabled.find((candidate) =>
+        candidate.value === button?.dataset.segmentedTab
+      );
+      if (!option) return;
+      event.preventDefault();
+      if ((event as CustomEvent<{ focus?: boolean }>).detail?.focus) {
+        buttons.current.get(option.value)?.focus();
+      }
+      if (option.value !== latest.current.value) {
+        latest.current.onChange(option.value, "roving");
+      }
+    };
+    node.addEventListener(DESKTOP_TAB_SELECT_EVENT, onSelect);
+    return () => node.removeEventListener(DESKTOP_TAB_SELECT_EVENT, onSelect);
+  }, [tabs]);
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: T) => {
     delete event.currentTarget.dataset.touchActivated;
     if (!tabs || enabled.length === 0) return;
@@ -105,6 +133,7 @@ export function SegmentedTabs<T extends string>({
   return (
     <Box
       {...rootProps}
+      ref={root}
       role={tabs ? "tablist" : "group"}
       aria-label={ariaLabel}
       data-segmented-tabs
