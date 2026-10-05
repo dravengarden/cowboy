@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "change": "Desktop Draft header and toolbar icons, targets and padding track root font; adjacent command groups have separators and wrap as a continuous flow; readable-width and save status align to the right; persisted order and Mobile target/layout behavior preserved.",
+  "typecheck": "passed",
+  "lint": "passed with existing warnings",
+  "browser_results": [
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "f931a70d11456f14901fe73390138b2d0576fbb4b5b7e6b50c35759d4964e71c",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 78ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "f931a70d11456f14901fe73390138b2d0576fbb4b5b7e6b50c35759d4964e71c",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 81ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    }
+  ],
+  "runner_note": "Default 30-second overall runner timed out during some attempts. Final dark run used a disposable runner with a 60-second startup/suite deadline and identical assertions. Temporary runner removed.",
+  "coverage": "Actual Cowboy theme, 320/600/960/1440px pane widths and 8/10.4/16/24px root fonts. Assert header/attachment target and glyph scaling, formatting fit and useful editor canvas. Existing integrated navigation/copy/Undo and Mobile shell conformance also pass.",
+  "native_input": "No editor, IME, Vim or keyboard implementation change; no new physical iOS claim.",
+  "release": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1791168095711382042-d3f78f690e0f",
+    "revision": "d3f78f690e0f17f47cf117451514b22a3afbaa13",
+    "published": true,
+    "release": "/nix/store/ckf1g1iabfipr50i55vzdblpgg1smllm-cowboy-web-release",
+    "previousRelease": "/nix/store/jnyj66d1wawyxysqfw4fga2crziqbwql-cowboy-web-release",
+    "activeRelease": "/nix/store/ckf1g1iabfipr50i55vzdblpgg1smllm-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-05T02:41:35.711382042Z",
+    "recordedAt": "2026-10-05T02:41:35.78471211Z",
+    "recovered": false
+  },
+  "live_sw": "cowboy-v1841",
+  "public_version": "1e9df717e2e4401d34e98e8b3201ffed",
+  "public_sw_matches_release": true,
+  "processes_before_and_after_web_activation": {
+    "controller": 2648009,
+    "machine": 2837499
+  }
+}
