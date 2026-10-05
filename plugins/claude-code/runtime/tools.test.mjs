@@ -328,6 +328,39 @@ async function fixture(t) {
   return { tools, files, calls, connection, binding, state };
 }
 
+test("interrupt includes foreground starts whose acknowledgement is still pending", async (t) => {
+  const { tools, connection } = await fixture(t);
+  const admitted = Promise.withResolvers();
+  const acknowledge = Promise.withResolvers();
+  const terminated = Promise.withResolvers();
+  const stops = [];
+  connection.call = async (method, params) => {
+    if (method === "process/start") {
+      admitted.resolve(params.processId);
+      await acknowledge.promise;
+      return { processId: params.processId };
+    }
+    if (method === "process/terminate") {
+      stops.push(params.processId);
+      terminated.resolve();
+      return {};
+    }
+    if (method === "process/read") {
+      await terminated.promise;
+      return { chunks: [], exited: true, closed: true, exitCode: 143 };
+    }
+    throw new Error(`Unexpected ${method}`);
+  };
+  const running = tools.call("bash", { command: "sleep 600" });
+  const id = await admitted.promise;
+  const interrupt = tools.cancelForeground();
+  acknowledge.resolve();
+  await interrupt;
+  assert.deepEqual(stops, [id]);
+  await running;
+  assert.equal(tools.foreground.size, 0);
+});
+
 test("a changed file is refused until read again, including after cold resume", async (t) => {
   const { tools, files, connection, binding, state } = await fixture(t);
   files.set("/target with space/file", Buffer.from("before\n"));
@@ -450,6 +483,133 @@ test("native Read task handles retain output cursors across cold resume", async 
   });
   assert.match(unknown.deny, /does not belong/);
   assert.equal(cursors.length, 2);
+});
+
+test("task output keeps split UTF-8 separate per stream across cold resume", async (t) => {
+  const { tools, connection, binding, state } = await fixture(t);
+  const id = "utf8-job";
+  tools.state.jobs[id] = { afterSeq: null, exited: false };
+  const stdout = Buffer.from("中");
+  const stderr = Buffer.from("🐎");
+  let sequence = 0;
+  const chunk = (stream, bytes) => ({
+    seq: ++sequence,
+    stream,
+    chunk: bytes.toString("base64"),
+  });
+  const responses = [{
+    chunks: [
+      chunk("stdout", stdout.subarray(0, 2)),
+      chunk(
+        "stderr",
+        Buffer.concat([Buffer.alloc(65534, 120), stderr.subarray(0, 2)]),
+      ),
+    ],
+    closed: false,
+    exited: false,
+  }, {
+    chunks: [
+      chunk("stdout", stdout.subarray(2)),
+      chunk("stderr", stderr.subarray(2)),
+    ],
+    closed: true,
+    exited: true,
+    exitCode: 0,
+  }, { chunks: [], closed: true, exited: true, exitCode: 0 }];
+  connection.call = async (method) => {
+    assert.equal(method, "process/read");
+    return responses.shift();
+  };
+  const first = await tools.collect(id, 10000);
+  assert.equal(first.output, "x".repeat(65534));
+  const resumed = new WorkspaceTools(connection, binding, state);
+  await resumed.load();
+  const last = await resumed.collect(id, 10000);
+  assert.equal(last.output, "中🐎");
+  assert.equal((await resumed.collect(id, 10000)).output, "");
+});
+
+test("interleaved output and terminal incomplete UTF-8 do not corrupt other streams", async (t) => {
+  const { tools, connection } = await fixture(t);
+  tools.state.jobs.job = { afterSeq: null, exited: false };
+  connection.call = async () => ({
+    chunks: [
+      {
+        seq: 1,
+        stream: "stdout",
+        chunk: Buffer.from([0xe4, 0xb8]).toString("base64"),
+      },
+      {
+        seq: 2,
+        stream: "stderr",
+        chunk: Buffer.from("error").toString("base64"),
+      },
+      {
+        seq: 3,
+        stream: "stdout",
+        chunk: Buffer.from([0xad, 0xf0, 0x9f]).toString("base64"),
+      },
+    ],
+    exited: true,
+    closed: true,
+    exitCode: 1,
+  });
+  assert.equal((await tools.collect("job", 1000)).output, "error中�");
+});
+
+test("failed output state commit preserves the cursor for retry", async (t) => {
+  const { tools, connection, state } = await fixture(t);
+  tools.state.jobs.job = { afterSeq: null, exited: false };
+  const cursors = [];
+  connection.call = async (_method, params) => {
+    cursors.push(params.afterSeq);
+    return {
+      chunks: params.afterSeq === null
+        ? [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("retained").toString("base64"),
+        }]
+        : [],
+      exited: true,
+      closed: true,
+      exitCode: 0,
+    };
+  };
+  // Actual atomic rename failure, after save's in-memory update has run.
+  await mkdir(state);
+  await assert.rejects(tools.collect("job", 1000));
+  assert.deepEqual(tools.state.jobs.job, { afterSeq: null, exited: false });
+  await rm(state, { recursive: true });
+  assert.equal((await tools.collect("job", 1000)).output, "retained");
+  assert.deepEqual(cursors, [null, null]);
+});
+
+test("byte-split output preserves BOMs and native invalid UTF-8 replacement", async (t) => {
+  const { tools, connection } = await fixture(t);
+  for (
+    const bytes of [
+      Buffer.from("\ufeff中文🐎\0end"),
+      Buffer.from([0xe0, 0x80, 0x80, 0xff, 0xed, 0xa0, 0x80]),
+      Buffer.from([0xf0, 0x90, 0x80]),
+    ]
+  ) {
+    tools.state.jobs.job = { afterSeq: null, exited: false };
+    connection.call = async () => ({
+      chunks: Array.from(bytes, (byte, index) => ({
+        seq: index + 1,
+        stream: "stdout",
+        chunk: Buffer.from([byte]).toString("base64"),
+      })),
+      exited: true,
+      closed: true,
+      exitCode: 0,
+    });
+    assert.equal(
+      (await tools.collect("job", 1000)).output,
+      bytes.toString("utf8"),
+    );
+  }
 });
 
 test("ambiguous edits and foreign task ids have no effects", async (t) => {

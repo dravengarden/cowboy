@@ -223,6 +223,17 @@ def main():
         client.prompt(timeout=90)
         context_checked(api.requests)
         checks.append("cold_resume_after_compaction_has_no_runtime_file_locators")
+        # Real target pipe writes split a UTF-8 character around another stream.
+        # Native result validation must preserve the character, not merely the
+        # adapter's unit-test representation of the chunks.
+        api.steps.extend([[], tool("Bash", {"command":
+            "python3 -c 'import os,time; os.write(1,bytes([228])); time.sleep(0.2); "
+            "os.write(2,b\"stream-marker\"); time.sleep(0.2); os.write(1,bytes([184,173]))'"})])
+        client.prompt(timeout=90)
+        stream_result = json.dumps(list(outputs(api.requests[-1]))[-1], ensure_ascii=False)
+        require("中" in stream_result and "stream-marker" in stream_result and "\ufffd" not in stream_result,
+                "split target UTF-8 was corrupted across stdout/stderr")
+        checks.append("native_bash_preserves_utf8_split_across_streams")
         # Each search reads a FIFO. Its writer supplies content only after BOTH
         # readers have opened their pipes: sequential native/facade dispatch
         # cannot pass. This exercises native read-only scheduling and the target route.

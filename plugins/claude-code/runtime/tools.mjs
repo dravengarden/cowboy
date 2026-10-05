@@ -82,6 +82,33 @@ function decode(bytes) {
     bytes,
   );
 }
+
+// Persist only an unfinished UTF-8 suffix, not a decoder's private internals.
+// stdout and stderr may split characters independently, including at a tool
+// result boundary. Invalid complete bytes retain Node's replacement behavior.
+function decodeOutput(bytes) {
+  for (let length = 1; length <= Math.min(3, bytes.length); length++) {
+    const pending = bytes.subarray(bytes.length - length);
+    try {
+      if (
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+          pending,
+          {
+            stream: true,
+          },
+        ) === ""
+      ) {
+        return {
+          text: bytes.subarray(0, bytes.length - length).toString("utf8"),
+          pending: pending.toString("base64"),
+        };
+      }
+    } catch {
+      // A suffix starting with a continuation/invalid byte is not retainable.
+    }
+  }
+  return { text: bytes.toString("utf8"), pending: "" };
+}
 function missing(error) {
   return error.remote &&
     /No such file|not found|NotFound/i.test(JSON.stringify(error.remote));
@@ -140,6 +167,7 @@ export class WorkspaceTools {
       jobs: {},
     };
     this.foreground = new Set();
+    this.startingForeground = new Set();
     this.operations = new Map();
     this.saves = Promise.resolve();
   }
@@ -394,9 +422,11 @@ export class WorkspaceTools {
   }
 
   async collectOutput(processId, timeout) {
-    const job = this.state.jobs[processId];
-    if (!job) throw new Error("Task does not belong to this session");
+    const previous = this.state.jobs[processId];
+    if (!previous) throw new Error("Task does not belong to this session");
+    const job = { ...previous, utf8Pending: { ...previous.utf8Pending } };
     const chunks = [];
+    const pending = job.utf8Pending ??= {};
     let size = 0;
     const deadline = Date.now() + timeout;
     do {
@@ -415,17 +445,35 @@ export class WorkspaceTools {
         }
         job.afterSeq = chunk.seq;
         const bytes = Buffer.from(chunk.chunk, "base64");
-        chunks.push(bytes);
+        const decoded = decodeOutput(Buffer.concat([
+          Buffer.from(pending[chunk.stream] ?? "", "base64"),
+          bytes,
+        ]));
+        chunks.push(decoded.text);
+        pending[chunk.stream] = decoded.pending;
         size += bytes.length;
       }
       job.exited = result.exited;
       job.closed = result.closed;
       job.exitCode = result.exitCode;
+      if (result.closed) {
+        for (const stream of ["stdout", "stderr"]) {
+          chunks.push(
+            Buffer.from(pending[stream] ?? "", "base64").toString("utf8"),
+          );
+          delete pending[stream];
+        }
+      }
       if (result.closed || size >= MAX_OUTPUT) break;
     } while (Date.now() < deadline);
-    await this.save();
+    await this.save(() => {
+      this.state.jobs[processId] = job;
+      return () => {
+        this.state.jobs[processId] = previous;
+      };
+    });
     return {
-      output: Buffer.concat(chunks).toString("utf8"),
+      output: chunks.join(""),
       exited: job.exited,
       closed: job.closed,
       exitCode: job.exitCode,
@@ -434,9 +482,21 @@ export class WorkspaceTools {
     };
   }
 
+  async startForeground(argv) {
+    const starting = this.start(argv).then((id) => {
+      this.foreground.add(id);
+      return id;
+    });
+    this.startingForeground.add(starting);
+    try {
+      return await starting;
+    } finally {
+      this.startingForeground.delete(starting);
+    }
+  }
+
   async command(argv, timeout = 10000) {
-    const id = await this.start(argv);
-    this.foreground.add(id);
+    const id = await this.startForeground(argv);
     try {
       const result = await this.collect(id, timeout);
       if (!result.exited) {
@@ -555,7 +615,10 @@ export class WorkspaceTools {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
       const timeout = bounded(args.timeout, 120000, 1, 600000);
-      const id = await this.start([this.shell, "-c", command]);
+      const argv = [this.shell, "-c", command];
+      const id = await (args.run_in_background
+        ? this.start(argv)
+        : this.startForeground(argv));
       if (args.run_in_background) {
         return text(
           JSON.stringify({ task_id: id, running: true }),
@@ -567,7 +630,6 @@ export class WorkspaceTools {
           }),
         );
       }
-      this.foreground.add(id);
       try {
         const result = await this.collect(id, timeout);
         return text(JSON.stringify(result), this.bashResult(result));
@@ -934,10 +996,24 @@ export class WorkspaceTools {
   }
 
   async cancelForeground() {
+    const stopped = new Set();
+    const stop = (processId) => {
+      if (stopped.has(processId)) return;
+      stopped.add(processId);
+      return this.connection.call("process/terminate", { processId });
+    };
+    // A submitted start is already part of this foreground operation. Wait
+    // for its identity acknowledgement before terminating, so cancellation
+    // cannot overtake admission. Existing jobs stop without waiting for it.
+    // Failed starts retain their ordinary error/unknown-result handling;
+    // never resubmit them in order to cancel.
     await Promise.all(
-      [...this.foreground].map((processId) =>
-        this.connection.call("process/terminate", { processId })
-      ),
+      [
+        ...[...this.foreground].map(stop),
+        ...[...this.startingForeground].map((starting) =>
+          starting.then(stop, () => {})
+        ),
+      ],
     );
   }
 }

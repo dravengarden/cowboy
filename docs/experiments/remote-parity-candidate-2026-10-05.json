@@ -1,0 +1,169 @@
+{
+  "schema": "cowboy.remote-parity-candidate/v1",
+  "date": "2026-10-05",
+  "plugin": "claude-code",
+  "version": "3.4.8",
+  "fixes": [
+    "utf8_stream_and_result_boundaries",
+    "output_cursor_commit_failure",
+    "interrupt_during_pending_foreground_start"
+  ],
+  "source_gate": {
+    "command": "just claude-remote-check",
+    "tests_passed": 58
+  },
+  "review": {
+    "surface": "native Codex review",
+    "blocking_findings": 0
+  },
+  "native": {
+    "schema": "cowboy.claude-execution-worker-conformance/v1",
+    "accepted": true,
+    "checks": [
+      "machine_owned_worktree",
+      "machine_restart_reattaches_same_keeper_and_binding",
+      "native_control_cannot_replace_bound_execution",
+      "module_readiness_uses_no_model_request",
+      "native_tools_use_target_files_and_processes_without_mcp",
+      "runtime_context_and_guidance_are_replaced",
+      "unicode_quotes_crlf_bytes_preserved",
+      "stale_edit_is_refused",
+      "target_image_enters_model_context",
+      "background_cancel_settles",
+      "bounded_large_read_stays_in_target_tool_result",
+      "native_notebook_edit_preserves_metadata",
+      "native_read_observes_retained_task_output",
+      "lost_start_receipt_and_transport_outage_do_not_replay",
+      "cold_native_resume_preserves_context_reads_and_effects",
+      "background_process_handle_survives_native_resume",
+      "real_compaction_and_next_turn_preserve_target_context",
+      "cold_resume_after_compaction_has_no_runtime_file_locators",
+      "native_bash_preserves_utf8_split_across_streams",
+      "independent_native_searches_execute_concurrently",
+      "native_interrupt_stops_foreground_target_process",
+      "packaged_acp_native_spawn_routes_target_tools",
+      "packaged_acp_cold_load_preserves_binding_history_and_effects",
+      "hot_effort_configuration_preserves_bound_execution",
+      "broken_module_refused_before_model_request",
+      "bare_mode_refused_without_changing_authentication",
+      "malformed_result_denies_without_native_fallback",
+      "bridge_error_denies_without_native_fallback",
+      "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+      "concurrent_large_input_and_output_do_not_deadlock",
+      "post_flood_commands_and_cancellation_keep_original_executor",
+      "target_image_bytes_cross_machine_transport",
+      "idempotent_close_stops_environment_and_preserves_worktree",
+      "closed_environment_cannot_be_recreated"
+    ],
+    "claude_version": "2.1.287",
+    "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+    "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "executor_version": "0.159.3",
+    "packaged_launcher_sha256": "18c51695c82821b8b11ed36a0496c02745de9879962ec96d6f5cbb8c5a673797",
+    "scripted_api_requests": 42,
+    "native_title_requests": 1,
+    "production_credentials": false,
+    "production_activation": false,
+    "not_checked": [
+      "real_subscription_inference",
+      "cross_host_latency",
+      "native_subagents_and_project_hooks"
+    ],
+    "cursor_expirations": 0
+  },
+  "linux": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.4.8",
+    "artifact_digest": "sha256:485d690dcb0c3e1a7612a6772fa8683941e540a5fdec56da35c69b248a74cfe6",
+    "platform": {
+      "os": "linux",
+      "architecture": "x86_64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:c2d2c8aa515093d90b89e3c299817006054c41de243650878e53a3f360d63955",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false
+  },
+  "macos": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.4.8",
+    "artifact_digest": "sha256:485d690dcb0c3e1a7612a6772fa8683941e540a5fdec56da35c69b248a74cfe6",
+    "platform": {
+      "os": "macos",
+      "architecture": "aarch64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:1ab48b345d405f1c76064991a25f15db7498234778f991569078906cb49aa3c7",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false
+  },
+  "coexistence": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.4.8",
+    "artifact_digest": "sha256:485d690dcb0c3e1a7612a6772fa8683941e540a5fdec56da35c69b248a74cfe6",
+    "platform": {
+      "os": "linux",
+      "architecture": "x86_64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:c2d2c8aa515093d90b89e3c299817006054c41de243650878e53a3f360d63955",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false,
+    "previous": {
+      "plugin_version": "3.4.7",
+      "artifact_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1"
+    },
+    "worker": {
+      "executable_digest": "sha256:1838792ba788e54946bcb540aea75df0e52d492f6d75601de8751168c1f5c6e0",
+      "initialize_and_session_new": "passed",
+      "stop_and_descendant_drain": "passed",
+      "sidecar_count": 0,
+      "distinct_generation_coexistence": "passed"
+    }
+  },
+  "production_activation": false,
+  "source_hashes": {
+    "plugins/claude-code/runtime/tools.mjs": "e7598962810e975070d054ea9eb71adf8448a25050ddde9b7e0c5376068fde18",
+    "plugins/claude-code/runtime/tools.test.mjs": "56aeeec60c070bae6ba77829e1d1d95849eba195fa2ea72fe9a855903040b4cd",
+    "tools/execution_claude_worker_conformance.py": "8b95ee5ec33a828b5efa06fa0388bc939f5a3e274883f35c6261430347257e91"
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "schema": "cowboy.remote-native-hooks-research/v1",
+  "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "scope": "user command hooks; isolated native remote environment; not project discovery",
+  "native_checks": [
+    "exact_native_version",
+    "native_patch_and_command_dispatch_to_target",
+    "native_target_guidance_without_runtime_guidance",
+    "one_scripted_response_per_tool_no_connection_turn",
+    "cold_resume_requires_host_to_reassert_execution_selection",
+    "cold_native_resume_retains_history_target_and_single_effect",
+    "missing_environment_on_resume_refused_without_local_fallback",
+    "no_global_environment_configuration_written"
+  ],
+  "hook_observations": [
+    {
+      "event": "SessionStart",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "Stop",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "SessionStart",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    },
+    {
+      "event": "Stop",
+      "cwd": "target",
+      "origin": "runtime",
+      "owners": [
+        "app-server"
+      ]
+    }
+  ],
+  "remote_hook_count": 10
+}

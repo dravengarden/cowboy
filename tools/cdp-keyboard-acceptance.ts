@@ -189,7 +189,9 @@ const draftFlow = async (): Promise<void> => {
   await key("Escape");
   await sleep(150);
   check(await inBody(), "A second Esc returns to the body");
-  results.push("Insert ↑ enters the title typing; Esc to its Normal, Esc again to the body");
+  results.push(
+    "Insert ↑ enters the title typing; Esc to its Normal, Esc again to the body",
+  );
   // On the Draft page its own actions are root keys: which-key lists them
   // under Here, and Session-only keys (Conversation, Plan, Queue) are absent.
   await key("Escape");
@@ -218,7 +220,9 @@ const draftFlow = async (): Promise<void> => {
   // Normal, j returns to the body.
   await key("b");
   check(
-    await page.evaluate<boolean>(`${title}.selectionStart === ${title}.value.lastIndexOf(" ") + 1`),
+    await page.evaluate<boolean>(
+      `${title}.selectionStart === ${title}.value.lastIndexOf(" ") + 1`,
+    ),
     "b moves to the title's last word",
   );
   await shot("4b-title-normal");
@@ -235,7 +239,9 @@ const draftFlow = async (): Promise<void> => {
   await key("j");
   await sleep(150);
   check(await inBody(), "j in the title's Normal returns to the body");
-  results.push("Draft which-key: T Y H E at the root, no Session-only keys; ␣T puts a Vim Normal cursor on the title; b, A, Esc, j work there");
+  results.push(
+    "Draft which-key: T Y H E at the root, no Session-only keys; ␣T puts a Vim Normal cursor on the title; b, A, Esc, j work there",
+  );
   await key("Escape");
   await sleep(150);
   await shot("5-draft-page");

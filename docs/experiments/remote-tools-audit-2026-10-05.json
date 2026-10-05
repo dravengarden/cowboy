@@ -1,0 +1,38 @@
+{
+  "schema": "cowboy.remote-tools-research/v1",
+  "source_revision": "aad251abecd26f2cffc1b05d2382b93d31cb084b",
+  "claude_version": "2.1.287",
+  "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+  "generated_types_sha256": "b899fbbd90476599bf236a104c4803bea7335786c016f2f63a84a4a311d35230",
+  "isolation": {
+    "fresh_private_home": true,
+    "network_namespace_loopback_only": true,
+    "scripted_api": true,
+    "production_credentials": false,
+    "real_model_requests": 0,
+    "production_changes": false
+  },
+  "process_mod_events": {
+    "native_bash_marker_created": true,
+    "after_native_bash": { "run": 0, "spawn": 0 },
+    "after_explicit_mod_api_positive_control": { "run": 1, "spawn": 1 }
+  },
+  "shell_prefix": {
+    "native_bash_intercepted": true,
+    "runtime_snapshot_path_in_envelope": true,
+    "runtime_cwd_result_path_in_envelope": true,
+    "background_marker_created": true,
+    "native_task_notification_after_prompt_result": true,
+    "native_task_status": "completed",
+    "scripted_requests": 2
+  },
+  "unit_tests": { "passed": 25, "failed": 0 },
+  "not_checked": [
+    "remote_shell_prefix_execution",
+    "remote_native_background_autonomous_continuation",
+    "remote_shell_prefix_cancellation_and_recovery",
+    "native_permission_mode_parity",
+    "codex_remote_hooks_and_nested_agents",
+    "all_tool_and_platform_parity"
+  ]
+}

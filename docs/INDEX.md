@@ -41,6 +41,8 @@ primary phone/desktop product path.
 
 ### Architecture
 
+- [`remote-tools-coverage-audit-2026-10-05.md`](remote-tools-coverage-audit-2026-10-05.md) — Claude/Codex remote capability gaps, native extension candidates and fault-injection acceptance matrix
+
 - [`cowboy-ovh-efficiency-2026-10-04.md`](cowboy-ovh-efficiency-2026-10-04.md) — Current cross-host SSH timings, real-session history, recurring usage preparation and scoped optimization order
 - [`ovh-native-execution-efficiency-2026-10-04.md`](ovh-native-execution-efficiency-2026-10-04.md) — Live Codex Remote/Claude Mods bindings, reproducible RPC amplification and Controller-to-OVH optimization priorities
 - [`claude-target-range-reads.md`](claude-target-range-reads.md) — Target-authoritative range reads, whole-file conflict stamps and safe bounded state cleanup

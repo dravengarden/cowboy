@@ -1,0 +1,20 @@
+{
+  "schema": "cowboy.claude-native-shell-research/v1",
+  "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+  "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "topology": "same-host separate native executor, shared filesystem",
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "not_checked": [
+    "cross_host",
+    "cancellation",
+    "reconnect",
+    "permissions",
+    "autonomous_model_continuation"
+  ],
+  "target_effect": true,
+  "runtime_effect": false,
+  "native_task_completion": true,
+  "native_task_output": true,
+  "scripted_api_requests": 2
+}
