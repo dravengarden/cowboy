@@ -56,3 +56,8 @@ Deno.test("only plain Ctrl with h/j/k/l by physical key", () => {
   assertEquals(regionMotionKey(event("KeyL", { metaKey: true })), null);
   assertEquals(regionMotionKey(event("KeyA")), null);
 });
+
+Deno.test("a thin bar sharing a sliver of the edge does not win", () => {
+  // From Sessions, L passes the top bar (40px of shared edge) for Prompt.
+  assertEquals(regionInDirection(sessions, all, "l"), 2);
+});
