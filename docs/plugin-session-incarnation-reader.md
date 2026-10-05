@@ -36,6 +36,22 @@ it, and the floor is anchored by the activation after it. The native writer
 startup parser and the reader-conformance manifest accept the declaration only
 as reader 1 / writer 0, and still refuse unknown fields.
 
+## Status: published, not activated
+
+Source is on main (`4d792318`) after the full Rust gate on the integrated tree
+(585 standalone and 1918 all-features tests, both Clippy gates, Rustfmt). The
+native conformance extension (default reader owns an empty namespace; a committed
+valid record is accepted and untouched by the previous writer; corrupt,
+foreign-owner and shared-lineage records refuse before binding) has **not been
+run against built artifacts**. Main now contains the independent commit
+`22de6bbf` (host resources and idle hibernation), which changes the Machine
+runtime wire files. `cowboy-machine-host-release` and
+`cowboy-machine-writer-host-release` refuse that change by design
+(`retained-worker-interface-compatible`), so no resident-only release can be
+built from main. Activating it needs the separate worker-pin/full-release
+maintenance acceptance, which is not authorized by this work and was not
+attempted. Production still runs `9c79b9c3`; no floor was created.
+
 ## Limits
 
 This is validation and exclusive ownership of an empty-by-default namespace. It

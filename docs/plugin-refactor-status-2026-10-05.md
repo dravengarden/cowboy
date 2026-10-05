@@ -80,6 +80,11 @@ The full contract is the [incarnation design](plugin-session-incarnation-design.
    state exists. Not exercised by a Cowboy release yet and **not activated on
    Falcon**, which keeps its older owner until its own host activation.
 2. Ship a Machine reader for the incarnation namespace with the writer disabled.
+   **Implemented, verified and published** (`4d792318`, see the
+   [reader contract](plugin-session-incarnation-reader.md)); **not activated**:
+   main now carries an independent wire change that host-only Machine releases
+   refuse, so activation waits for that task's separately accepted full Machine
+   maintenance.
 3. Admit a writer behind the floor; mint and persist an incarnation per Session
    slot before launch, rotate it on reset, supersede it on deletion.
 4. Carry it through the Machine protocol and make the Controller's existing
