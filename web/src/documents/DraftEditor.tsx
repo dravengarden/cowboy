@@ -374,7 +374,7 @@ function DraftEditingSession(
         sx={{
           ...(desktop ? { "& .MuiIconButton-root": desktopDraftActionSx } : {}),
           px: desktop ? "1rem" : 1,
-          py: 0.5,
+          py: desktop ? "0.375rem" : 0.5,
           borderBottom: 1,
           borderColor: "divider",
         }}
@@ -577,7 +577,7 @@ function DraftEditingSession(
           flexWrap: desktop ? "wrap" : "nowrap",
           overflowX: desktop ? "visible" : "auto",
           flexShrink: 0,
-          pb: desktop ? 0.5 : "max(4px, env(safe-area-inset-bottom))",
+          pb: desktop ? "0.5rem" : "max(4px, env(safe-area-inset-bottom))",
         }}
       >
         <Box
