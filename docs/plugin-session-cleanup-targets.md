@@ -76,19 +76,28 @@ leaf comparison, so the existing ancestor-rename fixture now preserves its
 original artifact as well as replacement contents.
 
 Linux defers the two root eligibility markers until the content walk finishes
-successfully. The walk streams entries and retains at most two marker entries;
-duplicate marker names in a changing enumeration produce the change refusal.
-This prevents cleanup's own early marker removal from hiding remaining artifacts
-from retry after a content I/O error. Nested files with the same basenames are
-ordinary content. A regression removes one payload, injects an I/O failure,
-checks both markers remain valid, then retries and clears the remaining payloads.
-It also refuses at the start of marker finalization and successfully retries.
+successfully. The walk streams entries and skips root marker names; nested files
+with those basenames remain ordinary content. After the walk, finalization pins
+both regular marker objects with restricted `openat2`/`O_PATH` opens, validates
+the bounded tag, and retains at most two extra handles for the current target.
+A successful marker unlink is recorded before any later fallible check. Retry
+can therefore finish cleanup's own partial marker removal without requiring
+both markers to remain present, and without repeating the content walk.
 
-This is ordered finalization, not a transaction or crash-resume journal. The two
-marker removals are not atomic; a failure after the first can leave unmarked
-marker residue after the observed content walk succeeded. Concurrently inserted
-entries, marker mutations, the final name-unlink race and I/O deadlines remain
-outside this guarantee. Non-Linux ordering is unchanged.
+Every finalization attempt checks that previously removed names remain absent
+and pending names still identify the pinned original regular objects. It reads
+the remaining tag through its pinned regular object and revalidates its bounded
+signature. Recreated, replaced, linked, missing or mounted markers, changed
+Session/target identity, and withdrawn tag eligibility refuse before additional
+unlink effects. Newly inserted content after the walk is outside finalization
+and is preserved. Returned paths describe completion of the original observed
+walk, not a guarantee that concurrent writers have left the directory empty.
+
+This is ordered process-local finalization, not a transaction or crash-resume
+journal. Progress does not survive resident restart. Marker removals and the
+final identity comparison/name unlink are not atomic; concurrent contents and
+same-node marker mutations are not frozen. General I/O deadlines remain outside
+this guarantee. Non-Linux ordering and pathname fallback remain unchanged.
 
 Removal admits at most 64 descendant levels and one million content entries
 across all candidate targets in one pass. It retains the target and descendant

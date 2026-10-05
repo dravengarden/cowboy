@@ -517,6 +517,8 @@ impl std::error::Error for CleanupTargetChanged {}
 struct CleanupPlan {
     targets: Vec<CleanupTarget>,
     completed: Vec<PathBuf>,
+    #[cfg(target_os = "linux")]
+    finalization: Option<CleanupFinalization>,
 }
 
 impl CleanupPlan {
@@ -525,6 +527,8 @@ impl CleanupPlan {
         Self {
             targets,
             completed: Vec::new(),
+            #[cfg(target_os = "linux")]
+            finalization: None,
         }
     }
 }
@@ -809,7 +813,11 @@ fn remove_cleanup_plan(
     let mut content_entries = 0;
     while let Some(target) = plan.targets.get(plan.completed.len()) {
         target.verify(workspace)?;
-        if !cargo_target_markers_match(&target.directory)? {
+        #[cfg(target_os = "linux")]
+        let needs_markers = plan.finalization.is_none();
+        #[cfg(not(target_os = "linux"))]
+        let needs_markers = true;
+        if needs_markers && !cargo_target_markers_match(&target.directory)? {
             return Err(CleanupTargetChanged.into());
         }
         let canonical_target = target
@@ -825,15 +833,24 @@ fn remove_cleanup_plan(
             );
         }
         #[cfg(target_os = "linux")]
-        clear_cleanup_directory(
-            workspace,
-            target,
-            &target.directory,
-            Path::new(""),
-            0,
-            &mut content_entries,
-            before_child_remove,
-        )?;
+        {
+            if plan.finalization.is_none() {
+                clear_cleanup_directory(
+                    workspace,
+                    target,
+                    &target.directory,
+                    Path::new(""),
+                    0,
+                    &mut content_entries,
+                    before_child_remove,
+                )?;
+                plan.finalization = Some(CleanupFinalization::capture(target)?);
+            }
+            plan.finalization
+                .as_mut()
+                .expect("finalization captured")
+                .finish(workspace, target, before_child_remove)?;
+        }
         #[cfg(not(target_os = "linux"))]
         {
             let contents_root = directory_access_root(&target.directory, &target.path);
@@ -854,8 +871,116 @@ fn remove_cleanup_plan(
         // above remain attached to the original target on Linux.
         plan.completed
             .push(session_root.join(target.path.strip_prefix(access_root)?));
+        #[cfg(target_os = "linux")]
+        {
+            plan.finalization = None;
+        }
     }
     Ok(plan.completed.clone())
+}
+
+#[cfg(target_os = "linux")]
+struct CleanupMarker {
+    name: &'static str,
+    directory_entry: File,
+    removed: bool,
+}
+
+#[cfg(target_os = "linux")]
+struct CleanupFinalization {
+    markers: [CleanupMarker; 2],
+}
+
+#[cfg(target_os = "linux")]
+impl CleanupFinalization {
+    fn capture(target: &CleanupTarget) -> Result<Self> {
+        use rustix::fs::OFlags;
+        let capture = |name| -> Result<CleanupMarker> {
+            let directory_entry = open_cleanup_content_entry(
+                &target.directory,
+                Path::new(name),
+                OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            )?;
+            if !directory_entry.metadata()?.is_file() {
+                return Err(CleanupTargetChanged.into());
+            }
+            Ok(CleanupMarker {
+                name,
+                directory_entry,
+                removed: false,
+            })
+        };
+        let finalization = Self {
+            markers: [capture(".rustc_info.json")?, capture("CACHEDIR.TAG")?],
+        };
+        finalization.verify_markers(target)?;
+        Ok(finalization)
+    }
+
+    fn verify_markers(&self, target: &CleanupTarget) -> Result<()> {
+        use rustix::fs::OFlags;
+        let access = directory_access_root(&target.directory, &target.path);
+        for marker in &self.markers {
+            if marker.removed {
+                match std::fs::symlink_metadata(access.join(marker.name)) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                    Ok(_) => return Err(CleanupTargetChanged.into()),
+                }
+            }
+            let current = open_cleanup_content_entry(
+                &target.directory,
+                Path::new(marker.name),
+                OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            )?
+            .metadata()?;
+            let original = marker.directory_entry.metadata()?;
+            if current.dev() != original.dev()
+                || current.ino() != original.ino()
+                || current.file_type() != original.file_type()
+            {
+                return Err(CleanupTargetChanged.into());
+            }
+            if marker.name == "CACHEDIR.TAG" {
+                // Reopen the pinned regular object, never a substituted name.
+                let file = File::open(directory_access_root(
+                    &marker.directory_entry,
+                    &access.join(marker.name),
+                ))?;
+                if !cargo_cache_tag_matches(file)? {
+                    return Err(CleanupTargetChanged.into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(
+        &mut self,
+        workspace: &CleanupWorkspace,
+        target: &CleanupTarget,
+        before_child_remove: &impl Fn(&Path) -> Result<()>,
+    ) -> Result<()> {
+        use rustix::fs::{AtFlags, unlinkat};
+        let access = directory_access_root(&target.directory, &target.path);
+        for index in 0..self.markers.len() {
+            target.verify(workspace)?;
+            self.verify_markers(target)?;
+            if self.markers[index].removed {
+                continue;
+            }
+            let name = self.markers[index].name;
+            before_child_remove(&access.join(name))?;
+            target.verify(workspace)?;
+            self.verify_markers(target)?;
+            // Record only a successful unlink, before any later fallible check.
+            // The final comparison/name unlink remains non-atomic.
+            unlinkat(&target.directory, name, AtFlags::empty())?;
+            self.markers[index].removed = true;
+            target.verify(workspace)?;
+        }
+        self.verify_markers(target)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -928,35 +1053,7 @@ fn clear_cleanup_directory(
     }
     verify_cleanup_content_directory(workspace, target, directory, relative)?;
     let access = directory_access_root(directory, &target.path.join(relative));
-    let mut reader = std::fs::read_dir(&access)?.fuse();
-    let mut markers = Vec::with_capacity(2);
-    // Preserve root eligibility until every other entry finishes. Stream the
-    // directory while retaining at most its two marker entries, not the tree.
-    let ordered = std::iter::from_fn(|| -> Option<Result<std::fs::DirEntry>> {
-        loop {
-            match reader.next() {
-                Some(Ok(entry))
-                    if relative.as_os_str().is_empty()
-                        && matches!(
-                            entry.file_name().to_str(),
-                            Some(".rustc_info.json" | "CACHEDIR.TAG")
-                        ) =>
-                {
-                    if markers.len() >= 2
-                        || markers
-                            .iter()
-                            .any(|held: &std::fs::DirEntry| held.file_name() == entry.file_name())
-                    {
-                        return Some(Err(CleanupTargetChanged.into()));
-                    }
-                    markers.push(entry);
-                }
-                Some(entry) => return Some(entry.map_err(anyhow::Error::from)),
-                None => return markers.pop().map(Ok),
-            }
-        }
-    });
-    for entry in ordered {
+    for entry in std::fs::read_dir(&access)? {
         let entry = entry?;
         *entries += 1;
         if *entries > MAX_CLEANUP_CONTENT_ENTRIES {
@@ -964,6 +1061,12 @@ fn clear_cleanup_directory(
         }
         verify_cleanup_content_directory(workspace, target, directory, relative)?;
         let name = entry.file_name();
+        if relative.as_os_str().is_empty()
+            && matches!(name.to_str(), Some(".rustc_info.json" | "CACHEDIR.TAG"))
+        {
+            // The plan captures and finalizes these only after content success.
+            continue;
+        }
         let observed = std::fs::symlink_metadata(entry.path())?;
         if observed.is_dir() {
             let child = open_cleanup_content_directory(directory, Path::new(&name))?;
@@ -1036,6 +1139,10 @@ fn cargo_target_markers_match(directory: &File) -> Result<bool> {
     let Some(file) = open_regular_cargo_marker(directory, "CACHEDIR.TAG") else {
         return Ok(false);
     };
+    cargo_cache_tag_matches(file)
+}
+
+fn cargo_cache_tag_matches(file: File) -> Result<bool> {
     if file.metadata()?.len() > MAX_CARGO_CACHE_TAG_BYTES {
         return Ok(false);
     }
@@ -1821,6 +1928,198 @@ mod tests {
             access_root,
             CleanupTarget { path, directory },
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fail_after_first_cleanup_marker(workspace: &CleanupWorkspace) {
+        let error = cleanup_build_artifacts_sync_with_hook(workspace, &|path| {
+            if path.file_name() == Some(OsStr::new("CACHEDIR.TAG")) {
+                return Err(std::io::Error::other("injected second-marker error").into());
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("injected second-marker error"));
+        let plan = workspace.cleanup_plan.lock();
+        let markers = &plan
+            .as_ref()
+            .unwrap()
+            .finalization
+            .as_ref()
+            .unwrap()
+            .markers;
+        assert!(markers[0].removed);
+        assert!(!markers[1].removed);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_resumes_own_partial_marker_finalization_without_rescanning_contents() {
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        let target = session.join("project/target");
+        fail_after_first_cleanup_marker(&workspace);
+        assert!(!target.join(".rustc_info.json").exists());
+        assert!(target.join("CACHEDIR.TAG").is_file());
+        assert!(!target.join("debug/deps/libtest.rlib").exists());
+        let late = target.join("late-source.txt");
+        std::fs::write(&late, "preserve").unwrap();
+        fail_after_first_cleanup_marker(&workspace.clone());
+        assert_eq!(
+            cleanup_build_artifacts_sync(&workspace.clone()).unwrap(),
+            vec![target.clone()]
+        );
+        assert!(!target.join("CACHEDIR.TAG").exists());
+        assert_eq!(std::fs::read_to_string(&late).unwrap(), "preserve");
+        assert!(workspace.cleanup_plan.lock().is_none());
+        assert!(cleanup_build_artifacts_sync(&workspace).unwrap().is_empty());
+        write_cargo_target(&target);
+        cleanup_build_artifacts_sync(&workspace).unwrap();
+        assert_only_directories(&target);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn partial_marker_retry_refuses_external_marker_and_directory_changes() {
+        for case in [
+            "replacement",
+            "missing",
+            "link",
+            "fifo",
+            "invalid-tag",
+            "recreated",
+            "target",
+            "parent",
+            "root",
+        ] {
+            let temp = TestDir::new();
+            let (workspace, session, _, _) = observed_cleanup_target(&temp);
+            let target = session.join("project/target");
+            fail_after_first_cleanup_marker(&workspace);
+            let tag = target.join("CACHEDIR.TAG");
+            let late = target.join("late-source.txt");
+            std::fs::write(&late, "preserve").unwrap();
+            match case {
+                "replacement" | "missing" | "link" | "fifo" => {
+                    std::fs::rename(&tag, target.join("original-tag")).unwrap();
+                    match case {
+                        "replacement" => {
+                            std::fs::write(&tag, CARGO_CACHE_TAG_SIGNATURE).unwrap();
+                        }
+                        "missing" => {}
+                        "link" => {
+                            std::os::unix::fs::symlink(target.join("original-tag"), &tag).unwrap()
+                        }
+                        "fifo" => rustix::fs::mkfifoat(
+                            rustix::fs::CWD,
+                            &tag,
+                            rustix::fs::Mode::from_raw_mode(0o600),
+                        )
+                        .unwrap(),
+                        _ => unreachable!(),
+                    }
+                }
+                "invalid-tag" => std::fs::write(&tag, "withdrawn").unwrap(),
+                "recreated" => std::fs::write(target.join(".rustc_info.json"), "{}").unwrap(),
+                "target" => {
+                    std::fs::rename(&target, session.join("original-target")).unwrap();
+                    write_cargo_target(&target);
+                }
+                "parent" => {
+                    std::fs::rename(session.join("project"), session.join("original-project"))
+                        .unwrap();
+                    write_cargo_target(&target);
+                }
+                "root" => {
+                    std::fs::rename(&session, session.with_file_name("original-session")).unwrap();
+                    write_cargo_target(&target);
+                }
+                _ => unreachable!(),
+            }
+            let invoked = std::sync::atomic::AtomicBool::new(false);
+            let error = cleanup_build_artifacts_sync_with_hook(&workspace.clone(), &|_| {
+                invoked.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap_err();
+            if case == "root" {
+                assert!(
+                    error.downcast_ref::<CleanupRootChanged>().is_some(),
+                    "{case}: {error}"
+                );
+            } else {
+                assert!(
+                    error.downcast_ref::<CleanupTargetChanged>().is_some(),
+                    "{case}: {error}"
+                );
+            }
+            assert!(!invoked.load(Ordering::SeqCst), "{case}");
+            let original = match case {
+                "target" => session.join("original-target"),
+                "parent" => session.join("original-project/target"),
+                "root" => session
+                    .with_file_name("original-session")
+                    .join("project/target"),
+                _ => target.clone(),
+            };
+            assert_eq!(
+                std::fs::read_to_string(original.join("late-source.txt")).unwrap(),
+                "preserve",
+                "{case}"
+            );
+            if matches!(case, "target" | "parent" | "root") {
+                assert!(target.join("debug/deps/libtest.rlib").is_file(), "{case}");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[ignore = "requires explicitly isolated private mount namespace"]
+    fn partial_marker_retry_refuses_same_device_file_mount() {
+        assert_eq!(
+            std::env::var("COWBOY_TEST_CLEANUP_MOUNT_NAMESPACE").as_deref(),
+            Ok("1")
+        );
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        let target = session.join("project/target");
+        fail_after_first_cleanup_marker(&workspace);
+        let marker = target.join("CACHEDIR.TAG");
+        let foreign = temp.0.join("foreign-tag");
+        std::fs::write(&foreign, CARGO_CACHE_TAG_SIGNATURE).unwrap();
+        assert_eq!(
+            std::fs::metadata(&foreign).unwrap().dev(),
+            std::fs::metadata(&marker).unwrap().dev()
+        );
+        assert!(
+            std::process::Command::new("mount")
+                .arg("--bind")
+                .arg(&foreign)
+                .arg(&marker)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let result = cleanup_build_artifacts_sync(&workspace.clone());
+        assert!(
+            std::process::Command::new("umount")
+                .arg(&marker)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<CleanupTargetChanged>()
+                .is_some()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&foreign).unwrap(),
+            CARGO_CACHE_TAG_SIGNATURE
+        );
+        assert!(marker.is_file());
     }
 
     #[test]
