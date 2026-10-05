@@ -15,7 +15,7 @@ if (
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
   suite !== "workspace-picker" && suite !== "project-placement" &&
   suite !== "sign-in" && suite !== "desktop-composer" &&
-  suite !== "session-move"
+  suite !== "session-move" && suite !== "session-fold"
 ) {
   throw new Error("unknown suite");
 }
@@ -41,7 +41,7 @@ await build({
         suite === "review-recovery" || suite === "workspace-extensions" ||
         suite === "sheet-keyboard" || suite === "workspace-picker" ||
         suite === "project-placement" || suite === "desktop-composer" ||
-        suite === "session-move"
+        suite === "session-move" || suite === "session-fold"
         ? "development"
         : "production",
     ),
@@ -79,12 +79,14 @@ await build({
     ...(suite === "review-diff" || suite === "review-document-refresh" ||
         suite === "review-destination" || suite === "review-recovery" ||
         suite === "workspace-extensions" || suite === "desktop-composer" ||
-        suite === "session-move"
+        suite === "session-move" || suite === "session-fold"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "session-move"
+        suite === "session-fold"
+          ? "../web/src/sessionFoldBrowserConformance.tsx"
+          : suite === "session-move"
           ? "../web/src/sessionMoveBrowserConformance.tsx"
           : suite === "desktop-composer"
           ? "../web/src/desktopComposerBrowserConformance.tsx"

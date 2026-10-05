@@ -188,6 +188,7 @@ import {
     useCollapsedSessionFolders,
     withFoldersCollapsed,
 } from "./SessionFolderUi";
+import { useSessionFoldControl } from "./SessionFoldControl";
 import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { type SortableDrag, useSortable } from "./useSortable";
@@ -912,6 +913,17 @@ function SessionList({
         });
         return () => cancelAnimationFrame(frame);
     }, [movedRow, tree, desktop]);
+    const fold = useSessionFoldControl({
+        listRef,
+        tree,
+        folders: sessionFolders,
+        collapsed,
+        setCollapsed: (next) => setCollapsed(() => next),
+        activeId,
+        // The Mobile drawer's last rows sit under the floating action islands.
+        bottomInset: mobileDrawer ? 84 : 0,
+        onLocate: setMovedRow,
+    });
     const foldersHydrated = sessionFolders.folders.length > 0;
     useEffect(() => {
         if (activeId) revealSession(activeId);
@@ -1398,6 +1410,22 @@ function SessionList({
                 >
                     <CreateNewFolderOutlined />
                 </IconButton>
+                {fold.action && <Tooltip title={fold.label} describeChild>
+                    <IconButton
+                        aria-label={fold.label}
+                        onClick={fold.run}
+                        sx={{
+                            ...(desktop && desktopEmbeddedControlSx()),
+                            width: 48,
+                            minHeight: 48,
+                            borderRadius: 1.25,
+                            flexShrink: 0,
+                            fontSize: "1.1rem",
+                        }}
+                    >
+                        {fold.icon}
+                    </IconButton>
+                </Tooltip>}
                 </Stack>
                 {desktop && pinned && (
                     <Box
@@ -1695,6 +1723,9 @@ function SessionList({
                                 pointerEvents: "none",
                                 opacity: 0.55,
                             }),
+                            // A brief ring so the eye finds the current row
+                            // after the fold button reflows the list.
+                            ...fold.pulseSx(s.id),
                             // The lifted row is opaque so the rows it passes
                             // over never show through its text.
                             ...(sortable.drag?.id === s.id && {
@@ -1878,6 +1909,8 @@ function SessionList({
                         // stays on the trailing edge. Each MobileSheetActionGroup
                         // defaults to width 100%, which would split this row
                         // into two half-width columns instead of two islands.
+                        // Phones use compact slots so two three-action islands
+                        // still leave a clear gap in a 375pt phone's drawer.
                         pl: 2,
                         pr: phone ? 2 : 4,
                         pointerEvents: "none",
@@ -1888,6 +1921,7 @@ function SessionList({
                     }}
                 >
                     <MobileSheetActionGroup
+                        compact={phone}
                         actions={[
                             ...(allowNewSession
                                 ? [{
@@ -1903,9 +1937,17 @@ function SessionList({
                                 onPress: (): void => openFolderName({ mode: "create", parent: null }),
                                 icon: <CreateNewFolderOutlined aria-hidden sx={{ fontSize: "1.25em" }} />,
                             },
+                            {
+                                key: "fold",
+                                label: fold.label,
+                                visible: fold.action !== null,
+                                onPress: fold.run,
+                                icon: fold.icon,
+                            },
                         ]}
                     />
                     <MobileSheetActionGroup
+                        compact={phone}
                         actions={[
                             {
                                 key: "close",

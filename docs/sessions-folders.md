@@ -168,6 +168,21 @@ children emits one `empty` row (`empty:<folder>` key) as its body.
   one tap creates one bound folder per project that has none yet, writes no
   placements, and every current and future session of those projects files
   itself.
+- The leading island ends with the **fold button**, one control whose glyph
+  names its next action. **Focus** (unfold-less glyph) collapses every folder
+  off the current session's ancestor path, keeps that path open, scrolls the
+  session into view and rings it briefly (no ring under reduced motion);
+  without a current session it collapses every folder. Once the list is in
+  exactly that state and the session is fully visible above the islands, the
+  button becomes **Expand all** (unfold-more glyph), which opens every folder
+  while holding the current row (else the topmost visible row) at the same
+  screen position. A manual fold or scrolling the session away re-arms Focus,
+  so a press never expands a list the reader just lost their place in. A list
+  with nothing to fold away shows **Show current session** (locate glyph); the
+  button hides when it has nothing to do. The state is derived (fold set plus
+  an IntersectionObserver on the current row), never remembered. Phones use
+  44px compact slots in both footer islands so the six actions keep a gap in
+  a 375pt phone's drawer.
 
 ## Desktop
 
@@ -195,7 +210,8 @@ lists the region's live map. Command Palette entries: New Session Folder,
 Move Session to Folder…, Organize Sessions by Project, Collapse/Expand All
 Session Folders, Reveal Current Session. No workspace-prefix continuation is
 added; `Cmd/Alt+K N` still creates a session. A folder button beside New
-session opens the same folder-wide actions with the pointer.
+session opens the same folder-wide actions with the pointer; the fold button
+beside it (see Mobile) is the one-click Focus / Expand all toggle.
 
 Pointer: see [Drag into folders](#drag-into-folders). Order mode keeps the
 row-above rule, so `j/k` across a header moves a session in or out. The folder actions modal offers

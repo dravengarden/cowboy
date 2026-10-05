@@ -233,6 +233,45 @@ export function foldersRevealing(
 }
 
 /**
+ * What the Sessions fold button does next (docs/sessions-folders.md):
+ * - `focus`: collapse every folder off the current session's path and bring
+ *   that session into view;
+ * - `expand`: the list is already focused and the session is in view, so open
+ *   every folder;
+ * - `locate`: no folder can fold away from the session, so only bring it into
+ *   view.
+ * `null` when there is nothing to fold and no current session to locate.
+ */
+export type SessionFoldAction = "focus" | "expand" | "locate";
+
+/** Folder ids the focused view collapses: everything off the session path. */
+export function foldersOffSessionPath(
+  tree: SessionTree,
+  value: SessionFoldersValue,
+  sessionId: string | null,
+): string[] {
+  const path = new Set(
+    sessionId ? foldersRevealing(tree, value, sessionId) : [],
+  );
+  return value.folders.map((folder) => folder.id).filter((id) => !path.has(id));
+}
+
+export function sessionFoldAction(
+  tree: SessionTree,
+  value: SessionFoldersValue,
+  collapsed: ReadonlySet<string>,
+  sessionId: string | null,
+  sessionInView: boolean,
+): SessionFoldAction | null {
+  const off = new Set(foldersOffSessionPath(tree, value, sessionId));
+  if (off.size === 0) return sessionId ? "locate" : null;
+  const focused = value.folders.every((folder) =>
+    collapsed.has(folder.id) === off.has(folder.id)
+  );
+  return focused && (sessionId === null || sessionInView) ? "expand" : "focus";
+}
+
+/**
  * Where a session lands when dropped at `index` among `rows` (the rows list
  * with the dragged session removed): the container of the row just above,
  * or the folder itself when that row is a folder header (dropping "onto" a

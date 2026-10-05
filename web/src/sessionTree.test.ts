@@ -6,12 +6,14 @@ import {
   displayedSessionOrder,
   dropTargetFolder,
   folderIdFromRowKey,
+  foldersOffSessionPath,
   foldersRevealing,
   mostUrgentStatus,
   movedRowKey,
   projectSessionDrop,
   rowInsideFolder,
   sessionActivity,
+  sessionFoldAction,
   sessionTreeRowKey,
 } from "./sessionTree";
 
@@ -299,4 +301,38 @@ Deno.test("explicit left drag can leave a branch without finding its last row", 
     folder: "f-cowboy",
     depth: 1,
   });
+});
+
+Deno.test("the fold button focuses the current session, then expands everything", () => {
+  const all = new Set(value.folders.map((folder) => folder.id));
+  const open = buildSessionTree(sessions, value, new Set());
+  assertEquals(foldersOffSessionPath(open, value, "s4"), [
+    "f-garden",
+    "f-orphan",
+  ]);
+  assertEquals(sessionFoldAction(open, value, new Set(), "s4", true), "focus");
+
+  const focused = new Set(["f-garden", "f-orphan"]);
+  const tree = buildSessionTree(sessions, value, focused);
+  assertEquals(sessionFoldAction(tree, value, focused, "s4", true), "expand");
+  // Scrolled away from the focused session: bring it back before expanding.
+  assertEquals(sessionFoldAction(tree, value, focused, "s4", false), "focus");
+  // A manual fold leaves the focused view.
+  const manual = new Set([...focused, "f-ime"]);
+  assertEquals(sessionFoldAction(tree, value, manual, "s4", true), "focus");
+
+  // Without a current session focus means collapse all.
+  assertEquals(
+    foldersOffSessionPath(open, value, null).length,
+    value.folders.length,
+  );
+  assertEquals(sessionFoldAction(open, value, new Set(), null, false), "focus");
+  assertEquals(sessionFoldAction(open, value, all, null, false), "expand");
+});
+
+Deno.test("the fold button only locates when nothing can fold away", () => {
+  const flat: SessionFoldersValue = { folders: [], placement: {} };
+  const tree = buildSessionTree(sessions, flat, new Set());
+  assertEquals(sessionFoldAction(tree, flat, new Set(), "s2", true), "locate");
+  assertEquals(sessionFoldAction(tree, flat, new Set(), null, false), null);
 });
