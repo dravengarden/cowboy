@@ -53,8 +53,18 @@ export function hintName(element: HTMLElement): string {
       .join(" ") || element.placeholder
     : "";
   return (element.getAttribute("aria-label") || fromLabelledBy ||
-    fieldLabel || element.textContent || element.title || "")
+    fieldLabel || visibleText(element) || element.title || "")
     .replace(/\s+/g, " ").trim();
+}
+
+/** Text a reader would hear: keycaps and other aria-hidden decoration (the
+ *  `Esc` inside "Cancel") are not part of the control's name. */
+function visibleText(element: HTMLElement): string {
+  const clone = element.cloneNode(true) as HTMLElement;
+  for (const hidden of clone.querySelectorAll("kbd, [aria-hidden='true']")) {
+    hidden.remove();
+  }
+  return clone.textContent ?? "";
 }
 
 /**

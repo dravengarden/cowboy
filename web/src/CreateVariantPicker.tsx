@@ -1,11 +1,10 @@
-import { Stack, Typography } from "@mui/material";
+import { Typography } from "@mui/material";
 import {
   ChatBubbleOutline,
   DescriptionOutlined,
   FolderOutlined,
 } from "@mui/icons-material";
 import { useMemo } from "react";
-import { Kbd } from "./Kbd";
 import { type SegmentedTabChangeSource, SegmentedTabs } from "./SegmentedTabs";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { useStoreSelector } from "./store";
@@ -28,14 +27,13 @@ export function createVariantTabId(variant: CreateVariant): string {
 }
 
 export function CreateVariantPicker(
-  { value, disabled, onChange, keyboard = false, keysAvailable = false }: {
+  { value, disabled, onChange, keyboard = false }: {
     value: CreateVariant;
     disabled: boolean;
     onChange: (value: CreateVariant, source: SegmentedTabChangeSource) => void;
-    /** Desktop: Vim tablist grammar plus visible digit slots. */
+    /** Desktop: Vim tablist grammar (h/l). Direct picks come from the
+     *  dialog's leader labels, so the tabs carry no digits. */
     keyboard?: boolean;
-    /** The tablist owns keyboard focus, so its slots execute now. */
-    keysAvailable?: boolean;
   },
 ): React.JSX.Element {
   return (
@@ -45,35 +43,13 @@ export function CreateVariantPicker(
       aria-label="Create type"
       disabled={disabled}
       vimKeys={keyboard}
-      options={CREATE_VARIANTS.map(({ value, label, icon }, index) => ({
+      options={CREATE_VARIANTS.map(({ value, label, icon }) => ({
         value,
         icon,
+        label,
         id: createVariantTabId(value),
         controls: "create-variant-panel",
         ariaLabel: label,
-        ...(keyboard
-          ? {
-            keyShortcuts: String(index + 1),
-            label: (
-              <Stack
-                component="span"
-                direction="row"
-                spacing={0.75}
-                alignItems="center"
-                justifyContent="center"
-              >
-                <span>{label}</span>
-                <Kbd
-                  keys={String(index + 1)}
-                  variant="context"
-                  availability={keysAvailable && !disabled
-                    ? "available"
-                    : "inactive"}
-                />
-              </Stack>
-            ),
-          }
-          : { label }),
       }))}
     />
   );

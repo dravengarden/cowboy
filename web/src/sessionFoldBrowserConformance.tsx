@@ -275,7 +275,7 @@ export async function runSessionFoldBrowserConformance(): Promise<string[]> {
       await tick();
       await tick();
       const tab = [...document.querySelectorAll<HTMLElement>("[role=tab]")]
-        .find((element) => element.textContent === "Folder");
+        .find((element) => element.getAttribute("aria-label") === "Folder");
       check(tab, "Create has no Folder tab");
       flushSync(() => tab.click());
       await tick();

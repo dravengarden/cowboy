@@ -442,10 +442,8 @@ export async function runDraftDocumentsBrowserConformance(
         );
         check(
           document.querySelector('[data-create-key-hint="text"]') &&
-            document.querySelectorAll(
-                '[role=tab] [data-shortcut-state="inactive"]',
-              ).length === 3,
-          "Insert advertises Esc and keeps type slots inactive",
+            !document.querySelector("[role=tab] [data-shortcut-state]"),
+          "Insert advertises Esc; type tabs carry no digit slots",
         );
         press(sessionTitle, "Escape", { key: "Escape", isComposing: true });
         await tick();
@@ -461,11 +459,8 @@ export async function runDraftDocumentsBrowserConformance(
           "Esc leaves the title for the selected type tab",
         );
         check(
-          document.querySelectorAll(
-              '[role=tab] [data-shortcut-state="available"]',
-            ).length === 3 &&
-            document.querySelector('[data-create-key-hint="tabs"]'),
-          "Type slots and the Normal hint become available on the tablist",
+          document.querySelector('[data-create-key-hint="tabs"]'),
+          "The Normal hint appears on the tablist",
         );
         press(document.activeElement!, "KeyL");
         await tick();
@@ -474,9 +469,9 @@ export async function runDraftDocumentsBrowserConformance(
             document.activeElement?.getAttribute("aria-label") === "Draft",
           "l selects the next type and keeps the keyboard on the tablist",
         );
-        press(document.activeElement!, "Digit3", { key: "3" });
+        press(document.activeElement!, "KeyL");
         await tick();
-        check(selected() === "Folder", "3 picks Folder directly");
+        check(selected() === "Folder", "l reaches Folder");
         press(document.activeElement!, "KeyH");
         await tick();
         check(selected() === "Draft", "h selects the previous type");

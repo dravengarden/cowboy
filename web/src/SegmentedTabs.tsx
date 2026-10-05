@@ -61,7 +61,7 @@ export function SegmentedTabs<T extends string>({
   /** Extra attributes for the root, typically `data-*` hooks. */
   readonly rootProps?: Readonly<Record<`data-${string}`, string | undefined>>;
   /** Desktop Vim grammar for a focused tablist: `h`/`l` beside the arrows and
-   *  `1…9` for a direct segment, resolved from physical keys so an active CJK
+   *  resolved from physical keys so an active CJK
    *  input source cannot turn them into marked text. Touch never sets it. */
   readonly vimKeys?: boolean;
 }): React.JSX.Element {
@@ -88,12 +88,7 @@ export function SegmentedTabs<T extends string>({
       }
     }
     const index = enabled.findIndex((option) => option.value === current);
-    const slot = vimKeys && /^[1-9]$/.test(key)
-      ? options[Number(key) - 1]
-      : undefined;
-    const next = slot
-      ? enabled.find((option) => option.value === slot.value)
-      : key === "ArrowRight"
+    const next = key === "ArrowRight"
       ? enabled[(index + 1) % enabled.length]
       : key === "ArrowLeft"
       ? enabled[(index - 1 + enabled.length) % enabled.length]
