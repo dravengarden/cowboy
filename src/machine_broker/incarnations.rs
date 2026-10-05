@@ -56,6 +56,10 @@ struct Record {
 }
 
 pub(super) struct Reader {
+    #[allow(
+        dead_code,
+        reason = "held for the life of the resident to keep exclusive ownership of the namespace"
+    )]
     namespace: Namespace,
     entries: BTreeMap<String, Entry>,
 }
@@ -110,6 +114,7 @@ impl Reader {
         self.entries.get(session_id)
     }
 
+    #[cfg(test)]
     pub(super) fn check(&self) -> Result<()> {
         self.namespace.check()
     }
