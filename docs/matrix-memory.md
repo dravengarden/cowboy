@@ -1,6 +1,6 @@
 # Matrix Provider integration
 
-Source contract for standard Codex 3.3.1 and Claude 3.4.3. Upstream native CLI,
+Source contract for standard Codex 3.3.2 and Claude 3.4.7. Upstream native CLI,
 ACP and authentication versions are unchanged. Installation and native runtime
 acceptance are separate release receipts, not implied by this document.
 
@@ -35,7 +35,7 @@ MCP and recalls bounded memory before each turn. It captures public completed
 messages, command results and file changes. Its existing execution bridge still
 owns every remote filesystem/process operation.
 
-Claude's remote Mods facade allows only the four exact Matrix MCP tools
+Claude's remote Mods facade allows only the seven exact Matrix MCP tools
 alongside existing target tools. Its input bridge retrieves fresh context before
 each user turn, including after compaction; native cached project instructions
 are not used for dynamic recall. Matrix calls run on OVH;
@@ -59,16 +59,27 @@ correction/forgetting, resume/compaction, outage delivery, scope isolation and
 the existing packaged execution gates. A synthetic extraction or client test
 alone does not establish native acceptance or improvement over built-in memory.
 
-Matrix 0.2.0 keeps these four tool names and Provider versions. Its experimental
-`memory_search` code argument composes scoped reads and emits selected JSON in
-one call; native Codex code mode and Claude direct MCP both pass the packaged
-fixture with `tools/matrix_native_conformance.py --code-mode`. Run that fixture
-inside the pinned shell and an isolated loopback network namespace, supplying
-the independent Matrix source and exact packaged native root explicitly.
+Matrix 0.3.0 retains the original `memory_search`, `memory_get`, `memory_put`
+and `memory_forget` tools, adding `memory_read`, `memory_execute` and
+`memory_receipt`. `memory_execute` accepts permissive TS or JS, compiles inside
+the service and runs a fresh contained V8 instance. The model-facing SDK remains
+strictly typed and runtime inputs remain validated. It can compose scoped reads,
+staged atomic writes and lazy shell processing in one call. Shell runs against
+private scratch files on the Matrix host; target project commands continue to
+use Cowboy's execution tools. The direct query path avoids sandbox startup.
+
+Codex discovers the new MCP tools dynamically. Claude 3.4.7 allows the three
+additional exact names; arbitrary Matrix-prefixed names remain refused.
+Existing workers retain their signed generation, so the new Claude routing
+applies to new sessions. The old Python read-only code path remains compatible.
 Matrix's draft protocol support retains older native-client negotiation.
+Both packaged native clients and Remote execution passed the
+[CodeAct acceptance](releases/matrix-codeact-2026-10-05.md).
+
 The independently versioned [Matrix performance contract][matrix-performance]
-owns the draft pin, interpreter limits, private metrics, benchmark method and
-weekly feedback review. No Provider or active worker restart is needed to update
-the memory service.
+and [CodeAct contract][matrix-codeact] own the draft pin, SDK, sandbox limits,
+private metrics, benchmark method and weekly feedback review. Matrix product
+activation is separate from Cowboy Controller and Machine activation.
 
 [matrix-performance]: https://github.com/dravengarden/matrix/blob/main/docs/performance.md
+[matrix-codeact]: https://github.com/dravengarden/matrix/blob/main/docs/codeact-runtime.md

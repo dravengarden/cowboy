@@ -53,10 +53,10 @@ The maintained routing list is `NATIVE_TOOLS` in
 `plugins/claude-code/runtime/tools.mjs`; read it rather than freezing a count
 here. Today the target tools are Bash, Read, Write, Edit, Glob, Grep,
 NotebookEdit and TaskStop. `context-mod.js` permits native TodoWrite and
-AskUserQuestion and, only for enrolled sessions, the four exact Matrix memory
-tools. Unknown tools are denied. Native agents, project hooks/skills, implicit
-file attachments, plan files and PDF extraction remain unsupported by this
-lane; adopting any of them is a separate capability change.
+AskUserQuestion and, only for enrolled sessions, the exact Matrix memory tools
+listed in that module. Unknown tools are denied. Native agents, project
+hooks/skills, implicit file attachments, plan files and PDF extraction remain
+unsupported by this lane; adopting any of them is a separate capability change.
 
 Check shared CLI/SDK/ACP consumers through the parent upgrade workflow. Standard
 Claude and Claude DeepSeek have different remote/authentication contracts.
