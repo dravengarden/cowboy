@@ -1413,6 +1413,11 @@ function ProviderManagement(
                   challenge?.event === "login_challenge"
                 ? (
                   <Stack spacing={1}>
+                    <Typography variant="caption" color="text.secondary">
+                      The sign-in page opens on this device and uses its network
+                      connection. Choosing a remote Agent does not route browser
+                      traffic through that Machine.
+                    </Typography>
                     <Button
                       variant="contained"
                       disabled={Boolean(authentication.busy)}

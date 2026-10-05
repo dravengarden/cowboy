@@ -77,6 +77,40 @@ Both enrolled-Machine creation endpoints enforce policy independently from the
 picker. Existing sessions retain their original bindings when policy changes.
 The legacy caller-owned local API workspace contract remains unchanged.
 
+The Controller host can additionally restrict exact Provider IDs with repeated
+`cowboy serve --provider-runtime-machine PROVIDER=MACHINE` arguments. For
+example, `--provider-runtime-machine codex=ovh --provider-runtime-machine
+claude-code=ovh` permits those Providers only on OVH, including after other
+Machines enroll. Provider variants retain independent identities and policies.
+Multiple entries for one Provider form an allowlist. This host restriction
+intersects project placement; an editable preference cannot override it.
+
+Admission covers the picker, both creation APIs, legacy local creation,
+restored worker launches and new prompts, temporary login executors, and exact
+Plugin usage commands. An unavailable permitted Machine produces an error;
+the Controller does not choose a disallowed Machine. Existing turns are not
+interrupted or relocated. Native Cancel and explicit deletion remain available.
+For a denied historical placement, forced restart returns an error after sending
+Cancel and leaves the session state intact. The retained Machine protocol has no
+non-destructive hard-stop-only command; a wedged worker requires process
+maintenance on its original Machine. Never substitute Session deletion for that
+operation. Native processes that were already running can continue background
+work, so inspect existing sessions before activating a new restriction.
+
+The arguments are startup configuration, not a new persistent schema or Machine
+wire field. Keep them in the machine-owned service definition. An older
+Controller refuses the unknown argument; a recovery binary must support the
+same restriction before it can replace an enforcing Controller. Removing the
+arguments is an explicit host-policy change. This does not fence manually
+launched CLIs, shell tools, credential replicas, or a user's browser network.
+
+Native Codex owns its processes and remote execution protocol; it cannot select
+Cowboy's enrolled Machines for another Provider's login or usage command.
+Cowboy's existing Controller admission is the narrow extension for that
+cross-machine gap. Claude uses the shared admission with its native Mods
+adapter. Delete this guard when the underlying runtime transport can enforce
+the same per-Provider restriction for sessions, login and account operations.
+
 All mutations require a Product Operator or the existing explicitly delegated
 local host Operator. Project requests are bound to the Service, Machine and
 original authenticated connection. An older Machine rejects registry requests

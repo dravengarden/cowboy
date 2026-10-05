@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 pub(super) fn select_candidate<'a>(
     preferred: Option<&str>,
     mut candidates: Vec<(&'a str, String, crate::machine_protocol::PluginInventory)>,
+    restrictions: &crate::project_placement::RuntimeRestrictions,
 ) -> Option<(&'a str, String, crate::machine_protocol::PluginInventory)> {
+    candidates.retain(|candidate| restrictions.allows(&candidate.2.plugin_id, &candidate.1));
     if let Some(machine) = preferred {
         candidates.retain(|candidate| candidate.1 == machine);
     }
@@ -169,19 +171,42 @@ mod tests {
 
     #[test]
     fn pinned_machine_beats_newer_elsewhere_and_never_falls_back() {
+        let restrictions = crate::project_placement::RuntimeRestrictions::default();
         let candidates = || {
             vec![
                 ("2.0.0", "hawk".into(), inventory("2.0.0")),
                 ("1.0.0", "ovh".into(), inventory("1.0.0")),
             ]
         };
-        assert_eq!(select_candidate(None, candidates()).unwrap().1, "hawk");
         assert_eq!(
-            select_candidate(Some("ovh"), candidates()).unwrap().1,
+            select_candidate(None, candidates(), &restrictions)
+                .unwrap()
+                .1,
+            "hawk"
+        );
+        assert_eq!(
+            select_candidate(Some("ovh"), candidates(), &restrictions)
+                .unwrap()
+                .1,
             "ovh"
         );
-        assert!(select_candidate(Some("offline"), candidates()).is_none());
-        assert!(select_candidate(Some("ovh"), vec![]).is_none());
+        assert!(select_candidate(Some("offline"), candidates(), &restrictions).is_none());
+        assert!(select_candidate(Some("ovh"), vec![], &restrictions).is_none());
+        let restricted =
+            crate::project_placement::RuntimeRestrictions::parse(&["agent=ovh".into()]).unwrap();
+        assert_eq!(
+            select_candidate(None, candidates(), &restricted).unwrap().1,
+            "ovh"
+        );
+        assert!(select_candidate(Some("hawk"), candidates(), &restricted).is_none());
+        assert!(
+            select_candidate(
+                None,
+                vec![("2.0.0", "hawk".into(), inventory("2.0.0"))],
+                &restricted
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]

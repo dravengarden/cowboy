@@ -601,6 +601,25 @@ active. The exported candidate repeats the version, digest, fingerprint,
 portable schema, and method; Cowboy rejects any upgrade race or identity drift
 before committing a generation.
 
+The Controller's optional `--provider-runtime-machine` restriction also filters
+the advertised authentication executors and the final selection. Selecting a
+remote executor does not route the user's browser through it: sign-in pages
+open on the device's own network. The UI states this beside the sign-in action;
+the ordinary copy-link path remains available for opening an authorized browser
+elsewhere.
+
+Each Machine command login has one 15-minute monotonic deadline spanning
+challenge output, authorization input, and process exit. The challenge advertises
+that same deadline rather than starting a second window. Cancellation,
+disconnection, I/O failure and expiry remove the temporary candidate and stop
+the owned process group; expired input cannot promote credentials. Secret-input
+methods have the same bounded wait. The Service binds executor selection,
+resume, code submission and credential promotion to the original authenticated
+Machine connection; a replacement connection cannot revive an old login.
+Host crash/SIGKILL recovery still depends on
+service process containment; a host-only maintenance transaction must cancel
+pending logins before intentionally retaining other child processes.
+
 `GET /api/plugins` includes the Agent capability projection and its
 `authentication_executors`, a deduplicated list
 of exact signed Plugin release identities active on connected Machines. It

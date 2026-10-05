@@ -57,6 +57,7 @@ pub struct Supervisor {
     router: Arc<RuntimeRouter>,
     counter: AtomicU64,
     lifecycle: Mutex<()>,
+    runtime_restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
 }
 
 fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
@@ -115,7 +116,20 @@ impl Supervisor {
             router,
             counter: AtomicU64::new(initial),
             lifecycle: Mutex::new(()),
+            runtime_restrictions: Arc::default(),
         }
+    }
+
+    pub(crate) fn with_runtime_restrictions(
+        mut self,
+        restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
+    ) -> Self {
+        self.runtime_restrictions = restrictions;
+        self
+    }
+
+    pub(crate) fn runtime_allowed(&self, provider: &str, machine: &str) -> bool {
+        self.runtime_restrictions.allows(provider, machine)
     }
 
     /// The configured root against which relative session paths resolve.
@@ -152,6 +166,7 @@ impl Supervisor {
             workspace,
             execution_binding,
         } = placement;
+        self.runtime_restrictions.check(provider, machine_id)?;
         let ProviderGeneration {
             version,
             digest,
@@ -223,6 +238,8 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         meta.require_runtime_launch()?;
+        self.runtime_restrictions
+            .check(&meta.provider, &meta.machine_id)?;
         let spec = if meta.provider_generation_digest.is_empty() {
             provider::lookup(&meta.provider)
         } else {
@@ -287,6 +304,8 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         meta.require_runtime_launch()?;
+        self.runtime_restrictions
+            .check(&meta.provider, &meta.machine_id)?;
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
@@ -342,6 +361,12 @@ impl Supervisor {
         trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        if matches!(command, AgentCommand::Cancel) {
+            // Stopping a retained turn must never require starting or repairing
+            // a worker, including after host policy has denied its placement.
+            self.runtime_for_session(session_id)?.cancel(session_id);
+            return Ok(());
+        }
         if matches!(
             command,
             AgentCommand::Prompt(..) | AgentCommand::SetConfigOption { .. }
@@ -459,6 +484,8 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         meta.require_runtime_launch()?;
+        self.runtime_restrictions
+            .check(&meta.provider, &meta.machine_id)?;
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
@@ -549,6 +576,8 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        self.runtime_restrictions
+            .check(&meta.provider, &meta.machine_id)?;
         if meta.status == Status::Starting
             && meta.machine_id != "local"
             && meta.origin == SessionOrigin::Web
@@ -577,6 +606,23 @@ impl Supervisor {
             );
         }
         self.recycle_session_inner(session_id)
+    }
+
+    /// Request native cancellation before arming a replacement watchdog.
+    /// Old Machine protocols have no non-destructive hard-stop-only command:
+    /// ordinary `StopSession` permanently deletes the session and its worktree.
+    /// A denied historical placement therefore keeps its state and requires
+    /// Machine-owned process maintenance if native cancellation does not finish.
+    pub fn request_cancel_for_recycle(&self, session_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        self.runtime_for_session(session_id)?.cancel(session_id);
+        self.start_session(session_id).map(|_| ()).map_err(|error| {
+            format!(
+                "native cancellation requested, but force-restart is unavailable: {error}. \
+                 If cancellation does not finish, stop the worker on its original Machine \
+                 without deleting the Session"
+            )
+        })
     }
 
     /// Fence and replace one session's agent while preserving its resumable ACP
@@ -834,8 +880,9 @@ impl Supervisor {
 
     fn recycle_session_inner(&self, session_id: &str) -> Result<(), String> {
         let runtime = self.runtime_for_session(session_id)?;
+        let session = self.start_session(session_id)?;
         self.hub.set_status(session_id, Status::Starting, None);
-        runtime.reset(self.start_session(session_id)?);
+        runtime.reset(session);
         Ok(())
     }
 
@@ -952,6 +999,114 @@ mod tests {
         let router = RuntimeRouter::new();
         router.install("hawk".to_owned(), runtime);
         Supervisor::new(hub, root, 0, router)
+    }
+
+    #[tokio::test]
+    async fn runtime_restriction_blocks_restored_launches_and_prompts_but_keeps_cancel() {
+        let root = TestDir::new();
+        let cwd = root.path().display().to_string();
+        let hub = Hub::new();
+        preparing_web_session(&hub, &cwd);
+        hub.set_status("s", Status::Busy, None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone())
+            .with_runtime_restrictions(Arc::new(
+                crate::project_placement::RuntimeRestrictions::parse(&["codex=ovh".into()])
+                    .unwrap(),
+            ));
+        for result in [
+            supervisor.start_registered_session("s"),
+            supervisor.ensure_alive("s").map(|_| ()),
+            supervisor.send("s", AgentCommand::Prompt(Vec::new(), None, None)),
+            supervisor.ensure_worker(
+                "s",
+                &provider::remote_generation("codex").unwrap(),
+                root.path(),
+                None,
+            ),
+        ] {
+            assert!(result.unwrap_err().contains("not permitted"));
+        }
+        assert!(runtime.pending_for_test().is_empty());
+        supervisor.send("s", AgentCommand::Cancel).unwrap();
+        assert!(
+            runtime
+                .pending_for_test()
+                .iter()
+                .all(|command| !matches!(command, CoreCommand::EnsureSession { .. }))
+        );
+        assert_eq!(hub.session_list().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn runtime_restriction_refuses_new_registration_before_mutating_sessions() {
+        let root = TestDir::new();
+        let hub = Hub::new();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), runtime, root.0.clone())
+            .with_runtime_restrictions(Arc::new(
+                crate::project_placement::RuntimeRestrictions::parse(&["codex=ovh".into()])
+                    .unwrap(),
+            ));
+        let result = supervisor.new_session_on_with_id(
+            "refused",
+            "codex",
+            Some(root.path().display().to_string()),
+            SessionOrigin::Web,
+            false,
+            "hawk",
+            ProviderGeneration {
+                version: "",
+                digest: "",
+                auth_generation: None,
+                behavior: None,
+            },
+            None,
+        );
+        assert!(result.unwrap_err().contains("not permitted"));
+        assert!(hub.session_list().is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_restriction_preserves_refused_reload_and_native_cancel_only() {
+        let root = TestDir::new();
+        let hub = Hub::new();
+        preparing_web_session(&hub, &root.path().display().to_string());
+        hub.set_status("s", Status::Busy, None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub.clone(), Arc::clone(&runtime), root.0.clone())
+            .with_runtime_restrictions(Arc::new(
+                crate::project_placement::RuntimeRestrictions::parse(&["codex=ovh".into()])
+                    .unwrap(),
+            ));
+        let original = hub.status_revision("s");
+        assert!(
+            supervisor
+                .reload_session("s", true)
+                .unwrap_err()
+                .contains("not permitted")
+        );
+        assert!(
+            supervisor
+                .reset_session("s")
+                .unwrap_err()
+                .contains("not permitted")
+        );
+        assert_eq!(hub.status_revision("s"), original);
+        assert!(runtime.pending_for_test().is_empty());
+
+        // A denied historical runtime still receives native Cancel. Never arm
+        // a replacement watchdog or use permanent deletion as a hard stop.
+        assert!(
+            supervisor
+                .request_cancel_for_recycle("s")
+                .unwrap_err()
+                .contains("native cancellation requested, but force-restart is unavailable")
+        );
+        assert!(matches!(runtime.pending_for_test().as_slice(),
+            [CoreCommand::Cancel { session_id, .. }] if session_id == "s"));
+        assert_eq!(hub.status_revision("s"), original);
+        assert_eq!(hub.session_list().len(), 1);
     }
 
     #[tokio::test]

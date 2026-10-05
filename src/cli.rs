@@ -429,6 +429,12 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_EXECUTION_RUNTIME_MACHINE")]
     pub execution_runtime_machine: Option<String>,
 
+    /// Restrict a Provider's sessions, login executor and usage commands to an
+    /// enrolled Machine. Repeat provider=machine to permit multiple Machines.
+    /// Omitted Providers retain their ordinary placement policy.
+    #[arg(long = "provider-runtime-machine", value_name = "PROVIDER=MACHINE")]
+    pub provider_runtime_machines: Vec<String>,
+
     /// Machines this Controller may execute Code reads for on its OWN
     /// filesystem. A Machine declares its connection mode in its authenticated
     /// hello, and that declaration is not evidence of where it runs: an

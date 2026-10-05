@@ -549,12 +549,24 @@ impl MachineControl {
         self.live.write().disconnect(machine_id);
     }
 
+    #[cfg(test)]
     pub fn send(&self, machine_id: &str, command: MachineCommand) -> Result<(), String> {
+        self.send_on_connection(&self.operation_connection(machine_id)?, command)
+    }
+
+    pub(crate) fn send_on_connection(
+        &self,
+        token: &ConnectionToken,
+        command: MachineCommand,
+    ) -> Result<(), String> {
         let live = self.live.read();
         let connection = live
             .connections
-            .get(machine_id)
+            .get(&token.0.machine_id)
             .ok_or_else(|| "Machine is not connected".to_owned())?;
+        if !connection.token.same(token) {
+            return Err("Machine connection changed before command dispatch".to_owned());
+        }
         self.check_command_site(&connection.token, &command)?;
         Self::check_protocol(connection, &command)?;
         connection

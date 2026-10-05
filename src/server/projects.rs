@@ -137,6 +137,12 @@ pub(super) async fn placements(
         let inventory = providers(machine);
         let remote = machine.id != query.machine_id;
         for installed in &inventory {
+            if !state
+                .supervisor
+                .runtime_allowed(&installed.plugin_id, &machine.id)
+            {
+                continue;
+            }
             let auth = state.provider_auth.status(&installed.plugin_id);
             if let Ok(generation) = resolve_provider_generation(
                 &state.provider_catalog,

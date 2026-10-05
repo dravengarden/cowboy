@@ -2,9 +2,58 @@
 use anyhow::ensure;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+
+/// Host-owned admission intersected with the editable project preference.
+/// CLI arguments keep this out of durable reader formats: an older Controller
+/// rejects the unknown flag instead of silently ignoring a new restriction.
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeRestrictions(BTreeMap<String, BTreeSet<String>>);
+
+impl RuntimeRestrictions {
+    pub(crate) fn parse(bindings: &[String]) -> anyhow::Result<Self> {
+        let mut providers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for binding in bindings {
+            let (provider, machine) = binding.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!("Provider runtime restriction must be provider=machine")
+            })?;
+            let valid = |value: &str| {
+                !value.is_empty()
+                    && value.len() <= 128
+                    && value.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            };
+            ensure!(
+                valid(provider) && valid(machine),
+                "invalid Provider runtime restriction"
+            );
+            providers
+                .entry(provider.into())
+                .or_default()
+                .insert(machine.into());
+        }
+        Ok(Self(providers))
+    }
+
+    pub(crate) fn allows(&self, provider: &str, machine: &str) -> bool {
+        self.0
+            .get(provider)
+            .is_none_or(|machines| machines.contains(machine))
+    }
+
+    pub(crate) fn check(&self, provider: &str, machine: &str) -> Result<(), String> {
+        if self.allows(provider, machine) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Provider {provider} is not permitted to run on Machine {machine}"
+            ))
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,6 +178,35 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_restrictions_fail_closed_for_new_machines_and_keep_variants_independent() {
+        let policy = RuntimeRestrictions::parse(&[
+            "codex=ovh".into(),
+            "claude-code=ovh".into(),
+            "claude-code=backup".into(),
+        ])
+        .unwrap();
+        assert!(policy.allows("codex", "ovh"));
+        assert!(policy.allows("claude-code", "backup"));
+        for machine in ["hawk", "falcon", "macbook-air", "local", "new-machine"] {
+            assert!(!policy.allows("codex", machine));
+            assert!(!policy.allows("claude-code", machine));
+            assert!(policy.allows("codex-deepseek", machine));
+            assert!(policy.allows("claude-deepseek", machine));
+        }
+        for malformed in [
+            "",
+            "codex",
+            "=ovh",
+            "codex=",
+            "codex=ovh=hawk",
+            "codex= ovh",
+        ] {
+            assert!(RuntimeRestrictions::parse(&[malformed.into()]).is_err());
+        }
+    }
+
     #[test]
     fn remote_only_policy_is_durable_and_enforces_both_ends() {
         let dir = tempfile::tempdir().unwrap();

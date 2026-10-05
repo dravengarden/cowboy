@@ -104,6 +104,12 @@ pub(in crate::server) async fn availability(
     {
         let inventory = providers(machine);
         for installed in &inventory {
+            if !state
+                .supervisor
+                .runtime_allowed(&installed.plugin_id, runtime)
+            {
+                continue;
+            }
             let authentication = state.provider_auth.status(&installed.plugin_id);
             if let Ok(generation) = resolve_provider_generation(
                 &state.provider_catalog,
@@ -163,6 +169,12 @@ async fn create_checked(
     authenticated: &AuthenticatedProductRequest,
     request: CreateRequest,
 ) -> Result<crate::core::SessionMeta, String> {
+    if !state
+        .supervisor
+        .runtime_allowed(&request.provider, &request.runtime_machine_id)
+    {
+        return Err("Provider policy does not permit this runtime Machine".into());
+    }
     if !state
         .project_placement
         .snapshot()
