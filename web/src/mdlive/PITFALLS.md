@@ -2833,3 +2833,13 @@ transforms to the Draft canvas to polish its moving peek. Native integrated
 fixture evidence and its coverage limits belong in the acceptance receipt;
 Firefox IME fences are not native input evidence. Physical iPhone/WeType #69
 is still unresolved.
+
+### 2026-10-05 — Desktop Draft toolbar typography and grouping
+
+Desktop Draft header/format/attachment actions use rem-based targets, padding
+and SVG glyphs. Adjacent formatting commands are grouped without changing the
+user's toolbar order; groups and auxiliary controls wrap within the pane.
+Mobile keeps its existing targets and horizontal toolbar flow. No editor,
+composition handler, Vim binding, keyboard adapter or gesture changed. Browser
+layout checks cover both themes and 8–24px root sizes; this CSS-only Desktop
+change supplies no new physical iOS/WeType acceptance or fix for #69.

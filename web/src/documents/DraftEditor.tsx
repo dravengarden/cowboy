@@ -38,6 +38,33 @@ import { draftRepository, useDraftDocument } from "./store";
 import { documentNotice } from "./DocumentNotifications";
 import { type DraftDocument } from "./model";
 
+// Group adjacent commands only: the user's configured order stays intact.
+function toolbarGroup(id: string): string {
+  if (["undo", "redo"].includes(id)) return "history";
+  if (["sourceMode", "extensions"].includes(id)) return "editor";
+  if (
+    [
+      "heading",
+      "bulletList",
+      "numberedList",
+      "checklist",
+      "quote",
+      "codeBlock",
+      "indent",
+      "outdent",
+    ].includes(id) || id.startsWith("heading")
+  ) return "blocks";
+  return "inline";
+}
+
+const desktopDraftActionSx = {
+  flexShrink: 0,
+  width: "2.25rem",
+  height: "2.25rem",
+  padding: "0.375rem",
+  "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
+};
+
 const positions = new Map<string, ComposerEditorSelection>();
 export type DraftFlush = () => Promise<void>;
 
@@ -343,9 +370,10 @@ function DraftEditingSession(
       <Stack
         direction="row"
         alignItems="center"
-        spacing={1}
+        spacing={desktop ? "0.25rem" : 1}
         sx={{
-          px: desktop ? 2 : 1,
+          ...(desktop ? { "& .MuiIconButton-root": desktopDraftActionSx } : {}),
+          px: desktop ? "1rem" : 1,
           py: 0.5,
           borderBottom: 1,
           borderColor: "divider",
@@ -543,54 +571,109 @@ function DraftEditingSession(
         sx={{
           borderTop: 1,
           borderColor: "divider",
-          px: 0.5,
-          py: 0.5,
+          px: desktop ? "0.75rem" : 0.5,
+          py: desktop ? "0.5rem" : 0.5,
+          gap: desktop ? "0.5rem" : 0,
           flexWrap: desktop ? "wrap" : "nowrap",
           overflowX: desktop ? "visible" : "auto",
           flexShrink: 0,
           pb: desktop ? 0.5 : "max(4px, env(safe-area-inset-bottom))",
         }}
       >
-        {toolbar.filter((id) => !["mention", "slash", "attach"].includes(id))
-          .map((id) => {
-            const command = COMPOSER_COMMANDS_BY_ID[id];
-            return command
-              ? (
-                <Tooltip key={id} title={command.label}>
-                  <IconButton
-                    data-draft-tool
-                    aria-label={command.label}
-                    onPointerDown={(e) => e.preventDefault()}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      if (!composing.current && editor.current) {
-                        command.run({
-                          editor: editor.current,
-                          attach: () => filePicker.current?.click(),
-                        });
-                      }
-                    }}
-                    sx={{
-                      flexShrink: 0,
-                      width: desktop ? "2.25rem" : 44,
-                      height: desktop ? "2.25rem" : 44,
-                      padding: desktop ? "0.3rem" : undefined,
-                    }}
-                  >
-                    {command.icon}
-                  </IconButton>
-                </Tooltip>
-              )
-              : null;
-          })}
-        <Tooltip title="Attach file">
-          <IconButton
-            aria-label="Attach file"
-            onClick={() => filePicker.current?.click()}
-          >
-            <AttachFile />
-          </IconButton>
-        </Tooltip>
+        <Box
+          data-draft-format-toolbar
+          sx={{
+            display: desktop ? "flex" : "contents",
+            alignItems: "center",
+            flexWrap: desktop ? "wrap" : "nowrap",
+            gap: desktop ? "0.125rem" : 0,
+            minWidth: 0,
+            maxWidth: "100%",
+          }}
+        >
+          {(() => {
+            const visible = toolbar.filter((id) =>
+              !["mention", "slash", "attach"].includes(id)
+            );
+            const groups: string[][] = [];
+            for (const id of visible) {
+              const previous = groups.at(-1);
+              if (
+                !desktop ||
+                (previous && toolbarGroup(previous[0]!) === toolbarGroup(id))
+              ) {
+                if (previous) previous.push(id);
+                else groups.push([id]);
+              } else groups.push([id]);
+            }
+            return groups.map((ids, index) => (
+              <Box
+                key={ids.join(":")}
+                data-draft-tool-group
+                sx={{
+                  display: "contents",
+                }}
+              >
+                {ids
+                  .map((id, commandIndex) => {
+                    const command = COMPOSER_COMMANDS_BY_ID[id];
+                    return command
+                      ? (
+                        <Tooltip key={id} title={command.label}>
+                          <IconButton
+                            data-draft-tool
+                            aria-label={command.label}
+                            onPointerDown={(e) => e.preventDefault()}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              if (!composing.current && editor.current) {
+                                command.run({
+                                  editor: editor.current,
+                                  attach: () => filePicker.current?.click(),
+                                });
+                              }
+                            }}
+                            sx={{
+                              flexShrink: 0,
+                              ...(desktop
+                                ? desktopDraftActionSx
+                                : { width: 44, height: 44 }),
+                              ...(desktop && index > 0 && commandIndex === 0
+                                ? {
+                                  ml: "0.5rem",
+                                  "&::before": {
+                                    content: '""',
+                                    position: "absolute",
+                                    left: "-0.25rem",
+                                    top: "0.5rem",
+                                    bottom: "0.5rem",
+                                    width: "1px",
+                                    bgcolor: "divider",
+                                    pointerEvents: "none",
+                                  },
+                                }
+                                : {}),
+                            }}
+                          >
+                            {command.icon}
+                          </IconButton>
+                        </Tooltip>
+                      )
+                      : null;
+                  })}
+              </Box>
+            ));
+          })()}
+          <Tooltip title="Attach file">
+            <IconButton
+              aria-label="Attach file"
+              sx={desktop ? desktopDraftActionSx : undefined}
+              onClick={() => filePicker.current?.click()}
+            >
+              <AttachFile />
+            </IconButton>
+          </Tooltip>
+        </Box>
         <input
           ref={filePicker}
           type="file"
@@ -601,32 +684,60 @@ function DraftEditingSession(
             e.target.value = "";
           }}
         />
-        {desktop && (
-          <Button
-            size="small"
-            color="inherit"
-            aria-pressed={readableWidth}
-            onClick={() => setReadableWidth((v) => !v)}
-          >
-            Readable width
-          </Button>
-        )}
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ ml: "auto", px: 1, whiteSpace: "nowrap" }}
-          role="status"
+        <Box
+          sx={{
+            display: desktop ? "flex" : "contents",
+            alignItems: "center",
+            gap: "0.75rem",
+            ml: "auto",
+            flexShrink: 0,
+            ...(desktop
+              ? {
+                flexWrap: "wrap",
+                justifyContent: "flex-end",
+                maxWidth: "100%",
+              }
+              : {}),
+          }}
         >
-          {dirty
-            ? "Saving…"
-            : phase === "saved"
-            ? "Synced"
-            : phase === "conflict"
-            ? "Conflict · local copy kept"
-            : phase === "error"
-            ? "Needs attention"
-            : "Saved on this device"}
-        </Typography>
+          {desktop && (
+            <Button
+              size="small"
+              color="inherit"
+              sx={{
+                textTransform: "none",
+                fontSize: "0.8125rem",
+                minHeight: "2.25rem",
+                px: "0.75rem",
+                bgcolor: readableWidth ? "action.selected" : undefined,
+              }}
+              aria-pressed={readableWidth}
+              onClick={() => setReadableWidth((v) => !v)}
+            >
+              Readable width
+            </Button>
+          )}
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{
+              ml: desktop ? 0 : "auto",
+              px: desktop ? "0.25rem" : 1,
+              whiteSpace: "nowrap",
+            }}
+            role="status"
+          >
+            {dirty
+              ? "Saving…"
+              : phase === "saved"
+              ? "Synced"
+              : phase === "conflict"
+              ? "Conflict · local copy kept"
+              : phase === "error"
+              ? "Needs attention"
+              : "Saved on this device"}
+          </Typography>
+        </Box>
       </Stack>
       {history && (
         <Sheet
