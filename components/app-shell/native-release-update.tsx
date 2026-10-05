@@ -11,16 +11,28 @@ import {
 } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useEffect, useMemo, useState } from "react";
-import { getNativeAppVersion } from "./native-app-version.ts";
-export { getNativeAppVersion } from "./native-app-version.ts";
+import {
+  getNativeAppPlatform,
+  getNativeAppVersion,
+  type NativeAppPlatform,
+} from "./native-app-version.ts";
+export {
+  getNativeAppPlatform,
+  getNativeAppVersion,
+  type NativeAppPlatform,
+} from "./native-app-version.ts";
 
-export type NativeReleaseChannelKind = "sidestore" | "app_store";
-
-export interface NativeReleaseChannel {
-  readonly kind: NativeReleaseChannelKind;
-  readonly url: string;
-  readonly label?: string;
-}
+import {
+  type NativeReleaseChannel,
+  type NativeReleaseChannelKind,
+  nativeReleaseChannelsFor,
+  validChannelPlatforms,
+} from "./native-release-channels.ts";
+export {
+  type NativeReleaseChannel,
+  type NativeReleaseChannelKind,
+  nativeReleaseChannelsFor,
+} from "./native-release-channels.ts";
 
 export interface NativeReleaseManifest {
   readonly schema_version: 1;
@@ -36,6 +48,7 @@ export interface NativeReleaseUpdatePromptProps {
   readonly appId: string;
   readonly manifestUrl: string;
   readonly getCurrentVersion?: () => Promise<string | null>;
+  readonly getPlatform?: () => NativeAppPlatform;
   readonly openUrl?: (url: string) => Promise<void>;
 }
 
@@ -121,7 +134,8 @@ function validManifest(value: unknown, appId: string): value is NativeReleaseMan
     manifest.channels.every((channel) =>
       !!channel && typeof channel === "object" &&
       (channel.kind === "sidestore" || channel.kind === "app_store") &&
-      typeof channel.url === "string"
+      typeof channel.url === "string" &&
+      validChannelPlatforms(channel.platforms)
     );
 }
 
@@ -133,6 +147,7 @@ export function NativeReleaseUpdatePrompt({
   appId,
   manifestUrl,
   getCurrentVersion = getNativeAppVersion,
+  getPlatform = getNativeAppPlatform,
   openUrl = openNativeReleaseUrl,
 }: NativeReleaseUpdatePromptProps): React.JSX.Element | null {
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
@@ -149,6 +164,11 @@ export function NativeReleaseUpdatePrompt({
         if (!response.ok) return;
         const candidate: unknown = await response.json();
         if (!active || !validManifest(candidate, appId)) return;
+        // A release is news only for a shell one of its channels installs:
+        // the macOS desktop shell must not be offered the iOS SideStore
+        // build (its Tauri version, 0.1.0, is always "older").
+        const channels = nativeReleaseChannelsFor(candidate.channels, getPlatform());
+        if (channels.length === 0) return;
         const comparison = compareNativeVersions(current, candidate.latest_version);
         if (comparison === null || comparison >= 0) return;
         const mandatory = candidate.minimum_version !== undefined &&
@@ -156,7 +176,7 @@ export function NativeReleaseUpdatePrompt({
         const dismissed = globalThis.localStorage?.getItem(`native-release-dismissed:${appId}`);
         if (!mandatory && dismissed === candidate.latest_version) return;
         setCurrentVersion(current);
-        setManifest(candidate);
+        setManifest({ ...candidate, channels });
       } catch {
         // Update discovery must never block launch or the working offline shell.
       }
@@ -170,7 +190,7 @@ export function NativeReleaseUpdatePrompt({
       active = false;
       globalThis.document?.removeEventListener("visibilitychange", onVisible);
     };
-  }, [appId, getCurrentVersion, manifestUrl]);
+  }, [appId, getCurrentVersion, getPlatform, manifestUrl]);
 
   const mandatory = useMemo(() => {
     if (!manifest?.minimum_version || !currentVersion) return false;

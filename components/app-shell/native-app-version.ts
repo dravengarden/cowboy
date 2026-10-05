@@ -27,3 +27,28 @@ export async function getNativeAppVersion(
   }
   return null;
 }
+
+export type NativeAppPlatform = "ios" | "macos" | "other";
+
+type NativePlatformHost = NativeVersionHost & {
+  navigator?: { userAgent?: string; maxTouchPoints?: number };
+};
+
+/**
+ * Which Apple shell runs this page. The iOS/iPadOS shell injects its
+ * installed bundle metadata (`__cowboyNativeApp`, CowboyAppIconBridge, built
+ * against UIKit only); the macOS Tauri shell does not. An older iOS build
+ * without that bridge is still recognised by its user agent: an iPhone, or
+ * an iPad that reports "Macintosh" but has a touch screen.
+ */
+export function getNativeAppPlatform(
+  host: NativePlatformHost = globalThis as NativePlatformHost,
+): NativeAppPlatform {
+  if (host.__cowboyNativeApp) return "ios";
+  const agent = host.navigator?.userAgent ?? "";
+  if (/iPhone|iPad|iPod/.test(agent)) return "ios";
+  if (/Macintosh/.test(agent)) {
+    return (host.navigator?.maxTouchPoints ?? 0) > 0 ? "ios" : "macos";
+  }
+  return "other";
+}
