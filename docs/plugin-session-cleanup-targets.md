@@ -92,3 +92,6 @@ The subsequent [retained-directory release](releases/plugin-session-cleanup-reta
 records adoption of content-only cleanup and removal of the final name unlink.
 The [bounded-scan release](releases/plugin-session-cleanup-scan-2026-10-05.md)
 records root-relative Linux scan admission and actual bind-mount acceptance.
+The [descendant-handle release](releases/plugin-session-cleanup-descendants-2026-10-05.md)
+records recursive handle-based content removal, retained directory structure and
+mounts introduced before/after child opens.
