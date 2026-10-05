@@ -69,6 +69,8 @@ protocol field that carries the Machine-minted value to the Controller. The
 installed owner (`machines/internal/cowboyrelease`) currently binds one floor to
 one dataset path, so the dependency order is:
 
+The full contract is the [incarnation design](plugin-session-incarnation-design.md).
+
 1. Generalize the owner's floor and admission to a dataset key, reader-only first,
    without changing the deletion dataset's bytes or behaviour (Columbus work,
    separate maintenance acceptance).

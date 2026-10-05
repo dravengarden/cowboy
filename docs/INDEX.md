@@ -143,6 +143,7 @@ primary phone/desktop product path.
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`plugin-refactor-completion.md`](plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
+- [`plugin-session-incarnation-design.md`](plugin-session-incarnation-design.md) — Design (unimplemented) for a Machine-minted durable Session incarnation, its reader-first floor, carriage and acceptance evidence
 - [`plugin-refactor-status-2026-10-05.md`](plugin-refactor-status-2026-10-05.md) — Dated per-exit status against production receipts, corrected historical Web recovery and the dependency order for durable Session incarnation
 - [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
 - [`plugin-session-cleanup-root.md`](plugin-session-cleanup-root.md) — Terminal cleanup retains the original directory handle and retires after observed root replacement

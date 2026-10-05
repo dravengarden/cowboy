@@ -93,6 +93,12 @@ are not reconstructed.
   still non-atomic as documented for cleanup targets. The two marker unlinks are
   not a transaction. Completed paths describe the original scan, not current
   emptiness.
+- A resumed Session whose cleanup keeps failing leaves its in-process retry loop
+  running (60-second backoff) with its retained root, target and marker handles,
+  after resume stops waiting for it. There is no global cap on such loops or
+  handles across Sessions; the 4,096-entry nomination bound is the only limit. A
+  later change should give up in-process after bounded retries and rely on the
+  durable nomination, releasing those handles.
 - No general filesystem I/O deadline is added. Resume merely bounds how long one
   Session delays the start of the next.
 - A worktree that was deleted and recreated while a resident was down is
