@@ -17,7 +17,7 @@ import { copyDraftToSession } from "./documents/transfer";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
-import { AiInstallationPicker } from "./AiInstallationPicker";
+import { AiInstallationPicker, installationCapacity } from "./AiInstallationPicker";
 import { useProjectPlacement } from "./useProjectPlacement";
 import { MachineProjects } from "./MachineProjects";
 import {
@@ -2609,6 +2609,7 @@ export function CreateDialog({
     const creatingRef = useRef(false);
     const machines = useStoreSelector((snapshot) => snapshot.machines);
     const placement = useProjectPlacement(open, machines);
+    const fullInstallation = placement.installations.find((installation) => installation.full);
     const machineId = placement.machineId;
     const cwd = placement.project?.projectId ?? "";
     const provider = placement.installation?.provider ?? "";
@@ -3044,6 +3045,8 @@ export function CreateDialog({
                             onChange={placement.selectInstallation}
                             helperText={placement.loading ? "Checking available AI installations…" : placement.installation
                                 ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
+                                : fullInstallation
+                                ? `${fullInstallation.machine.display_name} is full (${installationCapacity(fullInstallation)}). Choose another AI installation.`
                                 : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
                                 : "No ready AI installation can use this project. Check Machines in Settings."}
                         />

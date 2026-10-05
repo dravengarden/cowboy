@@ -98,7 +98,11 @@ export function useProjectPlacement(
       const machine = machines.find((m) =>
         m.id === placement.runtime_machine_id
       );
-      if (!machine?.schedulable) return [];
+      if (!machine?.connected || machine.capacity.draining) return [];
+      // A connected, non-draining Machine that is not schedulable has reached
+      // its live-session capacity. Show it as full instead of silently hiding
+      // every installation it hosts.
+      const full = !machine.schedulable;
       const inventory = projectAgentPluginInventory(machine.plugins);
       const row = joinProviderInstallations(catalog?.providers ?? [], inventory)
         .find((row) => row.providerId === placement.provider);
@@ -114,16 +118,18 @@ export function useProjectPlacement(
         machine,
         entry: row.installedEntry,
         installed: row.installed,
+        full,
         ...placement,
       }];
     });
   }, [availability, machineId, machines, catalog]);
   const preferredInstallations = installations.filter((i) =>
-    i.runtime_machine_id === availability?.default_runtime_machine_id
+    i.runtime_machine_id === availability?.default_runtime_machine_id &&
+    !i.full
   );
   const defaultCandidates = availability?.default_runtime_machine_id
     ? preferredInstallations
-    : installations;
+    : installations.filter((i) => !i.full);
   const defaultProvider = defaultNewSessionProvider(
     defaultCandidates.map((i) => i.provider),
   );
@@ -148,8 +154,8 @@ export function useProjectPlacement(
     runtimeMachineId: installation?.runtime_machine_id ?? "",
     separate: installation?.mode === "remote",
     ready: Boolean(
-      project && installation && availability?.machine_id === machineId &&
-        !error && !catalogError,
+      project && installation && !installation.full &&
+        availability?.machine_id === machineId && !error && !catalogError,
     ),
     loading: Boolean(
       open &&
