@@ -41,3 +41,21 @@ Deno.test("browser and failed or malformed bridges do not invent an installed ve
     null,
   );
 });
+
+Deno.test("the iOS bridge, an iPhone or a touch iPad is iOS; a desktop Mac is macOS", async () => {
+  const { getNativeAppPlatform } = await import("./native-app-version.ts");
+  assertEqual(getNativeAppPlatform({ __cowboyNativeApp: { version: "0.1.34" } }), "ios");
+  assertEqual(
+    getNativeAppPlatform({ navigator: { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0)" } }),
+    "ios",
+  );
+  assertEqual(
+    getNativeAppPlatform({ navigator: { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", maxTouchPoints: 5 } }),
+    "ios",
+  );
+  assertEqual(
+    getNativeAppPlatform({ navigator: { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", maxTouchPoints: 0 } }),
+    "macos",
+  );
+  assertEqual(getNativeAppPlatform({ navigator: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" } }), "other");
+});
