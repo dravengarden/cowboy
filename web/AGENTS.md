@@ -60,6 +60,11 @@ routinely breaks another.
   a disposable context over the loopback DevTools bridge, and
   `just desktop-keyboard-acceptance <endpoint> <dir>` drives Desktop keys as
   trusted input with screenshots. CDP IME composition is not OS IME acceptance.
+- Desktop keyboard, leader, label, modal or Draft-page changes must pass
+  `just desktop-browser-gate` (pinned Firefox and Chromium in both themes, then
+  trusted-input acceptance with screenshots on hawk Chrome). Exit code 3 means
+  the trusted-input step was skipped for lack of a DevTools endpoint; report
+  it as not run, never as passed. Look at the screenshots it writes.
 
 ## Mobile drawers, Code Review, and long transcripts
 

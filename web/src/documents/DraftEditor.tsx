@@ -16,17 +16,12 @@ import {
   SaveAlt,
 } from "@mui/icons-material";
 import {
-  ChevronLeftIcon,
-  ChevronRightIcon,
   DownloadIcon,
   EllipsisIcon,
   HistoryIcon,
   KeyboardHideIcon,
-  MenuIcon,
   PanelLeftIcon,
-  PlusIcon,
 } from "./draftChromeIcons";
-import { useInAppHistory } from "./inAppHistory";
 import { alpha, type Theme } from "@mui/material/styles";
 import {
   lazy,
@@ -95,15 +90,17 @@ const desktopDraftActionSx = {
 };
 
 const positions = new Map<string, ComposerEditorSelection>();
+/** Space under the resting formatting capsule: the home indicator inset,
+ *  with a small floor on devices without one. */
+const DRAFT_MOBILE_REST_CLEARANCE = "max(env(safe-area-inset-bottom, 0px), 8px)";
 export type DraftFlush = () => Promise<void>;
 
 /** Mobile focus-on-writing chrome (Obsidian): the page owns its Sessions and
- *  actions controls at the top, and formatting floats above the keyboard. */
+ *  actions controls at the top, and formatting rests at the bottom and rides
+ *  above the keyboard. Create and Settings live in the Sessions drawer. */
 export interface DraftMobileChrome {
   onOpenSessions: () => void;
   onMenu: () => void;
-  onCreate: () => void;
-  onSettings: () => void;
 }
 
 export function DraftEditor(
@@ -226,7 +223,6 @@ function DraftEditingSession(
   const composing = useRef(false);
   const desktop = useSurfaceProfile().kind === "desktop";
   const focusLayout = !desktop && mobileChrome !== undefined;
-  const navHistory = useInAppHistory();
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
   // The title is the document's first line (Obsidian inline title): `␣DR`
@@ -503,16 +499,21 @@ function DraftEditingSession(
     onPointerDown: (e: { preventDefault: () => void }) => e.preventDefault(),
     onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault(),
   };
-  // Shown only while the body is being edited (see the root's :has rule):
-  // a scrolling capsule of formatting above the keyboard, and a separate
-  // control that puts the keyboard away.
+  // Always present (see the root's :has rules): a scrolling capsule of
+  // formatting that rests at the bottom and rides above the keyboard while
+  // the body is edited, where a separate control also puts the keyboard away.
   const focusToolbar = (
     <Stack
       data-draft-mobile-toolbar
       direction="row"
       alignItems="center"
       spacing={1}
-      sx={{ display: "none", px: 1, py: 0.75, flexShrink: 0 }}
+      sx={{
+        px: 1,
+        py: 0.75,
+        flexShrink: 0,
+        mb: DRAFT_MOBILE_REST_CLEARANCE,
+      }}
     >
       <Stack
         data-draft-format-toolbar
@@ -557,6 +558,7 @@ function DraftEditingSession(
         </IconButton>
       </Stack>
       <IconButton
+        data-draft-hide-keyboard
         aria-label="Hide keyboard"
         {...keepEditorFocus}
         onClick={() => {
@@ -566,6 +568,7 @@ function DraftEditingSession(
         sx={{
           ...floatingMaterialSx,
           color: "text.primary",
+          display: "none",
           width: 48,
           height: 48,
           flexShrink: 0,
@@ -574,58 +577,6 @@ function DraftEditingSession(
         <KeyboardHideIcon />
       </IconButton>
     </Stack>
-  );
-  // Obsidian's resting navigation capsule: always present while the body is
-  // not being edited, replaced by the format capsule while it is.
-  const navigationBar = mobileChrome && (
-    <Box
-      data-draft-mobile-nav
-      sx={{
-        position: "absolute",
-        left: 16,
-        right: 16,
-        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-        zIndex: 2,
-        display: "flex",
-        justifyContent: "center",
-        pointerEvents: "none",
-      }}
-    >
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-around"
-        sx={{
-          ...floatingMaterialSx,
-          width: "100%",
-          maxWidth: 440,
-          height: 56,
-          px: 1,
-          pointerEvents: "auto",
-        }}
-      >
-        <IconButton
-          aria-label="Back"
-          disabled={!navHistory.canGoBack}
-          onClick={navHistory.back}
-        >
-          <ChevronLeftIcon />
-        </IconButton>
-        <IconButton
-          aria-label="Forward"
-          disabled={!navHistory.canGoForward}
-          onClick={navHistory.forward}
-        >
-          <ChevronRightIcon />
-        </IconButton>
-        <IconButton aria-label="Create" onClick={mobileChrome.onCreate}>
-          <PlusIcon />
-        </IconButton>
-        <IconButton aria-label="Settings" onClick={mobileChrome.onSettings}>
-          <MenuIcon />
-        </IconButton>
-      </Stack>
-    </Box>
   );
   const toolbarView = (
     <Stack
@@ -806,10 +757,10 @@ function DraftEditingSession(
         ...(focusLayout && {
           position: "relative",
           "&:has([data-draft-body]:focus-within) [data-draft-mobile-toolbar]": {
-            display: "flex",
+            mb: 0,
           },
-          "&:has([data-draft-body]:focus-within) [data-draft-mobile-nav]": {
-            display: "none",
+          "&:has([data-draft-body]:focus-within) [data-draft-hide-keyboard]": {
+            display: "inline-flex",
           },
         }),
       }}
@@ -1021,10 +972,12 @@ function DraftEditingSession(
           minHeight: 0,
           minWidth: 0,
           px: desktop ? 1.5 : 0.5,
-          // Rest the last line above the floating navigation capsule.
-          ...(focusLayout && {
-            pb: "calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)",
-          }),
+          // An empty page hints quietly (Obsidian): both engines use the
+          // disabled tone, including the touch textarea before CM6 mounts.
+          "& textarea::placeholder, & .cm-placeholder": {
+            color: "text.disabled",
+            opacity: 1,
+          },
         }}
         data-draft-body
         data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
@@ -1141,10 +1094,7 @@ function DraftEditingSession(
         )
         : focusLayout
         ? (
-          <>
-            {focusToolbar}
-            {navigationBar}
-          </>
+          focusToolbar
         )
         : toolbarView}
       <input

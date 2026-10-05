@@ -2685,6 +2685,13 @@ export function CreateDialog({
         };
     }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
+    // Field geometry for the touch Create cover, whose sheet a phone has
+    // shown stranded part-way down above the keyboard (sheetKeyboardDiagnostics).
+    useSheetKeyboardDiagnostics(
+        "create",
+        open && !desktop,
+        () => titleRef.current?.closest("[role='dialog']") ?? null,
+    );
     const theme = useTheme();
     const create = (): void => {
         if (creatingRef.current) return;
@@ -5071,14 +5078,12 @@ export function App({
                 {draftRoute.id ? (
                     <Box ref={mobile ? mobilePageRef : undefined}
                         data-mobile-drawer-surface={mobile ? "true" : undefined}
-                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "env(safe-area-inset-top)" : 0 }}>
+                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "var(--cowboy-system-top-clearance)" : 0 }}>
                         <WorkspaceDraftPane id={draftRoute.id} beforeLeave={draftBeforeLeave}
                             onAction={(action) => flushSync(() => setDraftAction(action))}
                             mobileNavigation={mobile
                                 ? {
                                     onOpenSessions: () => settleMobileDrawerRef.current?.(true),
-                                    onCreate: openNewSession,
-                                    onSettings: () => openSettings("settings"),
                                 }
                                 : undefined} />
                     </Box>

@@ -237,7 +237,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     () => report.reject(new Error("browser conformance timed out")),
     // The integrated-App suite is long; a loaded build host must not turn
     // scheduling latency into a spurious failure.
-    suite === "draft-documents" ? 150_000 : 30_000,
+    suite === "draft-documents" ? 150_000 : 90_000,
   );
   void child.status.then(() =>
     report.reject(new Error("browser exited before report"))

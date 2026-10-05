@@ -148,20 +148,23 @@ class InlineImageWidget extends WidgetType {
       img.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (readOnly) {
-          activateReadOnlyPreview();
-          return;
-        }
+        // A read-only preview opens on click. Opening on a mouse press put
+        // the lightbox under the pointer before the release, and that release
+        // dismissed it as a backdrop tap, so a Desktop click never stayed
+        // open. (Touch emits its mouse events after the touch ends, which is
+        // why only Desktop failed.)
+        if (readOnly) return;
         // Hand the tap point to the host so the popover opens at the finger, not
         // anchored to this (possibly tall) image's bottom edge.
         if (imageTapHandler !== null) imageTapHandler(id, img, e.clientX, e.clientY);
         else openLightbox([att], 0);
       });
       img.addEventListener("click", (event) => {
-        // mousedown already activated pointer input. Keep its compatibility
-        // click from bubbling into the pending row's edit target.
+        // Keep the click from bubbling into the pending row's edit target;
+        // an editable image was already handed to the host on mousedown.
         event.preventDefault();
         event.stopPropagation();
+        if (readOnly) activateReadOnlyPreview();
       });
       if (readOnly) {
         img.addEventListener("keydown", (event) => {

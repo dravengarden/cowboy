@@ -7,6 +7,13 @@ import type {
 import { haptic } from "./haptic";
 import { sortableTargetIndex } from "./sortableGeometry";
 
+/** Touch lifts a row after this still hold: long enough to reject a finger
+ *  brushing the grip while it scrolls or swipes, short enough not to feel like
+ *  waiting (iOS's own list reorder lifts in about the same time). */
+export const TOUCH_HOLD_MS = 180;
+/** Movement allowed during the hold before it counts as a scroll instead. */
+export const TOUCH_HOLD_SLOP_PX = 8;
+
 // A small, dependency-free vertical drag-to-reorder hook. Reorder is driven from
 // a dedicated GRIP HANDLE per row (not the whole row), so it never fights the
 // list's scroll or the DetentSheet's drag-to-dismiss: the handle's pointerdown
@@ -389,6 +396,12 @@ export function useSortable(opts: {
     };
   }, [drag === null]);
 
+  // A pending touch hold (see handleProps); cancelled on unmount.
+  const holdRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => holdRef.current?.(), []);
+  // Rows lift through refs and the state setter only, so this stays stable.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const lift = useCallback((id: string, x: number, y: number): void => liftRow(id, x, y), []);
   const handleProps = useCallback(
     (id: string) => ({
       onPointerDown: (e: ReactPointerEvent): void => {
@@ -396,64 +409,112 @@ export function useSortable(opts: {
         // Claim the gesture: no row tap, no list scroll, no sheet drag.
         e.preventDefault();
         e.stopPropagation();
-        const index = idsRef.current.indexOf(id);
-        if (index < 0) return;
-        // Measure every row once, at pickup. Rows do not change size during
-        // a drag (they only translate), so this geometry stays valid.
-        const tops: number[] = [];
-        const heights: number[] = [];
-        for (const rowId of idsRef.current) {
-          const rect = nodes.current.get(rowId)?.getBoundingClientRect();
-          const previousTop = tops.at(-1);
-          const previousHeight = heights.at(-1);
-          const top = rect?.top ??
-            (previousTop !== undefined && previousHeight !== undefined
-              ? previousTop + previousHeight
-              : 0);
-          tops.push(top);
-          heights.push(rect?.height ?? 48);
+        if (e.pointerType === "mouse") {
+          lift(id, e.clientX, e.clientY);
+          return;
         }
-        const height = heights[index] ?? 48;
-        const nextTop = tops[index + 1];
-        const previousTop = tops[index - 1];
-        const previousHeight = heights[index - 1];
-        // The dragged row's slot: its height plus the gap that follows it (or,
-        // for the last row, the gap that precedes it).
-        const gap = nextTop !== undefined
-          ? nextTop - (tops[index] ?? 0) - height
-          : previousTop !== undefined && previousHeight !== undefined
-          ? (tops[index] ?? 0) - previousTop - previousHeight
-          : 0;
-        dyRef.current = 0;
-        lastYRef.current = e.clientY;
-        lastXRef.current = e.clientX;
-        // Pin the real scroll element for this drag: the caller's hint if it
-        // scrolls, else the nearest scrollable ancestor of the dragged row (so a
-        // content-height sheet, where a parent scrolls, still edge-scrolls).
-        const el = nodes.current.get(id);
-        const sc = resolveScroller(el ?? null, scRef.current?.() ?? null);
-        scrollElRef.current = sc;
-        const startScrollTop = sc?.scrollTop ?? 0;
-        setDrag({
-          id,
-          startY: e.clientY,
-          startX: e.clientX,
-          originIndex: index,
-          targetIndex: index,
-          depthSteps: 0,
-          tops,
-          heights,
-          slot: height + Math.max(0, gap),
-          startScrollTop,
-        });
-        haptic(24); // firmer "lift" on PICKUP (iOS reorder feel), before onDragStart
-        cbRef.current.onDragStart?.();
+        // Touch and pen lift only after a short, still hold, so a finger
+        // that merely brushes the grip while scrolling or swiping the drawer
+        // never reorders. Moving away or releasing first cancels.
+        holdRef.current?.();
+        const pointerId = e.pointerId;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let x = startX;
+        let y = startY;
+        const cancel = (): void => {
+          globalThis.clearTimeout(timer);
+          globalThis.removeEventListener("pointermove", onMove);
+          globalThis.removeEventListener("pointerup", onEnd);
+          globalThis.removeEventListener("pointercancel", onEnd);
+          if (holdRef.current === cancel) holdRef.current = null;
+        };
+        const onMove = (event: PointerEvent): void => {
+          if (event.pointerId !== pointerId) return;
+          x = event.clientX;
+          y = event.clientY;
+          if (Math.hypot(x - startX, y - startY) > TOUCH_HOLD_SLOP_PX) cancel();
+        };
+        const onEnd = (event: PointerEvent): void => {
+          if (event.pointerId === pointerId) cancel();
+        };
+        const timer = globalThis.setTimeout(() => {
+          cancel();
+          lift(id, x, y);
+        }, TOUCH_HOLD_MS);
+        holdRef.current = cancel;
+        globalThis.addEventListener("pointermove", onMove);
+        globalThis.addEventListener("pointerup", onEnd);
+        globalThis.addEventListener("pointercancel", onEnd);
       },
       onClick: (e: ReactMouseEvent): void => e.stopPropagation(),
-      style: { touchAction: "none", cursor: "grab" } as CSSProperties,
+      style: {
+        touchAction: "none",
+        cursor: "grab",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
+      } as CSSProperties,
     }),
-    [],
+    [lift],
   );
+
+  // Pick a row up at (clientX, clientY): measure the list once and start the
+  // drag. Mouse lifts on press; touch after the hold above.
+  function liftRow(id: string, clientX: number, clientY: number): void {
+    const index = idsRef.current.indexOf(id);
+    if (index < 0) return;
+    // Measure every row once, at pickup. Rows do not change size during
+    // a drag (they only translate), so this geometry stays valid.
+    const tops: number[] = [];
+    const heights: number[] = [];
+    for (const rowId of idsRef.current) {
+      const rect = nodes.current.get(rowId)?.getBoundingClientRect();
+      const previousTop = tops.at(-1);
+      const previousHeight = heights.at(-1);
+      const top = rect?.top ??
+        (previousTop !== undefined && previousHeight !== undefined
+          ? previousTop + previousHeight
+          : 0);
+      tops.push(top);
+      heights.push(rect?.height ?? 48);
+    }
+    const height = heights[index] ?? 48;
+    const nextTop = tops[index + 1];
+    const previousTop = tops[index - 1];
+    const previousHeight = heights[index - 1];
+    // The dragged row's slot: its height plus the gap that follows it (or,
+    // for the last row, the gap that precedes it).
+    const gap = nextTop !== undefined
+      ? nextTop - (tops[index] ?? 0) - height
+      : previousTop !== undefined && previousHeight !== undefined
+      ? (tops[index] ?? 0) - previousTop - previousHeight
+      : 0;
+    dyRef.current = 0;
+    lastYRef.current = clientY;
+    lastXRef.current = clientX;
+    // Pin the real scroll element for this drag: the caller's hint if it
+    // scrolls, else the nearest scrollable ancestor of the dragged row (so a
+    // content-height sheet, where a parent scrolls, still edge-scrolls).
+    const el = nodes.current.get(id);
+    const sc = resolveScroller(el ?? null, scRef.current?.() ?? null);
+    scrollElRef.current = sc;
+    const startScrollTop = sc?.scrollTop ?? 0;
+    setDrag({
+      id,
+      startY: clientY,
+      startX: clientX,
+      originIndex: index,
+      targetIndex: index,
+      depthSteps: 0,
+      tops,
+      heights,
+      slot: height + Math.max(0, gap),
+      startScrollTop,
+    });
+    haptic(24); // firmer "lift" on PICKUP (iOS reorder feel), before onDragStart
+    cbRef.current.onDragStart?.();
+  }
 
   const itemStyle = useCallback(
     (id: string): CSSProperties => {

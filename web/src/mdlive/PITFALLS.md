@@ -2896,3 +2896,33 @@ exercised with synthetic events only.
     without an in-app entry, so they can never leave Cowboy for the native
     loader. The page chrome uses Lucide-style stroke icons
     (`documents/draftChromeIcons.tsx`) on shadow-lifted capsules.
+
+### 2026-10-05 Touch Draft formatting bar stays at rest
+
+User request: the touch Draft formatting capsule must not disappear when the
+software keyboard is put away. It now always renders; at rest it sits above the
+navigation capsule (which keeps its place), and only Hide keyboard and the nav
+swap are tied to `[data-draft-body]:focus-within`. Buttons keep
+`preventDefault` on pointer/mouse down, so tapping one at rest does not move
+focus. No editor, IME, caret, paste or keyboard-geometry code changed; #69 is
+unaffected. Checked in the integrated Mobile shell fixture (Firefox, 390px),
+not on a physical iPad/iPhone.
+
+119. **A read-only inline image opens its preview on click, not mousedown.**
+    Opening the shared lightbox on a mouse press put its backdrop under the
+    pointer before the release, and the release dismissed it as a backdrop
+    tap, so a Desktop click on a Queue/Draft preview image never stayed open.
+    Touch only worked because WebKit emits the compatibility mouse events
+    after the touch ends. The mousedown still `preventDefault`s (no caret into
+    the atomic widget); editable images still hand off on mousedown to the
+    host's non-modal action popper. Verified with trusted CDP mouse input in
+    Chrome; the lightbox's Desktop key map (H/L or ←/→ image or pan, J/K pan,
+    + − zoom, 0 fit, 1 2x, Esc close) is shown only on the Desktop surface.
+
+### 2026-10-05 Touch Draft drops the navigation capsule
+
+User request: the touch Draft page has no Back/Forward/Create/Settings capsule.
+The formatting capsule is the only bottom bar; at rest it sits on the home
+indicator inset, and Create/Settings remain in the Sessions drawer. The
+Navigation-API back/forward hook was removed with it. No editor, IME, caret or
+keyboard code changed; checked in the integrated Mobile shell fixture only.

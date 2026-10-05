@@ -1721,6 +1721,37 @@ export async function runDraftDocumentsBrowserConformance(
       ),
       "Draft uses the existing Sessions drawer surface",
     );
+    {
+      // The formatting bar stays when the keyboard is away and rests at the
+      // bottom; there is no separate navigation capsule. Hide keyboard
+      // appears only while editing.
+      (document.activeElement as HTMLElement | null)?.blur();
+      await tick();
+      const bar = container.querySelector<HTMLElement>("[data-draft-mobile-toolbar]");
+      const hide = container.querySelector<HTMLElement>("[data-draft-hide-keyboard]");
+      check(bar && hide, "Touch Draft renders the formatting capsule");
+      const surface = container.querySelector<HTMLElement>("[data-workspace-document]")!;
+      const barRect = bar.getBoundingClientRect();
+      check(
+        getComputedStyle(bar).display === "flex" && barRect.height > 0 &&
+          bar.querySelectorAll("[data-draft-tool]").length > 0 &&
+          getComputedStyle(hide).display === "none",
+        "Formatting bar is visible with the keyboard hidden, without Hide keyboard",
+      );
+      check(
+        !container.querySelector("[data-draft-mobile-nav]") &&
+          !container.querySelector('[aria-label="Back"], [aria-label="Forward"]'),
+        "No navigation capsule on the touch Draft page",
+      );
+      check(
+        surface.getBoundingClientRect().bottom - barRect.bottom < 40,
+        `Resting bar sits at the bottom (${Math.round(surface.getBoundingClientRect().bottom - barRect.bottom)}px)`,
+      );
+      container.querySelector<HTMLElement>("[data-draft-body] .cm-content, [data-draft-body] textarea")
+        ?.focus();
+      await tick();
+      check(getComputedStyle(hide).display !== "none", "Editing shows Hide keyboard");
+    }
     mobileRoot.unmount();
     results.push(
       "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager",

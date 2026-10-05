@@ -7,7 +7,7 @@ import {
   DESKTOP_COMPOSER_FORMAT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
-  DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderSequence,
 } from "./workspaceShortcuts";
 import { COMPOSER_COMMANDS } from "../../composerCommands";
 import { formatChord } from "./formatChord";
@@ -85,10 +85,7 @@ export function DesktopComposerCommandBindings({
       id: "composer.slash",
       title: "Insert slash command",
       group: "Prompt actions",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.composerSlash,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerSlash),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -100,10 +97,7 @@ export function DesktopComposerCommandBindings({
       id: "composer.reference",
       title: "Reference a file",
       group: "Prompt actions",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.composerReference,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerReference),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -116,10 +110,7 @@ export function DesktopComposerCommandBindings({
       title: "Attach file",
       description: "Pick an image or file for the current prompt",
       group: "Prompt actions",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.composerAttach,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerAttach),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -143,10 +134,7 @@ export function DesktopComposerCommandBindings({
       id: "composer.schedule",
       title: "Schedule prompt",
       group: "Prompt actions",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.composerSchedule,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerSchedule),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -158,10 +146,7 @@ export function DesktopComposerCommandBindings({
       id: "composer.jumpFront",
       title: "Jump prompt to front of queue",
       group: "Prompt actions",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.composerJumpFront,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerJumpFront),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -187,7 +172,7 @@ export function DesktopComposerCommandBindings({
       id: "composer.more",
       title: "More formatting",
       group: "Prompt actions",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.composerMore],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerMore),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -206,10 +191,7 @@ export function DesktopComposerCommandBindings({
       description:
         "Show the prompt as literal markdown instead of live preview",
       group: "Prompt actions",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.toggleSourceMode),
       allowInEditor: true,
       contexts: ["prompt"],
       run: () => void toggleComposerSourceMode(),
@@ -222,10 +204,7 @@ export function DesktopComposerCommandBindings({
       group: "Prompt formatting",
       ...(DESKTOP_COMPOSER_FORMAT_KEYS[command.id]
         ? {
-          sequence: [
-            DESKTOP_WORKSPACE_PREFIX,
-            DESKTOP_COMPOSER_FORMAT_KEYS[command.id]!,
-          ],
+          sequence: desktopLeaderSequence(DESKTOP_COMPOSER_FORMAT_KEYS[command.id]!),
         }
         : {}),
       allowInEditor: true,

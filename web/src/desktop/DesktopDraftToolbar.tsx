@@ -39,6 +39,7 @@ import {
   DESKTOP_WORKSPACE_KEYS,
   DESKTOP_DRAFT_GROUP_KEYS,
   DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderSequence,
   desktopLeaderGroupSequence,
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
@@ -110,7 +111,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
-      ...(key ? { sequence: [DESKTOP_WORKSPACE_PREFIX, key] } : {}),
+      ...(key ? { sequence: desktopLeaderSequence(key) } : {}),
       when: () =>
         !isImeComposing() &&
         (!writable || state.current.props.writable) &&
@@ -135,6 +136,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       return {
         ...command,
         sequence: [DESKTOP_WORKSPACE_PREFIX, DRAFT.group, key],
+        leaderAnywhere: true,
       };
     };
     return [

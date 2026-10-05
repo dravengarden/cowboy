@@ -213,6 +213,20 @@ function dimHex(base: string, dim: number): string {
 // agree on the mechanism — the sheet's restore-on-close (the page surface) then
 // reliably lands the post-switch colour instead of leaving it stuck. No-op-safe
 // when no meta exists (we just append one).
+// iOS WKWebView can leave a composited transform transition frozen part-way
+// when the viewport resizes during it — a cover opening while the keyboard
+// rises (Create) — while the DOM already reports the final value: the user saw
+// the sheet stranded a random distance down the screen with blank page above
+// it. Once a settle ends at the fully open position, replace the transform
+// with a different, equivalent value so the compositor must commit a fresh
+// frame. Only the open (0) rest needs this; a peek stays as painted.
+function commitRest(sheet: HTMLElement, y: number): void {
+  if (y !== 0 || sheet.style.transform === "none") {
+    return;
+  }
+  sheet.style.transform = "none";
+}
+
 export function setStatusBarColor(color: string): void {
   const { head } = globalThis.document;
   if (!head) {
@@ -476,6 +490,7 @@ export function DetentSheet(
           sheet.style.transition = `background-color ${String(MOVING_SURFACE_FADE_MS)}ms ease`;
           delete sheet.dataset["detentMoving"];
           movingTimerRef.current = null;
+          commitRest(sheet, yRef.current);
         }, SETTLE_MS + 34);
       }
     }
@@ -896,6 +911,7 @@ export function DetentSheet(
             if (event.target === event.currentTarget && event.propertyName === "transform") {
               event.currentTarget.style.transition = `background-color ${String(MOVING_SURFACE_FADE_MS)}ms ease`;
               delete event.currentTarget.dataset["detentMoving"];
+              commitRest(event.currentTarget, yRef.current);
               if (movingTimerRef.current !== null) {
                 globalThis.clearTimeout(movingTimerRef.current);
                 movingTimerRef.current = null;

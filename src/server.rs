@@ -3200,6 +3200,50 @@ fn provider_fence_key_for_session(hub: &Hub, session_id: &str) -> Option<(String
         .map(|session| (session.machine_id, session.provider))
 }
 
+/// Why a Provider lifecycle fence refuses session runtime admission, or `None`
+/// when the fence (an install or reload in progress) leaves sessions usable.
+/// `NeedsReconcile` covers an install or uninstall whose Machine outcome is
+/// unknown, so it must not be reported as an uninstall.
+const fn provider_fence_refusal(fence: PluginFenceState) -> Option<&'static str> {
+    match fence {
+        PluginFenceState::Installing => None,
+        PluginFenceState::Uninstalling => {
+            Some("the session Provider is uninstalling from its Machine")
+        }
+        PluginFenceState::Uninstalled => {
+            Some("the session Provider was uninstalled from its Machine")
+        }
+        PluginFenceState::NeedsReconcile => Some(
+            "the session Provider's last install or uninstall on its Machine has an unconfirmed \
+             outcome; reconcile it in Extensions before continuing",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod provider_fence_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn refusal_names_the_actual_lifecycle_state() {
+        assert_eq!(provider_fence_refusal(PluginFenceState::Installing), None);
+        assert!(
+            provider_fence_refusal(PluginFenceState::Uninstalling)
+                .is_some_and(|refusal| refusal.contains("is uninstalling"))
+        );
+        assert!(
+            provider_fence_refusal(PluginFenceState::Uninstalled)
+                .is_some_and(|refusal| refusal.contains("was uninstalled"))
+        );
+        // An interrupted install must not be reported as an uninstall.
+        assert!(
+            provider_fence_refusal(PluginFenceState::NeedsReconcile).is_some_and(|refusal| refusal
+                .contains("unconfirmed")
+                && !refusal.contains("uninstalling"))
+        );
+    }
+}
+
 /// Build the ACP prompt blocks for a queued message: parse the stored content
 /// blocks, or fall back to a single text block. Mirrors the `Inbound::Prompt`
 /// handler's logic. Returns `None` for a genuinely empty prompt.
@@ -15027,16 +15071,12 @@ async fn api_session_reload(
     }
     let reload_key = provider_fence_key_for_session(&state.hub, &session_id);
     let reload_fence = state.plugin_lifecycle_fences.read();
-    if reload_key
+    if let Some(refusal) = reload_key
         .as_ref()
         .and_then(|key| reload_fence.get(key))
-        .is_some_and(|fence| *fence != PluginFenceState::Installing)
+        .and_then(|fence| provider_fence_refusal(*fence))
     {
-        return (
-            StatusCode::CONFLICT,
-            "the session Provider is uninstalling from its Machine",
-        )
-            .into_response();
+        return (StatusCode::CONFLICT, refusal).into_response();
     }
     tracing::info!(
         session = %session_id,
@@ -15174,16 +15214,12 @@ async fn api_session_prompt(
     // between the fence check and the explicit active-turn confirmation.
     let provider_key = provider_fence_key_for_session(&state.hub, &session_id);
     let plugin_prompt_fence = state.plugin_lifecycle_fences.read();
-    if provider_key
+    if let Some(refusal) = provider_key
         .as_ref()
         .and_then(|key| plugin_prompt_fence.get(key))
-        .is_some_and(|fence| *fence != PluginFenceState::Installing)
+        .and_then(|fence| provider_fence_refusal(*fence))
     {
-        return (
-            StatusCode::CONFLICT,
-            "the session Provider is uninstalling from its Machine",
-        )
-            .into_response();
+        return (StatusCode::CONFLICT, refusal).into_response();
     }
     let blocks: Vec<ContentBlock> = if req.content.is_empty() {
         if req.text.is_empty() {
@@ -19644,16 +19680,15 @@ fn handle_command(
     let plugin_prompt_fence = provider_prompt_key
         .as_ref()
         .map(|_| state.plugin_lifecycle_fences.read());
-    if provider_prompt_key
+    if let Some(refusal) = provider_prompt_key
         .as_ref()
         .zip(plugin_prompt_fence.as_ref())
         .and_then(|(key, fences)| fences.get(key))
-        .is_some_and(|fence| *fence != PluginFenceState::Installing)
+        .and_then(|fence| provider_fence_refusal(*fence))
     {
-        state.hub.broadcast_error(
-            session_id_for_err,
-            "the session Provider is uninstalling from its Machine".to_owned(),
-        );
+        state
+            .hub
+            .broadcast_error(session_id_for_err, refusal.to_owned());
         return false;
     }
     let result = match cmd {

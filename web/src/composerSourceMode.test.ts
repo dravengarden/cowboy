@@ -127,12 +127,13 @@ Deno.test("source mode uses the workspace prefix because Mod+E is reserved", () 
   assert(chromeShortcutConflict("composer.toggleSourceMode", "Mod+E", true));
   assert(macShortcutConflict("composer.toggleSourceMode", "Mod+E"));
   assert(chromeShortcutConflict("composer.toggleSourceMode", "Alt+E", false));
-  assertEquals(DESKTOP_WORKSPACE_KEYS.toggleSourceMode, "E");
+  // The Interface group: `␣UE`.
+  assertEquals(DESKTOP_WORKSPACE_KEYS.toggleSourceMode, "UE");
   assertEquals(
     DESKTOP_SHORTCUTS.toggleSourceMode,
-    `${DESKTOP_WORKSPACE_PREFIX} → E`,
+    `${DESKTOP_WORKSPACE_PREFIX} → U → E`,
   );
-  assertEquals(DESKTOP_WORKSPACE_COMMANDS["e"], "composer.toggleSourceMode");
+  assertEquals(DESKTOP_WORKSPACE_COMMANDS["u"], "group:u");
   // A sequence, never a direct chord: a direct binding would have to pass the
   // browser audits that just rejected Mod+E.
   const binding = composerBindings.slice(

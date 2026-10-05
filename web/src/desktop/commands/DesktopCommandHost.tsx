@@ -24,6 +24,7 @@ import {
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderSequence,
 } from "./workspaceShortcuts";
 import {
   preferredDesktopSplitter,
@@ -123,7 +124,7 @@ export function DesktopCommandHost({
       description: "Search every registered Desktop command",
       group: "Open",
       shortcut: DESKTOP_SHORTCUTS.commands,
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.commandPalette],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.commandPalette),
       allowInEditor: true,
       run: () => {
         setQuery("");
@@ -136,7 +137,7 @@ export function DesktopCommandHost({
       title: "Switch Session",
       description: "Label every session with a letter, then press it to open",
       group: "Session",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.switchSession],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.switchSession),
       when: sessionsListMounted,
       run: () => leaderRef.current?.open("sessions"),
     },
@@ -145,10 +146,7 @@ export function DesktopCommandHost({
       title: "Previous Session",
       description: "Return to the session open before this one",
       group: "Session",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.alternateSession,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.alternateSession),
       when: sessionsListMounted,
       run: () => {
         const opened = sessionsListElement()?.dispatchEvent(
@@ -167,7 +165,7 @@ export function DesktopCommandHost({
       title: "New Session",
       description: "Create a Cowboy session",
       group: "Session",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.newSession],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.newSession),
       run: onNewSession,
     },
     {
@@ -220,7 +218,7 @@ export function DesktopCommandHost({
       id: "settings.open",
       title: "Open Settings",
       group: "Settings",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.settings],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.settings),
       run: onOpenSettings,
     },
     {
@@ -240,7 +238,7 @@ export function DesktopCommandHost({
       id: "workspace.focusSessions",
       title: "Focus Sessions",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusSessions],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
       run: () => workspace.focusPane("sessions"),
     },
     {
@@ -248,14 +246,14 @@ export function DesktopCommandHost({
       title: "Focus Message the Agent",
       description: "Return to the Prompt editor without changing its Vim mode or caret",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusPrompt],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {
       id: "workspace.focusConversation",
       title: "Focus Conversation",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusConversation],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusConversation),
       run: () => workspace.focusPane("conversation"),
     },
     {
@@ -264,7 +262,7 @@ export function DesktopCommandHost({
       description:
         "Enter Resize mode on the nearest vertical split, then H/L to move it",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.resize],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.resize),
       run: () => {
         if (workspace.selectedSplitter !== null) {
           workspace.setSelectedSplitter(null);
@@ -295,7 +293,7 @@ export function DesktopCommandHost({
       title: "Cycle Workspace Region",
       description: "Move focus to the next visible Desktop region",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.cycleRegion],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.cycleRegion),
       run: () => workspace.cycleRegion(),
     },
     {
@@ -303,7 +301,7 @@ export function DesktopCommandHost({
       title: workspace.collapsedPanes.sessions ? "Expand Sessions" : "Collapse Sessions",
       description: "Show or hide the Sessions sidebar",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.toggleSessions],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.toggleSessions),
       run: () => workspace.togglePane("sessions"),
     },
     {
@@ -311,7 +309,7 @@ export function DesktopCommandHost({
       title: workspace.collapsedPanes.prompt ? "Expand Prompt" : "Collapse Prompt",
       description: "Show or hide the Prompt column; Conversation takes its width",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.togglePrompt],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.togglePrompt),
       run: () => workspace.togglePane("prompt"),
     },
     {
@@ -321,7 +319,7 @@ export function DesktopCommandHost({
         : "Collapse Conversation",
       description: "Show or hide the Conversation; Prompt takes its width",
       group: "Workspace",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.toggleConversation],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.toggleConversation),
       run: () => workspace.togglePane("conversation"),
     },
     {
@@ -340,7 +338,7 @@ export function DesktopCommandHost({
       title: "Focus Plan",
       description: "Move keyboard focus to the current task plan",
       group: "Prompt",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusPlan],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
       // The prefix continuation is stable even while Plan is absent.
@@ -353,7 +351,7 @@ export function DesktopCommandHost({
       description:
         "Open and focus queued prompts, or close them when the queue already owns focus",
       group: "Prompt",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusQueue],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
       run: () => {
@@ -375,7 +373,7 @@ export function DesktopCommandHost({
       title: "Focus Drafts",
       description: "Move keyboard focus to parked drafts",
       group: "Prompt",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.focusDrafts],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
       run: () => {

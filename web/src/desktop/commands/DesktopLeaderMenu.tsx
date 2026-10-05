@@ -82,9 +82,11 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
         registry.commands,
         groupKey,
         workspace.focusedPane,
+        workspace.focusedRegion,
       )
     ) {
       const path = desktopLeaderGroupKey(command)!;
+      if (entries.some((entry) => entry.key === path.key)) continue;
       // Listed under the group name, not "Here": the group is the scope.
       const { regions: _regions, ...unscoped } = command;
       entries.push({
@@ -102,6 +104,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
           registry.commands,
           key,
           workspace.focusedPane,
+          workspace.focusedRegion,
         )
       ) continue;
       entries.push({
@@ -155,7 +158,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
         right: 16,
         bottom: 44,
         zIndex: (theme) => theme.zIndex.modal + 2,
-        width: sessionsLayer || modalLayer
+        width: sessionsLayer || modalLayer || groupKey !== null
           ? "min(26rem, calc(100vw - 32px))"
           : "min(72rem, calc(100vw - 32px))",
         maxHeight: "min(50vh, 30rem)",

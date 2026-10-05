@@ -120,7 +120,7 @@ export function WorkspaceDraftPane(
     onAction: (action: WorkspaceDraftAction) => void;
     /** Mobile only: the page owns its navigation (no session bottom nav). */
     mobileNavigation?:
-      | Pick<DraftMobileChrome, "onOpenSessions" | "onCreate" | "onSettings">
+      | Pick<DraftMobileChrome, "onOpenSessions">
       | undefined;
   },
 ): React.JSX.Element {
