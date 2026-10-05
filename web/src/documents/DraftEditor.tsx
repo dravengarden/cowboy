@@ -1045,6 +1045,12 @@ function DraftEditingSession(
           ...(focusLayout && {
             pb: DRAFT_MOBILE_NAV_CLEARANCE,
           }),
+          // An empty page hints quietly (Obsidian): both engines use the
+          // disabled tone, including the touch textarea before CM6 mounts.
+          "& textarea::placeholder, & .cm-placeholder": {
+            color: "text.disabled",
+            opacity: 1,
+          },
         }}
         data-draft-body
         data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
