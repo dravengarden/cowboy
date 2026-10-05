@@ -2926,3 +2926,16 @@ The formatting capsule is the only bottom bar; at rest it sits on the home
 indicator inset, and Create/Settings remain in the Sessions drawer. The
 Navigation-API back/forward hook was removed with it. No editor, IME, caret or
 keyboard code changed; checked in the integrated Mobile shell fixture only.
+
+### 2026-10-05 Touch Draft bar: no focus-driven jump
+
+Field report: as the keyboard opened, the Draft formatting capsule flashed,
+and a frame with the editor focused but the keyboard still down showed the
+capsule on the home indicator with a useless Hide keyboard button. Cause: the
+capsule's bottom clearance and Hide keyboard were keyed to
+`[data-draft-body]:focus-within`, which flips before `--kb-inset` starts to
+grow. Now the clearance is `max(4px, max(safe-bottom, 8px) - --kb-inset)`, so
+it shrinks continuously as the App column's `--kb-inset` padding grows, and
+Hide keyboard renders from `useKeyboardOpen()`. The Mobile shell fixture checks
+that focus alone does not move the bar and that a keyboard inset lifts it; it
+does not reproduce iOS keyboard animation timing (physical check pending).
