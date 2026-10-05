@@ -166,9 +166,15 @@ test("bridge failures deny instead of invoking the native fallback", async (t) =
 test("only questions, todos and enrolled exact memory tools pass through", async () => {
   for (const memory of [false, true]) {
     const { hook, api, calls, native, next } = await routingFixture({ memory });
-    const memoryTools = ["search", "get", "put", "forget"].map((name) =>
-      "mcp__matrix__memory_" + name
-    );
+    const memoryTools = [
+      "search",
+      "get",
+      "put",
+      "forget",
+      "read",
+      "execute",
+      "receipt",
+    ].map((name) => "mcp__matrix__memory_" + name);
     const allowed = [
       "TodoWrite",
       "AskUserQuestion",
@@ -187,6 +193,7 @@ test("only questions, todos and enrolled exact memory tools pass through", async
         "Skill",
         "mcp__foreign__read",
         "mcp__matrix__memory_get_extra",
+        "mcp__matrix__memory_execute_extra",
         ...(memory ? [] : memoryTools),
       ]
     ) {
