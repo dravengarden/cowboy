@@ -381,6 +381,21 @@ here says otherwise.
     bypass every key while either the event or the shared IME lifecycle reports
     composition (including legacy keyCode 229), and discard armed focus chords.
 
+    The Normal-mode handoff from `.cm-content` to the sink must be driven by the
+    native `focus` event on `contentDOM`, never by CM6's `update.focusChanged`.
+    CM6 reports focus from a 10ms timer that compares `hasFocus` with the last
+    notified state. A Session switch hands focus to the new Prompt through
+    several rAF paths (row focus, Prompt focus, region restoration). A second
+    `.cm-content` focus inside that window, after the sink took it once, makes
+    the pending blur report see "still focused": no update is dispatched, and
+    the editable keeps focus in Normal. The first `i`
+    after the switch reached macOS as editable input and opened the candidate
+    window; every later `i` worked because Escape re-ran the handoff. The
+    focus listener defers its mode check to a microtask, so a direct Insert
+    command that focuses `contentDOM` before entering Insert in the same keydown
+    keeps the editable. `tools/cdp-keyboard-acceptance.ts` step 1b refocuses
+    twice 14ms apart and requires the next trusted `i` to reach the sink.
+
     An empty document needs one synchronous exception to the "plain `i` has no
     deferred stabilization" rule. CM6 renders an empty `.cm-line` with placeholder
     widgets plus a `<br>`, but focusing `contentDOM` can leave the browser Selection
