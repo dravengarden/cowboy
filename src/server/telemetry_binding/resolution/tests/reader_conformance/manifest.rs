@@ -203,6 +203,7 @@ fn resolve_roles(lanes: impl IntoIterator<Item = (Lane, Role, PathBuf)>) -> Resu
             "workerGeneration",
             "bootstrap",
             "sessionDeletionJournal",
+            "sessionIncarnations",
         ];
         ensure!(
             source
@@ -219,6 +220,17 @@ fn resolve_roles(lanes: impl IntoIterator<Item = (Lane, Role, PathBuf)>) -> Resu
                             && fields.get("writerSchema") == Some(&serde_json::json!(0))
                     }),
                 "invalid Machine deletion-reader provenance"
+            );
+        }
+        if let Some(reader) = source.get("sessionIncarnations") {
+            ensure!(
+                lane == Lane::Machine
+                    && reader.as_object().is_some_and(|fields| {
+                        fields.len() == 2
+                            && fields.get("readerSchema") == Some(&serde_json::json!(1))
+                            && fields.get("writerSchema") == Some(&serde_json::json!(0))
+                    }),
+                "invalid Machine incarnation-reader provenance"
             );
         }
         ensure!(

@@ -46,6 +46,9 @@ struct Source {
     bootstrap: bool,
     worker_generation: String,
     session_deletion_journal: Declaration,
+    /// Reader-only: no build may declare an incarnation writer yet.
+    #[serde(default)]
+    session_incarnations: Option<Declaration>,
 }
 
 fn revision_valid(value: &str) -> bool {
@@ -97,7 +100,13 @@ impl Source {
                                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
                     })
                 && self.session_deletion_journal.reader_schema == 1
-                && self.session_deletion_journal.writer_schema == 1,
+                && self.session_deletion_journal.writer_schema == 1
+                && self
+                    .session_incarnations
+                    .as_ref()
+                    .is_none_or(|declaration| {
+                        declaration.reader_schema == 1 && declaration.writer_schema == 0
+                    }),
             "component Session deletion writer source does not match this native build"
         );
         Ok(())
@@ -287,6 +296,41 @@ mod tests {
         ] {
             let changed: Source = serde_json::from_str(&bytes.replace(old, new)).unwrap();
             assert!(changed.validate(&source.revision).is_err());
+        }
+    }
+
+    #[test]
+    fn incarnation_declaration_is_optional_reader_only_and_closed() {
+        let bytes = r#"{"schema":1,"component":"cowboy","lane":"machine","repository":"git@github.com:dravengarden/cowboy.git","revision":"0123456789012345678901234567890123456789","dirty":false,"workerGeneration":"worker-0123456789abcdef0123","sessionDeletionJournal":{"readerSchema":1,"writerSchema":1}}"#;
+        let with = |declaration: &str| {
+            format!(
+                "{},\"sessionIncarnations\":{declaration}}}",
+                &bytes[..bytes.len() - 1]
+            )
+        };
+        let accepted = with(r#"{"readerSchema":1,"writerSchema":0}"#);
+        let source: Source = serde_json::from_str(&accepted).unwrap();
+        source.validate(&source.revision).unwrap();
+        // An artifact predating the dataset remains admissible.
+        let legacy: Source = serde_json::from_str(bytes).unwrap();
+        legacy.validate(&legacy.revision).unwrap();
+        for refused in [
+            r#"{"readerSchema":1,"writerSchema":1}"#,
+            r#"{"readerSchema":0,"writerSchema":0}"#,
+            r#"{"readerSchema":2,"writerSchema":0}"#,
+        ] {
+            let source: Source = serde_json::from_str(&with(refused)).unwrap();
+            assert!(source.validate(&source.revision).is_err(), "{refused}");
+        }
+        for malformed in [
+            r#"{"readerSchema":1}"#,
+            r#"{"readerSchema":1,"writerSchema":0,"enableWriter":true}"#,
+            r#"{"readerSchema":1,"readerSchema":1,"writerSchema":0}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Source>(&with(malformed)).is_err(),
+                "{malformed}"
+            );
         }
     }
 

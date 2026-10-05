@@ -28,6 +28,7 @@ use crate::runtime_wire::{
 
 mod cleanups;
 pub(crate) mod deletions;
+mod incarnations;
 
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
@@ -282,6 +283,9 @@ struct Broker {
     /// resident restart can finish artifact cleanup. Present only on a Machine
     /// admitted to write the deletion journal.
     cleanup_continuations: Mutex<Option<cleanups::Store>>,
+    /// Validated durable Session incarnation namespace. Read-only: it is held for
+    /// exclusive ownership and refusal of invalid state; no writer exists yet.
+    incarnation_reader: Mutex<Option<incarnations::Reader>>,
     /// Session workspaces awaiting generated-artifact cleanup after their
     /// process owner has been stopped and collected. Source worktrees and
     /// branches are retained.
@@ -385,6 +389,7 @@ impl Broker {
             cancelled_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
             cleanup_continuations: Mutex::new(None),
+            incarnation_reader: Mutex::new(None),
             deleted_session_workspaces: Mutex::new(HashMap::new()),
             session_lifecycle_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
@@ -2671,7 +2676,7 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
 
 #[cfg(test)]
 async fn run(args: MachineBrokerArgs) -> Result<()> {
-    run_broker(args, None, None).await
+    run_broker(args, None, None, None).await
 }
 
 /// Default production builds stay read-only. The dedicated writer build must
@@ -2680,12 +2685,14 @@ pub(crate) async fn run_with_deletion_reader(
     args: MachineBrokerArgs,
     path: PathBuf,
     cleanup_path: PathBuf,
+    incarnation_path: PathBuf,
     owner: deletions::Owner,
 ) -> Result<()> {
     let writer_enabled =
         crate::session_deletion_admission::owner_writer::admitted(&path, &owner.machine_id)
             .context("admitting component Session deletion writer")?;
     let cleanup_owner = owner.clone();
+    let incarnation_owner = owner.clone();
     let journal =
         tokio::task::spawn_blocking(move || deletions::Journal::open(&path, owner, writer_enabled))
             .await
@@ -2694,6 +2701,18 @@ pub(crate) async fn run_with_deletion_reader(
         deleted_sessions = journal.deleted().len(),
         writer_enabled,
         "Session deletion journal reader ready"
+    );
+    // Every build reads and validates the incarnation namespace and refuses to
+    // start on invalid state, like the deletion journal. No build writes it.
+    let incarnations = tokio::task::spawn_blocking(move || {
+        incarnations::Reader::open(&incarnation_path, &incarnation_owner)
+    })
+    .await
+    .context("joining Session incarnation reader open")?
+    .context("opening Session incarnation namespace")?;
+    tracing::info!(
+        incarnations = incarnations.len(),
+        "Session incarnation reader ready"
     );
     // Cleanup effects resume from durable state only on a Machine already
     // admitted to write terminal deletions. The advisory namespace can never
@@ -2720,15 +2739,19 @@ pub(crate) async fn run_with_deletion_reader(
     } else {
         None
     };
-    run_broker(args, Some(journal), continuations).await
+    run_broker(args, Some(journal), continuations, Some(incarnations)).await
 }
 
 async fn run_broker(
     args: MachineBrokerArgs,
     journal: Option<deletions::Journal>,
     continuations: Option<cleanups::Store>,
+    incarnations: Option<incarnations::Reader>,
 ) -> Result<()> {
     let broker = Arc::new(Broker::new(args));
+    if let Some(reader) = incarnations {
+        *broker.incarnation_reader.lock() = Some(reader);
+    }
     if let Some(journal) = journal {
         broker.attach_deletion_journal(journal);
     }
@@ -4528,7 +4551,7 @@ mod tests {
         args.worktree_root = root.path().join("worktrees");
         let journal =
             deletions::Journal::open(&journal_root, deletion_fixture_owner(), true).unwrap();
-        let server = tokio::spawn(run_broker(args.clone(), Some(journal), None));
+        let server = tokio::spawn(run_broker(args.clone(), Some(journal), None, None));
         tokio::time::timeout(Duration::from_secs(2), async {
             while !socket.exists() {
                 tokio::task::yield_now().await;
@@ -4576,7 +4599,7 @@ mod tests {
         .await
         .expect("old namespace owner exits");
         assert!(journal.deleted().contains("sess-1"));
-        let server = tokio::spawn(run_broker(args, Some(journal), None));
+        let server = tokio::spawn(run_broker(args, Some(journal), None, None));
         let (deleted_reader, deleted_writer, reply) =
             tokio::time::timeout(Duration::from_secs(2), async {
                 loop {

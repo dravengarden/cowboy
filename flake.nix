@@ -665,6 +665,12 @@
             readerSchema = 1;
             writerSchema = if writer then 1 else 0;
           };
+          # Reader only: this build validates the incarnation namespace but no
+          # release writes it.
+          sessionIncarnations = {
+            readerSchema = 1;
+            writerSchema = 0;
+          };
         })}
         EOF
       '';

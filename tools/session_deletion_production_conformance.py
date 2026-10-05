@@ -178,7 +178,20 @@ def main():
                     ipc.ack(peer, True)
                 ipc.require(not (state / 'session-deletions/deletions.json').exists(), 'default reader wrote a terminal record')
                 ipc.require(not (state / 'session-cleanups').exists(), 'default reader opened the cleanup continuation namespace')
+                ipc.require('Session incarnation reader ready' in process.output()
+                            and (state / 'session-incarnations/.lock').is_file()
+                            and not (state / 'session-incarnations/incarnations.json').exists(),
+                            'default reader did not own an empty incarnation namespace')
             observations.append({'case': 'default-build-runtime-env-cannot-enable-writer', 'writerEnabled': False})
+        with tempfile.TemporaryDirectory(prefix='cw-incarnation-', dir='/tmp') as temporary:
+            state = Path(temporary)
+            namespace = state / 'session-incarnations'
+            namespace.mkdir()
+            (namespace / 'incarnations.json').write_text('{')
+            with NativeProcess(default_reader, state) as rejected:
+                rejected.refused('invalid incarnation record')
+            ipc.require((namespace / 'incarnations.json').read_text() == '{', 'refusal rewrote the incarnation record')
+            observations.append({'case': 'default-reader-refuses-invalid-incarnation-record', 'beforeBind': True})
         for writer in (old, new):
             with tempfile.TemporaryDirectory(prefix='cw-ack-', dir='/tmp') as temporary:
                 state = Path(temporary)
@@ -209,12 +222,41 @@ def main():
                         rejected.refused('already owned')
                     authority.select(writer)
                 ipc.require(json.loads(captured)['deleted'] == ['sess-1'], 'wrong terminal record')
+                if writer is new:
+                    # A committed, valid incarnation record is accepted by the new
+                    # reader and ignored, untouched, by the previous writer.
+                    owner = json.loads(captured)['owner']
+                    incarnations = state / 'session-incarnations/incarnations.json'
+                    valid = json.dumps({'schema': 1, 'owner': owner, 'entries': [
+                        {'session_id': 'sess-fixture', 'incarnation': '0123456789abcdef' * 2, 'epoch': 1, 'origin': 'minted'}]})
+                    incarnations.write_text(valid)
                 for reopener in (old, new, old):
                     cold(reopener, state, authority, True, True)
                     ipc.require(record.read_bytes() == captured and record.stat().st_ino == inode,
                                 'writer reopen rewrote evidence')
                 cold(reader, state, authority, True, False)
                 ipc.require(record.read_bytes() == captured, 'reader-only fallback changed evidence')
+                if writer is new:
+                    ipc.require(incarnations.read_text() == valid, 'a reopen rewrote the incarnation record')
+                    refusals = {
+                        'corrupt': ('{', 'invalid incarnation record'),
+                        'foreign-owner': (json.dumps({'schema': 1, 'owner': {**owner, 'machine_id': 'foreign'}, 'entries': []}),
+                                          'another Machine or Service'),
+                        'shared-lineage': (json.dumps({'schema': 1, 'owner': owner, 'entries': [
+                            {'session_id': 'sess-a', 'incarnation': '0123456789abcdef' * 2, 'epoch': 1, 'origin': 'minted'},
+                            {'session_id': 'sess-b', 'incarnation': '0123456789abcdef' * 2, 'epoch': 1, 'origin': 'minted'}]}),
+                                           'invalid or duplicate incarnation identity'),
+                    }
+                    for name, (text, reason) in refusals.items():
+                        incarnations.write_text(text)
+                        authority.select(new)
+                        authority.admit(state)
+                        with NativeProcess(new, state, fixture=False) as rejected:
+                            rejected.refused(reason)
+                        ipc.require(incarnations.read_text() == text, f'{name} refusal rewrote the record')
+                        observations.append({'case': 'incarnation-record-' + name, 'revision': writer['source']['revision'], 'beforeBind': True})
+                    incarnations.write_text(valid)
+                    observations.append({'case': 'incarnation-record-valid-reopen', 'revision': writer['source']['revision']})
                 observations.append({'case': 'ack-dedup-sigkill-old-new-old-reader-fallback',
                                      'revision': writer['source']['revision'],
                                      'recordSha256': hashlib.sha256(captured).hexdigest()})

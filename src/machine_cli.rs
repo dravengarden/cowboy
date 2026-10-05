@@ -601,6 +601,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
             broker,
             args.state_dir.join("session-deletions"),
             args.state_dir.join("session-cleanups"),
+            args.state_dir.join("session-incarnations"),
             crate::machine_broker::deletions::Owner {
                 machine_id,
                 service_id: deletion_service_id,
