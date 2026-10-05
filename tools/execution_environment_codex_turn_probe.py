@@ -27,6 +27,9 @@ class Api(ThreadingHTTPServer):
 
     def __init__(self, steps):
         self.steps = steps
+        self.dispatcher = None
+        self.extra_requests = 0
+        self.dispatch_lock = threading.Lock()
         self.requests = []
         self.failure = None
         super().__init__(("127.0.0.1", 0), Handler)
@@ -49,13 +52,14 @@ class Handler(BaseHTTPRequestHandler):
             require(0 < length < 8 * 1024 * 1024, "fixture API body exceeds limit")
             require(self.path == "/v1/responses", "unexpected fixture API endpoint")
             request = json.loads(self.rfile.read(length))
-            index = len(self.server.requests)
-            self.server.requests.append(request)
-            require(index < len(self.server.steps), "unexpected extra native API request")
-            response_id = f"fixture_response_{index}"
-            step = self.server.steps[index]
-            if callable(step):
-                step = step(self.server.requests)
+            with self.server.dispatch_lock:
+                index = len(self.server.requests)
+                self.server.requests.append(request)
+                require(index < len(self.server.steps) + self.server.extra_requests, "unexpected extra native API request")
+                response_id = f"fixture_response_{index}"
+                step = self.server.dispatcher(self.server.requests) if self.server.dispatcher else self.server.steps[index]
+                if callable(step):
+                    step = step(self.server.requests)
             events = [
                 {"type": "response.created", "response": {"id": response_id}},
                 {"type": "response.output_item.done", "item": step},

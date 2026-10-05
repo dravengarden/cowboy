@@ -291,6 +291,18 @@ async fn native_worker_execution() {
                     {
                         relay_codeact_calls.fetch_or(2, std::sync::atomic::Ordering::Relaxed);
                     }
+                    if invocation.method == "process/start" {
+                        for (marker, bit) in [
+                            ("native-child-none.txt", 4),
+                            ("native-child-all.txt", 8),
+                            ("native-child-acp.txt", 16),
+                        ] {
+                            if params.contains(marker) {
+                                relay_codeact_calls
+                                    .fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
                 }
                 tasks.spawn(async move {
                     if matches!(request.command, Command::Events { .. }) && slow_events.load(std::sync::atomic::Ordering::Relaxed) {
@@ -389,8 +401,12 @@ async fn native_worker_execution() {
     if input["provider"] != "claude-code" {
         assert_eq!(
             codeact_calls.load(std::sync::atomic::Ordering::Relaxed),
-            3,
-            "CodeAct shell and image calls must cross the target transport"
+            if input["adapter_launcher"].is_string() {
+                31
+            } else {
+                15
+            },
+            "CodeAct shell/image and both native child commands must cross the target transport"
         );
     }
     assert!(
@@ -462,6 +478,15 @@ async fn native_worker_execution() {
         receipt["checks"].as_array_mut().unwrap().push(json!(
             "native_codeact_shell_and_image_cross_target_transport"
         ));
+        receipt["checks"].as_array_mut().unwrap().push(json!(
+            "native_fresh_and_forked_children_cross_target_transport"
+        ));
+        if input["adapter_launcher"].is_string() {
+            receipt["checks"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("packaged_acp_child_crosses_target_transport"));
+        }
     }
     receipt["accepted"] = true.into();
     std::fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();

@@ -1,0 +1,114 @@
+{
+  "schema": "cowboy.native-child-inheritance-audit/v1",
+  "date": "2026-10-05",
+  "source_base": "bb0e63c5",
+  "source_sha256": {
+    "tools/execution_environment_codex_turn_probe.py": "0c8182eff8fcc592f6fd27cde26729bd982bffd72e10740e1c50e5debf8cb136",
+    "tools/execution_worker_conformance.py": "204dc14fcfb56bb025925a40b180b8ece2fd2e7f54123dfbf712233b1d5dd71f",
+    "src/worker_execution/tests.rs": "9978f13497335bf954f9b44a0fe11ce9ecc635970c991f22d5b27301795d6c65"
+  },
+  "provider_plugin": {
+    "id": "codex",
+    "version": "3.3.2",
+    "digest": "sha256:a833d5b617922fc67938bd5ddf9a43bf9dd928caee2a3242a869014357c3e08f",
+    "native_version": "0.159.3"
+  },
+  "native": {
+    "schema": "cowboy.execution-worker-conformance/v1",
+    "accepted": true,
+    "checks": [
+      "machine_owned_worktree",
+      "long_state_path_uses_private_short_socket",
+      "machine_restart_reattaches_same_keeper_and_binding",
+      "provider_refuses_environment_override",
+      "native_fresh_and_forked_children_inherit_target_guidance_and_execute_once",
+      "target_image_read_reaches_native_model_input",
+      "background_job_survives_lost_reply_and_35_second_transport_gap",
+      "cancel_reaches_original_target_job_without_replay",
+      "output_backpressure_survives_35_second_transport_gap",
+      "native_apply_patch_and_command_use_target",
+      "runtime_files_unchanged",
+      "native_target_instructions",
+      "cold_native_resume_automatically_rebinds_each_turn",
+      "cold_resume_retains_history_without_effect_replay",
+      "cold_native_resumed_command_returns_target_bytes",
+      "global_environment_config_unchanged",
+      "native_codeact_patch_parallel_shell_and_failure_use_target",
+      "native_codeact_target_image_reaches_model",
+      "native_codeact_yield_and_wait_keep_target_and_single_effect",
+      "native_codeact_cold_resume_preserves_binding_and_single_effect",
+      "packaged_acp_child_completion_does_not_finish_parent_prompt",
+      "packaged_acp_native_spawn_routes_target_tools",
+      "packaged_acp_cold_load_preserves_binding_history_and_effects",
+      "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+      "concurrent_large_input_and_output_do_not_deadlock",
+      "post_flood_commands_and_cancellation_keep_original_executor",
+      "target_image_bytes_cross_machine_transport",
+      "idempotent_close_stops_environment_and_preserves_worktree",
+      "closed_environment_cannot_be_recreated",
+      "native_codeact_shell_and_image_cross_target_transport",
+      "native_fresh_and_forked_children_cross_target_transport",
+      "packaged_acp_child_crosses_target_transport"
+    ],
+    "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "sandbox_helper_sha256": "77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c",
+    "code_mode_host_sha256": "fe64bd08c7844ca1fca91d8cb825e62012a03a05ae8040c635bbb61e5be0b4c5",
+    "launcher_sha256": "bb5360dae4551a880220022c248af8a477d3f7713e3236cd56c6d6805ca37738",
+    "packaged_bridge_sha256": "9528b2fe5ea8c9947f48e7a89d6e08c7ef3dea2358f62cb52ea21501f3702153",
+    "packaged_adapter_sha256": "2fa6ed1a85b8e95b5919828200a59c5dd184b88d1e89066cc56fd5c868d4dedf",
+    "scripted_api_requests": 31,
+    "real_model_requests": 0,
+    "packaged_parent_continuation_polls": 1,
+    "production_credentials": false,
+    "production_activation": false,
+    "not_checked": [
+      "authenticated_enrolled_transport",
+      "cross_host_network",
+      "signed_provider_release",
+      "subscription_inference",
+      "inline_user_attachments",
+      "native_grandchildren_background_agents_and_child_crash_recovery"
+    ],
+    "cursor_expirations": 0
+  },
+  "fixture_corrections": [
+    "Match parent thread before consuming interleaved native turn/completed notifications",
+    "Route native agent_message child requests independently of parent API steps",
+    "Serialize scripted response selection and retain a bounded request count",
+    "Poll an unfinished parent continuation by its original process handle before finalizing the parent turn"
+  ],
+  "observed_modes": [
+    {
+      "entry": "private native app-server",
+      "fork_turns": "none",
+      "tool": "direct exec_command"
+    },
+    {
+      "entry": "private native app-server",
+      "fork_turns": "all",
+      "tool": "functions.exec with nested exec_command"
+    },
+    {
+      "entry": "packaged ACP session/prompt",
+      "fork_turns": "none",
+      "tool": "functions.exec with nested exec_command",
+      "parent_completion": "delayed parent target effect required after child completion"
+    }
+  ],
+  "limitations": [
+    "isolated same-host worker/keeper transport; no production cross-host canary",
+    "parent approvalPolicy=never and full-access mode do not establish restricted child approval or denial semantics",
+    "no proof for grandchildren, live-child cold resume, child cancellation or native-runtime crash recovery",
+    "no new Claude agent/task integration"
+  ],
+  "validation": {
+    "quality_gate": "nix develop -c env RUST_TEST_THREADS=4 just check-compact",
+    "quality_gate_exit_code": 0,
+    "native_review_final_findings": 0,
+    "default_scripted_api_probe_checks": 8,
+    "default_scripted_api_probe_real_model_requests": 0,
+    "prior_gate_failure": "Unmodified machine_install::tests::install_and_refresh_copy_the_probed_bundle_when_sources_are_replaced encountered Text file busy under default concurrency; exact isolated rerun passed, then the complete gate passed with four test threads",
+    "global_docs_index": "Blocked by pre-existing projects/data-transfer-toolkit/docs/INDEX.md front matter error; no new Markdown page added"
+  },
+  "production_changes": false
+}

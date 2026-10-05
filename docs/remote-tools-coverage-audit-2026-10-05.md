@@ -104,7 +104,7 @@ to introduce more restrictions.
 | Project hooks | Claude launch suppresses settings sources; Codex remote hook placement not established by current receipt | Execute target-owned hooks at target, preserve native lifecycle/decisions and trusted configuration; separate runtime-owned hooks |
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
 | Permission modes | Claude bound launch selects `bypassPermissions`; remote tools must not be presented as supporting every native permission mode | Design explicit mapping for approval, deny, modified input and concurrent approval cancellation; test denial before any target effect |
-| Native agents | Claude Agent/Task paths restricted; Codex nested agents explicitly not checked | Inherit binding and policy into every child; separately test foreground, background, fork, teammate and worktree paths |
+| Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance; Claude Agent/Task paths remain restricted | Separately test grandchildren, live-child resume, cancellation, background, teammate and worktree paths |
 | Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
@@ -150,6 +150,40 @@ corrections, not a new runtime release or a weakened sandbox policy.
 The fixture remains same-host with separate runtime/target directories and a
 real transport. It does not prove cross-host latency behavior, arbitrary nested
 agents, or survival of a pending V8 cell after native-runtime death.
+
+### Native child inheritance follow-up
+
+The default Codex conformance now asks the native runtime to spawn two children:
+`fork_turns=none` executes a direct command and `fork_turns=all` executes a
+CodeAct command. Both must load target guidance, return the target cwd, produce
+exactly one target-side effect and leave runtime files unchanged. Independent
+relay observations require both child commands to cross the worker/keeper
+transport; shared host paths alone cannot satisfy acceptance. See the
+[child inheritance evidence](experiments/codex-native-children-2026-10-05.json).
+The exact packaged ACP entry point also creates a child, waits for it, and
+executes a delayed parent command. The parent effect must exist when
+`session/prompt` returns, so an unrelated child completion cannot satisfy the
+parent prompt. If that command returns a running process handle, the fixture
+polls the same handle to a successful exit before sending the final answer;
+it does not assume that a fixed sleep guarantees process completion.
+Its child command independently crosses the target transport. The combined
+native receipt has 32 checks and zero real-model requests.
+
+This uncovered a fixture assumption: app-server interleaves child and parent
+`turn/completed` events. Completion now matches the requested thread before
+checking its turn identity. The scripted API routes each child independently
+and serializes response selection, so concurrent child requests cannot consume
+another thread's scripted response. Its request budget remains bounded.
+An initial research probe also misclassified native `agent_message` input as
+ordinary user input; that run did not exercise a child command and is not
+positive execution evidence.
+
+No production binding change or feature restriction was needed for these
+tested paths. This establishes two first-level child modes for the pinned
+runtime, not arbitrary native delegation, child cancellation, grandchildren,
+live-child cold resume, or a cross-host acceptance result. Claude's native
+agent/task integration remains a separate gap. The parent uses `never` approval
+and full access; restricted-mode approval and denial behavior is not established.
 
 ### Follow-up native probes
 

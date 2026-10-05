@@ -31,7 +31,7 @@ def complete_turn(client, thread, prompt="Run the fixture."):
     while time.monotonic() < deadline:
         frame = client.frame(deadline)
         require(not ("id" in frame and "method" in frame), "unexpected approval")
-        if frame.get("method") == "turn/completed":
+        if frame.get("method") == "turn/completed" and frame["params"]["threadId"] == thread:
             turn = frame["params"]["turn"]
             require(turn["id"] == result["turn"]["id"], "turn identity changed")
             require(turn["status"] == "completed", "native turn failed")
@@ -106,6 +106,45 @@ def main():
                        "input": '// @exec: {"yield_time_ms": 1}\ntext(await tools.exec_command({cmd:"sleep 2; printf yielded >> codeact-yielded.txt; cat codeact-yielded.txt",yield_time_ms:3000,max_output_tokens:1000}));'}, wait_codeact]
     api.steps.insert(-1, {"type": "custom_tool_call", "call_id": "fixture-native-codeact-resume", "namespace": "functions", "name": "exec",
                          "input": "text(await tools.exec_command({cmd:'cat codeact.txt; cat codeact-once.txt',max_output_tokens:1000}));"})
+    child_counts = {"none": 0, "all": 0}
+    child_requests = {mode: [] for mode in child_counts}
+    child_steps = []
+    for mode in child_counts:
+        child_steps.extend([
+            {"type": "function_call", "namespace": "collaboration", "name": "spawn_agent", "call_id": "fixture_spawn_" + mode,
+             "arguments": json.dumps({"task_name": "remote_" + mode, "message": "Execute the isolated child fixture.", "fork_turns": mode})},
+            {"type": "function_call", "namespace": "collaboration", "name": "wait_agent", "call_id": "fixture_wait_" + mode,
+             "arguments": json.dumps({"timeout_ms": 10000})},
+        ])
+    api.steps[8:8] = child_steps
+    parent_step = 0
+
+    def dispatch(requests):
+        nonlocal parent_step
+        request = requests[-1]
+        recipient = next((item.get("recipient") for item in reversed(request.get("input", []))
+                          if item.get("type") == "agent_message" and item.get("recipient") in
+                          ["/root/remote_" + mode for mode in child_counts]), None)
+        if recipient:
+            mode = recipient.rsplit("_", 1)[1]
+            step = child_counts[mode]
+            child_counts[mode] += 1
+            child_requests[mode].append(request)
+            require(step < 2, "unexpected extra child request")
+            if step == 1:
+                return final("fixture_child_final_" + mode)
+            script = "pwd; printf once >> native-child-" + mode + ".txt; cat native-child-" + mode + ".txt"
+            if mode == "none":
+                return command("fixture_child_none", script)
+            return {"type": "custom_tool_call", "namespace": "functions", "name": "exec", "call_id": "fixture_child_" + mode,
+                    "input": "text(await tools.exec_command(" + json.dumps({"cmd": script, "max_output_tokens": 1000}) + "));"}
+        require(parent_step < len(api.steps), "unexpected extra parent request")
+        step = api.steps[parent_step]
+        parent_step += 1
+        return step
+
+    api.dispatcher = dispatch
+    api.extra_requests = 4
     if inputs.get("legacy_event_gap"):
         api.steps[0:0] = [
             command("fixture_legacy_flood", "printf once >> legacy-starts; head -c 8388608 /dev/zero"),
@@ -152,6 +191,17 @@ def main():
         thread = started["thread"]["id"]
         complete_turn(client, thread)
         require(api.failure is None, api.failure or "scripted API failed")
+        require(child_counts == {"none": 2, "all": 2}, "both native children must execute and complete")
+        for mode, requests in child_requests.items():
+            name = "native-child-" + mode + ".txt"
+            require((args.target / name).read_text() == "once" and not (args.runtime / name).exists(),
+                    "native child missed target or repeated an effect: " + mode)
+            require("TARGET_GUIDANCE_MUST_REACH_MODEL" in json.dumps(requests[0]) and
+                    "RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in json.dumps(requests), "child guidance binding differs: " + mode)
+            results = [item for request in requests for item in request.get("input", [])
+                       if item.get("call_id") == "fixture_child_" + mode and item.get("type", "").endswith("call_output")]
+            require(str(args.target) in json.dumps(results) and "once" in json.dumps(results), "child target result missing: " + mode)
+        checks.append("native_fresh_and_forked_children_inherit_target_guidance_and_execute_once")
         require((args.target / "fixture.txt").read_text() == "target after '\" $() 中文 🐎\n", "target edit failed")
         require((args.target / "once.txt").read_text() == "once", "target command did not execute exactly once")
         if inputs.get("legacy_event_gap"):
@@ -220,9 +270,37 @@ def main():
         if packaged:
             client.close()
             client = None
+            child_counts["acp"] = 0
+            child_requests["acp"] = []
+            api.extra_requests += 2
+            parent_result_id = "packaged_parent_after_child"
+            parent_polls = 0
+
+            def finish_parent(requests):
+                nonlocal parent_result_id, parent_polls
+                outputs = [item.get("output", "") for item in requests[-1].get("input", [])
+                           if item.get("type") == "function_call_output" and item.get("call_id") == parent_result_id]
+                require(len(outputs) == 1, "parent continuation result missing")
+                output = str(outputs[0])
+                running = re.search(r"(?:session ID|session_id)[\s:=]+(\d+)", output, re.IGNORECASE)
+                if running:
+                    parent_polls += 1
+                    require(parent_polls <= 10, "parent continuation did not exit within fixture poll budget")
+                    parent_result_id = "packaged_parent_poll_" + str(parent_polls)
+                    api.steps.insert(parent_step, finish_parent)
+                    return {"type": "function_call", "name": "write_stdin", "call_id": parent_result_id,
+                            "arguments": json.dumps({"session_id": int(running[1]), "chars": "", "yield_time_ms": 1000})}
+                require("Process exited with code 0" in output, "parent continuation failed: " + output[-1000:])
+                return final("packaged_acp_final")
+
             api.steps.extend([
                 command("packaged_acp_command", "cat fixture.txt; printf acp_once >> acp-once.txt"),
-                final("packaged_acp_final"),
+                {"type": "function_call", "namespace": "collaboration", "name": "spawn_agent", "call_id": "fixture_spawn_acp",
+                 "arguments": json.dumps({"task_name": "remote_acp", "message": "Execute the isolated ACP child fixture.", "fork_turns": "none"})},
+                {"type": "function_call", "namespace": "collaboration", "name": "wait_agent", "call_id": "fixture_wait_acp",
+                 "arguments": json.dumps({"timeout_ms": 10000})},
+                command("packaged_parent_after_child", "sleep 2; printf after >> parent-after-child.txt"),
+                finish_parent,
                 command("packaged_acp_resume", "cat fixture.txt; cat acp-once.txt"),
                 final("packaged_acp_resumed_final"),
             ])
@@ -260,6 +338,13 @@ def main():
             require(result["stopReason"] == "end_turn", "packaged ACP turn failed")
             require((args.target / "acp-once.txt").read_text() == "acp_once", "packaged ACP missed target")
             require(not (args.runtime / "acp-once.txt").exists(), "packaged ACP used runtime filesystem")
+            require(child_counts["acp"] == 2 and (args.target / "native-child-acp.txt").read_text() == "once",
+                    "packaged ACP child did not complete its target command")
+            require((args.target / "parent-after-child.txt").read_text() == "after",
+                    "packaged ACP returned before the parent completed after its child")
+            require(not (args.runtime / "native-child-acp.txt").exists() and
+                    not (args.runtime / "parent-after-child.txt").exists(), "packaged ACP child or continuation used runtime files")
+            checks.append("packaged_acp_child_completion_does_not_finish_parent_prompt")
             client.close()
             client = acp()
             client.request("session/load", {"sessionId": acp_session, "cwd": str(args.runtime), "mcpServers": []})
@@ -282,9 +367,11 @@ def main():
             "packaged_bridge_sha256": hashlib.sha256((packaged.parent / "cowboy-execution.mjs").read_bytes()).hexdigest() if packaged else None,
             "packaged_adapter_sha256": hashlib.sha256((packaged.parent / "node_modules/@agentclientprotocol/codex-acp/dist/index.js").read_bytes()).hexdigest() if packaged else None,
             "scripted_api_requests": len(api.requests), "real_model_requests": 0,
+            "packaged_parent_continuation_polls": parent_polls if packaged else 0,
             "production_credentials": False, "production_activation": False,
             "not_checked": ["authenticated_enrolled_transport", "cross_host_network", "signed_provider_release",
-                            "subscription_inference", "inline_user_attachments", "native_nested_agents"],
+                            "subscription_inference", "inline_user_attachments",
+                            "native_grandchildren_background_agents_and_child_crash_recovery"],
         }
         fd = os.open(args.receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as output:
