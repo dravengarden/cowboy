@@ -1,3 +1,4 @@
+import { defaultDraftTitle } from "./defaultDraftTitle";
 import {
   Alert,
   AppBar,
@@ -193,7 +194,7 @@ function DraftWorkspaceBody(
   const create = (): void =>
     attempt(async () => {
       await beforeLeave.current();
-      const newId = await draftRepository().create("Untitled", folder);
+      const newId = await draftRepository().create(defaultDraftTitle(), folder);
       setDrawer(false);
       setTrash(false);
       openDrafts(newId);
