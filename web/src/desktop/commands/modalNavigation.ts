@@ -233,6 +233,8 @@ export function handleDesktopModalKey(
   };
   // Insert: the field keeps every key except the one that leaves it.
   if (target && isModalTextField(target)) {
+    // A launcher's search (the Command Palette) closes on its first Esc.
+    if (target.closest("[data-desktop-escape='close']")) return false;
     const escape = (event.key === "Escape" && !event.ctrlKey &&
       !event.metaKey && !event.altKey && !event.shiftKey) ||
       (event.ctrlKey && !event.metaKey && !event.altKey &&

@@ -341,9 +341,11 @@ the destination tree are such regions. A dialog that already runs this
 grammar itself marks `[data-desktop-modal-keys='own']`: the control center
 (digits and `[`/`]` for sections, `J/K` rows, `H/L` choices, `Esc` from a
 field to its row). A dialog without its own shortcut bar shows the grammar
-for the current mode in its footer (`DesktopModalKeyHint`), and the Command
-Palette follows it too: `Esc` from the search leaves for its results
-(`J/K`, `Enter` runs, `I` searches again), a second `Esc` closes.
+for the current mode in its footer (`DesktopModalKeyHint`). The one exception is a launcher whose
+only purpose is typing a query, the Command Palette: its search is marked
+`data-desktop-escape="close"` (and `data-desktop-vim="off"`), arrows move
+the highlight, `Enter` runs and a single `Esc` closes, as in every
+command palette.
 
 ### Create
 
