@@ -1,0 +1,255 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "implementation_revision": "aa0cc545ef6b4e15aa52966c7da34a38be408cfe",
+  "purpose": "Independent Draft documents share Session workspace navigation, directories and the actual PlatformComposerEditor.",
+  "automated": {
+    "web_tests": {
+      "passed": 2049,
+      "failed": 0
+    },
+    "rust_all_targets_all_features": {
+      "library_passed": 1863,
+      "library_ignored": 55,
+      "failed": 0,
+      "integration_tests": "passed"
+    },
+    "typecheck": "passed",
+    "lint": "passed with warnings",
+    "rust_format": "passed",
+    "postgres_contracts": {
+      "passed": 26,
+      "failed": 0,
+      "isolation": "tools/test-postgres.sh disposable database; includes migration/import/reparent and copy contracts"
+    }
+  },
+  "browsers": [
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "0577b9619b17da521a281140e3ffec802adfed267bb16ec7978f44a16ca5a718",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 76ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "session-fold",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "18434dd1630966bd7b79aa27b9465cf93f3b8e91646028ca9fba9c77eadb3da3",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "an off-screen current session arms Focus",
+        "Focus folds off-path folders, scrolls and rings the row",
+        "scrolling away re-arms Focus without unfolding",
+        "Expand all keeps the current row anchored",
+        "a flat list only locates",
+        "Create's Folder tab names, places and announces a folder"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "session-fold",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "18434dd1630966bd7b79aa27b9465cf93f3b8e91646028ca9fba9c77eadb3da3",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "an off-screen current session arms Focus",
+        "Focus folds off-path folders, scrolls and rings the row",
+        "scrolling away re-arms Focus without unfolding",
+        "Expand all keeps the current row anchored",
+        "a flat list only locates",
+        "Create's Folder tab names, places and announces a folder"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "desktop-composer",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "e92d0965042f231781687dfa8d82f9a4b896bc2456c1f03f432696d30e76802d",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+        "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+        "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+        "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+        "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+        "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
+        "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed",
+        "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "desktop-composer",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "e92d0965042f231781687dfa8d82f9a4b896bc2456c1f03f432696d30e76802d",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+        "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+        "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+        "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+        "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+        "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
+        "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed",
+        "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection"
+      ],
+      "physical_device": "not_checked"
+    }
+  ],
+  "additional_browser_results": {
+    "draft_light": {
+      "ok": true,
+      "fixture_sha256": "0577b9619b17da521a281140e3ffec802adfed267bb16ec7978f44a16ca5a718",
+      "tests": 10
+    },
+    "session_move_light_dark": {
+      "ok": true,
+      "fixture_sha256": "daadbb18cb84eb98df4ff2bda93e4c79e44677f94b0376817f669b9002277368",
+      "tests_per_theme": 4
+    }
+  },
+  "native": {
+    "environment": "Dedicated disposable iPhone 17 / iOS 27 Simulator; isolated WKWebView runner mounting actual MobileApp and MobileProductShell",
+    "fixture_sha256": "925fdf7340ed2d85a1604b8b6e1e6ab000c781b7807e0da584da263edd7edb8c",
+    "fixture_revision": "9c151782 (before unified SegmentedTabs merge; shared editor/native shell equivalent)",
+    "observed": [
+      "Actual native textarea, touch document editor context and Agent product",
+      "UIKit text input saves to the owned Draft replica",
+      "Pinyin compositionstart/update/end and candidate 你好 committed and saved",
+      "OS clipboard Unicode multiline paste (LC_CTYPE=UTF-8) saved unchanged",
+      "Existing Mobile navigation drawer opens and shows independent Draft and Session rows",
+      "Draft has Menu/actions and no Code navigation button"
+    ],
+    "input_receipt_sha256": "422e443101812c15ee0bb3542db2a031755271dba0dc2c015dba88eaee3a0410",
+    "composition_events": [
+      {
+        "type": "compositionstart",
+        "data": ""
+      },
+      {
+        "type": "compositionupdate",
+        "data": "n"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "ni"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "ni h"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "ni ha"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "ni hao"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "你好"
+      },
+      {
+        "type": "compositionend",
+        "data": "你好"
+      }
+    ],
+    "value_matches_saved": true,
+    "unicode_paste_saved": true,
+    "boundaries": [
+      "Account-free fixture; no production login",
+      "Simulator, not physical iPhone or WeType",
+      "No claim of full software-keyboard Clear/Send/pending-row matrix",
+      "No successful native Session-switch assertion; browser exercises actual shell switching",
+      "Physical iPhone pasted-image caret issue #69 remains open"
+    ],
+    "cleanup": "Only dedicated Simulator deleted; existing Simulators left intact"
+  },
+  "release": {
+    "status": "activated and published",
+    "controller": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "controller",
+      "transaction": "1791165396314277280-aa0cc545ef6b",
+      "revision": "aa0cc545ef6b4e15aa52966c7da34a38be408cfe",
+      "published": true,
+      "release": "/nix/store/cj636x76f2dd46bbyw910p5wzqclh00f-cowboy-controller-release",
+      "previousRelease": "/nix/store/j6fzcrgrz7a2yg1gax880lkxwm0nqsd1-cowboy-controller-release",
+      "activeRelease": "/nix/store/cj636x76f2dd46bbyw910p5wzqclh00f-cowboy-controller-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-05T01:56:36.31427728Z",
+      "recordedAt": "2026-10-05T01:56:46.260378489Z",
+      "recovered": false
+    },
+    "web": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791165451529152117-aa0cc545ef6b",
+      "revision": "aa0cc545ef6b4e15aa52966c7da34a38be408cfe",
+      "published": true,
+      "release": "/nix/store/jnyj66d1wawyxysqfw4fga2crziqbwql-cowboy-web-release",
+      "previousRelease": "/nix/store/slg6ccic9va807fxwaicrnkqsnrsb3vb-cowboy-web-release",
+      "activeRelease": "/nix/store/jnyj66d1wawyxysqfw4fga2crziqbwql-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-05T01:57:31.529152117Z",
+      "recordedAt": "2026-10-05T01:57:31.566640315Z",
+      "recovered": false
+    },
+    "service_worker": "cowboy-v1840",
+    "spa_version": "cb8c15049f5eb2f9ee0013565173666f",
+    "local_and_public_healthz": "ok",
+    "local_and_public_version_match": true,
+    "public_index_sha256": "cb8c15049f5eb2f9ee0013565173666faacbc79d2c209c8170292f321f67e02d",
+    "public_sw_sha256": "65187d158921f086a2a7f914d4f25550e2343e6455de0d43ad973d171ebff9e4",
+    "public_index_and_sw_match_immutable_release": true,
+    "index_and_sw_cache_control": "no-store",
+    "controller_pid_before": 803041,
+    "controller_pid_after": 2648009,
+    "machine_pid_before_and_after": 2564297,
+    "machines_reconnected": [
+      "hawk",
+      "falcon",
+      "macbook-air",
+      "ovh"
+    ],
+    "preexisting_worker_processes": "All observed worker/Codex processes remain present; only Controller replaced",
+    "machine_release_activated_by_task": false,
+    "client_pwa_reload_observed": false
+  }
+}
