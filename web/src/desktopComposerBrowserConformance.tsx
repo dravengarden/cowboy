@@ -289,6 +289,93 @@ export async function runDesktopComposerBrowserConformance(): Promise<
       calls.at(-1) === "force",
       "Force shortcut opens confirmation callback",
     );
+    // Space leader (FOCUS.md "Leader"): armed only where Cowboy owns the
+    // key, lights every live slot, and leaves typed spaces alone.
+    {
+      const region = container.querySelector<HTMLElement>(
+        "[data-desktop-region='prompt.composer']",
+      )!;
+      const space = (target: Element, init: KeyboardEventInit = {}) => {
+        const event = new KeyboardEvent("keydown", {
+          key: " ",
+          code: "Space",
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        });
+        flushSync(() => target.dispatchEvent(event));
+        return event;
+      };
+      const typed = space(
+        container.querySelector("[contenteditable=true], textarea")!,
+      );
+      check(
+        !typed.defaultPrevented && workspace.mode === "normal",
+        "Space in a text editor stays text",
+      );
+      const composing = space(region, { isComposing: true });
+      check(
+        !composing.defaultPrevented && workspace.mode === "normal",
+        "Space confirming an IME candidate stays with the IME",
+      );
+      const held = space(region, { repeat: true });
+      check(!held.defaultPrevented, "Auto-repeated Space never arms");
+      const armed = space(region);
+      check(
+        armed.defaultPrevented && (workspace.mode as string) === "command",
+        "Space on Cowboy-owned focus arms the leader",
+      );
+      const up = new KeyboardEvent("keyup", {
+        key: " ",
+        code: "Space",
+        bubbles: true,
+        cancelable: true,
+      });
+      region.dispatchEvent(up);
+      check(up.defaultPrevented, "The leader Space never activates a button on keyup");
+      await tick();
+      check(
+        button("attach").querySelector("[data-shortcut-state='active']") &&
+          button("attach").textContent?.includes("␣A"),
+        "Armed leader lights the Attach slot as one ␣A keycap",
+      );
+      flushSync(() =>
+        region.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "a",
+            code: "KeyA",
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+      );
+      check(
+        calls.at(-1) === "attach" && workspace.mode === "normal",
+        "␣A runs Attach and closes the leader",
+      );
+      space(region);
+      flushSync(() =>
+        region.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            code: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+      );
+      check(workspace.mode === "normal", "Esc closes the leader");
+      space(region);
+      flushSync(() =>
+        document.body.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true }),
+        )
+      );
+      check(workspace.mode === "normal", "A pointer press closes the leader");
+      results.push(
+        "Space leader arms only on Cowboy-owned focus (not text, IME or repeat), swallows its keyup, lights ␣ slots, runs ␣A and closes on Esc/pointer",
+      );
+    }
     for (const id of ["attach", "draft", "schedule", "next", "force", "send"]) {
       click(id);
       check(calls.at(-1) === id, `${id} click shares action`);
@@ -363,7 +450,12 @@ export async function runDesktopComposerBrowserConformance(): Promise<
       editorRef.current.getValue() === "A **prompt** worth writing",
       "Bold formats current selection",
     );
-    sequence("Z");
+    // Undo stays with the editor (Mod+Z / Vim u) and the toolbar command; the
+    // leader keeps Z for zoom.
+    flushSync(() => {
+      commands.list().find((command) => command.id === "composer.format.undo")
+        ?.run();
+    });
     check(
       editorRef.current.getValue() === "A prompt worth writing",
       "Toolbar formatting is undoable",
@@ -392,13 +484,13 @@ export async function runDesktopComposerBrowserConformance(): Promise<
 
     prefix();
     check(
-      button("attach").querySelector("[data-shortcut-state='available']"),
-      "Armed continuation becomes available",
+      button("attach").querySelector("[data-shortcut-state='active']"),
+      "Armed leader lights the continuation slot",
     );
     key("Escape", "Escape");
     check(
-      button("attach").querySelector("[data-shortcut-state='inactive']"),
-      "Unarmed letter is inactive",
+      button("attach").querySelector("[data-shortcut-state='available']"),
+      "At rest the in-scope ␣A slot is available, not lit",
     );
     flushSync(() => workspace.focusRegion("conversation.transcript"));
     const outside = calls.length;

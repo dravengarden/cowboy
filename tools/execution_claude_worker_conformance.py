@@ -123,7 +123,7 @@ def main():
     fixture = WorkspaceFixture(args.target)
     memory = MatrixFixture(inputs, args.runtime.parent, args.descriptor, "claude", environment)
     if memory.enabled:
-        api.steps.insert(0, tool("mcp__matrix__memory_get", {"id": memory.id}))
+        api.steps.insert(0, tool("mcp__matrix__" + memory.tool, memory.arguments))
     def native(resume=None):
         return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume, bound_native=True)
     def context_checked(requests):
@@ -133,7 +133,7 @@ def main():
                     "auxiliary request leaked runtime context")
         for index, request in enumerate(requests):
             names = {definition["name"] for definition in request.get("tools", [])}
-            require(not any(name.startswith("mcp__") and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget"}) for name in names), "Unowned MCP tool definitions remain advertised")
+            require(not any(name.startswith("mcp__") and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget", "mcp__matrix__memory_read", "mcp__matrix__memory_execute", "mcp__matrix__memory_receipt"}) for name in names), "Unowned MCP tool definitions remain advertised")
             require(not names or {"Read", "Edit", "Write", "Bash", "Glob", "Grep", "NotebookEdit", "TaskStop"} <= names,
                     "native execution tools missing")
             encoded = json.dumps(request)

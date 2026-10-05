@@ -297,6 +297,13 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
+import { useDesktopLeaderOptional } from "./desktop/commands/leaderContext";
+import {
+    DESKTOP_SESSION_ALTERNATE_EVENT,
+    DESKTOP_SESSION_JUMP_EVENT,
+    publishSessionJumpTargets,
+    sessionJumpLabels,
+} from "./desktop/commands/sessionJump";
 import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
@@ -802,6 +809,29 @@ function SessionList({
     const sessionFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [collapsed, setCollapsed] = useCollapsedSessionFolders();
     const displayedSessions = useMemo(() => displayedSessionOrder(sessions), [sessions]);
+    // `␣␣` labels (FOCUS.md "Leader"): letters in flat displayed order.
+    const jumpLabels = useMemo(() => sessionJumpLabels(displayedSessions), [displayedSessions]);
+    const leader = useDesktopLeaderOptional();
+    const sessionLabelsShown = desktop && leader?.armed === true && leader.layer === "sessions";
+    const previousActiveId = useRef<string | null>(null);
+    const lastActiveId = useRef<string | null>(activeId);
+    if (lastActiveId.current !== activeId) {
+        previousActiveId.current = lastActiveId.current;
+        lastActiveId.current = activeId;
+    }
+    useEffect(() => {
+        if (!desktop) return;
+        publishSessionJumpTargets(displayedSessions.flatMap((session) => {
+            const label = jumpLabels.get(session);
+            return label ? [{
+                label,
+                id: session.id,
+                title: session.title,
+                detail: sessionProjectLabel(session) ?? "",
+                current: session.id === activeId,
+            }] : [];
+        }));
+    }, [activeId, desktop, displayedSessions, jumpLabels]);
     const workspaceOrder = useStoreSelector((snapshot) => snapshot.workspaceOrder);
     const tree = useMemo(
         () => buildSessionTree(displayedSessions, sessionFolders, collapsed, drafts, workspaceOrder),
@@ -1095,18 +1125,19 @@ function SessionList({
     };
     const runRowCommandRef = useRef(runRowCommand);
     runRowCommandRef.current = runRowCommand;
-    const selectSessionSlot = (digit: string): boolean => {
-        const slot = Number(digit);
-        const session = displayedSessions[slot === 0 ? 9 : slot - 1];
-        if (!session) return false;
+    const selectSessionLabel = (label: string): boolean => {
+        const session = label === "`"
+            ? displayedSessions.find((candidate) => candidate.id === previousActiveId.current)
+            : displayedSessions.find((candidate) => jumpLabels.get(candidate) === label);
+        if (!session || session.id === activeId) return false;
         revealSession(session.id);
         setPinned(false);
         onPick(session.id);
         focusRow(session.id);
         return true;
     };
-    const selectSessionSlotRef = useRef(selectSessionSlot);
-    selectSessionSlotRef.current = selectSessionSlot;
+    const selectSessionLabelRef = useRef(selectSessionLabel);
+    selectSessionLabelRef.current = selectSessionLabel;
     const runFoldersAction = (action: string, rowKey: string | null): void => {
         if (action === "move") {
             const key = rowKey ?? activeId;
@@ -1253,17 +1284,22 @@ function SessionList({
             event.preventDefault();
             runFoldersActionRef.current(detail.action, detail.row ?? null);
         };
-        const onSelectSlot = (event: Event): void => {
-            const digit = (event as CustomEvent<{ digit?: string }>).detail?.digit;
-            if (digit !== undefined && selectSessionSlotRef.current(digit)) event.preventDefault();
+        const onJump = (event: Event): void => {
+            const label = (event as CustomEvent<{ label?: string }>).detail?.label;
+            if (label !== undefined && selectSessionLabelRef.current(label)) event.preventDefault();
+        };
+        const onAlternate = (event: Event): void => {
+            if (selectSessionLabelRef.current("`")) event.preventDefault();
         };
         for (const type of Object.keys(SESSION_ROW_EVENTS)) list.addEventListener(type, onRowCommand);
         list.addEventListener("cowboy:desktop-folders", onFolders);
-        list.addEventListener("cowboy:desktop-select-session", onSelectSlot);
+        list.addEventListener(DESKTOP_SESSION_JUMP_EVENT, onJump);
+        list.addEventListener(DESKTOP_SESSION_ALTERNATE_EVENT, onAlternate);
         return () => {
             for (const type of Object.keys(SESSION_ROW_EVENTS)) list.removeEventListener(type, onRowCommand);
             list.removeEventListener("cowboy:desktop-folders", onFolders);
-            list.removeEventListener("cowboy:desktop-select-session", onSelectSlot);
+            list.removeEventListener(DESKTOP_SESSION_JUMP_EVENT, onJump);
+            list.removeEventListener(DESKTOP_SESSION_ALTERNATE_EVENT, onAlternate);
         };
     }, [desktop]);
     useEffect(() => {
@@ -1696,10 +1732,7 @@ function SessionList({
                     />;
                     const s = row.session;
                     const deleting = deletingSessionIds.has(s.id);
-                    // Alt/Option+1…0 slots follow the flat displayed session
-                    // order, never the folded view, so a fold cannot renumber a
-                    // session while the keycaps still read 1…0 down the rail.
-                    const slot = desktop ? displayedSessions.indexOf(s) : -1;
+                    const jumpLabel = sessionLabelsShown ? jumpLabels.get(s) : undefined;
                     return (
                     <ReliableListItemButton
                         key={s.id}
@@ -1910,13 +1943,9 @@ function SessionList({
                                 }}
                             />
                         )}
-                        {desktop && slot >= 0 && slot < 10 && (
+                        {jumpLabel && (
                             <Suspense fallback={null}>
-                                <DesktopSessionShortcut
-                                    digit={slot === 9 ? "0" : String(slot + 1)}
-                                    active={s.id === activeId}
-                                    title={s.title}
-                                />
+                                <DesktopSessionShortcut label={jumpLabel} />
                             </Suspense>
                         )}
                         <IconButton
@@ -3659,17 +3688,15 @@ export function App({
         ? [pendingCreatedSession, ...sessions]
         : sessions;
     // The collapsed Sessions rail shows the folder structure (fully expanded,
-    // independent of this device's folds) and labels sessions with the same
-    // Alt/Option slots as the list, which number the flat displayed order.
+    // independent of this device's folds).
     const railFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const workspaceOrder = useStoreSelector((snapshot) => snapshot.workspaceOrder);
     const collapsedRail = useMemo(() => {
-        if (!sessionsCollapsed) return { groups: [], slots: new Map<string, number>() };
+        if (!sessionsCollapsed) return { groups: [] };
         const ordered = displayedSessionOrder(sessionsForView);
         const rows = buildSessionTree(ordered, railFolders, NO_COLLAPSED_FOLDERS, draftLibrary.entries, workspaceOrder).rows;
         return {
             groups: sessionsRailGroups(rows, draftRoute.id ? `draft:${draftRoute.id}` : activeId),
-            slots: new Map(ordered.map((session, index): [string, number] => [session.id, index])),
         };
     }, [activeId, railFolders, sessionsCollapsed, sessionsForView, draftLibrary.entries, draftRoute.id, workspaceOrder]);
     const active = draftRoute.active ? null : resolveActiveSession(sessions, activeId, pendingCreatedSession);
@@ -4293,7 +4320,6 @@ export function App({
                     <Suspense fallback={null}>
                         <DesktopSessionsRail
                             groups={collapsedRail.groups}
-                            slots={collapsedRail.slots}
                             activeId={draftRoute.id ? `draft:${draftRoute.id}` : active?.id ?? null}
                             allowNewSession
                             onPick={pick}
@@ -4318,7 +4344,7 @@ export function App({
                         borderColor: "divider",
                         height: "100%",
                         // Collapsed Sessions stays mounted: its list still owns
-                        // the Alt/Option+1…0 slots and folder state.
+                        // the ␣␣ session labels and folder state.
                         display: sessionsCollapsed ? "none" : "flex",
                         opacity: sessionsCollapseIntent ? 0.38 : 1,
                         transition: "opacity 120ms ease",

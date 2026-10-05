@@ -1285,6 +1285,66 @@ export async function runDraftDocumentsBrowserConformance(
       item,
     ) => item.textContent === "Undo")!.click();
     await until(() => copied.length === 0, "Tree copy has exact snackbar Undo");
+    // Leader: ␣ opens which-key, ␣␣ labels sessions, a label opens one.
+    {
+      const press = (target: Element, key: string, code: string) =>
+        flushSync(() =>
+          target.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key,
+              code,
+              bubbles: true,
+              cancelable: true,
+            }),
+          )
+        );
+      const row = container.querySelector<HTMLElement>(
+        '[data-desktop-item="integrated-session"]',
+      )!;
+      row.focus();
+      press(row, " ", "Space");
+      await until(
+        () => !!document.querySelector('[data-desktop-leader-menu="root"]'),
+        "Space opens the which-key leader panel",
+      );
+      check(
+        document.querySelector('[data-leader-entry=" "]') &&
+          document.querySelector('[data-leader-entry="n"]'),
+        "which-key lists ␣␣ Switch Session and ␣N New",
+      );
+      press(row, " ", "Space");
+      await until(
+        () => !!document.querySelector('[data-desktop-leader-menu="sessions"]'),
+        "␣␣ opens the session switcher layer",
+      );
+      await until(
+        () => !!row.querySelector("[data-session-jump-label]"),
+        "Session rows show their switcher label",
+      );
+      const label = row.querySelector<HTMLElement>("[data-session-jump-label]")
+        ?.dataset.sessionJumpLabel;
+      check(
+        label && /^[a-z]$/.test(label) &&
+          document.querySelector(`[data-session-jump-entry="${label}"]`),
+        "The session row and the switcher show the same letter label",
+      );
+      press(row, label, `Key${label.toUpperCase()}`);
+      await until(
+        () => !container.querySelector("[data-workspace-document]"),
+        "Pressing the label opens that session",
+      );
+      check(
+        !document.querySelector("[data-desktop-leader-menu]") &&
+          !row.querySelector("[data-session-jump-label]"),
+        "Labels and which-key disappear after the jump",
+      );
+      container.querySelector<HTMLElement>(`[data-desktop-item="draft:${id}"]`)!
+        .click();
+      await until(
+        () => !!container.querySelector("[data-workspace-document]"),
+        "Draft reopens after the leader jump",
+      );
+    }
     integrated.unmount();
     touchCreate = true;
     localStorage.setItem("cowboy:mobile-product", "review");

@@ -44,7 +44,7 @@ Deno.test("workspace prefix has priority after IME and exclusive overlays", () =
 Deno.test("claimed workspace strokes stop same-node Vim listeners immediately", () => {
   const prefix = provider.indexOf("if (matchesDesktopWorkspacePrefix(event))");
   const continuation = provider.indexOf(
-    "if (workspaceCommandTimer.current !== null)",
+    "if (leaderArmed.current) {",
     prefix,
   );
   assert(prefix >= 0);

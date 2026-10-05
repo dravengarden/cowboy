@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  leaderShortcutAvailability,
   sequentialShortcutAvailability,
   shortcutAvailability,
 } from "./shortcutAvailability.ts";
@@ -32,4 +33,10 @@ Deno.test("sequential shortcut prefix and continuation expose truthful states", 
     sequentialShortcutAvailability({ scopeAvailable: true, armed: true, prefix: false }),
     "available",
   );
+});
+
+Deno.test("leader slots are available at rest and lit while armed", () => {
+  assertEquals(leaderShortcutAvailability(false, true), "inactive");
+  assertEquals(leaderShortcutAvailability(true, false), "available");
+  assertEquals(leaderShortcutAvailability(true, true), "active");
 });

@@ -9,7 +9,12 @@ import {
   MEMORY_TOOLS,
 } from "@cowboy/memory-client";
 export { MatrixClient, matrixConfiguration };
-export const MATRIX_TOOLS = MEMORY_TOOLS.map((tool) => "mcp__matrix__" + tool);
+export const MATRIX_TOOLS = [
+  ...MEMORY_TOOLS,
+  "memory_read",
+  "memory_execute",
+  "memory_receipt",
+].map((tool) => "mcp__matrix__" + tool);
 
 export function claudePrompt(frame) {
   const content = frame.message?.content;

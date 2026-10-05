@@ -36,20 +36,15 @@ import {
   toggleComposerSourceMode,
   useComposerSourceMode,
 } from "../composerSourceMode";
-import { ShortcutKeycap } from "../ShortcutKeycap";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopComposerCommandBindings } from "./commands/DesktopComposerShortcuts";
-import { DesktopShortcut } from "./commands/DesktopKeycap";
+import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
-import {
-  sequentialShortcutAvailability,
-  shortcutAvailability,
-} from "./commands/shortcutAvailability";
+import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
   DESKTOP_COMPOSER_FORMAT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
-  DESKTOP_WORKSPACE_PREFIX,
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 import { useImeStatus } from "./vim/imeStatusStore";
@@ -107,7 +102,6 @@ export function DesktopComposerToolbar(
   const scoped = workspace.focusedRegion === "prompt.composer" &&
     prefixAvailable;
   const sourceScope = workspace.focusedPane === "prompt" && prefixAvailable;
-  const armed = workspace.mode === "command";
   const ready = props.sendable && !props.pending;
   const deliveryReason = props.pending
     ? "Saving this prompt…"
@@ -195,15 +189,10 @@ export function DesktopComposerToolbar(
           <Box component="span" data-composer-action-label>{label}</Box>
           {key
             ? (
-              <ShortcutKeycap
-                keyLabel={key}
-                variant="global"
-                availability={sequentialShortcutAvailability({
-                  scopeAvailable: (id === "source" ? sourceScope : scoped) &&
-                    !disabled,
-                  armed,
-                  prefix: false,
-                })}
+              <LeaderKeycap
+                leaderKey={key}
+                scopeAvailable={(id === "source" ? sourceScope : scoped) &&
+                  !disabled}
               />
             )
             : shortcut && (
@@ -276,26 +265,6 @@ export function DesktopComposerToolbar(
           pb: 0.25,
         }}
       >
-        <Tooltip title="Press the workspace prefix, then an action’s letter. All formatting is also in the Command Palette.">
-          <Box
-            component="span"
-            sx={{ display: "flex", alignItems: "center", gap: 0.25, mr: 0.5 }}
-          >
-            <DesktopShortcut
-              shortcut={DESKTOP_WORKSPACE_PREFIX}
-              quiet
-              compact
-              availability={sequentialShortcutAvailability({
-                scopeAvailable: prefixAvailable,
-                armed,
-                prefix: true,
-              })}
-            />
-            <Box component="span" aria-hidden sx={{ fontSize: "0.75rem" }}>
-              →
-            </Box>
-          </Box>
-        </Tooltip>
         <Box data-composer-insert sx={{ display: "flex", gap: 0.25 }}>
           {action({
             id: "slash",
@@ -386,16 +355,10 @@ export function DesktopComposerToolbar(
             }}
           >
             <MoreHoriz sx={{ fontSize: "1.125rem" }} />
-            <ShortcutKeycap
-              keyLabel={DESKTOP_WORKSPACE_KEYS.composerMore}
-              variant="global"
-              availability={moreAnchor
-                ? "active"
-                : sequentialShortcutAvailability({
-                  scopeAvailable: scoped,
-                  armed,
-                  prefix: false,
-                })}
+            <LeaderKeycap
+              leaderKey={DESKTOP_WORKSPACE_KEYS.composerMore}
+              scopeAvailable={scoped}
+              {...(moreAnchor ? { availability: "active" as const } : {})}
             />
           </Button>
         </Tooltip>

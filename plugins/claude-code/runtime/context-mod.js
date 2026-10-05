@@ -95,7 +95,15 @@ export function register(on) {
     }
     if (
       context?.memory &&
-      ["memory_search", "memory_get", "memory_put", "memory_forget"].some((
+      [
+        "memory_search",
+        "memory_get",
+        "memory_put",
+        "memory_forget",
+        "memory_read",
+        "memory_execute",
+        "memory_receipt",
+      ].some((
         name,
       ) => event.tool === "mcp__matrix__" + name)
     ) return next(event);

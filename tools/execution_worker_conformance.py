@@ -98,7 +98,7 @@ def main():
     home = Path(environment["CODEX_HOME"])
     memory = MatrixFixture(inputs, args.runtime.parent, args.descriptor, "codex", environment)
     if memory.enabled:
-        api.steps.insert(0, {"type": "custom_tool_call", "call_id": "fixture-memory", "namespace": "functions", "name": "exec", "input": "text(await tools.mcp__matrix__memory_get(" + json.dumps({"id": memory.id}) + "));"})
+        api.steps.insert(0, {"type": "custom_tool_call", "call_id": "fixture-memory", "namespace": "functions", "name": "exec", "input": "text(await tools.mcp__matrix__" + memory.tool + "(" + json.dumps(memory.arguments) + "));"})
     home.mkdir()
     (home / "config.toml").write_text(
         'model = "gpt-6-astra"\nmodel_provider = "cowboy_fixture"\n'

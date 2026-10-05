@@ -51,3 +51,20 @@ Deno.test("a prefix continuation has only one command meaning", () => {
     null,
   );
 });
+
+Deno.test("scoped editors may share one leader meaning in disjoint regions", () => {
+  assertEquals(
+    shortcutRegistrationConflict(
+      { id: "queued.slash", sequence: ["Mod+K", "/"], regions: ["prompt.queued"] },
+      [{ id: "composer.slash", sequence: ["Mod+K", "/"], regions: ["prompt.composer"] }],
+    ),
+    null,
+  );
+  assertStringIncludes(
+    shortcutRegistrationConflict(
+      { id: "global.slash", sequence: ["Mod+K", "/"] },
+      [{ id: "composer.slash", sequence: ["Mod+K", "/"], regions: ["prompt.composer"] }],
+    ) ?? "",
+    "already belongs to composer.slash",
+  );
+});

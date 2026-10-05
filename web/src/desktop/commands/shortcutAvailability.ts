@@ -27,3 +27,16 @@ export function sequentialShortcutAvailability({
   if (!armed) return prefix ? "available" : "inactive";
   return prefix ? "active" : "available";
 }
+
+/**
+ * A leader slot (`␣B`) is one keycap for the whole sequence: available at rest
+ * while its scope owns focus, lit (`active`) while the leader is armed so every
+ * key that works next stands out at once.
+ */
+export function leaderShortcutAvailability(
+  scopeAvailable: boolean,
+  armed: boolean,
+): ShortcutAvailability {
+  if (!scopeAvailable) return "inactive";
+  return armed ? "active" : "available";
+}
