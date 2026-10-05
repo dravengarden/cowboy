@@ -2733,6 +2733,23 @@ async fn run_adapter_request(
                 }
             }
         } else { payload };
+        if adapter == crate::generation_retention::ADAPTER {
+            let request: crate::generation_retention::Request = serde_json::from_value(payload)
+                .context("decoding generation retention request")?;
+            anyhow::ensure!(request.is_valid(), "invalid generation retention request");
+            let outcome = providers
+                .retire_generations(&request.plugin_id, &request.referenced)
+                .await?;
+            if !outcome.retired.is_empty() {
+                tracing::info!(
+                    plugin = %outcome.plugin_id,
+                    retired = outcome.retired.len(),
+                    freed_bytes = outcome.freed_bytes,
+                    "retired unreferenced Plugin generations"
+                );
+            }
+            return serde_json::to_value(outcome).context("encoding generation retention");
+        }
         if adapter == "provider-cache-status" {
             let request: ProviderCacheStatusRequest = serde_json::from_value(payload)
                 .context("decoding Provider cache status request")?;

@@ -2853,6 +2853,121 @@ async fn run_purge_sweeper(store: Store) {
     }
 }
 
+/// First retention pass after start, once Machines have reconnected and every
+/// restored session's pinned generation is known; then every six hours.
+const GENERATION_RETENTION_DELAY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const GENERATION_RETENTION_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(6 * 60 * 60);
+
+/// Generations each `(Machine, Provider)` must keep: every one pinned by a
+/// session that is not deleted, including exited and hibernated sessions,
+/// because a revive launches exactly its pinned generation.
+fn referenced_generations(
+    sessions: &[crate::core::SessionMeta],
+) -> HashMap<(String, String), BTreeSet<String>> {
+    let mut referenced: HashMap<(String, String), BTreeSet<String>> = HashMap::new();
+    for session in sessions {
+        if session.provider_generation_digest.is_empty() {
+            continue;
+        }
+        referenced
+            .entry((session.machine_id.clone(), session.provider.clone()))
+            .or_default()
+            .insert(session.provider_generation_digest.clone());
+    }
+    referenced
+}
+
+/// Ask each connected Machine to retire Agent Provider generations no
+/// recoverable session pins. The Machine keeps the active and rollback
+/// generations itself and refuses while an installation is unreconciled.
+async fn run_generation_retention(state: Arc<AppState>) {
+    tokio::time::sleep(GENERATION_RETENTION_DELAY).await;
+    let mut tick = tokio::time::interval(GENERATION_RETENTION_INTERVAL);
+    loop {
+        tick.tick().await;
+        let Ok(machines) = state.machine_snapshots.load().await else {
+            continue;
+        };
+        let mut referenced = referenced_generations(&state.hub.session_list());
+        // Soft-deleted sessions stay recoverable until purged. Without that
+        // list a pass could retire their generations, so skip it entirely.
+        let Some(store) = state.store.as_ref() else {
+            continue;
+        };
+        match store.deleted_session_generations().await {
+            Ok(deleted) => {
+                for (machine_id, provider, digest) in deleted {
+                    referenced
+                        .entry((machine_id, provider))
+                        .or_default()
+                        .insert(digest);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "skipping Plugin generation retention");
+                continue;
+            }
+        }
+        for machine in machines {
+            if !machine.connected || !machine.capabilities.hibernation {
+                // Machines older than protocol 26 lack the retention adapter.
+                continue;
+            }
+            let providers: Vec<String> = machine
+                .plugins
+                .iter()
+                .filter(|plugin| {
+                    plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
+                        && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+                })
+                .map(|plugin| plugin.plugin_id.clone())
+                .collect();
+            for plugin_id in providers {
+                let request = crate::generation_retention::Request {
+                    referenced: referenced
+                        .get(&(machine.id.clone(), plugin_id.clone()))
+                        .cloned()
+                        .unwrap_or_default(),
+                    plugin_id,
+                };
+                if !request.is_valid() {
+                    tracing::warn!(machine = %machine.id, plugin = %request.plugin_id, "skipping invalid generation retention request");
+                    continue;
+                }
+                let plugin_id = request.plugin_id.clone();
+                let payload = match serde_json::to_value(&request) {
+                    Ok(payload) => payload,
+                    Err(_) => continue,
+                };
+                match state
+                    .machine_control
+                    .adapter_request(&machine.id, crate::generation_retention::ADAPTER, payload)
+                    .await
+                    .and_then(|value| {
+                        serde_json::from_value::<crate::generation_retention::Outcome>(value)
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok(outcome) if !outcome.retired.is_empty() => tracing::info!(
+                        machine = %machine.id,
+                        plugin = %plugin_id,
+                        retired = ?outcome.retired,
+                        freed_bytes = outcome.freed_bytes,
+                        "retired unreferenced Plugin generations"
+                    ),
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(
+                        machine = %machine.id,
+                        plugin = %plugin_id,
+                        %error,
+                        "Plugin generation retention failed"
+                    ),
+                }
+            }
+        }
+    }
+}
+
 fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
     let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =
         state.hub.status_revision(session_id)
@@ -10061,6 +10176,7 @@ async fn serve_axum(
     ));
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
+    let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -10073,6 +10189,7 @@ async fn serve_axum(
     local_operator.shutdown().await;
     convergence_task.abort();
     provider_update_task.abort();
+    generation_retention_task.abort();
     code_buffers.shutdown().await;
     result?;
     Ok(())
@@ -20451,6 +20568,27 @@ mod bootstrap_tests {
             );
         }
         hub
+    }
+
+    #[test]
+    fn every_open_session_pins_its_generation_per_machine_and_provider() {
+        let hub = hub_with_sessions();
+        let mut sessions = hub.session_list();
+        let digest = |name: &str| format!("sha256:{}", name.repeat(64));
+        sessions[0].machine_id = "ovh".to_owned();
+        sessions[0].provider_generation_digest = digest("a");
+        sessions[1].machine_id = "ovh".to_owned();
+        sessions[1].provider_generation_digest = digest("b");
+        sessions[1].status = Status::Exited;
+        let mut legacy = sessions[0].clone();
+        legacy.provider_generation_digest.clear();
+        sessions.push(legacy);
+        let referenced = super::referenced_generations(&sessions);
+        assert_eq!(
+            referenced.get(&("ovh".to_owned(), "codex".to_owned())),
+            Some(&[digest("a"), digest("b")].into_iter().collect())
+        );
+        assert_eq!(referenced.len(), 1);
     }
 
     #[test]

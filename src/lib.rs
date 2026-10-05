@@ -68,6 +68,8 @@ mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod first_party_sources;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod generation_retention;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod legacy_provider_release;
 #[cfg(all(feature = "full", unix))]
 mod local_operator;

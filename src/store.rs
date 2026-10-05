@@ -1707,6 +1707,12 @@ impl Store {
         dispatch_storage!(self, purge_deleted(retention_days))
     }
 
+    /// `(machine_id, provider, generation)` pinned by soft-deleted sessions
+    /// that remain recoverable until the purge sweeper removes them.
+    pub async fn deleted_session_generations(&self) -> Result<Vec<(String, String, String)>> {
+        dispatch_storage!(self, deleted_session_generations())
+    }
+
     pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
         dispatch_storage!(self, upsert_runtime_incident(incident))
     }
@@ -6098,6 +6104,16 @@ impl PostgresStorage {
     ///
     /// # Errors
     /// If the DELETE fails.
+    pub async fn deleted_session_generations(&self) -> Result<Vec<(String, String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, provider, provider_generation_digest FROM sessions \
+             WHERE deleted_at IS NOT NULL AND provider_generation_digest <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list soft-deleted session generations")
+    }
+
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         let done = sqlx::query(
             "DELETE FROM sessions WHERE deleted_at IS NOT NULL \

@@ -48,6 +48,28 @@ Deno.test("a reporting Machine shows memory, swap, load, disk and sessions", () 
   assertEquals(machineResourcesCaption(ovh, 31_000), "Remote · updated 30s ago");
 });
 
+Deno.test("a Machine low on disk says so in its caption", () => {
+  const low = machine({
+    resources: {
+      memory_total_bytes: 12 * GIB,
+      memory_available_bytes: 8 * GIB,
+      swap_total_bytes: 0,
+      swap_free_bytes: 0,
+      load_1m_milli: 0,
+      cpu_count: 1,
+      disk_total_bytes: 96 * GIB,
+      disk_available_bytes: 10 * GIB,
+      uptime_seconds: 0,
+      observed_at_ms: 0,
+    },
+  });
+  assertEquals(
+    machineResourcesCaption(low, 0),
+    "Remote · updated 0s ago · low disk: 10.0 GB free",
+  );
+  assertEquals(machineResourceMetrics(low)[1], ["Swap", "None"]);
+});
+
 Deno.test("an older or offline Machine still shows what is known", () => {
   const old = machine({});
   assertEquals(machineResourceMetrics(old), [["Live sessions", "8 / 28"]]);
