@@ -1379,15 +1379,29 @@ function SessionList({
         event.stopPropagation();
         runRowCommand(command, rowKey, row, { toggle: key === "Enter" });
     };
-    const folderDepthPl = (depth: number): string =>
-        mobileDrawer
-            ? `${String(4 + depth * 16)}px`
-            : `calc(max(env(safe-area-inset-left), 12px) + ${String(depth * 20)}px)`;
-    const folderDepthFinePl = (depth: number): string => `calc(6px + ${String(depth * 16)}px)`;
+    // Tree rows indent by MARGIN, not padding, so a nested row's own
+    // selection, hover and drop material starts right of its ancestors'
+    // guides instead of painting across them. One step clears the parent
+    // chevron's centre (its guide) by 4px: chevron box + base padding.
+    const ROW_BASE_PL = mobileDrawer ? "4px" : "max(env(safe-area-inset-left), 12px)";
+    const ROW_FINE_PL = "6px";
+    const ROW_MX = mobileDrawer ? 4 : 6;
+    const INDENT_STEP = mobileDrawer ? "22px" : `calc(${ROW_BASE_PL} + 18px)`;
+    const INDENT_FINE_STEP = 22;
+    const rowIndentSx = (depth: number, extraPl = 0, extraFinePl = extraPl) => ({
+        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px)`,
+        ml: `calc(${String(ROW_MX)}px + ${String(depth)} * ${INDENT_STEP})`,
+        mr: `${String(ROW_MX)}px`,
+        "@media (pointer: fine) and (hover: hover)": {
+            pl: `calc(${ROW_FINE_PL} + ${String(extraFinePl)}px)`,
+            ml: `${String(ROW_MX + depth * INDENT_FINE_STEP)}px`,
+        },
+    });
     // Obsidian-style indent guides: one hairline per ancestor level, centred
-    // under that ancestor's chevron. A pseudo-element spanning the row margins
-    // joins consecutive rows into one continuous line, so a folder's body is
-    // visibly fenced off from the unfiled rows that follow it. Paint-only.
+    // under that ancestor's chevron (28px touch / 24px fine box after the base
+    // padding). The pseudo-element reaches back over the row's indent margin
+    // and spans the row gaps, joining consecutive rows into one continuous
+    // line, so a folder's body is visibly fenced off. Paint-only.
     const treeGuideSx = (depth: number) => {
         if (depth === 0) return {};
         const levels = Array.from({ length: depth }, (_, level) => level);
@@ -1397,7 +1411,7 @@ function SessionList({
                 position: "absolute",
                 top: "-2px",
                 bottom: "-2px",
-                left: 0,
+                left: `calc(-1 * ${String(depth)} * ${INDENT_STEP})`,
                 right: 0,
                 pointerEvents: "none",
                 backgroundImage: (t: Theme) =>
@@ -1405,14 +1419,11 @@ function SessionList({
                 backgroundSize: levels.map(() => "1px 100%").join(", "),
                 backgroundRepeat: "no-repeat",
                 backgroundPosition: levels
-                    // Touch chevrons overhang their row padding by 4px (see the
-                    // list's grip rule), so their centre sits 4px left of 22px.
-                    .map((level) => mobileDrawer
-                        ? `${String(level * 16 + 22)}px 0`
-                        : `calc(max(env(safe-area-inset-left), 12px) + ${String(level * 20 + 18)}px) 0`)
+                    .map((level) => `calc(${String(level)} * ${INDENT_STEP} + ${ROW_BASE_PL} + 14px) 0`)
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
-                    backgroundPosition: levels.map((level) => `${String(level * 16 + 22)}px 0`).join(", "),
+                    left: `${String(-depth * INDENT_FINE_STEP)}px`,
+                    backgroundPosition: levels.map((level) => `${String(level * INDENT_FINE_STEP + 18)}px 0`).join(", "),
                 },
             },
         };
@@ -1551,6 +1562,10 @@ function SessionList({
                     "& .cowboy-session-grip": { mx: "-4px" },
                     "& .cowboy-session-grip-slot": { width: 36 },
                     "& .cowboy-session-actions": { ml: 0, mr: "-4px" },
+                    // The folder chevron is decorative (the whole row toggles),
+                    // so it needs no touch-sized box; tree indentation and
+                    // guides are measured from this narrower width.
+                    "& .cowboy-folder-chevron": { width: 28, mx: 0 },
                     // Fine-pointer desktops do not need phone-sized 44px controls
                     // in every row. Keep the generous targets for touch/tablet,
                     // while fitting more sessions without making the rail noisy.
@@ -1565,6 +1580,7 @@ function SessionList({
                         // the touch width beside it.
                         "& .cowboy-session-grip-slot": { width: 32 },
                         "& .cowboy-session-actions": { ml: 0.25 },
+                        "& .cowboy-folder-chevron": { width: 24 },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
                             fontSize: "1.125rem",
                         },
@@ -1594,14 +1610,13 @@ function SessionList({
                             display: "flex",
                             alignItems: "center",
                             minHeight: 36,
-                            pl: `calc(${folderDepthPl(row.depth)} + 18px)`,
+                            ...rowIndentSx(row.depth, 18, 12),
                             pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
-                            mx: mobileDrawer ? 0.5 : 0.75,
                             my: 0.25,
                             borderRadius: "10px",
                             color: "text.disabled",
                             "@media (pointer: fine) and (hover: hover)": {
-                                pl: `calc(${folderDepthFinePl(row.depth)} + 12px)`,
+                                ...rowIndentSx(row.depth, 18, 12)["@media (pointer: fine) and (hover: hover)"],
                                 minHeight: 30,
                             },
                         }}
@@ -1642,19 +1657,18 @@ function SessionList({
                             ...(desktop && desktopListItemSx()),
                             ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, rowKey)),
-                            pl: folderDepthPl(row.depth),
+                            ...rowIndentSx(row.depth),
                             pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
-                            mx: mobileDrawer ? 0.5 : 0.75,
                             my: 0.25,
                             "@media (pointer: fine) and (hover: hover)": {
-                                pl: folderDepthFinePl(row.depth),
+                                ...rowIndentSx(row.depth)["@media (pointer: fine) and (hover: hover)"],
                                 pr: 0.5,
                                 py: 0.25,
                             },
                         }}
                     >
                         <Box
-                            className="cowboy-session-grip"
+                            className="cowboy-session-grip cowboy-folder-chevron"
                             aria-hidden
                             sx={{
                                 width: 44,
@@ -1740,7 +1754,7 @@ function SessionList({
                         desktop={desktop} onPick={() => onPick(`draft:${row.draft.id}`)} onAction={onDraftAction}
                         sx={{ ...(desktop && desktopListItemSx()), ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, `draft:${row.draft.id}`)),
-                            pl: folderDepthPl(row.depth), pr: 0.5, mx: mobileDrawer ? 0.5 : 0.75, my: 0.25 }}
+                            ...rowIndentSx(row.depth), pr: 0.5, my: 0.25 }}
                     />;
                     const s = row.session;
                     const deleting = deletingSessionIds.has(s.id);
@@ -1815,12 +1829,11 @@ function SessionList({
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
                                 },
                             }),
-                            pl: folderDepthPl(row.depth),
+                            ...rowIndentSx(row.depth),
                             pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
-                            mx: mobileDrawer ? 0.5 : 0.75,
                             my: 0.25,
                             "@media (pointer: fine) and (hover: hover)": {
-                                pl: folderDepthFinePl(row.depth),
+                                ...rowIndentSx(row.depth)["@media (pointer: fine) and (hover: hover)"],
                                 pr: 0.5,
                                 py: 0.25,
                             },
