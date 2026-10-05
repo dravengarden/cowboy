@@ -144,3 +144,6 @@ acceptance before unlink.
 The [marker-finalization release](releases/plugin-session-cleanup-finalization-2026-10-05.md)
 records retention of eligibility across partial content I/O errors and successful
 retry before root marker removal.
+The [retry-observation release](releases/plugin-session-cleanup-retry-2026-10-05.md)
+records process-local retention of original target handles and successful-target
+progress across retries, replacement refusal and exact Hawk preservation receipts.

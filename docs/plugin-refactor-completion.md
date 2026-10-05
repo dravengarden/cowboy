@@ -723,6 +723,13 @@ handle and refuses observed replacement or file mount crossing before unlink.
 The final comparison/name unlink remains non-atomic; this does not complete
 continuous ownership or freeze filesystem mutations.
 
+The [cleanup retry plan](releases/plugin-session-cleanup-retry-2026-10-05.md)
+retains the first complete target scan and successful-target progress through
+ordinary I/O errors. Cloned workspaces do not rescan or admit same-path marked
+replacements during that plan. It remains process-local, not durable across a
+resident restart; continuous launch-time ownership and Session incarnation
+remain open.
+
 Linux cleanup defers root marker removal until its streamed content walk
 succeeds, retaining eligibility across partial content I/O failures. Successful
 retry is covered by a real-filesystem failure fixture. Marker finalization is
