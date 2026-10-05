@@ -185,6 +185,52 @@ live-child cold resume, or a cross-host acceptance result. Claude's native
 agent/task integration remains a separate gap. The parent uses `never` approval
 and full access; restricted-mode approval and denial behavior is not established.
 
+### Native child interruption and scoped stop
+
+The pinned Codex 0.159.3 has a cancellation distinction in both local and remote
+execution. After positive admission of a child shell and its descendant,
+`collaboration.interrupt_agent` stops a direct `exec_command` process tree.
+The same call through native `functions.exec` leaves both processes alive after
+12 seconds, despite the child turn reporting `interrupted`. The descendant
+writes a delayed marker after the interrupt. This is a reproduced native
+lifetime distinction, not evidence of an OVH-only transport defect.
+
+The native `thread/backgroundTerminals/list` and
+`thread/backgroundTerminals/terminate` APIs provide a working explicit stop:
+use the owning child thread and its original process ID. Both tested process
+trees then exit, while an independently admitted parent background process
+retains its original PID/start-time identity. No additional model turn is
+needed to invoke these management APIs. Using the parent thread with the real
+child process ID returns `terminated:false` and leaves the child tree alive;
+the subsequent correctly scoped request stops it. The reproducible four-case probe is
+`just execution-child-stop-conformance CLI SHA256 RECEIPT`; it requires a
+disposable PID/network namespace, exact binary hash and a fresh receipt.
+Its CodeAct expectation deliberately records the current pin's behavior; an
+upstream cancellation change requires reviewing that expectation.
+The [exact receipt](experiments/codex-native-child-stop-2026-10-05.json) records
+all four cases and helper hashes. A negative control fabricated a successful
+termination response without issuing the stop; acceptance failed on the live
+process tree, rather than trusting the response alone.
+
+An earlier immediate-stop exploratory run observed an empty terminal list
+while the remote command still lived. Empty enumeration immediately after
+interruption is therefore not proof of cleanup. The committed probe observes
+12 seconds before enumeration and does not establish recovery of that early
+registration race. It also does not exercise the Cowboy worker/keeper relay,
+restricted permissions, detached grandchildren or cross-host transport.
+
+Inspection of the accepted Codex 3.3.2 packaged ACP adapter found an existing
+`_session/async_task/stop` extension backed by these same native APIs. Its task
+publication is opt-in through `jetbrains.air` capability metadata (`asyncTasks`);
+Cowboy's current ACP initialization does not negotiate it. Native activity
+counts are not equivalent to exposing that task-control extension. Integration
+must negotiate an actual supported contract, preserve child/session ownership,
+surface late task registration and reconcile state without inference. Do not
+advertise an extension without consuming its updates, or make ordinary turn
+interrupt silently terminate all background tasks. Packaged ACP behavior for
+these cancellation cases remains unverified; no product stop behavior or
+production configuration was changed in this follow-up.
+
 ### Follow-up native probes
 
 Two research probes now live in `tools/` and require exact binary hashes,

@@ -1,0 +1,75 @@
+{
+  "schema": "cowboy.native-child-stop-audit/v1",
+  "accepted": true,
+  "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "input_sha256": {
+    "codex-code-mode-host": "fe64bd08c7844ca1fca91d8cb825e62012a03a05ae8040c635bbb61e5be0b4c5",
+    "bwrap": "77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c",
+    "execution_native_child_stop_probe.py": "3f2029ad774d5eb7e41d6f6f96c06c4080a4187ad144001f10dd970cb6ae2951",
+    "execution_environment_codex_turn_probe.py": "0c8182eff8fcc592f6fd27cde26729bd982bffd72e10740e1c50e5debf8cb136"
+  },
+  "cases": [
+    {
+      "mode": "local",
+      "tool": "direct",
+      "child_status": "interrupted",
+      "retained_after_interrupt": false,
+      "post_interrupt_effect": false,
+      "observation_seconds": 0.01720410108100623,
+      "tree_stopped": true,
+      "original_peer_survives": true,
+      "scripted_api_requests": 6
+    },
+    {
+      "mode": "local",
+      "tool": "codeact",
+      "child_status": "interrupted",
+      "retained_after_interrupt": true,
+      "post_interrupt_effect": true,
+      "observation_seconds": 12.01213165000081,
+      "wrong_thread_stop_rejected": true,
+      "tree_stopped": true,
+      "original_peer_survives": true,
+      "scripted_api_requests": 152
+    },
+    {
+      "mode": "remote",
+      "tool": "direct",
+      "child_status": "interrupted",
+      "retained_after_interrupt": false,
+      "post_interrupt_effect": false,
+      "observation_seconds": 0.00968347699381411,
+      "tree_stopped": true,
+      "original_peer_survives": true,
+      "scripted_api_requests": 7
+    },
+    {
+      "mode": "remote",
+      "tool": "codeact",
+      "child_status": "interrupted",
+      "retained_after_interrupt": true,
+      "post_interrupt_effect": true,
+      "observation_seconds": 12.035742170992307,
+      "wrong_thread_stop_rejected": true,
+      "tree_stopped": true,
+      "original_peer_survives": true,
+      "scripted_api_requests": 155
+    }
+  ],
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "production_changes": false,
+  "not_checked": [
+    "Cowboy worker/keeper transport",
+    "packaged ACP async task extension",
+    "early terminal registration race",
+    "restricted approvals",
+    "cross-host network"
+  ],
+  "negative_control": {
+    "change": "Omit native terminate while returning a fabricated terminated:true result",
+    "exit_code": 1,
+    "expected_failure": "process tree survived scoped stop",
+    "scope": "same process-liveness assertion before adding wrong-thread rejection check"
+  }
+}

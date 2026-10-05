@@ -444,6 +444,10 @@ agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
 execution-codex-turn-conformance CLI VERSION SHA256 RECEIPT:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_environment_codex_turn_probe.py "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
 
+# Native local/remote child cancellation comparison; pins observed CodeAct behavior.
+execution-child-stop-conformance CLI SHA256 RECEIPT:
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; exec setpriv --inh-caps=-all --ambient-caps=-all python3 tools/execution_native_child_stop_probe.py "$@"' conformance --native-cli "{{CLI}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+
 execution-claude-turn-conformance CLI VERSION SHA256 RECEIPT:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/execution_environment_claude_probe.py "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
 
