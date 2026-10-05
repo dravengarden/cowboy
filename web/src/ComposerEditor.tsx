@@ -13,7 +13,8 @@ import {
   keymap,
   placeholder as placeholderExt,
 } from "@codemirror/view";
-import { type Extension, Prec } from "@codemirror/state";
+import { type Extension, Prec, Transaction } from "@codemirror/state";
+import { textChanges } from "./documents/textMerge";
 import {
   acceptCompletion,
   autocompletion,
@@ -109,6 +110,10 @@ export interface ComposerEditorHandle {
   revealSelection: () => void;
   /** Live document text, including keystrokes that have not reached React yet. */
   getValue: () => string;
+  /** Adopt text merged from another device: minimal edits that keep the
+   * caret where it was and stay out of local Undo. False (nothing written)
+   * while an IME composition owns the editor; the caller retries later. */
+  applyRemoteText: (next: string) => boolean;
   /** Read the logical selection before replacing one editor surface with another. */
   getSelection: () => ComposerEditorSelection;
   /** Focus this editor and restore a selection captured from the replaced surface. */
@@ -512,6 +517,22 @@ export const ComposerEditor = forwardRef<
       if (view) revealFocusedSelection(view);
     },
     getValue: (): string => cmRef.current?.view?.state.doc.toString() ?? "",
+    applyRemoteText: (next: string): boolean => {
+      const view = cmRef.current?.view;
+      if (!view || view.composing || view.compositionStarted) return false;
+      const changes = textChanges(view.state.doc.toString(), next);
+      if (changes.length) {
+        // CM6 maps the selection (and Vim marks) through these changes.
+        view.dispatch({
+          changes,
+          annotations: [
+            Transaction.addToHistory.of(false),
+            Transaction.remote.of(true),
+          ],
+        });
+      }
+      return true;
+    },
     getSelection: (): ComposerEditorSelection => {
       const selection = cmRef.current?.view?.state.selection.main;
       return selection

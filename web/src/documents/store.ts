@@ -3,6 +3,10 @@ import { productSyncDatabase } from "../productSyncDatabase";
 import { createDraftRepository } from "./repository";
 
 let repository: ReturnType<typeof createDraftRepository> | undefined;
+/** The controller's `drafts` push; inert until this device opens Drafts. */
+export function announceDraftChanges(value: unknown): void {
+  repository?.announce(value);
+}
 export function draftRepository(): ReturnType<typeof createDraftRepository> {
   return repository ??= createDraftRepository({
     persistence: (id) =>

@@ -17,7 +17,7 @@ DraftEditor mounts the existing PlatformComposerEditor, also used by Session
 composers. Its extensions, native input, CodeMirror, Vim/IME behavior and document
 undo remain owned by that component. Navigation first flushes locally authored
 content and attachments; a failed local save keeps the document open. Remote
-convergence remains independent of navigation, with conflicts preserving copies.
+convergence remains independent of navigation.
 Draft selection is remembered per principal on this device. Legacy #drafts links
 select an ordinary entry; they no longer replace the workspace with a library.
 
@@ -26,6 +26,36 @@ pager navigation and starts on Agent even if Review was last selected. Desktop
 uses the existing keyboard tree, folder actions and collapsed rail. Autosave
 does not reorder rows. A principal-owned workspace-order replica preserves
 explicit mixed ordering without changing authored document bodies.
+
+## Editing on several devices
+
+Editing on two devices converges without a prompt, following Obsidian Sync's
+Markdown merge. Every write records the content it was authored against.
+When the server refuses a write because another device wrote first, the
+client merges three-way: that ancestor, its own pending text and the newer
+server text. It folds every pending write into one write and resends. Edits in
+different places all survive. Words, whitespace, punctuation and single CJK
+characters are merge tokens. An overlapping region keeps both versions, remote
+first, rather than dropping either. Overwritten server states remain in the
+recovery history (its latest 30 revisions). Attachments are kept unless one
+side removed them. Title and location changes are last-writer-wins. Trash and
+restore reapply the local intent.
+
+An open editor folds newer content in place. With no local typing since its
+last synchronized content, it adopts the update. Otherwise it merges and
+autosave writes the result. Remote edits map the caret, stay out of local
+Undo, and wait while an IME composition owns the editor. Each applied
+mutation announces the document's metadata on the principal-narrowed
+`drafts` sync state. An open document fetches only a revision it has not
+seen; the sidebar index adopts the metadata directly. A reconnect resync
+carries every document announced in the controller's lifetime. The 10-second
+poll remains a fallback.
+
+Only texts too divergent to align at bounded cost (over 1,000 edits per side
+at both token and line granularity) are not merged. Then the local text
+becomes a separate "(conflicted copy)" draft and the editor shows the newer
+document. A pending write from an older outbox has no merge ancestor and keeps
+the legacy recoverable conflict.
 
 ## Move, copy and recover
 

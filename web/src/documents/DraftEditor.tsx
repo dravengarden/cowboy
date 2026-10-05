@@ -64,7 +64,13 @@ import { Sheet } from "../Sheet";
 import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
 import { documentNotice } from "./DocumentNotifications";
-import { type DraftDocument } from "./model";
+import {
+  type DraftContent,
+  draftContent,
+  type DraftDocument,
+  mergeDraftContent,
+  sameDraftContent,
+} from "./model";
 
 const DesktopDraftToolbar = lazy(() =>
   import("../desktop/DesktopDraftToolbar")
@@ -215,7 +221,14 @@ function DraftEditingSession(
   const [title, setTitle] = useState(initial.title);
   const titleRef = useRef(initial.title);
   const savedTitle = useRef(initial.title);
-  const bodyRevision = useRef(initial.body_revision);
+  // The document content this editor's text was last in sync with. Writes
+  // name it as their merge ancestor, and newer content (another device, or a
+  // server-side merge) is merged into the live text against it.
+  const shadow = useRef<DraftContent>(draftContent(initial));
+  const writing = useRef(false);
+  const reconcileTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const titleRevision = useRef(initial.metadata_revision);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -257,28 +270,107 @@ function DraftEditingSession(
     const { head } = handle.getSelection();
     return !handle.getValue().slice(0, head).includes("\n");
   };
+  const localContent = (): DraftContent => {
+    const body = textRef.current;
+    const referenced = new Set(imageTokensInText(body).map((t) => t.id));
+    return {
+      body,
+      attachments: attachmentsRef.current.filter((a) =>
+        !a.pending && (!a.isImage || referenced.has(a.id))
+      ),
+    };
+  };
+  const retryReconcile = (): void => {
+    clearTimeout(reconcileTimer.current);
+    if (mounted.current) {
+      reconcileTimer.current = setTimeout(() => reconcileRef.current(), 250);
+    }
+  };
+  /** Fold newer document content into the open editor (Obsidian Sync style):
+   * adopt it when nothing is typed since the shadow, otherwise merge both
+   * three-way and let autosave write the result. */
+  const reconcile = (): void => {
+    if (writing.current) return;
+    const document = owner.get().document;
+    if (!document || document.kind !== "document") return;
+    const remote = draftContent(document);
+    if (sameDraftContent(remote, shadow.current)) return;
+    if (encoding.current.size) {
+      retryReconcile();
+      return;
+    }
+    const kept = localContent();
+    const merged = sameDraftContent(kept, shadow.current)
+      ? remote
+      : mergeDraftContent(
+        shadow.current,
+        { body: textRef.current, attachments: attachmentsRef.current },
+        remote,
+      );
+    const next = merged ?? remote;
+    if (next.body !== textRef.current) {
+      const previous = textRef.current;
+      textRef.current = next.body;
+      if (!editor.current?.applyRemoteText(next.body)) {
+        // An IME composition owns the editor; never write under it.
+        textRef.current = previous;
+        retryReconcile();
+        return;
+      }
+      setText(next.body);
+    }
+    if (!merged) {
+      // Too divergent to merge: keep this text as its own draft and show the
+      // newer document here. Nothing is lost and nothing blocks typing.
+      void draftRepository().create(
+        `${titleRef.current.trim() || "Untitled"} (conflicted copy)`,
+        document.parent_id,
+        "document",
+        kept.body,
+        kept.attachments,
+      ).then(() =>
+        documentNotice("Edited on two devices. Your version was kept as a copy.")
+      ).catch((e: Error) => documentNotice(e.message));
+    }
+    if (
+      JSON.stringify(next.attachments) !==
+        JSON.stringify(attachmentsRef.current)
+    ) {
+      seedInlineAttachments(next.attachments);
+      attachmentsRef.current = next.attachments;
+      setAttachments(next.attachments);
+      editor.current?.refreshImages();
+    }
+    shadow.current = remote;
+    if (!sameDraftContent(localContent(), remote)) schedule();
+  };
+  const reconcileRef = useRef(reconcile);
+  reconcileRef.current = reconcile;
   const flush = async (): Promise<void> => {
     clearTimeout(timer.current);
     if (!dirtyRef.current && encoding.current.size === 0) return saving.current;
     await Promise.all(encoding.current);
-    const body = textRef.current;
-    const attached = attachmentsRef.current.filter((a) =>
-      !a.pending &&
-      (!a.isImage || imageTokensInText(body).some((token) => token.id === a.id))
-    );
     const nextTitle = titleRef.current.trim() || "Untitled";
+    let body = "";
     const task = saving.current.catch(() => undefined).then(async () => {
       const saved = owner.get().document;
       if (!saved) throw new Error("Draft is unavailable");
-      if (
-        saved.body !== body ||
-        JSON.stringify(saved.attachments) !== JSON.stringify(attached)
-      ) {
-        await owner.change(
-          { type: "write", body, attachments: attached },
-          bodyRevision.current,
-        );
-        bodyRevision.current++;
+      reconcile();
+      const written = localContent();
+      body = written.body;
+      if (!sameDraftContent(written, shadow.current)) {
+        writing.current = true;
+        try {
+          await owner.change(
+            { type: "write", ...written },
+            undefined,
+            shadow.current,
+          );
+          shadow.current = written;
+        } finally {
+          writing.current = false;
+        }
+        reconcile();
       }
       if (savedTitle.current !== nextTitle) {
         await owner.change(
@@ -331,6 +423,7 @@ function DraftEditingSession(
     return () => {
       mounted.current = false;
       clearTimeout(timer.current);
+      clearTimeout(reconcileTimer.current);
       if (editor.current) {
         positions.set(initial.id, editor.current.getSelection());
       }
@@ -351,6 +444,9 @@ function DraftEditingSession(
       setTitle(current.title);
     }
   }, [current.metadata_revision, current.title, phase]);
+  useEffect(() => {
+    reconcileRef.current();
+  }, [current]);
   const attach = (files: File[]): void => {
     const selection = editor.current?.getSelection();
     const pending = files.filter((file) => file.type.startsWith("image/")).map((
@@ -427,10 +523,6 @@ function DraftEditingSession(
     documentNotice("Your local version was preserved as a separate draft.");
     globalThis.location.hash = `drafts/${copy}`;
   };
-  const changedElsewhere = !dirty && phase === "saved" &&
-    (current.body !== textRef.current ||
-      JSON.stringify(current.attachments) !==
-        JSON.stringify(attachmentsRef.current));
   const saveStatus = dirty
     ? "Saving…"
     : phase === "saved"
@@ -988,24 +1080,6 @@ function DraftEditingSession(
           {error ?? syncError}
         </Alert>
       )}
-      {changedElsewhere && (
-        <Alert
-          severity="info"
-          action={
-            <Button
-              color="inherit"
-              onClick={() => {
-                dirtyRef.current = false;
-                onReload();
-              }}
-            >
-              Load latest
-            </Button>
-          }
-        >
-          This draft was updated on another device.
-        </Alert>
-      )}
       <Box
         sx={{
           display: "flex",
@@ -1065,9 +1139,11 @@ function DraftEditingSession(
             value={mountSeed.current}
             nativeValue={text}
             onChange={(value) => {
+              // A merged remote update already set textRef; it is not typing.
+              const typed = value !== textRef.current;
               textRef.current = value;
               setText(value);
-              schedule();
+              if (typed) schedule();
             }}
             {...(positions.has(initial.id)
               ? { initialSelection: positions.get(initial.id)!.head }

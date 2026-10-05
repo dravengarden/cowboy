@@ -1563,6 +1563,10 @@ struct HubInner {
     /// behind the `"folders"` sync state (`docs/sessions-folders.md`).
     folders: Mutex<crate::session_folders::SessionFolders>,
     workspace_orders: Mutex<HashMap<String, Vec<String>>>,
+    /// Metadata of each owner's draft documents changed this lifetime, behind
+    /// the `"drafts"` announcement state. Documents converge over HTTP; this
+    /// only tells the owner's other devices which revision to fetch.
+    draft_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     /// One immutable frame is shared by the Web Push observer and every socket:
@@ -1748,6 +1752,7 @@ impl Hub {
                 order: Mutex::new(Vec::new()),
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
                 workspace_orders: Mutex::new(HashMap::new()),
+                draft_announcements: Mutex::new(HashMap::new()),
                 tx,
                 broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
@@ -1974,6 +1979,39 @@ impl Hub {
     /// each [`RestoredSession::folder_id`] instead.
     pub(crate) fn restore_workspace_orders(&self, orders: Vec<(String, Vec<String>)>) {
         *self.inner.workspace_orders.lock() = orders.into_iter().collect();
+    }
+
+    /// Announce one owner's changed draft `metadata` (no body) to that owner's
+    /// devices. The live patch carries only this document; a reconnect resync
+    /// carries every document announced this lifetime.
+    pub(crate) fn announce_draft(&self, owner: &str, metadata: serde_json::Value) {
+        let Some(id) = metadata.get("id").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        let id = id.to_owned();
+        {
+            let mut announcements = self.inner.draft_announcements.lock();
+            let documents = announcements.entry(owner.to_owned()).or_default();
+            let newer = documents
+                .get(&id)
+                .and_then(|previous| previous.get("revision"))
+                .and_then(serde_json::Value::as_i64)
+                .is_none_or(|previous| {
+                    metadata
+                        .get("revision")
+                        .and_then(serde_json::Value::as_i64)
+                        .is_some_and(|revision| revision > previous)
+                });
+            if !newer {
+                return;
+            }
+            documents.insert(id.clone(), metadata.clone());
+        }
+        self.sync_emit(
+            "drafts",
+            serde_json::json!({ owner: { id: metadata } }),
+            Vec::new(),
+        );
     }
 
     pub fn restore_session_folders(&self, folders: Vec<crate::session_folders::SessionFolder>) {
@@ -3148,6 +3186,8 @@ impl Hub {
             "folders" => self.inner.folders.lock().value(),
             "workspace-order" => serde_json::to_value(&*self.inner.workspace_orders.lock())
                 .expect("workspace orders serialize"),
+            "drafts" => serde_json::to_value(&*self.inner.draft_announcements.lock())
+                .expect("draft announcements serialize"),
             _ if state.starts_with("mobile-review:") => {
                 let session_id = &state["mobile-review:".len()..];
                 let sessions = self.inner.sessions.lock();

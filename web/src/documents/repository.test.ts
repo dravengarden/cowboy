@@ -169,3 +169,121 @@ Deno.test("competing writer stays recoverable instead of silently adopting a new
   assertEquals(f.server.get(copy)?.body, "my unsaved typing");
   await first.dispose();
 });
+
+Deno.test("a write refused by a newer server text merges both edits and resends", async () => {
+  const f = fixture();
+  const phone = f.create();
+  const id = await phone.create("Draft", null, "document", "first line\nsecond line\n");
+  await settle(() => phone.document(id).get().phase === "saved");
+  // Another device appended while this one was offline.
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    body: "first line\nsecond line\nfrom desktop\n",
+    revision: 2,
+    body_revision: 2,
+  });
+  f.offline(true);
+  await phone.document(id).change({
+    type: "write",
+    body: "first line edited\nsecond line\n",
+    attachments: [],
+  });
+  await phone.document(id).change({
+    type: "write",
+    body: "first line edited twice\nsecond line\n",
+    attachments: [],
+  });
+  f.offline(false);
+  await phone.document(id).retry();
+  await settle(() =>
+    phone.document(id).get().phase === "saved" &&
+    f.server.get(id)?.body_revision === 3
+  );
+  assertEquals(
+    f.server.get(id)?.body,
+    "first line edited twice\nsecond line\nfrom desktop\n",
+  );
+  assertEquals(phone.document(id).get().document?.body, f.server.get(id)?.body);
+  await phone.dispose();
+});
+
+Deno.test("an editor writing against stale content merges with the newer replica", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "alpha beta");
+  await settle(() => first.document(id).get().phase === "saved");
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    body: "alpha beta gamma",
+    revision: 2,
+    body_revision: 2,
+  });
+  await first.document(id).refresh();
+  await first.document(id).change(
+    { type: "write", body: "ALPHA beta", attachments: [] },
+    undefined,
+    { body: "alpha beta", attachments: [] },
+  );
+  await settle(() => first.document(id).get().phase === "saved");
+  assertEquals(f.server.get(id)?.body, "ALPHA beta gamma");
+  await first.dispose();
+});
+
+Deno.test("a refused rename is reapplied over the newer metadata", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Old", null, "document", "body");
+  await settle(() => first.document(id).get().phase === "saved");
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    title: "Elsewhere",
+    revision: 2,
+    metadata_revision: 2,
+  });
+  await first.document(id).change({ type: "rename", title: "Mine" }, 1);
+  await settle(() =>
+    first.document(id).get().phase === "saved" &&
+    f.server.get(id)?.title === "Mine"
+  );
+  assertEquals(f.server.get(id)?.metadata_revision, 3);
+  await first.dispose();
+});
+
+Deno.test("a pushed revision refreshes only an open document that lacks it", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "body");
+  await settle(() => first.document(id).get().phase === "saved");
+  await first.start();
+  const before = f.requests.filter((p) => p === `/api/drafts/${id}`).length;
+  first.announce({ [id]: { ...f.server.get(id)!, body: undefined } });
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    body: "pushed",
+    revision: 2,
+    body_revision: 2,
+  });
+  first.announce({
+    [id]: {
+      id,
+      kind: "document",
+      title: "Draft",
+      parent_id: null,
+      revision: 2,
+      body_revision: 2,
+      metadata_revision: 1,
+      updated_at_ms: 1,
+      deleted: false,
+    },
+  });
+  await settle(() => first.document(id).get().document?.body === "pushed");
+  assertEquals(
+    f.requests.filter((p) => p === `/api/drafts/${id}`).length,
+    before + 1,
+  );
+  assertEquals(
+    first.get().entries.find((e) => e.id === id)?.revision,
+    2,
+  );
+  await first.dispose();
+});

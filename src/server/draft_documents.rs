@@ -6,6 +6,16 @@ fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({"error": message}))).into_response()
 }
 
+/// A document without its authored content: what the library lists and the
+/// `drafts` push announces.
+fn metadata(document: &crate::store::draft_documents::DraftDocument) -> serde_json::Value {
+    let mut metadata = serde_json::to_value(document).expect("document serializes");
+    let object = metadata.as_object_mut().expect("document object");
+    object.remove("body");
+    object.remove("attachments");
+    metadata
+}
+
 pub(super) async fn list(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
@@ -18,22 +28,7 @@ pub(super) async fn list(
     };
     match store.draft_documents(&auth.principal.user_id).await {
         Ok(documents) => {
-            let entries: Vec<_> = documents
-                .into_iter()
-                .map(|mut d| {
-                    d.body.clear();
-                    let mut metadata = serde_json::to_value(d).expect("document serializes");
-                    metadata
-                        .as_object_mut()
-                        .expect("document object")
-                        .remove("body");
-                    metadata
-                        .as_object_mut()
-                        .expect("document object")
-                        .remove("attachments");
-                    metadata
-                })
-                .collect();
+            let entries: Vec<_> = documents.iter().map(metadata).collect();
             (
                 [(header::CACHE_CONTROL, "no-store")],
                 Json(serde_json::json!({"entries": entries})),
@@ -137,7 +132,10 @@ pub(super) async fn mutate(
         })
         .collect::<Vec<_>>();
     match store.mutate_draft_document_in_workspace(&auth.principal.user_id, &mutation, &folders).await {
-        Ok(DraftResult::Applied(document)) => Json(document).into_response(),
+        Ok(DraftResult::Applied(document)) => {
+            state.hub.announce_draft(&auth.principal.user_id, metadata(&document));
+            Json(document).into_response()
+        }
         Ok(DraftResult::Conflict(document)) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": "This draft changed elsewhere. Your local version has been kept.", "current": document}))).into_response(),
         Ok(DraftResult::Invalid(message)) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),
         Err(e) => { tracing::error!(error = %e, "persist draft"); error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save draft; retry with the same operation") }

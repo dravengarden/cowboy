@@ -876,40 +876,33 @@ export async function runDraftDocumentsBrowserConformance(
     const before = server.get(id)!;
     server.set(id, {
       ...before,
-      body: "Remote writer",
+      body: `Remote writer\n\n${before.body}`,
       revision: before.revision + 1,
       body_revision: before.body_revision + 1,
     });
-    const localBeforeRefresh = port.read().text;
-    await repo.document(id).refresh();
-    await tick();
-    check(
-      port.read().text === localBeforeRefresh,
-      "Remote refresh does not replace the live IME/undo document",
-    );
+    // Typed here before this device has seen the other writer.
     check(
       port.replaceSelection("My competing edit\n", port.read()),
-      "Local edit after remote refresh",
+      "Local edit while another device writes",
     );
+    repo.announce({ [id]: draftMetadata(server.get(id)!) });
     await until(
-      () => repo.document(id).get().phase === "conflict",
-      "conflict preserved",
+      () =>
+        server.get(id)?.body.includes("My competing edit") === true &&
+        repo.document(id).get().phase === "saved",
+      "concurrent edits merged",
     );
     check(
-      server.get(id)?.body === "Remote writer",
-      "Does not overwrite remote",
-    );
-    button("Keep mine as copy").click();
-    await until(
-      () => activeEditorExtensionPort()?.context.id !== id,
-      "recovery document opened",
+      server.get(id)?.body.startsWith("Remote writer") &&
+        port.read().text === server.get(id)?.body,
+      "Both writers survive in the server and the open editor",
     );
     check(
-      activeEditorExtensionPort()?.read().text.includes("My competing edit"),
-      "Recovery includes local text",
+      !document.body.textContent?.includes("changed elsewhere"),
+      "Merging shows no conflict banner",
     );
     results.push(
-      "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+      "Concurrent writers merge into the open editor without a conflict or copy",
     );
 
     const recovered = activeEditorExtensionPort()!;

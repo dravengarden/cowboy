@@ -1,5 +1,6 @@
-import type { Attachment } from "../attachments";
+import { type Attachment, imageTokensInText } from "../attachments";
 import type { SessionFoldersValue } from "../sessionFolders";
+import { mergeText } from "./textMerge";
 
 export interface DraftDocument {
   readonly id: string;
@@ -31,11 +32,55 @@ export type DraftChange =
   | { type: "trash" }
   | { type: "restore" };
 
+/** Authored content of one document revision. */
+export interface DraftContent {
+  readonly body: string;
+  readonly attachments: readonly Attachment[];
+}
+
 export interface DraftMutationArgs {
   readonly document_id: string;
   readonly expected_revision: number;
   readonly change: DraftChange;
   readonly authored_at_ms: number;
+  /** Content a write was authored against: the merge ancestor when another
+   * device wrote first. Local only; never sent to the server. */
+  readonly base?: DraftContent;
+}
+
+/** Three-way merge of two edits of one document (Obsidian Sync style). Both
+ * sides' text survives; an attachment stays unless one side removed it, and an
+ * inline image stays only while the merged text references it. Null when the
+ * texts cannot be aligned at bounded cost. */
+export function mergeDraftContent(
+  base: DraftContent,
+  ours: DraftContent,
+  theirs: DraftContent,
+): DraftContent | null {
+  const body = mergeText(base.body, ours.body, theirs.body);
+  if (body === null) return null;
+  const ids = (list: readonly Attachment[]): Set<string> =>
+    new Set(list.map((a) => a.id));
+  const inBase = ids(base.attachments);
+  const inOurs = ids(ours.attachments);
+  const inTheirs = ids(theirs.attachments);
+  const referenced = new Set(imageTokensInText(body).map((t) => t.id));
+  const attachments = [...theirs.attachments, ...ours.attachments]
+    .filter((a, index, all) => all.findIndex((b) => b.id === a.id) === index)
+    .filter((a) =>
+      !(inBase.has(a.id) && (!inOurs.has(a.id) || !inTheirs.has(a.id))) &&
+      (!a.isImage || referenced.has(a.id))
+    );
+  return { body, attachments };
+}
+
+export function sameDraftContent(a: DraftContent, b: DraftContent): boolean {
+  return a.body === b.body &&
+    JSON.stringify(a.attachments) === JSON.stringify(b.attachments);
+}
+
+export function draftContent({ body, attachments }: DraftContent): DraftContent {
+  return { body, attachments };
 }
 
 export function expectedRevision(

@@ -76,6 +76,7 @@ import {
 } from "./configOptionMutation";
 import { refreshProviderCatalog } from "./providerCatalogRegistry";
 import { attachDraftDatabase, getDraft, pruneDrafts } from "./draftStore";
+import { announceDraftChanges } from "./documents/store";
 import {
   claimOrphanedPendingEdits,
   finishOrphanedPendingEdit,
@@ -1819,6 +1820,10 @@ function handle(msg: Outbound): void {
       if (msg.state.startsWith("queue:")) {
         telemetryOperations.acknowledge(msg.state.slice("queue:".length), msg.confirmed);
         applyQueuePatch(msg.state.slice("queue:".length), msg.version, msg.value, msg.confirmed, resync);
+      } else if (msg.state === "drafts") {
+        // Independent documents converge over HTTP; this only announces which
+        // ones changed so open editors merge them in without polling.
+        announceDraftChanges(msg.value);
       } else {
         if (msg.state.startsWith("mobile-review:")) {
           mobileReviewClient(msg.state.slice("mobile-review:".length));

@@ -31,6 +31,7 @@ import { withoutNativeComposition } from "./composer/nativeComposition";
 import { isAppleTouchDevice } from "./keyboardGeometry";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { mapOffset, textChanges } from "./documents/textMerge";
 import {
   mapNativeSelectionThroughValueChange,
   nativeTextareaFittedHeight,
@@ -666,6 +667,30 @@ export const ComposerTextarea = forwardRef<
     // no-op so a viewport resize never rewrites UIKit selection or IME state.
     revealSelection: (): void => undefined,
     getValue: (): string => inputRef.current?.value ?? value,
+    // Never write while the iOS IME owns marked text (pitfalls #83/#84); the
+    // caller retries after composition. The caret follows the remote edits.
+    applyRemoteText: (next: string): boolean => {
+      const ta = inputRef.current;
+      if (!ta) return false;
+      if (nativeImeOwns()) return false;
+      if (ta.value === next) return true;
+      const changes = textChanges(ta.value, next);
+      const focused = ta.ownerDocument.activeElement === ta;
+      const selection = focused ? rememberSelection(ta) : rememberedSelection(ta);
+      const anchor = mapOffset(selection.anchor, changes);
+      const head = mapOffset(selection.head, changes);
+      ta.value = next;
+      lastNativeValueRef.current = next;
+      if (focused) {
+        ta.setSelectionRange(
+          Math.min(anchor, head),
+          Math.max(anchor, head),
+          anchor > head ? "backward" : "forward",
+        );
+      }
+      lastSelectionRef.current = { anchor, head };
+      return true;
+    },
     getSelection: (): ComposerEditorSelection => {
       const ta = inputRef.current;
       if (!ta) return lastSelectionRef.current;

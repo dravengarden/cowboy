@@ -18750,12 +18750,17 @@ fn connect_bootstrap(
 }
 
 /// An Owner sees every session, so a broadcast usually reaches its socket as
-/// the shared pre-serialized frame. `workspace-order` is stored for every user
-/// at once (`{user_id: [...]}`) and must still be narrowed to the receiving
-/// principal's own list; the raw map would replace the client's array.
+/// the shared pre-serialized frame. `workspace-order` and `drafts` are stored
+/// for every user at once (`{user_id: ...}`) and must still be narrowed to the
+/// receiving principal's own value; the raw map would replace the client's
+/// array or reveal another user's document titles.
 fn fanout_sends_shared_frame(principal: &ProductPrincipal, outbound: &Outbound) -> bool {
     principal.sees_every_session()
-        && !matches!(outbound, Outbound::SyncPatch { state, .. } if state == "workspace-order")
+        && !matches!(outbound, Outbound::SyncPatch { state, .. } if principal_owned_sync_state(state))
+}
+
+fn principal_owned_sync_state(state: &str) -> bool {
+    state == "workspace-order" || state == "drafts"
 }
 
 fn project_outbound(
@@ -18818,6 +18823,15 @@ fn project_outbound(
                         .get(&principal.user_id)
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!([])),
+                    state,
+                    version,
+                    confirmed,
+                    resync,
+                })
+            } else if state == "drafts" {
+                // Another user's document change is not even announced.
+                value.get(&principal.user_id).cloned().map(|value| Outbound::SyncPatch {
+                    value,
                     state,
                     version,
                     confirmed,
@@ -20721,6 +20735,32 @@ mod bootstrap_tests {
             resync: false,
         };
         assert!(fanout_sends_shared_frame(&owner, &title));
+    }
+
+    #[test]
+    fn draft_announcements_reach_only_their_owner() {
+        let hub = Hub::new();
+        let owner = test_owner_principal();
+        let mut events = hub.subscribe();
+        hub.announce_draft("other", serde_json::json!({"id": "d1", "revision": 2}));
+        let frame = events.try_recv().expect("announcement must be broadcast");
+        let patch = frame.outbound().clone();
+        assert!(matches!(&patch, Outbound::SyncPatch { state, .. } if state == "drafts"));
+        assert!(!fanout_sends_shared_frame(&owner, &patch));
+        assert!(project_outbound(&hub, &owner, &HashSet::new(), patch).is_none());
+
+        hub.announce_draft("owner", serde_json::json!({"id": "d2", "revision": 5}));
+        // An older or repeated revision is not announced again.
+        hub.announce_draft("owner", serde_json::json!({"id": "d2", "revision": 4}));
+        let Some(Outbound::SyncPatch { value, .. }) = hub
+            .sync_resync()
+            .into_iter()
+            .find(|message| matches!(message, Outbound::SyncPatch { state, .. } if state == "drafts"))
+            .and_then(|message| project_outbound(&hub, &owner, &HashSet::new(), message))
+        else {
+            panic!("resync must carry the owner's announcements");
+        };
+        assert_eq!(value, serde_json::json!({"d2": {"id": "d2", "revision": 5}}));
     }
 
     #[test]
