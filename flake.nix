@@ -155,6 +155,7 @@
           ./src/session_deletion_admission
           ./src/machine_protocol.rs
           ./src/machine_protocol
+          ./src/generation_retention.rs
           ./src/machine_plugins.rs
           ./src/machine_plugins
           ./src/operation_budget.rs
