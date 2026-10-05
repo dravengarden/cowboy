@@ -73,6 +73,7 @@ import {
   normalizeClipboardText,
   pastedTextBeatsFiles,
 } from "./composer/clipboardPastePolicy";
+import { clipboardHtmlToMarkdown } from "./composer/htmlToMarkdown";
 import { iosLineStartDashRepair } from "./composer/obsidianAutoPair";
 import { readWebClipboard } from "./composer/webClipboard";
 import { hasNativeClipboardBridge } from "./composer/clipboardPort";
@@ -815,6 +816,22 @@ export const ComposerEditor = forwardRef<
             view.dispatch({
               changes: { from: main.from, to: main.to, insert: link },
               selection: { anchor: main.from + link.length },
+              scrollIntoView: true,
+              userEvent: "input.paste",
+            });
+            return true;
+          }
+          // Desktop only (Obsidian's "Auto convert HTML"): rich text pastes as
+          // Markdown. Mod+Shift+V delivers plain text, which skips this. Touch
+          // keeps its verified native paste path (PITFALLS.md "Paste").
+          const markdown = !touchInput && files.length === 0 && !view.composing
+            ? clipboardHtmlToMarkdown(cb.getData("text/html"))
+            : null;
+          if (markdown !== null) {
+            event.preventDefault();
+            view.dispatch({
+              changes: { from: main.from, to: main.to, insert: markdown },
+              selection: { anchor: main.from + markdown.length },
               scrollIntoView: true,
               userEvent: "input.paste",
             });

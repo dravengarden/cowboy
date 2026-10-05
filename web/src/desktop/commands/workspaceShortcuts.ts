@@ -78,6 +78,13 @@ export const DESKTOP_COMPOSER_FORMAT_KEYS: Readonly<Record<string, string>> = {
   bulletList: "O",
 };
 
+/** Obsidian's direct formatting chords. Only formats whose chord has the same
+ *  meaning everywhere get one; Mod+K stays the workspace prefix on macOS. */
+export const DESKTOP_COMPOSER_FORMAT_CHORDS: Readonly<Record<string, string>> = {
+  bold: "Mod+B",
+  italic: "Mod+I",
+};
+
 export function desktopWorkspaceSequence(key: string): string {
   return `${DESKTOP_WORKSPACE_PREFIX} → ${key}`;
 }

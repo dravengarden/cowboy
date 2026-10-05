@@ -38,6 +38,7 @@ import {
 } from "./mobileCompactEditorPolicy";
 
 import { bindEditorExtensions } from "../editorExtensions/host";
+import { loadEditorPlugins } from "../editorPlugins/appHost";
 
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
 
@@ -127,6 +128,11 @@ export const PlatformComposerEditor = forwardRef<
   const composingRef = useRef(false);
   const compositionEndedAtRef = useRef(0);
   const compositionEndHoldTimerRef = useRef(0);
+  // Desktop toolbars and the palette show plugin commands once an editor
+  // exists; touch loads plugins when the Editor extensions sheet opens.
+  useEffect(() => {
+    if (surface.kind === "desktop") loadEditorPlugins();
+  }, [surface.kind]);
   useLayoutEffect(() => bindEditorExtensions(extensionHandle, {
     kind: props.sessionId ? "session" : "document",
     id: props.sessionId ?? documentId ?? editorId,

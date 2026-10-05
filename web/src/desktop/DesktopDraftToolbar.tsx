@@ -30,6 +30,7 @@ import {
   useOptionalDesktopCommands,
 } from "./commands/DesktopCommandProvider";
 import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
+import { formatChord } from "./commands/formatChord";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
@@ -40,6 +41,7 @@ import {
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 import { isImeComposing, useImeStatus } from "./vim/imeStatusStore";
+import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 
 interface Props {
   fallback: ReactNode;
@@ -164,15 +166,16 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       ),
       ...COMPOSER_COMMANDS.filter((c) =>
         !["slash", "mention", "attach", "sourceMode"].includes(c.id)
-      ).map((c) =>
-        action(
+      ).map((c) => ({
+        ...action(
           `composer.format.${c.id}`,
           c.label,
           (p) => p.onFormat(c.id),
           DESKTOP_COMPOSER_FORMAT_KEYS[c.id],
           true,
-        )
-      ),
+        ),
+        ...formatChord(c.id),
+      })),
     ];
   }, []);
   const { register, execute } = useDesktopCommands();
@@ -323,6 +326,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           DESKTOP_WORKSPACE_KEYS.composerAttach,
           !props.writable,
         )}
+        <EditorPluginToolbar kind="document" disabled={!props.writable || composing} />
         <Box sx={{ flex: 1 }} />
         <Button
           size="small"
@@ -354,6 +358,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           <span>
             <Button
               data-draft-action="save"
+              aria-label="Save"
               size="small"
               color="inherit"
               disabled={!props.writable || composing}
@@ -370,7 +375,10 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
                 "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
               }}
             >
-              <SaveOutlined />Save{" "}
+              {/* The label joins the density tiers so Save + its keycap fit a
+                  narrow pane at large reading sizes. */}
+              <SaveOutlined />
+              <Box component="span" data-draft-action-label>Save</Box>
               <DesktopShortcut
                 shortcut="Mod+S"
                 compact

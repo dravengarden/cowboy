@@ -11,6 +11,10 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   ["mod+.", new Set(["topbar.stop"])],
+  // Bold/Italic in a text editor are the common meaning itself (Obsidian,
+  // every macOS editor), not a conflict with it.
+  ["mod+b", new Set(["composer.format.bold"])],
+  ["mod+i", new Set(["composer.format.italic"])],
   ["mod+k", new Set(["workspace.prefix"])],
 ]);
 

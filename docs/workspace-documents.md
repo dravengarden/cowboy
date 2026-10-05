@@ -88,4 +88,8 @@ visible hints. More (prefix M) and the Command Palette expose all formatting
 and document actions. Available pane width, measured in rem, controls density
 so enlarged fonts retain useful writing space. Shared fixed-size chrome uses
 the SurfaceProvider size unit: rem on Desktop, original pixels on touch.
-The sidebar Create label and folder/fold targets also scale with reading size.
+The sidebar Create label and fold target also scale with reading size.
+
+Installable editor plugins share this host: their commands join the same
+palette and toolbars in Drafts and Session prompts. See
+[editor plugins](editor-plugins.md).

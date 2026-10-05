@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 import {
   Box,
   Button,
@@ -362,6 +363,7 @@ export function DesktopComposerToolbar(
             />
           </Button>
         </Tooltip>
+        <EditorPluginToolbar kind="session" disabled={composing} />
         <Box sx={{ flex: 1 }} />
         {action({
           id: "source",

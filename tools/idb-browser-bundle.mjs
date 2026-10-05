@@ -16,7 +16,7 @@ if (
   suite !== "workspace-picker" && suite !== "project-placement" &&
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
-  suite !== "draft-documents"
+  suite !== "draft-documents" && suite !== "editor-plugin-sandbox"
 ) {
   throw new Error("unknown suite");
 }
@@ -87,7 +87,9 @@ await build({
       : {}),
     lib: {
       entry: new URL(
-        suite === "draft-documents"
+        suite === "editor-plugin-sandbox"
+          ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"
+          : suite === "draft-documents"
           ? "../web/src/draftDocumentsBrowserConformance.tsx"
           : suite === "session-fold"
           ? "../web/src/sessionFoldBrowserConformance.tsx"

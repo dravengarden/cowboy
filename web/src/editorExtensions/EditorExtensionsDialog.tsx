@@ -35,6 +35,16 @@ import {
   openEditorExtensions,
 } from "./host";
 import { createEditorExtensionRuntime } from "./runtime";
+import type { EditorPanelItem } from "./contract";
+import {
+  editorPluginCommandId,
+  editorPluginHost,
+  loadEditorPlugins,
+} from "../editorPlugins/appHost";
+import {
+  EditorPluginManager,
+  useEditorPlugins,
+} from "../editorPlugins/EditorPluginManager";
 
 interface Settings {
   templates: readonly EditorTemplate[];
@@ -104,6 +114,32 @@ export function EditorExtensionsCommand(): null {
       for (const dispose of disposers) dispose();
     };
   }, [registry.register, settings]);
+  const plugins = useEditorPlugins();
+  useEffect(() => {
+    loadEditorPlugins();
+  }, []);
+  useEffect(() => {
+    const disposers = plugins.plugins.flatMap((plugin) =>
+      plugin.commands.map((command) =>
+        registry.register({
+          id: editorPluginCommandId(plugin.manifest.id, command.id),
+          title: `${plugin.manifest.name}: ${command.title}`,
+          ...(command.description ? { description: command.description } : {}),
+          group: "Plugins",
+          allowInEditor: true,
+          when: () => {
+            const port = activeEditorExtensionPort();
+            return !!port && editorPluginHost().appliesTo(plugin.manifest.id, port);
+          },
+          disabledReason: "Focus a Draft or Session editor this plugin supports",
+          run: () => runEditorPluginCommand(plugin.manifest.id, command.id),
+        })
+      )
+    );
+    return () => {
+      for (const dispose of disposers) dispose();
+    };
+  }, [registry.register, plugins]);
   const command = useMemo(
     () => ({
       id: "editor.extensions",
@@ -116,6 +152,18 @@ export function EditorExtensionsCommand(): null {
   );
   useDesktopCommand(command);
   return null;
+}
+
+/** The single execution path for palette, toolbar and the Tools list. */
+export function runEditorPluginCommand(plugin: string, command: string): void {
+  const port = activeEditorExtensionPort();
+  if (!port) {
+    documentNotice("Focus a Draft or Session editor first.");
+    return;
+  }
+  void editorPluginHost().runCommand(plugin, command, port).catch((error: unknown) =>
+    documentNotice(error instanceof Error ? error.message : "The plugin command failed")
+  );
 }
 
 export function EditorExtensionsDialog(): React.JSX.Element | null {
@@ -138,6 +186,40 @@ function ExtensionWorkbench(
   const [snapshot, setSnapshot] = useState(() => binding.port.read());
   const [editing, setEditing] = useState<EditorTemplate | null>(null);
   const desktop = useSurfaceProfile().kind === "desktop";
+  const plugins = useEditorPlugins();
+  useEffect(() => {
+    loadEditorPlugins();
+  }, []);
+  const pluginHost = editorPluginHost();
+  const applicable = plugins.plugins.filter((plugin) =>
+    plugin.status === "running" &&
+    pluginHost.appliesTo(plugin.manifest.id, binding.port)
+  );
+  const [pluginPanels, setPluginPanels] = useState<
+    Record<string, readonly EditorPanelItem[] | string>
+  >({});
+  useEffect(() => {
+    if (tab !== "tools") return undefined;
+    let current = true;
+    for (const plugin of applicable) {
+      for (const panel of plugin.panels) {
+        const key = `${plugin.manifest.id}:${panel.id}`;
+        void pluginHost.renderPanel(plugin.manifest.id, panel.id, binding.port).then(
+          (items) => current && setPluginPanels((all) => ({ ...all, [key]: items })),
+          (cause: unknown) =>
+            current &&
+            setPluginPanels((all) => ({
+              ...all,
+              [key]: cause instanceof Error ? cause.message : "Panel failed",
+            })),
+        );
+      }
+    }
+    return () => {
+      current = false;
+    };
+    // Re-render plugin panels when the document revision or plugins change.
+  }, [tab, plugins, snapshot.revision, binding]);
   const extensions = useMemo(
     () => [templateExtension(settings.templates), outlineExtension],
     [settings.templates],
@@ -224,6 +306,63 @@ function ExtensionWorkbench(
                   </ListItemButton>
                 ))}
               </List>
+              {applicable.length > 0 && (
+                <List dense data-editor-plugin-tools>
+                  {applicable.flatMap((plugin) =>
+                    plugin.commands.map((command) => (
+                      <ListItemButton
+                        key={`${plugin.manifest.id}:${command.id}`}
+                        onClick={() => {
+                          closeEditorExtensions();
+                          void pluginHost.runCommand(plugin.manifest.id, command.id, binding.port)
+                            .catch((cause: unknown) =>
+                              documentNotice(
+                                cause instanceof Error ? cause.message : "The plugin command failed",
+                              )
+                            );
+                        }}
+                      >
+                        <ListItemText
+                          primary={`${plugin.manifest.name}: ${command.title}`}
+                          secondary={command.description}
+                        />
+                      </ListItemButton>
+                    ))
+                  )}
+                </List>
+              )}
+              {applicable.flatMap((plugin) =>
+                plugin.panels.map((panel) => {
+                  const key = `${plugin.manifest.id}:${panel.id}`;
+                  const items = pluginPanels[key];
+                  return (
+                    <Box key={key} sx={{ py: 1 }} data-editor-plugin-panel={key}>
+                      <Typography variant="subtitle2">
+                        {plugin.manifest.name}: {panel.title}
+                      </Typography>
+                      {typeof items === "string"
+                        ? <Typography variant="caption" color="error">{items}</Typography>
+                        : (
+                          <List dense>
+                            {(items ?? []).map((item) => (
+                              <ListItemButton
+                                key={item.id}
+                                disabled={item.offset === undefined}
+                                sx={{ pl: 1 + (item.depth ?? 0) * 1.5 }}
+                                onClick={() => {
+                                  closeEditorExtensions();
+                                  binding.port.reveal(item.offset!);
+                                }}
+                              >
+                                <ListItemText primary={item.label} secondary={item.detail} />
+                              </ListItemButton>
+                            ))}
+                          </List>
+                        )}
+                    </Box>
+                  );
+                })
+              )}
               {(runtime?.panels() ?? []).map((panel) => (
                 <Box key={panel.id} sx={{ py: 1 }}>
                   <Typography variant="subtitle2">{panel.title}</Typography>
@@ -283,6 +422,8 @@ function ExtensionWorkbench(
                   </Typography>
                 </Box>
               ))}
+              <Divider />
+              <EditorPluginManager />
               <Divider />
               <Typography variant="subtitle2">Your templates</Typography>
               {settings.templates.map((template) => (

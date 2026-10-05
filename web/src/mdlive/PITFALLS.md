@@ -2593,7 +2593,9 @@ Desktop Vim + IME checks:
       payload no longer deletes the CM6 selection, the textarea never cancels a
       paste that has plain text, and the native shell never issues a second
       web-clipboard read. Pastes carry `input.paste` so undo never joins them
-      with typing. HTML→Markdown conversion (Obsidian's turndown) is not ported.
+      with typing. Desktop CM6 converts semantic clipboard HTML to Markdown
+      (Obsidian's "Auto convert HTML", `composer/htmlToMarkdown.ts`); touch
+      and the native textarea keep the plain-text path unchanged.
     - **Pickers.** Like Obsidian's EditorSuggest, a visible list owns
       Enter/Tab/arrows even while an async `@file` refresh marks it pending;
       Enter pressed while it refreshes accepts the highlighted option once the

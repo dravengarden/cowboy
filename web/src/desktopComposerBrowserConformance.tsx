@@ -389,8 +389,36 @@ export async function runDesktopComposerBrowserConformance(): Promise<
         `${id} is searchable with its shortcut`,
       );
     }
+    {
+      // Obsidian's direct chords run the same format commands as ␣B / ␣I.
+      const editor = editorRef.current!;
+      if (editor.getValue().trim() === "") editor.insertText("word");
+      const mod = isMac ? { metaKey: true } : { ctrlKey: true };
+      const original = editor.getValue();
+      const end = original.search(/\s|$/);
+      editor.focusSelection({ anchor: 0, head: end });
+      key("b", "KeyB", mod);
+      await tick();
+      check(
+        editor.getValue() === `**${original.slice(0, end)}**${original.slice(end)}`,
+        `Mod+B toggles bold: ${JSON.stringify(editor.getValue())}`,
+      );
+      const bold = editor.getValue();
+      editor.focusSelection(editor.getSelection());
+      key("i", "KeyI", mod);
+      await tick();
+      check(editor.getValue() !== bold && editor.getValue().includes("*"), "Mod+I toggles italic");
+      check(
+        commands.list().some((command) =>
+          command.id === "composer.format.bold" && command.shortcut === "Mod+B"
+        ),
+        "Bold advertises Mod+B in the palette",
+      );
+      editor.insertText(original, { anchor: 0, head: editor.getValue().length });
+      await tick();
+    }
     results.push(
-      "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+      "Buttons, native save/force chords, prefix actions and command palette share callbacks; Mod+B/Mod+I format in the editor",
     );
 
     flushSync(() =>

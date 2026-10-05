@@ -180,7 +180,9 @@ function suffix(scope: ProductSyncScope): string {
 export type ProductCacheScope =
   | {
     readonly kind: "service";
-    readonly state: "sessions" | "machines" | "drafts";
+    // `editor-plugins` is device-local installed editor plugins (code,
+    // settings, data). It shares the dataset fence but survives sign-out.
+    readonly state: "sessions" | "machines" | "drafts" | "editor-plugins";
   }
   | {
     readonly kind: "session";
@@ -195,7 +197,10 @@ const CACHE_SESSION_STATES = ["tail", "delivery", "draft"] as const;
 
 function cacheSuffix(scope: ProductCacheScope): string {
   if (scope.kind === "service") {
-    if (scope.state !== "sessions" && scope.state !== "machines" && scope.state !== "drafts") invalid();
+    if (
+      scope.state !== "sessions" && scope.state !== "machines" &&
+      scope.state !== "drafts" && scope.state !== "editor-plugins"
+    ) invalid();
     return `service:${scope.state}`;
   }
   if (

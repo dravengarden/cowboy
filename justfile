@@ -241,6 +241,11 @@ example-auth-bundle PLUGIN:
 
 # Every bootstrap login host must have an independently buildable signed
 # Plugin source. Discovery deliberately has no list of authentication IDs.
+# Pack an editor plugin directory (manifest.json + main.js) into one
+# installable .cowboy-plugin file; see docs/editor-plugins.md.
+editor-plugin-pack DIR OUT:
+    deno run --allow-read --allow-write="{{OUT}}" tools/editor-plugin-pack.ts "{{DIR}}" "{{OUT}}"
+
 example-auth-build-all:
     #!/usr/bin/env bash
     set -euo pipefail

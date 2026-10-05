@@ -95,7 +95,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣E` | Source / live preview (Prompt) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` `␣M` | Schedule, run next, more formatting (Composer) |
-| `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list |
+| `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list (`Mod+B`/`Mod+I` also format, as in Obsidian; off macOS only in Vim Insert or without Vim, so Ctrl-B/Ctrl-I keep their Vim meaning) |
 | `␣V` `␣G` | Copy Draft to a Session, Draft history |
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).

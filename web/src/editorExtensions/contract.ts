@@ -1,6 +1,7 @@
-/** Core editor extension API v1. Independent of Session, Machine and React.
- * Installable packages must be admitted by Cowboy's generic Plugin lifecycle;
- * this API does not download, install or evaluate untrusted package code. */
+/** Core editor extension API v1 for built-in extensions. Independent of
+ * Session, Machine and React. Installable third-party plugins run sandboxed
+ * through editorPlugins/ (docs/editor-plugins.md) and reach the editor only
+ * through the same EditorPort. */
 export const EDITOR_EXTENSION_API = 1 as const;
 
 export interface EditorContext {

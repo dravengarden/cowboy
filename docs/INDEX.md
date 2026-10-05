@@ -16,6 +16,7 @@ primary phone/desktop product path.
 ## Reading order
 
 - [`workspace-documents.md`](workspace-documents.md) — Unified Draft/Session navigation, shared directories, content ownership, migration and Undo
+- [`editor-plugins.md`](editor-plugins.md) — Installable sandboxed editor plugins (manifest, API, lifecycle, isolation) and Desktop editing parity with Obsidian 1.13.7
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`execution-environments.md`](execution-environments.md) — Native remote execution decision: separate runtime placement from target files/processes; core, Provider and infrastructure ownership; staged acceptance
@@ -68,6 +69,7 @@ primary phone/desktop product path.
 - [`architecture/17-authentication-plugins.md`](architecture/17-authentication-plugins.md) — Signed authentication packages, configurable login UI, and server-owned session policy
 - [`architecture/18-auth-capacity-sso.md`](architecture/18-auth-capacity-sso.md) — Configurable client/session capacity, fair admission, SSO logout, and isolated automation
 - [`../examples/authentication/README.md`](../examples/authentication/README.md) — Google, Apple, and Cloudflare Email Authentication Provider examples
+- [`../examples/editor-plugins/README.md`](../examples/editor-plugins/README.md) — Installable editor plugin example and packing command
 - [`architecture/runtime-incident-ledger.md`](architecture/runtime-incident-ledger.md) — Runtime failure evidence and resolved invariants
 
 ### Core documents
