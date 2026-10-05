@@ -6,6 +6,23 @@ marked targets and finishes before any removal. Exceeding that limit preserves
 all candidates and releases their handles; the existing directory traversal
 limit remains separate.
 
+Linux collection opens each pending directory and candidate relative to the held
+Session-root descriptor using `openat2` with `BENEATH`, `NO_SYMLINKS` and
+`NO_XDEV`. It enumerates each opened directory through its own descriptor and
+retains only root-relative pending names. Linked ancestors, mount points
+(including same-device bind mounts), missing paths and nondirectories are skipped
+before marker reads. Other errors, including unsupported kernels, fail collection
+before removal without a pathname fallback. These flags follow the
+[Linux interface contract](https://man7.org/linux/man-pages/man2/openat2.2.html).
+Non-Linux Unix keeps its explicitly weaker pathname fallback.
+
+A filesystem regression replaces a pending ancestor with a link and refuses
+linked and escaping paths. An ignored fixture runs explicitly in a private mount
+namespace, binds same-device directories over both an ancestor and a direct
+target, checks refusal, preserves their original Cargo artifacts and clears a
+separate ordinary target. This is scan-time mount admission; mounts added after
+an accepted open or below a candidate during recursive removal remain open gaps.
+
 Before removing contents, cleanup checks the candidate's pathname against its
 retained directory handle and revalidates its markers through that handle. A
 missing, symbolic or replacement directory, or withdrawn marker, produces a

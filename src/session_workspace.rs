@@ -624,7 +624,7 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
 
     let access_root = workspace.access_root(&session_root);
     let mut candidates = Vec::new();
-    let mut pending = vec![access_root.clone()];
+    let mut pending = vec![PathBuf::new()];
     let mut visited = 0_usize;
     while let Some(directory) = pending.pop() {
         workspace.verify()?;
@@ -632,8 +632,13 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
         if visited > MAX_CLEANUP_DIRECTORIES {
             bail!("session worktree cleanup exceeded {MAX_CLEANUP_DIRECTORIES} directories");
         }
-        for entry in std::fs::read_dir(&directory)
-            .with_context(|| format!("reading worktree directory {}", directory.display()))?
+        let Some(handle) = open_cleanup_scan_directory(workspace, &access_root, &directory)? else {
+            continue;
+        };
+        let directory_path = access_root.join(&directory);
+        let scan_root = directory_access_root(&handle, &directory_path);
+        for entry in std::fs::read_dir(&scan_root)
+            .with_context(|| format!("reading worktree directory {}", directory_path.display()))?
         {
             let entry = entry
                 .with_context(|| format!("reading worktree entry below {}", directory.display()))?;
@@ -644,9 +649,12 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
                 continue;
             }
             let name = entry.file_name();
-            let path = entry.path();
+            let relative_path = directory.join(&name);
+            let path = access_root.join(&relative_path);
             if name == OsStr::new("target")
-                && let Some(directory) = observe_cargo_target_directory(&path)?
+                && let Some(directory) =
+                    open_cleanup_scan_directory(workspace, &access_root, &relative_path)?
+                && cargo_target_markers_match(&directory)?
             {
                 if candidates.len() >= MAX_CLEANUP_TARGETS {
                     bail!(
@@ -659,13 +667,69 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
             if matches!(name.to_str(), Some(".git" | "node_modules" | "vendor")) {
                 continue;
             }
-            pending.push(path);
+            pending.push(relative_path);
         }
     }
 
     remove_cleanup_targets(workspace, &session_root, &access_root, candidates, &|_| {
         Ok(())
     })
+}
+
+/// Linux must resolve every scan component from the retained Session root.
+/// Unsupported kernels fail rather than falling back to pathname traversal.
+fn open_cleanup_scan_directory(
+    workspace: &CleanupWorkspace,
+    access_root: &Path,
+    relative: &Path,
+) -> Result<Option<File>> {
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
+        let _ = access_root;
+        let relative = if relative.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            relative
+        };
+        match openat2(
+            workspace.directory.as_ref(),
+            relative,
+            OFlags::RDONLY
+                | OFlags::DIRECTORY
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK
+                | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+        ) {
+            Ok(directory) => Ok(Some(File::from(directory))),
+            Err(error)
+                if matches!(
+                    error,
+                    rustix::io::Errno::LOOP
+                        | rustix::io::Errno::XDEV
+                        | rustix::io::Errno::NOENT
+                        | rustix::io::Errno::NOTDIR
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error).context("opening bounded cleanup scan directory"),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = workspace;
+        match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(access_root.join(relative))
+        {
+            Ok(directory) => Ok(Some(directory)),
+            Err(error) => Err(error).context("opening cleanup scan directory"),
+        }
+    }
 }
 
 fn remove_cleanup_targets(
@@ -714,6 +778,7 @@ fn remove_cleanup_targets(
     Ok(removed)
 }
 
+#[cfg(test)]
 fn observe_cargo_target_directory(path: &Path) -> Result<Option<File>> {
     let Ok(directory) = OpenOptions::new()
         .read(true)
@@ -1066,6 +1131,103 @@ mod tests {
         std::fs::remove_dir_all(session.join(format!("project-{MAX_CLEANUP_TARGETS}"))).unwrap();
         let removed = cleanup_build_artifacts(&workspace).await.unwrap();
         assert_eq!(removed.len(), MAX_CLEANUP_TARGETS);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_scan_refuses_linked_ancestors_and_escaping_paths() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-scan");
+        write_cargo_target(&session.join("project/target"));
+        let outside = temp.0.join("outside");
+        write_cargo_target(&outside.join("target"));
+        let workspace = capture_cleanup_workspace(&managed, "sess-scan", &session).unwrap();
+        let access = workspace.access_root(&session);
+        std::fs::rename(session.join("project"), session.join("original-project")).unwrap();
+        std::os::unix::fs::symlink(&outside, session.join("project")).unwrap();
+        for path in ["project", "project/target", "../outside", "/tmp"] {
+            assert!(
+                open_cleanup_scan_directory(&workspace, &access, Path::new(path))
+                    .unwrap()
+                    .is_none(),
+                "{path}"
+            );
+        }
+        let cleared = cleanup_build_artifacts_sync(&workspace).unwrap();
+        assert_eq!(cleared, vec![session.join("original-project/target")]);
+        assert!(outside.join("target/debug/deps/libtest.rlib").is_file());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[ignore = "requires explicitly isolated private mount namespace"]
+    fn cleanup_scan_refuses_same_device_bind_mounts() {
+        assert_eq!(
+            std::env::var("COWBOY_TEST_CLEANUP_MOUNT_NAMESPACE").as_deref(),
+            Ok("1")
+        );
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-mount-scan");
+        write_cargo_target(&session.join("local/target"));
+        let outside = temp.0.join("outside");
+        write_cargo_target(&outside.join("target"));
+        struct Mounts(Vec<PathBuf>);
+        impl Drop for Mounts {
+            fn drop(&mut self) {
+                for path in self.0.iter().rev() {
+                    assert!(
+                        std::process::Command::new("umount")
+                            .arg(path)
+                            .status()
+                            .unwrap()
+                            .success()
+                    );
+                }
+            }
+        }
+        let mut mounts = Mounts(Vec::new());
+        for (source, destination) in [
+            (outside.clone(), session.join("mounted-project")),
+            (outside.join("target"), session.join("direct/target")),
+        ] {
+            std::fs::create_dir_all(&destination).unwrap();
+            assert!(
+                std::process::Command::new("mount")
+                    .arg("--bind")
+                    .arg(source)
+                    .arg(&destination)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            mounts.0.push(destination);
+        }
+        let workspace = capture_cleanup_workspace(&managed, "sess-mount-scan", &session).unwrap();
+        let access = workspace.access_root(&session);
+        for relative in ["mounted-project", "mounted-project/target", "direct/target"] {
+            assert_eq!(
+                std::fs::metadata(session.join(relative)).unwrap().dev(),
+                workspace.directory.metadata().unwrap().dev()
+            );
+            assert!(
+                open_cleanup_scan_directory(&workspace, &access, Path::new(relative))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            cleanup_build_artifacts_sync(&workspace).unwrap(),
+            vec![session.join("local/target")]
+        );
+        assert!(outside.join("target/debug/deps/libtest.rlib").is_file());
+        assert_eq!(
+            std::fs::read_dir(session.join("local/target"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 
     fn observed_cleanup_target(
