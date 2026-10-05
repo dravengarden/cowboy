@@ -294,6 +294,25 @@ export async function runDraftDocumentsBrowserConformance(
     await repo.start();
     const folder = await repo.create("Research", null, "folder");
     sharedFolder = folder;
+    // Store bootstrap can connect before the async repository creates Research.
+    // Publish the final fixture folder identity rather than relying on timer order.
+    socket?.publish({
+      type: "sync_patch",
+      state: "folders",
+      version: 1,
+      value: {
+        folders: [{
+          id: folder,
+          name: "Research",
+          parent: null,
+          project: null,
+          position: 0,
+        }],
+        placement: {},
+      },
+      confirmed: [],
+      resync: true,
+    });
     if (nativeMode) {
       const id = await repo.create("Native Draft", folder, "document", "");
       globalThis.location.hash = `drafts/${id}`;
@@ -745,10 +764,39 @@ export async function runDraftDocumentsBrowserConformance(
             "Desktop toolbar icon and padding follow the global font size",
           );
         }
+        for (
+          const label of [
+            "Copy to Session drafts",
+            "Recovery history",
+            "Export Markdown",
+            "Attach file",
+          ]
+        ) {
+          const button = container.querySelector<HTMLElement>(
+            `button[aria-label="${label}"]`,
+          )!;
+          if (!button?.getClientRects().length) continue;
+          const svg = button.querySelector("svg")!;
+          check(
+            Math.abs(button.getBoundingClientRect().width - 2.25 * font) < 1,
+            `${label} target scales with root font`,
+          );
+          check(
+            Math.abs(svg.getBoundingClientRect().width - 1.5 * font) < 1,
+            `${label} glyph scales with root font`,
+          );
+        }
+        const formatBar = container.querySelector<HTMLElement>(
+          "[data-draft-format-toolbar]",
+        )!;
+        check(
+          formatBar.scrollWidth <= formatBar.clientWidth + 1,
+          "Grouped formatting controls wrap within the available width",
+        );
         const editor = container.querySelector<HTMLElement>(".cm-editor")!;
         check(
           editor.getBoundingClientRect().height > 200,
-          "Editing canvas retains useful height",
+          `Editing canvas retains useful height at ${width}px/${font}px: ${editor.getBoundingClientRect().height}`,
         );
       }
     }
