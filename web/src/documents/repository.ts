@@ -57,6 +57,8 @@ interface RepositoryOptions {
   localIds(): Promise<string[]>;
   request(path: string, init?: RequestInit): Promise<Response>;
   signal: AbortSignal;
+  /** One-line user notice, e.g. a version kept as a separate draft. */
+  notify?(message: string): void;
 }
 
 /** Per-document durable replicas keep large bodies out of the library index.
@@ -139,35 +141,85 @@ export function createDraftRepository(options: RepositoryOptions) {
         replica.resend();
       });
     }
-    /** Replace a refused mutation with one authored against `remote`. Writes
-     * fold every pending write into a single merged write; metadata changes
-     * reapply the local intent. False leaves the refusal to the caller. */
+    /** Content the server held at `bodyRevision`, for a pending write queued
+     * before writes recorded their ancestor. */
+    async function historicAncestor(
+      bodyRevision: number,
+    ): Promise<DraftContent | null> {
+      try {
+        const response = await options.request(
+          `/api/drafts/${encodeURIComponent(id)}/history`,
+        );
+        if (!response.ok) return null;
+        const history = await response.json() as unknown[];
+        for (const entry of history) {
+          const past = decodeDraft(entry);
+          if (past.id === id && past.body_revision === bodyRevision) {
+            return draftContent(past);
+          }
+        }
+      } catch {
+        // No ancestor: the local branch is preserved as a copy instead.
+      }
+      return null;
+    }
+    /** Keep authored text that cannot be merged as its own draft. */
+    async function preserve(ours: DraftContent): Promise<void> {
+      if (!ours.body.trim() && ours.attachments.length === 0) return;
+      const view = replica.get();
+      await create(
+        `${view?.title ?? "Untitled"} (conflicted copy)`,
+        view?.parent_id ?? null,
+        "document",
+        ours.body,
+        ours.attachments,
+      );
+      options.notify?.(
+        "This draft was edited on two devices. Your version was kept as a copy.",
+      );
+    }
+    /** Resolve a refused mutation against `remote` without ever blocking the
+     * document. Writes fold every pending write into a single merged write;
+     * metadata changes reapply the local intent. Authored text that cannot be
+     * merged (no ancestor, too divergent, deleted elsewhere) is kept as a
+     * separate draft and this document adopts the server state. */
     async function rebase(
       mutation: Mutation,
-      remote: DraftDocument,
+      remote: DraftDocument | null,
     ): Promise<boolean> {
       const args = mutation.args as DraftMutationArgs;
       const { change } = args;
-      if (
-        remote.deleted && change.type !== "trash" && change.type !== "restore"
-      ) return false;
+      const view = replica.get();
+      const writes = replica.pending()
+        .filter((m) => {
+          const type = (m.args as DraftMutationArgs).change.type;
+          return type === "write" || type === "create";
+        })
+        .map((m) => m.id);
       let superseded = [mutation.id];
       let replacement:
         | { change: DraftChange; expected: number; base?: DraftContent }
         | null = null;
       switch (change.type) {
         case "create":
-          return false;
         case "write": {
-          const view = replica.get();
-          if (!args.base || !view) return false;
-          const theirs = draftContent(remote);
-          const merged = mergeDraftContent(args.base, draftContent(view), theirs);
-          if (!merged) return false;
-          superseded = replica.pending()
-            .filter((m) => (m.args as DraftMutationArgs).change.type === "write")
-            .map((m) => m.id);
-          if (!sameDraftContent(merged, theirs)) {
+          superseded = writes;
+          const ours = view ? draftContent(view) : draftContent(
+            change.type === "create" ? change : { body: "", attachments: [] },
+          );
+          const theirs = remote && !remote.deleted
+            ? draftContent(remote)
+            : null;
+          if (theirs && sameDraftContent(ours, theirs)) break;
+          const ancestor = change.type === "create"
+            ? null
+            : args.base ?? await historicAncestor(args.expected_revision);
+          const merged = theirs && ancestor
+            ? mergeDraftContent(ancestor, ours, theirs)
+            : null;
+          if (!merged || !theirs || !remote) {
+            await preserve(ours);
+          } else if (!sameDraftContent(merged, theirs)) {
             replacement = {
               change: { type: "write", ...merged },
               expected: remote.body_revision,
@@ -177,25 +229,27 @@ export function createDraftRepository(options: RepositoryOptions) {
           break;
         }
         case "rename":
-          if (remote.title !== change.title) {
+          if (remote && !remote.deleted && remote.title !== change.title) {
             replacement = { change, expected: remote.metadata_revision };
           }
           break;
         case "move":
-          if (remote.parent_id !== change.parent_id) {
+          if (
+            remote && !remote.deleted && remote.parent_id !== change.parent_id
+          ) {
             replacement = { change, expected: remote.metadata_revision };
           }
           break;
         case "trash":
         case "restore":
-          if (remote.deleted !== (change.type === "trash")) {
+          if (remote && remote.deleted !== (change.type === "trash")) {
             replacement = { change, expected: remote.revision };
           }
           break;
       }
       await replica.confirmDurably(superseded);
       for (const id of superseded) deliverable.delete(id);
-      replica.applyPatch(snapshotPatch(remote.revision, remote, []), {
+      replica.applyPatch(snapshotPatch(remote?.revision ?? 0, remote, []), {
         force: true,
       });
       if (replacement) {
@@ -251,11 +305,13 @@ export function createDraftRepository(options: RepositoryOptions) {
               const remote = detail.current
                 ? decodeDraft(detail.current)
                 : null;
-              if (
-                remote && rebases < MAX_REBASES &&
-                await rebase(mutation, remote)
-              ) {
+              if (rebases < MAX_REBASES && await rebase(mutation, remote)) {
                 rebases++;
+                publish({
+                  phase: replica.pending().length ? "local" : "saved",
+                  error: null,
+                  remote: null,
+                });
                 continue;
               }
               if (["move", "trash", "restore"].includes(args.change.type)) {
@@ -366,9 +422,8 @@ export function createDraftRepository(options: RepositoryOptions) {
     ): Promise<void> {
       await hydrate();
       assertActive();
-      if (snapshot.phase === "conflict" || snapshot.phase === "error") {
-        throw new Error(snapshot.error ?? "Resolve this draft before saving");
-      }
+      // A delivery problem never refuses local durability: the authored change
+      // joins the outbox so the editor, navigation and menus stay usable.
       if (change.type !== "create" && !replica.get()) await refresh();
       const view = replica.get();
       let ancestor: DraftContent | undefined;

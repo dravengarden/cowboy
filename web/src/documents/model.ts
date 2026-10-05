@@ -79,7 +79,9 @@ export function sameDraftContent(a: DraftContent, b: DraftContent): boolean {
     JSON.stringify(a.attachments) === JSON.stringify(b.attachments);
 }
 
-export function draftContent({ body, attachments }: DraftContent): DraftContent {
+export function draftContent(
+  { body, attachments }: DraftContent,
+): DraftContent {
   return { body, attachments };
 }
 

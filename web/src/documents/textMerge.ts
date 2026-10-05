@@ -239,7 +239,10 @@ export function mapOffset(
 ): number {
   let delta = 0;
   for (const change of changes) {
-    if (change.from >= offset && !(change.from === change.to && change.from === offset)) break;
+    if (
+      change.from >= offset &&
+      !(change.from === change.to && change.from === offset)
+    ) break;
     if (change.to <= offset) {
       delta += change.insert.length - (change.to - change.from);
     } else {

@@ -12,6 +12,8 @@ function fixture() {
   const local = new Map<string, ClientSnapshot<DraftDocument | null>>();
   const server = new Map<string, DraftDocument>();
   const operations = new Map<string, string>();
+  const history: DraftDocument[] = [];
+  const notices: string[] = [];
   const requests: string[] = [];
   const lifetime = new AbortController();
   let blocked = false;
@@ -39,6 +41,7 @@ function fixture() {
         discard: () => Promise.resolve(),
       },
       localIds: () => Promise.resolve([...local.keys()]),
+      notify: (message) => notices.push(message),
       request: (path, init) => {
         if (offline) return Promise.reject(new Error("offline"));
         requests.push(path);
@@ -72,6 +75,9 @@ function fixture() {
           operations.set(args.operation_id, next.id);
           return Promise.resolve(Response.json(next));
         }
+        if (path.endsWith("/history")) {
+          return Promise.resolve(Response.json(history));
+        }
         const row = server.get(path.split("/").at(-1)!);
         return Promise.resolve(
           row ? Response.json(row) : Response.json({}, { status: 404 }),
@@ -84,6 +90,8 @@ function fixture() {
     server,
     requests,
     operations,
+    history,
+    notices,
     block: () => {
       blocked = true;
     },
@@ -136,7 +144,7 @@ Deno.test("offline create and edits survive reload and replay exactly once", asy
   await second.dispose();
 });
 
-Deno.test("competing writer stays recoverable instead of silently adopting a new base revision", async () => {
+Deno.test("an ancestor-less competing write is kept as a copy and never blocks the document", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "base");
@@ -148,32 +156,63 @@ Deno.test("competing writer stays recoverable instead of silently adopting a new
     body_revision: 2,
   });
   await first.document(id).refresh();
+  // An outbox write queued by an older client: a stale revision, no base.
   await first.document(id).change({
     type: "write",
     body: "my unsaved typing",
     attachments: [],
   }, 1);
-  await settle(() => first.document(id).get().phase === "conflict");
-  assertEquals(first.document(id).get().document?.body, "my unsaved typing");
-  assertEquals(first.document(id).get().remote?.body, "other device");
-  assertEquals(f.server.get(id)?.body, "other device");
-  const copy = await first.create(
-    "Recovered",
-    null,
-    "document",
-    first.document(id).get().document!.body,
+  await settle(() =>
+    first.document(id).get().phase === "saved" &&
+    [...f.server.values()].some((d) => d.body === "my unsaved typing")
   );
-  await settle(() => first.document(copy).get().phase === "saved");
-  await first.document(id).useRemote();
+  assertEquals(f.server.get(id)?.body, "other device");
   assertEquals(first.document(id).get().document?.body, "other device");
-  assertEquals(f.server.get(copy)?.body, "my unsaved typing");
+  const copy = [...f.server.values()].find((d) => d.id !== id)!;
+  assertEquals(copy.title, "Draft (conflicted copy)");
+  assertEquals(f.notices.length, 1);
+  // Later edits save normally.
+  await first.document(id).change({
+    type: "write",
+    body: "other device, continued",
+    attachments: [],
+  });
+  await settle(() => f.server.get(id)?.body === "other device, continued");
+  await first.dispose();
+});
+
+Deno.test("an ancestor-less write merges through the server's recovery history", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "alpha beta");
+  await settle(() => first.document(id).get().phase === "saved");
+  f.history.push(f.server.get(id)!);
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    body: "alpha beta gamma",
+    revision: 2,
+    body_revision: 2,
+  });
+  await first.document(id).change({
+    type: "write",
+    body: "ALPHA beta",
+    attachments: [],
+  }, 1);
+  await settle(() => f.server.get(id)?.body === "ALPHA beta gamma");
+  assertEquals(f.server.size, 1);
+  assertEquals(f.notices, []);
   await first.dispose();
 });
 
 Deno.test("a write refused by a newer server text merges both edits and resends", async () => {
   const f = fixture();
   const phone = f.create();
-  const id = await phone.create("Draft", null, "document", "first line\nsecond line\n");
+  const id = await phone.create(
+    "Draft",
+    null,
+    "document",
+    "first line\nsecond line\n",
+  );
   await settle(() => phone.document(id).get().phase === "saved");
   // Another device appended while this one was offline.
   f.server.set(id, {

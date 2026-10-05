@@ -505,8 +505,11 @@ export const ComposerEditor = forwardRef<
   ): void => {
     const view = cmRef.current?.view;
     if (!view) return;
-    runMarkdownEdit(view, command, userEvent);
-    view.focus();
+    // An explicit toolbar command commits live touch marked text first.
+    afterTouchComposition(view, () => {
+      runMarkdownEdit(view, command, userEvent);
+      view.focus();
+    });
   };
 
   useImperativeHandle(ref, () => ({

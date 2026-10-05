@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { productSyncDatabase } from "../productSyncDatabase";
 import { createDraftRepository } from "./repository";
+import { documentNotice } from "./DocumentNotifications";
 
 let repository: ReturnType<typeof createDraftRepository> | undefined;
 /** The controller's `drafts` push; inert until this device opens Drafts. */
@@ -18,6 +19,7 @@ export function draftRepository(): ReturnType<typeof createDraftRepository> {
     cache: productSyncDatabase.cache({ kind: "service", state: "drafts" }),
     localIds: () => productSyncDatabase.draftDocumentIds(),
     signal: productSyncDatabase.signal,
+    notify: (message) => documentNotice(message),
     request: async (path, init = {}) => {
       const dataset = await productSyncDatabase.ready();
       if (productSyncDatabase.signal.aborted) {

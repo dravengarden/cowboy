@@ -166,6 +166,7 @@ function exportDraft(
   title: string,
   text: string,
   attachments: readonly Attachment[],
+  touch: boolean,
 ): void {
   let markdown = text;
   for (const attachment of attachments) {
@@ -176,12 +177,22 @@ function exportDraft(
       );
     }
   }
+  const name = `${title.replace(/[\\/:*?"<>|]/g, "-") || "Untitled"}.md`;
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  // A touch WebView (the iOS shell, a home-screen PWA) silently ignores a
+  // download link. Its share sheet saves to Files or hands off to an app;
+  // it must open inside this same tap.
+  const file = new File([blob], name, { type: "text/markdown" });
+  if (touch && navigator.canShare?.({ files: [file] })) {
+    void navigator.share({ files: [file], title }).catch((e: Error) => {
+      if (e.name !== "AbortError") documentNotice(e.message);
+    });
+    return;
+  }
   const link = document.createElement("a");
-  const url = URL.createObjectURL(
-    new Blob([markdown], { type: "text/markdown;charset=utf-8" }),
-  );
+  const url = URL.createObjectURL(blob);
   link.href = url;
-  link.download = `${title.replace(/[\\/:*?"<>|]/g, "-") || "Untitled"}.md`;
+  link.download = name;
   link.click();
   globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -329,7 +340,9 @@ function DraftEditingSession(
         kept.body,
         kept.attachments,
       ).then(() =>
-        documentNotice("Edited on two devices. Your version was kept as a copy.")
+        documentNotice(
+          "Edited on two devices. Your version was kept as a copy.",
+        )
       ).catch((e: Error) => documentNotice(e.message));
     }
     if (
@@ -497,7 +510,8 @@ function DraftEditingSession(
   const openHistory = async (): Promise<void> => {
     setHistoryLoading(true);
     try {
-      await flush();
+      // History is how a user recovers from a save problem; never gate it.
+      await flush().catch((e: Error) => setError(e.message));
       const response = await fetch(
         `/api/drafts/${encodeURIComponent(initial.id)}/history`,
         { cache: "no-store" },
@@ -645,7 +659,7 @@ function DraftEditingSession(
             aria-label={command.label}
             {...keepEditorFocus}
             onClick={() => {
-              if (!composing.current && editor.current) {
+              if (editor.current) {
                 command.run({
                   editor: editor.current,
                   attach: () => filePicker.current?.click(),
@@ -667,24 +681,24 @@ function DraftEditingSession(
         </IconButton>
       </Stack>
       {keyboardOpen && (
-      <IconButton
-        data-draft-hide-keyboard
-        aria-label="Hide keyboard"
-        {...keepEditorFocus}
-        onClick={() => {
-          const active = globalThis.document.activeElement;
-          if (active instanceof HTMLElement) active.blur();
-        }}
-        sx={{
-          ...floatingMaterialSx,
-          color: "text.primary",
-          width: 48,
-          height: 48,
-          flexShrink: 0,
-        }}
-      >
-        <KeyboardHideIcon />
-      </IconButton>
+        <IconButton
+          data-draft-hide-keyboard
+          aria-label="Hide keyboard"
+          {...keepEditorFocus}
+          onClick={() => {
+            const active = globalThis.document.activeElement;
+            if (active instanceof HTMLElement) active.blur();
+          }}
+          sx={{
+            ...floatingMaterialSx,
+            color: "text.primary",
+            width: 48,
+            height: 48,
+            flexShrink: 0,
+          }}
+        >
+          <KeyboardHideIcon />
+        </IconButton>
       )}
     </Stack>
   );
@@ -750,7 +764,7 @@ function DraftEditingSession(
                           onPointerDown={(e) => e.preventDefault()}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
-                            if (!composing.current && editor.current) {
+                            if (editor.current) {
                               command.run({
                                 editor: editor.current,
                                 attach: () => filePicker.current?.click(),
@@ -911,16 +925,23 @@ function DraftEditingSession(
                 <IconButton
                   aria-label="Export Markdown"
                   onClick={() =>
-                    exportDraft(title, textRef.current, attachmentsRef.current)}
+                    exportDraft(
+                      title,
+                      textRef.current,
+                      attachmentsRef.current,
+                      !desktop,
+                    )}
                 >
                   <DownloadIcon />
                 </IconButton>
                 <IconButton
                   aria-label="Draft actions"
-                  onClick={() =>
-                    void flush().then(mobileChrome.onMenu).catch((e: Error) =>
-                      setError(e.message)
-                    )}
+                  onClick={() => {
+                    // The menu holds recovery actions too; a save problem
+                    // must not make it unreachable.
+                    void flush().catch((e: Error) => setError(e.message));
+                    mobileChrome.onMenu();
+                  }}
                 >
                   <EllipsisIcon />
                 </IconButton>
@@ -969,7 +990,9 @@ function DraftEditingSession(
                   color: "text.secondary",
                   typography: "caption",
                   whiteSpace: "nowrap",
-                  "@container draft-editor (max-width: 28rem)": { display: "none" },
+                  "@container draft-editor (max-width: 28rem)": {
+                    display: "none",
+                  },
                 }}
               >
                 {(titleMode === "normal"
@@ -977,7 +1000,15 @@ function DraftEditingSession(
                   : titleMode === "insert"
                   ? [["Esc", "normal"], ["↵", "body"]]
                   : [["↵", "body"], ["Esc", "back"]]).map(([key, label]) => (
-                    <Box key={key} component="span" sx={{ display: "inline-flex", alignItems: "center", mr: "0.375rem" }}>
+                    <Box
+                      key={key}
+                      component="span"
+                      sx={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        mr: "0.375rem",
+                      }}
+                    >
                       <Kbd keys={key!} variant="context" />
                       <Box component="span" sx={{ ml: "0.25rem" }}>{label}</Box>
                     </Box>
@@ -996,39 +1027,46 @@ function DraftEditingSession(
                 />
               </Box>
             )}
-            {/* Desktop shows these actions once, in the bottom document bar
-                with their leader slots; Mobile keeps them beside the title. */}
+            {
+              /* Desktop shows these actions once, in the bottom document bar
+                with their leader slots; Mobile keeps them beside the title. */
+            }
             {!desktop && (
               <>
-              <Tooltip title="Copy to Session drafts">
-                <IconButton
-                  aria-label="Copy to Session drafts"
-                  onClick={() =>
-                    void flush().then(onCopyToSession).catch((e: Error) =>
-                      setError(e.message)
-                    )}
-                >
-                  <OpenInNew />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Recovery history">
-                <IconButton
-                  disabled={historyLoading}
-                  aria-label="Recovery history"
-                  onClick={() => void openHistory()}
-                >
-                  <HistoryOutlined />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Export Markdown">
-                <IconButton
-                  aria-label="Export Markdown"
-                  onClick={() =>
-                    exportDraft(title, textRef.current, attachmentsRef.current)}
-                >
-                  <SaveAlt />
-                </IconButton>
-              </Tooltip>
+                <Tooltip title="Copy to Session drafts">
+                  <IconButton
+                    aria-label="Copy to Session drafts"
+                    onClick={() =>
+                      void flush().then(onCopyToSession).catch((e: Error) =>
+                        setError(e.message)
+                      )}
+                  >
+                    <OpenInNew />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Recovery history">
+                  <IconButton
+                    disabled={historyLoading}
+                    aria-label="Recovery history"
+                    onClick={() => void openHistory()}
+                  >
+                    <HistoryOutlined />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Export Markdown">
+                  <IconButton
+                    aria-label="Export Markdown"
+                    onClick={() =>
+                      exportDraft(
+                        title,
+                        textRef.current,
+                        attachmentsRef.current,
+                        !desktop,
+                      )}
+                  >
+                    <SaveAlt />
+                  </IconButton>
+                </Tooltip>
               </>
             )}
           </Stack>
@@ -1204,15 +1242,18 @@ function DraftEditingSession(
                 )}
               onHistory={() => void openHistory()}
               onExport={() =>
-                exportDraft(title, textRef.current, attachmentsRef.current)}
+                exportDraft(
+                  title,
+                  textRef.current,
+                  attachmentsRef.current,
+                  !desktop,
+                )}
               onTitle={() => focusTitle("normal")}
             />
           </Suspense>
         )
         : focusLayout
-        ? (
-          focusToolbar
-        )
+        ? focusToolbar
         : toolbarView}
       <input
         ref={filePicker}

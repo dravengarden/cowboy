@@ -119,7 +119,10 @@ Deno.test("randomized disjoint edits always merge and changes round-trip", () =>
     const theirs = head + "|" + middle + "|" + text(random(40));
     const merged = mergeText(base, ours, theirs)!;
     assertEquals(merged.startsWith(ours.slice(0, ours.indexOf("|"))), true);
-    assertEquals(merged.endsWith(theirs.slice(theirs.lastIndexOf("|") + 1)), true);
+    assertEquals(
+      merged.endsWith(theirs.slice(theirs.lastIndexOf("|") + 1)),
+      true,
+    );
     assertEquals(applyChanges(base, textChanges(base, ours)), ours);
     assertEquals(applyChanges(theirs, textChanges(theirs, merged)), merged);
   }

@@ -54,8 +54,13 @@ poll remains a fallback.
 Only texts too divergent to align at bounded cost (over 1,000 edits per side
 at both token and line granularity) are not merged. Then the local text
 becomes a separate "(conflicted copy)" draft and the editor shows the newer
-document. A pending write from an older outbox has no merge ancestor and keeps
-the legacy recoverable conflict.
+document. A pending write from an older outbox has no recorded ancestor; the
+client finds it in the recovery history by body revision, or else keeps the
+local text as a conflicted copy. A text deleted elsewhere is kept the same
+way. A delivery problem never refuses local durability, so menus, History,
+export and navigation stay usable. On touch, Export opens the share sheet
+because the iOS shell and home-screen PWAs ignore download links. Toolbar
+commands commit live IME marked text before editing instead of being dropped.
 
 ## Move, copy and recover
 

@@ -595,23 +595,27 @@ export const ComposerTextarea = forwardRef<
     if (ta) publishSelection(ta);
   };
 
-  const applyMarkdownCommand = (command: MarkdownEditCommand): void => {
-    const ta = inputRef.current;
-    const current = ta?.value ?? value;
-    const selection = ta
-      ? (ta.ownerDocument.activeElement === ta
-        ? rememberSelection(ta)
-        : rememberedSelection(ta))
-      : { anchor: current.length, head: current.length };
-    const edit = command(current, selection);
-    if (!edit) return;
-    const { anchor, head } = edit.selection;
-    applyTextEdit({
-      value: applyMarkdownEdit(current, edit),
-      from: Math.min(anchor, head),
-      to: Math.max(anchor, head),
+  // A toolbar tap is an explicit action like dock Paste: commit live marked
+  // text first (or wait out the post-composition hold), then edit. Silently
+  // dropping the tap made Bold/Link look dead after iOS Pinyin input.
+  const applyMarkdownCommand = (command: MarkdownEditCommand): void =>
+    runOutsideNativeIme(() => {
+      const ta = inputRef.current;
+      const current = ta?.value ?? value;
+      const selection = ta
+        ? (ta.ownerDocument.activeElement === ta
+          ? rememberSelection(ta)
+          : rememberedSelection(ta))
+        : { anchor: current.length, head: current.length };
+      const edit = command(current, selection);
+      if (!edit) return;
+      const { anchor, head } = edit.selection;
+      applyTextEdit({
+        value: applyMarkdownEdit(current, edit),
+        from: Math.min(anchor, head),
+        to: Math.max(anchor, head),
+      }, { afterComposition: true });
     });
-  };
 
   const sync = (v: string, caret: number): void =>
     setTrigger(computeTrigger(v, caret));
