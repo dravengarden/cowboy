@@ -146,6 +146,7 @@ primary phone/desktop product path.
 - [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
 - [`plugin-session-cleanup-root.md`](plugin-session-cleanup-root.md) — Terminal cleanup retains the original directory handle and retires after observed root replacement
 - [`plugin-session-cleanup-markers.md`](plugin-session-cleanup-markers.md) — Directory-relative regular-file marker probes, FIFO refusal and 8 KiB tag bounds
+- [`plugin-session-cleanup-continuation.md`](plugin-session-cleanup-continuation.md) — Advisory durable nomination of a deleted Session's original root so a restarted writer-admitted Machine finishes cleanup with a fresh scan
 - [`plugin-session-cleanup-targets.md`](plugin-session-cleanup-targets.md) — Bounded retained target handles, replacement/marker refusal and Linux content anchoring
 - [`releases/plugin-session-cleanup-finalization-2026-10-05.md`](releases/plugin-session-cleanup-finalization-2026-10-05.md) — Hawk retains markers until content success; 1877/551 tests, partial-error retry fixture, 32 native groups and 19 retained worker/keeper processes
 - [`releases/plugin-session-cleanup-retry-2026-10-05.md`](releases/plugin-session-cleanup-retry-2026-10-05.md) — Hawk retains original target observations across I/O retries; 1892/561 tests, 32 native groups and 19 retained worker/keeper processes

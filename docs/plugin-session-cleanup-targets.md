@@ -14,6 +14,9 @@ New targets appearing after admission are outside that plan. Successful overall
 completion releases it; a later explicit invocation can observe a new Cargo
 build. Failed collection admits no plan and has no cleanup effects. The plan is
 not durable across resident restart and establishes no launch-time ownership.
+A [durable continuation](plugin-session-cleanup-continuation.md) nominates only
+the original root for a restarted writer-admitted Machine; it never serializes
+this plan, and the restarted cleanup scans targets afresh.
 
 Linux collection opens each pending directory and candidate relative to the held
 Session-root descriptor using `openat2` with `BENEATH`, `NO_SYMLINKS` and

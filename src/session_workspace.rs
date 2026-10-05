@@ -590,6 +590,71 @@ pub fn capture_cleanup_workspace(
     Ok(workspace)
 }
 
+/// Storage identity of a Session worktree root object. Equality shows that two
+/// observations named the same directory object; it is not a grant, and device
+/// numbers may legitimately change across a reboot (a refusal, never a match).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RootIdentity {
+    pub dev: u64,
+    pub ino: u64,
+    pub birth_secs: i64,
+    pub birth_nanos: u32,
+}
+
+impl CleanupWorkspace {
+    /// Identity of the retained directory object. Inode numbers are reused as
+    /// soon as a directory is recreated, so a root that cannot report its
+    /// creation time has no durable identity.
+    pub fn root_identity(&self) -> Result<RootIdentity> {
+        let metadata = self.directory.metadata()?;
+        let born = metadata
+            .created()
+            .context("worktree root creation time is unavailable")?
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("worktree root creation time precedes the Unix epoch")?;
+        Ok(RootIdentity {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            birth_secs: i64::try_from(born.as_secs())?,
+            birth_nanos: born.subsec_nanos(),
+        })
+    }
+}
+
+/// Re-observe the root of a previously accepted terminal deletion after a
+/// Machine restart. Only the object recorded at deletion time is admitted: a
+/// missing, linked, nondirectory or recreated root is `CleanupRootChanged` and
+/// has no effects. Nothing but the root is carried over; the caller still scans
+/// for Cargo targets from scratch exactly as for a first invocation.
+pub fn resume_cleanup_workspace(
+    worktree_root: &Path,
+    session_id: &str,
+    expected: &RootIdentity,
+) -> Result<CleanupWorkspace> {
+    validate_session_id(session_id)?;
+    let worktree_root = std::path::absolute(worktree_root)?;
+    let root = worktree_root.join(session_id);
+    match std::fs::symlink_metadata(&root) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => return Err(CleanupRootChanged.into()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Err(CleanupRootChanged.into());
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let workspace = capture_cleanup_workspace(&worktree_root, session_id, &root)?;
+    if workspace.root_identity().ok().as_ref() != Some(expected) {
+        return Err(CleanupRootChanged.into());
+    }
+    Ok(workspace)
+}
+
 /// Clear Cargo build directory contents from a permanently stopped session worktree.
 ///
 /// The Git worktree and every source file remain intact. A directory is eligible

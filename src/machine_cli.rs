@@ -600,6 +600,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         crate::machine_broker::run_with_deletion_reader(
             broker,
             args.state_dir.join("session-deletions"),
+            args.state_dir.join("session-cleanups"),
             crate::machine_broker::deletions::Owner {
                 machine_id,
                 service_id: deletion_service_id,

@@ -736,6 +736,18 @@ I/O retry finishes only that phase, refusing marker recreation/replacement or
 identity changes and preserving late contents. This extends the process-local
 plan; it is not a durable cleanup journal or a filesystem transaction.
 
+The [durable cleanup continuation](plugin-session-cleanup-continuation.md) adds
+a separate advisory nomination of the original worktree root for a deletion
+already committed in the terminal journal. A writer-admitted Machine that
+restarts re-observes that exact root object (device, inode and creation time),
+requires the committed deletion and rescans Cargo targets from scratch; it does
+not serialize or restore the retry plan, marker progress or any target
+observation. A missing, linked or replaced root retires the nomination without
+effects. Loss of the record leaves the earlier behaviour (artifacts preserved).
+This is cleanup continuity only: no continuous Session/worktree ownership, no
+durable Session incarnation, no I/O deadline, no portable writer admission and
+no crash/power-loss proof.
+
 Linux cleanup defers root marker removal until its streamed content walk
 succeeds, retaining eligibility across partial content I/O failures. Successful
 retry is covered by a real-filesystem failure fixture. Marker finalization is
@@ -838,8 +850,18 @@ unconstrained workflow executor to hide these gaps.
   Local/public health is now 200, with zero drops/failed batches in the new
   epoch and all 16 worker/four Code process identities retained. The original
   rejected contents and recovery remain unknown; no replay or DB edit was used
-  to claim restoration. The independent failed Web transaction is still awaiting
-  its own recovery; no Machine maintenance was performed.
+  to claim restoration. The independent failed Web transaction
+  `1789566575530411524-8edf513e0307` has since received its own owner recovery
+  receipt: `history/…-recovered-rolled-back.json` (outcome
+  `recovered-rolled-back`, phase `rolled-back`, `published=false`, recorded
+  `2026-09-17T01:32:34Z`) with the active Web release unchanged at the preceding
+  `2n1n5z5g…` root. That is a rollback to the previous release, not delivery of
+  the failed one, and it restores neither the rejected persistence contents nor
+  any browser data. No Machine maintenance was performed. The other older
+  `failed` Controller/Machine transactions in the component history directories
+  that lack a recovered receipt are historical; each lane's current receipt is a
+  later `succeeded`/`committed` transaction, and this entry does not reconcile
+  them individually.
 - **Supported browser and retained-worker acceptance:** dataset-aware Web, bound
   Controller, compatible cold recovery and independently authorized Machine
   maintenance are [activated](releases/dataset-bound-maintenance-2026-09-15.md).
