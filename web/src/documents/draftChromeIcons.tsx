@@ -64,33 +64,6 @@ export const EllipsisIcon = strokeIcon(
   </>,
 );
 
-export const ChevronLeftIcon = strokeIcon(
-  "ChevronLeftIcon",
-  <path d="m15 18-6-6 6-6" />,
-);
-
-export const ChevronRightIcon = strokeIcon(
-  "ChevronRightIcon",
-  <path d="m9 18 6-6-6-6" />,
-);
-
-export const PlusIcon = strokeIcon(
-  "PlusIcon",
-  <>
-    <path d="M5 12h14" />
-    <path d="M12 5v14" />
-  </>,
-);
-
-export const MenuIcon = strokeIcon(
-  "MenuIcon",
-  <>
-    <path d="M4 6h16" />
-    <path d="M4 12h16" />
-    <path d="M4 18h16" />
-  </>,
-);
-
 export const KeyboardHideIcon = strokeIcon(
   "KeyboardHideIcon",
   <>

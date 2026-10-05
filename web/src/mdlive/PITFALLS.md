@@ -2918,3 +2918,11 @@ not on a physical iPad/iPhone.
     host's non-modal action popper. Verified with trusted CDP mouse input in
     Chrome; the lightbox's Desktop key map (H/L or ←/→ image or pan, J/K pan,
     + − zoom, 0 fit, 1 2x, Esc close) is shown only on the Desktop surface.
+
+### 2026-10-05 Touch Draft drops the navigation capsule
+
+User request: the touch Draft page has no Back/Forward/Create/Settings capsule.
+The formatting capsule is the only bottom bar; at rest it sits on the home
+indicator inset, and Create/Settings remain in the Sessions drawer. The
+Navigation-API back/forward hook was removed with it. No editor, IME, caret or
+keyboard code changed; checked in the integrated Mobile shell fixture only.

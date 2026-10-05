@@ -5084,8 +5084,6 @@ export function App({
                             mobileNavigation={mobile
                                 ? {
                                     onOpenSessions: () => settleMobileDrawerRef.current?.(true),
-                                    onCreate: openNewSession,
-                                    onSettings: () => openSettings("settings"),
                                 }
                                 : undefined} />
                     </Box>
