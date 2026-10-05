@@ -66,6 +66,21 @@ binds before and after the identity open. The parent is checked again before the
 leaf comparison, so the existing ancestor-rename fixture now preserves its
 original artifact as well as replacement contents.
 
+Linux defers the two root eligibility markers until the content walk finishes
+successfully. The walk streams entries and retains at most two marker entries;
+duplicate marker names in a changing enumeration produce the change refusal.
+This prevents cleanup's own early marker removal from hiding remaining artifacts
+from retry after a content I/O error. Nested files with the same basenames are
+ordinary content. A regression removes one payload, injects an I/O failure,
+checks both markers remain valid, then retries and clears the remaining payloads.
+It also refuses at the start of marker finalization and successfully retries.
+
+This is ordered finalization, not a transaction or crash-resume journal. The two
+marker removals are not atomic; a failure after the first can leave unmarked
+marker residue after the observed content walk succeeded. Concurrently inserted
+entries, marker mutations, the final name-unlink race and I/O deadlines remain
+outside this guarantee. Non-Linux ordering is unchanged.
+
 Removal admits at most 64 descendant levels and one million content entries
 across all candidate targets in one pass. It retains the target and descendant
 directory structure: no final directory-name unlink follows an identity check.
@@ -117,3 +132,6 @@ mounts introduced before/after child opens.
 The [leaf-identity release](releases/plugin-session-cleanup-leaves-2026-10-05.md)
 records nondirectory handle retention, replacement refusal and actual file-mount
 acceptance before unlink.
+The [marker-finalization release](releases/plugin-session-cleanup-finalization-2026-10-05.md)
+records retention of eligibility across partial content I/O errors and successful
+retry before root marker removal.

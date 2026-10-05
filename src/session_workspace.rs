@@ -862,7 +862,35 @@ fn clear_cleanup_directory(
     }
     verify_cleanup_content_directory(workspace, target, directory, relative)?;
     let access = directory_access_root(directory, &target.path.join(relative));
-    for entry in std::fs::read_dir(&access)? {
+    let mut reader = std::fs::read_dir(&access)?.fuse();
+    let mut markers = Vec::with_capacity(2);
+    // Preserve root eligibility until every other entry finishes. Stream the
+    // directory while retaining at most its two marker entries, not the tree.
+    let ordered = std::iter::from_fn(|| -> Option<Result<std::fs::DirEntry>> {
+        loop {
+            match reader.next() {
+                Some(Ok(entry))
+                    if relative.as_os_str().is_empty()
+                        && matches!(
+                            entry.file_name().to_str(),
+                            Some(".rustc_info.json" | "CACHEDIR.TAG")
+                        ) =>
+                {
+                    if markers.len() >= 2
+                        || markers
+                            .iter()
+                            .any(|held: &std::fs::DirEntry| held.file_name() == entry.file_name())
+                    {
+                        return Some(Err(CleanupTargetChanged.into()));
+                    }
+                    markers.push(entry);
+                }
+                Some(entry) => return Some(entry.map_err(anyhow::Error::from)),
+                None => return markers.pop().map(Ok),
+            }
+        }
+    });
+    for entry in ordered {
         let entry = entry?;
         *entries += 1;
         if *entries > MAX_CLEANUP_CONTENT_ENTRIES {
@@ -1502,6 +1530,65 @@ mod tests {
             .unwrap();
         thread.join().unwrap();
         assert_only_directories(&target);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_preserves_root_markers_across_content_and_finalization_errors() {
+        for fail_at_marker in [false, true] {
+            let temp = TestDir::new();
+            let (workspace, session, access, observation) = observed_cleanup_target(&temp);
+            let target = session.join("project/target");
+            let payloads = [
+                target.join("debug/deps/libtest.rlib"),
+                target.join("cache-one"),
+                target.join("cache-two"),
+            ];
+            for path in &payloads[1..] {
+                std::fs::write(path, "generated").unwrap();
+            }
+            let seen = std::sync::atomic::AtomicUsize::new(0);
+            let marker_seen = std::sync::atomic::AtomicBool::new(false);
+            let error =
+                remove_cleanup_targets(&workspace, &session, &access, vec![observation], &|path| {
+                    let marker = matches!(
+                        path.file_name().and_then(OsStr::to_str),
+                        Some(".rustc_info.json" | "CACHEDIR.TAG")
+                    );
+                    if marker {
+                        marker_seen.store(true, Ordering::SeqCst);
+                        assert!(payloads.iter().all(|path| !path.exists()));
+                        if fail_at_marker {
+                            return Err(std::io::Error::other(
+                                "injected marker finalization error",
+                            )
+                            .into());
+                        }
+                    } else if matches!(
+                        path.file_name().and_then(OsStr::to_str),
+                        Some("libtest.rlib" | "cache-one" | "cache-two")
+                    ) && seen.fetch_add(1, Ordering::SeqCst) == 1
+                        && !fail_at_marker
+                    {
+                        return Err(std::io::Error::other("injected content error").into());
+                    }
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(error.downcast_ref::<std::io::Error>().is_some());
+            assert_eq!(marker_seen.load(Ordering::SeqCst), fail_at_marker);
+            assert_eq!(
+                payloads.iter().filter(|path| path.exists()).count(),
+                if fail_at_marker { 0 } else { 2 }
+            );
+            assert!(observe_cargo_target_directory(&target).unwrap().is_some());
+            assert_eq!(
+                cleanup_build_artifacts_sync(&workspace).unwrap(),
+                vec![target.clone()]
+            );
+            assert_only_directories(&target);
+            assert!(cleanup_build_artifacts_sync(&workspace).unwrap().is_empty());
+        }
     }
 
     #[test]
