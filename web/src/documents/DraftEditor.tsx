@@ -43,6 +43,11 @@ import {
 import { seedInlineAttachments } from "../inlineImages";
 import { useVimSetting } from "../vimSetting";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
+import { isImeKeyEvent } from "../imeKey";
+import { getVimMode } from "../vimModeStore";
+import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
+import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
+import { DESKTOP_DRAFT_GROUP_KEYS } from "../desktop/commands/workspaceShortcuts";
 import { Sheet } from "../Sheet";
 import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
@@ -178,6 +183,7 @@ function DraftEditingSession(
   },
 ): React.JSX.Element {
   const editor = useRef<ComposerEditorHandle | null>(null);
+  const titleInput = useRef<HTMLInputElement | null>(null);
   const mountSeed = useRef(initial.body);
   const owner = draftRepository().document(initial.id);
   const [text, setText] = useState(initial.body);
@@ -211,6 +217,23 @@ function DraftEditingSession(
   const focusLayout = !desktop && mobileChrome !== undefined;
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
+  // The title is the document's first line (Obsidian inline title): `␣DR`
+  // selects it for renaming; `↑`/`k` on the body's first line enters it at
+  // the end; `Enter`/`↓`/`Tab` returns to the body start and `Esc` returns
+  // to where the body caret was (FOCUS.md "Draft document").
+  const focusTitle = (select: boolean): void => {
+    const input = titleInput.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (select) input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
+  };
+  const bodyCaretOnFirstLine = (): boolean => {
+    const handle = editor.current;
+    if (!handle) return false;
+    const { head } = handle.getSelection();
+    return !handle.getValue().slice(0, head).includes("\n");
+  };
   const flush = async (): Promise<void> => {
     clearTimeout(timer.current);
     if (!dirtyRef.current && encoding.current.size === 0) return saving.current;
@@ -401,7 +424,23 @@ function DraftEditingSession(
       placeholder="Untitled"
       fullWidth
       sx={{ flex: 1, minWidth: 0 }}
+      inputRef={titleInput}
       inputProps={{ "aria-label": "Draft title", maxLength: 160 }}
+      onKeyDown={(e) => {
+        if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        const toStart = e.key === "Enter" || e.key === "ArrowDown" ||
+          (e.key === "Tab" && !e.shiftKey);
+        if (toStart) {
+          e.preventDefault();
+          editor.current?.focusSelection({ anchor: 0, head: 0 });
+        } else if (e.key === "Escape") {
+          // Leave the field for the body; never close a surrounding layer.
+          e.preventDefault();
+          e.stopPropagation();
+          editor.current?.focus();
+        }
+      }}
       onChange={(e) => {
         setTitle(e.target.value);
         titleRef.current = e.target.value;
@@ -766,35 +805,53 @@ function DraftEditingSession(
             }}
           >
             {titleField}
-            <Tooltip title="Copy to Session drafts">
-              <IconButton
-                aria-label="Copy to Session drafts"
-                onClick={() =>
-                  void flush().then(onCopyToSession).catch((e: Error) =>
-                    setError(e.message)
-                  )}
+            {desktop && (
+              <Box
+                component="span"
+                data-draft-title-shortcut
+                title="Rename: Space D R (Cmd/Alt+K D R from a text field), or ↑ from the first line"
+                sx={{ display: "inline-flex", flexShrink: 0 }}
               >
-                <OpenInNew />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Recovery history">
-              <IconButton
-                disabled={historyLoading}
-                aria-label="Recovery history"
-                onClick={() => void openHistory()}
-              >
-                <HistoryOutlined />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Export Markdown">
-              <IconButton
-                aria-label="Export Markdown"
-                onClick={() =>
-                  exportDraft(title, textRef.current, attachmentsRef.current)}
-              >
-                <SaveAlt />
-              </IconButton>
-            </Tooltip>
+                <LeaderKeycap
+                  leaderKey={`${DESKTOP_DRAFT_GROUP_KEYS.group}${DESKTOP_DRAFT_GROUP_KEYS.rename}`}
+                />
+              </Box>
+            )}
+            {/* Desktop shows these actions once, in the bottom document bar
+                with their `␣D` slots; Mobile keeps them beside the title. */}
+            {!desktop && (
+              <>
+              <Tooltip title="Copy to Session drafts">
+                <IconButton
+                  aria-label="Copy to Session drafts"
+                  onClick={() =>
+                    void flush().then(onCopyToSession).catch((e: Error) =>
+                      setError(e.message)
+                    )}
+                >
+                  <OpenInNew />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Recovery history">
+                <IconButton
+                  disabled={historyLoading}
+                  aria-label="Recovery history"
+                  onClick={() => void openHistory()}
+                >
+                  <HistoryOutlined />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Export Markdown">
+                <IconButton
+                  aria-label="Export Markdown"
+                  onClick={() =>
+                    exportDraft(title, textRef.current, attachmentsRef.current)}
+                >
+                  <SaveAlt />
+                </IconButton>
+              </Tooltip>
+              </>
+            )}
           </Stack>
         )}
       {current.deleted && (
@@ -874,6 +931,21 @@ function DraftEditingSession(
         data-draft-body
         data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
         data-desktop-region={desktop ? "prompt.composer" : undefined}
+        onKeyDownCapture={(e) => {
+          // ↑ in Insert, or a plain Vim Normal `k`, on the first line moves
+          // into the title. A pending Vim command (`dk`, `ck`) keeps its key.
+          if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+          if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+          const sink = e.target instanceof Element &&
+            e.target.matches("[data-vim-command-sink]");
+          const up = e.key === "ArrowUp" ||
+            (sink && e.code === "KeyK" && getVimMode() === "normal" &&
+              !vimSinkAwaitsInput(e.target));
+          if (!up || !bodyCaretOnFirstLine()) return;
+          e.preventDefault();
+          e.stopPropagation();
+          focusTitle(false);
+        }}
       >
         <Box
           sx={{
@@ -965,6 +1037,7 @@ function DraftEditingSession(
               onHistory={() => void openHistory()}
               onExport={() =>
                 exportDraft(title, textRef.current, attachmentsRef.current)}
+              onRename={() => focusTitle(true)}
             />
           </Suspense>
         )

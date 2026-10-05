@@ -37,9 +37,15 @@ import {
   DESKTOP_COMPOSER_FORMAT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
+  DESKTOP_DRAFT_GROUP_KEYS,
   DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderGroupSequence,
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
+
+const DRAFT = DESKTOP_DRAFT_GROUP_KEYS;
+/** `␣D` + key, drawn as one `␣DV` keycap. */
+const draftKey = (key: string): string => `${DRAFT.group}${key}`;
 import { isImeComposing, useImeStatus } from "./vim/imeStatusStore";
 import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 
@@ -57,6 +63,8 @@ interface Props {
   onHistory: () => void;
   onExport: () => void;
   onReadableWidth: () => void;
+  /** Move keyboard focus into the title field with its text selected. */
+  onRename: () => void;
 }
 
 export default function DesktopDraftToolbar(props: Props): ReactNode {
@@ -111,6 +119,24 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         "Finish composition or resolve this draft’s save error first",
       run: () => run(state.current.props),
     });
+    // The `␣D` group is the open document's own menu: it runs from any focus
+    // (Sessions, Conversation, the title field) while this Draft is open.
+    const documentAction = (
+      id: string,
+      title: string,
+      run: (p: Props) => void,
+      key: string,
+    ): DesktopCommand => {
+      const { contexts: _contexts, regions: _regions, ...command } = action(
+        id,
+        title,
+        run,
+      );
+      return {
+        ...command,
+        sequence: [DESKTOP_WORKSPACE_PREFIX, DRAFT.group, key],
+      };
+    };
     return [
       {
         ...action(
@@ -136,27 +162,35 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         DESKTOP_WORKSPACE_KEYS.composerAttach,
         true,
       ),
-      action(
+      documentAction(
+        "document.rename",
+        "Rename draft (edit title)",
+        (p) => p.onRename(),
+        DRAFT.rename,
+      ),
+      documentAction(
         "document.copyToSession",
         "Copy draft to Session drafts",
         (p) => p.onCopy(),
-        DESKTOP_WORKSPACE_KEYS.documentCopy,
+        DRAFT.copy,
       ),
-      action(
+      documentAction(
         "document.history",
         "Draft recovery history",
         (p) => p.onHistory(),
-        DESKTOP_WORKSPACE_KEYS.documentHistory,
+        DRAFT.history,
       ),
-      action(
+      documentAction(
         "document.export",
         "Export draft as Markdown",
         (p) => p.onExport(),
+        DRAFT.export,
       ),
-      action(
+      documentAction(
         "document.readableWidth",
         "Toggle draft readable width",
         (p) => p.onReadableWidth(),
+        DRAFT.readableWidth,
       ),
       action(
         "composer.toggleSourceMode",
@@ -194,7 +228,13 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
   ): ReactNode => (
     <Tooltip
       key={id}
-      title={key ? `${label} · ${desktopWorkspaceSequence(key)}` : label}
+      title={key
+        ? `${label} · ${
+          key.length > 1
+            ? desktopLeaderGroupSequence(key[0]!, key.slice(1))
+            : desktopWorkspaceSequence(key)
+        }`
+        : label}
     >
       <span
         data-draft-document-secondary={["copy", "history", "export"].includes(
@@ -241,7 +281,9 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           {key && (
             <LeaderKeycap
               leaderKey={key}
-              scopeAvailable={scoped && !disabled}
+              // Document-group keys run from any focus; the rest belong to
+              // the editor's scope.
+              scopeAvailable={(key.length > 1 ? !composing : scoped) && !disabled}
               {...(id === "more" && moreAnchor
                 ? { availability: "active" as const }
                 : {})}
@@ -342,6 +384,9 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           }}
         >
           Readable width
+          <Box component="span" sx={{ display: "inline-flex", ml: "0.375rem" }}>
+            <LeaderKeycap leaderKey={draftKey(DRAFT.readableWidth)} scopeAvailable={!composing} />
+          </Box>
         </Button>
       </Box>
       <Box
@@ -393,7 +438,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           "Copy to Session",
           <OpenInNew />,
           props.onCopy,
-          DESKTOP_WORKSPACE_KEYS.documentCopy,
+          draftKey(DRAFT.copy),
           false,
           true,
         )}
@@ -402,11 +447,17 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           "History",
           <HistoryOutlined />,
           props.onHistory,
-          DESKTOP_WORKSPACE_KEYS.documentHistory,
+          draftKey(DRAFT.history),
           props.historyLoading,
           true,
         )}
-        {action("export", "Export Markdown", <SaveAlt />, props.onExport)}
+        {action(
+          "export",
+          "Export Markdown",
+          <SaveAlt />,
+          props.onExport,
+          draftKey(DRAFT.export),
+        )}
         <Tooltip title="Search all editing and document actions">
           <Button
             size="small"
@@ -459,9 +510,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           </ListItemIcon>
           <ListItemText>Copy to Session</ListItemText>
           <DesktopShortcut
-            shortcut={desktopWorkspaceSequence(
-              DESKTOP_WORKSPACE_KEYS.documentCopy,
-            )}
+            shortcut={desktopLeaderGroupSequence(DRAFT.group, DRAFT.copy)}
             compact
             quiet
             availability="inactive"
@@ -479,9 +528,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           </ListItemIcon>
           <ListItemText>Recovery history</ListItemText>
           <DesktopShortcut
-            shortcut={desktopWorkspaceSequence(
-              DESKTOP_WORKSPACE_KEYS.documentHistory,
-            )}
+            shortcut={desktopLeaderGroupSequence(DRAFT.group, DRAFT.history)}
             compact
             quiet
             availability="inactive"
@@ -497,6 +544,12 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
             <SaveAlt />
           </ListItemIcon>
           <ListItemText>Export Markdown</ListItemText>
+          <DesktopShortcut
+            shortcut={desktopLeaderGroupSequence(DRAFT.group, DRAFT.export)}
+            compact
+            quiet
+            availability="inactive"
+          />
         </MenuItem>
         <MenuItem
           aria-checked={props.readableWidth}

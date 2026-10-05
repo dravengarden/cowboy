@@ -123,6 +123,7 @@ export async function checkDraftKeyboard(): Promise<string> {
                 onAttach={() => calls.push("attach")}
                 onCopy={() => calls.push("copy")}
                 onHistory={() => calls.push("history")}
+                onRename={() => calls.push("rename")}
                 onExport={() => calls.push("export")}
                 onReadableWidth={() => calls.push("width")}
               />
@@ -267,15 +268,21 @@ export async function checkDraftKeyboard(): Promise<string> {
           calls.at(-1) === "attach",
           "Draft uses the existing attachment prefix",
         );
-        prefix();
-        key("v", "KeyV");
-        check(calls.at(-1) === "copy", "Draft copy has a scoped prefix action");
-        prefix();
-        key("g", "KeyG");
-        check(
-          calls.at(-1) === "history",
-          "Draft history has a scoped prefix action",
-        );
+        // The open document's own `␣D` group: rename, copy, history,
+        // export, readable width.
+        for (
+          const [letter, code, call] of [
+            ["r", "KeyR", "rename"],
+            ["v", "KeyV", "copy"],
+            ["h", "KeyH", "history"],
+            ["e", "KeyE", "export"],
+          ] as const
+        ) {
+          prefix();
+          key("d", "KeyD");
+          key(letter, code);
+          check(calls.at(-1) === call, `␣D${letter.toUpperCase()} runs ${call}`);
+        }
         prefix();
         key("m", "KeyM");
         await tick();
