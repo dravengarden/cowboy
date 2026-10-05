@@ -17,7 +17,7 @@ if (
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
-  suite !== "editor-plugin-sandbox"
+  suite !== "editor-plugin-sandbox" && suite !== "tool-inspector"
 ) {
   throw new Error("unknown suite");
 }
@@ -44,7 +44,8 @@ await build({
         suite === "sheet-keyboard" || suite === "workspace-picker" ||
         suite === "project-placement" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
-        suite === "draft-documents" || suite === "keyboard-acceptance"
+        suite === "draft-documents" || suite === "keyboard-acceptance" ||
+        suite === "tool-inspector"
         ? "development"
         : "production",
     ),
@@ -83,13 +84,16 @@ await build({
         suite === "review-destination" || suite === "review-recovery" ||
         suite === "workspace-extensions" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
-        suite === "draft-documents" || suite === "keyboard-acceptance"
+        suite === "draft-documents" || suite === "keyboard-acceptance" ||
+        suite === "tool-inspector"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
         suite === "editor-plugin-sandbox"
           ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"
+          : suite === "tool-inspector"
+          ? "../web/src/toolInspectorBrowserConformance.tsx"
           : suite === "keyboard-acceptance"
           ? "../web/src/desktop/keyboardAcceptanceFixture.tsx"
           : suite === "draft-documents"

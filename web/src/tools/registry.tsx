@@ -11,11 +11,13 @@ import {
   CopyTextButton,
   FileChip,
   hasDiff,
+  imagesOfContent,
   KeyValues,
   Labeled,
   langFromPath,
   LineLayoutControl,
   OutputBlocks,
+  OutputImages,
   PreBlock,
   ShellCommandView,
   textOfContent,
@@ -200,6 +202,8 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
   const path = String(rawInput["file_path"] ?? rawInput["path"] ?? "");
   const lang = path ? langFromPath(path) : "";
   const has = textOfContent(content);
+  // Claude Code returns an image Read as image blocks rather than text.
+  const images = has ? [] : imagesOfContent(content);
   const offset = rawInput["offset"];
   const limit = rawInput["limit"];
   return (
@@ -222,6 +226,8 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
       )}
       {has
         ? <FileReadContent content={content} language={lang} />
+        : images.length > 0
+        ? <OutputImages sources={images} fallback={<Empty />} />
         : running
         ? <RunningHint />
         : <Empty />}
@@ -231,7 +237,10 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
 
 const genericTool: Renderer = ({ rawInput, content, running }) => {
   const result = <OutputBlocks content={content} />;
-  const hasResult = Boolean(textOfContent(content) || hasDiff(content));
+  const hasResult = Boolean(
+    textOfContent(content) || hasDiff(content) ||
+      imagesOfContent(content).length,
+  );
   return (
     <Stack spacing={1}>
       {Object.keys(rawInput).length > 0 && (
@@ -338,7 +347,10 @@ const mcpTool: Renderer = (ctx) => {
     ? String(args[widget.primary])
     : "";
   if (widget) delete args[widget.primary];
-  const hasResult = Boolean(textOfContent(ctx.content) || hasDiff(ctx.content));
+  const hasResult = Boolean(
+    textOfContent(ctx.content) || hasDiff(ctx.content) ||
+      imagesOfContent(ctx.content).length,
+  );
   return (
     <Stack spacing={1}>
       {primary && widget && (

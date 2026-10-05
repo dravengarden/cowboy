@@ -3,6 +3,9 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import { CheckRounded, ContentCopyRounded, SwapHorizRounded, WrapTextRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
+import { ProtectedImage } from "../ProtectedImage";
+import { imageBlockPreviewUrl } from "../attachments";
+import type { ContentBlock } from "../protocol";
 import { copyText } from "../clipboard";
 import { Collapsible } from "./Collapsible";
 import { nestedMarkerColor } from "./nestedMarkerColors";
@@ -647,6 +650,59 @@ export function textOfContent(content: unknown): string {
     .join("\n");
 }
 
+/** Displayable images in a tool's content blocks (a Read of a PNG, an MCP
+ *  screenshot). History may have externalized the bytes to `/api/artifacts/…`;
+ *  a block with neither loadable bytes nor a URL is skipped. */
+export function imagesOfContent(content: unknown): string[] {
+  const sources: string[] = [];
+  for (const b of asBlocks(content)) {
+    const block = b.type === "content" ? (b as { content?: unknown }).content : b;
+    if (!block || typeof block !== "object") continue;
+    const image = block as ContentBlock;
+    if (image.type !== "image") continue;
+    const mimeType = typeof image.mimeType === "string" ? image.mimeType : "image/png";
+    const src = imageBlockPreviewUrl(image, mimeType);
+    if (src) sources.push(src);
+  }
+  return sources;
+}
+
+/** Tool output images. An image that fails to load is dropped; when none can
+ *  be shown, `fallback` (the tool's ordinary text-only presentation) renders. */
+export function OutputImages({
+  sources,
+  fallback = null,
+}: {
+  sources: readonly string[];
+  fallback?: ReactNode;
+}): React.JSX.Element {
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const visible = sources.filter((src) => !failed.has(src));
+  if (visible.length === 0) return <>{fallback}</>;
+  return (
+    <Stack spacing={1} data-tool-output-images>
+      {visible.map((src) => (
+        <Box
+          key={src}
+          component={ProtectedImage}
+          src={src}
+          alt=""
+          onError={(): void => setFailed((previous) => new Set(previous).add(src))}
+          sx={{
+            display: "block",
+            maxWidth: "100%",
+            maxHeight: 480,
+            objectFit: "contain",
+            borderRadius: 1,
+            border: 1,
+            borderColor: "divider",
+          }}
+        />
+      ))}
+    </Stack>
+  );
+}
+
 /** Does this content carry a structured diff block? (edit/write/apply_patch) */
 export function hasDiff(content: unknown): boolean {
   return asBlocks(content).some((b) => b.type === "diff");
@@ -728,6 +784,8 @@ export function OutputBlocks({
       );
     }
   });
+  const images = imagesOfContent(content);
+  if (images.length > 0) rendered.push(<OutputImages key="images" sources={images} />);
   if (rendered.length === 0) return null;
   return <Stack spacing={1}>{rendered}</Stack>;
 }

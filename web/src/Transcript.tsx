@@ -1982,7 +1982,7 @@ function ToolTranscriptContext({
   );
 }
 
-function ToolDetailsBrowser({
+export function ToolDetailsBrowser({
   items,
   runs,
   selectedKey,
@@ -2635,7 +2635,15 @@ function ToolDetailsBrowser({
                 >
                   {candidateSummary}
                 </Typography>
-                <Typography variant="caption" color="text.disabled" noWrap>
+                {/* A caption is an inline span: without block display noWrap
+                    cannot ellipsize, so a long description widened the rail and
+                    scrollIntoView panned the whole history sideways. */}
+                <Typography
+                  variant="caption"
+                  color="text.disabled"
+                  display="block"
+                  noWrap
+                >
                   {candidateHeading}
                   {candidate.tools.length > 1
                     ? ` · ${candidate.tools.length} calls`
