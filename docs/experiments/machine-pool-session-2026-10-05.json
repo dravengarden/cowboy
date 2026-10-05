@@ -1,0 +1,58 @@
+{
+  "schema": "cowboy.execution-session-conformance/v1",
+  "accepted": true,
+  "checks": [
+    "current_browser_device_login_and_bound_api_credentials",
+    "real_product_setup_login_and_two_signed_machine_handshakes",
+    "signed_fixture_installed_through_public_operator_lifecycle",
+    "public_creation_persists_exact_binding_and_isolated_target_worktree",
+    "worker_tools_cross_both_enrolled_machine_connections",
+    "runtime_and_stable_source_remain_unchanged",
+    "controller_restart_retains_binding_and_resumes_original_environment_without_replay",
+    "target_machine_restart_reattaches_original_keeper_without_replay",
+    "public_deletion_waits_for_target_stop_and_preserves_work"
+  ],
+  "inputs": {
+    "controller": {
+      "path": "/nix/store/ahzs20h9hwf7bl2hymnhs1xxp63nhks0-cowboy-0.1.0/bin/cowboy",
+      "sha256": "873231e0cf5584c2ffe2a7e1329311a6c7b4f8bf999e34b83bdcb87ba094766d"
+    },
+    "machine": {
+      "path": "/nix/store/6qj2v7hqqxdf2g7gp35zbva0bw07563x-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "2c235402707b8406295903de617b914d15b4d8502b12ec870f0f7a879c41f375"
+    },
+    "worker": {
+      "path": "/nix/store/ahzs20h9hwf7bl2hymnhs1xxp63nhks0-cowboy-0.1.0/bin/cowboy-acp-worker",
+      "sha256": "b2350db1bd5d01bfa5749edf94aa1e6bc88724fe43be54e31437b95cd9f648ba"
+    },
+    "keeper": {
+      "path": "/nix/store/caiv4bjk766yl6la34fqbkgvci5h9d1r-cowboy-machine-release/bin/cowboy-execution-host",
+      "sha256": "cdcdaeb0bc540e375b2be528e755c7f0c46acc569fd418c8578d5a5c750b459a"
+    },
+    "pack": {
+      "path": "/nix/store/d4i9h2yls04shws9w7cjvy2zd2sd82p7-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack",
+      "sha256": "9397ab274205f97198deddf3390163abdc29707e6cd9df9e918495672ff75c78"
+    },
+    "native_cli": {
+      "path": "/nix/store/4a9fvhlhk3gwiajjrisrnrf8nsz5vlnf-cowboy-execution-runtime-0.159.3/bin/codex",
+      "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+    }
+  },
+  "fixture_release": {
+    "release_schema": 4,
+    "plugin_id": "execution-fixture",
+    "plugin_version": "1.0.0",
+    "artifact_digest": "sha256:92bb1eda818fc087991d319b3838529886c857c7e5f601c1a22ef3e81a3ec65e"
+  },
+  "harness_sha256": "ad078472cdf2727313990ea968a33095df38a73d3205c23ef088c9a35b8142ca",
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "production_activation": false,
+  "not_checked": [
+    "native_codex_turns_covered_by_separate_gate",
+    "cross_host_latency",
+    "production_subscription_inference",
+    "external_tls_termination_fixture_uses_trusted_loopback_proxy_boundary"
+  ],
+  "device_fixture_sha256": "187ef0605032f68e6cfc3c72e3c9d6104b47e8526cf9c054a4e7f9dd08bfad47"
+}
