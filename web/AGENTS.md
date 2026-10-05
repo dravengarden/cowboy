@@ -107,8 +107,10 @@ the peek, or freeze the session list to make a swipe cheaper.
   model, such as pane splitters and the Vim status line.
 - Desktop must never render a page-wide Vimium-style target-hint overlay or
   reserve bare `f` for one. It duplicates Cowboy's own navigation model and
-  obscures the working surface. Keep actions reachable through native focus,
-  direct Vim motions, visible contextual shortcuts, and the Command Palette.
+  obscures the working surface. Scoped labels are the exception: `'` in the
+  focused list and the leader inside one modal (FOCUS.md "Labels"). Keep
+  actions reachable through native focus, direct Vim motions, visible
+  contextual shortcuts, and the Command Palette.
 - Share protocol, stores, API clients, domain logic, attachments, and markdown
   machinery. Desktop and mobile may intentionally duplicate layout, component,
   and interaction code so either product can evolve without responsive-UI

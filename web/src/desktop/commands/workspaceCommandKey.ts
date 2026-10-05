@@ -19,6 +19,8 @@ export function workspaceCommandKey(event: {
   if (event.code === "Period") return event.shiftKey ? ">" : ".";
   if (event.code === "Semicolon") return event.shiftKey ? ":" : ";";
   if (event.code === "Slash") return event.shiftKey ? "?" : "/";
+  if (event.code === "Quote") return event.shiftKey ? "\"" : "'";
+  if (event.code === "Backquote") return event.shiftKey ? "~" : "`";
   const physical = ({
     BracketLeft: "[",
     BracketRight: "]",

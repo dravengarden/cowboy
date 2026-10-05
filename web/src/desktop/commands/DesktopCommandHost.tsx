@@ -19,6 +19,7 @@ import { useDesktopLeaderOptional } from "./leaderContext";
 import { DESKTOP_SESSION_ALTERNATE_EVENT } from "./sessionJump";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { DesktopLeaderMenu } from "./DesktopLeaderMenu";
+import { DesktopHintLayer } from "./DesktopHintLayer";
 import {
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
@@ -484,6 +485,7 @@ export function DesktopCommandHost({
         <DesktopCommandRegistration key={command.id} command={command} />
       ))}
       <DesktopLeaderMenu />
+      <DesktopHintLayer />
       <DesktopShortcutsDialog
         open={shortcutsOpen}
         onClose={(): void => setShortcutsOpen(false)}

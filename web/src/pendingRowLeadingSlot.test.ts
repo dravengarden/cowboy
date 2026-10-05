@@ -8,11 +8,11 @@ import {
 const source = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
-const start = source.indexOf("{sortable.order.map((id, index) => {");
+const start = source.indexOf("{sortable.order.map((id) => {");
 const end = source.indexOf("<Box sx={{ flex: 1, minWidth: 0 }}>", start);
 const leading = source.slice(start, end);
 
-Deno.test("pending row ordinal shares the reorder grip slot", () => {
+Deno.test("pending rows keep only the reorder grip in their leading slot", () => {
   assert(start >= 0);
   assert(end > start);
   assert(
@@ -23,12 +23,9 @@ Deno.test("pending row ordinal shares the reorder grip slot", () => {
   assert(leading.includes('const gripSize = desktop ? "2.75rem" : 44'));
   assert(leading.includes("width: gripSize"));
   assert(leading.includes("height: gripSize"));
-  assert(leading.includes("<DesktopListJumpKeycap"));
   assert(leading.includes('position: "absolute"'));
-  assert(
-    leading.indexOf("<DesktopListJumpKeycap") >
-      leading.indexOf('aria-label="Drag to reorder"'),
-  );
+  // Jumps use transient ' labels (FOCUS.md "Labels"); rows carry no ordinal.
+  assertEquals(leading.includes("<DesktopListJumpKeycap"), false);
 });
 
 Deno.test("empty draft and queue cards match the compact composer card height", () => {

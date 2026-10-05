@@ -7,7 +7,8 @@ import {
   desktopCommandInScope,
   useDesktopCommands,
 } from "./DesktopCommandProvider";
-import { useDesktopLeaderOptional } from "./leaderContext";
+import { useDesktopHints, useDesktopLeaderOptional } from "./leaderContext";
+import { activateHint } from "./hintTargets";
 import {
   DESKTOP_SESSION_JUMP_EVENT,
   useSessionJumpTargets,
@@ -45,6 +46,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
   const registry = useDesktopCommands();
   const workspace = useDesktopWorkspace();
   const sessions = useSessionJumpTargets();
+  const hints = useDesktopHints();
   const armed = leader?.armed === true;
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -65,8 +67,9 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     command.run();
   };
   const sessionsLayer = leader.layer === "sessions";
+  const modalLayer = leader.layer === "modal";
   const entries: LeaderEntry[] = [];
-  if (!sessionsLayer) {
+  if (!sessionsLayer && !modalLayer) {
     const seen = new Set<string>();
     for (const command of registry.commands) {
       const key = desktopLeaderKey(command);
@@ -101,13 +104,15 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     <Box
       data-desktop-leader-menu={leader.layer}
       role="group"
-      aria-label={sessionsLayer ? "Switch session" : "Leader keys"}
+      aria-label={sessionsLayer ? "Switch session" : modalLayer ? "Dialog keys" : "Leader keys"}
       sx={{
         position: "fixed",
         right: 16,
         bottom: 44,
         zIndex: (theme) => theme.zIndex.modal + 2,
-        width: sessionsLayer ? "min(26rem, calc(100vw - 32px))" : "min(52rem, calc(100vw - 32px))",
+        width: sessionsLayer || modalLayer
+          ? "min(26rem, calc(100vw - 32px))"
+          : "min(52rem, calc(100vw - 32px))",
         maxHeight: "min(70vh, 36rem)",
         overflow: "auto",
         p: 1.25,
@@ -132,14 +137,41 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
           accent
         />
         <Typography variant="subtitle2" fontWeight={750}>
-          {sessionsLayer ? "Switch session" : "Leader"}
+          {sessionsLayer ? "Switch session" : modalLayer ? "This dialog" : "Leader"}
         </Typography>
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary">
           {sessionsLayer ? "⌫ back · Esc close" : "Esc close"}
         </Typography>
       </Stack>
-      {sessionsLayer
+      {modalLayer
+        ? (
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
+              columnGap: 1,
+            }}
+          >
+            {hints.map((hint) => (
+              <ButtonBase
+                key={`${hint.label}:${hint.name}`}
+                data-modal-leader-entry={hint.label}
+                onClick={() => {
+                  leader.close();
+                  activateHint(hint.element);
+                }}
+                sx={entrySx(false)}
+              >
+                <ShortcutKeycap keyLabel={hint.label} availability="active" accent />
+                <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                  {hint.name}
+                </Typography>
+              </ButtonBase>
+            ))}
+          </Box>
+        )
+        : sessionsLayer
         ? (
           <Stack spacing={0.25}>
             {sessions.length === 0 && (

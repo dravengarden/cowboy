@@ -300,20 +300,14 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
 
 function RailGroupButton({
   group,
-  index,
   open,
   onOpen,
 }: {
   group: RailGroup;
-  index: number;
   open: boolean;
   onOpen: (anchor: HTMLElement) => void;
 }): React.JSX.Element {
-  const workspace = useDesktopWorkspace();
-  // Contextual slots: only while the rail owns keyboard focus, like every
-  // other region-scoped hint. Digits 1…9 open that folder directly.
-  const digit = index < 9 ? String(index + 1) : null;
-  const hint = digit !== null && workspace.focusedRegion === "sessions.rail";
+  // Folders are reached with J/K or transient ' labels, never fixed digits.
   const Icon = group.kind === "folder"
     ? (open ? FolderOpenOutlined : FolderOutlined)
     : ListAltOutlined;
@@ -327,7 +321,6 @@ function RailGroupButton({
         data-desktop-rail-group={group.id}
         data-desktop-item={group.id}
         data-desktop-current={group.current ? "true" : undefined}
-        aria-keyshortcuts={digit ?? undefined}
         aria-label={`${group.name}: ${activitySummary(group)}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -376,14 +369,6 @@ function RailGroupButton({
         <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
           <Icon sx={{ fontSize: desktopSize(22) }} />
           <GroupBadge group={group} />
-          {hint && digit && (
-            <ShortcutKeycap
-              keyLabel={digit}
-              variant="context"
-              availability="available"
-              sx={{ position: "absolute", top: -7, left: -14 }}
-            />
-          )}
         </Box>
         <Typography
           component="span"
@@ -772,11 +757,10 @@ export function DesktopSessionsRail({
         {groups.length > 0 && (
           <Box aria-hidden sx={{ width: 24, height: "1px", bgcolor: "divider", my: 0.5, flexShrink: 0 }} />
         )}
-        {groups.map((group, index) => (
+        {groups.map((group) => (
           <RailGroupButton
             key={group.id}
             group={group}
-            index={index}
             open={menu?.id === group.id}
             onOpen={(anchor): void => setMenu({ id: group.id, anchor })}
           />

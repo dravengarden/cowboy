@@ -131,11 +131,11 @@ export async function checkDraftKeyboard(): Promise<string> {
               <DesktopPendingEditCommandBindings
                 kind={kind}
                 sendable
-                onSlash={() => {}}
-                onReference={() => {}}
-                onAttach={() => {}}
+                onSlash={() => calls.push("slash")}
+                onReference={() => calls.push("reference")}
+                onAttach={() => calls.push("pending-attach")}
                 onDone={save}
-                onExpand={() => {}}
+                onExpand={() => calls.push("expand")}
               />
             )}
         </>
@@ -235,6 +235,21 @@ export async function checkDraftKeyboard(): Promise<string> {
       );
       key("s", "KeyS", { ...mod, repeat: true });
       check(calls.length === before + 1, `${kind}: held Save does not repeat`);
+      if (kind === "queued" || kind === "draft") {
+        // The row editor toolbar: every button has a leader key in its scope.
+        for (
+          const [letter, code, call] of [
+            ["/", "Slash", "slash"],
+            ["f", "KeyF", "reference"],
+            ["a", "KeyA", "pending-attach"],
+            ["z", "KeyZ", "expand"],
+          ] as const
+        ) {
+          prefix();
+          key(letter, code);
+          check(calls.at(-1) === call, `${kind}: ␣${letter} runs ${call}`);
+        }
+      }
       if (kind === "document") {
         check(
           registry.list().some((c) => c.id === "document.export") &&
