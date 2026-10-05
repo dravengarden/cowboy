@@ -9,7 +9,21 @@ account, device, native-generation and policy exits below remain open.
 Production at this reading: Machine writer release `9c79b9c3` (transaction
 `1791179356912329897-9c79b9c379ec`, worker generation `worker-748825b4…`,
 retained worker source `b97c2724…`); Controller and Web were moved by independent
-tasks. State words follow the ledger: **implemented**, **verified** (automated
+tasks. Source on main but **not active** because host-only Machine releases are blocked
+(main carries the independent wire change `22de6bbf`, so the retained worker pin
+must advance first, which drains every live Hawk worker): the
+[incarnation reader](plugin-session-incarnation-reader.md), bounded in-process
+cleanup retries, and the shared `namespace.rs` refactor. The refactor touches the
+active deletion journal, so its native old/new writer conformance must be re-run on
+a built artifact before it ships. The
+[worker-pool candidate](releases/machine-pool-candidate-2026-10-05.md)
+(`worker-5e009066…`) has Codex execution, logs, session and Codex/Claude
+(Hawk-installed) coexistence accepted; Claude native execution (needs the
+3.4.7 runtime built) and connected Code (needs the exact Zed pair) are open. The
+Columbus owner knows `sessionIncarnations` on Hawk only; Falcon is untouched and
+need not change until a release declaring the dataset is meant for it.
+
+State words follow the ledger: **implemented**, **verified** (automated
 gates), **published**, **activated** and **accepted** (the stated real-world
 exit, not a proxy).
 
