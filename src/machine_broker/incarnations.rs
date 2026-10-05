@@ -8,19 +8,18 @@
 //! See `docs/plugin-session-incarnation-design.md`.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{File, OpenOptions};
-use std::io::Read as _;
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::deletions::Owner;
+use super::namespace::{Namespace, valid_id};
 
 const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const FILE: &str = "incarnations.json";
+const NOUN: &str = "Session incarnation namespace";
 
 #[allow(
     dead_code,
@@ -57,14 +56,8 @@ struct Record {
 }
 
 pub(super) struct Reader {
-    root: PathBuf,
-    root_handle: File,
-    lock: File,
+    namespace: Namespace,
     entries: BTreeMap<String, Entry>,
-}
-
-fn valid_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 512 && !value.contains('\0')
 }
 
 /// 128 random bits as 32 lowercase hex digits.
@@ -77,99 +70,35 @@ fn valid_incarnation(value: &str) -> bool {
 
 impl Reader {
     pub(super) fn open(path: &Path, owner: &Owner) -> Result<Self> {
-        ensure!(
-            valid_id(&owner.machine_id),
-            "invalid incarnation namespace Machine identity"
-        );
-        ensure!(
-            owner.service_id.as_deref().is_none_or(valid_id),
-            "invalid incarnation namespace Service identity"
-        );
-        match std::fs::create_dir(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
-        // Keep the caller's path unresolved: a linked namespace must refuse, and
-        // replacing a parent alias must end this owner's admission.
-        let root = std::path::absolute(path)?;
-        let root_handle = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(&root)
-            .context("opening incarnation namespace without following links")?;
-        File::open(
-            root.parent()
-                .context("incarnation namespace has no parent")?,
-        )?
-        .sync_all()?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join(".lock"))?;
-        ensure!(
-            lock.metadata()?.is_file(),
-            "incarnation namespace lock is not a regular file"
-        );
-        fs2::FileExt::try_lock_exclusive(&lock)
-            .context("Session incarnation namespace already owned")?;
+        let namespace = Namespace::open(path, owner, NOUN)?;
         let mut entries = BTreeMap::new();
-        match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join(FILE))
-        {
-            Ok(file) => {
+        if let Some(bytes) = namespace.read(FILE, MAX_BYTES)? {
+            let record: Record =
+                serde_json::from_slice(&bytes).context("invalid incarnation record")?;
+            ensure!(record.schema == 1, "unsupported incarnation record schema");
+            ensure!(
+                record.owner == *owner,
+                "incarnation record belongs to another Machine or Service"
+            );
+            ensure!(
+                record.entries.len() <= MAX_RECORDS,
+                "incarnation record exceeds record limit"
+            );
+            let mut values = HashSet::new();
+            for entry in record.entries {
                 ensure!(
-                    file.metadata()?.is_file(),
-                    "incarnation record is not a regular file"
-                );
-                let mut bytes = Vec::new();
-                file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes)?;
-                ensure!(
-                    bytes.len() <= MAX_BYTES,
-                    "incarnation record exceeds byte limit"
-                );
-                let record: Record =
-                    serde_json::from_slice(&bytes).context("invalid incarnation record")?;
-                ensure!(record.schema == 1, "unsupported incarnation record schema");
-                ensure!(
-                    record.owner == *owner,
-                    "incarnation record belongs to another Machine or Service"
+                    valid_id(&entry.session_id)
+                        && valid_incarnation(&entry.incarnation)
+                        && values.insert(entry.incarnation.clone()),
+                    "invalid or duplicate incarnation identity"
                 );
                 ensure!(
-                    record.entries.len() <= MAX_RECORDS,
-                    "incarnation record exceeds record limit"
+                    entries.insert(entry.session_id.clone(), entry).is_none(),
+                    "duplicate incarnation Session identity"
                 );
-                let mut values = HashSet::new();
-                for entry in record.entries {
-                    ensure!(
-                        valid_id(&entry.session_id)
-                            && valid_incarnation(&entry.incarnation)
-                            && values.insert(entry.incarnation.clone()),
-                        "invalid or duplicate incarnation identity"
-                    );
-                    ensure!(
-                        entries.insert(entry.session_id.clone(), entry).is_none(),
-                        "duplicate incarnation Session identity"
-                    );
-                }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
-        let reader = Self {
-            root,
-            root_handle,
-            lock,
-            entries,
-        };
-        reader.check()?;
-        Ok(reader)
+        Ok(Self { namespace, entries })
     }
 
     pub(super) fn len(&self) -> usize {
@@ -182,19 +111,7 @@ impl Reader {
     }
 
     pub(super) fn check(&self) -> Result<()> {
-        let root = std::fs::symlink_metadata(&self.root)?;
-        let held = self.root_handle.metadata()?;
-        ensure!(
-            root.is_dir() && root.dev() == held.dev() && root.ino() == held.ino(),
-            "incarnation namespace directory was replaced"
-        );
-        let lock = std::fs::symlink_metadata(self.root.join(".lock"))?;
-        let held = self.lock.metadata()?;
-        ensure!(
-            lock.is_file() && lock.dev() == held.dev() && lock.ino() == held.ino(),
-            "incarnation namespace lock was replaced"
-        );
-        Ok(())
+        self.namespace.check()
     }
 }
 
