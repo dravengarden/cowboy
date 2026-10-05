@@ -194,12 +194,12 @@ export const ComposerTextarea = forwardRef<
   {
     value: string;
     onChange: (value: string) => void;
-    onSubmit: () => void;
+    onSubmit?: (() => void) | undefined;
     // ⌃⏎ (mac) / Alt+⏎ — park as a draft. Optional: the queued-message edit box
     // reuses this textarea and has no draft action, so it omits this.
     onSaveDraft?: () => void;
-    sessionId: string;
-    commands: () => AvailableCommand[];
+    sessionId?: string | undefined;
+    commands?: (() => AvailableCommand[]) | undefined;
     placeholder?: string;
     disabled?: boolean;
     autoFocus?: boolean;
@@ -228,7 +228,7 @@ export const ComposerTextarea = forwardRef<
     onSubmit,
     onSaveDraft,
     sessionId,
-    commands,
+    commands = () => [],
     placeholder,
     disabled,
     autoFocus = false,
@@ -624,6 +624,7 @@ export const ComposerTextarea = forwardRef<
       setOptions(slashOptions(commandsRef.current(), trigger.query));
       return undefined;
     }
+    if (!sessionId) { setOptions([]); return undefined; }
     let cancelled = false;
     const t = setTimeout(() => {
       void fetchFileOptions(sessionId, trigger.query).then((opts) => {
@@ -1092,14 +1093,14 @@ export const ComposerTextarea = forwardRef<
           if (chordEnter && hasDraftMod(e) && onSaveDraft) {
             e.preventDefault();
             onSaveDraft();
-          } else if (chordEnter && hasSendMod(e)) {
+          } else if (chordEnter && hasSendMod(e) && onSubmit) {
             e.preventDefault();
             onSubmit();
           } else if (e.key === "Enter" && hasDraftMod(e) && onSaveDraft) {
             // ⌃⏎ / Alt+⏎ → draft (e.g. an iPad with an external keyboard).
             e.preventDefault();
             onSaveDraft();
-          } else if (e.key === "Enter" && hasSendMod(e)) {
+          } else if (e.key === "Enter" && hasSendMod(e) && onSubmit) {
             // ⌘⏎ only — Ctrl+Enter no longer sends (it's the draft chord now).
             e.preventDefault();
             onSubmit();

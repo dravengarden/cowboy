@@ -14,6 +14,7 @@ import {
   Code,
   CommentOutlined,
   DataObject,
+  ExtensionOutlined,
   FormatBold,
   FormatClear,
   FormatIndentDecrease,
@@ -33,6 +34,7 @@ import {
   Undo,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
+import { openEditorExtensions } from "./editorExtensions/host";
 import { toggleComposerSourceMode } from "./composerSourceMode";
 
 // The context a command runs against. The editor handle covers in-doc actions;
@@ -71,6 +73,7 @@ function HeadingBadge({ n }: { n: number }): ReactNode {
 }
 
 export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
+  { id: "extensions", icon: <ExtensionOutlined />, label: "Editor extensions", run: (c): void => openEditorExtensions(c.editor) },
   { id: "undo", icon: <Undo />, label: "Undo", run: (c): void => c.editor.undo() },
   { id: "redo", icon: <Redo />, label: "Redo", run: (c): void => c.editor.redo() },
   { id: "heading", icon: <Title />, label: "Toggle heading", run: (c): void => c.editor.cycleHeading() },

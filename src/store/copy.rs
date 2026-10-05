@@ -15,6 +15,10 @@ use sqlx::{Connection as _, Row as _};
 use super::sqlite::SqliteStorage;
 
 const TABLES: &[&str] = &[
+    "draft_document_owners",
+    "draft_documents",
+    "draft_document_operations",
+    "draft_document_history",
     "core_security_authority",
     "cardea_operation_capacity",
     "cardea_operations",

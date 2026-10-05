@@ -5235,6 +5235,37 @@ impl Hub {
         found
     }
 
+    /// Compare and remove under one lock. A delayed Undo may never remove a
+    /// row another device has edited, scheduled or already sent.
+    pub fn remove_draft_if_unchanged(
+        &self,
+        session_id: &str,
+        identity: &str,
+        text: &str,
+        content: &[serde_json::Value],
+    ) -> bool {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            let Some(index) = session
+                .drafts
+                .iter()
+                .position(|row| row.cmid.as_deref() == Some(identity) || row.id == identity)
+            else {
+                return false;
+            };
+            let row = &session.drafts[index];
+            if row.schedule.is_some() || row.text != text || row.content != content {
+                return false;
+            }
+            session.drafts.remove(index);
+        }
+        self.emit_pending(session_id);
+        true
+    }
+
     /// Drop one draft. Returns whether the draft still existed.
     pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
         let (removed, unscheduled) = {
@@ -6593,6 +6624,43 @@ mod core_tests {
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
         );
+    }
+
+    #[test]
+    fn copy_undo_requires_the_original_unsent_row() {
+        let hub = hub_with_session("undo-copy");
+        let content = vec![serde_json::json!({"type":"text", "text":"original"})];
+        hub.add_draft(
+            "undo-copy",
+            "original".into(),
+            content.clone(),
+            Some("copy-1".into()),
+        );
+        let id = hub.inner.sessions.lock()["undo-copy"].drafts[0].id.clone();
+        assert!(!hub.remove_draft_if_unchanged("missing", "copy-1", "original", &content));
+        assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-1", "original", &[]));
+        hub.edit_draft("undo-copy", &id, "edited".into(), content.clone());
+        assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-1", "original", &content));
+        assert_eq!(hub.inner.sessions.lock()["undo-copy"].drafts.len(), 1);
+        assert!(hub.remove_draft_if_unchanged("undo-copy", "copy-1", "edited", &content));
+        assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-1", "edited", &content));
+        hub.add_draft(
+            "undo-copy",
+            "original".into(),
+            content.clone(),
+            Some("copy-2".into()),
+        );
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("undo-copy")
+            .unwrap()
+            .drafts[0]
+            .schedule = Some(DraftSchedule {
+            fire_at_ms: i64::MAX,
+            delivery: Delivery::default(),
+        });
+        assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-2", "original", &content));
     }
 
     #[tokio::test]

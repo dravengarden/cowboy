@@ -1,0 +1,229 @@
+{
+  "schema": "cowboy.draft-documents.acceptance/v1",
+  "recorded_at": "2026-10-04T15:34:01.208669+00:00",
+  "delivery": {
+    "web_revision": "390f10d06f26dc804c92c91647ca74001ecdc1dd",
+    "controller_revision": "3ca96d03df2d78e8808aebbbcd8b4a5903eec78e",
+    "published_to": "origin/main"
+  },
+  "behavior": [
+    "Independent principal-owned documents and folders; no Session or Machine binding; root is parent_id=null",
+    "Draft and every Session compose surface use PlatformComposerEditor, preserving the existing CM6/native and Vim/IME paths",
+    "Directory moves, tabs, desktop palette, trash/restore, recovery history and Markdown export",
+    "Drag/copy into Session creates an unsent draft and keeps the source; Undo compares the original target atomically",
+    "Session drafts can move out to independent documents only after target synchronization; referenced images retain independent bytes",
+    "Dataset-owned IndexedDB outbox precedes HTTP, independent body/metadata clocks preserve conflicts and operation ids deduplicate retries",
+    "Versioned editor-extension facade with scoped cleanup, composition/selection fences, built-in templates, outline and statistics; custom templates are device preferences"
+  ],
+  "extension_distribution": "Core compiled extensions and user templates. This does not install third-party JS, claim Obsidian plugin compatibility or replace Cowboy signed Plugin lifecycle.",
+  "gates": {
+    "rust_lib": {
+      "passed": 1366,
+      "failed": 0,
+      "ignored": 30
+    },
+    "clippy": "--locked --lib -- -D warnings passed",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "web_types_lint": "passed; pre-existing lint warnings retained",
+    "isolated_postgres_contracts": {
+      "passed": 25,
+      "includes_new_draft_store": true
+    },
+    "sqlite_draft_contract": "passed"
+  },
+  "draft_browser": [
+    {
+      "theme": "light",
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "25c4559d2bc5737f51c02a0e6428e579bb6a02ebd75881918c3eecd6f978bcb2",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 79ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "theme": "dark",
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "25c4559d2bc5737f51c02a0e6428e579bb6a02ebd75881918c3eecd6f978bcb2",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 81ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document"
+      ],
+      "physical_device": "not_checked"
+    }
+  ],
+  "existing_composer_browser": [
+    {
+      "theme": "light",
+      "ok": true,
+      "suite": "desktop-composer",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "6713c72e15f86a768beb03a59e034292b207c525ee75774a979d88ec89357db7",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+        "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+        "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+        "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+        "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+        "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
+        "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed",
+        "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "theme": "dark",
+      "ok": true,
+      "suite": "desktop-composer",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "6713c72e15f86a768beb03a59e034292b207c525ee75774a979d88ec89357db7",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "320–1560px panes and enlarged text retain visible delivery controls, right-edge Send, editor and selection",
+        "Buttons, native save/force chords, prefix actions and command palette share callbacks",
+        "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
+        "Formatting and Undo edit the real selection; Source mode preserves text, caret and editor",
+        "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
+        "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
+        "Queue/Drafts fit 320–1200px at normal/enlarged fonts on both surfaces; Mobile card/labels/reorder preserved, disclosure, menu and touch targets passed",
+        "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection"
+      ],
+      "physical_device": "not_checked"
+    }
+  ],
+  "native_input": {
+    "ok": true,
+    "tests": [
+      "Native textarea accepts real HID text and retains caret/focus",
+      "Pinyin owns marked text through real UIKit composition events",
+      "Pinyin candidate commits and text/caret survive canvas expansion/collapse",
+      "Native clipboard pastes Unicode text",
+      "Real image clipboard promotes the shared editor to CM6 and subsequent Return/typing remain editable",
+      "Source toggle preserves exact text and selection",
+      "The same Session CM6 surface commits Pinyin without losing surrounding Markdown",
+      "UIKit long-press Paste menu appears and its Paste action inserts text",
+      "Shared template sheet inserts Markdown, promotes the native surface and restores editor focus",
+      "Native typing continues after the extension sheet closes"
+    ],
+    "fixture_source_revision": "f29b594f",
+    "web_component_revision": "3ba9fa12341958571f9889de2a4c58c064a2b320",
+    "simulator": "96E869F2-778E-4A3F-941C-E47AD32525E9",
+    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    "host": "isolated WKWebView app, loopback fixture, real AXe HID/clipboard",
+    "physical_device": "not_checked",
+    "WeType": "not_available_in_simulator",
+    "full_native_product_shell": "not_checked",
+    "software_keyboard_clear_send_pending_row_matrix": "not_checked",
+    "pitfall_69": "still_open",
+    "artifacts": "/tmp/cowboy-draft-input.xy7T30"
+  },
+  "controller_activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "controller",
+    "transaction": "1791127094693409094-3ca96d03df2d",
+    "revision": "3ca96d03df2d78e8808aebbbcd8b4a5903eec78e",
+    "published": true,
+    "release": "/nix/store/j6fzcrgrz7a2yg1gax880lkxwm0nqsd1-cowboy-controller-release",
+    "previousRelease": "/nix/store/g5ryy9r08089pp0wvkpgfmplf25d7wdj-cowboy-controller-release",
+    "activeRelease": "/nix/store/j6fzcrgrz7a2yg1gax880lkxwm0nqsd1-cowboy-controller-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-04T15:18:14.693409094Z",
+    "recordedAt": "2026-10-04T15:18:27.083368705Z",
+    "recovered": false
+  },
+  "web_activation": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1791127894262157190-390f10d06f26",
+    "revision": "390f10d06f26dc804c92c91647ca74001ecdc1dd",
+    "published": true,
+    "release": "/nix/store/vxvahfyw4b2n2ypjq2gwc2hldrlp18j5-cowboy-web-release",
+    "previousRelease": "/nix/store/lfq3067ihymz42f8x6gaanhb6vjdsji5-cowboy-web-release",
+    "activeRelease": "/nix/store/vxvahfyw4b2n2ypjq2gwc2hldrlp18j5-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-04T15:31:34.26215719Z",
+    "recordedAt": "2026-10-04T15:31:34.303213659Z",
+    "recovered": false
+  },
+  "production": {
+    "spa_version": "b243155dfbc385d22bbb54477fbabbb4",
+    "service_worker": "cowboy-v1833",
+    "healthz": "ok",
+    "assets": [
+      {
+        "path": "/",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "b243155dfbc385d22bbb54477fbabbb4dbfffe9c6dcbd13ea8fcbfdbc2f779da",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/sw.js",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "c47592fb9794247847bb5576b1de095403bdcc2ecb788c1b661f2586b939c901",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/assets/main-Dkso5diW.js",
+        "status": 200,
+        "cache_control": "public, max-age=31536000, immutable",
+        "sha256": "5fbd7559adf9faffc351a9d1271634647789b06e774b4939f24c629a0f5aebcf",
+        "matches_immutable_release": true
+      }
+    ],
+    "retained_observed_processes": 33,
+    "observed_processes": 33,
+    "changed_processes": [],
+    "installed_pwa_reload": "not_observed; service-worker version changed for foreground adoption"
+  },
+  "limits": [
+    "Physical iPhone/WeType issue #69 remains open",
+    "Native acceptance uses an isolated WKWebView editor fixture, not the full logged-in app or the entire software-keyboard Clear/Send/pending-row matrix",
+    "Firefox layout/IME fences do not establish native input acceptance; the Draft fixture explicitly forces pointer/hover and asserts the actual Desktop branch",
+    "Installed user PWA adoption is not observed; foreground version checking or a hard reload must load v1833"
+  ],
+  "activation_notes": [
+    "An earlier component dispatch refused a stale Git revision before restarting anything; remote main was integrated, republished and rebuilt before successful activation"
+  ],
+  "cleanup": "Task-owned Simulator deleted. No other simulator, account or installed app modified. Local HTTP fixture and its reverse tunnel stopped; native screenshots/JSON remain in the receipt artifact directory."
+}

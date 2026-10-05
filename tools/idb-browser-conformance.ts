@@ -20,11 +20,13 @@ if (
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
   suite !== "workspace-picker" && suite !== "project-placement" &&
   suite !== "sign-in" && suite !== "desktop-composer" &&
-  suite !== "session-move"
+  suite !== "session-move" && suite !== "draft-documents"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "session-move"
+const entry = suite === "draft-documents"
+  ? "runDraftDocumentsBrowserConformance"
+  : suite === "session-move"
   ? "runSessionMoveBrowserConformance"
   : suite === "desktop-composer"
   ? "runDesktopComposerBrowserConformance"
@@ -219,7 +221,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 10
         : suite === "settings-recovery"
         ? 9
-        : suite === "desktop-composer"
+        : suite === "desktop-composer" || suite === "draft-documents"
         ? 8
         : suite === "code-buffer-cleanup"
         ? 7

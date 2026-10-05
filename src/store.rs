@@ -38,6 +38,7 @@ mod browser_devices;
 mod cardea_operations;
 mod copy;
 mod core_security;
+pub(crate) mod draft_documents;
 pub(crate) use core_security::HandoffPoint;
 mod plugin_installations;
 mod plugin_operations;

@@ -273,6 +273,7 @@ export function FolderNameShell({
 
 export function FolderPickerShell({
   title,
+  rootLabel = "Global · top level",
   value,
   current,
   exclude = null,
@@ -281,6 +282,7 @@ export function FolderPickerShell({
   onClose,
 }: {
   title: string;
+  rootLabel?: string;
   value: SessionFoldersValue;
   /** Folder the item is in today (`null` = top level); shown checked. */
   current: string | null;
@@ -375,7 +377,7 @@ export function FolderPickerShell({
               {current === null ? <CheckIcon /> : <ViewListOutlined />}
             </ListItemIcon>
             <ListItemText
-              primary="Global · top level"
+              primary={rootLabel}
               secondary={current === null
                 ? "Current location"
                 : "Outside all folders"}
