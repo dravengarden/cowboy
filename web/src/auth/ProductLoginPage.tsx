@@ -25,7 +25,7 @@ import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 import { NativeAuthenticationBrowserOpenError } from "../openExternal";
 import { loginMethodLabel } from "./productReauthMethods";
 import { ExternalSignInButton } from "./ExternalSignInButton";
-import { SegmentedPill } from "../SegmentedPill";
+import { SegmentedTabs } from "../SegmentedTabs";
 
 export type OidcLoginContext = {
   kind: "oidc";
@@ -98,7 +98,9 @@ export function ProductLoginPage({
   const [confirm, setConfirm] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [nativeBrowserUnavailable, setNativeBrowserUnavailable] = useState(false);
+  const [nativeBrowserUnavailable, setNativeBrowserUnavailable] = useState(
+    false,
+  );
   const [busy, setBusy] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const providerAbort = useRef<AbortController | null>(null);
@@ -187,7 +189,8 @@ export function ProductLoginPage({
 
   const submitProvider = (): void => {
     if (
-      busy || providerAbort.current || !selectedProvider || !useNativeProviderFlow
+      busy || providerAbort.current || !selectedProvider ||
+      !useNativeProviderFlow
     ) return;
     const abort = new AbortController();
     providerAbort.current = abort;
@@ -389,7 +392,7 @@ export function ProductLoginPage({
         )}
         {error && <Alert severity="error" role="alert">{error}</Alert>}
         {!setupRequired && loginMethods.length > 1 && (
-          <SegmentedPill
+          <SegmentedTabs
             value={method}
             options={loginMethods.map((loginMethod) => ({
               value: loginMethod.id,
@@ -400,38 +403,7 @@ export function ProductLoginPage({
               setError(null);
             }}
             disabled={busy}
-            fullWidth
             aria-label="Sign-in method"
-            sx={{
-              borderRadius: "12px",
-              bgcolor: "action.hover",
-              backdropFilter: "none",
-              WebkitBackdropFilter: "none",
-              "& > [aria-hidden]": {
-                borderRadius: "8px",
-                bgcolor: (theme) =>
-                  theme.palette.mode === "dark"
-                    ? alpha(theme.palette.common.white, 0.12)
-                    : theme.palette.background.paper,
-                boxShadow: (theme) =>
-                  `0 1px 3px ${alpha(theme.palette.common.black, 0.08)}`,
-                "@media (prefers-reduced-motion: reduce)": {
-                  transition: "none",
-                },
-              },
-              "& .MuiButtonBase-root": {
-                minHeight: 44,
-                borderRadius: "8px",
-                px: 1,
-                fontSize: "max(0.875rem, 14px)",
-                fontWeight: 550,
-                "&.Mui-focusVisible": {
-                  outline: "2px solid",
-                  outlineColor: "primary.main",
-                  outlineOffset: 2,
-                },
-              },
-            }}
           />
         )}
         {loginContext?.kind === "password"

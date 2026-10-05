@@ -177,9 +177,9 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes('component="form"'));
   assert(login.includes("setupToken.trim()"));
   assertEquals(login.includes("<Tabs"), false);
-  assert(login.includes("<SegmentedPill"));
+  assert(login.includes("<SegmentedTabs"));
   assert(login.includes("fullWidth"));
-  assert(login.includes("justifyContent: \"flex-start\""));
+  assert(login.includes('justifyContent: "flex-start"'));
   assert(login.includes("cowboy-app-icon-192-v10.png"));
   assert(login.includes('textTransform: "none"'));
   assert(login.includes("selectedProvider.button_label"));

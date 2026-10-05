@@ -53,9 +53,10 @@ Deno.test("verification outcomes render beside the button that caused them", () 
   // The body scrolls. An alert inserted above the method tabs lands off-screen
   // on a phone, which is what "I tapped Verify and nothing happened" looks like.
   const actionArea = sheetSource.slice(sheetSource.indexOf("{error && <Alert"));
-  assert(actionArea.indexOf("<Tabs") > 0);
+  assert(actionArea.indexOf("<SegmentedTabs") > 0);
   assert(
-    actionArea.indexOf("Verify with Passkey") > actionArea.indexOf("<Tabs"),
+    actionArea.indexOf("Verify with Passkey") >
+      actionArea.indexOf("<SegmentedTabs"),
   );
   assertEquals(
     sheetSource.indexOf("{error && <Alert") <

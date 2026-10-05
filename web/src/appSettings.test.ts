@@ -26,8 +26,8 @@ Deno.test("Code settings open on the Code section and Agent settings stay on Age
     appSettingsFromEvent(new CustomEvent(OPEN_APP_SETTINGS_EVENT)).section,
     undefined,
   );
-  assert(appSource.includes('label="Agent"'));
-  assert(appSource.includes('label="Code & diff"'));
+  assert(appSource.includes('label: "Agent"'));
+  assert(appSource.includes('label: "Code & diff"'));
   assert(appSource.includes("<ReviewSettingsContent"));
   assert(appSource.includes('openAppSettings({ section: "agent" })'));
   assert(appSource.includes("portal"));
@@ -39,14 +39,14 @@ Deno.test("desktop settings use compact section tabs and expose product sign out
     appSource.indexOf("function machineComponentName("),
   );
   assert(settings.includes("data-desktop-settings-section-tabs"));
-  assert(settings.includes('width: "fit-content"'));
-  assert(settings.includes('label="Code & diff"'));
+  assert(settings.includes("fullWidth={false}"));
+  assert(settings.includes('label: "Code & diff"'));
   // Account is its own control center tab rather than a Settings block, so
   // sign out sits beside Passkeys and client credentials exactly as it does
   // in the mobile account route. controlCenterTabs.test.ts pins that parity.
   assert(settings.includes("function DesktopAccountTabContent("));
   assert(settings.includes("<ProductAccountMenu />"));
-  assertEquals(settings.includes("<SegmentedPill"), false);
+  assert(settings.includes("<SegmentedTabs"));
 });
 
 Deno.test("Machine mutations use correlated Controller receipts instead of polling event history", () => {
@@ -54,8 +54,16 @@ Deno.test("Machine mutations use correlated Controller receipts instead of polli
     appSource.indexOf("function MachinesContent("),
     appSource.indexOf("function isSettingsEditableTarget("),
   );
-  assert(machines.includes("await fetch(`/api/machines/${encodeURIComponent(machineId)}/refresh`"));
-  assert(machines.includes("await fetch(`/api/machines/${encodeURIComponent(machineId)}/components/update-npm`"));
+  assert(
+    machines.includes(
+      "await fetch(`/api/machines/${encodeURIComponent(machineId)}/refresh`",
+    ),
+  );
+  assert(
+    machines.includes(
+      "await fetch(`/api/machines/${encodeURIComponent(machineId)}/components/update-npm`",
+    ),
+  );
   assertEquals(machines.includes("/events"), false);
   assertEquals(machines.includes("request_id"), false);
 });
@@ -63,9 +71,12 @@ Deno.test("Machine mutations use correlated Controller receipts instead of polli
 Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(reviewAppSource.includes('data-mobile-open-agent="true"'));
   assert(reviewAppSource.includes('aria-label="Open Agent"'));
-  assert(reviewAppSource.includes("openMobileProduct(\"agent\")"));
+  assert(reviewAppSource.includes('openMobileProduct("agent")'));
   assert(reviewAppSource.includes("data-mobile-review-mode-switcher"));
-  assertEquals(reviewAppSource.includes("data-mobile-review-mode-switch-track"), false);
+  assertEquals(
+    reviewAppSource.includes("data-mobile-review-mode-switch-track"),
+    false,
+  );
   assertEquals(
     reviewAppSource.includes("<Switch"),
     false,
@@ -83,7 +94,7 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
     assertEquals(switcher.includes("translateX"), false);
     assertEquals(switcher.includes("boxShadow"), false);
     assert(switcher.includes('transform: "none"'));
-    assert(switcher.includes('height: 40'));
+    assert(switcher.includes("height: 40"));
     assert(switcher.includes('alignItems: "center"'));
     assert(switcher.includes('boxSizing: "border-box"'));
     assert(switcher.includes('fontSize: "1.125rem"'));
@@ -135,7 +146,9 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
     reviewAppSource.includes('pr: "env(safe-area-inset-right, 0px)"'),
   );
   assertEquals(
-    reviewAppSource.includes('pr: "max(env(safe-area-inset-right, 0px), 10px)"'),
+    reviewAppSource.includes(
+      'pr: "max(env(safe-area-inset-right, 0px), 10px)"',
+    ),
     false,
   );
   {
@@ -148,23 +161,25 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
   }
   assertEquals(reviewAppSource.includes("ArrowBackIosNew"), false);
   assertEquals(reviewSettingsSource.includes("SettingsSheet"), false);
-  assert(reviewSettingsSource.includes("export function ReviewSettingsContent"));
+  assert(
+    reviewSettingsSource.includes("export function ReviewSettingsContent"),
+  );
   assert(fileTreeSource.includes('openAppSettings({ section: "code" })'));
 });
 
-Deno.test("Context tabs retain the selected pill after an iOS touch", () => {
+Deno.test("Context tabs use the shared segmented tabs", () => {
   const tabs = reviewAppSource.slice(
     reviewAppSource.indexOf("data-mobile-context-tabs"),
-    reviewAppSource.indexOf('contextTab === "sessions"', reviewAppSource.indexOf("data-mobile-context-tabs")),
-  );
-  assert(tabs.includes("disableRipple"));
-  assert(tabs.includes('event.currentTarget.dataset.touchActivated = "true"'));
-  assert(tabs.includes("event.currentTarget.blur()"));
-  assert(tabs.includes("&[aria-selected='true']"));
-  assert(
-    tabs.includes(
-      "[data-touch-activated='true'][aria-selected='true']:hover",
+    reviewAppSource.indexOf(
+      'contextTab === "sessions"',
+      reviewAppSource.indexOf("data-mobile-context-tabs"),
     ),
   );
-  assert(tabs.includes('bgcolor: "action.selected"'));
+  // SegmentedTabs.test.ts pins the iOS selected-pill invariants.
+  assert(tabs.includes("Context views"));
+  assert(
+    reviewAppSource.includes(
+      '<SegmentedTabs\n                rootProps={{ "data-mobile-context-tabs": "" }}',
+    ),
+  );
 });
