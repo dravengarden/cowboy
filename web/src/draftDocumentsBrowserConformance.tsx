@@ -1,6 +1,8 @@
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { StrictMode } from "react";
+import { SessionDestinationTree } from "./SessionDestinationTree";
+import type { SessionMeta } from "./protocol";
 import { MobileApp } from "./mobile/MobileApp";
 import { openMobileProduct } from "./mobile/appPagerMotion";
 import { AppErrorBoundary } from "./AppErrorBoundary";
@@ -813,6 +815,204 @@ export async function runDraftDocumentsBrowserConformance(
       "Unmount revokes old plugin editor authority and keeps the saved document",
     );
     document.documentElement.style.fontSize = "16px";
+    const destinations = createRoot(container);
+    let chosen = "";
+    const destinationSessions: SessionMeta[] = [
+      {
+        id: "tree-first",
+        title: "Same title",
+        provider: "codex",
+        cwd: "/first",
+        status: "running",
+      },
+      {
+        id: "tree-second",
+        title: "Same title",
+        provider: "codex",
+        cwd: "/second",
+        status: "running",
+      },
+      {
+        id: "tree-root",
+        title: "Root Session",
+        provider: "codex",
+        cwd: "/root",
+        status: "running",
+      },
+      {
+        id: "tree-other",
+        title: "Other Session",
+        provider: "codex",
+        cwd: "/other",
+        status: "running",
+      },
+      {
+        id: "tree-system",
+        title: "System",
+        provider: "codex",
+        cwd: "/system",
+        status: "running",
+        system: true,
+      },
+    ];
+    const renderDestinations = (busy = false) =>
+      flushSync(() =>
+        destinations.render(
+          <SurfaceProvider>
+            <BrowserProductTheme>
+              <CssBaseline />
+              <SessionDestinationTree
+                sessions={destinationSessions}
+                folders={{
+                  folders: [
+                    {
+                      id: "tree-parent",
+                      name: "Parent",
+                      parent: null,
+                      position: 0,
+                      project: null,
+                    },
+                    {
+                      id: "tree-child",
+                      name: "Child",
+                      parent: "tree-parent",
+                      position: 0,
+                      project: null,
+                    },
+                    {
+                      id: "tree-sibling",
+                      name: "Sibling",
+                      parent: null,
+                      position: 1,
+                      project: null,
+                    },
+                  ],
+                  placement: {
+                    "tree-first": "tree-child",
+                    "tree-second": "tree-child",
+                    "tree-other": "tree-sibling",
+                  },
+                }}
+                order={["session:tree-second", "session:tree-first"]}
+                initialFolder="tree-child"
+                busy={busy}
+                onPick={(session) => {
+                  chosen = session.id;
+                }}
+              />
+            </BrowserProductTheme>
+          </SurfaceProvider>,
+        )
+      );
+    renderDestinations();
+    await tick();
+    const destinationFolder = (id: string) =>
+      container.querySelector<HTMLElement>(
+        `[data-session-destination-folder="${id}"]`,
+      )!;
+    const destinationSession = (id: string) =>
+      container.querySelector<HTMLElement>(
+        `[data-session-destination-session="${id}"]`,
+      );
+    check(
+      destinationFolder("tree-parent").getAttribute("aria-expanded") ===
+          "true" &&
+        destinationFolder("tree-child").getAttribute("aria-expanded") ===
+          "true",
+      "Draft context opens both ancestor levels",
+    );
+    check(
+      destinationFolder("tree-sibling").getAttribute("aria-expanded") ===
+          "false" && !destinationSession("tree-other"),
+      "Other directories start folded",
+    );
+    check(
+      destinationSession("tree-root") && !destinationSession("tree-system"),
+      "Top-level Sessions are available; system Sessions excluded",
+    );
+    check(
+      [...container.querySelectorAll<HTMLElement>(
+        "[data-session-destination-session]",
+      )].slice(0, 2).map((row) => row.dataset.sessionDestinationSession)
+        .join() === "tree-second,tree-first",
+      "Shared workspace order distinguishes same-title Sessions by identity",
+    );
+    destinationFolder("tree-parent").click();
+    await tick();
+    check(
+      !destinationSession("tree-first"),
+      "Collapsing an ancestor hides descendant leaves without selecting anything",
+    );
+    const destinationSearch = container.querySelector<HTMLInputElement>(
+      "input",
+    )!;
+    const searchDestination = async (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
+        .call(destinationSearch, value);
+      destinationSearch.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+    };
+    await searchDestination("Child");
+    check(
+      destinationSession("tree-first") && !destinationSession("tree-root") &&
+        !destinationFolder("tree-sibling"),
+      "Search includes matching folder paths and their ancestors",
+    );
+    await searchDestination("");
+    check(
+      !destinationSession("tree-first") &&
+        destinationFolder("tree-parent").getAttribute("aria-expanded") ===
+          "false",
+      "Clearing search restores local folds",
+    );
+    const destinationKey = (target: HTMLElement, key: string) =>
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+    destinationFolder("tree-parent").focus();
+    destinationKey(destinationFolder("tree-parent"), "ArrowRight");
+    await tick();
+    destinationSession("tree-second")!.focus();
+    destinationKey(destinationSession("tree-second")!, "ArrowLeft");
+    check(
+      document.activeElement === destinationFolder("tree-child"),
+      "Left arrow moves from a Session to its parent folder",
+    );
+    destinationSession("tree-second")!.focus();
+    destinationSession("tree-second")!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "Enter",
+        isComposing: true,
+        keyCode: 229,
+      }),
+    );
+    check(!chosen, "IME Enter cannot select a Session");
+    destinationSession("tree-second")!.click();
+    check(
+      chosen === "tree-second",
+      "Same-title Session picks its exact identity",
+    );
+    renderDestinations(true);
+    await tick();
+    destinationSession("tree-first")!.click();
+    check(chosen === "tree-second", "Busy copy blocks another selection");
+    renderDestinations();
+    await tick();
+    for (const font of [8, 16, 24]) {
+      document.documentElement.style.fontSize = `${font}px`;
+      container.style.width = "320px";
+      await tick();
+      check(
+        container.scrollWidth <= container.clientWidth + 1,
+        "Tree fits narrow panes at global font sizes",
+      );
+    }
+    destinations.unmount();
+    results.push(
+      "Session destinations use a shared ordered directory tree; context expansion, folds/search, root leaves, duplicate identities, keyboard/IME guards, busy selection and font fit pass",
+    );
+    document.documentElement.style.fontSize = "16px";
     container.style.cssText =
       "width:1200px;height:800px;position:relative;display:flex";
     globalThis.location.hash = `drafts/${id}`;
@@ -947,6 +1147,30 @@ export async function runDraftDocumentsBrowserConformance(
       () => copied.length === 0,
       "Undo removes the exact copied Session draft",
     );
+    button("Copy to Session drafts").click();
+    await until(
+      () =>
+        !!document.querySelector(
+          '[role="tree"][aria-label="Destination Sessions"]',
+        ),
+      "Production Add to Session opens the tree picker",
+    );
+    document.querySelector<HTMLElement>(
+      '[data-session-destination-session="integrated-session"]',
+    )!.click();
+    await until(
+      () => copied.length === 1,
+      "Tree selection copies to the exact unsent Session destination",
+    );
+    check(
+      copied[0]!.text === integratedBody &&
+        repo.document(id).get().document!.body === integratedBody,
+      "Tree copy retains original document",
+    );
+    [...document.querySelectorAll<HTMLElement>("[role=alert] button")].find((
+      item,
+    ) => item.textContent === "Undo")!.click();
+    await until(() => copied.length === 0, "Tree copy has exact snackbar Undo");
     integrated.unmount();
     touchCreate = true;
     localStorage.setItem("cowboy:mobile-product", "review");

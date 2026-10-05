@@ -199,7 +199,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   }).spawn();
   deadline = setTimeout(
     () => report.reject(new Error("browser conformance timed out")),
-    30_000,
+    suite === "draft-documents" ? 60_000 : 30_000,
   );
   void child.status.then(() =>
     report.reject(new Error("browser exited before report"))
@@ -227,7 +227,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "settings-recovery"
         ? 9
         : suite === "draft-documents"
-        ? 10
+        ? 11
         : suite === "desktop-composer"
         ? 8
         : suite === "code-buffer-cleanup"
