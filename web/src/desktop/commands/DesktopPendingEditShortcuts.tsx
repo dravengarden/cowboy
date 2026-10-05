@@ -69,9 +69,10 @@ export function DesktopPendingEditCommandBindings({
     },
     {
       id: `${prefix}.done`,
-      title: "Finish editing message",
+      title: "Save message changes",
       group: "Pending message editor",
-      shortcut: "Mod+Enter",
+      shortcut: "Mod+S",
+      consumeWhenDisabled: true,
       allowInEditor: true,
       contexts: ["prompt"],
       regions: [region],

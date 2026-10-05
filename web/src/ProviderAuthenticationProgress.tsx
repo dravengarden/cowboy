@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import {
   Box,
   Button,
@@ -30,7 +31,7 @@ export function ProviderAuthenticationProgress(
       <Stack direction="row" spacing={1.5} alignItems="center" role="status">
         {!failed && (
           <CircularProgress
-            size={22}
+            size={desktopSize(22)}
             disableShrink
             aria-label={label}
           />

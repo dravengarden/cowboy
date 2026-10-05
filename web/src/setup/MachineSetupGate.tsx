@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { Box, Button, Typography } from "@mui/material";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
@@ -74,7 +75,7 @@ export function MachineSetupGate({
         <DraftsButton />
         {unreachable && (
           <>
-            <Typography sx={{ fontSize: 13, maxWidth: 320 }}>
+            <Typography sx={{ fontSize: desktopSize(13), maxWidth: 320 }}>
               {sync.phase === "offline"
                 ? "This device is offline and has nothing cached yet."
                 : sync.phase === "unreachable"

@@ -739,7 +739,7 @@ export async function runDraftDocumentsBrowserConformance(
       }ms in this browser)`,
     );
 
-    for (const font of [8, 10.4, 16, 24]) {
+    for (const font of [8, 10.4, 16, 24, 32]) {
       for (const width of [320, 600, 960, 1440]) {
         document.documentElement.style.fontSize = `${font}px`;
         container.style.width = `${width}px`;
@@ -803,7 +803,7 @@ export async function runDraftDocumentsBrowserConformance(
       }
     }
     results.push(
-      "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+      "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–32px fonts; modified browser shortcuts are preserved",
     );
     await repo.document(recovered.context.id).whenSynced();
     flushSync(() => root.unmount());
@@ -1058,6 +1058,22 @@ export async function runDraftDocumentsBrowserConformance(
       '[data-desktop-region="sessions.list"]',
     );
     check(rail, "Draft keeps the ordinary workspace sidebar mounted");
+    await until(() => !!container.querySelector("[data-desktop-draft-toolbar]"), "Integrated Draft mounts keyboard-first Desktop controls");
+    const originalScale = document.documentElement.style.getPropertyValue("--cowboy-font-scale");
+    for (const size of [8, 16, 24, 32]) {
+      document.documentElement.style.fontSize = `${size}px`;
+      document.documentElement.style.setProperty("--cowboy-font-scale", String(size / 16));
+      await tick();
+      const create = container.querySelector<HTMLElement>("[data-desktop-new-session]")!;
+      check(Math.abs(parseFloat(getComputedStyle(create).fontSize) - size * 0.875) < 1, "Sidebar Create label tracks root font");
+      const toolbar = create.parentElement!;
+      check(toolbar.scrollWidth <= toolbar.clientWidth + 1, `Sidebar Create/folder/fold controls fit at ${size}px`);
+      const folderIcon = toolbar.querySelector<SVGElement>("button[aria-label=Folders] svg")!;
+      check(Math.abs(folderIcon.getBoundingClientRect().width - size * 1.5) < 1, "Sidebar folder icon follows global font");
+    }
+    document.documentElement.style.fontSize = originalFont;
+    if (originalScale) document.documentElement.style.setProperty("--cowboy-font-scale", originalScale);
+    else document.documentElement.style.removeProperty("--cowboy-font-scale");
     const integratedBody = repo.document(id).get().document!.body;
     socket!.publish({
       type: "sessions",

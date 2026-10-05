@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import AddRounded from "@mui/icons-material/AddRounded";
 import KeyRounded from "@mui/icons-material/KeyRounded";
 import SecurityRounded from "@mui/icons-material/SecurityRounded";
@@ -568,7 +569,7 @@ export function ProductPasskeysPanel({
             variant="contained"
             size="large"
             startIcon={busy
-              ? <CircularProgress size={16} color="inherit" />
+              ? <CircularProgress size={desktopSize(16)} color="inherit" />
               : <AddRounded />}
             disabled={busy || !canCreate || nickname.trim() === ""}
             onClick={add}
@@ -642,7 +643,7 @@ export function ProductPasskeysPanel({
       {listState === "loading" && (
         <Box sx={CARD_SX}>
           <Stack direction="row" spacing={1.25} alignItems="center">
-            <CircularProgress size={20} />
+            <CircularProgress size={desktopSize(20)} />
             <Typography variant="body2" color="text.secondary">
               Checking registered Passkeys…
             </Typography>
@@ -801,7 +802,7 @@ export function ProductPasskeysPanel({
                       disabled={busy}
                       onClick={verifyCurrentSession}
                       startIcon={busy
-                        ? <CircularProgress size={16} color="inherit" />
+                        ? <CircularProgress size={desktopSize(16)} color="inherit" />
                         : <KeyRounded />}
                       sx={{ alignSelf: "flex-start" }}
                     >

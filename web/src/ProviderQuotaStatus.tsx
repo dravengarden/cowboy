@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { alpha, Box, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
@@ -135,7 +136,7 @@ export function ProviderQuotaStatus({
           ),
         })}
       >
-        <WarningAmberRounded sx={{ fontSize: 20, flexShrink: 0 }} />
+        <WarningAmberRounded sx={{ fontSize: desktopSize(20), flexShrink: 0 }} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
             variant="body2"

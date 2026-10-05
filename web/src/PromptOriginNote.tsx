@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { useState } from "react";
 import { Box, Button, Stack, Typography, useTheme } from "@mui/material";
 import { ExpandLess, ExpandMore } from "@mui/icons-material";
@@ -56,7 +57,7 @@ function CowboyOriginNote({
           borderColor: "divider",
           bgcolor: "action.hover",
           color: "text.secondary",
-          fontSize: 13,
+          fontSize: desktopSize(13),
         }}
       >
         <Markdown text={text} />
@@ -98,7 +99,7 @@ function AgentOriginNote({
       provider={providerId}
       providerVersion={exactVersion}
       providerDigest={exactDigest}
-      sx={{ fontSize: 18 }}
+      sx={{ fontSize: desktopSize(18) }}
     />
   );
 
@@ -134,11 +135,11 @@ function AgentOriginNote({
               color: visual.primary,
               display: "grid",
               placeItems: "center",
-              "& .MuiSvgIcon-root": { fontSize: 18 },
+              "& .MuiSvgIcon-root": { fontSize: desktopSize(18) },
             }}
           >
             {mark ?? (
-              <Typography component="span" sx={{ fontSize: 11, fontWeight: 700, lineHeight: 1 }}>
+              <Typography component="span" sx={{ fontSize: desktopSize(11), fontWeight: 700, lineHeight: 1 }}>
                 {name.slice(0, 1)}
               </Typography>
             )}

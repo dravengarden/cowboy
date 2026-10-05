@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accordion,
@@ -385,7 +386,7 @@ function ProviderUsageCardBody({
               >
                 <Refresh
                   sx={{
-                    fontSize: 17,
+                    fontSize: desktopSize(17),
                     ...(refreshBusy && {
                       animation: "cowboy-card-refresh 700ms linear infinite",
                       "@keyframes cowboy-card-refresh": {
@@ -548,7 +549,7 @@ function ProviderUsageCardBody({
             target="_blank"
             rel="noopener noreferrer"
             size="small"
-            endIcon={<OpenInNew sx={{ fontSize: 15 }} />}
+            endIcon={<OpenInNew sx={{ fontSize: desktopSize(15) }} />}
             sx={{
               alignSelf: "flex-start",
               px: 0.5,

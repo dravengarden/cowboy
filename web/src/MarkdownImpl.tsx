@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { ProtectedImage } from "./ProtectedImage";
 // Markdown renderer used by message bubbles. GitHub-Flavored Markdown
 // (tables, strikethrough, task lists) + syntax-highlighted code fences via
@@ -470,13 +471,13 @@ function CodeBlock({
           top: centerCompactCopy ? "50%" : 6,
           right: 6,
           transform: centerCompactCopy ? "translateY(-50%)" : "none",
-          height: 32,
-          minWidth: 32,
+          height: desktopSize(32),
+          minWidth: desktopSize(32),
           // Explicit width to OVERRIDE the global MuiIconButton `width: 44` —
           // without it the button is locked at 44px and the morphed "Copied" label
           // overflows / gets clipped at the code block's right edge. Resting: a
           // 32px square; copied: `auto` so it grows to fit "✓ Copied".
-          width: copied ? "auto" : 32,
+          width: copied ? "auto" : desktopSize(32),
           // Resting: a compact translucent square (opt out of the global 44px icon
           // button). On success it MORPHS into a labelled green pill — an
           // icon-only swap is too easy to miss; "Copied" is unmistakable. The
@@ -521,7 +522,7 @@ function CodeBlock({
           }),
         }}
       >
-        {copied ? <Check sx={{ fontSize: 16 }} /> : <ContentCopy sx={{ fontSize: 15 }} />}
+        {copied ? <Check sx={{ fontSize: desktopSize(16) }} /> : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
         {copied && <Box component="span">Copied</Box>}
       </IconButton>
     </Box>

@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useContext, useLayoutEffect, useMemo } from "react";
 import { useMediaQuery } from "@mui/material";
 import { classifySurface, type SurfaceProfile } from "./profile";
 
@@ -41,6 +41,20 @@ export function SurfaceProvider(
       }),
     [finePointer, hover, tabletWidth, touchCapable],
   );
+  useLayoutEffect(() => {
+    const root = globalThis.document?.documentElement;
+    if (!root) return;
+    const previous = root.style.getPropertyValue("--cowboy-desktop-size-unit");
+    root.style.setProperty(
+      "--cowboy-desktop-size-unit",
+      profile.kind === "desktop" ? "1rem" : "16px",
+    );
+    return () => {
+      if (previous) {
+        root.style.setProperty("--cowboy-desktop-size-unit", previous);
+      } else root.style.removeProperty("--cowboy-desktop-size-unit");
+    };
+  }, [profile.kind]);
   return (
     <SurfaceContext.Provider value={profile}>
       {children}

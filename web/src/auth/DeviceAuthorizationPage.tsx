@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   Alert,
   Box,
@@ -162,7 +163,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
             <ShieldOutlined />
           </Box>
           <Box>
-            <Typography sx={{ letterSpacing: "0.14em", fontSize: 12 }}>
+            <Typography sx={{ letterSpacing: "0.14em", fontSize: desktopSize(12) }}>
               COWBOY SECURITY
             </Typography>
             <Typography variant="h5" sx={{ fontWeight: 750 }}>
@@ -227,7 +228,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
               <Box
                 sx={{ minHeight: 180, display: "grid", placeItems: "center" }}
               >
-                <CircularProgress size={26} color="inherit" />
+                <CircularProgress size={desktopSize(26)} color="inherit" />
               </Box>
             )}
             {info && phase === "pending" && (
@@ -312,7 +313,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                 alignItems="center"
                 sx={{ py: 3, textAlign: "center" }}
               >
-                <CheckCircleOutline color="success" sx={{ fontSize: 52 }} />
+                <CheckCircleOutline color="success" sx={{ fontSize: desktopSize(52) }} />
                 <Typography variant="h6" sx={{ fontWeight: 750 }}>
                   Client authorized
                 </Typography>
@@ -327,7 +328,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                 alignItems="center"
                 sx={{ py: 3, textAlign: "center" }}
               >
-                <ShieldOutlined color="action" sx={{ fontSize: 48 }} />
+                <ShieldOutlined color="action" sx={{ fontSize: desktopSize(48) }} />
                 <Typography variant="h6" sx={{ fontWeight: 750 }}>
                   Request denied
                 </Typography>

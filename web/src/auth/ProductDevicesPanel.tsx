@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   Alert,
   Box,
@@ -125,7 +126,7 @@ export function ProductDevicesPanel({
       {loading
         ? (
           <Box sx={{ minHeight: 72, display: "grid", placeItems: "center" }}>
-            <CircularProgress size={22} color="inherit" />
+            <CircularProgress size={desktopSize(22)} color="inherit" />
           </Box>
         )
         : devices.length === 0

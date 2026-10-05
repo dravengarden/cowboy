@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
 import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
 import { SegmentedTabs } from "./SegmentedTabs";
@@ -523,7 +524,7 @@ function StatusDot({
     const active = shown === "busy" || shown === "starting";
     const indicator = active ? (
             <CircularProgress
-                size={11}
+                size={desktopSize(11)}
                 thickness={6}
                 disableShrink
                 color="inherit"
@@ -534,7 +535,7 @@ function StatusDot({
             <Circle
                 aria-label={label}
                 sx={[
-                    { fontSize: 10, flexShrink: 0, color: statusColor(shown) },
+                    { fontSize: desktopSize(10), flexShrink: 0, color: statusColor(shown) },
                     ...extra,
                 ]}
             />
@@ -567,7 +568,7 @@ function FolderActivityBadges({
             label: "working",
             glyph: (
                 <CircularProgress
-                    size={9}
+                    size={desktopSize(9)}
                     thickness={7}
                     disableShrink
                     color="inherit"
@@ -579,13 +580,13 @@ function FolderActivityBadges({
             key: "attention",
             count: activity.attention,
             label: activity.attention === 1 ? "needs attention" : "need attention",
-            glyph: <Circle sx={{ fontSize: 8, color: statusColor("interrupted") }} />,
+            glyph: <Circle sx={{ fontSize: desktopSize(8), color: statusColor("interrupted") }} />,
         },
         {
             key: "live",
             count: activity.live,
             label: "ready",
-            glyph: <Circle sx={{ fontSize: 8, color: statusColor("running") }} />,
+            glyph: <Circle sx={{ fontSize: desktopSize(8), color: statusColor("running") }} />,
         },
     ].filter((part) => part.count > 0);
     if (parts.length === 0) return null;
@@ -633,7 +634,7 @@ function ScheduleBadge({ meta }: { meta: SessionMeta }): React.JSX.Element | nul
     if (ms === undefined) return null;
     return (
         <Tooltip title={`定时发送 · ${fireLabel(ms)}（${fireRel(ms)}）`} enterDelay={300}>
-            <Schedule sx={{ fontSize: 15, flexShrink: 0, color: "info.main" }} />
+            <Schedule sx={{ fontSize: desktopSize(15), flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );
 }
@@ -1411,9 +1412,13 @@ function SessionList({
                     onClick={onNew}
                     sx={desktop ? {
                         ...desktopEmbeddedControlSx(),
-                        minHeight: 48,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.08em",
+                        minHeight: "3rem",
+                        fontSize: "0.875rem",
+                        minWidth: 0,
+                        flexWrap: "wrap",
+                        gap: "0.25rem",
+                        textTransform: "none",
+                        letterSpacing: "normal",
                     } : undefined}
                 >
                     Create
@@ -1424,8 +1429,8 @@ function SessionList({
                     onClick={(e): void => setRootMenuEl(e.currentTarget)}
                     sx={{
                         ...(desktop && desktopEmbeddedControlSx()),
-                        width: 48,
-                        minHeight: 48,
+                        width: desktop ? "3rem" : 48,
+                        minHeight: desktop ? "3rem" : 48,
                         borderRadius: 1.25,
                         flexShrink: 0,
                     }}
@@ -1438,8 +1443,8 @@ function SessionList({
                         onClick={fold.run}
                         sx={{
                             ...(desktop && desktopEmbeddedControlSx()),
-                            width: 48,
-                            minHeight: 48,
+                            width: desktop ? "3rem" : 48,
+                            minHeight: desktop ? "3rem" : 48,
                             borderRadius: 1.25,
                             flexShrink: 0,
                             fontSize: "1.1rem",
@@ -1926,7 +1931,7 @@ function SessionList({
                             sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0, position: "relative" }}
                         >
                             {deleting
-                                ? <DelayedNetworkProgress size={18} />
+                                ? <DelayedNetworkProgress size={desktopSize(18)} />
                                 : <MoreVert sx={{ fontSize: "1.5rem" }} />}
                         </IconButton>
                     </ReliableListItemButton>
@@ -4956,7 +4961,7 @@ export function App({
                                     />
                                 )}
                                 prompt={active.system ? (
-                                    <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
+                                    <Box sx={{ p: 1.5, textAlign: "center", fontSize: desktopSize(13), opacity: 0.6 }}>
                                         View-only system session — managed by cowboy
                                     </Box>
                                 ) : (
@@ -5116,7 +5121,7 @@ export function App({
                                     />
                             )}
                             {active.system ? (
-                                <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
+                                <Box sx={{ p: 1.5, textAlign: "center", fontSize: desktopSize(13), opacity: 0.6 }}>
                                     View-only system session — managed by cowboy
                                 </Box>
                             ) : exploreState.projection === "explore" ? (
@@ -5588,7 +5593,7 @@ function MobileSettingsRoute({
                             justifyContent="center"
                             sx={{ minHeight: 160, color: "text.secondary" }}
                         >
-                            <CircularProgress size={18} color="inherit" />
+                            <CircularProgress size={desktopSize(18)} color="inherit" />
                             <Typography variant="caption">Loading…</Typography>
                         </Stack>
                     )}
@@ -5773,7 +5778,7 @@ function MachineNpmUpdateButton({
             variant="outlined"
             color="warning"
             disabled={updating}
-            startIcon={updating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
+            startIcon={updating ? <DelayedNetworkProgress size={desktopSize(14)} /> : <SystemUpdateAlt />}
             {...updateTap}
             sx={fullWidthOnTouch
                 ? {
@@ -6179,7 +6184,7 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                                 color="warning"
                                                                 disabled={busy[componentKey]}
                                                                 onClick={() => requestReconcileOne(machine.id, component)}
-                                                            >{busy[componentKey] ? <DelayedNetworkProgress size={14} /> : "Update"}</Button>
+                                                            >{busy[componentKey] ? <DelayedNetworkProgress size={desktopSize(14)} /> : "Update"}</Button>
                                                         )}
                                                         {!componentPending && npmInstallable && (
                                                             <MachineNpmUpdateButton

@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, useTheme } from "@mui/material";
 import { ExpandLess, ExpandMore } from "@mui/icons-material";
@@ -139,8 +140,8 @@ function MessagePreviewImpl({
         <Button
           size="small"
           endIcon={expanded
-            ? <ExpandLess sx={{ fontSize: 16 }} />
-            : <ExpandMore sx={{ fontSize: 16 }} />}
+            ? <ExpandLess sx={{ fontSize: desktopSize(16) }} />
+            : <ExpandMore sx={{ fontSize: desktopSize(16) }} />}
           onClick={(e): void => {
             e.stopPropagation();
             setExpanded((v) => !v);

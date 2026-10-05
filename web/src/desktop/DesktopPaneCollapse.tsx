@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   alpha,
   Box,
@@ -60,7 +61,7 @@ function CollapseGlyph(
 ): React.JSX.Element {
   const towardLeft = (pane === "conversation") === collapsed;
   const Icon = towardLeft ? KeyboardDoubleArrowLeft : KeyboardDoubleArrowRight;
-  return <Icon sx={{ fontSize: 16, width: 16, height: 16, flexShrink: 0 }} />;
+  return <Icon sx={{ fontSize: desktopSize(16), width: desktopSize(16), height: desktopSize(16), flexShrink: 0 }} />;
 }
 
 /**
@@ -203,7 +204,7 @@ export function DesktopRailCount(
           display: "inline-grid",
           placeItems: "center",
           borderRadius: 99,
-          fontSize: 11,
+          fontSize: desktopSize(11),
           fontWeight: 700,
           fontVariantNumeric: "tabular-nums",
           color: "primary.main",
@@ -293,7 +294,7 @@ function GroupBadge({ group }: { group: RailGroup }): React.JSX.Element | null {
         display: "grid",
         placeItems: "center",
         borderRadius: 99,
-        fontSize: 9.5,
+        fontSize: desktopSize(9.5),
         fontWeight: 750,
         lineHeight: 1,
         fontVariantNumeric: "tabular-nums",
@@ -384,7 +385,7 @@ function RailGroupButton({
         }}
       >
         <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
-          <Icon sx={{ fontSize: 22 }} />
+          <Icon sx={{ fontSize: desktopSize(22) }} />
           <GroupBadge group={group} />
           {hint && digit && (
             <ShortcutKeycap
@@ -400,7 +401,7 @@ function RailGroupButton({
           sx={{
             width: "100%",
             textAlign: "center",
-            fontSize: 10.5,
+            fontSize: desktopSize(10.5),
             lineHeight: 1.15,
             fontWeight: group.current ? 700 : 550,
             overflow: "hidden",
@@ -519,11 +520,11 @@ function RailGroupMenu({
                 lineHeight: 2.2,
                 pl: 2 + section.depth * 1.5,
                 bgcolor: "transparent",
-                fontSize: 12,
+                fontSize: desktopSize(12),
                 fontWeight: 650,
               }}
             >
-              <FolderOutlined sx={{ fontSize: 15 }} />
+              <FolderOutlined sx={{ fontSize: desktopSize(15) }} />
               {section.title}
             </ListSubheader>,
           );
@@ -563,7 +564,7 @@ function RailGroupMenu({
                 provider={session.provider}
                 providerVersion={session.provider_version}
                 providerDigest={session.provider_generation_digest}
-                sx={{ fontSize: 16, width: 16, height: 16, flexShrink: 0 }}
+                sx={{ fontSize: desktopSize(16), width: desktopSize(16), height: desktopSize(16), flexShrink: 0 }}
               />
               <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
                 {session.title}
@@ -584,7 +585,7 @@ function RailGroupMenu({
         return items;
       })}
       {group && empty && (
-        <MenuItem disabled sx={{ fontStyle: "italic", fontSize: 13 }}>
+        <MenuItem disabled sx={{ fontStyle: "italic", fontSize: desktopSize(13) }}>
           No items in this folder
         </MenuItem>
       )}
@@ -595,9 +596,9 @@ function RailGroupMenu({
             onClose(false);
             onShowAll();
           }}
-          sx={{ gap: 1, minHeight: 34, color: "text.secondary", fontSize: 13 }}
+          sx={{ gap: 1, minHeight: 34, color: "text.secondary", fontSize: desktopSize(13) }}
         >
-          <KeyboardDoubleArrowRight sx={{ fontSize: 16 }} />
+          <KeyboardDoubleArrowRight sx={{ fontSize: desktopSize(16) }} />
           <Box component="span" sx={{ flex: 1 }}>Show all sessions</Box>
           <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.toggleSessions} compact quiet />
         </MenuItem>
@@ -613,7 +614,7 @@ function RailGroupMenu({
             px: 2,
             pt: 0.5,
             pb: 0.75,
-            fontSize: 11,
+            fontSize: desktopSize(11),
             color: "text.disabled",
           }}
         >
@@ -782,7 +783,7 @@ export function DesktopSessionsRail({
                 },
               }}
             >
-              <Add sx={{ fontSize: 22 }} />
+              <Add sx={{ fontSize: desktopSize(22) }} />
             </ButtonBase>
           </Tooltip>
         )}

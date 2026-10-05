@@ -72,7 +72,7 @@ slots, and must not be copied into an action surface as an availability claim.
 ### Activation, confirmation, and escape
 
 - `Enter` opens, selects, or activates the focused non-destructive item.
-- `Mod+Enter` commits a mutating edit or confirms a consequential action. A
+- `Mod+S` saves Queue/Draft edits. `Mod+Enter` sends/queues a new prompt or confirms a consequential action. A
   confirmation must never also accept plain Enter.
 - `Esc` unwinds exactly one innermost transient state: pending chord, Vim Insert
   or reorder mode, popover, modal, then product mode. It does not skip levels.
@@ -436,7 +436,7 @@ and [Apple Mac keyboard shortcuts](https://support.apple.com/en-us/102650).
 
 An expanded Queue or Draft region starts on its first row. `j/k` moves the row
 selection, while `l` or `Enter` opens the selected message for editing. The
-inline queued/draft editor keeps `Mod+Enter` to commit and `Esc` to open the
+inline queued/draft editor uses `Mod+S` to save and `Esc` to open the
 discard confirmation; plain `Enter` remains a newline. Slash, reference,
 attachment, and expand remain visible actions and Command Palette entries but
 do not reserve Option/Alt letters. Mobile renders neither bindings nor hints.
@@ -525,5 +525,12 @@ Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
 slots once that list owns focus. Clicking a visible number does the same jump.
 `G` then `1…0` remains available as the sequential form. `L`/`Enter` opens the
 selected message editor. `O` pins Order reorder mode
-so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+Enter`
+so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+S`
 saves and `Esc` cancels, with both returning focus to the originating list row.
+
+Independent Draft documents share the Prompt editor region and command host.
+They autosave; `Mod+S` flushes local persistence without sending. The workspace
+prefix exposes the same formatting, attachment and Source commands as Sessions,
+plus `V` (copy to Session drafts, source retained) and `G` (recovery history).
+All document actions, including export and readable width, are searchable in the
+Command Palette. Prefix hints show actual scope, composition and armed state.

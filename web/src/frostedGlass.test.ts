@@ -256,13 +256,13 @@ Deno.test("thought indicators align to the inherited first-line box", () => {
   );
   assertEquals(
     providerTranscriptSource.includes(
-      "top: `calc(0.5lh - ${geometry.size / 2}px)`,",
+      "top: `calc(0.5lh - ${desktopSize(geometry.size / 2)})`,",
     ),
     true,
   );
   assertEquals(
     providerTranscriptSource.includes(
-      "`${geometry.size}px minmax(0, 1fr)`,",
+      "`${desktopSize(geometry.size)} minmax(0, 1fr)`,",
     ),
     true,
   );

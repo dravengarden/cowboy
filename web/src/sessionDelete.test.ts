@@ -22,7 +22,7 @@ Deno.test("a deleting session row is busy, disabled, and shows delayed progress"
   assertEquals(appSource.includes('type: "delete_session"'), false);
   assert(appSource.includes("data-session-deleting"));
   assert(appSource.includes("deletingSessionIds.has(s.id)"));
-  assert(appSource.includes("<DelayedNetworkProgress size={18} />"));
+  assert(appSource.includes("<DelayedNetworkProgress size={desktopSize(18)} />"));
   assert(appSource.includes('pointerEvents: "none"'));
   assert(appSource.includes("aria-busy={deleting || undefined}"));
 });

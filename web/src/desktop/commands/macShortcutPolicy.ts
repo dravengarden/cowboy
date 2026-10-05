@@ -1,7 +1,15 @@
 import { parseShortcut } from "./shortcut";
 
 const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
-  ["mod+s", new Set(["composer.saveDraft"])],
+  [
+    "mod+s",
+    new Set([
+      "composer.saveDraft",
+      "pendingEdit.queued.done",
+      "pendingEdit.draft.done",
+      "document.save",
+    ]),
+  ],
   ["mod+.", new Set(["topbar.stop"])],
   ["mod+k", new Set(["workspace.prefix"])],
 ]);

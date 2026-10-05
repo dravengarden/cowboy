@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   alpha,
@@ -133,7 +134,7 @@ function LogDetail({
   if (state.loading) {
     return (
       <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 1 }}>
-        <CircularProgress size={15} />
+        <CircularProgress size={desktopSize(15)} />
         <Typography variant="caption" color="text.secondary">
           Loading detail…
         </Typography>
@@ -223,15 +224,15 @@ function LogDetail({
                           size="small"
                           aria-label={`Copy ${field.label}`}
                           onClick={() => onCopy(copyKey, field.value)}
-                          sx={{ width: 24, height: 24, p: 0, mt: -0.35 }}
+                          sx={{ width: desktopSize(24), height: desktopSize(24), p: 0, mt: -0.35 }}
                         >
                           {copiedKey === copyKey
-                            ? <Check sx={{ fontSize: 14 }} />
-                            : <ContentCopy sx={{ fontSize: 13 }} />}
+                            ? <Check sx={{ fontSize: desktopSize(14) }} />
+                            : <ContentCopy sx={{ fontSize: desktopSize(13) }} />}
                         </IconButton>
                       </Tooltip>
                     )
-                    : <Box aria-hidden sx={{ width: 24, height: 1 }} />}
+                    : <Box aria-hidden sx={{ width: desktopSize(24), height: 1 }} />}
                 </Box>
               );
             })}
@@ -709,8 +710,8 @@ export function UsageLogs(
                       sx={{ mt: -0.35 }}
                     >
                       {copiedKey === entry.id
-                        ? <Check sx={{ fontSize: 16 }} />
-                        : <ContentCopy sx={{ fontSize: 15 }} />}
+                        ? <Check sx={{ fontSize: desktopSize(16) }} />
+                        : <ContentCopy sx={{ fontSize: desktopSize(15) }} />}
                     </IconButton>
                   </Tooltip>
                   <IconButton
@@ -722,8 +723,8 @@ export function UsageLogs(
                     sx={{ mt: -0.35 }}
                   >
                     {expanded
-                      ? <ExpandLess sx={{ fontSize: 18 }} />
-                      : <ExpandMore sx={{ fontSize: 18 }} />}
+                      ? <ExpandLess sx={{ fontSize: desktopSize(18) }} />
+                      : <ExpandMore sx={{ fontSize: desktopSize(18) }} />}
                   </IconButton>
                 </Stack>
                 {expanded && detailState && (
@@ -743,7 +744,7 @@ export function UsageLogs(
           size="small"
           disabled={loadingMore}
           onClick={() => void loadPage(nextCursor, true)}
-          startIcon={loadingMore ? <CircularProgress size={14} /> : undefined}
+          startIcon={loadingMore ? <CircularProgress size={desktopSize(14)} /> : undefined}
         >
           Load more
         </Button>

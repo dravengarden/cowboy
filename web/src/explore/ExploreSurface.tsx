@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import {
   ArrowDownward,
   ArrowUpward,
@@ -165,7 +166,7 @@ function PageTurnFooter({
         sx={{ minWidth: 0, width: "100%", position: "relative" }}
       >
         {previous && (loading
-          ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
+          ? <CircularProgress size={desktopSize(16)} sx={{ flexShrink: 0 }} />
           : <ChevronLeft sx={{ flexShrink: 0 }} />)}
         <Box
           sx={{
@@ -219,7 +220,7 @@ function PageTurnFooter({
           </Box>
         )}
         {!previous && (loading
-          ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
+          ? <CircularProgress size={desktopSize(16)} sx={{ flexShrink: 0 }} />
           : <ChevronRight sx={{ flexShrink: 0 }} />)}
       </Stack>
     );
@@ -1062,7 +1063,7 @@ function PageList({
             transition: "opacity 140ms ease",
           }}
         >
-          <CircularProgress size={15} thickness={5} color="inherit" />
+          <CircularProgress size={desktopSize(15)} thickness={5} color="inherit" />
           <Typography variant="caption" sx={{ fontWeight: 650, whiteSpace: "nowrap" }}>
             Loading earlier pages
           </Typography>
@@ -1166,7 +1167,7 @@ function PageList({
                 {loadingPageId === page.id && (
                   <CircularProgress
                     aria-label="Loading page"
-                    size={17}
+                    size={desktopSize(17)}
                     thickness={5}
                     color="inherit"
                     sx={{ ml: 1, flexShrink: 0, color: "text.secondary" }}

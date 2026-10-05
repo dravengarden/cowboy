@@ -44,8 +44,12 @@ import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 import { Kbd, useConfirmEnter } from "./Kbd";
-import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ENTER_LABEL, isMac, MOD_LABEL } from "./platform";
 import { ConfirmSheet } from "./Sheet";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { isImeKeyEvent } from "./imeKey";
+import { isImeComposing } from "./desktop/vim/imeStatusStore";
+import { matchesShortcut, parseShortcut } from "./desktop/commands/shortcut";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
 // 100dvh overlay modeled on Obsidian's mobile note editor — a full-height native
@@ -74,6 +78,7 @@ export function FullscreenComposer({
   showCollapse = true,
   submitLabel = "Send",
   submitIcon,
+  saveOnly = false,
   vim = false,
   onVimMode,
   onDiscard,
@@ -119,6 +124,8 @@ export function FullscreenComposer({
    *  than sending the queued/draft item. */
   submitLabel?: string;
   submitIcon?: ReactNode;
+  /** Desktop transactional row editors save with Mod+S, never Mod+Enter. */
+  saveOnly?: boolean;
   /** Desktop preference. PlatformComposerEditor always forces this off on
    * touch surfaces, so the native Mobile editor path remains unchanged. */
   vim?: boolean;
@@ -130,6 +137,8 @@ export function FullscreenComposer({
   onForcePush?: ((anchor: HTMLElement) => void) | undefined;
   forcePushEnabled?: boolean;
 }): React.JSX.Element {
+  const desktop = useSurfaceProfile().kind === "desktop";
+  const composing = useRef(false);
   const nativeShell = isNativeShell();
   const keyboardOpen = useKeyboardOpen();
   const theme = useTheme();
@@ -198,6 +207,32 @@ export function FullscreenComposer({
       data-mobile-pager-modal="true"
       data-mobile-focus-composer="true"
       data-mobile-keyboard-open={keyboardOpen ? "true" : undefined}
+      onCompositionStartCapture={() => {
+        composing.current = true;
+      }}
+      onCompositionEndCapture={() => {
+        composing.current = false;
+      }}
+      onKeyDownCapture={(event) => {
+        if (
+          !desktop || !saveOnly || discardOpen || settingsOpen ||
+          composing.current || isImeComposing() ||
+          isImeKeyEvent(event.nativeEvent) ||
+          !(event.target instanceof Element) ||
+          event.target.closest('[role="dialog"]') !== event.currentTarget
+        ) return;
+        const save = matchesShortcut(
+          parseShortcut("Mod+S"),
+          event,
+          isMac,
+          true,
+        );
+        const send = matchesShortcut(parseShortcut("Mod+Enter"), event, isMac);
+        if (!save && !send) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (save && sendable && !event.repeat) onSubmit();
+      }}
       sx={{
         // `position: absolute` (not fixed): the native shell resizes the WebView for
         // the keyboard, so `body` is normal-flow at viewport height and `absolute
@@ -276,8 +311,8 @@ export function FullscreenComposer({
           // reset by the next React render.
           nativeValue={value}
           onChange={onChange}
-          onSubmit={onSubmit}
-          onSaveDraft={onSaveDraft}
+          onSubmit={desktop && saveOnly ? undefined : onSubmit}
+          {...(!(desktop && saveOnly) ? { onSaveDraft } : {})}
           sessionId={sessionId}
           commands={commands}
           placeholder={placeholder}
@@ -389,7 +424,11 @@ export function FullscreenComposer({
             {resumeEditing ? <Edit /> : <KeyboardHide />}
           </MobileComposerAccessoryButton>
         }
-        primaryLabel={showCollapse ? "Collapse editor" : submitLabel}
+        primaryLabel={showCollapse
+          ? "Collapse editor"
+          : desktop && saveOnly
+          ? `${submitLabel} · ${MOD_LABEL}S`
+          : submitLabel}
         primaryDisabled={showCollapse ? false : !sendable}
         onPrimary={showCollapse ? act(onCollapse) : act(onSubmit)}
         primaryIcon={showCollapse ? <CloseFullscreen /> : submitIcon ??

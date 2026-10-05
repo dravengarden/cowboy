@@ -2,7 +2,15 @@ import { parseShortcut } from "./shortcut";
 import { isMac } from "../../platform";
 
 const SEMANTIC_CHROME_SHORTCUTS = new Map<string, ReadonlySet<string>>([
-  ["mod+s", new Set(["composer.saveDraft"])],
+  [
+    "mod+s",
+    new Set([
+      "composer.saveDraft",
+      "pendingEdit.queued.done",
+      "pendingEdit.draft.done",
+      "document.save",
+    ]),
+  ],
 ]);
 
 /**
@@ -111,7 +119,9 @@ export function chromeShortcutConflict(
     return `${shortcut} conflicts with Chrome Search from the address bar`;
   }
   const chromeAction = CHROME_SHORTCUTS.get(canonical);
-  return chromeAction ? `${shortcut} conflicts with Chrome ${chromeAction}` : null;
+  return chromeAction
+    ? `${shortcut} conflicts with Chrome ${chromeAction}`
+    : null;
 }
 
 export function assertChromeShortcutAllowed(

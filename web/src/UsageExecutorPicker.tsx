@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import { useState } from "react";
 import {
   CircularProgress,
@@ -68,7 +69,7 @@ export function UsageExecutorPicker({ account, settings, onChange }: {
       </TextField>
       {busy && (
         <Stack direction="row" spacing={1} alignItems="center" role="status">
-          <CircularProgress size={14} />
+          <CircularProgress size={desktopSize(14)} />
           <Typography variant="caption">
             Saving and refreshing usage…
           </Typography>

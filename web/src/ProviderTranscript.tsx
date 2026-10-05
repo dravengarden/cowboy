@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import {
   Box,
   CircularProgress,
@@ -47,7 +48,7 @@ function WorkcellGlyph({ size = 16 }: { size?: number }): React.JSX.Element {
     <LightbulbOutlined
       aria-hidden
       sx={{
-        fontSize: size,
+        fontSize: desktopSize(size),
         display: "block",
         flexShrink: 0,
       }}
@@ -64,15 +65,15 @@ function TerminalGlyph({ current }: { current: boolean }): React.JSX.Element {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 15,
-        height: 15,
+        width: desktopSize(15),
+        height: desktopSize(15),
         lineHeight: 1,
         flexShrink: 0,
       }}
     >
       {current
-        ? <CircularProgress size={13} thickness={4.5} color="inherit" />
-        : <TerminalRounded sx={{ fontSize: 16, display: "block" }} />}
+        ? <CircularProgress size={desktopSize(13)} thickness={4.5} color="inherit" />
+        : <TerminalRounded sx={{ fontSize: desktopSize(16), display: "block" }} />}
     </Box>
   );
 }
@@ -112,7 +113,7 @@ function VariantGlyph({
       return header ? <WorkcellGlyph size={14} /> : (
         <LightbulbOutlined
           sx={{
-            fontSize: 14,
+            fontSize: desktopSize(14),
             animation: current
               ? `${thoughtPulse} 1.5s ease-in-out infinite`
               : "none",
@@ -269,13 +270,13 @@ export function ProviderThoughtSteps({
           sx={{
             display: "grid",
             gridTemplateColumns: signalHeader
-              ? `${geometry.size}px minmax(0, 1fr)`
+              ? `${desktopSize(geometry.size)} minmax(0, 1fr)`
               : "auto minmax(0, 1fr)",
             alignItems: "center",
-            columnGap: signalHeader ? `${geometry.gap}px` : 0.75,
+            columnGap: signalHeader ? desktopSize(geometry.gap) : 0.75,
             minHeight: compact ? 16 : 18,
             mb: compact ? 0.125 : 0.25,
-            pl: signalHeader ? `${geometry.paddingLeft}px` : 0,
+            pl: signalHeader ? desktopSize(geometry.paddingLeft) : 0,
             pr: 0,
             py: 0,
             borderRadius: 0,
@@ -328,8 +329,8 @@ export function ProviderThoughtSteps({
             sx={{
               position: "relative",
               display: "grid",
-              gridTemplateColumns: `${geometry.size}px minmax(0, 1fr)`,
-              columnGap: `${geometry.gap}px`,
+              gridTemplateColumns: `${desktopSize(geometry.size)} minmax(0, 1fr)`,
+              columnGap: desktopSize(geometry.gap),
               pl: current && currentSurface ? 0.5 : 0,
               pr: current && currentSurface ? 1.25 : 0,
               py: current && currentSurface ? (compact ? 0.375 : 0.5) : 0,
@@ -365,10 +366,10 @@ export function ProviderThoughtSteps({
                 sx={{
                   position: "absolute",
                   left: "50%",
-                  top: `calc(0.5lh - ${geometry.size / 2}px)`,
+                  top: `calc(0.5lh - ${desktopSize(geometry.size / 2)})`,
                   transform: "translateX(-50%)",
-                  width: geometry.size,
-                  height: geometry.size,
+                  width: desktopSize(geometry.size),
+                  height: desktopSize(geometry.size),
                   display: "grid",
                   placeItems: "center",
                   color: current

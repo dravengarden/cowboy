@@ -1,3 +1,4 @@
+import { desktopSize } from "../surface/desktopSize";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import { CheckRounded, ContentCopyRounded, SwapHorizRounded, WrapTextRounded } from "@mui/icons-material";
@@ -66,11 +67,11 @@ export function CopyTextButton({ text, label }: { text: string; label: string })
       <IconButton
         aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()}`}
         onClick={onCopy}
-        sx={{ width: 44, height: 36, mr: -0.75 }}
+        sx={{ width: desktopSize(44), height: desktopSize(36), mr: -0.75 }}
       >
         {copied
-          ? <CheckRounded color="success" sx={{ fontSize: 18 }} />
-          : <ContentCopyRounded sx={{ fontSize: 18 }} />}
+          ? <CheckRounded color="success" sx={{ fontSize: desktopSize(18) }} />
+          : <ContentCopyRounded sx={{ fontSize: desktopSize(18) }} />}
       </IconButton>
     </Tooltip>
   );
@@ -400,7 +401,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                       px: 0.25,
                       borderRadius: "50%",
                       bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
-                      fontSize: 8,
+                      fontSize: desktopSize(8),
                       lineHeight: 1,
                     }}
                   >

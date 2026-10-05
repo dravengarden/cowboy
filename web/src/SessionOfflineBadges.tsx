@@ -1,3 +1,4 @@
+import { desktopSize } from "./surface/desktopSize";
 import CloudOffOutlined from "@mui/icons-material/CloudOffOutlined";
 import CloudUploadOutlined from "@mui/icons-material/CloudUploadOutlined";
 import {
@@ -47,7 +48,7 @@ export function SessionObligationBadge(
           color: "info.main",
         }}
       >
-        <CloudUploadOutlined sx={{ fontSize: 15 }} />
+        <CloudUploadOutlined sx={{ fontSize: desktopSize(15) }} />
         <Typography variant="caption">{pending}</Typography>
       </Box>
     </Tooltip>
@@ -66,7 +67,7 @@ export function SessionCacheGlyph(
     <Tooltip title="Not cached on this device" enterDelay={300}>
       <CloudOffOutlined
         aria-label="Not cached on this device"
-        sx={{ fontSize: 15, flexShrink: 0, color: "text.disabled" }}
+        sx={{ fontSize: desktopSize(15), flexShrink: 0, color: "text.disabled" }}
       />
     </Tooltip>
   );
@@ -110,8 +111,8 @@ export function SessionsSyncedCaption(): React.JSX.Element | null {
       }}
     >
       {busy
-        ? <CircularProgress size={12} color="inherit" thickness={5} />
-        : <CloudOffOutlined sx={{ fontSize: 15, flexShrink: 0 }} />}
+        ? <CircularProgress size={desktopSize(12)} color="inherit" thickness={5} />
+        : <CloudOffOutlined sx={{ fontSize: desktopSize(15), flexShrink: 0 }} />}
       <Typography variant="caption" sx={{ fontWeight: 600 }}>
         {label}
       </Typography>
