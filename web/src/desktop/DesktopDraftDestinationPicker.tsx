@@ -266,7 +266,8 @@ export function DraftDestinationDialog(
                 </ListItemButton>
               );
             }
-            const s = row.session;
+            const s = row.kind === "session" ? row.session : null;
+            if (!s) return null;
             const machine = sessionMachinePresentation(s);
             const path = sessionFolderLocation(folders, row.folder);
             return (

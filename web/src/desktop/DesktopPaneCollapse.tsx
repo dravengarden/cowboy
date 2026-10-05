@@ -264,7 +264,7 @@ function activitySummary(group: RailGroup): string {
       ? `${String(group.activity.attention)} ${group.activity.attention === 1 ? "needs" : "need"} attention`
       : null,
     group.activity.live > 0 ? `${String(group.activity.live)} ready` : null,
-    `${String(group.sessionCount)} ${group.sessionCount === 1 ? "session" : "sessions"}`,
+    `${String(group.sessionCount)} ${group.sessionCount === 1 ? "item" : "items"}`,
   ];
   return parts.filter(Boolean).join(" · ");
 }
@@ -465,7 +465,7 @@ function RailGroupMenu({
       : Math.max(0, current < 0 ? 0 : current - 1);
     items[next]?.focus();
   };
-  const empty = !group || group.sections.every((section) => section.sessions.length === 0);
+  const empty = !group || group.sections.every((section) => section.sessions.length === 0 && !section.drafts?.length);
   return (
     <Menu
       open={group !== null && anchor !== null}
@@ -572,11 +572,20 @@ function RailGroupMenu({
             </MenuItem>,
           );
         }
+        for (const draft of section.drafts ?? []) {
+          items.push(<MenuItem key={`draft:${draft.id}`} selected={`draft:${draft.id}` === activeId}
+            data-desktop-rail-draft={draft.id} onClick={() => { onPick(`draft:${draft.id}`); onClose(false); }}
+            sx={{ gap: 1, minHeight: 36, pl: 2 + indent * 1.5 }}>
+            <Typography component="span" aria-hidden>▤</Typography>
+            <Typography variant="body2" noWrap sx={{ flex: 1 }}>{draft.title}</Typography>
+            <Typography variant="caption" color="text.secondary">Draft</Typography>
+          </MenuItem>);
+        }
         return items;
       })}
       {group && empty && (
         <MenuItem disabled sx={{ fontStyle: "italic", fontSize: 13 }}>
-          No sessions in this folder
+          No items in this folder
         </MenuItem>
       )}
       {group && <Divider sx={{ my: 0.5 }} />}

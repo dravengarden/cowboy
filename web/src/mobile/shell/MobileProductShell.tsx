@@ -1,3 +1,5 @@
+import { useDraftRoute } from "../../documents/navigation";
+import { openMobileProduct } from "../appPagerMotion";
 import { Box } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { navigationHaptic, prepareNavigationHaptic } from "../../haptic";
@@ -140,7 +142,8 @@ export function MobileProductShell({
   themeMode: ThemeMode;
   onSetThemeMode: (mode: ThemeMode) => void;
 }): React.JSX.Element {
-  const [product, setProduct] = useState<MobileProduct>(restoredProduct);
+  const draft = useDraftRoute();
+  const [product, setProduct] = useState<MobileProduct>(() => draft.active ? "agent" : restoredProduct());
   const productRef = useRef(product);
   const agentDrawerOpenRef = useRef(false);
   const reviewDrawerOpenRef = useRef(false);
@@ -149,6 +152,9 @@ export function MobileProductShell({
   const agentPageRef = useRef<HTMLDivElement>(null);
   const reviewPageRef = useRef<HTMLDivElement>(null);
   const workspace = useActiveWorkspaceBinding();
+  const draftActiveRef = useRef(draft.active);
+  draftActiveRef.current = draft.active;
+  useEffect(() => { if (draft.active) openMobileProduct("agent"); }, [draft.active]);
   const onAgentDrawerOpenChange = useCallback((open: boolean): void => {
     agentDrawerOpenRef.current = open;
     setSessionsDrawerOpen(open);
@@ -281,6 +287,7 @@ export function MobileProductShell({
       settle(productRef.current, 0, width);
     };
     const onTouchStart = (event: TouchEvent): void => {
+      if (draftActiveRef.current) return;
       // Keep a claimed swipe on the finger that claimed it. Restarting the
       // recognizer for a second contact drops `locked`, and the touchend that
       // follows then returns without settling.
@@ -463,7 +470,7 @@ export function MobileProductShell({
 
     const onOpenProduct = (event: Event): void => {
       const next = mobileProductFromEvent(event);
-      if (next === null || next === productRef.current) return;
+      if (next === null || next === productRef.current || (draftActiveRef.current && next !== "agent")) return;
       settle(next);
     };
 
@@ -535,11 +542,11 @@ export function MobileProductShell({
         // paint through the otherwise opaque cover. Tie the freeze to the
         // sheet's actual DOM lifetime (not the open registry), so removal also
         // restores every Agent/Review scroller even after a portaled dismiss.
-        "&:has([data-detent-sheet='true'][aria-label='New session']) [data-mobile-overflow-layer='true']": {
+        "&:has([data-detent-sheet='true'][aria-label='Create']) [data-mobile-overflow-layer='true']": {
           overflowY: "hidden !important",
           WebkitOverflowScrolling: "auto",
         },
-        "&:has([data-detent-sheet='true'][aria-label='New session']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
+        "&:has([data-detent-sheet='true'][aria-label='Create']) [data-detent-sheet='true'] [data-mobile-overflow-layer='true']": {
           overflowY: "auto !important",
           WebkitOverflowScrolling: "touch",
         },

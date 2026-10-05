@@ -7,7 +7,6 @@ import {
   captureDeviceAuthorizationFromLocation,
   DeviceAuthorizationRoute,
 } from "./auth/DeviceAuthorizationPage";
-import { MachineSetupGate } from "./setup/MachineSetupGate";
 import { BootSkeleton } from "./BootSkeleton";
 import { rememberBootSurface } from "./bootSnapshot";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -34,7 +33,6 @@ import {
 import { initializeAppIcons } from "./appIcons";
 import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
 import { installBrowserDevice } from "./browserDevice";
-import { useDraftRoute } from "./documents/navigation";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 
@@ -50,11 +48,6 @@ const releasePluginHostScope = ownPluginHostLifecycle(globalThis);
 import.meta.hot?.dispose(releasePluginHostScope);
 
 initializeAppIcons();
-
-const DraftWorkspace = lazy(async () => {
-  const module = await import("./documents/DraftWorkspace");
-  return { default: module.DraftWorkspace };
-});
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
@@ -83,7 +76,6 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
-  const draftRoute = useDraftRoute();
   // The static boot shell cannot run this rule, so it reuses the answer
   // (docs/offline-first-sync.md §Boot presentation).
   const desktop = surface.kind === "desktop";
@@ -115,13 +107,7 @@ function Root(): React.JSX.Element {
       <AppErrorBoundary>
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
-            {draftRoute.active ? (
-              <Suspense fallback={<BootSkeleton />}><DraftWorkspace id={draftRoute.id} /></Suspense>
-            ) : (
-              <MachineSetupGate>
-                <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
-              </MachineSetupGate>
-            )}
+            <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
             <DocumentNotifications />
             <EditorExtensionsDialog />
           </DeviceAuthorizationRoute>

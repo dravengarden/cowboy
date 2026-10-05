@@ -50,7 +50,7 @@ Deno.test("top-level folders and unfiled sessions become rail groups", () => {
       sections: ["-@0:s1,s3", "Deep@0:s2"],
     },
     { id: "f-empty", name: "liveview", count: 0, current: false, sections: [] },
-    { id: "unfiled", name: "Unfiled", count: 2, current: false, sections: ["-@0:s4,s5"] },
+    { id: "unfiled", name: "Top level", count: 2, current: false, sections: ["-@0:s4,s5"] },
   ]);
 });
 
@@ -64,5 +64,15 @@ Deno.test("group activity counts every descendant", () => {
 Deno.test("without folders the single group is simply Sessions", () => {
   const rows = buildSessionTree(sessions, { folders: [], placement: {} }, new Set()).rows;
   const groups = sessionsRailGroups(rows, "s4");
-  assertEquals(groups.map((group) => [group.name, group.current]), [["Sessions", true]]);
+  assertEquals(groups.map((group) => [group.name, group.current]), [["Workspace", true]]);
+});
+
+Deno.test("collapsed rail retains Draft-only folders and current Draft", () => {
+  const draft = { id: "note", kind: "document" as const, title: "Note", parent_id: "f-empty", revision: 1, body_revision: 1, metadata_revision: 1, updated_at_ms: 1, deleted: false };
+  const rows = buildSessionTree([], value, new Set(), [draft]).rows;
+  const group = sessionsRailGroups(rows, "draft:note").find((entry) => entry.id === "f-empty");
+  assertEquals(group?.sessionCount, 1);
+  assertEquals(group?.current, true);
+  assertEquals(group?.sections[0]?.drafts?.map((entry) => entry.id), ["note"]);
+  assertEquals(group?.activity, { working: 0, attention: 0, live: 0 });
 });

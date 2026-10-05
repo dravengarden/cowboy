@@ -257,3 +257,136 @@ async fn postgres_documents_preserve_conflicts_replay_and_ownership() {
         .unwrap();
     contract(&store).await;
 }
+
+#[allow(clippy::too_many_lines)] // One migration/delete/content contract on both database backends.
+async fn workspace_contract(store: &Store) {
+    store.migrate().await.unwrap();
+    for owner in ["alice", "bob"] {
+        for (id, parent, kind, body) in [
+            ("root", None, DraftKind::Folder, ""),
+            ("nested", Some("root"), DraftKind::Folder, ""),
+            (
+                "document",
+                Some("nested"),
+                DraftKind::Document,
+                "中文\n# saved content",
+            ),
+        ] {
+            applied(
+                store
+                    .mutate_draft_document(
+                        owner,
+                        &mutation(id, id, 0, create(kind, "Same name", parent, body)),
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+    }
+    store.integrate_draft_folders().await.unwrap();
+    let first = store.load_session_folders().await.unwrap();
+    assert_eq!(first.len(), 4);
+    for owner in ["alice", "bob"] {
+        let document = store
+            .draft_document(owner, "document")
+            .await
+            .unwrap()
+            .unwrap();
+        let nested = first
+            .iter()
+            .find(|folder| Some(&folder.id) == document.parent_id.as_ref())
+            .unwrap();
+        assert_eq!(nested.owner_user_id.as_deref(), Some(owner));
+        assert!(nested.parent.is_some());
+        assert_eq!(document.body, "中文\n# saved content");
+        assert_eq!(document.body_revision, 1);
+        let root = first
+            .iter()
+            .find(|folder| Some(&folder.id) == nested.parent.as_ref())
+            .unwrap();
+        store
+            .replace_session_folders(Some(owner), std::slice::from_ref(root))
+            .await
+            .unwrap();
+        let document = store
+            .draft_document(owner, "document")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(document.parent_id.as_ref(), Some(&root.id));
+        // A writer that began before folder deletion still owns its body clock.
+        applied(
+            store
+                .mutate_draft_document(
+                    owner,
+                    &mutation(
+                        "document",
+                        "write-after-move",
+                        1,
+                        write("Written after folder deletion"),
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
+        store
+            .replace_session_folders(Some(owner), &[])
+            .await
+            .unwrap();
+        let document = store
+            .draft_document(owner, "document")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(document.parent_id, None);
+        assert_eq!(document.body, "Written after folder deletion");
+        assert_eq!(
+            store.draft_history(owner, "document").await.unwrap().len(),
+            1
+        );
+    }
+    store.integrate_draft_folders().await.unwrap();
+    assert!(store.load_session_folders().await.unwrap().is_empty());
+    for owner in ["alice", "bob"] {
+        assert_eq!(
+            store
+                .draft_document(owner, "document")
+                .await
+                .unwrap()
+                .unwrap()
+                .parent_id,
+            None
+        );
+    }
+    store
+        .update_workspace_order("alice", &["draft:document".to_owned()])
+        .await
+        .unwrap();
+    store
+        .update_workspace_order("bob", &["session:other".to_owned()])
+        .await
+        .unwrap();
+    let orders = store.load_workspace_orders().await.unwrap();
+    assert_eq!(orders.len(), 2);
+    assert!(orders.contains(&("alice".to_owned(), vec!["draft:document".to_owned()])));
+}
+
+#[tokio::test]
+async fn sqlite_workspace_import_and_folder_deletion_preserve_content_and_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    workspace_contract(&store).await;
+}
+
+#[tokio::test]
+#[ignore = "run with just test-postgres in a disposable database"]
+async fn postgres_workspace_import_and_folder_deletion_preserve_content_and_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated database URL");
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    workspace_contract(&store).await;
+}

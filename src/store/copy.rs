@@ -17,6 +17,8 @@ use super::sqlite::SqliteStorage;
 const TABLES: &[&str] = &[
     "draft_document_owners",
     "draft_documents",
+    "draft_workspace_folder_imports",
+    "workspace_item_order",
     "draft_document_operations",
     "draft_document_history",
     "core_security_authority",

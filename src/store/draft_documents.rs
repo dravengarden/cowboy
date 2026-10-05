@@ -90,7 +90,12 @@ fn normalized_title(title: &str) -> Option<String> {
         .then(|| title.to_owned())
 }
 
-fn apply(entries: &[DraftDocument], mutation: &DraftMutation, now: i64) -> DraftResult {
+fn apply(
+    entries: &[DraftDocument],
+    mutation: &DraftMutation,
+    now: i64,
+    shared: &[crate::session_folders::SessionFolder],
+) -> DraftResult {
     use DraftChange::{Create, Move, Rename, Restore, Trash, Write};
     if !valid_id(&mutation.document_id)
         || !valid_id(&mutation.operation_id)
@@ -179,16 +184,22 @@ fn apply(entries: &[DraftDocument], mutation: &DraftMutation, now: i64) -> Draft
                 !entries
                     .iter()
                     .any(|d| d.id == *id && !d.deleted && d.kind == DraftKind::Folder)
+                    && !shared.iter().any(|folder| folder.id == *id)
             }) {
                 next.parent_id = None;
                 next.metadata_revision += 1;
             }
         }
     }
-    validate_next(entries, next, now)
+    validate_next(entries, next, now, shared)
 }
 
-fn validate_next(entries: &[DraftDocument], mut next: DraftDocument, now: i64) -> DraftResult {
+fn validate_next(
+    entries: &[DraftDocument],
+    mut next: DraftDocument,
+    now: i64,
+    shared: &[crate::session_folders::SessionFolder],
+) -> DraftResult {
     let Some(title) = normalized_title(&next.title) else {
         return DraftResult::Invalid("Use a title of 1–160 characters".to_owned());
     };
@@ -217,6 +228,10 @@ fn validate_next(entries: &[DraftDocument], mut next: DraftDocument, now: i64) -
     while let Some(id) = parent {
         if id == next.id || !ancestors.insert(id) {
             return DraftResult::Invalid("A folder cannot be moved inside itself".to_owned());
+        }
+        if let Some(folder) = shared.iter().find(|folder| folder.id == id) {
+            parent = folder.parent.as_deref();
+            continue;
         }
         let Some(folder) = entries
             .iter()
@@ -293,10 +308,27 @@ impl Store {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) async fn mutate_draft_document(
         &self,
         owner: &str,
         mutation: &DraftMutation,
+    ) -> Result<DraftResult> {
+        let shared = self
+            .load_session_folders()
+            .await?
+            .into_iter()
+            .filter(|folder| folder.owner_user_id.as_deref().is_none_or(|id| id == owner))
+            .collect::<Vec<_>>();
+        self.mutate_draft_document_in_workspace(owner, mutation, &shared)
+            .await
+    }
+
+    pub(crate) async fn mutate_draft_document_in_workspace(
+        &self,
+        owner: &str,
+        mutation: &DraftMutation,
+        shared: &[crate::session_folders::SessionFolder],
     ) -> Result<DraftResult> {
         let request_hash = crate::admin::hex_sha256(&serde_json::to_vec(mutation)?);
         macro_rules! write { ($db:expr) => {{
@@ -321,7 +353,13 @@ impl Store {
                 let Some(document) = entries.iter().find(|d| d.id == id) else { bail!("draft operation lost its document"); };
                 return Ok(DraftResult::Applied(document.clone()));
             }
-            let result = apply(&entries, mutation, chrono::Utc::now().timestamp_millis());
+            let mut mapped = mutation.clone();
+            let parent = match &mut mapped.change { DraftChange::Create { parent_id, .. } | DraftChange::Move { parent_id } => Some(parent_id), _ => None };
+            if let Some(Some(parent)) = parent {
+                let destination: Option<String> = sqlx::query_scalar("SELECT folder_id FROM draft_workspace_folder_imports WHERE owner_user_id=$1 AND document_id=$2").bind(owner).bind(&*parent).fetch_optional(&mut *tx).await?;
+                if let Some(destination) = destination { *parent = destination; }
+            }
+            let result = apply(&entries, &mapped, chrono::Utc::now().timestamp_millis(), shared);
             if let DraftResult::Applied(ref next) = result {
                 if let Some(previous) = entries.iter().find(|d| d.id == next.id && (d.body != next.body || d.attachments != next.attachments) && d.kind == DraftKind::Document) {
                     sqlx::query("INSERT INTO draft_document_history (owner_user_id, document_id, revision, value) VALUES ($1, $2, $3, $4)")

@@ -146,7 +146,7 @@ export type ProductSyncScope =
   | { readonly kind: "document"; readonly document: string; readonly state: "entry" }
   | {
     readonly kind: "service";
-    readonly state: "title" | "order" | "folders";
+    readonly state: "title" | "order" | "folders" | "workspace-order";
   }
   | {
     readonly kind: "session";
@@ -162,7 +162,7 @@ function suffix(scope: ProductSyncScope): string {
   if (scope.kind === "service") {
     if (
       scope.state !== "title" && scope.state !== "order" &&
-      scope.state !== "folders"
+      scope.state !== "folders" && scope.state !== "workspace-order"
     ) invalid();
     return `service:${scope.state}`;
   }
