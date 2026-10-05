@@ -132,3 +132,6 @@ mounts introduced before/after child opens.
 The [leaf-identity release](releases/plugin-session-cleanup-leaves-2026-10-05.md)
 records nondirectory handle retention, replacement refusal and actual file-mount
 acceptance before unlink.
+The [marker-finalization release](releases/plugin-session-cleanup-finalization-2026-10-05.md)
+records retention of eligibility across partial content I/O errors and successful
+retry before root marker removal.
