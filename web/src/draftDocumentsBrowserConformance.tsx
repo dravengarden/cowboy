@@ -1721,6 +1721,36 @@ export async function runDraftDocumentsBrowserConformance(
       ),
       "Draft uses the existing Sessions drawer surface",
     );
+    {
+      // The formatting bar stays when the keyboard is away: at rest it sits
+      // above the navigation capsule; Hide keyboard appears only while editing.
+      (document.activeElement as HTMLElement | null)?.blur();
+      await tick();
+      const bar = container.querySelector<HTMLElement>("[data-draft-mobile-toolbar]");
+      const nav = container.querySelector<HTMLElement>("[data-draft-mobile-nav] > *");
+      const hide = container.querySelector<HTMLElement>("[data-draft-hide-keyboard]");
+      check(bar && nav && hide, "Touch Draft renders formatting and navigation capsules");
+      const barRect = bar.getBoundingClientRect();
+      const navRect = nav.getBoundingClientRect();
+      check(
+        getComputedStyle(bar).display === "flex" && barRect.height > 0 &&
+          bar.querySelectorAll("[data-draft-tool]").length > 0,
+        "Formatting bar is visible with the keyboard hidden",
+      );
+      check(
+        barRect.bottom <= navRect.top + 1 &&
+          navRect.height > 0 && getComputedStyle(hide).display === "none",
+        `Resting bar sits above navigation (${Math.round(barRect.bottom)} ≤ ${Math.round(navRect.top)}) without Hide keyboard`,
+      );
+      container.querySelector<HTMLElement>("[data-draft-body] .cm-content, [data-draft-body] textarea")
+        ?.focus();
+      await tick();
+      check(
+        getComputedStyle(hide).display !== "none" &&
+          getComputedStyle(container.querySelector("[data-draft-mobile-nav]")!).display === "none",
+        "Editing shows Hide keyboard and hides navigation",
+      );
+    }
     mobileRoot.unmount();
     results.push(
       "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager",

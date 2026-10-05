@@ -2896,3 +2896,14 @@ exercised with synthetic events only.
     without an in-app entry, so they can never leave Cowboy for the native
     loader. The page chrome uses Lucide-style stroke icons
     (`documents/draftChromeIcons.tsx`) on shadow-lifted capsules.
+
+### 2026-10-05 Touch Draft formatting bar stays at rest
+
+User request: the touch Draft formatting capsule must not disappear when the
+software keyboard is put away. It now always renders; at rest it sits above the
+navigation capsule (which keeps its place), and only Hide keyboard and the nav
+swap are tied to `[data-draft-body]:focus-within`. Buttons keep
+`preventDefault` on pointer/mouse down, so tapping one at rest does not move
+focus. No editor, IME, caret, paste or keyboard-geometry code changed; #69 is
+unaffected. Checked in the integrated Mobile shell fixture (Firefox, 390px),
+not on a physical iPad/iPhone.

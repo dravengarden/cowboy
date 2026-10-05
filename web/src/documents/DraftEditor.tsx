@@ -95,6 +95,10 @@ const desktopDraftActionSx = {
 };
 
 const positions = new Map<string, ComposerEditorSelection>();
+/** Height reserved under the resting formatting capsule for the floating
+ *  navigation capsule (56px plus its bottom inset and gap). */
+const DRAFT_MOBILE_NAV_CLEARANCE =
+  "calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)";
 export type DraftFlush = () => Promise<void>;
 
 /** Mobile focus-on-writing chrome (Obsidian): the page owns its Sessions and
@@ -503,16 +507,22 @@ function DraftEditingSession(
     onPointerDown: (e: { preventDefault: () => void }) => e.preventDefault(),
     onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault(),
   };
-  // Shown only while the body is being edited (see the root's :has rule):
-  // a scrolling capsule of formatting above the keyboard, and a separate
-  // control that puts the keyboard away.
+  // Always present (see the root's :has rules): a scrolling capsule of
+  // formatting that rests above the navigation capsule and rides above the
+  // keyboard while the body is edited, where a separate control also puts
+  // the keyboard away.
   const focusToolbar = (
     <Stack
       data-draft-mobile-toolbar
       direction="row"
       alignItems="center"
       spacing={1}
-      sx={{ display: "none", px: 1, py: 0.75, flexShrink: 0 }}
+      sx={{
+        px: 1,
+        py: 0.75,
+        flexShrink: 0,
+        mb: DRAFT_MOBILE_NAV_CLEARANCE,
+      }}
     >
       <Stack
         data-draft-format-toolbar
@@ -557,6 +567,7 @@ function DraftEditingSession(
         </IconButton>
       </Stack>
       <IconButton
+        data-draft-hide-keyboard
         aria-label="Hide keyboard"
         {...keepEditorFocus}
         onClick={() => {
@@ -566,6 +577,7 @@ function DraftEditingSession(
         sx={{
           ...floatingMaterialSx,
           color: "text.primary",
+          display: "none",
           width: 48,
           height: 48,
           flexShrink: 0,
@@ -806,7 +818,15 @@ function DraftEditingSession(
         ...(focusLayout && {
           position: "relative",
           "&:has([data-draft-body]:focus-within) [data-draft-mobile-toolbar]": {
-            display: "flex",
+            mb: 0,
+          },
+          "&:has([data-draft-body]:focus-within) [data-draft-hide-keyboard]": {
+            display: "inline-flex",
+          },
+          // At rest the formatting capsule already sits above the navigation
+          // capsule, so the body needs no extra clearance of its own.
+          "&:not(:has([data-draft-body]:focus-within)) [data-draft-body]": {
+            pb: 0,
           },
           "&:has([data-draft-body]:focus-within) [data-draft-mobile-nav]": {
             display: "none",
@@ -1023,7 +1043,7 @@ function DraftEditingSession(
           px: desktop ? 1.5 : 0.5,
           // Rest the last line above the floating navigation capsule.
           ...(focusLayout && {
-            pb: "calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)",
+            pb: DRAFT_MOBILE_NAV_CLEARANCE,
           }),
         }}
         data-draft-body
