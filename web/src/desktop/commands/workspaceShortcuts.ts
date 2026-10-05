@@ -28,8 +28,6 @@ export function desktopLeaderLabel(key: string): string {
 /** which-key groups: `␣` + group key opens a layer of related commands. */
 export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   t: "Top bar",
-  // Editor formatting (direct chords such as Mod+B remain).
-  m: "Markup",
   // Layout: cycle regions, resize, fold panes.
   w: "Window",
   // Presentation toggles.
@@ -81,7 +79,7 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerAttach: "A",
   composerSchedule: "H",
   composerJumpFront: "J",
-  composerMore: "MM",
+  composerMore: "M",
   // Zoom the focused editor into the fullscreen composer.
   editorExpand: "Z",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
@@ -92,21 +90,28 @@ export const DESKTOP_WORKSPACE_KEYS = {
   toggleConversation: "W\\",
 } as const;
 
-/** Formatting shares the leader; bare letters remain editor input. Undo and
- *  redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`). */
-export const DESKTOP_COMPOSER_FORMAT_KEYS: Readonly<Record<string, string>> = {
-  bold: "MB",
-  italic: "MI",
-  code: "MX",
-  link: "MU",
-  bulletList: "MO",
-};
 
-/** Obsidian's direct formatting chords. Only formats whose chord has the same
- *  meaning everywhere get one; Mod+K stays the workspace prefix on macOS. */
+/**
+ * Rich-text formatting uses direct chords, never the leader (FOCUS.md "Rich
+ * text"), active only while an editor owns focus. Obsidian and Google Docs
+ * conventions, filtered through the Chrome/macOS audits: Mod+K is the macOS
+ * leader (and Chrome search elsewhere), so links take Mod+Shift+K; Mod+E is
+ * Chrome's, so inline code takes Mod+Shift+E; Mod+Shift+H is Chrome Home on
+ * macOS, so highlight stays in More and the palette. Undo/redo stay with the
+ * editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
+ */
 export const DESKTOP_COMPOSER_FORMAT_CHORDS: Readonly<Record<string, string>> = {
   bold: "Mod+B",
   italic: "Mod+I",
+  strikethrough: "Mod+Shift+X",
+  code: "Mod+Shift+E",
+  link: "Mod+Shift+K",
+  numberedList: "Mod+Shift+7",
+  bulletList: "Mod+Shift+8",
+  checklist: "Mod+Shift+9",
+  heading1: "Mod+Alt+1",
+  heading2: "Mod+Alt+2",
+  heading3: "Mod+Alt+3",
 };
 
 /** The strokes of a leader path, for `DesktopCommand.sequence`. */
@@ -179,8 +184,8 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   q: "prompt.focusQueue",
   d: "prompt.focusDrafts",
   n: "session.new",
-  // Groups, not commands: their layers hold formatting, layout and toggles.
-  m: "group:m",
+  m: "composer.more",
+  // Groups, not commands: their layers hold layout and toggles.
   w: "group:w",
   u: "group:u",
   "/": "composer.slash",

@@ -58,6 +58,7 @@ const CHROME_SHORTCUTS = new Map<string, string>([
   ["mod+u", "View source"],
   ["mod+d", "Bookmark page"],
   ["shift+mod+d", "Bookmark all tabs"],
+  ["shift+mod+h", "Home page (macOS)"],
   ["shift+mod+b", "Toggle bookmarks bar"],
   ["shift+mod+o", "Bookmark manager"],
   ["shift+mod+j", "Developer tools"],

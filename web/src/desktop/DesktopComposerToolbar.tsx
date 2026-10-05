@@ -43,7 +43,7 @@ import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
-  DESKTOP_COMPOSER_FORMAT_KEYS,
+  DESKTOP_COMPOSER_FORMAT_CHORDS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   desktopWorkspaceSequence,
@@ -320,7 +320,7 @@ export function DesktopComposerToolbar(
             id,
             icon: command.icon,
             label: command.label,
-            key: DESKTOP_COMPOSER_FORMAT_KEYS[id]!,
+            shortcut: DESKTOP_COMPOSER_FORMAT_CHORDS[id]!,
             disabled: composing,
             reason: "Finish text composition first",
             formatTier: index < 3 ? "primary" : "secondary",
@@ -514,12 +514,10 @@ export function DesktopComposerToolbar(
           >
             <ListItemIcon>{command.icon}</ListItemIcon>
             <ListItemText>{command.label}</ListItemText>
-            {DESKTOP_COMPOSER_FORMAT_KEYS[command.id] && (
+            {DESKTOP_COMPOSER_FORMAT_CHORDS[command.id] && (
               <Box sx={{ ml: 2 }} data-shortcut-reference>
                 <DesktopShortcut
-                  shortcut={desktopWorkspaceSequence(
-                    DESKTOP_COMPOSER_FORMAT_KEYS[command.id]!,
-                  )}
+                  shortcut={DESKTOP_COMPOSER_FORMAT_CHORDS[command.id]!}
                   quiet
                   compact
                   availability="inactive"
