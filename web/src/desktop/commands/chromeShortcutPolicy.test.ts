@@ -90,6 +90,7 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
     "n",
     "p",
     "q",
+    "r",
     "s",
     "t",
     "u",

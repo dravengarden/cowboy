@@ -27,6 +27,8 @@ export function desktopLeaderLabel(key: string): string {
 
 /** which-key groups: `␣` + group key opens a layer of related commands. */
 export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
+  // The Sessions sidebar: focus it (`␣SS`), fold its tree, file folders.
+  s: "Sessions",
   t: "Top bar",
   // Layout: cycle regions, resize, fold panes.
   w: "Window",
@@ -57,7 +59,13 @@ export const DESKTOP_WORKSPACE_KEYS = {
   switchSession: " ",
   alternateSession: "`",
   commandPalette: "K",
-  focusSessions: "S",
+  // The Sessions group mirrors Top bar: the doubled key focuses the surface,
+  // the rest act on its tree from any focus. `Z` is Vim's fold prefix.
+  focusSessions: "SS",
+  sessionsFold: "SZ",
+  sessionsNewFolder: "SN",
+  sessionsOrganize: "SP",
+  sessionsMove: "SM",
   focusPrompt: "P",
   focusTopbar: "T",
   focusConversation: "C",
@@ -68,6 +76,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   cycleRegion: "WW",
   resize: "WR",
   settings: ",",
+  // Only while a Retry control is on screen (the server is unreachable).
+  reconnect: "R",
   // Obsidian binds live-preview ↔ source to Mod+E, which Cowboy cannot have:
   // Chrome owns it for the address bar and macOS apps for a common editor
   // action (chromeShortcutPolicy / macShortcutPolicy both reject it). The
@@ -143,6 +153,8 @@ export const DESKTOP_SHORTCUTS = {
     DESKTOP_WORKSPACE_KEYS.focusTopbar,
   ),
   focusSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
+  sessionsFold: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsFold),
+  reconnect: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
   focusPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
   focusConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.focusConversation,
@@ -175,7 +187,8 @@ export const DESKTOP_RESIZE_HINT = DESKTOP_SHORTCUTS.resize;
 
 /** One stable meaning for every workspace-prefix continuation. */
 export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
-  s: "workspace.focusSessions",
+  // A group: `␣SS` focuses Sessions, `␣SZ` folds its tree.
+  s: "group:s",
   p: "workspace.focusPrompt",
   // A group, not a command: `␣T` opens the Top bar layer (`␣TT` focuses it).
   t: "group:t",
@@ -194,6 +207,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   h: "composer.schedule",
   j: "composer.jumpFront",
   ",": "settings.open",
+  r: "sync.retry",
   " ": "session.switch",
   "`": "session.alternate",
   k: "commandPalette.open",

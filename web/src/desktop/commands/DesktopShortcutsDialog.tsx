@@ -28,6 +28,21 @@ interface ShortcutRow {
 
 const NAVIGATION: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.focusSessions], title: "Focus Sessions / Sidebar" },
+  {
+    keys: [DESKTOP_SHORTCUTS.sessionsFold],
+    title: "Fold Sessions",
+    description:
+      "The fold button beside Create: focus the current session's folder path, expand every folder, or scroll back to the current row",
+  },
+  {
+    keys: [
+      desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsNewFolder),
+      desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsMove),
+      desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsOrganize),
+    ],
+    title: "New folder / Move session / Organize by project",
+    description: "The Sessions group runs from any focus; the focused row, else the current session, is the subject",
+  },
   { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Message the Agent" },
   { keys: [DESKTOP_FOCUS_PLAN_SHORTCUT], title: "Focus Plan" },
   { keys: [DESKTOP_SHORTCUTS.focusConversation], title: "Focus Conversation Log" },

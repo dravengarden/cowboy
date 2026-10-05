@@ -39,26 +39,37 @@ function Segment({
   mono?: boolean;
   onClick?: () => void;
 }): React.JSX.Element {
-  const body = (
-    <ButtonBase
-      disableRipple
-      tabIndex={-1}
-      onClick={onClick}
-      sx={{
-        height: 28,
-        px: 1,
-        color,
-        fontSize: "0.6875rem",
-        fontWeight: 650,
-        letterSpacing: "0.035em",
-        whiteSpace: "nowrap",
-        fontFamily: mono && typeof label === "string" ? "monospace" : "inherit",
-        "&:hover": { bgcolor: "action.hover", color: "text.primary" },
-      }}
-    >
-      {label}
-    </ButtonBase>
-  );
+  const sx = {
+    height: 28,
+    px: 1,
+    color,
+    fontSize: "0.6875rem",
+    fontWeight: 650,
+    letterSpacing: "0.035em",
+    whiteSpace: "nowrap",
+    fontFamily: mono && typeof label === "string" ? "monospace" : "inherit",
+  } as const;
+  // A read-out is not a control: only a segment with an action is a button,
+  // and each of those mirrors a keyboard command (FOCUS.md "Shortcut slots").
+  const body = onClick
+    ? (
+      <ButtonBase
+        disableRipple
+        tabIndex={-1}
+        onClick={onClick}
+        sx={{
+          ...sx,
+          "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+        }}
+      >
+        {label}
+      </ButtonBase>
+    )
+    : (
+      <Box component="span" sx={{ ...sx, display: "inline-flex", alignItems: "center" }}>
+        {label}
+      </Box>
+    );
   return tooltip ? <Tooltip title={tooltip}>{body}</Tooltip> : body;
 }
 
@@ -409,7 +420,12 @@ export function DesktopStatusLine({
         <Segment label={status.toUpperCase()} tooltip="Session status" mono />
         <Segment
           label={
-            <Stack direction="row" spacing={0.6} alignItems="center">
+            <Stack
+              direction="row"
+              spacing={0.6}
+              alignItems="center"
+              data-desktop-sync-retry={syncLive ? undefined : true}
+            >
               <Box
                 component="span"
                 aria-hidden
@@ -422,6 +438,7 @@ export function DesktopStatusLine({
                 }}
               />
               <Box component="span">{syncLabel.toUpperCase()}</Box>
+              {!syncLive && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.reconnect} quiet />}
             </Stack>
           }
           color={sync.phase === "live" && sync.outbox.held > 0 ? "warning.main" : `${syncTone}.main`}

@@ -3,6 +3,8 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import type { ConnectionNotice } from "./connectionNotice";
+import { DesktopShortcut } from "./commands/DesktopKeycap";
+import { DESKTOP_SHORTCUTS } from "./commands/workspaceShortcuts";
 
 /** The Desktop connection notice as painted; the container owns timing. */
 export function ConnectionNoticeStrip({
@@ -65,7 +67,10 @@ export function ConnectionNoticeStrip({
           variant="outlined"
           color="inherit"
           onClick={onRetry}
+          data-desktop-sync-retry
+          aria-keyshortcuts={DESKTOP_SHORTCUTS.reconnect}
           sx={{
+            gap: 0.75,
             flexShrink: 0,
             textTransform: "none",
             fontWeight: 600,
@@ -75,6 +80,7 @@ export function ConnectionNoticeStrip({
           }}
         >
           Retry now
+          <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.reconnect} quiet />
         </Button>
       )}
     </Box>

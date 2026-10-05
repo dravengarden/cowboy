@@ -1174,6 +1174,9 @@ function SessionList({
             case "expandAll":
                 setFolderCollapsed(sessionFolders.folders.map((f) => f.id), false);
                 return;
+            case "fold":
+                fold.run();
+                return;
             case "reveal":
                 if (activeId) {
                     revealSession(activeId);
@@ -1490,10 +1493,15 @@ function SessionList({
                 {fold.action && <Tooltip title={fold.label} describeChild>
                     <IconButton
                         aria-label={fold.label}
+                        aria-keyshortcuts={desktop ? DESKTOP_SHORTCUTS.sessionsFold : undefined}
                         onClick={fold.run}
                         sx={{
                             ...(desktop && desktopEmbeddedControlSx()),
-                            width: desktop ? "3rem" : 48,
+                            // Desktop carries its `␣SZ` slot beside the glyph.
+                            width: desktop ? "auto" : 48,
+                            minWidth: desktop ? "3rem" : undefined,
+                            px: desktop ? "0.625rem" : undefined,
+                            gap: desktop ? "0.375rem" : undefined,
                             minHeight: desktop ? "3rem" : 48,
                             borderRadius: 1.25,
                             flexShrink: 0,
@@ -1501,6 +1509,7 @@ function SessionList({
                         }}
                     >
                         {fold.icon}
+                        {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.sessionsFold} quiet />}
                     </IconButton>
                 </Tooltip>}
                 </Stack>
@@ -1538,6 +1547,7 @@ function SessionList({
             <List
                 dense
                 ref={listRef}
+                data-desktop-fold-action={desktop ? fold.action ?? undefined : undefined}
                 data-mobile-overflow-layer={mobileDrawer ? "true" : undefined}
                 onKeyDownCapture={onDesktopListKeyDown}
                 sx={{

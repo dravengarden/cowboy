@@ -31,6 +31,7 @@ import {
   visibleDesktopSplitterIds,
 } from "../desktopSplitterKeyboard";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
+import { retrySyncNow } from "../../store";
 import { DesktopModal } from "../DesktopModal";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import {
@@ -173,6 +174,7 @@ export function DesktopCommandHost({
       title: "New Session Folder",
       description: "Create a folder in the Sessions sidebar",
       group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.sessionsNewFolder),
       when: sessionsListMounted,
       run: () => dispatchSessionFolders("newFolder"),
     },
@@ -181,6 +183,7 @@ export function DesktopCommandHost({
       title: "Move Session to Folder…",
       description: "File the selected (or current) session into a folder",
       group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.sessionsMove),
       when: sessionsListMounted,
       run: () => dispatchSessionFolders("move"),
     },
@@ -189,8 +192,19 @@ export function DesktopCommandHost({
       title: "Organize Sessions by Project",
       description: "One folder per project; its sessions file themselves",
       group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.sessionsOrganize),
       when: sessionsListMounted,
       run: () => dispatchSessionFolders("organize"),
+    },
+    {
+      id: "session.folders.fold",
+      title: "Fold Sessions",
+      description:
+        "The fold button: focus the current session's folder path, expand every folder, or scroll back to the current row",
+      group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.sessionsFold),
+      when: () => sessionsListElement()?.dataset.desktopFoldAction !== undefined,
+      run: () => dispatchSessionFolders("fold"),
     },
     {
       id: "session.folders.collapseAll",
@@ -213,6 +227,16 @@ export function DesktopCommandHost({
       group: "Session",
       when: sessionsListMounted,
       run: () => dispatchSessionFolders("reveal"),
+    },
+    {
+      id: "sync.retry",
+      title: "Reconnect Now",
+      description: "Retry the Cowboy server connection without waiting",
+      group: "Connection",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
+      // Offered exactly while a Retry control is on screen.
+      when: () => document.querySelector("[data-desktop-sync-retry]") !== null,
+      run: retrySyncNow,
     },
     {
       id: "settings.open",

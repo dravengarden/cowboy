@@ -96,11 +96,13 @@ and in a queued-message editor), and the focused one runs.
 | ``␣` `` | Previous session |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
-| `␣S` `␣P` `␣C` | Focus Sessions, Prompt, Conversation |
+| `␣P` `␣C` | Focus Prompt, Conversation |
+| `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
 | `␣T` + `R/U/A/L/C/X/T` | Top bar group: run config, usage, verify, reload, compact, clear; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
+| `␣R` | Reconnect now (only while a Retry control is shown) |
 | `␣U` + `E` | Interface group: Source / live preview (Prompt) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` | Schedule, run next (Composer) |
@@ -109,11 +111,20 @@ and in a queued-message editor), and the focused one runs.
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
-style: Top bar `␣T`, Draft `␣D`, Window `␣W`, Interface `␣U`.
+style: Sessions `␣S`, Top bar `␣T`, Draft `␣D`, Window `␣W`, Interface `␣U`.
+A surface group doubles its key to focus the surface (`␣SS`, `␣TT`) and
+holds the surface's own buttons, so a header control is reachable without
+first moving focus there.
 A group opens only when one of its commands can run in the current focus
-(Interface needs the Prompt pane; Top bar and Draft run from
+(Interface needs the Prompt pane; Sessions, Top bar and Draft run from
 anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `B E G I O R V X Y`.
+become groups instead of taking root letters. Free root letters: `B E G I O V X Y`.
+
+The shortcut audit (`tools/cdp-shortcut-audit.ts`) lists every visible
+control without a slot. A control is either given one, covered by its
+group's slot (the History/Explore toggle's `V`), reached through an item
+verb (row menus and grips), or is not a control at all: read-outs such as
+the status line's mode and pane segments render as text, not buttons.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
@@ -285,8 +296,8 @@ continuation is optional.
 
 ## Navigation
 
-- Leader then `S/P/C`: focus Sessions, Prompt or Conversation; `␣TT` focuses
-  the Top Bar.
+- Leader then `P/C`: focus Prompt or Conversation; `␣SS` focuses Sessions
+  and `␣TT` the Top Bar.
 - Leader then `L/Q/D`: focus Plan, Queue, or Drafts.
 - Leader then `N` or `,`: create, or open Settings. The Window group
   `␣WW`/`␣WR` cycles visible regions or enters Resize mode.

@@ -77,10 +77,12 @@ cdp-browser-conformance ENDPOINT SUITE THEME="light":
     deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-browser-conformance.ts "{{ENDPOINT}}" "{{SUITE}}" "{{THEME}}"
 
 # Trusted-input Desktop keyboard acceptance with screenshots (leader, labels,
-# dialog leader, Vim/IME ownership, the Draft page) in a running Chrome.
+# dialog leader, Vim/IME ownership, the Draft page) in a running Chrome, then
+# the shortcut audit: every visible control must show a keyboard slot.
 desktop-keyboard-acceptance ENDPOINT OUT:
     deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}"
     deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" draft
+    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
 
 idb-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"

@@ -5,6 +5,7 @@ import {
   DESKTOP_COMPOSER_FORMAT_CHORDS,
   DESKTOP_LEADER_GROUPS,
   DESKTOP_WORKSPACE_COMMANDS,
+  DESKTOP_WORKSPACE_KEYS,
   DESKTOP_WORKSPACE_PREFIX,
   desktopLeaderKey,
   desktopLeaderLabel,
@@ -113,7 +114,7 @@ Deno.test("workspace sequence preempts idle IME markers but not real composition
 
 Deno.test("every prefix continuation has one stable command meaning", () => {
   assertEquals(DESKTOP_WORKSPACE_COMMANDS, {
-    s: "workspace.focusSessions",
+    s: "group:s",
     p: "workspace.focusPrompt",
     t: "group:t",
     c: "workspace.focusConversation",
@@ -130,6 +131,7 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     h: "composer.schedule",
     j: "composer.jumpFront",
     ",": "settings.open",
+    r: "sync.retry",
     " ": "session.switch",
     "`": "session.alternate",
     k: "commandPalette.open",
@@ -201,4 +203,22 @@ Deno.test("rich text uses direct chords, never the leader", () => {
   assertEquals(DESKTOP_COMPOSER_FORMAT_CHORDS.bold, "Mod+B");
   assertEquals(DESKTOP_COMPOSER_FORMAT_CHORDS.italic, "Mod+I");
   assertEquals("m" in DESKTOP_LEADER_GROUPS, false);
+});
+
+Deno.test("surface groups double their key to focus and hold its buttons", () => {
+  assertEquals(DESKTOP_LEADER_GROUPS.s, "Sessions");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.focusSessions, "SS");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.focusTopbar, "T");
+  // The fold button beside Create (`␣SZ`, Vim's fold prefix).
+  assertEquals(DESKTOP_WORKSPACE_KEYS.sessionsFold, "SZ");
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.sessionsFold), "␣SZ");
+  for (
+    const path of [
+      DESKTOP_WORKSPACE_KEYS.sessionsNewFolder,
+      DESKTOP_WORKSPACE_KEYS.sessionsMove,
+      DESKTOP_WORKSPACE_KEYS.sessionsOrganize,
+    ]
+  ) {
+    assertEquals(path.startsWith("S") && path.length === 2, true);
+  }
 });

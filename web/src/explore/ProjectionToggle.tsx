@@ -50,6 +50,8 @@ export function DesktopProjectionToggle({
   return (
     <Box
       data-desktop-conversation-projection
+      // One `V` slot toggles the whole History/Explore pair.
+      data-desktop-shortcut-owner
       sx={{
         // Pane focus makes the shortcut available, but it must not make every
         // action in the Conversation rail look selected. The exclusive

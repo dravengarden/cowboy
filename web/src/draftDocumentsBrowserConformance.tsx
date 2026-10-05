@@ -39,6 +39,41 @@ import { editorPluginHost } from "./editorPlugins/appHost";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { isMac } from "./platform";
 
+/** Visible operable controls without any keyboard slot (FOCUS.md "Leader").
+ *  A control counts as keyboard-reachable when it shows a keycap, declares
+ *  aria-keyshortcuts, is a navigable list item (item verbs), lives inside an
+ *  editor, or sits in a `data-desktop-shortcut-owner` whose one slot drives
+ *  the whole group (the History/Explore toggle). */
+export function shortcutAudit(root: Document): string[] {
+  const covered = (element: HTMLElement): boolean => {
+    const owner = element.closest("[data-desktop-shortcut-owner]");
+    return !!owner?.querySelector("[data-shortcut-state], kbd");
+  };
+  const controls = [
+    ...root.querySelectorAll<HTMLElement>(
+      "button, [role=button], [role=tab], [role=menuitem], [role=switch], a[href]",
+    ),
+  ].filter((element) =>
+    element.getClientRects().length > 0 &&
+    !element.matches(":disabled, [aria-disabled=true]") &&
+    !element.closest("[aria-hidden=true], .cm-editor, [data-desktop-item]") &&
+    !element.querySelector("[data-shortcut-state], kbd") &&
+    !element.closest("[data-shortcut-state]") &&
+    !element.hasAttribute("aria-keyshortcuts") &&
+    !covered(element)
+  );
+  return controls.map((element) => {
+    const name = (element.getAttribute("aria-label") || element.title ||
+      element.textContent || element.tagName).replace(/\s+/g, " ").trim()
+      .slice(0, 60);
+    const region = element.closest<HTMLElement>("[data-desktop-region]")
+      ?.dataset.desktopRegion ??
+      element.closest<HTMLElement>("[data-desktop-pane]")?.dataset.desktopPane ??
+      (element.closest("[data-desktop-status-line]") ? "status-line" : "chrome");
+    return `${region} :: ${name}`;
+  });
+}
+
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
@@ -1349,6 +1384,19 @@ export async function runDraftDocumentsBrowserConformance(
           !!document.querySelector("[data-desktop-topbar-action='usage']"),
         "The open session shows its Top bar",
       );
+      // tools/cdp-shortcut-audit.ts: hold the integrated Desktop App with an
+      // open session and publish every visible control that has no keyboard
+      // slot, so missing shortcuts are found from the real DOM.
+      if ((globalThis as { __cowboyShortcutAudit?: boolean }).__cowboyShortcutAudit) {
+        (globalThis as { __cowboyShortcutAuditResult?: unknown })
+          .__cowboyShortcutAuditResult = shortcutAudit(document);
+        await new Promise<void>(() => {});
+      }
+      const unreachable = shortcutAudit(document);
+      check(
+        unreachable.length === 0,
+        `Every visible Desktop control has a keyboard slot: ${unreachable.join("; ")}`,
+      );
       check(
         document.querySelector("[data-desktop-topbar-action='usage']")
           ?.textContent?.includes("␣TU"),
@@ -1377,6 +1425,29 @@ export async function runDraftDocumentsBrowserConformance(
       );
       press(document.activeElement!, "Escape", "Escape");
       await until(() => !usageDialog(), "Usage closes");
+      // `␣SZ` presses the Sessions fold button from any focus.
+      {
+        const foldAction = () =>
+          container.querySelector<HTMLElement>("[data-desktop-region='sessions.list'] ul")
+            ?.dataset.desktopFoldAction;
+        const before = foldAction();
+        check(before, "Sessions offers a fold action");
+        check(
+          [...container.querySelectorAll("[aria-keyshortcuts]")].some((element) =>
+            element.textContent?.includes("␣SZ")
+          ),
+          "The fold button shows its ␣SZ slot",
+        );
+        row.focus();
+        press(row, " ", "Space");
+        press(row, "s", "KeyS");
+        await until(
+          () => !!document.querySelector('[data-desktop-leader-menu="group:s"]'),
+          "␣S opens the Sessions group",
+        );
+        press(row, "z", "KeyZ");
+        await until(() => foldAction() !== before, "␣SZ runs the Sessions fold button");
+      }
       container.querySelector<HTMLElement>(`[data-desktop-item="draft:${id}"]`)!
         .click();
       await until(
