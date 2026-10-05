@@ -137,10 +137,11 @@ Deno.test("pending inline images open the lightbox instead of starting an edit",
     ),
     true,
   );
+  // Activation is on click: a mouse-press open put the lightbox under the
+  // pointer and the release dismissed it as a backdrop tap (Desktop).
+  assertEquals(inlineImagesSource.includes("if (readOnly) return;"), true);
   assertEquals(
-    inlineImagesSource.includes(
-      "if (readOnly) {\n          activateReadOnlyPreview();\n          return;\n        }",
-    ),
+    inlineImagesSource.includes("if (readOnly) activateReadOnlyPreview();"),
     true,
   );
 });

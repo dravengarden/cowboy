@@ -4,7 +4,8 @@ import { classifySurface, type SurfaceProfile } from "./profile";
 
 export type { SurfaceInput, SurfaceKind, SurfaceProfile } from "./profile";
 
-const SurfaceContext = createContext<SurfaceProfile | null>(null);
+/** Optional surface read for components that may render outside a provider. */
+export const SurfaceContext = createContext<SurfaceProfile | null>(null);
 
 function nativeDesktopHost(): boolean {
   const global = globalThis as typeof globalThis & {

@@ -60,6 +60,11 @@ export interface LightboxGestures {
   onImageLoad: () => void;
   /** Step zoom toward the viewport centre (the dock +/− buttons). */
   zoomBy: (factor: number) => void;
+  /** Pan a zoomed image by a viewport offset; false when it cannot move. */
+  panBy: (dx: number, dy: number) => boolean;
+  /** Return to the fitted view. */
+  fit: () => void;
+  isZoomed: () => boolean;
 }
 
 const clamp = (s: number): number => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
@@ -698,5 +703,41 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     }
   }, [reset, constrainPan, applyTransform, setBackdrop]);
 
-  return { onPointerDown, onPointerMove, onPointerEnd, onPointerCancel, onImageLoad: settleGeometry, zoomBy };
+  // Keyboard counterparts of the pointer gestures (the desktop key map).
+  const panBy = useCallback((dx: number, dy: number): boolean => {
+    if (tf.current.scale <= 1) {
+      return false;
+    }
+    stopSettle();
+    measureGeometry();
+    const { x, y } = tf.current;
+    tf.current.x += dx;
+    tf.current.y += dy;
+    constrainPan();
+    // An axis that already fits the viewport cannot pan; report that so the
+    // key falls through to its at-fit meaning (previous / next image).
+    if (tf.current.x === x && tf.current.y === y) {
+      return false;
+    }
+    applyTransform(true, true);
+    schedulePanLayer(240);
+    return true;
+  }, [stopSettle, measureGeometry, constrainPan, applyTransform, schedulePanLayer]);
+  const fit = useCallback(() => {
+    stopSettle();
+    reset(true);
+  }, [stopSettle, reset]);
+  const isZoomed = useCallback(() => tf.current.scale > 1, []);
+
+  return {
+    onPointerDown,
+    onPointerMove,
+    onPointerEnd,
+    onPointerCancel,
+    onImageLoad: settleGeometry,
+    zoomBy,
+    panBy,
+    fit,
+    isZoomed,
+  };
 }

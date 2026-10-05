@@ -2907,3 +2907,14 @@ swap are tied to `[data-draft-body]:focus-within`. Buttons keep
 focus. No editor, IME, caret, paste or keyboard-geometry code changed; #69 is
 unaffected. Checked in the integrated Mobile shell fixture (Firefox, 390px),
 not on a physical iPad/iPhone.
+
+119. **A read-only inline image opens its preview on click, not mousedown.**
+    Opening the shared lightbox on a mouse press put its backdrop under the
+    pointer before the release, and the release dismissed it as a backdrop
+    tap, so a Desktop click on a Queue/Draft preview image never stayed open.
+    Touch only worked because WebKit emits the compatibility mouse events
+    after the touch ends. The mousedown still `preventDefault`s (no caret into
+    the atomic widget); editable images still hand off on mousedown to the
+    host's non-modal action popper. Verified with trusted CDP mouse input in
+    Chrome; the lightbox's Desktop key map (H/L or ←/→ image or pan, J/K pan,
+    + − zoom, 0 fit, 1 2x, Esc close) is shown only on the Desktop surface.

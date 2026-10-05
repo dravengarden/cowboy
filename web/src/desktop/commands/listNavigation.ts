@@ -3,6 +3,7 @@ export type PendingItemAction =
   | "return"
   | "schedule"
   | "move"
+  | "document"
   | "remove";
 
 /** Bare item-scoped actions shared by Queue and Draft rows. */
@@ -12,6 +13,7 @@ export function pendingItemActionKey(key: string): PendingItemAction | null {
     r: "return",
     t: "schedule",
     m: "move",
+    d: "document",
     x: "remove",
   } as Record<string, PendingItemAction>)[key.toLocaleLowerCase()] ?? null;
 }

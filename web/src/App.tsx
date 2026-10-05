@@ -2685,6 +2685,13 @@ export function CreateDialog({
         };
     }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
+    // Field geometry for the touch Create cover, whose sheet a phone has
+    // shown stranded part-way down above the keyboard (sheetKeyboardDiagnostics).
+    useSheetKeyboardDiagnostics(
+        "create",
+        open && !desktop,
+        () => titleRef.current?.closest("[role='dialog']") ?? null,
+    );
     const theme = useTheme();
     const create = (): void => {
         if (creatingRef.current) return;

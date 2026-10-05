@@ -46,6 +46,7 @@ import {
   Typography,
   useMediaQuery,
   useTheme,
+  type Theme,
 } from "@mui/material";
 import {
   AlternateEmail,
@@ -59,6 +60,7 @@ import {
   CloseFullscreen,
   Compress,
   DeleteOutline,
+  DescriptionOutlined,
   DragIndicator,
   DriveFileMoveOutlined,
   EditNoteOutlined,
@@ -210,10 +212,7 @@ import {
   type TranscriptProjection,
   useExploreAtTail,
 } from "./explore/exploreStore";
-import {
-  desktopListItemSx,
-  desktopSessionActionSx,
-} from "./desktop/DesktopEmbeddedControl";
+import { desktopSessionActionSx } from "./desktop/DesktopEmbeddedControl";
 import { ACTION_ICON_WIDTH_PX } from "./desktop/topBarDensity";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
@@ -4543,7 +4542,7 @@ export function PendingPanel({
         }}
       >
         <Stack
-          spacing={0.5}
+          spacing={desktop ? 0 : 0.5}
           ref={scrollRef}
           data-mobile-pending-scrollport={!desktop && !visuallyCollapsed
             ? "true"
@@ -4579,6 +4578,7 @@ export function PendingPanel({
           }}
         >
           {sortable.order.map((id) => {
+            const index = sortable.order.indexOf(id);
             const m = byId.get(id);
             if (!m) return null;
             // A LOCAL optimistic draft (carries `status`) renders a lightweight
@@ -4586,7 +4586,7 @@ export function PendingPanel({
             const optimistic = m.status !== undefined;
             const leadingHandle = editingId !== m.id && !optimistic &&
               count > 1;
-            const gripSize = desktop ? "2.75rem" : 44;
+            const gripSize = 44;
             const arrivalFlashActive = pendingRowMatchesArrival(
               m,
               arrivalFlash,
@@ -4615,11 +4615,7 @@ export function PendingPanel({
                 direction="row"
                 alignItems="center"
                 spacing={0.5}
-                sx={desktop
-                  ? {
-                    ...desktopListItemSx(),
-                  }
-                  : undefined}
+                sx={desktop ? desktopPendingRowSx(index, leadingHandle) : undefined}
               >
                 {
                   /* The leading slot is the reorder grip. Wide rows show it; narrow
@@ -4627,7 +4623,53 @@ export function PendingPanel({
                     uses transient `'` labels (FOCUS.md "Labels"), never a
                     per-row number. A single row needs no ordering affordance. */
                 }
-                {leadingHandle && (
+                {leadingHandle && desktop && (
+                  // Desktop is keyboard-first: `O` pins reorder mode (J/K
+                  // move, Esc done) and Shift+J/K moves directly. The pointer
+                  // grip is a slim edge handle revealed on hover or focus, not
+                  // a permanent gutter beside every message.
+                  <Box
+                    className="cowboy-pending-grip"
+                    sx={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: 20,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      opacity: reordering ? 1 : 0,
+                      transition: "opacity 120ms ease",
+                    }}
+                  >
+                    <Suspense fallback={null}>
+                      <DesktopContextShortcut
+                        badge="O"
+                        shortcut="O · reorder (J/K move, Esc done) · Shift+J/K moves directly"
+                        itemScoped
+                        placement="corner"
+                      >
+                        <IconButton
+                          {...sortable.handleProps(m.id)}
+                          aria-label="Drag to reorder"
+                          sx={{
+                            width: 20,
+                            height: 32,
+                            p: 0,
+                            borderRadius: 1,
+                            color: "text.disabled",
+                            cursor: "grab",
+                            "& .MuiSvgIcon-root": { fontSize: "1rem" },
+                          }}
+                        >
+                          <DragIndicator />
+                        </IconButton>
+                      </DesktopContextShortcut>
+                    </Suspense>
+                  </Box>
+                )}
+                {leadingHandle && !desktop && (
                   <Box
                     sx={{
                       position: "relative",
@@ -4650,7 +4692,6 @@ export function PendingPanel({
                         inset: 0,
                         width: gripSize,
                         height: gripSize,
-                        ...(desktop && { padding: "0.5rem" }),
                         color: "text.disabled",
                         display: reordering ? "inline-flex" : "none",
                         [ROW_ACTIONS_INLINE]: { display: "inline-flex" },
@@ -4777,6 +4818,30 @@ export function PendingPanel({
 // kebab. A landscape phone (panel ~900px) genuinely has the room, so inline there
 // is correct too — exactly what keying on real width (not device class) buys.
 const ROW_ACTIONS_INLINE = "@container pendingPanel (min-width: 520px)";
+
+/** Desktop Queue/Draft rows read as lines of the Prompt, not cards: flat,
+ *  hairline-separated, with the current row marked by a primary edge (an
+ *  editor's current line) instead of an outlined capsule. */
+function desktopPendingRowSx(index: number, reorderable: boolean) {
+  const current = {
+    bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.05),
+    boxShadow: (t: Theme) => `inset 2px 0 0 ${t.palette.primary.main}`,
+  };
+  return {
+    position: "relative",
+    pl: reorderable ? "20px" : 0,
+    borderTop: index > 0 ? 1 : 0,
+    borderColor: "divider",
+    outline: "none",
+    transition: "background-color 120ms ease, box-shadow 120ms ease",
+    "&:hover": {
+      bgcolor: (t: Theme) => alpha(t.palette.primary.main, 0.025),
+    },
+    "&:focus, &:focus-within, &[data-desktop-current='true']": current,
+    "&:hover .cowboy-pending-grip, &:focus .cowboy-pending-grip, &:focus-within .cowboy-pending-grip":
+      { opacity: 1 },
+  } as const;
+}
 
 function pendingContentCleared(
   text: string,
@@ -5427,7 +5492,9 @@ function PendingRow({
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
-            ...(desktop ? { p: 0.75 } : {
+            ...(desktop
+              ? { p: 0.75, border: 0, borderRadius: 0, bgcolor: "transparent" }
+              : {
               borderRadius: mobileComposerPanelFrameSx.borderRadius,
               bgcolor: "transparent",
               borderColor: mobileComposerOutlineColor,
@@ -5748,7 +5815,7 @@ function PendingRow({
       ...(!message.schedule ? [{
         key: "document",
         label: "Move to independent Drafts",
-        icon: <DriveFileMoveOutlined fontSize="small" />,
+        icon: <DescriptionOutlined fontSize="small" />,
         onClick: (): void => { void moveSessionDraftToDocument(sessionId, message).catch((error: Error) => notify(error.message)); },
       }] : []),
       ...(onMove
@@ -5795,6 +5862,10 @@ function PendingRow({
     edit: { badge: "L", description: "L / Enter · edit focused item" },
     schedule: { badge: "T", description: "T · schedule focused item" },
     move: { badge: "M", description: "M · move focused item" },
+    document: {
+      badge: "D",
+      description: "D · move focused item to independent Drafts",
+    },
     return: { badge: "R", description: "R · return focused item to drafts" },
     remove: { badge: "X", description: "X · remove focused item" },
   };
@@ -5886,6 +5957,11 @@ function PendingRow({
       variant="outlined"
       sx={{
         p: 0.75,
+        ...(desktop && {
+          border: 0,
+          borderRadius: 0,
+          bgcolor: "transparent",
+        }),
         display: "flex",
         alignItems: "flex-start",
         minHeight: mobilePendingRowMinHeight,
