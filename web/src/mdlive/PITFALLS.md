@@ -2817,3 +2817,19 @@ Desktop Vim + IME checks:
     plugin installer. Future distributable extensions must enter Cowboy's
     existing signed Plugin lifecycle and declared capabilities; core Web does
     not download/evaluate arbitrary community JavaScript.
+
+
+### 2026-10-05 — Integrated workspace document navigation
+
+Draft now occupies the existing App main area and Sessions drawer instead of
+unmounting App for a separate library. DraftEditor continues to mount the same
+PlatformComposerEditor; no CM6 extension, Vim/IME fence, native editor or keyboard
+adapter was changed. Navigation flushes document-local persistence first. The
+Mobile product pager guards Draft with a ref and starts on Agent; existing
+drawer tracking, gesture geometry and finger-time transform writes remain
+unchanged. Grip center-drop detection is opt-in, uses cached pickup geometry
+and publishes only discrete target changes. Do not add nested shadows or
+transforms to the Draft canvas to polish its moving peek. Native integrated
+fixture evidence and its coverage limits belong in the acceptance receipt;
+Firefox IME fences are not native input evidence. Physical iPhone/WeType #69
+is still unresolved.

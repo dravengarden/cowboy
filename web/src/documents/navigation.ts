@@ -18,10 +18,15 @@ function restoreSelection(): void {
   const key = selectionKey();
   if (!key || restoredFor === key) return;
   restoredFor = key;
-  if (globalThis.location.hash || new URLSearchParams(globalThis.location.search).has("session")) return;
+  if (
+    globalThis.location.hash ||
+    new URLSearchParams(globalThis.location.search).has("session")
+  ) return;
   try {
     const id = localStorage.getItem(key);
-    if (id && /^[A-Za-z0-9_-]{1,128}$/.test(id)) globalThis.location.hash = `drafts/${id}`;
+    if (id && /^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+      globalThis.location.hash = `drafts/${id}`;
+    }
   } catch { /* No stored selection. */ }
 }
 

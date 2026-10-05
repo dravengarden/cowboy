@@ -61,7 +61,7 @@ Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async ()
   assert(main.includes("<ProductAuthGate>"));
   assert(main.includes("DeviceAuthorizationRoute"));
   assert(main.includes("captureDeviceAuthorizationFromLocation"));
-  assert(main.includes("MachineSetupGate"));
+  assertEquals(main.includes("MachineSetupGate"), false); // Draft workspace needs no Machine.
   assert(main.includes("<DesktopApp"));
   assert(main.includes("<MobileApp"));
   assertEquals(app.includes("ProductAuthGate"), false);

@@ -15,6 +15,8 @@ primary phone/desktop product path.
 
 ## Reading order
 
+- [`workspace-documents.md`](workspace-documents.md) — Unified Draft/Session navigation, shared directories, content ownership, migration and Undo
+
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`execution-environments.md`](execution-environments.md) — Native remote execution decision: separate runtime placement from target files/processes; core, Provider and infrastructure ownership; staged acceptance
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, and ownership contract

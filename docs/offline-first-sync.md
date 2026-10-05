@@ -179,6 +179,15 @@ Rules:
   continues to come from the immutable `/api/history` pages the service
   worker already caches.
 
+### 2026-10-05: independent documents in the shared workspace
+
+The production root now mounts the workspace without MachineSetupGate. Draft
+needs no Machine; only Create's Session variant checks placement readiness.
+The auth, dataset and local replica ownership boundaries remain unchanged.
+Draft bodies still flush to their owned local replicas before entry switching;
+the new workspace-order service replica participates in layout hydration.
+Historical setup-gate observations below describe the pre-integration path.
+
 ### 2. Boot without gates
 
 Boot order becomes: paint from replica, then converge. The four gates are

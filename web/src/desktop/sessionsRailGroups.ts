@@ -77,10 +77,12 @@ export function sessionsRailGroups(
       // A subfolder heading stays even when empty; the group's own level
       // only when it holds sessions.
       sections: sections.filter((section) =>
-        section.title !== null || section.sessions.length > 0 || section.drafts.length > 0
+        section.title !== null || section.sessions.length > 0 ||
+        section.drafts.length > 0
       ),
       current: sections.some((section) =>
-        section.sessions.some((session) => session.id === activeId) || section.drafts.some((draft) => `draft:${draft.id}` === activeId)
+        section.sessions.some((session) => session.id === activeId) ||
+        section.drafts.some((draft) => `draft:${draft.id}` === activeId)
       ),
     });
     open = null;
@@ -95,7 +97,13 @@ export function sessionsRailGroups(
           name: row.folder.name,
           activity: row.activity,
           count: row.sessionCount,
-          sections: [{ folder: row.folder.id, title: null, depth: 0, sessions: [], drafts: [] }],
+          sections: [{
+            folder: row.folder.id,
+            title: null,
+            depth: 0,
+            sessions: [],
+            drafts: [],
+          }],
         };
       } else {
         if (row.kind === "draft") unfiledDrafts.push(row.draft);
@@ -109,10 +117,13 @@ export function sessionsRailGroups(
         folder: row.folder.id,
         title: row.folder.name,
         depth: row.depth - 1,
-        sessions: [], drafts: [],
+        sessions: [],
+        drafts: [],
       });
     } else {
-      const section = open.sections.find((candidate) => candidate.folder === row.folder) ??
+      const section = open.sections.find((candidate) =>
+        candidate.folder === row.folder
+      ) ??
         open.sections[0];
       if (row.kind === "draft") section?.drafts.push(row.draft);
       else section?.sessions.push(row.session);
@@ -126,8 +137,15 @@ export function sessionsRailGroups(
       name: groups.length > 0 ? "Top level" : "Workspace",
       activity: sessionActivity(unfiled),
       sessionCount: unfiled.length + unfiledDrafts.length,
-      sections: [{ folder: null, title: null, depth: 0, sessions: unfiled, drafts: unfiledDrafts }],
-      current: unfiled.some((session) => session.id === activeId) || unfiledDrafts.some((draft) => `draft:${draft.id}` === activeId),
+      sections: [{
+        folder: null,
+        title: null,
+        depth: 0,
+        sessions: unfiled,
+        drafts: unfiledDrafts,
+      }],
+      current: unfiled.some((session) => session.id === activeId) ||
+        unfiledDrafts.some((draft) => `draft:${draft.id}` === activeId),
     });
   }
   return groups;

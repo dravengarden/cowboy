@@ -2331,7 +2331,7 @@ function SessionList({
                     open={!!folderMenu}
                     onClose={(): void => setFolderMenu(null)}
                     title="Folder"
-                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} sessions`}
+                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} items`}
                     width={560}
                     onShortcutKeyDown={(event): void => {
                         if (
@@ -4848,7 +4848,11 @@ export function App({
                                             changeTranscriptProjection(active.id, projection)}
                                     />
                                 )}
-                                <IconButton
+                                {draftRoute.id && <IconButton aria-label="Draft actions" onClick={() => {
+                                    const draft = draftLibrary.entries.find((entry) => entry.id === draftRoute.id);
+                                    if (draft) flushSync(() => setDraftAction({ draft, action: "menu" }));
+                                }}><MoreVert /></IconButton>}
+                                {!draftRoute.active && <IconButton
                                     data-mobile-open-code="true"
                                     onPointerDown={(event): void => {
                                         if (event.pointerType === "touch") {
@@ -4893,7 +4897,7 @@ export function App({
                                     }}
                                 >
                                     <CodeIcon />
-                                </IconButton>
+                                </IconButton>}
                             </>
                         )}
                     </Toolbar>
@@ -4902,7 +4906,7 @@ export function App({
                 {draftRoute.id ? (
                     <Box ref={mobile ? mobilePageRef : undefined}
                         data-mobile-drawer-surface={mobile ? "true" : undefined}
-                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto" }}>
+                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "env(safe-area-inset-top)" : 0 }}>
                         <WorkspaceDraftPane id={draftRoute.id} beforeLeave={draftBeforeLeave}
                             onAction={(action) => flushSync(() => setDraftAction(action))} />
                     </Box>
