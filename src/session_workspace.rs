@@ -704,17 +704,12 @@ fn open_cleanup_scan_directory(
             ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
         ) {
             Ok(directory) => Ok(Some(File::from(directory))),
-            Err(error)
-                if matches!(
-                    error,
-                    rustix::io::Errno::LOOP
-                        | rustix::io::Errno::XDEV
-                        | rustix::io::Errno::NOENT
-                        | rustix::io::Errno::NOTDIR
-                ) =>
-            {
-                Ok(None)
-            }
+            Err(
+                rustix::io::Errno::LOOP
+                | rustix::io::Errno::XDEV
+                | rustix::io::Errno::NOENT
+                | rustix::io::Errno::NOTDIR,
+            ) => Ok(None),
             Err(error) => Err(error).context("opening bounded cleanup scan directory"),
         }
     }
