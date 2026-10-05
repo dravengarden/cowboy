@@ -696,6 +696,12 @@ schedule, `M` move to another Session, `D` move to independent Drafts and `X`
 remove. Inside the editor, `Mod+S` saves and `Esc` cancels, with both
 returning focus to the originating list row.
 
+`M` (and `␣DV` from a Draft document) opens the Session destination modal: the
+Sessions folder tree with the source Session shown as Current. It opens in
+search (Insert); `Esc`, `↓` or `Enter` reaches the tree, where `J/K` moves,
+`H/L` folds or walks the tree, `gg`/`G` jump, `/` returns to search and
+`L`/`Enter` chooses. `Esc` on the tree closes.
+
 ### Draft document
 
 Independent Draft documents share the Prompt editor region and command host.

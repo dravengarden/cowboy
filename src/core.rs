@@ -1245,6 +1245,9 @@ pub enum Outbound {
     Settings {
         settings: std::collections::HashMap<String, serde_json::Value>,
     },
+    /// The Controller's account usage snapshot, including which accounts are
+    /// refreshing. Sent whenever it changes so every client shows one state.
+    Usage { snapshot: serde_json::Value },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -1809,6 +1812,11 @@ impl Hub {
             .broadcast_last_bytes
             .store(bytes, Ordering::Relaxed);
         let _ = self.inner.tx.send(FanoutFrame::new(outbound));
+    }
+
+    /// Publish the current account usage snapshot to every client.
+    pub fn broadcast_usage(&self, snapshot: serde_json::Value) {
+        self.fanout(Outbound::Usage { snapshot });
     }
 
     /// Publish one authoritative Machine registry revision over the existing

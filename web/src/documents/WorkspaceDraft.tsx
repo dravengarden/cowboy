@@ -25,7 +25,10 @@ import { useConfirmEnter } from "../Kbd";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { ConfirmSheet, Sheet } from "../Sheet";
 import { useStoreSelector } from "../store";
-import { SessionDestinationTree } from "../SessionDestinationTree";
+import {
+  DraftDestinationModal,
+  DraftDestinationSheet,
+} from "../DraftDestinationPicker";
 import {
   DraftEditor,
   type DraftFlush,
@@ -242,29 +245,22 @@ export function WorkspaceDraftActions(
     );
   }
   if (action === "copy") {
+    const Picker = desktop ? DraftDestinationModal : DraftDestinationSheet;
     return (
-      <Sheet
-        open
-        onClose={busy ? () => {} : onClose}
+      <Picker
         title="Add draft to Session"
-        actions={
-          <Button onClick={onClose} disabled={busy} color="inherit">
-            Cancel
-          </Button>
-        }
-      >
-        <SessionDestinationTree
-          sessions={sessions}
-          folders={folders}
-          order={order}
-          initialFolder={request.draft.parent_id}
-          busy={busy}
-          onPick={(session) =>
-            run(() =>
-              copyDraftToSession(request.draft.id, session.id, session.title)
-            )}
-        />
-      </Sheet>
+        sourceId=""
+        initialFolder={request.draft.parent_id}
+        busy={busy}
+        sessions={sessions}
+        folders={folders}
+        order={order}
+        onClose={onClose}
+        onPick={(session) =>
+          run(() =>
+            copyDraftToSession(request.draft.id, session.id, session.title)
+          )}
+      />
     );
   }
   return (

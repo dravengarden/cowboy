@@ -1,6 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
-import { DesktopDraftDestinationPicker } from "./desktop/DesktopDraftDestinationPicker";
+import { DraftDestinationPicker } from "./DraftDestinationPicker";
 import { ProtectedImage } from "./ProtectedImage";
 import {
   lazy,
@@ -31,7 +31,6 @@ import {
   keyframes,
   LinearProgress,
   List,
-  ListItemButton,
   ListItemIcon,
   ListItemText,
   Menu,
@@ -134,9 +133,9 @@ import {
 } from "./sessionSettingsPresentation";
 import {
   providerUsage,
-  type UsageSnapshot,
+  providerUsageAccount,
+  usageRefreshing,
 } from "./usageLimits";
-import { readUsage, refreshSessionUsage } from "./usageApi";
 import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
@@ -268,6 +267,8 @@ import {
   setSessionConfigOptions,
   setPaused,
   setQueueEditing,
+  loadUsageSnapshot,
+  requestUsageRefresh,
   submitPrompt,
   unscheduleDraft,
   useConnected,
@@ -3356,8 +3357,9 @@ export function ComposerWorkspace({
           drafts panel) so the snackbar survives when moving the LAST draft
           unmounts that panel. */
       }
-      {desktop && moveSrcId !== null && (
-        <DesktopDraftDestinationPicker
+      {moveSrcId !== null && (
+        <DraftDestinationPicker
+          title="Move draft to…"
           sourceId={sessionId}
           onClose={(): void => setMoveSrcId(null)}
           onPick={(destination): void => {
@@ -3367,59 +3369,6 @@ export function ComposerWorkspace({
           }}
         />
       )}
-      <Sheet
-        open={!desktop && moveSrcId !== null}
-        onClose={(): void => setMoveSrcId(null)}
-        title="Move draft to…"
-        mobileDismiss="footer"
-        portal
-      >
-        {
-          /* Bleed the list to the card so rows share the title inset. A
-            <button> with nowrap cwd otherwise grows to min-content and
-            paints through the right pad; width 100% + flex 0 basis keeps
-            both sides on the same 18px gutter. */
-        }
-        <List disablePadding sx={{ mx: -2.25, pb: 1 }}>
-          {otherSessions.map((s) => (
-            <ListItemButton
-              key={s.id}
-              onClick={(): void => {
-                if (moveSrcId !== null) {
-                  moveDraft(sessionId, moveSrcId, s.id);
-                  setMoveUndo({ id: moveSrcId, toId: s.id, toTitle: s.title });
-                }
-                setMoveSrcId(null);
-              }}
-              sx={{
-                px: 2.25,
-                py: 1.25,
-                width: "100%",
-                maxWidth: "100%",
-                minWidth: 0,
-                overflow: "hidden",
-                boxSizing: "border-box",
-              }}
-            >
-              <ListItemText
-                primary={s.title}
-                secondary={s.cwd}
-                sx={{
-                  my: 0,
-                  minWidth: 0,
-                  flex: "1 1 0px",
-                  overflow: "hidden",
-                  "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  },
-                }}
-              />
-            </ListItemButton>
-          ))}
-        </List>
-      </Sheet>
       <Snackbar
         open={moveUndo !== null}
         autoHideDuration={6000}
@@ -7898,35 +7847,34 @@ function SessionProviderUsage({
   providerVersion?: string;
   providerDigest?: string;
 }): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  // Controller-owned usage shared by every surface and device.
+  const snapshot = useStoreSelector((state) => state.usage);
   const [error, setError] = useState<string | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
     const timer = globalThis.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => globalThis.clearInterval(timer);
   }, []);
+  useEffect(() => setClock(Date.now()), [snapshot]);
+  const account = providerUsageAccount(provider, providerVersion, providerDigest);
+  const refreshing = account !== undefined && usageRefreshing(snapshot, account);
   const load = useCallback(async (manual: boolean): Promise<void> => {
-    setSnapshot(
-      await (manual
-        ? refreshSessionUsage(provider, providerVersion, providerDigest)
-        : readUsage()),
-    );
+    if (manual) {
+      if (!account) {
+        throw new Error("Usage is unavailable for this session's Provider.");
+      }
+      await requestUsageRefresh(account);
+    } else {
+      await loadUsageSnapshot();
+    }
     setError(null);
-    setClock(Date.now());
-  }, [provider, providerVersion, providerDigest]);
+  }, [account]);
   useEffect(() => {
     const ctrl = new AbortController();
-    void readUsage(ctrl.signal)
-      .then((snapshot) => {
-        setSnapshot(snapshot);
-        setError(null);
-      })
-      .catch((cause: unknown) => {
-        if (ctrl.signal.aborted) return;
-        setError(
-          cause instanceof Error ? cause.message : "Could not load usage",
-        );
-      });
+    void loadUsageSnapshot(ctrl.signal).catch((cause: unknown) => {
+      if (ctrl.signal.aborted) return;
+      setError(cause instanceof Error ? cause.message : "Could not load usage");
+    });
     return (): void => ctrl.abort();
   }, [provider]);
   const usage = providerUsage(
@@ -7942,6 +7890,7 @@ function SessionProviderUsage({
       size="small"
       reliableTouch
       networkAction={() => load(true)}
+      disabled={refreshing}
       sx={{
         width: "2.75em",
         height: "2.75em",

@@ -10221,6 +10221,7 @@ async fn serve_axum(
 
     let provider_update_task = tokio::spawn(session_provider_updates::run(Arc::clone(&state)));
     let generation_retention_task = tokio::spawn(run_generation_retention(Arc::clone(&state)));
+    let usage_broadcast_task = tokio::spawn(run_usage_broadcast(Arc::clone(&state)));
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -10234,6 +10235,7 @@ async fn serve_axum(
     convergence_task.abort();
     provider_update_task.abort();
     generation_retention_task.abort();
+    usage_broadcast_task.abort();
     code_buffers.shutdown().await;
     result?;
     Ok(())
@@ -10672,33 +10674,73 @@ async fn api_usage_executor_update(
     }
 }
 
-async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UsageRefreshQuery {
+    /// `false` starts the refresh and returns at once; every client follows
+    /// it through the usage broadcast. Absent keeps the waiting contract that
+    /// the operator CLI and older cached clients rely on.
+    wait: Option<bool>,
+}
+
+fn usage_response(state: &AppState, snapshot: crate::usage::UsageSnapshot) -> Response {
     let bindings = state.usage.plugin_bindings();
-    let snapshot = crate::usage::with_session_usage(
-        state.usage.refresh().await,
+    Json(crate::usage::with_session_usage(
+        snapshot,
         &state.hub.session_list(),
         &state.provider_catalog,
         &bindings,
-    );
-    Json(snapshot).into_response()
+    ))
+    .into_response()
+}
+
+async fn api_usage_refresh(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<UsageRefreshQuery>,
+) -> Response {
+    if query.wait == Some(false) {
+        return match state.usage.request_refresh(None).await {
+            Ok(snapshot) => usage_response(&state, snapshot),
+            Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        };
+    }
+    usage_response(&state, state.usage.refresh().await)
 }
 
 async fn api_usage_provider_refresh(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(provider): axum::extract::Path<String>,
+    Query(query): Query<UsageRefreshQuery>,
 ) -> Response {
-    match state.usage.refresh_provider(&provider).await {
-        Ok(snapshot) => {
-            let bindings = state.usage.plugin_bindings();
-            Json(crate::usage::with_session_usage(
-                snapshot,
-                &state.hub.session_list(),
-                &state.provider_catalog,
-                &bindings,
-            ))
-            .into_response()
-        }
+    let result = if query.wait == Some(false) {
+        state.usage.request_refresh(Some(&provider)).await
+    } else {
+        state.usage.refresh_provider(&provider).await
+    };
+    match result {
+        Ok(snapshot) => usage_response(&state, snapshot),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
+}
+
+/// Fan every usage change out to all clients. A short settle window folds the
+/// start and end of concurrent collections into fewer frames.
+async fn run_usage_broadcast(state: Arc<AppState>) {
+    let mut changes = state.usage.subscribe();
+    while changes.changed().await.is_ok() {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        changes.borrow_and_update();
+        let bindings = state.usage.plugin_bindings();
+        let snapshot = crate::usage::with_session_usage(
+            state.usage.snapshot().await,
+            &state.hub.session_list(),
+            &state.provider_catalog,
+            &bindings,
+        );
+        match serde_json::to_value(snapshot) {
+            Ok(snapshot) => state.hub.broadcast_usage(snapshot),
+            Err(error) => tracing::warn!(%error, "encoding usage broadcast"),
+        }
     }
 }
 
@@ -18753,6 +18795,7 @@ fn project_outbound(
         | Outbound::Ping
         | Outbound::ConnectionProbe { .. }
         | Outbound::BootstrapComplete
+        | Outbound::Usage { .. }
         | Outbound::Settings { .. } => Some(message),
         Outbound::SyncPatch {
             state,

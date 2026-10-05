@@ -2,7 +2,8 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "../browserProductTheme";
-import { DraftDestinationDialog } from "./DesktopDraftDestinationPicker";
+import { DraftDestinationModal } from "../DraftDestinationPicker";
+import { SurfaceContext } from "../surface/SurfaceProfile";
 import type { SessionMeta } from "../protocol";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 70));
@@ -44,91 +45,175 @@ export async function checkDraftDestinationDialog(): Promise<string> {
     ],
     placement: { nested: "child", global: "" },
   };
-  const button = (selector: string) =>
+  const row = (selector: string) =>
     document.querySelector<HTMLElement>(selector);
-  const search = (value: string) => {
-    const input = document.querySelector<HTMLInputElement>(
-      "input[aria-label='Search draft destinations']",
+  const session = (id: string) =>
+    row(`[data-session-destination-session='${id}']`);
+  const folder = (id: string) =>
+    row(`[data-session-destination-folder='${id}']`);
+  const input = () =>
+    document.querySelector<HTMLInputElement>(
+      "input[aria-label='Search destination Sessions']",
     )!;
+  const search = (value: string) => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
-      .call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+      .call(input(), value);
+    input().dispatchEvent(new Event("input", { bubbles: true }));
   };
+  const press = (
+    target: Element,
+    key: string,
+    init: KeyboardEventInit = {},
+  ) =>
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key,
+        code: /^[a-z]$/i.test(key)
+          ? `Key${key.toUpperCase()}`
+          : key === "/"
+          ? "Slash"
+          : key,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
   try {
     flushSync(() =>
       root.render(
-        <BrowserProductTheme>
-          <CssBaseline />
-          <DraftDestinationDialog
-            sessions={sessions}
-            folders={folders}
-            sourceId="current"
-            onPick={(s) => picks.push(s.id)}
-            onClose={() => cancels++}
-          />
-        </BrowserProductTheme>,
+        <SurfaceContext.Provider
+          value={{
+            kind: "desktop",
+            input: "pointer",
+            touchCapable: false,
+            finePointer: true,
+            hover: true,
+          } as never}
+        >
+          <BrowserProductTheme>
+            <CssBaseline />
+            <DraftDestinationModal
+              title="Move draft to…"
+              sessions={sessions}
+              folders={folders}
+              order={[]}
+              sourceId="current"
+              onPick={(s) => picks.push(s.id)}
+              onClose={() => cancels++}
+            />
+          </BrowserProductTheme>
+        </SurfaceContext.Provider>,
       )
     );
     await tick();
+    await tick();
     check(
-      !button("[data-draft-session='current']"),
-      "Current session is excluded",
+      document.activeElement === input(),
+      "Desktop opens in search (Insert)",
     );
     check(
-      button("[data-draft-session='bound']") &&
-        button("[data-draft-session='global']"),
+      session("current")?.getAttribute("aria-disabled") === "true" &&
+        session("current")?.getAttribute("aria-current") === "true",
+      "The source Session stays visible as the current, unselectable row",
+    );
+    check(
+      folder("work")?.getAttribute("aria-expanded") === "true" &&
+        folder("child")?.getAttribute("aria-expanded") === "false",
+      "The current Session's folder path opens; other folders start folded",
+    );
+    check(
+      session("bound") && session("global"),
       "Project bindings and explicit Global placements agree with Sessions",
     );
     check(
-      button("[data-draft-session='nested']")?.textContent?.includes("cowboy"),
-      "Stable project context replaces generated cwd",
+      session("bound")?.textContent?.includes("cowboy") &&
+        !document.querySelector("[role='tree']")?.textContent?.includes(
+          "cowboy-machine/worktrees",
+        ),
+      "Rows show the stable project, never generated execution paths",
     );
-    button("[data-draft-folder='work']")!.click();
+    const guide = getComputedStyle(folder("child")!, "::before");
+    check(
+      guide.backgroundImage.includes("gradient"),
+      "Nested rows draw the sidebar's ancestor guides",
+    );
+    check(
+      document.querySelector("[data-desktop-shortcut-bar]")?.textContent
+        ?.includes("Fold"),
+      "The modal shortcut bar is a live legend for tree motions",
+    );
+    press(input(), "ArrowDown", { isComposing: true });
+    check(document.activeElement === input(), "IME owns candidate arrows");
+    press(input(), "Escape", { isComposing: true });
+    check(cancels === 0, "IME Escape does not dismiss the picker");
+    press(input(), "Escape");
     await tick();
     check(
-      !button("[data-draft-session='nested']") &&
-        button("[data-draft-session='global']"),
-      "Folder collapse does not conceal Global sessions",
+      cancels === 0 &&
+        document.activeElement?.hasAttribute("data-session-destination-row"),
+      "Esc leaves search for the tree instead of closing",
     );
+    press(document.activeElement!, "G", { shiftKey: true });
+    check(
+      document.activeElement === session("global"),
+      "G jumps to the last destination",
+    );
+    press(document.activeElement!, "g");
+    await tick();
+    press(document.activeElement!, "g");
+    await tick();
+    check(
+      document.activeElement === folder("work"),
+      "gg jumps to the first destination",
+    );
+    press(document.activeElement!, "j");
+    check(
+      document.activeElement === folder("child"),
+      "j skips the current Session",
+    );
+    press(document.activeElement!, "l");
+    await tick();
+    check(
+      folder("child")?.getAttribute("aria-expanded") === "true" &&
+        session("nested"),
+      "l expands a folded folder",
+    );
+    folder("child")!.focus();
+    press(folder("child")!, "l");
+    check(
+      document.activeElement === session("nested"),
+      "l on an open folder enters it",
+    );
+    press(session("nested")!, "h");
+    check(
+      document.activeElement === folder("child"),
+      "h moves from a Session to its folder",
+    );
+    press(folder("child")!, "h");
+    await tick();
+    check(!session("nested"), "h collapses an open folder");
+    press(folder("child")!, "/");
+    check(document.activeElement === input(), "/ returns to search");
     search("Nested");
     await tick();
     check(
-      button("[data-draft-session='nested']") &&
-        !button("[data-draft-session='bound']"),
+      session("nested") && !session("bound"),
       "Folder search reveals ancestors and filters destinations",
     );
-    const input = document.querySelector<HTMLInputElement>(
-      "input[aria-label='Search draft destinations']",
-    )!;
-    input.focus();
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowDown",
-        bubbles: true,
-        isComposing: true,
-      }),
-    );
-    check(document.activeElement === input, "IME owns candidate arrows");
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        isComposing: true,
-      }),
-    );
-    check(Number(cancels) === 0, "IME Escape does not dismiss the picker");
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
-    );
+    press(input(), "Enter");
     check(
-      document.activeElement === button("[data-draft-session='nested']"),
-      "ArrowDown skips search-only folder headings",
+      document.activeElement === session("nested"),
+      "Enter in search reaches the first matching Session",
     );
-    button("[data-draft-session='nested']")!.click();
+    press(session("nested")!, "l");
     check(
       picks.join() === "nested",
-      "Duplicate titles choose by immutable session id",
+      "l chooses; duplicate titles choose by immutable session id",
     );
+    search("current");
+    await tick();
+    session("current")?.click();
+    check(picks.length === 1, "The current Session is never a destination");
     search("no such destination");
     await tick();
     check(
@@ -136,15 +221,6 @@ export async function checkDraftDestinationDialog(): Promise<string> {
         "No matching",
       ),
       "Empty search has explicit feedback",
-    );
-    check(picks.length === 1, "Search never delivers a draft");
-    const cancel = Array.from(
-      document.querySelectorAll<HTMLElement>("[role='dialog'] button"),
-    ).find((b) => b.textContent === "Cancel")!;
-    cancel.click();
-    check(
-      cancels === 1 && picks.length === 1,
-      "Cancel does not select or move",
     );
     const paper = document.querySelector<HTMLElement>(".MuiDialog-paper")!;
     const originalFont = document.documentElement.style.fontSize;
@@ -155,23 +231,24 @@ export async function checkDraftDestinationDialog(): Promise<string> {
           paper.style.width = `${width}px`;
           search("");
           await tick();
-          const list = document.querySelector<HTMLElement>(
-            "[aria-label='Draft destination sessions']",
-          )!;
+          const tree = document.querySelector<HTMLElement>("[role='tree']")!;
           check(
-            list.scrollWidth <= list.clientWidth + 1,
-            "Destination list fits narrow dialogs and enlarged fonts",
-          );
-          check(
-            !list.textContent?.includes("cowboy-machine/worktrees"),
-            "Generated execution paths do not crowd destination rows",
+            tree.scrollWidth <= tree.clientWidth + 1,
+            "Destination tree fits narrow dialogs and enlarged fonts",
           );
         }
       }
     } finally {
       document.documentElement.style.fontSize = originalFont;
     }
-    return "Desktop draft destinations share Sessions folders/order/Global placement, stable project context, search, IME-safe keyboard focus and id-based selection";
+    folder("work")!.focus();
+    press(folder("work")!, "Escape");
+    await tick();
+    check(
+      Number(cancels) === 1 && picks.length === 1,
+      "Esc from the tree closes",
+    );
+    return "Desktop draft destinations are the Sessions tree: current Session in context, sidebar guides, stable project context, search Insert/Esc layering, J/K/H/L/gg/G and / motions, IME guards and id-based selection";
   } finally {
     root.unmount();
     container.remove();

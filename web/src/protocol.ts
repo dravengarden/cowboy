@@ -366,6 +366,9 @@ export type Outbound =
   // Compatibility tombstone for clients cached before automatic resume was
   // retired. Current clients ignore the empty snapshot.
   | { type: "settings"; settings: Record<string, unknown> }
+  // The Controller's account usage snapshot, sent whenever it or its refresh
+  // state changes so every client shows the same values and progress.
+  | { type: "usage"; snapshot: import("./usageLimits").UsageSnapshot }
   // Addressed refusal of one client-authored command. Only the device whose
   // outbox owns `cmid` acts on it (docs/offline-first-sync.md §Conflict catalog).
   | {

@@ -550,6 +550,7 @@ impl MachinePluginStore {
         )?;
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
 
+        let started = Instant::now();
         let runtime = guard
             .bounded(stage_provider_runtime(
                 &content,
@@ -558,19 +559,31 @@ impl MachinePluginStore {
                 self.root.parent(),
             ))
             .await?;
+        let runtime_ms = started.elapsed().as_millis();
         let launch_command = runtime
             .commands
             .get(&payload.launch_command)
             .context("staged Provider runtime does not export its launch command")?;
         let launch_command = content.join(&launch_command.executable);
         ensure_within(&content, &launch_command)?;
+        let probe_started = Instant::now();
         guard
             .bounded(probe_provider_runtime(
                 &package.manifest.runtime,
                 &launch_command,
             ))
             .await?;
+        let probe_ms = probe_started.elapsed().as_millis();
+        let flush_started = Instant::now();
         guard.flush_staging(&content)?;
+        tracing::info!(
+            plugin_id = %package.manifest.id,
+            runtime_ms,
+            probe_ms,
+            flush_ms = flush_started.elapsed().as_millis(),
+            staging_ms = started.elapsed().as_millis(),
+            "Provider generation staged"
+        );
         guard.before_activation(self)?;
         let pending =
             self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
@@ -3697,8 +3710,15 @@ async fn stage_provider_runtime(
         let mut commands = BTreeMap::new();
         for artifact in &artifacts.components {
             guard.check()?;
-            let staged =
-                stage_runtime_component(&client, &temporary, artifact, guard, cache_state).await?;
+            let staged = stage_runtime_component(
+                &client,
+                &temporary,
+                artifact,
+                guard,
+                cache_state,
+                Some(content),
+            )
+            .await?;
             let executable = staged
                 .executable
                 .strip_prefix(&temporary)
@@ -3994,12 +4014,50 @@ fn archive_runtime_matches(archive_path: &Path, extracted: &Path) -> Result<bool
     Ok(extracted_paths.is_empty())
 }
 
+async fn download_runtime_artifact(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+    guard: &InstallGuard<'_>,
+) -> Result<Vec<u8>> {
+    let response = client.get(url).send().await?.error_for_status()?;
+    if let Some(length) = response.content_length() {
+        ensure!(
+            length <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64,
+            "Provider runtime artifact exceeds 1 GiB"
+        );
+    }
+    let capacity = usize::try_from(
+        response
+            .content_length()
+            .unwrap_or_default()
+            .min(MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64),
+    )
+    .context("Provider runtime artifact capacity does not fit this platform")?;
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        guard.check()?;
+        let chunk = chunk.context("downloading Provider runtime artifact")?;
+        let next_size = bytes
+            .len()
+            .checked_add(chunk.len())
+            .context("Provider runtime artifact size overflow")?;
+        ensure!(
+            next_size <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES,
+            "Provider runtime artifact exceeds 1 GiB"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 async fn stage_runtime_component(
     client: &reqwest::Client,
     runtime_root: &Path,
     artifact: &ReleasedPrivateComponent,
     guard: &InstallGuard<'_>,
     cache_state: Option<&Path>,
+    generation_content: Option<&Path>,
 ) -> Result<StagedRuntimeComponent> {
     guard.check()?;
     let url = reqwest::Url::parse(&artifact.artifact_url)?;
@@ -4008,50 +4066,31 @@ async fn stage_runtime_component(
         url.scheme() == "https" || (url.scheme() == "http" && loopback),
         "Provider runtime artifact must use HTTPS"
     );
+    let started = Instant::now();
     let cached = cache_state
         .map(|state| artifact_cache::read(state, &artifact.artifact_digest))
         .transpose()?
         .flatten();
-    let bytes = if let Some(bytes) = cached {
-        bytes
+    let (bytes, source) = if let Some(bytes) = cached {
+        (bytes, "cache")
+    } else if let Some(bytes) = generation_content
+        .and_then(|content| artifact_cache::read_retained(content, &artifact.artifact_digest))
+    {
+        (bytes, "retained_generation")
     } else {
-        let response = client.get(url).send().await?.error_for_status()?;
-        if let Some(length) = response.content_length() {
-            ensure!(
-                length <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64,
-                "Provider runtime artifact exceeds 1 GiB"
-            );
-        }
-        let capacity = usize::try_from(
-            response
-                .content_length()
-                .unwrap_or_default()
-                .min(MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES as u64),
+        (
+            download_runtime_artifact(client, url, guard).await?,
+            "download",
         )
-        .context("Provider runtime artifact capacity does not fit this platform")?;
-        let mut bytes = Vec::with_capacity(capacity);
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            guard.check()?;
-            let chunk = chunk.context("downloading Provider runtime artifact")?;
-            let next_size = bytes
-                .len()
-                .checked_add(chunk.len())
-                .context("Provider runtime artifact size overflow")?;
-            ensure!(
-                next_size <= MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES,
-                "Provider runtime artifact exceeds 1 GiB"
-            );
-            bytes.extend_from_slice(&chunk);
-        }
-        bytes
     };
+    let fetch_ms = started.elapsed().as_millis();
     let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
     ensure!(
         digest == artifact.artifact_digest.to_ascii_lowercase(),
         "Provider runtime artifact digest mismatch"
     );
     guard.check()?;
+    let unpack_started = Instant::now();
     let component_root = runtime_root.join(format!("{}-{}", artifact.kind.as_str(), artifact.slot));
     fs::create_dir_all(&component_root)?;
     let (executable, stored_artifact) = match artifact.artifact_format {
@@ -4080,7 +4119,11 @@ async fn stage_runtime_component(
             (executable, stored_artifact)
         }
     };
+    let unpack_ms = unpack_started.elapsed().as_millis();
+    let probe_started = Instant::now();
     probe_released_component(&executable, artifact).await?;
+    let probe_ms = probe_started.elapsed().as_millis();
+    let verify_started = Instant::now();
     ensure!(
         digest_file(&stored_artifact)? == artifact.artifact_digest.to_ascii_lowercase(),
         "runtime component probe changed signed artifact bytes"
@@ -4091,6 +4134,16 @@ async fn stage_runtime_component(
             "runtime component probe changed extracted runtime bytes"
         );
     }
+    tracing::info!(
+        command = %artifact.command,
+        source,
+        bytes = bytes.len(),
+        fetch_ms,
+        unpack_ms,
+        probe_ms,
+        verify_ms = verify_started.elapsed().as_millis(),
+        "Provider runtime component staged"
+    );
     Ok(StagedRuntimeComponent {
         executable,
         artifact: stored_artifact,

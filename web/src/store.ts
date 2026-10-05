@@ -139,6 +139,8 @@ import {
 } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
+import { readUsage, startUsageRefresh } from "./usageApi";
+import type { UsageSnapshot } from "./usageLimits";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import {
   retainTranscriptSessionCache,
@@ -212,6 +214,8 @@ export interface State {
   // WebSocket. Retain it across disconnects: transport loss is not evidence
   // that every enrolled Machine disappeared.
   machines: readonly MachineSummary[];
+  /** Controller-owned account usage, pushed on every change. */
+  usage: UsageSnapshot | null;
   machinesLoaded: boolean;
   machinesRevision: number;
   // session_id → seq-ordered, deduped event log
@@ -285,6 +289,7 @@ let state: State = {
   connected: false,
   sessions: [],
   machines: [],
+  usage: null,
   machinesLoaded: false,
   machinesRevision: 0,
   timelines: new Map(),
@@ -1502,6 +1507,12 @@ function handle(msg: Outbound): void {
     case "bootstrap_complete":
       liveBootstrapped = true;
       schedulePrefetchAfterActive();
+      // Usage is pushed only when it changes; read the current value once per
+      // connection so a reconnecting client is never stale.
+      void loadUsageSnapshot().catch(() => undefined);
+      break;
+    case "usage":
+      setState({ ...state, usage: msg.snapshot });
       break;
     case "ping":
       // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
@@ -5428,4 +5439,22 @@ export function useStoreSelector<T>(
     return next;
   }, []);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// --- Account usage ------------------------------------------------------------
+// The Controller owns usage values and refresh progress; every surface reads
+// this one store value so a refresh started on any device shows everywhere.
+
+/** Read the current usage snapshot into the shared store. On failure the
+ *  last value stays; the next broadcast or read replaces it. */
+export async function loadUsageSnapshot(signal?: AbortSignal): Promise<void> {
+  const usage = await readUsage(signal);
+  setState({ ...state, usage });
+}
+
+/** Ask the Controller to refresh one account (or all). Returns once the
+ *  request is accepted; progress and results arrive as broadcasts. */
+export async function requestUsageRefresh(accountProvider?: string): Promise<void> {
+  const usage = await startUsageRefresh(accountProvider);
+  setState({ ...state, usage });
 }

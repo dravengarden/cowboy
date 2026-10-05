@@ -6,7 +6,7 @@
 
 #![warn(clippy::pedantic)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +90,10 @@ pub struct UsageSnapshot {
     pub providers: Vec<ProviderUsage>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub reset_schedules: BTreeMap<String, ResetSchedule>,
+    /// Accounts whose collection is in flight. The Controller owns this state
+    /// so every client shows the same progress, including after reopening.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refreshing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +129,11 @@ pub struct UsageService {
     machine_control: Arc<crate::machine_control::MachineControl>,
     store: Option<crate::store::Store>,
     snapshot: Arc<Mutex<UsageSnapshot>>,
-    refresh_lock: Arc<Mutex<()>>,
+    /// Accounts being collected. One collection per account at a time:
+    /// concurrent requests join it instead of starting another.
+    in_flight: Arc<parking_lot::Mutex<BTreeSet<String>>>,
+    /// Bumped whenever the snapshot or its refresh state changes.
+    changes: Arc<tokio::sync::watch::Sender<u64>>,
     reset_lock: Arc<Mutex<()>>,
     reset_schedules: Arc<Mutex<BTreeMap<String, ResetSchedule>>>,
     cache_path: Option<PathBuf>,
@@ -215,6 +223,7 @@ impl UsageService {
                     .unwrap_or(i64::MAX),
                 providers: initial_bindings.iter().map(placeholder_usage).collect(),
                 reset_schedules: BTreeMap::new(),
+                refreshing: Vec::new(),
             });
         align_snapshot_bindings(&mut snapshot, &initial_bindings);
         Self {
@@ -222,7 +231,8 @@ impl UsageService {
             machine_control,
             store,
             snapshot: Arc::new(Mutex::new(snapshot)),
-            refresh_lock: Arc::new(Mutex::new(())),
+            in_flight: Arc::default(),
+            changes: Arc::new(tokio::sync::watch::channel(0).0),
             reset_lock: Arc::new(Mutex::new(())),
             reset_schedules: Arc::new(Mutex::new(BTreeMap::new())),
             cache_path,
@@ -449,7 +459,114 @@ impl UsageService {
         align_snapshot_bindings(&mut snapshot, &bindings);
         apply_reset_schedules(&mut snapshot, &reset_schedules);
         self.maybe_warm(&snapshot);
+        snapshot.refreshing = self.in_flight.lock().iter().cloned().collect();
         snapshot
+    }
+
+    /// Wakes on every snapshot or refresh-state change; the Controller fans
+    /// the current snapshot out to every connected client.
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    fn notify(&self) {
+        self.changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    /// Claim the due, idle accounts among `candidates` for one collection.
+    /// The manual cooldown and the in-flight set together rate-limit and
+    /// debounce every caller, whichever client or schedule asked.
+    async fn claim_due(
+        &self,
+        candidates: Vec<PluginUsageSpec>,
+        policy: RefreshPolicy,
+    ) -> Vec<PluginUsageSpec> {
+        let bindings = self.bindings.current();
+        let mut current = self.snapshot.lock().await.clone();
+        align_snapshot_bindings(&mut current, &bindings);
+        let attempted_at_ms = now_ms();
+        let claimed: Vec<PluginUsageSpec> = {
+            let mut in_flight = self.in_flight.lock();
+            candidates
+                .into_iter()
+                .filter(PluginUsageSpec::refreshable)
+                .filter(|binding| {
+                    provider_refresh_due(
+                        find_provider(&current, &binding.account),
+                        attempted_at_ms,
+                        policy,
+                    )
+                })
+                .filter(|binding| in_flight.insert(binding.account.clone()))
+                .collect()
+        };
+        if !claimed.is_empty() {
+            self.notify();
+        }
+        claimed
+    }
+
+    /// Collect one claimed account outside any lock, then fold its result into
+    /// the shared snapshot and release the claim.
+    async fn collect_and_store(&self, binding: &PluginUsageSpec) {
+        let attempt = self.collect_binding(binding).await;
+        let completed_at_ms = now_ms();
+        let bindings = self.bindings.current();
+        {
+            let mut snapshot = self.snapshot.lock().await;
+            align_snapshot_bindings(&mut snapshot, &bindings);
+            reconcile_provider_attempt(&mut snapshot, attempt, completed_at_ms, &bindings);
+            update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &bindings);
+            self.persist_snapshot(&snapshot);
+        }
+        self.in_flight.lock().remove(&binding.account);
+        self.notify();
+    }
+
+    /// Start a manual refresh and return at once with the refreshing state.
+    /// Results reach every client through [`Self::subscribe`].
+    ///
+    /// # Errors
+    /// If `provider` names no usage account.
+    pub async fn request_refresh(&self, provider: Option<&str>) -> Result<UsageSnapshot> {
+        let bindings = self.bindings.current();
+        let candidates: Vec<PluginUsageSpec> = match provider {
+            Some(provider) => vec![
+                bindings
+                    .iter()
+                    .find(|binding| binding.account == provider)
+                    .cloned()
+                    .context("unknown usage provider")?,
+            ],
+            None => bindings,
+        };
+        let claimed = self.claim_due(candidates, RefreshPolicy::Manual).await;
+        if !claimed.is_empty() {
+            let this = self.clone();
+            tokio::spawn(async move {
+                futures::future::join_all(
+                    claimed
+                        .iter()
+                        .map(|binding| this.collect_and_store(binding)),
+                )
+                .await;
+            });
+        }
+        Ok(self.snapshot().await)
+    }
+
+    /// Wait until none of `accounts` is being collected.
+    async fn wait_settled(&self, accounts: &[String]) {
+        let mut changes = self.subscribe();
+        while {
+            let in_flight = self.in_flight.lock();
+            accounts.iter().any(|account| in_flight.contains(account))
+        } {
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     /// Coalesces concurrent manual/automatic refreshes. All API callers share
@@ -468,56 +585,37 @@ impl UsageService {
     }
 
     async fn refresh_with_policy(&self, low_peak: bool) -> UsageSnapshot {
-        let _guard = self.refresh_lock.lock().await;
         let bindings = self.bindings.current();
-        let mut current = self.snapshot.lock().await.clone();
-        align_snapshot_bindings(&mut current, &bindings);
         let policy = if low_peak {
             RefreshPolicy::Background
         } else {
             RefreshPolicy::Manual
         };
-        let attempted_at_ms = now_ms();
-        let due: Vec<PluginUsageSpec> = bindings
+        let accounts: Vec<String> = bindings
             .iter()
-            .filter(|binding| binding.refreshable())
-            .filter(|binding| {
-                provider_refresh_due(
-                    find_provider(&current, &binding.account),
-                    attempted_at_ms,
-                    policy,
-                )
-            })
-            .cloned()
+            .map(|binding| binding.account.clone())
             .collect();
-        if due.is_empty() {
-            let reset_schedules = self.reset_schedules.lock().await.clone();
-            apply_reset_schedules(&mut current, &reset_schedules);
-            return current;
-        }
+        let claimed = self.claim_due(bindings, policy).await;
         // Subprocess collectors are comparatively heavy. Background refreshes
         // run them one after another so RSS peaks do not stack. Manual refresh
         // keeps the concurrent path.
-        let attempts = if low_peak {
-            let mut attempts = Vec::new();
-            for binding in &due {
-                attempts.push(self.collect_binding(binding).await);
+        if low_peak {
+            for binding in &claimed {
+                self.collect_and_store(binding).await;
             }
-            attempts
         } else {
-            let futs = due.iter().map(|binding| self.collect_binding(binding));
-            futures::future::join_all(futs).await
-        };
-        let completed_at_ms = now_ms();
-        for attempt in attempts {
-            reconcile_provider_attempt(&mut current, attempt, completed_at_ms, &bindings);
+            futures::future::join_all(
+                claimed
+                    .iter()
+                    .map(|binding| self.collect_and_store(binding)),
+            )
+            .await;
         }
-        update_snapshot_refresh_times(&mut current, completed_at_ms, &bindings);
-        let reset_schedules = self.reset_schedules.lock().await.clone();
-        apply_reset_schedules(&mut current, &reset_schedules);
-        *self.snapshot.lock().await = current.clone();
-        self.persist_snapshot(&current);
-        current
+        // Callers that wait observe any collection another request started.
+        if !low_peak {
+            self.wait_settled(&accounts).await;
+        }
+        self.snapshot().await
     }
 
     fn maybe_warm(&self, snapshot: &UsageSnapshot) {
@@ -580,24 +678,12 @@ impl UsageService {
         if !binding.refreshable() {
             return Ok(self.snapshot().await);
         }
-        let _guard = self.refresh_lock.lock().await;
-        let mut snapshot = self.snapshot.lock().await.clone();
-        align_snapshot_bindings(&mut snapshot, &bindings);
-        let attempted_at_ms = now_ms();
-        if !provider_refresh_due(find_provider(&snapshot, provider), attempted_at_ms, policy) {
-            let reset_schedules = self.reset_schedules.lock().await.clone();
-            apply_reset_schedules(&mut snapshot, &reset_schedules);
-            return Ok(snapshot);
+        for claimed in self.claim_due(vec![binding], policy).await {
+            self.collect_and_store(&claimed).await;
         }
-        let replacement = self.collect_binding(&binding).await;
-        let completed_at_ms = now_ms();
-        reconcile_provider_attempt(&mut snapshot, replacement, completed_at_ms, &bindings);
-        update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &bindings);
-        let reset_schedules = self.reset_schedules.lock().await.clone();
-        apply_reset_schedules(&mut snapshot, &reset_schedules);
-        *self.snapshot.lock().await = snapshot.clone();
-        self.persist_snapshot(&snapshot);
-        Ok(snapshot)
+        // A collection another client started is joined, not repeated.
+        self.wait_settled(&[provider.to_owned()]).await;
+        Ok(self.snapshot().await)
     }
 
     pub async fn set_reset_schedule(&self, provider: &str, schedule: Option<ResetSchedule>) {
@@ -991,6 +1077,7 @@ fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
             })
             .collect(),
         reset_schedules,
+        refreshing: Vec::new(),
     })
 }
 
@@ -1312,6 +1399,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_refresh_returns_at_once_and_coalesces_one_collection() {
+        let runs = tempfile::NamedTempFile::new().unwrap();
+        let mut binding = openai_usage_binding();
+        binding.account = "future".to_owned();
+        binding.collector = UsageCollectorKind::Command;
+        binding.collector_argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!(
+                "read -r _request || true; echo run >> {}; sleep 1; printf '%s' '{{\"provider\":\"future\",\"status\":\"available\",\"source\":\"cmd\",\"observed_at_ms\":7}}'",
+                runs.path().display()
+            ),
+        ];
+        let service = UsageService::with_bindings(None, None, vec![binding]);
+        let mut changes = service.subscribe();
+
+        let started = std::time::Instant::now();
+        let first = service.request_refresh(Some("future")).await.unwrap();
+        let second = service.request_refresh(Some("future")).await.unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert_eq!(first.refreshing, vec!["future".to_owned()]);
+        assert_eq!(second.refreshing, vec!["future".to_owned()]);
+
+        while !service.snapshot().await.refreshing.is_empty() {
+            tokio::time::timeout(std::time::Duration::from_secs(10), changes.changed())
+                .await
+                .expect("refresh completion is announced")
+                .unwrap();
+        }
+        let done = service.snapshot().await;
+        let future = find_provider(&done, "future").expect("future usage");
+        assert_eq!(future.status, "available");
+        assert_eq!(future.observed_at_ms, 7);
+        // Two requests while it ran started exactly one collection.
+        assert_eq!(
+            std::fs::read_to_string(runs.path())
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        // The manual cooldown now holds further requests to the cached value.
+        let cooled = service.request_refresh(Some("future")).await.unwrap();
+        assert!(cooled.refreshing.is_empty());
+        assert!(service.request_refresh(Some("unknown")).await.is_err());
+    }
+
+    #[tokio::test]
     async fn collector_argv_parses_plugin_json_stdout() {
         let mut binding = openai_usage_binding();
         binding.account = "future".to_owned();
@@ -1528,6 +1663,7 @@ mod tests {
             refresh_interval_ms: 300,
             providers: vec![successful_usage("openai", 100)],
             reset_schedules: BTreeMap::new(),
+            refreshing: Vec::new(),
         };
 
         reconcile_provider_attempt(
@@ -1565,6 +1701,7 @@ mod tests {
             refresh_interval_ms: 300,
             providers: vec![successful_usage("openai", 100)],
             reset_schedules: BTreeMap::new(),
+            refreshing: Vec::new(),
         };
 
         reconcile_provider_attempt(
@@ -1791,6 +1928,7 @@ mod tests {
             refresh_interval_ms: 1_000,
             providers: unavailable_providers(),
             reset_schedules: BTreeMap::new(),
+            refreshing: Vec::new(),
         };
         let mut snapshot = snapshot;
         snapshot.providers[0].refresh = Some(refresh_state(42, AUTO_REFRESH_INTERVAL, false));

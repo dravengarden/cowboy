@@ -9,12 +9,32 @@ use crate::machine_protocol::DesiredPlugin;
 use crate::machine_protocol::plugin_install::{
     InstallLookup, InstallObservation, InstallStep, InstallTargetObservation, InstallTargetQuery,
 };
+use std::time::Duration;
+
+/// The Machine bounds one installation by the step deadline and never beyond
+/// five minutes from receipt; the grace covers its final receipt fsync and the
+/// reply's transport after the lease ends.
+const INSTALL_REPLY_GRACE: Duration = Duration::from_secs(15);
+const MAX_INSTALL_REPLY_WAIT: Duration = Duration::from_secs(5 * 60 + 15);
 
 fn fail(certainty: CommandFailure, detail: &str) -> CommandRequestError {
     CommandRequestError {
         certainty,
         detail: detail.to_owned(),
     }
+}
+
+/// How long to observe an executing step before its outcome becomes unknown.
+/// Staging a large runtime over a slow artifact path routinely outlasts the
+/// generic command timeout while the Machine still holds a live lease, so an
+/// executing step waits for that lease. A read-only query keeps the short bound.
+fn install_reply_timeout(step: &InstallStep, executing: bool, now_ms: i64) -> Duration {
+    if !executing {
+        return PROVIDER_COMMAND_TIMEOUT;
+    }
+    let lease = u64::try_from(step.expires_at_ms.saturating_sub(now_ms)).unwrap_or_default();
+    (Duration::from_millis(lease) + INSTALL_REPLY_GRACE)
+        .clamp(PROVIDER_COMMAND_TIMEOUT, MAX_INSTALL_REPLY_WAIT)
 }
 
 impl MachineControl {
@@ -95,6 +115,11 @@ impl MachineControl {
                 "installation target or envelope mismatch",
             ));
         }
+        let reply_timeout = install_reply_timeout(
+            step,
+            desired.is_some(),
+            chrono::Utc::now().timestamp_millis(),
+        );
         let request_id = if desired.is_some() {
             format!("plugin-install-{}", step.operation_id)
         } else {
@@ -127,7 +152,7 @@ impl MachineControl {
                     "installation step channel unavailable",
                 )
             })?;
-        match tokio::time::timeout(PROVIDER_COMMAND_TIMEOUT, rx).await {
+        match tokio::time::timeout(reply_timeout, rx).await {
             Ok(Ok(Reply::InstallationStep(observation))) => {
                 if let InstallLookup::Found { receipt } = &observation.result
                     && !receipt.matches(step)

@@ -125,8 +125,31 @@ impl UsageService {
             );
         }
         // Serialize with collectors and other edits: a completed refresh cannot
-        // publish an old executor's result after this mutation returns.
-        let _guard = self.refresh_lock.lock().await;
+        // publish an old executor's result after this mutation returns. Wait
+        // for this account's collection, then hold its slot so none starts
+        // until the new route is recorded.
+        loop {
+            self.wait_settled(&[account.to_owned()]).await;
+            if self.in_flight.lock().insert(account.to_owned()) {
+                break;
+            }
+        }
+        let result = self
+            .record_execution_machine(store, account, machine_id)
+            .await;
+        self.in_flight.lock().remove(account);
+        result?;
+        self.notify();
+        tracing::info!(account, "usage execution Machine updated");
+        Ok(())
+    }
+
+    async fn record_execution_machine(
+        &self,
+        store: &crate::store::Store,
+        account: &str,
+        machine_id: Option<String>,
+    ) -> Result<()> {
         let mut configured = self.execution_machines.read().clone();
         if configured.get(account) == machine_id.as_ref() {
             return Ok(());
@@ -151,7 +174,6 @@ impl UsageService {
         {
             provider.refresh = None;
         }
-        tracing::info!(account, "usage execution Machine updated");
         Ok(())
     }
 }

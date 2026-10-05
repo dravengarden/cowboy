@@ -65,6 +65,44 @@ pub(super) fn read(state: &Path, digest: &str) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// A Plugin retains only a few generations; bound the scan regardless.
+const MAX_RETAINED_GENERATIONS: usize = 64;
+
+/// Runtime bytes a retained sibling generation of the same Plugin already
+/// staged, so an unchanged component is not downloaded again for every
+/// release. Like the cache this is untrusted input accepted only by exact
+/// digest: a damaged, linked or unreadable generation is simply a miss.
+pub(super) fn read_retained(content: &Path, digest: &str) -> Option<Vec<u8>> {
+    let current = content.parent()?;
+    let generations = current.parent()?;
+    for entry in fs::read_dir(generations)
+        .ok()?
+        .flatten()
+        .take(MAX_RETAINED_GENERATIONS)
+    {
+        let generation = entry.path();
+        if generation == current || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let candidate = generation.join("content");
+        let Ok(metadata) = read_installed_runtime(&candidate) else {
+            continue;
+        };
+        for command in metadata.commands.values() {
+            if !command.artifact_digest.eq_ignore_ascii_case(digest) {
+                continue;
+            }
+            let path = candidate.join(&command.artifact);
+            if ensure_within(&candidate, &path).is_ok()
+                && let Ok(bytes) = read_verified(&path, digest)
+            {
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
 impl MachinePluginStore {
     /// Import opaque public bytes only; never opens identity, credentials,
     /// operation journals, generation pointers, or a Controller connection.
@@ -131,6 +169,7 @@ mod tests {
                 &artifact,
                 &InstallGuard::Legacy,
                 Some(root.path()),
+                None,
             ),
         )
         .await
@@ -141,6 +180,57 @@ mod tests {
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn retained_generation_supplies_only_exact_unchanged_runtime_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let generations = root.path().join("generations");
+        let bytes = b"unchanged provider cli";
+        let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+        let retained = generations.join("old/content");
+        fs::create_dir_all(retained.join("runtime/provider_cli-claude")).unwrap();
+        fs::write(
+            retained.join("runtime/provider_cli-claude/artifact.tar.gz"),
+            bytes,
+        )
+        .unwrap();
+        let metadata = |artifact: &str| {
+            serde_json::json!({"schema_version": 2, "commands": {"claude": {
+                "executable": "runtime/provider_cli-claude/content/claude",
+                "artifact": artifact,
+                "artifact_digest": digest,
+            }}})
+            .to_string()
+        };
+        fs::write(
+            retained.join("runtime/metadata.json"),
+            metadata("runtime/provider_cli-claude/artifact.tar.gz"),
+        )
+        .unwrap();
+        let current = generations.join("new/content");
+        fs::create_dir_all(&current).unwrap();
+
+        assert_eq!(read_retained(&current, &digest).unwrap(), bytes);
+        let other = format!("sha256:{:x}", Sha256::digest(b"changed adapter"));
+        assert!(read_retained(&current, &other).is_none());
+        // The current generation is never its own source.
+        assert!(read_retained(&retained, &digest).is_none());
+
+        // Escaping metadata or tampered bytes are misses, never inputs.
+        fs::write(retained.join("runtime/metadata.json"), metadata("../../x")).unwrap();
+        assert!(read_retained(&current, &digest).is_none());
+        fs::write(
+            retained.join("runtime/metadata.json"),
+            metadata("runtime/provider_cli-claude/artifact.tar.gz"),
+        )
+        .unwrap();
+        fs::write(
+            retained.join("runtime/provider_cli-claude/artifact.tar.gz"),
+            b"tampered",
+        )
+        .unwrap();
+        assert!(read_retained(&current, &digest).is_none());
     }
 
     #[test]
