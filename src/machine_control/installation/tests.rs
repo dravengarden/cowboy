@@ -137,3 +137,30 @@ async fn an_ack_for_changed_input_is_unknown_not_success_and_never_retried() {
     assert!(commands.try_recv().is_err());
     assert!(control.live.read().pending.is_empty());
 }
+
+#[test]
+fn executing_steps_wait_for_the_machine_lease_and_queries_stay_short() {
+    let now = 1_000_000;
+    let mut step = fixture();
+    step.expires_at_ms = now + 300_000;
+    assert_eq!(
+        install_reply_timeout(&step, true, now),
+        Duration::from_secs(300) + INSTALL_REPLY_GRACE
+    );
+    assert_eq!(
+        install_reply_timeout(&step, false, now),
+        PROVIDER_COMMAND_TIMEOUT
+    );
+    // A lease that is already short or over never waits less than the generic
+    // bound, and a skewed far-future deadline is capped at the Machine maximum.
+    step.expires_at_ms = now - 1;
+    assert_eq!(
+        install_reply_timeout(&step, true, now),
+        PROVIDER_COMMAND_TIMEOUT
+    );
+    step.expires_at_ms = now + 3_600_000;
+    assert_eq!(
+        install_reply_timeout(&step, true, now),
+        MAX_INSTALL_REPLY_WAIT
+    );
+}

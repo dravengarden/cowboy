@@ -302,11 +302,22 @@ connection. Importing bytes is not Plugin admission or proof of a trusted releas
 
 The ordinary Controller-authorized installation still verifies the signed
 release and exact artifact digest, probes the runtime, honors its original
-lease, and writes the normal receipts. A cache hit avoids HTTP download; a
-miss follows the existing HTTPS path. Corrupt or symlinked cache input fails
-closed. No active generation or credential pointer is populated by preloading.
-Remove unused cached blobs separately when their public bytes are no longer
-needed; they are reproducible artifacts, not Machine recovery identity.
+lease, and writes the normal receipts. A cache hit avoids HTTP download. On a
+miss the installer next reuses the exact component bytes from a retained
+generation of the same Plugin, so an unchanged CLI is not downloaded again for
+every release; otherwise it follows the existing HTTPS path. Retained bytes are
+accepted only by exact digest, and a damaged generation is a miss. Corrupt or
+symlinked cache input fails closed. No active generation or credential pointer
+is populated by preloading. Remove unused cached blobs separately when their
+public bytes are no longer needed; they are reproducible artifacts, not Machine
+recovery identity.
+
+Each staged runtime component logs its source with `fetch_ms`, `unpack_ms`,
+`probe_ms` and `verify_ms`; each staged generation logs `runtime_ms`,
+`probe_ms` and `flush_ms`. The Controller observes an executing installation
+step until its Machine lease ends plus a short grace (at most five minutes and
+fifteen seconds) rather than the generic 90-second command bound, so slow
+artifact delivery within the lease no longer becomes an unknown outcome.
 
 ## Provider usage spool status
 
