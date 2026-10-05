@@ -6,6 +6,8 @@ import {
   Typography,
 } from "@mui/material";
 import type { ProviderCatalogEntry } from "@cowboy/provider-ui";
+import { machineCapacityLabel } from "./machineCapacity";
+import type { MachineSummary } from "./protocol";
 import { ProviderIcon } from "./ProviderIcon";
 
 interface Installation {
@@ -14,6 +16,15 @@ interface Installation {
   provider: string;
   mode: "local" | "remote";
   entry: ProviderCatalogEntry;
+  /** The runtime Machine has no free live-session slot. */
+  full?: boolean;
+  machine?: Pick<MachineSummary, "capacity" | "active_sessions">;
+}
+
+export function installationCapacity(installation: Installation): string {
+  return installation.machine
+    ? machineCapacityLabel(installation.machine, installation.full ?? false)
+    : "";
 }
 
 export function AiInstallationPicker({
@@ -71,6 +82,7 @@ export function AiInstallationPicker({
         <MenuItem
           key={installation.value}
           value={installation.value}
+          disabled={installation.full}
           sx={{
             alignItems: "center",
             minHeight: 44,
@@ -88,6 +100,7 @@ export function AiInstallationPicker({
             <Typography variant="caption" color="text.secondary">
               {installation.mode === "remote" ? "Remote" : "Local"} ·{" "}
               {installation.entry.manifest.display.vendor}
+              {installation.machine ? ` · ${installationCapacity(installation)}` : ""}
             </Typography>
           </Box>
         </MenuItem>

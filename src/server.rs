@@ -398,6 +398,20 @@ struct MachineSnapshots {
     revision: Arc<AtomicU64>,
 }
 
+/// Whether a session holds one of its Machine's worker slots. Capacity bounds
+/// live Agent processes: a starting session counts before its worker
+/// registers, while a session whose worker exited (or was never revived after
+/// a restart) holds no memory and must not keep the Machine full.
+fn holds_worker_slot(router: &RuntimeRouter, session: &crate::core::SessionMeta) -> bool {
+    match session.status {
+        crate::agent_model::Status::Exited => false,
+        crate::agent_model::Status::Starting => true,
+        _ => router
+            .runtime(&session.machine_id)
+            .is_some_and(|runtime| runtime.has_worker(&session.id)),
+    }
+}
+
 const MACHINE_RUNTIME_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(45);
 // Legacy Machine hosts begin their heartbeat only after welcome-time component
 // reconciliation. Keep that explicitly identified work out of the
@@ -507,17 +521,24 @@ impl MachineSnapshots {
             return Ok(Vec::new());
         };
         let machines = store.list_machines().await?;
-        let mut session_loads: HashMap<String, (u32, HashMap<String, u64>)> = HashMap::new();
+        // (open sessions, sessions holding a worker slot, open sessions per
+        // Provider). Component occupancy keeps counting every open session;
+        // capacity counts only live Agent processes.
+        let mut session_loads: HashMap<String, (u32, u32, HashMap<String, u64>)> = HashMap::new();
         for session in self
             .hub
             .session_list()
             .into_iter()
             .filter(|session| session.status != crate::agent_model::Status::Exited)
         {
-            let (active_sessions, providers) = session_loads
+            let live = holds_worker_slot(&self.runtime_router, &session);
+            let (open_sessions, live_sessions, providers) = session_loads
                 .entry(session.machine_id)
-                .or_insert_with(|| (0, HashMap::new()));
-            *active_sessions = active_sessions.saturating_add(1);
+                .or_insert_with(|| (0, 0, HashMap::new()));
+            *open_sessions = open_sessions.saturating_add(1);
+            if live {
+                *live_sessions = live_sessions.saturating_add(1);
+            }
             let provider_sessions = providers.entry(session.provider).or_default();
             *provider_sessions = provider_sessions.saturating_add(1);
         }
@@ -569,9 +590,11 @@ impl MachineSnapshots {
                     .get("plugin_contracts")
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok());
-                let (active_sessions, provider_sessions) = session_loads
+                let (open_sessions, active_sessions, provider_sessions) = session_loads
                     .get(&machine.id)
-                    .map_or((0, None), |(active, providers)| (*active, Some(providers)));
+                    .map_or((0, 0, None), |(open, live, providers)| {
+                        (*open, *live, Some(providers))
+                    });
                 let local = machine.connection_mode == "local";
                 for component in &mut components {
                     if matches!(
@@ -602,7 +625,7 @@ impl MachineSnapshots {
                                     })
                                 }
                             }
-                            _ => u64::from(active_sessions),
+                            _ => u64::from(open_sessions),
                         };
                     }
                     component.superseded_by = superseding_plugin(&component.id, &plugins);
@@ -15349,7 +15372,7 @@ async fn api_new_session(
             .into_iter()
             .filter(|session| {
                 session.machine_id == req.machine_id
-                    && session.status != crate::agent_model::Status::Exited
+                    && holds_worker_slot(&state.runtime_router, session)
             })
             .count();
         if capacity.draining || active_sessions >= capacity.max_sessions as usize {
@@ -20355,10 +20378,13 @@ mod zed_adapter_tests {
 #[cfg(test)]
 mod bootstrap_tests {
     use super::{
-        connect_bootstrap, fanout_sends_shared_frame, focused_session_bootstrap, project_outbound,
+        connect_bootstrap, fanout_sends_shared_frame, focused_session_bootstrap, holds_worker_slot,
+        project_outbound,
     };
+    use crate::agent_model::Status;
     use crate::core::{Event, Hub, Outbound, SessionOrigin};
     use crate::product_auth::ProductPrincipal;
+    use crate::runtime_router::RuntimeRouter;
     use std::collections::HashSet;
 
     fn test_owner_principal() -> ProductPrincipal {
@@ -20388,6 +20414,28 @@ mod bootstrap_tests {
             );
         }
         hub
+    }
+
+    #[test]
+    fn only_starting_or_live_worker_sessions_hold_capacity() {
+        let hub = hub_with_sessions();
+        let router = RuntimeRouter::new();
+        let slot = |status: Status| {
+            hub.set_status("focused", status, None);
+            let session = hub
+                .session_list()
+                .into_iter()
+                .find(|session| session.id == "focused")
+                .expect("session");
+            holds_worker_slot(&router, &session)
+        };
+        // A starting session reserves its slot before the worker registers.
+        assert!(slot(Status::Starting));
+        // A recorded Running/Busy status without a live worker is stale and
+        // holds no Agent process, so it must not keep the Machine full.
+        assert!(!slot(Status::Running));
+        assert!(!slot(Status::Busy));
+        assert!(!slot(Status::Exited));
     }
 
     #[test]
