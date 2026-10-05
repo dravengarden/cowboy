@@ -184,6 +184,10 @@ Automated (see `docs/acceptance-results/editor-plugins-2026-10-05.json`):
   stops at the pre-existing "Esc on the tablist closes Create" check, which
   also fails on unmodified `origin/main`.
 - `desktop-composer` suite in Firefox and Chromium: Mod+B/Mod+I.
+- The same three suites in real macOS Chrome 154 through
+  `just cdp-browser-conformance http://127.0.0.1:9223 <suite>` (disposable
+  context, intercepted origin, no credentials), including `draft-documents`.
+  Fixture key events there are synthetic, not trusted OS input.
 
 Not verified by these runs: real IME candidate selection and cancellation with
 actual input methods, physical iPhone/iPad input (pitfall #69 remains open),
