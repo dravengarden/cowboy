@@ -2,6 +2,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
+use std::io::Read as _;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
@@ -15,6 +16,7 @@ use tokio::process::Command;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CARGO_CACHE_TAG_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
+const MAX_CARGO_CACHE_TAG_BYTES: u64 = 8192;
 const MAX_CLEANUP_DIRECTORIES: usize = 100_000;
 
 #[derive(Debug, Deserialize)]
@@ -635,14 +637,49 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
 }
 
 fn is_cargo_target_directory(path: &Path) -> Result<bool> {
-    if !path.join(".rustc_info.json").is_file() {
+    let Ok(directory) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    else {
+        return Ok(false);
+    };
+    if open_regular_cargo_marker(&directory, ".rustc_info.json").is_none() {
         return Ok(false);
     }
-    let tag_path = path.join("CACHEDIR.TAG");
-    let Ok(tag) = std::fs::read_to_string(&tag_path) else {
+    let Some(file) = open_regular_cargo_marker(&directory, "CACHEDIR.TAG") else {
+        return Ok(false);
+    };
+    if file.metadata()?.len() > MAX_CARGO_CACHE_TAG_BYTES {
+        return Ok(false);
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_CARGO_CACHE_TAG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_CARGO_CACHE_TAG_BYTES
+    {
+        return Ok(false);
+    }
+    let Ok(tag) = std::str::from_utf8(&bytes) else {
         return Ok(false);
     };
     Ok(tag.lines().any(|line| line == CARGO_CACHE_TAG_SIGNATURE))
+}
+
+fn open_regular_cargo_marker(directory: &File, name: &str) -> Option<File> {
+    use rustix::fs::{Mode, OFlags, openat};
+    let file = File::from(
+        openat(
+            directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()?,
+    );
+    file.metadata().ok()?.is_file().then_some(file)
 }
 
 fn validate_session_id(value: &str) -> Result<()> {
@@ -888,6 +925,103 @@ mod tests {
             assert!(error.downcast_ref::<CleanupRootChanged>().is_some());
             assert!(original.join("target/debug/deps/libtest.rlib").is_file());
         }
+    }
+
+    #[tokio::test]
+    async fn cleanup_preserves_targets_with_linked_or_oversized_markers() {
+        for case in [
+            "linked-info",
+            "linked-tag",
+            "oversized-tag",
+            "invalid-tag",
+            "tag-directory",
+        ] {
+            let temp = TestDir::new();
+            let managed = temp.0.join("managed");
+            let session = managed.join("sess-marker");
+            let target = session.join("target");
+            write_cargo_target(&target);
+            match case {
+                "linked-info" | "linked-tag" => {
+                    let name = if case == "linked-info" {
+                        ".rustc_info.json"
+                    } else {
+                        "CACHEDIR.TAG"
+                    };
+                    let external = temp.0.join("external-marker");
+                    std::fs::rename(target.join(name), &external).unwrap();
+                    std::os::unix::fs::symlink(&external, target.join(name)).unwrap();
+                }
+                "oversized-tag" => {
+                    let mut content = format!("{CARGO_CACHE_TAG_SIGNATURE}\n").into_bytes();
+                    content.resize(
+                        usize::try_from(MAX_CARGO_CACHE_TAG_BYTES + 1).unwrap(),
+                        b' ',
+                    );
+                    std::fs::write(target.join("CACHEDIR.TAG"), content).unwrap();
+                }
+                "invalid-tag" => std::fs::write(target.join("CACHEDIR.TAG"), [0xff]).unwrap(),
+                "tag-directory" => {
+                    std::fs::remove_file(target.join("CACHEDIR.TAG")).unwrap();
+                    std::fs::create_dir(target.join("CACHEDIR.TAG")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let observation = capture_cleanup_workspace(&managed, "sess-marker", &session).unwrap();
+            assert!(
+                cleanup_build_artifacts(&observation)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{case}"
+            );
+            assert!(target.join("debug/deps/libtest.rlib").is_file(), "{case}");
+        }
+    }
+
+    #[test]
+    fn cleanup_fifo_markers_finish_without_a_writer_and_preserve_artifacts() {
+        for name in [".rustc_info.json", "CACHEDIR.TAG"] {
+            let temp = TestDir::new();
+            let managed = temp.0.join("managed");
+            let session = managed.join("sess-fifo");
+            let target = session.join("target");
+            write_cargo_target(&target);
+            std::fs::remove_file(target.join(name)).unwrap();
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                target.join(name),
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .unwrap();
+            let observation = capture_cleanup_workspace(&managed, "sess-fifo", &session).unwrap();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn(move || {
+                sender
+                    .send(cleanup_build_artifacts_sync(&observation))
+                    .unwrap();
+            });
+            assert!(
+                receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("marker probing must not wait for a FIFO writer")
+                    .unwrap()
+                    .is_empty()
+            );
+            thread.join().unwrap();
+            assert!(target.join("debug/deps/libtest.rlib").is_file());
+        }
+    }
+
+    #[test]
+    fn bounded_cache_tag_accepts_exact_size_limit() {
+        let temp = TestDir::new();
+        let target = temp.0.join("target");
+        write_cargo_target(&target);
+        let mut content = format!("{CARGO_CACHE_TAG_SIGNATURE}\n").into_bytes();
+        content.resize(usize::try_from(MAX_CARGO_CACHE_TAG_BYTES).unwrap(), b' ');
+        std::fs::write(target.join("CACHEDIR.TAG"), content).unwrap();
+        assert!(is_cargo_target_directory(&target).unwrap());
     }
 
     #[tokio::test]
