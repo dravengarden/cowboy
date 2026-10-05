@@ -10,6 +10,7 @@ import { useDraftLibrary } from "./documents/store";
 import type { DraftMetadata } from "./documents/model";
 import type { DraftFlush } from "./documents/DraftEditor";
 import { documentNotice } from "./documents/DocumentNotifications";
+import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, WorkspaceDraftTrash, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { reorderWorkspaceItems } from "./store";
 import { DRAFT_DRAG_TYPE } from "./documents/model";
@@ -79,6 +80,7 @@ import {
     Code as CodeIcon,
     CreateNewFolderOutlined,
     DeleteOutline,
+    BedtimeOutlined,
     DragIndicator,
     DriveFileMoveOutlined,
     DriveFileRenameOutline,
@@ -772,6 +774,18 @@ function SessionList({
         if (!menuAnchor) return;
         setSessionNotificationsMuted(menuAnchor.row.id, !menuSessionMuted);
         setMenuAnchor(null);
+    };
+    const sessionMachines = useStoreSelector((snapshot) => snapshot.machines);
+    const menuHibernate = menuAnchor
+        ? hibernateAvailability(menuAnchor.row, sessionMachines)
+        : null;
+    const hibernateMenuSession = (): void => {
+        if (!menuAnchor || menuHibernate !== "ready") return;
+        const session = menuAnchor.row;
+        setMenuAnchor(null);
+        void hibernateSession(session.id)
+            .then(() => documentNotice(`${session.title || "Session"} is hibernating; it resumes when you open it.`))
+            .catch((error: Error) => documentNotice(error.message));
     };
     const menuProjection = useExploreSessionState(
         menuAnchor?.row.id ?? "__session-menu-none__",
@@ -2111,6 +2125,17 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary={menuSessionMuted ? "Unmute notifications" : "Mute notifications"} />
                 </MenuItem>
+                {menuHibernate && (
+                    <MenuItem disabled={menuHibernate === "busy"} onClick={hibernateMenuSession}>
+                        <ListItemIcon>
+                            <BedtimeOutlined fontSize="medium" />
+                        </ListItemIcon>
+                        <ListItemText
+                            primary="Hibernate"
+                            secondary={menuHibernate === "busy" ? "Available after the current turn" : "Free its memory; resumes when opened"}
+                        />
+                    </MenuItem>
+                )}
                 <Divider />
                 <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
                     View mode
@@ -2221,6 +2246,12 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuSessionMuted ? "Unmute notifications" : "Mute notifications"}</Box>
                                 <Kbd keys="N" />
                             </Button>
+                            {menuHibernate && (
+                                <Button data-session-shortcut="z" fullWidth disabled={menuHibernate === "busy"} startIcon={<BedtimeOutlined />} onClick={hibernateMenuSession} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuHibernate === "busy" ? "Hibernate after this turn" : "Hibernate"}</Box>
+                                    <Kbd keys="Z" />
+                                </Button>
+                            )}
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>View mode</Typography>
                             {([

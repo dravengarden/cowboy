@@ -694,6 +694,13 @@ impl MachineSnapshots {
                     plugin_contracts,
                     capacity,
                     active_sessions,
+                    resources: self.machine_control.host_resources(&machine_id),
+                    capabilities: crate::machine_protocol::MachineCapabilities {
+                        hibernation: self.machine_control.machine_supports(
+                            &machine_id,
+                            crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION,
+                        ),
+                    },
                     pending_updates,
                     convergence: Vec::new(),
                     plugin_lifecycle: if desired_plugins.value.manages(&machine_id) {
@@ -10001,6 +10008,7 @@ async fn serve_axum(
             "/api/sessions/{id}/reload",
             get(api_session_reload_plan).post(api_session_reload).put(session_provider_updates::configure),
         )
+        .route("/api/sessions/{id}/hibernate", post(api_session_hibernate))
         .route(
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
@@ -14924,6 +14932,35 @@ async fn api_session_reload(
         .reload_session(&session_id, query.confirm_active_turn)
     {
         Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+/// Free an idle session's Agent process and Machine slot without ending it.
+async fn api_session_hibernate(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(session) = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|session| session.id == session_id)
+    else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    if !state.machine_control.machine_supports(
+        &session.machine_id,
+        crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION,
+    ) {
+        return (
+            StatusCode::CONFLICT,
+            "this session's Machine does not support hibernation yet",
+        )
+            .into_response();
+    }
+    match state.supervisor.hibernate_session(&session_id) {
+        Ok(()) => (StatusCode::ACCEPTED, "hibernating").into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
 }

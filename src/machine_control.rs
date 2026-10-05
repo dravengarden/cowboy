@@ -476,6 +476,9 @@ pub struct MachineControl {
     read_owner: Arc<()>,
     live: RwLock<LiveState>,
     next_request: AtomicU64,
+    /// Latest host observation per Machine. Retained across reconnects so an
+    /// offline Machine still shows when it was last observed.
+    host_resources: RwLock<HashMap<String, crate::machine_protocol::ObservedHostResources>>,
 }
 
 #[cfg(test)]
@@ -492,7 +495,16 @@ impl MachineControl {
             read_owner: Arc::new(()),
             live: RwLock::new(LiveState::default()),
             next_request: AtomicU64::new(0),
+            host_resources: RwLock::default(),
         }
+    }
+
+    /// Latest host resources a Machine reported, if any.
+    pub(crate) fn host_resources(
+        &self,
+        machine_id: &str,
+    ) -> Option<crate::machine_protocol::ObservedHostResources> {
+        self.host_resources.read().get(machine_id).cloned()
     }
 
     pub(crate) fn install(
@@ -739,6 +751,20 @@ impl MachineControl {
                         request_id,
                         accepted,
                         detail,
+                    },
+                );
+            }
+            // A periodic observation replaces the previous value; keep it out
+            // of the bounded event history it would otherwise flood.
+            MachineEvent::HostResources {
+                resources,
+                observed_at_ms,
+            } => {
+                self.host_resources.write().insert(
+                    machine_id.clone(),
+                    crate::machine_protocol::ObservedHostResources {
+                        resources,
+                        observed_at_ms,
                     },
                 );
             }
@@ -1058,6 +1084,15 @@ impl MachineControl {
             token,
             crate::machine_protocol::PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION,
         )
+    }
+
+    /// Whether the Machine's current connection negotiated at least `minimum`.
+    pub(crate) fn machine_supports(&self, machine_id: &str, minimum: u16) -> bool {
+        self.live
+            .read()
+            .connections
+            .get(machine_id)
+            .is_some_and(|c| c.protocol >= minimum)
     }
 
     fn connection_supports(&self, token: &ConnectionToken, minimum: u16) -> bool {
