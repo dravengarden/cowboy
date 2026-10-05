@@ -4,7 +4,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { useStoreSelector } from "./store";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 
-export type CreateVariant = "session" | "draft";
+export type CreateVariant = "session" | "draft" | "folder";
 
 export function CreateVariantPicker({ value, disabled, onChange }: {
   value: CreateVariant;
@@ -30,6 +30,13 @@ export function CreateVariantPicker({ value, disabled, onChange }: {
         aria-controls="create-variant-panel"
         value="draft"
         label="Draft"
+        disabled={disabled}
+      />
+      <Tab
+        id="create-folder-tab"
+        aria-controls="create-variant-panel"
+        value="folder"
+        label="Folder"
         disabled={disabled}
       />
     </Tabs>

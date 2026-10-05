@@ -20,12 +20,15 @@ if (
   suite !== "workspace-extensions" && suite !== "sheet-keyboard" &&
   suite !== "workspace-picker" && suite !== "project-placement" &&
   suite !== "sign-in" && suite !== "desktop-composer" &&
-  suite !== "session-move" && suite !== "draft-documents"
+  suite !== "session-move" && suite !== "session-fold" &&
+  suite !== "draft-documents"
 ) {
   throw new Error("unknown suite");
 }
 const entry = suite === "draft-documents"
   ? "runDraftDocumentsBrowserConformance"
+  : suite === "session-fold"
+  ? "runSessionFoldBrowserConformance"
   : suite === "session-move"
   ? "runSessionMoveBrowserConformance"
   : suite === "desktop-composer"
@@ -209,6 +212,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.tests.length !==
       (suite === "sign-in" || suite === "session-move"
         ? 4
+        : suite === "session-fold"
+        ? 6
         : suite === "project-placement"
         ? 11
         : suite === "workspace-picker"

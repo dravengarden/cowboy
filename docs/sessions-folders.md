@@ -158,16 +158,35 @@ children emits one `empty` row (`empty:<folder>` key) as its body.
   Moves expand every destination ancestor and scroll the moved item into view
   on either surface, without a success snackbar. They do not
   switch the active session.
-- Drawer footer "+" is unchanged; the New Session sheet gains an optional
-  Folder row defaulting to the folder bound to the chosen workspace, else the
-  folder of the current session, else Root.
+- Create's Session tab has an optional Sessions directory defaulting to the
+  folder bound to the chosen workspace, else the folder of the current
+  session, else Root.
 - The grip reorders and files; see [Drag into folders](#drag-into-folders).
   "Move to…" remains available for long distances.
-- The footer's leading island gains **New folder** beside New session. The
-  name prompt offers **By project (N)** while unbound project labels exist:
-  one tap creates one bound folder per project that has none yet, writes no
-  placements, and every current and future session of those projects files
-  itself.
+- Drawer footer "+" opens **Create**, which owns every creation: Session,
+  Draft and **Folder** tabs. The Folder tab takes a name (focused, empty,
+  contact AutoFill off) and an optional parent from the same Sessions-tree
+  picker as Session, so switching between the two keeps the location. It
+  offers **Organize by project instead (N)** while unbound project labels
+  exist: one tap creates one bound folder per project that has none yet,
+  writes no placements, and every current and future session of those
+  projects files itself. Creating closes Create and the list expands the new
+  folder's ancestors and scrolls it into view. Folder creation is rare, so it
+  costs one extra tap instead of a footer slot; folder kebabs and the Move
+  picker keep their in-place "New folder" actions.
+- The leading island pairs "+" with the **fold button**, one control whose glyph
+  names its next action. **Focus** (unfold-less glyph) collapses every folder
+  off the current session's ancestor path, keeps that path open, scrolls the
+  session into view and rings it briefly (no ring under reduced motion);
+  without a current session it collapses every folder. Once the list is in
+  exactly that state and the session is fully visible above the islands, the
+  button becomes **Expand all** (unfold-more glyph), which opens every folder
+  while holding the current row (else the topmost visible row) at the same
+  screen position. A manual fold or scrolling the session away re-arms Focus,
+  so a press never expands a list the reader just lost their place in. A list
+  with nothing to fold away shows **Show current session** (locate glyph); the
+  button hides when it has nothing to do. The state is derived (fold set plus
+  an IntersectionObserver on the current row), never remembered.
 
 ## Desktop
 
@@ -195,7 +214,8 @@ lists the region's live map. Command Palette entries: New Session Folder,
 Move Session to Folder…, Organize Sessions by Project, Collapse/Expand All
 Session Folders, Reveal Current Session. No workspace-prefix continuation is
 added; `Cmd/Alt+K N` still creates a session. A folder button beside New
-session opens the same folder-wide actions with the pointer.
+session opens the same folder-wide actions with the pointer; the fold button
+beside it (see Mobile) is the one-click Focus / Expand all toggle.
 
 Pointer: see [Drag into folders](#drag-into-folders). Order mode keeps the
 row-above rule, so `j/k` across a header moves a session in or out. The folder actions modal offers
