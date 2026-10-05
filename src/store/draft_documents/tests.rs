@@ -30,6 +30,7 @@ fn applied(result: DraftResult) -> DraftDocument {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One revision/CAS/history contract shared by SQLite and PostgreSQL.
 async fn contract(store: &Store) {
     store.migrate().await.unwrap();
     let folder = mutation(
