@@ -822,6 +822,8 @@
         cowboy-web = cowboy-web;
         # Optional local conformance tool, never part of a product runtime.
         cowboy-idb-test-browser = pkgs.firefox;
+        # Second engine for the same isolated runner (Blink).
+        cowboy-chromium-test-browser = pkgs.chromium;
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;

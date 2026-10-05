@@ -41,6 +41,35 @@ build-web:
 
 # Optional real IndexedDB gate. Build .#cowboy-idb-test-browser and pass its
 # absolute /bin/firefox; never use an authenticated/system browser profile.
+# The Desktop keyboard/UI gate. Required before shipping Desktop keyboard,
+# leader, label, modal or Draft-page changes: the keyboard suites in pinned
+# Firefox and Chromium (light and dark), then trusted-input acceptance with
+# screenshots in a running Chrome when CDP_ENDPOINT answers (hawk
+# chrome-debug by default). An unreachable endpoint is reported, never
+# treated as a pass for that step.
+desktop-browser-gate CDP_ENDPOINT="http://127.0.0.1:9222" OUT="/tmp/cowboy-desktop-acceptance":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    firefox="$(nix build --no-link --print-out-paths .#cowboy-idb-test-browser)/bin/firefox"
+    chromium="$(nix build --no-link --print-out-paths .#cowboy-chromium-test-browser)/bin/chromium"
+    for browser in "$firefox" "$chromium"; do
+      for suite in desktop-composer draft-documents session-fold sheet-keyboard; do
+        for theme in light dark; do
+          echo "== $(basename "$browser") $suite $theme"
+          unshare --user --map-current-user --keep-caps --net bash -euc \
+            'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" "$2" "$3"' \
+            conformance "$browser" "$suite" "$theme" | grep -E '"ok"|"browser"'
+        done
+      done
+    done
+    if deno eval "await fetch('{{CDP_ENDPOINT}}/json/version')" >/dev/null 2>&1; then
+      just desktop-keyboard-acceptance "{{CDP_ENDPOINT}}" "{{OUT}}"
+      echo "screenshots: {{OUT}}"
+    else
+      echo "SKIPPED trusted-input acceptance: no Chrome DevTools at {{CDP_ENDPOINT}}" >&2
+      exit 3
+    fi
+
 # Run a browser fixture in an already running Chrome over a loopback DevTools
 # endpoint (hawk chrome-debug :9222, or the macbook-air bridge :9223) inside a
 # disposable browser context; see tools/cdp-fixture.ts.
@@ -48,9 +77,10 @@ cdp-browser-conformance ENDPOINT SUITE THEME="light":
     deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-browser-conformance.ts "{{ENDPOINT}}" "{{SUITE}}" "{{THEME}}"
 
 # Trusted-input Desktop keyboard acceptance with screenshots (leader, labels,
-# dialog leader, Vim/IME ownership) in a running Chrome.
+# dialog leader, Vim/IME ownership, the Draft page) in a running Chrome.
 desktop-keyboard-acceptance ENDPOINT OUT:
     deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}"
+    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" draft
 
 idb-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
