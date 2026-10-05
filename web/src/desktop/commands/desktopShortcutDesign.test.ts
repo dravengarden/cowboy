@@ -28,7 +28,16 @@ const vimRuntime = await Deno.readTextFile(
 Deno.test("workspace prefix has priority after IME and exclusive overlays", () => {
   const arbitration = provider.indexOf("desktopWorkspaceSequenceOwnsKey(");
   const ime = provider.indexOf("desktopImeOwnsKey(event)");
-  const overlay = provider.indexOf("desktopOverlayOwnsShortcuts(document)");
+  const overlay = provider.indexOf("if (desktopOverlayOwnsShortcuts(document)) {");
+  // The modal grammar runs before the strict IME gate, but only for keys
+  // desktopKeyIntent does not give to a composition.
+  const modal = provider.indexOf("handleDesktopModalKey(event, modal)");
+  assert(modal >= 0 && modal < ime);
+  assert(
+    provider.slice(modal - 400, modal).includes(
+      'desktopKeyIntent(event).owner !== "ime"',
+    ),
+  );
   const prefix = provider.indexOf("matchesDesktopWorkspacePrefix(event)");
   const reading = provider.indexOf('workspace.productMode === "reading"');
   const direct = provider.indexOf(
