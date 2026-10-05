@@ -142,6 +142,10 @@ impl Store {
         Ok(store)
     }
 
+    pub(super) fn contains(&self, session_id: &str) -> bool {
+        self.pending.contains_key(session_id)
+    }
+
     pub(super) fn pending(&self) -> Vec<(String, RootIdentity)> {
         self.pending
             .iter()

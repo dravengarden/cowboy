@@ -30,6 +30,9 @@ mod cleanups;
 pub(crate) mod deletions;
 mod incarnations;
 
+/// Consecutive failed cleanup attempts (about three minutes of backoff) after
+/// which a nominated Session stops holding its handles in this process.
+const CLEANUP_ATTEMPT_LIMIT: usize = 8;
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
 /// Bytes still queued on the broker side prove the worker kept writing and the
@@ -283,6 +286,10 @@ struct Broker {
     /// resident restart can finish artifact cleanup. Present only on a Machine
     /// admitted to write the deletion journal.
     cleanup_continuations: Mutex<Option<cleanups::Store>>,
+    /// In-process attempts before a Session with a durable nomination stops
+    /// retrying, and the first backoff delay. Giving up releases its retained
+    /// handles; the nomination retries after the next Machine restart.
+    cleanup_retry: Mutex<(usize, Duration)>,
     /// Validated durable Session incarnation namespace. Read-only: it is held for
     /// exclusive ownership and refusal of invalid state; no writer exists yet.
     incarnation_reader: Mutex<Option<incarnations::Reader>>,
@@ -404,6 +411,7 @@ impl Broker {
             cancelled_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
             cleanup_continuations: Mutex::new(None),
+            cleanup_retry: Mutex::new((CLEANUP_ATTEMPT_LIMIT, Duration::from_secs(1))),
             incarnation_reader: Mutex::new(None),
             deleted_session_workspaces: Mutex::new(HashMap::new()),
             session_lifecycle_gates: Mutex::new(HashMap::new()),
@@ -1249,7 +1257,9 @@ impl Broker {
         let session_id = session_id.to_owned();
         let command_id = command_id.to_owned();
         tokio::spawn(async move {
-            let mut retry_delay = Duration::from_secs(1);
+            let (attempt_limit, first_delay) = *broker.cleanup_retry.lock();
+            let mut retry_delay = first_delay;
+            let mut failures = 0_usize;
             loop {
                 let gate = broker.session_lifecycle_gate(&session_id);
                 let _guard = gate.lock().await;
@@ -1347,6 +1357,32 @@ impl Broker {
                         return;
                     }
                     Err(error) => {
+                        failures += 1;
+                        let nominated = broker
+                            .cleanup_continuations
+                            .lock()
+                            .as_ref()
+                            .is_some_and(|store| store.contains(&session_id));
+                        if failures >= attempt_limit && nominated {
+                            // Release the root, target and marker handles. The
+                            // durable nomination observes the root again and
+                            // rescans after the next Machine restart.
+                            let mut workspaces = broker.deleted_session_workspaces.lock();
+                            if workspaces
+                                .get(&session_id)
+                                .is_some_and(|current| current.command_id == command_id)
+                            {
+                                workspaces.remove(&session_id);
+                            }
+                            drop(workspaces);
+                            tracing::warn!(
+                                session = %session_id,
+                                %error,
+                                attempts = failures,
+                                "deleted session cleanup keeps failing; releasing its handles and leaving the durable continuation for the next Machine restart"
+                            );
+                            return;
+                        }
                         tracing::warn!(
                             session = %session_id,
                             %error,
@@ -6432,6 +6468,57 @@ mod tests {
         // Completion is durable: a later resident has nothing to resume.
         let third = continuation_broker(temp.path(), true);
         assert!(pending_continuations(&third).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failing_resumed_cleanup_releases_its_handles_and_keeps_the_nomination() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("worktrees/sess-stuck");
+        write_continuation_target(&workspace);
+        let first = continuation_broker(temp.path(), false);
+        stop_fixture_session(&first, "sess-stuck", &workspace);
+        handle_core_command(
+            &first,
+            CoreCommand::StopSession {
+                session_id: "sess-stuck".into(),
+                command_id: "delete-stuck".into(),
+            },
+        )
+        .await;
+        assert_eq!(pending_continuations(&first), ["sess-stuck"]);
+        end_resident(&first);
+
+        // A launch that never settles makes every attempt fail closed.
+        let second = continuation_broker(temp.path(), true);
+        *second.cleanup_retry.lock() = (3, Duration::from_millis(10));
+        second.launching.lock().insert("sess-stuck".to_owned());
+        second.resume_cleanup_continuations();
+        // First the resumed Session must actually hold its workspace (each
+        // attempt waits out the launch timeout), then release it by giving up.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while second.deleted_session_workspaces.lock().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("resume holds the workspace while attempting");
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !second.deleted_session_workspaces.lock().is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("bounded retries release the retained workspace");
+        // Nothing was removed, and the durable record still names the root.
+        assert!(workspace.join("target/debug/artifact").is_file());
+        assert_eq!(pending_continuations(&second), ["sess-stuck"]);
+        end_resident(&second);
+
+        // The next resident, with the obstruction gone, completes it.
+        let third = continuation_broker(temp.path(), true);
+        third.resume_cleanup_continuations();
+        wait_for_no_continuations(&third).await;
+        assert!(!workspace.join("target/debug/artifact").exists());
     }
 
     #[tokio::test]
