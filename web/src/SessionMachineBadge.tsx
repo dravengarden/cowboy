@@ -7,12 +7,13 @@ import { useReliableTouchTap } from "./useReliableTouchTap";
 
 export function SessionMachineBadge({ session, onInfo, compact = false }: {
   session: SessionMeta;
-  onInfo: () => void;
+  /** Without it the badge is a passive label, e.g. inside a picker row. */
+  onInfo?: () => void;
   /** Sized for the subtitle line beside the project, not the title line. */
   compact?: boolean;
 }) {
   const machine = sessionMachinePresentation(session);
-  const tap = useReliableTouchTap<HTMLDivElement>(onInfo);
+  const tap = useReliableTouchTap<HTMLDivElement>(onInfo ?? (() => {}));
   if (!machine.visible) return null;
   return (
     <Chip
@@ -27,15 +28,17 @@ export function SessionMachineBadge({ session, onInfo, compact = false }: {
         ? "primary"
         : "default"}
       icon={machine.unavailable ? <WarningAmberOutlined /> : undefined}
-      onPointerDown={tap.onPointerDown}
-      onPointerMove={tap.onPointerMove}
-      onPointerUp={tap.onPointerUp}
-      onPointerCancel={tap.onPointerCancel}
-      onClick={(event) => {
-        event.stopPropagation();
-        tap.onClick(event);
-      }}
-      onKeyDown={(event) => event.stopPropagation()}
+      {...(onInfo && {
+        onPointerDown: tap.onPointerDown,
+        onPointerMove: tap.onPointerMove,
+        onPointerUp: tap.onPointerUp,
+        onPointerCancel: tap.onPointerCancel,
+        onClick: (event: React.MouseEvent<HTMLDivElement>) => {
+          event.stopPropagation();
+          tap.onClick(event);
+        },
+        onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
+      })}
       sx={{
         height: compact ? "1.25rem" : "1.5rem",
         flexShrink: 0,
