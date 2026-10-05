@@ -711,8 +711,9 @@ They do not complete the independent nested-directory removal fence.
 
 The [observed cleanup targets](plugin-session-cleanup-targets.md) retain at most
 128 target handles, revalidate directory identity/markers and anchor Linux
-contents to those handles. Final empty-directory name unlink, independent
-descendant mutation and continuous ownership remain open.
+contents to those handles. Cleanup retains the empty target directory to avoid
+the final pathname-unlink race. Independent descendant mutation and continuous
+ownership remain open.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |

@@ -5827,7 +5827,7 @@ mod tests {
         )
         .await;
         for _ in 0..100 {
-            // Removing the target precedes the asynchronous bookkeeping update.
+            // Clearing target contents precedes the asynchronous bookkeeping update.
             // Wait for the cleanup task's completion, not that intermediate step.
             if broker.deleted_session_workspaces.lock().is_empty() {
                 break;
@@ -5836,7 +5836,8 @@ mod tests {
         }
 
         assert!(broker.deleted_session_workspaces.lock().is_empty());
-        assert!(!target.exists());
+        assert!(target.is_dir());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
         assert!(workspace.join("source.rs").is_file());
         assert!(workspace.is_dir());
         let _ = std::fs::remove_dir_all(root);

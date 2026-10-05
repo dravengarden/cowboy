@@ -564,11 +564,12 @@ pub fn capture_cleanup_workspace(
     Ok(workspace)
 }
 
-/// Remove Cargo build directories from a permanently stopped session worktree.
+/// Clear Cargo build directory contents from a permanently stopped session worktree.
 ///
 /// The Git worktree and every source file remain intact. A directory is eligible
 /// only when it is named `target`, carries both Cargo cache markers, and stays
-/// within the exact Machine-owned worktree for `session_id`.
+/// within the exact Machine-owned worktree for `session_id`. Keep the directory
+/// itself: its pathname cannot be atomically verified and unlinked.
 pub async fn cleanup_build_artifacts(workspace: &CleanupWorkspace) -> Result<Vec<PathBuf>> {
     let workspace = workspace.clone();
     tokio::task::spawn_blocking(move || cleanup_build_artifacts_sync(&workspace))
@@ -705,10 +706,9 @@ fn remove_cleanup_targets(
             }
         }
         target.verify(workspace)?;
-        // Identity verification and this final name unlink are not atomic.
-        // Contents above remain attached to the original target on Linux.
-        std::fs::remove_dir(&target.path)
-            .with_context(|| format!("removing empty Cargo target {}", target.path.display()))?;
+        // Retain the empty directory. A pathname unlink after identity checking
+        // could delete an independently substituted empty directory. Contents
+        // above remain attached to the original target on Linux.
         removed.push(session_root.join(target.path.strip_prefix(access_root)?));
     }
     Ok(removed)
@@ -940,7 +940,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_removes_only_marked_targets_inside_exact_session_worktree() {
+    async fn cleanup_clears_only_marked_targets_inside_exact_session_worktree() {
         let temp = TestDir::new();
         let managed = temp.0.join("managed");
         let session = managed.join("sess-clean");
@@ -961,10 +961,42 @@ mod tests {
         let removed = cleanup_build_artifacts(&observed).await.unwrap();
 
         assert_eq!(removed.len(), 2);
-        assert!(!session.join("target").exists());
-        assert!(!session.join("native/replay/target").exists());
+        for path in [session.join("target"), session.join("native/replay/target")] {
+            assert!(path.is_dir());
+            assert_eq!(std::fs::read_dir(path).unwrap().count(), 0);
+        }
         assert!(session.join("examples/target/keep.txt").is_file());
         assert!(outside.join("debug/deps/libtest.rlib").is_file());
+    }
+
+    #[tokio::test]
+    async fn cleanup_retains_directory_identity_and_allows_later_cargo_rebuild() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-retained-target");
+        let target = session.join("target");
+        write_cargo_target(&target);
+        let original = File::open(&target).unwrap();
+        let observation =
+            capture_cleanup_workspace(&managed, "sess-retained-target", &session).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                cleanup_build_artifacts(&observation).await.unwrap(),
+                vec![target.clone()]
+            );
+            let retained = std::fs::symlink_metadata(&target).unwrap();
+            assert!(retained.is_dir());
+            assert_eq!(retained.dev(), original.metadata().unwrap().dev());
+            assert_eq!(retained.ino(), original.metadata().unwrap().ino());
+            assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+            assert!(
+                cleanup_build_artifacts(&observation)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            write_cargo_target(&target);
+        }
     }
 
     #[tokio::test]

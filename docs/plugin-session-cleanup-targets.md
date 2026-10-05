@@ -20,6 +20,15 @@ Previously the scan remembered only eligible pathnames, so a later replacement
 could receive the recursive removal even when it carried no Cargo markers.
 Returned cleanup paths still use the logical worktree location.
 
+Cleanup clears eligible contents and retains the target directory itself. Linux
+does not perform a final unlink through the mutable target pathname. The returned
+paths identify cleared targets, not removed directories. Both Cargo markers are
+cleared with the other contents, so a second pass skips the empty directory; a
+later Cargo build can recreate markers and artifacts in the same directory.
+Real filesystem tests retain an open handle and check its device/inode against
+the empty directory after cleanup, repeat cleanup without markers, then recreate
+ordinary Cargo contents and clean again.
+
 Real-filesystem fixtures cover same-path marked and unmarked replacement,
 ancestor replacement, disappearance, a symlink to the original object and marker
 withdrawal. A deterministic unit seam replaces the target after the child check
@@ -31,9 +40,8 @@ part of the Machine gate.
 
 This is a scan-time target observation, not continuous Session/worktree ownership
 from launch or terminal deletion. It does not establish a reader/writer lease or
-an atomic tree snapshot. The final empty-directory name check and unlink are not
-atomic: an independently replaced empty directory can still be unlinked in that
-window. Independent replacement of descendants during recursive child removal,
+an atomic tree snapshot. Retaining the empty target avoids the former final
+empty-directory name-unlink race. Independent replacement of descendants during recursive child removal,
 filesystem/mount boundaries and general I/O deadlines remain separate gaps.
 Non-Linux Unix targets retain pathname content access with identity checks and
 do not claim Linux descriptor anchoring. A refusal may follow removal of some
