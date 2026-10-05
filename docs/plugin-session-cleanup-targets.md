@@ -68,3 +68,5 @@ Hawk activation, native conformance and process-preservation receipts are in the
 [October 5 release](releases/plugin-session-cleanup-targets-2026-10-05.md).
 The subsequent [retained-directory release](releases/plugin-session-cleanup-retained-2026-10-05.md)
 records adoption of content-only cleanup and removal of the final name unlink.
+The [bounded-scan release](releases/plugin-session-cleanup-scan-2026-10-05.md)
+records root-relative Linux scan admission and actual bind-mount acceptance.
