@@ -38,3 +38,6 @@ filesystem/mount boundaries and general I/O deadlines remain separate gaps.
 Non-Linux Unix targets retain pathname content access with identity checks and
 do not claim Linux descriptor anchoring. A refusal may follow removal of some
 original contents; prior effects are not rolled back.
+
+Hawk activation, native conformance and process-preservation receipts are in the
+[October 5 release](releases/plugin-session-cleanup-targets-2026-10-05.md).
