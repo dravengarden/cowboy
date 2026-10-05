@@ -5,9 +5,11 @@ import type { SessionMeta } from "./protocol";
 import { sessionMachinePresentation } from "./sessionExecution";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
-export function SessionMachineBadge({ session, onInfo }: {
+export function SessionMachineBadge({ session, onInfo, compact = false }: {
   session: SessionMeta;
   onInfo: () => void;
+  /** Sized for the subtitle line beside the project, not the title line. */
+  compact?: boolean;
 }) {
   const machine = sessionMachinePresentation(session);
   const tap = useReliableTouchTap<HTMLDivElement>(onInfo);
@@ -35,17 +37,17 @@ export function SessionMachineBadge({ session, onInfo }: {
       }}
       onKeyDown={(event) => event.stopPropagation()}
       sx={{
-        height: "1.5rem",
+        height: compact ? "1.25rem" : "1.5rem",
         flexShrink: 0,
         maxWidth: machine.remote ? "12rem" : "8rem",
-        fontSize: "0.75rem",
+        fontSize: compact ? "0.6875rem" : "0.75rem",
         boxShadow: "none",
         "&:active, &.Mui-focusVisible": { boxShadow: "none" },
         ...(machine.remote
           ? { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) }
           : {}),
         "& .MuiChip-label": {
-          px: "0.625rem",
+          px: compact ? "0.5rem" : "0.625rem",
           overflow: "hidden",
           textOverflow: "ellipsis",
         },

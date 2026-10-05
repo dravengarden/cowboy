@@ -1405,9 +1405,11 @@ function SessionList({
                 backgroundSize: levels.map(() => "1px 100%").join(", "),
                 backgroundRepeat: "no-repeat",
                 backgroundPosition: levels
+                    // Touch chevrons overhang their row padding by 4px (see the
+                    // list's grip rule), so their centre sits 4px left of 22px.
                     .map((level) => mobileDrawer
-                        ? `${String(level * 16 + 26)}px 0`
-                        : `calc(max(env(safe-area-inset-left), 12px) + ${String(level * 20 + 22)}px) 0`)
+                        ? `${String(level * 16 + 22)}px 0`
+                        : `calc(max(env(safe-area-inset-left), 12px) + ${String(level * 20 + 18)}px) 0`)
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
                     backgroundPosition: levels.map((level) => `${String(level * 16 + 22)}px 0`).join(", "),
@@ -1543,6 +1545,12 @@ function SessionList({
                         : mobileDrawer
                         ? "calc(84px + env(safe-area-inset-bottom, 0px))"
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
+                    // Touch keeps 44px grip and kebab targets, but lets each
+                    // overhang the row's own edge padding so the visible
+                    // gutters stop costing a phone-width rail ~16px.
+                    "& .cowboy-session-grip": { mx: "-4px" },
+                    "& .cowboy-session-grip-slot": { width: 36 },
+                    "& .cowboy-session-actions": { ml: 0, mr: "-4px" },
                     // Fine-pointer desktops do not need phone-sized 44px controls
                     // in every row. Keep the generous targets for touch/tablet,
                     // while fitting more sessions without making the rail noisy.
@@ -1551,7 +1559,12 @@ function SessionList({
                         "& .cowboy-session-grip, & .cowboy-session-actions": {
                             width: 32,
                             height: 32,
+                            mx: 0,
                         },
+                        // The slot follows its 32px grip rather than reserving
+                        // the touch width beside it.
+                        "& .cowboy-session-grip-slot": { width: 32 },
+                        "& .cowboy-session-actions": { ml: 0.25 },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
                             fontSize: "1.125rem",
                         },
@@ -1834,6 +1847,7 @@ function SessionList({
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
                         <Box
+                            className="cowboy-session-grip-slot"
                             sx={{
                                 position: "relative",
                                 width: 44,
@@ -1888,10 +1902,6 @@ function SessionList({
                                             }}
                                         />
                                     )}
-                                    <SessionMachineBadge
-                                        session={s}
-                                        onInfo={() => onRequestInfo(s)}
-                                    />
                                     <SessionProjectionBadge sessionId={s.id} />
                                     <ScheduleBadge meta={s} />
                                     <SessionCacheGlyph sessionId={s.id} active={s.id === activeId} />
@@ -1899,9 +1909,24 @@ function SessionList({
                             }
                             secondary={
                                 <Stack alignItems="flex-start" sx={{ minWidth: 0 }}>
-                                    <Typography variant="caption" noWrap sx={{ maxWidth: "100%" }}>
-                                        {sessionListProjectLabel(s)}
-                                    </Typography>
+                                    {/* Placement belongs with the project it runs: on
+                                        the title line the badge took a third of a
+                                        phone-width row and truncated the title. */}
+                                    <Stack
+                                        direction="row"
+                                        spacing={0.75}
+                                        alignItems="center"
+                                        sx={{ minWidth: 0, maxWidth: "100%" }}
+                                    >
+                                        <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
+                                            {sessionListProjectLabel(s)}
+                                        </Typography>
+                                        <SessionMachineBadge
+                                            session={s}
+                                            onInfo={() => onRequestInfo(s)}
+                                            compact
+                                        />
+                                    </Stack>
                                     <SessionObligationBadge sessionId={s.id} />
                                 </Stack>
                             }
