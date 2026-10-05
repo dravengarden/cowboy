@@ -68,3 +68,24 @@ Deno.test("scoped editors may share one leader meaning in disjoint regions", () 
     "already belongs to composer.slash",
   );
 });
+
+Deno.test("Session and Draft surfaces may reuse a leader key", () => {
+  const schedule = {
+    id: "composer.schedule",
+    sequence: ["Mod+K", "H"],
+    contexts: ["prompt"],
+    regions: ["prompt.composer"],
+    surface: "session" as const,
+  };
+  const history = {
+    id: "document.history",
+    sequence: ["Mod+K", "H"],
+    surface: "document" as const,
+  };
+  assertEquals(shortcutRegistrationConflict(history, [schedule]), null);
+  assertStringIncludes(
+    shortcutRegistrationConflict({ ...history, surface: "session" }, [schedule]) ??
+      "",
+    "already belongs to composer.schedule",
+  );
+});

@@ -46,6 +46,40 @@ try {
     JSON.stringify({ browser: page.browser, missing: result }, null, 2),
   );
   missing = result.length;
+  // Recent (`␣O`) with trusted keys in the same App, after the Draft visits
+  // the fixture made: it lists them, newest first, and Esc closes it.
+  const mac = (await page.evaluate<string>("navigator.platform"))
+    .toLowerCase().includes("mac");
+  const press = async (key: string, code: string, keyCode: number, modifiers = 0) => {
+    const base = {
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      modifiers,
+    };
+    await page.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  };
+  await press("k", "KeyK", 75, mac ? 4 : 1);
+  await press("o", "KeyO", 79);
+  let rows = 0;
+  for (let attempt = 0; attempt < 50 && rows === 0; attempt++) {
+    rows = await page.evaluate<number>(
+      "document.querySelectorAll('[data-desktop-recent-index]').length",
+    );
+    if (rows === 0) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (rows === 0) throw new Error("␣O did not open Recent with its visits");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const recent = await page.send("Page.captureScreenshot", { format: "png" });
+  await Deno.writeFile(
+    `${output}/recent.png`,
+    Uint8Array.from(atob(recent.data), (c) => c.charCodeAt(0)),
+  );
+  await press("Escape", "Escape", 27);
+  console.log(JSON.stringify({ recent_rows: rows }));
 } finally {
   await page.close();
 }

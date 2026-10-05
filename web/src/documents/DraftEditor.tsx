@@ -52,7 +52,7 @@ import { isImeKeyEvent } from "../imeKey";
 import { getVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
-import { DESKTOP_DRAFT_GROUP_KEYS } from "../desktop/commands/workspaceShortcuts";
+import { DESKTOP_WORKSPACE_KEYS } from "../desktop/commands/workspaceShortcuts";
 import { Sheet } from "../Sheet";
 import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
@@ -230,7 +230,7 @@ function DraftEditingSession(
   const keyboardOpen = useKeyboardOpen();
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
-  // The title is the document's first line (Obsidian inline title): `␣DR`
+  // The title is the document's first line (Obsidian inline title): `␣R`
   // selects it for renaming; `↑`/`k` on the body's first line enters it at
   // the end; `Enter`/`↓`/`Tab` returns to the body start and `Esc` returns
   // to where the body caret was (FOCUS.md "Draft document").
@@ -858,12 +858,12 @@ function DraftEditingSession(
                 sx={{ display: "inline-flex", flexShrink: 0 }}
               >
                 <LeaderKeycap
-                  leaderKey={`${DESKTOP_DRAFT_GROUP_KEYS.group}${DESKTOP_DRAFT_GROUP_KEYS.rename}`}
+                  leaderKey={DESKTOP_WORKSPACE_KEYS.rename}
                 />
               </Box>
             )}
             {/* Desktop shows these actions once, in the bottom document bar
-                with their `␣D` slots; Mobile keeps them beside the title. */}
+                with their leader slots; Mobile keeps them beside the title. */}
             {!desktop && (
               <>
               <Tooltip title="Copy to Session drafts">

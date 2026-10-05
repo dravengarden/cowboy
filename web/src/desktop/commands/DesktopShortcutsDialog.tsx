@@ -14,6 +14,7 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_SELECT_SHORTCUT,
+  DESKTOP_DOCUMENT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   desktopWorkspaceSequence,
@@ -122,7 +123,26 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
   },
   {
     keys: [DESKTOP_SHORTCUTS.alternateSession],
-    title: "Return to the previously open session",
+    title: "Return to the previous Session or Draft (Alt-Tab)",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.recentSessions],
+    title: "Recent: the Sessions and Drafts you opened, newest first",
+    description: "1–9 open a row at once; J/K move, L or Enter open, H or Esc close. It opens on the previous item",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.rename],
+    title: "Rename the current Session, or the open Draft's title",
+  },
+  {
+    keys: [
+      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.copy),
+      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.history),
+      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.export),
+      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.readableWidth),
+    ],
+    title: "On a Draft: copy to a Session, history, export, readable width",
+    description: "The open Draft's own actions are root keys; H is Schedule in a Session and History in a Draft",
   },
 ];
 

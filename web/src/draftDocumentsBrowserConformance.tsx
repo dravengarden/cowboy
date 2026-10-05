@@ -1454,7 +1454,7 @@ export async function runDraftDocumentsBrowserConformance(
         () => !!container.querySelector("[data-workspace-document]"),
         "Draft reopens after the leader jump",
       );
-      // Draft title: `␣DR` renames, Enter returns to the body start, and ↑ on
+      // Draft title: `␣R` renames, Enter returns to the body start, and ↑ on
       // the first body line re-enters the title (FOCUS.md "Draft document").
       {
         const titleField = () =>
@@ -1462,22 +1462,21 @@ export async function runDraftDocumentsBrowserConformance(
         await until(() => !!titleField(), "Draft title field");
         check(
           container.querySelector("[data-draft-title-shortcut]")?.textContent
-            ?.includes("␣DR"),
-          "The title shows its ␣DR slot",
+            ?.includes("␣R"),
+          "The title shows its ␣R slot",
         );
         const leader = isMac ? { metaKey: true } : { altKey: true };
         const at = document.activeElement ?? document.body;
         flushSync(() =>
           at.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", bubbles: true, cancelable: true, ...leader }))
         );
-        press(document.activeElement ?? document.body, "d", "KeyD");
         press(document.activeElement ?? document.body, "r", "KeyR");
         await tick();
         const field = titleField()!;
         check(
           document.activeElement === field && field.selectionStart === 0 &&
             field.selectionEnd === field.value.length,
-          "␣DR focuses the title with its text selected",
+          "␣R focuses the title with its text selected",
         );
         press(field, "Enter", "Enter");
         await tick();
@@ -1498,6 +1497,55 @@ export async function runDraftDocumentsBrowserConformance(
         check(
           !!document.activeElement?.closest(".cm-editor"),
           "Esc in the title returns to the body without closing anything",
+        );
+      }
+      // `␣⇥` flips back to the previous item; `␣O` lists Recent, opened on
+      // that item, and a digit opens a row at once.
+      {
+        const leaderKey = (target: Element) =>
+          flushSync(() =>
+            target.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "k",
+                code: "KeyK",
+                bubbles: true,
+                cancelable: true,
+                ...(isMac ? { metaKey: true } : { altKey: true }),
+              }),
+            )
+          );
+        leaderKey(document.activeElement ?? document.body);
+        press(document.activeElement ?? document.body, "Tab", "Tab");
+        await until(
+          () => !container.querySelector("[data-workspace-document]"),
+          "␣⇥ returns to the previous Session",
+        );
+        leaderKey(document.activeElement ?? document.body);
+        press(document.activeElement ?? document.body, "o", "KeyO");
+        await until(
+          () => !!document.querySelector("[data-desktop-recent]"),
+          "␣O opens Recent",
+        );
+        const first = document.querySelector<HTMLElement>(
+          '[data-desktop-recent-index="0"]',
+        );
+        check(
+          first?.dataset.desktopRecentKey === `draft:${id}` &&
+            first.getAttribute("aria-selected") === "true",
+          "Recent opens on the previous item, the Draft",
+        );
+        check(
+          !document.querySelector(
+            '[data-desktop-recent-key="integrated-session"]',
+          ),
+          "Recent leaves out the current Session",
+        );
+        await tick(100);
+        press(document.activeElement ?? document.body, "1", "Digit1");
+        await until(
+          () => !!container.querySelector("[data-workspace-document]") &&
+            !document.querySelector("[data-desktop-recent]"),
+          "1 in Recent reopens the Draft and closes the dialog",
         );
       }
       // `'` labels the focused list's rows; a label moves the cursor.

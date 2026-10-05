@@ -86,14 +86,17 @@ rather than taking the last free root letters.
 
 A leader slot is one keycap holding the glyph and the key: `␣N`, never
 `⌘K → N`. At rest it is `available` while its scope owns focus and
-`inactive` otherwise; armed, it is `active`. A leader key has one meaning;
+`inactive` otherwise; armed, it is `active`. A leader key has one meaning per page (a Session or a Draft, see "Context
+keys" below);
 scoped editors may each register it in disjoint regions (`␣/` in the Composer
 and in a queued-message editor), and the focused one runs.
 
 | Key | Meaning |
 | --- | --- |
 | `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
-| ``␣` `` | Previous session |
+| `␣⇥` | Previous Session or Draft (Alt-Tab) |
+| `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
+| `␣R` | Rename the current item: the open Draft's title, else the current Session |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
 | `␣P` `␣C` | Focus Prompt, Conversation |
@@ -102,23 +105,39 @@ and in a queued-message editor), and the focused one runs.
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
-| `␣R` | Reconnect now (only while a Retry control is shown) |
-| `␣U` + `E` | Interface group: Source / live preview (Prompt) |
+| `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
+| `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
-| `␣H` `␣J` | Schedule, run next (Composer) |
+| `␣H` `␣J` | Schedule, run next (Composer; on a Draft `␣H` is History) |
 | `␣M` | More formatting menu (Composer) |
-| `␣D` + `R/V/H/E/W` | Draft group (an open Draft only): rename, copy to a Session, history, export, readable width; otherwise `␣D` focuses Drafts |
+| `␣Y` `␣H` `␣E` | On a Draft: yank (copy) to a Session, history, export Markdown |
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
-style: Sessions `␣S`, Top bar `␣T`, Draft `␣D`, Window `␣W`, Interface `␣U`.
+style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Interface `␣U`.
 A surface group doubles its key to focus the surface (`␣SS`, `␣TT`) and
 holds the surface's own buttons, so a header control is reachable without
 first moving focus there.
 A group opens only when one of its commands can run in the current focus
-(Interface needs the Prompt pane; Sessions, Top bar and Draft run from
-anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `B E G I O V X Y`.
+(Interface needs the Prompt pane or an open Draft; Sessions and Top bar run
+from anywhere) and otherwise leaves its key to the root meaning. New families
+become groups instead of taking root letters. Free root letters: `B G I V X`.
+
+#### Context keys
+
+What the current page owns needs no prefix beyond the leader. The open
+Draft's own actions are root keys (`␣Y` `␣H` `␣E`, `␣R` rename) rather
+than a `␣D` group, exactly as the Composer's insert actions are in a
+Session. A letter may mean different things on the two pages only when the
+pages are never mounted together, declared with `surface: "session" |
+"document"` (`␣H` Schedule / History); registration still rejects any other
+overlap. The current page's actions are listed first in which-key, under
+"Here". which-key lists only keys that can run now; a key that cannot run
+here appears dimmed only when it belongs to the focused surface (an empty Composer's
+Schedule), so Session-only keys (Conversation, Plan, Queue, the Prompt and
+Conversation folds) are absent from a Draft page. Inside a focused surface
+the same principle drops the leader entirely: in the Sessions list `Z` is
+the fold button (`␣SZ` elsewhere).
 
 The shortcut audit (`tools/cdp-shortcut-audit.ts`) lists every visible
 control without a slot. A control is either given one, covered by its
@@ -129,6 +148,18 @@ the status line's mode and pane segments render as text, not buttons.
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
 so Option+digit types its character again in text fields.
+
+#### Recent
+
+`␣O` opens Recent, Desktop's jump list (Vim's `Ctrl-O`): the Sessions and
+Drafts this device opened, newest first, without the current one, from
+`sessionVisits.ts` (per device, never synced, absent on Mobile). It opens
+on the previous item, so `␣O` `Enter` equals `␣⇥`. `1`–`9` (physical
+top row or keypad) open a row at once; `J/K`, arrows and `Tab` move, `gg`/
+`G` jump, `L` or `Enter` open and `H` or `Esc` close. Opening lands in the
+Prompt (a Draft's body), or the Conversation when Prompt is folded. With the
+`Alt+K`/`Cmd+K` prefix, release the modifier before `⇥`: `Alt+Tab` and
+`Cmd+Tab` belong to the operating system.
 
 ### Rich text
 
@@ -310,7 +341,7 @@ continuation is optional.
 - `␣W[` / `␣W]` / `␣W\`: collapse or expand Sessions, Prompt, or
   Conversation. The three adjacent keys sit in the same left-to-right
   order as the panes. See [Pane collapse](#pane-collapse).
-- `␣␣` then a label switches session; ``␣` `` returns to the previous one.
+- `␣␣` then a label switches session; `␣⇥` returns to the previous one and `␣O` lists Recent.
 - `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
   turn, `Mod+Shift+P` opens Command Palette, and `Mod+/` opens shortcut help.
 - `Alt/Option+Enter` force-pushes a prompt. On macOS, no other product action
@@ -696,7 +727,7 @@ schedule, `M` move to another Session, `D` move to independent Drafts and `X`
 remove. Inside the editor, `Mod+S` saves and `Esc` cancels, with both
 returning focus to the originating list row.
 
-`M` (and `␣DV` from a Draft document) opens the Session destination modal: the
+`M` (and `␣Y` from a Draft document) opens the Session destination modal: the
 Sessions folder tree with the source Session shown as Current. It opens in
 search (Insert); `Esc`, `↓` or `Enter` reaches the tree, where `J/K` moves,
 `H/L` folds or walks the tree, `gg`/`G` jump, `/` returns to search and
@@ -708,14 +739,14 @@ Independent Draft documents share the Prompt editor region and command host.
 They autosave; `Mod+S` flushes local persistence without sending. The leader
 exposes the same formatting, attachment and Source commands as Sessions.
 
-The document itself is a `␣D` group, available from any focus while a Draft is
-open (it shadows `␣D` Focus Drafts, which has no list on that page):
-`␣DR` rename, `␣DV` copy to Session drafts (source retained), `␣DH` recovery
-history, `␣DE` export Markdown, `␣DW` readable width. Each control shows its
-`␣D…` slot; Desktop draws the document actions once, in the bottom bar.
+The document's actions are root keys, available from any focus while a Draft
+is open ("Context keys"): `␣R` rename, `␣Y` copy (yank) to Session drafts
+(source retained), `␣H` recovery history, `␣E` export Markdown, `␣UW`
+readable width. Each control shows its slot; Desktop draws the document
+actions once, in the bottom bar.
 
 The title behaves as the document's first line, as Obsidian's inline title:
-`␣DR` focuses it with the text selected for replacement; `↑` in Insert or a
+`␣R` focuses it with the text selected for replacement; `↑` in Insert or a
 plain Vim Normal `k` on the body's first line enters it at the end (a pending
 Vim command such as `dk` keeps its key); `Enter`, `↓` or `Tab` returns to
 the start of the body and `Esc` returns to where the body caret was. Every

@@ -300,8 +300,8 @@ import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
 import { useDesktopLeaderOptional } from "./desktop/commands/leaderContext";
+import { desktopRecentItems, recordDesktopVisit, useDesktopVisits } from "./desktop/sessionVisits";
 import {
-    DESKTOP_SESSION_ALTERNATE_EVENT,
     DESKTOP_SESSION_JUMP_EVENT,
     publishSessionJumpTargets,
     sessionJumpLabels,
@@ -728,12 +728,6 @@ function SessionList({
     const jumpLabels = useMemo(() => sessionJumpLabels(displayedSessions), [displayedSessions]);
     const leader = useDesktopLeaderOptional();
     const sessionLabelsShown = desktop && leader?.armed === true && leader.layer === "sessions";
-    const previousActiveId = useRef<string | null>(null);
-    const lastActiveId = useRef<string | null>(activeId);
-    if (lastActiveId.current !== activeId) {
-        previousActiveId.current = lastActiveId.current;
-        lastActiveId.current = activeId;
-    }
     useEffect(() => {
         if (!desktop) return;
         publishSessionJumpTargets(displayedSessions.flatMap((session) => {
@@ -1040,9 +1034,7 @@ function SessionList({
     const runRowCommandRef = useRef(runRowCommand);
     runRowCommandRef.current = runRowCommand;
     const selectSessionLabel = (label: string): boolean => {
-        const session = label === "`"
-            ? displayedSessions.find((candidate) => candidate.id === previousActiveId.current)
-            : displayedSessions.find((candidate) => jumpLabels.get(candidate) === label);
+        const session = displayedSessions.find((candidate) => jumpLabels.get(candidate) === label);
         if (!session || session.id === activeId) return false;
         revealSession(session.id);
         setPinned(false);
@@ -1204,18 +1196,13 @@ function SessionList({
             const label = (event as CustomEvent<{ label?: string }>).detail?.label;
             if (label !== undefined && selectSessionLabelRef.current(label)) event.preventDefault();
         };
-        const onAlternate = (event: Event): void => {
-            if (selectSessionLabelRef.current("`")) event.preventDefault();
-        };
         for (const type of Object.keys(SESSION_ROW_EVENTS)) list.addEventListener(type, onRowCommand);
         list.addEventListener("cowboy:desktop-folders", onFolders);
         list.addEventListener(DESKTOP_SESSION_JUMP_EVENT, onJump);
-        list.addEventListener(DESKTOP_SESSION_ALTERNATE_EVENT, onAlternate);
         return () => {
             for (const type of Object.keys(SESSION_ROW_EVENTS)) list.removeEventListener(type, onRowCommand);
             list.removeEventListener("cowboy:desktop-folders", onFolders);
             list.removeEventListener(DESKTOP_SESSION_JUMP_EVENT, onJump);
-            list.removeEventListener(DESKTOP_SESSION_ALTERNATE_EVENT, onAlternate);
         };
     }, [desktop]);
     useEffect(() => {
@@ -3627,6 +3614,19 @@ export function App({
         };
     }, [activeId, railFolders, sessionsCollapsed, sessionsForView, draftLibrary.entries, draftRoute.id, workspaceOrder]);
     const active = draftRoute.active ? null : resolveActiveSession(sessions, activeId, pendingCreatedSession);
+    // Desktop jump list (`␣⇥` previous, `␣O` Recent): every opened Session or
+    // Draft, newest first, kept per device.
+    const workspaceItemKey = draftRoute.id ? `draft:${draftRoute.id}` : active?.id ?? null;
+    useEffect(() => {
+        if (surface === "desktop" && workspaceItemKey) recordDesktopVisit(workspaceItemKey);
+    }, [surface, workspaceItemKey]);
+    const desktopVisits = useDesktopVisits();
+    const desktopRecent = useMemo(
+        () => surface === "desktop"
+            ? desktopRecentItems(desktopVisits, workspaceItemKey, sessionsForView, draftLibrary.entries)
+            : [],
+        [desktopVisits, draftLibrary.entries, sessionsForView, surface, workspaceItemKey],
+    );
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
     // presentation). A cached tail counts: it is what the user came to read.
@@ -4150,6 +4150,12 @@ export function App({
                     <DesktopCommandHost
                         onNewSession={openNewSession}
                         onOpenSettings={(): void => openSettings("settings")}
+                        recent={desktopRecent}
+                        onOpenRecent={pick}
+                        onRenameSession={active && !draftRoute.id
+                            ? (): void => setPendingRename(active)
+                            : undefined}
+                        draftOpen={!!draftRoute.id}
                     />
                 </Suspense>
             )}

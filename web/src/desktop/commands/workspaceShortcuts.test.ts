@@ -6,6 +6,9 @@ import {
   DESKTOP_LEADER_GROUPS,
   DESKTOP_WORKSPACE_COMMANDS,
   DESKTOP_WORKSPACE_KEYS,
+  DESKTOP_DOCUMENT_COMMANDS,
+  DESKTOP_DOCUMENT_KEYS,
+  desktopLeaderSequence,
   DESKTOP_WORKSPACE_PREFIX,
   desktopLeaderKey,
   desktopLeaderLabel,
@@ -131,9 +134,11 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     h: "composer.schedule",
     j: "composer.jumpFront",
     ",": "settings.open",
-    r: "sync.retry",
+    ".": "sync.retry",
+    r: "item.rename",
+    o: "session.recent",
     " ": "session.switch",
-    "`": "session.alternate",
+    tab: "session.alternate",
     k: "commandPalette.open",
     z: "editor.expand",
   });
@@ -220,5 +225,29 @@ Deno.test("surface groups double their key to focus and hold its buttons", () =>
     ]
   ) {
     assertEquals(path.startsWith("S") && path.length === 2, true);
+  }
+});
+
+Deno.test("previous item is Space-Tab, drawn as one keycap", () => {
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.alternateSession), "␣⇥");
+  assertEquals(desktopLeaderLabel("Tab"), "␣⇥");
+  assertEquals(
+    desktopLeaderKey({
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.alternateSession),
+    }),
+    "tab",
+  );
+  assertEquals(DESKTOP_WORKSPACE_KEYS.recentSessions, "O");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.rename, "R");
+});
+
+Deno.test("an open Draft's actions are root keys, not a group", () => {
+  assertEquals("d" in DESKTOP_LEADER_GROUPS, false);
+  assertEquals(DESKTOP_DOCUMENT_KEYS.copy, "Y");
+  assertEquals(DESKTOP_DOCUMENT_KEYS.readableWidth, "UW");
+  for (const key of Object.keys(DESKTOP_DOCUMENT_COMMANDS)) {
+    // Never a global Session meaning other than the surface-scoped `H`.
+    const session = DESKTOP_WORKSPACE_COMMANDS[key];
+    assertEquals(session === undefined || session === "composer.schedule", true);
   }
 });

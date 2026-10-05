@@ -87,12 +87,14 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     ) {
       const path = desktopLeaderGroupKey(command)!;
       if (entries.some((entry) => entry.key === path.key)) continue;
+      const enabled = command.when?.() !== false;
+      if (!enabled && !command.disabledReason) continue;
       // Listed under the group name, not "Here": the group is the scope.
-      const { regions: _regions, ...unscoped } = command;
+      const { regions: _regions, contextual: _contextual, ...unscoped } = command;
       entries.push({
         key: path.key,
         command: { ...unscoped, group: DESKTOP_LEADER_GROUPS[groupKey] ?? command.group },
-        enabled: command.when?.() !== false,
+        enabled,
       });
     }
   } else if (!sessionsLayer && !modalLayer) {
@@ -119,6 +121,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
       });
     }
     const seen = new Set<string>(entries.map((entry) => entry.key));
+    const candidates = new Map<string, DesktopCommand[]>();
     for (const command of registry.commands) {
       const key = desktopLeaderKey(command);
       if (key === null || seen.has(key)) continue;
@@ -129,15 +132,27 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
           workspace.focusedRegion,
         )
       ) continue;
-      seen.add(key);
-      entries.push({ key, command, enabled: command.when?.() !== false });
+      candidates.set(key, [...(candidates.get(key) ?? []), command]);
+    }
+    for (const [key, commands] of candidates) {
+      // The runnable owner of a key wins, as in dispatch. A key that cannot
+      // run is listed (dimmed) only when it belongs to the focused surface
+      // (an empty Composer's Schedule); a surface that is simply absent
+      // (Plan, Queue and Conversation on a Draft page) stays out.
+      const runnable = commands.find((command) => command.when?.() !== false);
+      const command = runnable ??
+        commands.find((c) => !!c.regions || c.contextual === true);
+      if (!command) continue;
+      entries.push({ key, command, enabled: runnable !== undefined });
     }
   }
-  const scoped = entries.filter((entry) => entry.command.regions);
+  const here = (entry: LeaderEntry): boolean =>
+    !!entry.command.regions || entry.command.contextual === true;
+  const scoped = entries.filter(here);
   const groups = new Map<string, LeaderEntry[]>();
   if (scoped.length > 0) groups.set("Here", scoped);
   for (const entry of entries) {
-    if (entry.command.regions) continue;
+    if (here(entry)) continue;
     const group = groups.get(entry.command.group) ?? [];
     group.push(entry);
     groups.set(entry.command.group, group);
@@ -300,7 +315,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
                     sx={entrySx(false)}
                   >
                     <ShortcutKeycap
-                      keyLabel={entry.key === " " ? DESKTOP_LEADER_GLYPH : entry.key.toUpperCase()}
+                      keyLabel={desktopLeaderLabel(entry.key).slice(DESKTOP_LEADER_GLYPH.length)}
                       availability={entry.enabled ? "active" : "inactive"}
                       accent={entry.enabled}
                     />

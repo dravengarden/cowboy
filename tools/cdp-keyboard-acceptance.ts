@@ -132,9 +132,9 @@ const draftFlow = async (): Promise<void> => {
   await sleep(800);
   check(
     await page.evaluate<boolean>(
-      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣DR')",
+      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣R')",
     ),
-    "The title shows its ␣DR slot",
+    "The title shows its ␣R slot",
   );
   // Write two lines in the shared Vim editor.
   await click("[data-workspace-document] .cm-content");
@@ -178,21 +178,21 @@ const draftFlow = async (): Promise<void> => {
   await sleep(150);
   check(await inBody(), "Esc in the title returns to the body");
   results.push("Insert ↑ enters the title; Esc returns to the body");
-  // The ␣D group from Vim Normal: which-key layer, then R selects the title.
+  // On the Draft page its own actions are root keys: which-key lists them
+  // under Here, and Session-only keys (Conversation, Plan, Queue) are absent.
   await key("Escape");
   await key(" ");
-  await key("d");
   await until(
-    "document.querySelector('[data-desktop-leader-menu=\"group:d\"]')",
-    "␣D opens the Draft group",
+    "document.querySelector('[data-desktop-leader-menu=\"root\"]')",
+    "␣ opens which-key on the Draft page",
   );
   await sleep(250);
-  await shot("4-draft-group");
+  await shot("4-draft-leader");
   check(
     await page.evaluate<boolean>(
-      "['r','v','h','e','w'].every((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`))",
+      "['r','y','h','e'].every((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`)) && !['c','l','q','d'].some((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`))",
     ),
-    "The Draft group lists R V H E W",
+    "Draft which-key lists R Y H E and no Session-only keys",
   );
   await key("r");
   await sleep(150);
@@ -200,9 +200,9 @@ const draftFlow = async (): Promise<void> => {
     await page.evaluate<boolean>(
       `document.activeElement === ${title} && ${title}.selectionStart === 0 && ${title}.selectionEnd === ${title}.value.length`,
     ),
-    "␣DR focuses the title with its text selected",
+    "␣R focuses the title with its text selected",
   );
-  results.push("␣D shows the Draft group (R V H E W); ␣DR selects the title");
+  results.push("Draft which-key: R Y H E at the root, no Session-only keys; ␣R selects the title");
   await key("Escape");
   await sleep(150);
   await shot("5-draft-page");

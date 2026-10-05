@@ -4,8 +4,6 @@ import { DESKTOP_JUMP_LABELS } from "./workspaceShortcuts";
 /** Dispatched on the Sessions list with `{ label }`; the list cancels it once
  *  it has opened the labelled session. */
 export const DESKTOP_SESSION_JUMP_EVENT = "cowboy:desktop-session-jump";
-/** Dispatched on the Sessions list to reopen the previously open session. */
-export const DESKTOP_SESSION_ALTERNATE_EVENT = "cowboy:desktop-session-alternate";
 
 export interface SessionJumpTarget {
   readonly label: string;

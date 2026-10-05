@@ -134,6 +134,8 @@ export function DesktopComposerCommandBindings({
       title: "Schedule prompt",
       group: "Prompt actions",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerSchedule),
+      // `␣H` is History on the Draft page.
+      surface: "session",
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],

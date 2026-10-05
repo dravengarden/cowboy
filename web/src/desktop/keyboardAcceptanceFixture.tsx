@@ -225,6 +225,7 @@ export async function mountDraftKeyboardAcceptance(): Promise<void> {
         <DesktopCommandHost
           onNewSession={() => actions.push("new")}
           onOpenSettings={() => actions.push("settings")}
+          draftOpen
         />
         <Box
           data-desktop-pane="prompt"

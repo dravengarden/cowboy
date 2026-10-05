@@ -268,21 +268,28 @@ export async function checkDraftKeyboard(): Promise<string> {
           calls.at(-1) === "attach",
           "Draft uses the existing attachment prefix",
         );
-        // The open document's own `␣D` group: rename, copy, history,
-        // export, readable width.
+        // The open document's own actions are root keys (no `␣D` detour):
+        // yank to a Session, history, export; readable width is Interface.
         for (
           const [letter, code, call] of [
-            ["r", "KeyR", "rename"],
-            ["v", "KeyV", "copy"],
+            ["y", "KeyY", "copy"],
             ["h", "KeyH", "history"],
             ["e", "KeyE", "export"],
           ] as const
         ) {
           prefix();
-          key("d", "KeyD");
           key(letter, code);
-          check(calls.at(-1) === call, `␣D${letter.toUpperCase()} runs ${call}`);
+          check(calls.at(-1) === call, `␣${letter.toUpperCase()} runs ${call}`);
         }
+        prefix();
+        key("u", "KeyU");
+        key("w", "KeyW");
+        check(calls.at(-1) === "width", "␣UW toggles readable width");
+        // `␣R` is the host's item.rename; on a Draft it runs this command.
+        check(
+          registry.execute("document.rename") && calls.at(-1) === "rename",
+          "document.rename edits the title",
+        );
         prefix();
         key("m", "KeyM");
         await tick();

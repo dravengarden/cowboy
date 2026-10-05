@@ -80,6 +80,12 @@ export interface DesktopCommand {
   /** A grouped leader command that runs from any focus (Top bar, an open
    *  Draft); others keep their own pane/region scope inside the group. */
   leaderAnywhere?: boolean;
+  /** The surface that owns this key when one letter means different things
+   *  on different pages (`␣H`: Schedule in a Session, History in a Draft).
+   *  Commands of different surfaces never overlap; only one is mounted. */
+  surface?: "session" | "document";
+  /** which-key lists the current item's own actions first, under "Here". */
+  contextual?: boolean;
   /** Reserve a shortcut even while its target is temporarily unavailable. */
   consumeWhenDisabled?: boolean;
   run: () => void;
@@ -555,8 +561,10 @@ export function DesktopCommandProvider(
           );
           const fallbackId = DESKTOP_WORKSPACE_COMMANDS[leader];
           const fallback = fallbackId ? commands.current.get(fallbackId) : undefined;
-          const command = registered.find(scoped) ??
-            (fallback && scoped(fallback) ? fallback : undefined);
+          const command =
+            registered.find((c) => scoped(c) && c.when?.() !== false) ??
+              registered.find(scoped) ??
+              (fallback && scoped(fallback) ? fallback : undefined);
           if (command && command.when?.() !== false) {
             if (workspace.productMode !== "agent") workspace.setProductMode("agent");
             if (
@@ -929,6 +937,19 @@ export function DesktopCommandProvider(
               new CustomEvent("cowboy:desktop-toggle-pin"),
             );
             items[active]?.focus({ preventScroll: true });
+            return;
+          }
+          // Inside the list the fold button needs no leader: bare `z` (Vim's
+          // fold prefix) is the same action as `␣SZ`.
+          if (sessionsList && !pinned && key === "z" && !event.repeat) {
+            event.preventDefault();
+            event.stopPropagation();
+            region.querySelector<HTMLElement>("ul")?.dispatchEvent(
+              new CustomEvent("cowboy:desktop-folders", {
+                cancelable: true,
+                detail: { action: "fold", row: null },
+              }),
+            );
             return;
           }
           if (sessionsList && pinned && key === "Escape") {

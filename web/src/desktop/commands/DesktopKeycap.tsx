@@ -7,6 +7,7 @@ import {
 import { useDesktopLeaderOptional } from "./leaderContext";
 import { leaderShortcutAvailability } from "./shortcutAvailability";
 import {
+  DESKTOP_LEADER_TAB,
   DESKTOP_WORKSPACE_PREFIX,
   desktopLeaderLabel,
 } from "./workspaceShortcuts";
@@ -87,7 +88,9 @@ export function DesktopShortcut(
     return (
       <Stack direction="row" alignItems="center" aria-label={shortcut}>
         <LeaderKeycap
-          leaderKey={strokes.slice(1).join("")}
+          leaderKey={strokes.slice(1)
+            .map((stroke) => stroke === "Tab" ? DESKTOP_LEADER_TAB : stroke)
+            .join("")}
           quiet={quiet || compact}
           {...(availability === "available"
             ? { scopeAvailable: true }

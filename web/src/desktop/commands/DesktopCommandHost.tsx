@@ -16,7 +16,8 @@ import {
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopLeaderOptional } from "./leaderContext";
-import { DESKTOP_SESSION_ALTERNATE_EVENT } from "./sessionJump";
+import { DesktopRecentDialog } from "./DesktopRecentDialog";
+import type { DesktopRecentItem } from "../sessionVisits";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { DesktopLeaderMenu } from "./DesktopLeaderMenu";
 import { DesktopHintLayer } from "./DesktopHintLayer";
@@ -52,6 +53,11 @@ function sessionsListElement(): HTMLElement | null {
   );
 }
 
+/** The Session page (Prompt and Conversation), as opposed to a Draft. */
+function sessionWorkspaceMounted(): boolean {
+  return document.querySelector("[data-desktop-pane='conversation']") !== null;
+}
+
 function sessionsListMounted(): boolean {
   return sessionsListElement() !== null;
 }
@@ -74,9 +80,20 @@ function dispatchSessionFolders(action: string): void {
 export function DesktopCommandHost({
   onNewSession,
   onOpenSettings,
+  recent = [],
+  onOpenRecent,
+  onRenameSession,
+  draftOpen = false,
 }: {
   onNewSession: () => void;
   onOpenSettings: () => void;
+  /** The jump list without the current item, newest first (sessionVisits). */
+  recent?: readonly DesktopRecentItem[];
+  onOpenRecent?: (key: string) => void;
+  /** Rename the current Session; absent while no Session is open. */
+  onRenameSession?: (() => void) | undefined;
+  /** A Draft, not a Session, is the workspace item. */
+  draftOpen?: boolean;
 }): React.JSX.Element {
   const registry = useDesktopCommands();
   const workspace = useDesktopWorkspace();
@@ -87,6 +104,28 @@ export function DesktopCommandHost({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [recentOpen, setRecentOpen] = useState(false);
+  // Commands are memoized; read the live jump list and handlers at run time.
+  const live = useRef({ recent, onOpenRecent, onRenameSession });
+  live.current = { recent, onOpenRecent, onRenameSession };
+  // The registry changes on every registration; a memo dependency on it
+  // would re-register these commands in a loop.
+  const registryRef = useRef(registry);
+  registryRef.current = registry;
+  const openRecent = (key: string): void => {
+    live.current.onOpenRecent?.(key);
+    // Land where typing continues: the Prompt (a Draft's body is its
+    // Prompt region), else the Conversation when Prompt is folded.
+    requestAnimationFrame(() =>
+      workspace.focusRegion(
+        workspace.collapsedPanes.prompt && !key.startsWith("draft:")
+          ? "conversation.transcript"
+          : "prompt.composer",
+      )
+    );
+  };
+  const openRecentRef = useRef(openRecent);
+  openRecentRef.current = openRecent;
   const paletteInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!paletteOpen) return undefined;
@@ -144,20 +183,39 @@ export function DesktopCommandHost({
     },
     {
       id: "session.alternate",
-      title: "Previous Session",
-      description: "Return to the session open before this one",
+      title: "Previous Session or Draft",
+      description: "Alt-Tab: return to the item open before this one",
       group: "Session",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.alternateSession),
-      when: sessionsListMounted,
+      when: () => live.current.recent.length > 0 && !!live.current.onOpenRecent,
       run: () => {
-        const opened = sessionsListElement()?.dispatchEvent(
-          new CustomEvent(DESKTOP_SESSION_ALTERNATE_EVENT, { cancelable: true }),
-        ) === false;
-        if (opened) {
-          const target = workspace.collapsedPanes.prompt
-            ? "conversation.transcript"
-            : "prompt.composer";
-          requestAnimationFrame(() => workspace.focusRegion(target));
+        const previous = live.current.recent[0];
+        if (previous) openRecentRef.current(previous.key);
+      },
+    },
+    {
+      id: "session.recent",
+      title: "Recent Sessions and Drafts…",
+      description: "The jump list: 1–9 open a row, J/K and Enter choose",
+      group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.recentSessions),
+      when: () => !!live.current.onOpenRecent,
+      run: () => setRecentOpen(true),
+    },
+    {
+      id: "item.rename",
+      title: "Rename",
+      description: "Rename the open Draft (its title) or the current Session",
+      group: "Session",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.rename),
+      contextual: true,
+      when: () =>
+        registryRef.current.list().some((command) =>
+          command.id === "document.rename" && command.when?.() !== false
+        ) || !!live.current.onRenameSession,
+      run: () => {
+        if (!registryRef.current.execute("document.rename")) {
+          live.current.onRenameSession?.();
         }
       },
     },
@@ -267,8 +325,8 @@ export function DesktopCommandHost({
     },
     {
       id: "workspace.focusPrompt",
-      title: "Focus Message the Agent",
-      description: "Return to the Prompt editor without changing its Vim mode or caret",
+      title: draftOpen ? "Focus Draft" : "Focus Message the Agent",
+      description: "Return to the editor without changing its Vim mode or caret",
       group: "Workspace",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
       run: () => workspace.focusRegion("prompt.composer"),
@@ -278,6 +336,7 @@ export function DesktopCommandHost({
       title: "Focus Conversation",
       group: "Workspace",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusConversation),
+      when: sessionWorkspaceMounted,
       run: () => workspace.focusPane("conversation"),
     },
     {
@@ -334,6 +393,7 @@ export function DesktopCommandHost({
       description: "Show or hide the Prompt column; Conversation takes its width",
       group: "Workspace",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.togglePrompt),
+      when: sessionWorkspaceMounted,
       run: () => workspace.togglePane("prompt"),
     },
     {
@@ -344,6 +404,7 @@ export function DesktopCommandHost({
       description: "Show or hide the Conversation; Prompt takes its width",
       group: "Workspace",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.toggleConversation),
+      when: sessionWorkspaceMounted,
       run: () => workspace.togglePane("conversation"),
     },
     {
@@ -478,6 +539,7 @@ export function DesktopCommandHost({
       run: () => clickFocusedItemAction("edit"),
     },
   ], [
+    draftOpen,
     onNewSession,
     onOpenSettings,
     workspace,
@@ -515,6 +577,12 @@ export function DesktopCommandHost({
       <DesktopShortcutsDialog
         open={shortcutsOpen}
         onClose={(): void => setShortcutsOpen(false)}
+      />
+      <DesktopRecentDialog
+        open={recentOpen}
+        items={recent}
+        onClose={(): void => setRecentOpen(false)}
+        onOpen={(key): void => openRecentRef.current(key)}
       />
       <DesktopModal
         open={paletteOpen}

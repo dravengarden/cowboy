@@ -6,6 +6,8 @@ export interface RegisteredShortcut {
   sequence?: readonly string[];
   contexts?: readonly string[];
   regions?: readonly string[];
+  /** Session and Draft pages are never mounted together. */
+  surface?: "session" | "document";
 }
 
 function canonicalShortcut(shortcut: string): string {
@@ -31,6 +33,9 @@ function scopesOverlap(
   left: RegisteredShortcut,
   right: RegisteredShortcut,
 ): boolean {
+  if (left.surface && right.surface && left.surface !== right.surface) {
+    return false;
+  }
   return hasIntersection(left.contexts, right.contexts) &&
     hasIntersection(left.regions, right.regions);
 }

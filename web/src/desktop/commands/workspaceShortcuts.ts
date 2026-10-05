@@ -21,8 +21,19 @@ export const DESKTOP_WORKSPACE_PREFIX = desktopWorkspacePrefix(isMac);
  */
 export const DESKTOP_LEADER_GLYPH = "␣";
 
-export function desktopLeaderLabel(key: string): string {
-  return `${DESKTOP_LEADER_GLYPH}${key === " " ? DESKTOP_LEADER_GLYPH : key.toUpperCase()}`;
+/** Tab inside a leader path (`␣⇥`); paths are one character per stroke. */
+export const DESKTOP_LEADER_TAB = "\t";
+
+function leaderPathLabel(key: string): string {
+  if (key === " ") return DESKTOP_LEADER_GLYPH;
+  if (key === DESKTOP_LEADER_TAB || key.toLowerCase() === "tab") return "⇥";
+  return key.toUpperCase();
+}
+
+/** `␣N`, `␣SZ`, `␣␣`, `␣⇥`: the leader glyph and the path in one keycap. */
+export function desktopLeaderLabel(path: string): string {
+  const keys = path.toLowerCase() === "tab" ? [path] : [...path];
+  return `${DESKTOP_LEADER_GLYPH}${keys.map(leaderPathLabel).join("")}`;
 }
 
 /** which-key groups: `␣` + group key opens a layer of related commands. */
@@ -34,19 +45,28 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   w: "Window",
   // Presentation toggles.
   u: "Interface",
-  // Only while a Draft document is open; otherwise `␣D` focuses Drafts.
-  d: "Draft",
 };
 
-/** The `␣D` group of an open Draft document (FOCUS.md "Draft document"). */
-export const DESKTOP_DRAFT_GROUP_KEYS = {
-  group: "D",
-  rename: "R",
-  copy: "V",
+/**
+ * The open Draft's own actions (FOCUS.md "Draft document"). While a Draft is
+ * the workspace item they take root keys directly, like the Composer's
+ * insert actions in a session: no group detour, because nothing else on the
+ * Draft page wants these letters. `H` is Schedule in a session and History
+ * in a Draft; the two surfaces are never mounted together.
+ */
+export const DESKTOP_DOCUMENT_KEYS = {
+  copy: "Y",
   history: "H",
   export: "E",
-  readableWidth: "W",
+  readableWidth: "UW",
 } as const;
+
+/** Root keys whose meaning belongs to the Draft surface. */
+export const DESKTOP_DOCUMENT_COMMANDS: Readonly<Record<string, string>> = {
+  y: "document.copyToSession",
+  h: "document.history",
+  e: "document.export",
+};
 
 /** Labels for the `␣␣` session switcher: home row first, then the rest. */
 export const DESKTOP_JUMP_LABELS = "asdfghjklqwertyuiopzxcvbnm";
@@ -57,7 +77,12 @@ export const DESKTOP_JUMP_LABELS = "asdfghjklqwertyuiopzxcvbnm";
  */
 export const DESKTOP_WORKSPACE_KEYS = {
   switchSession: " ",
-  alternateSession: "`",
+  // Alt-Tab: back to the previous Session or Draft; `␣O` lists the rest.
+  alternateSession: DESKTOP_LEADER_TAB,
+  // Open recent, Vim's jump list (`Ctrl-O`): the last Sessions and Drafts.
+  recentSessions: "O",
+  // Rename the current item: the open Draft's title or the current Session.
+  rename: "R",
   commandPalette: "K",
   // The Sessions group mirrors Top bar: the doubled key focuses the surface,
   // the rest act on its tree from any focus. `Z` is Vim's fold prefix.
@@ -77,7 +102,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   resize: "WR",
   settings: ",",
   // Only while a Retry control is on screen (the server is unreachable).
-  reconnect: "R",
+  // Vim's `.` repeats the last action; here it repeats the connection.
+  reconnect: ".",
   // Obsidian binds live-preview ↔ source to Mod+E, which Cowboy cannot have:
   // Chrome owns it for the address bar and macOS apps for a common editor
   // action (chromeShortcutPolicy / macShortcutPolicy both reject it). The
@@ -126,9 +152,9 @@ export const DESKTOP_COMPOSER_FORMAT_CHORDS: Readonly<Record<string, string>> = 
 
 /** The strokes of a leader path, for `DesktopCommand.sequence`. */
 export function desktopLeaderSequence(path: string): string[] {
-  return path === " " ? [DESKTOP_WORKSPACE_PREFIX, " "] : [
+  return [
     DESKTOP_WORKSPACE_PREFIX,
-    ...path,
+    ...[...path].map((key) => key === DESKTOP_LEADER_TAB ? "Tab" : key),
   ];
 }
 
@@ -178,6 +204,10 @@ export const DESKTOP_SHORTCUTS = {
   alternateSession: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.alternateSession,
   ),
+  recentSessions: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.recentSessions,
+  ),
+  rename: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.rename),
 } as const;
 
 export const DESKTOP_FOCUS_PROMPT_SHORTCUT = DESKTOP_SHORTCUTS.focusPrompt;
@@ -185,7 +215,8 @@ export const DESKTOP_FOCUS_PLAN_SHORTCUT = DESKTOP_SHORTCUTS.focusPlan;
 export const DESKTOP_RESIZE_SELECT_SHORTCUT = DESKTOP_SHORTCUTS.resize;
 export const DESKTOP_RESIZE_HINT = DESKTOP_SHORTCUTS.resize;
 
-/** One stable meaning for every workspace-prefix continuation. */
+/** One stable meaning for every workspace-prefix continuation in a Session;
+ *  the Draft surface adds DESKTOP_DOCUMENT_COMMANDS. */
 export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   // A group: `␣SS` focuses Sessions, `␣SZ` folds its tree.
   s: "group:s",
@@ -207,9 +238,11 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   h: "composer.schedule",
   j: "composer.jumpFront",
   ",": "settings.open",
-  r: "sync.retry",
+  ".": "sync.retry",
+  r: "item.rename",
+  o: "session.recent",
   " ": "session.switch",
-  "`": "session.alternate",
+  tab: "session.alternate",
   k: "commandPalette.open",
   // Scoped editors register their own `<id>.expand` under this one meaning.
   z: "editor.expand",

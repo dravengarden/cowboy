@@ -37,16 +37,12 @@ import {
   DESKTOP_COMPOSER_FORMAT_CHORDS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
-  DESKTOP_DRAFT_GROUP_KEYS,
-  DESKTOP_WORKSPACE_PREFIX,
+  DESKTOP_DOCUMENT_KEYS,
   desktopLeaderSequence,
-  desktopLeaderGroupSequence,
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 
-const DRAFT = DESKTOP_DRAFT_GROUP_KEYS;
-/** `␣D` + key, drawn as one `␣DV` keycap. */
-const draftKey = (key: string): string => `${DRAFT.group}${key}`;
+const DOCUMENT = DESKTOP_DOCUMENT_KEYS;
 import { isImeComposing, useImeStatus } from "./vim/imeStatusStore";
 import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 
@@ -120,13 +116,15 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         "Finish composition or resolve this draft’s save error first",
       run: () => run(state.current.props),
     });
-    // The `␣D` group is the open document's own menu: it runs from any focus
-    // (Sessions, Conversation, the title field) while this Draft is open.
+    // The open document's own actions take root keys (`␣Y` `␣H` `␣E`) and
+    // run from any focus (Sessions, the title field) while this Draft is the
+    // workspace item; which-key lists them first, under "Here". Rename is the
+    // shared `␣R` (item.rename), which defers to document.rename here.
     const documentAction = (
       id: string,
       title: string,
       run: (p: Props) => void,
-      key: string,
+      key?: string,
     ): DesktopCommand => {
       const { contexts: _contexts, regions: _regions, ...command } = action(
         id,
@@ -135,7 +133,9 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       );
       return {
         ...command,
-        sequence: [DESKTOP_WORKSPACE_PREFIX, DRAFT.group, key],
+        ...(key ? { sequence: desktopLeaderSequence(key) } : {}),
+        surface: "document",
+        contextual: true,
         leaderAnywhere: true,
       };
     };
@@ -168,31 +168,30 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         "document.rename",
         "Rename draft (edit title)",
         (p) => p.onRename(),
-        DRAFT.rename,
       ),
       documentAction(
         "document.copyToSession",
         "Copy draft to Session drafts",
         (p) => p.onCopy(),
-        DRAFT.copy,
+        DOCUMENT.copy,
       ),
       documentAction(
         "document.history",
         "Draft recovery history",
         (p) => p.onHistory(),
-        DRAFT.history,
+        DOCUMENT.history,
       ),
       documentAction(
         "document.export",
         "Export draft as Markdown",
         (p) => p.onExport(),
-        DRAFT.export,
+        DOCUMENT.export,
       ),
       documentAction(
         "document.readableWidth",
         "Toggle draft readable width",
         (p) => p.onReadableWidth(),
-        DRAFT.readableWidth,
+        DOCUMENT.readableWidth,
       ),
       action(
         "composer.toggleSourceMode",
@@ -288,9 +287,11 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           {key && !key.includes("+") && (
             <LeaderKeycap
               leaderKey={key}
-              // `␣D` document keys run from any focus; the rest belong to
-              // the editor's scope.
-              scopeAvailable={(key.length > 1 && key.startsWith(DRAFT.group)
+              // Document keys run from any focus; the rest belong to the
+              // editor's scope.
+              scopeAvailable={(Object.values(DOCUMENT).includes(
+                  key as typeof DOCUMENT[keyof typeof DOCUMENT],
+                )
                 ? !composing
                 : scoped) && !disabled}
               {...(id === "more" && moreAnchor
@@ -394,7 +395,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         >
           Readable width
           <Box component="span" sx={{ display: "inline-flex", ml: "0.375rem" }}>
-            <LeaderKeycap leaderKey={draftKey(DRAFT.readableWidth)} scopeAvailable={!composing} />
+            <LeaderKeycap leaderKey={DOCUMENT.readableWidth} scopeAvailable={!composing} />
           </Box>
         </Button>
       </Box>
@@ -447,7 +448,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           "Copy to Session",
           <OpenInNew />,
           props.onCopy,
-          draftKey(DRAFT.copy),
+          DOCUMENT.copy,
           false,
           true,
         )}
@@ -456,7 +457,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           "History",
           <HistoryOutlined />,
           props.onHistory,
-          draftKey(DRAFT.history),
+          DOCUMENT.history,
           props.historyLoading,
           true,
         )}
@@ -465,7 +466,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           "Export Markdown",
           <SaveAlt />,
           props.onExport,
-          draftKey(DRAFT.export),
+          DOCUMENT.export,
         )}
         <Tooltip title="Search all editing and document actions">
           <Button
@@ -519,7 +520,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           </ListItemIcon>
           <ListItemText>Copy to Session</ListItemText>
           <DesktopShortcut
-            shortcut={desktopLeaderGroupSequence(DRAFT.group, DRAFT.copy)}
+            shortcut={desktopWorkspaceSequence(DOCUMENT.copy)}
             compact
             quiet
             availability="inactive"
@@ -537,7 +538,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           </ListItemIcon>
           <ListItemText>Recovery history</ListItemText>
           <DesktopShortcut
-            shortcut={desktopLeaderGroupSequence(DRAFT.group, DRAFT.history)}
+            shortcut={desktopWorkspaceSequence(DOCUMENT.history)}
             compact
             quiet
             availability="inactive"
@@ -554,7 +555,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           </ListItemIcon>
           <ListItemText>Export Markdown</ListItemText>
           <DesktopShortcut
-            shortcut={desktopLeaderGroupSequence(DRAFT.group, DRAFT.export)}
+            shortcut={desktopWorkspaceSequence(DOCUMENT.export)}
             compact
             quiet
             availability="inactive"

@@ -138,6 +138,7 @@ function regionHints(
         { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Open" },
         { keys: "H", label: "Collapse/up" },
+        { keys: "Z", label: "Fold" },
         { keys: "S", label: "Actions" },
         { keys: "M", label: "Move to" },
         { keys: "N", label: "New folder" },
