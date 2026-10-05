@@ -3,9 +3,10 @@ import { getVimMode } from "../../vimModeStore";
 import { getVimSetting } from "../../vimSetting";
 import { DESKTOP_COMPOSER_FORMAT_CHORDS } from "./workspaceShortcuts";
 
-/** Direct Mod+B / Mod+I formatting for a composer command, if it has one.
- * Off macOS, Mod is Ctrl: Ctrl-B/Ctrl-I are Vim scroll/jump keys, so outside
- * Vim Insert they stay with the editor and formatting uses the leader. */
+/** The direct formatting chord of a composer command, if it has one.
+ * Off macOS, Mod is Ctrl: plain Ctrl-B/Ctrl-I are Vim scroll/jump keys, so
+ * outside Vim Insert they stay with the editor (toolbar and palette remain).
+ * Shift/Alt chords have no Vim meaning and always format. */
 export function formatChord(
   id: string,
 ): { shortcut: string; allowInEditor: () => boolean } | Record<string, never> {
@@ -13,6 +14,8 @@ export function formatChord(
   if (!shortcut) return {};
   return {
     shortcut,
-    allowInEditor: () => isMac || !getVimSetting() || getVimMode() === "insert",
+    allowInEditor: () =>
+      isMac || /\b(Shift|Alt)\+/.test(shortcut) || !getVimSetting() ||
+      getVimMode() === "insert",
   };
 }

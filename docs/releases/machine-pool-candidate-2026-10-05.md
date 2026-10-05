@@ -24,29 +24,36 @@ this work ("a") together with a fresh review of the live worker list.
 
 ## Accepted on the candidate
 
+All with the exact candidate worker `cowboy-acp-worker` (executable digest
+`sha256:b2350db1…`, previous pool `1838792b…`) or candidate Machine/Controller
+bytes, disposable loopback fixtures and no production credential.
+
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Native Codex worker execution (Codex 0.159.3 executor `8bf204b3…`, packaged Codex plugin 3.3.2 launcher, candidate keeper) | 16 checks accepted | [receipt](../experiments/machine-pool-codex-execution-2026-10-05.json) |
+| Native Codex worker execution (Codex 0.159.3 executor `8bf204b3…`, packaged Codex 3.3.2 launcher, candidate keeper) | 16 checks accepted | [receipt](../experiments/machine-pool-codex-execution-2026-10-05.json) |
 | Diagnostic CLI log conformance | 11 checks accepted | [receipt](../experiments/machine-pool-logs-2026-10-05.json) |
+| Public sessions, enrolled Machines and signed ACP fixture, with device-bound browser proof (`browser_device`) | 9 checks accepted | [receipt](../experiments/machine-pool-session-2026-10-05.json) |
+| Codex generation coexistence: Codex 3.3.2 (`a833d5b6…`) with previous 3.3.1 (`d5b985f3…`) | accepted: initialize and session/new, stop and descendant drain, distinct-generation coexistence, no sidecar | [receipt](../experiments/machine-pool-codex-coexistence-2026-10-05.json) |
+| Claude generation coexistence: the Claude Code releases **installed on Hawk**, 3.1.35 (`051263cb…`) with previous 3.1.34 (`6b00907a…`) | accepted, same checks | [receipt](../experiments/machine-pool-claude-coexistence-2026-10-05.json) |
 
-Both used disposable loopback fixtures and no production credential. They do not
-cover Claude, coexistence, sessions or Code.
+Input notes, from the reruns: the session tool needs `"browser_device": true`
+(without it the Controller refuses its HTTP origin and the harness reports a
+Controller timeout) and the native `.cowboy-machine-wrapped` ELF rather than the
+release wrapper, which already passes `--desired-generation`; coexistence needs
+the harness layout (`<release>.release.json`, sibling `.cowboy-plugin`, and
+`artifacts/artifacts/<digest>/<file>` as regular files, passed as the artifact
+root) and a symlink-free absolute worker path; every rerun needs new receipt
+paths.
 
 ## Not yet accepted, and why
 
-- **Claude native execution and Codex/Claude coexistence.** These need the
-  Claude plugin runtime (CLI, `cowboy-configured-cli` launcher) for the repository's
-  current Claude plugin. Hawk's installed Claude generations and Catalog stop at
-  3.1.x, which predate the execution launcher, and no built runtime or artifact
-  root was found locally. The candidate plugin must be built through the
-  repository release skill first. The coexistence harness also wants its own
-  artifact-root layout and a symlink-free absolute worker path.
-- **Execution-session conformance.** The tool in main still sets
-  `COWBOY_PUBLIC_ORIGIN=http://127.0.0.1`; the Controller now refuses that
-  (`Controller timed out`). A fixture upgrade (HTTPS origin with a local TLS proxy,
-  `X-Forwarded-Proto`, device-bound browser proof over the full `/ws?{query}`)
-  was reported working on October 4 but is not in main.
+- **Claude native execution, and coexistence for the repository's current Claude
+  plugin.** The coexistence above covers what Hawk runs (3.1.x). The repository's
+  Claude plugin is 3.4.7 with the remote-execution launcher
+  (`cowboy-configured-cli`), which no Hawk generation or Catalog entry contains.
+  Native Claude execution and its coexistence need that runtime built through the
+  release skill, including the CLI download.
 - **Connected Code** needs the exact native Zed pair and was not attempted.
 
-Until those pass for this exact worker, the pin must not advance. Use new receipt
-paths for every rerun.
+Until the Claude native execution and connected Code gates pass for this exact
+worker, the pin must not advance. The activation consequence above is unchanged.

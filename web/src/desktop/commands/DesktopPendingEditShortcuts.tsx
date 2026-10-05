@@ -5,7 +5,7 @@ import {
 } from "./DesktopCommandProvider";
 import {
   DESKTOP_WORKSPACE_KEYS,
-  DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderSequence,
 } from "./workspaceShortcuts";
 
 export function DesktopPendingEditCommandBindings({
@@ -48,7 +48,7 @@ export function DesktopPendingEditCommandBindings({
       id: `${prefix}.slash`,
       title: "Insert slash command",
       group: "Pending message editor",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.composerSlash],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerSlash),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: [region],
@@ -58,10 +58,7 @@ export function DesktopPendingEditCommandBindings({
       id: `${prefix}.reference`,
       title: "Reference a file",
       group: "Pending message editor",
-      sequence: [
-        DESKTOP_WORKSPACE_PREFIX,
-        DESKTOP_WORKSPACE_KEYS.composerReference,
-      ],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerReference),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: [region],
@@ -71,7 +68,7 @@ export function DesktopPendingEditCommandBindings({
       id: `${prefix}.attach`,
       title: "Attach file",
       group: "Pending message editor",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.composerAttach],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.composerAttach),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: [region],
@@ -94,7 +91,7 @@ export function DesktopPendingEditCommandBindings({
       id: `${prefix}.expand`,
       title: "Expand message editor",
       group: "Pending message editor",
-      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.editorExpand],
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.editorExpand),
       allowInEditor: true,
       contexts: ["prompt"],
       regions: [region],

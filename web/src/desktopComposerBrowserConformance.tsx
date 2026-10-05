@@ -22,7 +22,7 @@ import {
   useDesktopCommands,
 } from "./desktop/commands/DesktopCommandProvider";
 import {
-  DESKTOP_COMPOSER_FORMAT_KEYS,
+  DESKTOP_COMPOSER_FORMAT_CHORDS,
   DESKTOP_WORKSPACE_KEYS,
 } from "./desktop/commands/workspaceShortcuts";
 import { clearImeStatus, setImeComposing } from "./desktop/vim/imeStatusStore";
@@ -175,9 +175,15 @@ export async function runDesktopComposerBrowserConformance(): Promise<
   };
   const prefix = (): void =>
     key("k", "KeyK", isMac ? { metaKey: true } : { altKey: true });
-  const sequence = (letter: string): void => {
+  // A leader path: one key at the root (`A`) or a group and its key (`MB`).
+  const sequence = (path: string): void => {
     prefix();
-    key(letter.toLowerCase(), letter === "/" ? "Slash" : `Key${letter}`);
+    for (const letter of path) {
+      key(
+        letter.toLowerCase(),
+        letter === "/" ? "Slash" : `Key${letter.toUpperCase()}`,
+      );
+    }
   };
   const click = (id: string): void => flushSync(() => button(id).click());
   const results: string[] = [];
@@ -380,13 +386,14 @@ export async function runDesktopComposerBrowserConformance(): Promise<
       click(id);
       check(calls.at(-1) === id, `${id} click shares action`);
     }
-    for (const [id, key] of Object.entries(DESKTOP_COMPOSER_FORMAT_KEYS)) {
+    // Rich text is direct chords, never the leader.
+    for (const [id, chord] of Object.entries(DESKTOP_COMPOSER_FORMAT_CHORDS)) {
       check(
         commands.list().some((command) =>
           command.id === `composer.format.${id}` &&
-          command.sequence?.[1] === key
+          command.shortcut === chord && !command.sequence
         ),
-        `${id} is searchable with its shortcut`,
+        `${id} is searchable with its chord`,
       );
     }
     {
@@ -473,11 +480,27 @@ export async function runDesktopComposerBrowserConformance(): Promise<
 
     flushSync(() => setOptions({}));
     editorRef.current.focusSelection({ anchor: 2, head: 8 });
-    sequence("B");
+    key("b", "KeyB", isMac ? { metaKey: true } : { ctrlKey: true });
     check(
       editorRef.current.getValue() === "A **prompt** worth writing",
-      "Bold formats current selection",
+      "Mod+B bolds the current selection",
     );
+    flushSync(() => {
+      commands.list().find((command) => command.id === "composer.format.undo")
+        ?.run();
+    });
+    editorRef.current.focusSelection({ anchor: 2, head: 8 });
+    key("x", "KeyX", { ...(isMac ? { metaKey: true } : { ctrlKey: true }), shiftKey: true });
+    check(
+      editorRef.current.getValue() === "A ~~prompt~~ worth writing",
+      `Mod+Shift+X strikes through (got ${editorRef.current.getValue()})`,
+    );
+    flushSync(() => {
+      commands.list().find((command) => command.id === "composer.format.undo")
+        ?.run();
+    });
+    editorRef.current.focusSelection({ anchor: 2, head: 8 });
+    key("b", "KeyB", isMac ? { metaKey: true } : { ctrlKey: true });
     // Undo stays with the editor (Mod+Z / Vim u) and the toolbar command; the
     // leader keeps Z for zoom.
     flushSync(() => {
@@ -545,7 +568,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
       "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
     );
 
-    sequence("M");
+    sequence(DESKTOP_WORKSPACE_KEYS.composerMore);
     await tick();
     check(
       document.querySelector("[role='menu']"),

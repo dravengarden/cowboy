@@ -29,6 +29,7 @@ use crate::runtime_wire::{
 mod cleanups;
 pub(crate) mod deletions;
 mod incarnations;
+mod namespace;
 
 /// Consecutive failed cleanup attempts (about three minutes of backoff) after
 /// which a nominated Session stops holding its handles in this process.

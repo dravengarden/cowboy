@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "plugin_id": "codex",
+  "plugin_version": "3.3.2",
+  "artifact_digest": "sha256:a833d5b617922fc67938bd5ddf9a43bf9dd928caee2a3242a869014357c3e08f",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "probes": [
+    {
+      "command": "codex",
+      "version": "0.159.3",
+      "artifact_digest": "sha256:0719027cfe326e248971a2dff0a391c3532a3d838b4e3cc660bf93b2a606d2ce",
+      "status": "passed"
+    },
+    {
+      "command": "codex-acp",
+      "version": "2.1.0",
+      "artifact_digest": "sha256:8ce40a0cb5ff6e15d8fa0972072788cef9cecec3bfaa5fc43f78ab729ca9a708",
+      "status": "passed"
+    }
+  ],
+  "uses_service_credentials": false,
+  "sends_prompt": false,
+  "previous": {
+    "plugin_version": "3.3.1",
+    "artifact_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4"
+  },
+  "worker": {
+    "executable_digest": "sha256:b2350db1bd5d01bfa5749edf94aa1e6bc88724fe43be54e31437b95cd9f648ba",
+    "initialize_and_session_new": "passed",
+    "stop_and_descendant_drain": "passed",
+    "sidecar_count": 0,
+    "distinct_generation_coexistence": "passed"
+  }
+}

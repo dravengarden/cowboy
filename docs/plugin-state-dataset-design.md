@@ -114,7 +114,12 @@ requires that each state its answers to items 2, 6, 8 and 9 in one place.
 
 ## Order
 
-1. Rust durable-namespace extraction (no behaviour change).
+1. Rust durable-namespace extraction (no behaviour change). **Source done**
+   (`src/machine_broker/namespace.rs`; deletion journal, incarnation reader and
+   cleanup continuation now share it). It keeps every deletion-journal refusal
+   string except the unreachable "no parent" wording. The deletion writer's native
+   old/new conformance has not been re-run on a built artifact, because host-only
+   Machine releases are blocked behind the worker-pool maintenance.
 2. Owner descriptor table (no behaviour change; Hawk and Falcon each need their
    own host activation to adopt it).
 3. Generic matrix tool.

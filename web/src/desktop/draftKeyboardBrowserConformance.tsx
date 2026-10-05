@@ -307,11 +307,11 @@ export async function checkDraftKeyboard(): Promise<string> {
           "Closing More releases its exclusive keyboard scope",
         );
         editorRef.current!.focus();
-        prefix();
-        key("b", "KeyB");
+        // Rich text is a direct chord in the focused editor.
+        key("b", "KeyB", mod);
         check(
           editorRef.current!.getValue().includes("**"),
-          "Formatting prefix reaches the actual editor",
+          "Mod+B reaches the actual editor",
         );
         for (const font of [8, 16, 24, 32]) {
           document.documentElement.style.fontSize = `${font}px`;

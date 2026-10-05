@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
+import { chromeShortcutConflict } from "./chromeShortcutPolicy.ts";
+import { macShortcutConflict } from "./macShortcutPolicy.ts";
 import {
+  DESKTOP_COMPOSER_FORMAT_CHORDS,
+  DESKTOP_LEADER_GROUPS,
   DESKTOP_WORKSPACE_COMMANDS,
   DESKTOP_WORKSPACE_PREFIX,
   desktopLeaderKey,
@@ -117,23 +121,14 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     q: "prompt.focusQueue",
     d: "prompt.focusDrafts",
     n: "session.new",
-    w: "workspace.cycleRegion",
-    r: "workspace.enterResize",
-    e: "composer.toggleSourceMode",
+    m: "composer.more",
+    w: "group:w",
+    u: "group:u",
     "/": "composer.slash",
     f: "composer.reference",
     a: "composer.attach",
     h: "composer.schedule",
     j: "composer.jumpFront",
-    m: "composer.more",
-    b: "composer.format.bold",
-    i: "composer.format.italic",
-    x: "composer.format.code",
-    u: "composer.format.link",
-    o: "composer.format.bulletList",
-    "[": "workspace.toggleSessions",
-    "]": "workspace.togglePrompt",
-    "\\": "workspace.toggleConversation",
     ",": "settings.open",
     " ": "session.switch",
     "`": "session.alternate",
@@ -193,4 +188,17 @@ Deno.test("leader keycaps draw the glyph and key in one label", () => {
     "n",
   );
   assertEquals(desktopLeaderKey({ sequence: ["G", "1"] }), null);
+});
+
+Deno.test("rich text uses direct chords, never the leader", () => {
+  for (const [id, chord] of Object.entries(DESKTOP_COMPOSER_FORMAT_CHORDS)) {
+    const command = `composer.format.${id}`;
+    assertEquals(chord.startsWith("Mod+"), true);
+    assertEquals(chromeShortcutConflict(command, chord, true), null);
+    assertEquals(chromeShortcutConflict(command, chord, false), null);
+    assertEquals(macShortcutConflict(command, chord), null);
+  }
+  assertEquals(DESKTOP_COMPOSER_FORMAT_CHORDS.bold, "Mod+B");
+  assertEquals(DESKTOP_COMPOSER_FORMAT_CHORDS.italic, "Mod+I");
+  assertEquals("m" in DESKTOP_LEADER_GROUPS, false);
 });

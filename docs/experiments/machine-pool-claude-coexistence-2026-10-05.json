@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "plugin_id": "claude-code",
+  "plugin_version": "3.1.35",
+  "artifact_digest": "sha256:051263cb77807d62913ed0054116851778fd482d22cc605eb965146a49ff5ebe",
+  "platform": {
+    "os": "linux",
+    "architecture": "x86_64"
+  },
+  "probes": [
+    {
+      "command": "claude",
+      "version": "2.1.285",
+      "artifact_digest": "sha256:3fea1abf2d5f42236ebf7e59126698e347ac80437a145dd6e85b87c8c3341ffe",
+      "status": "passed"
+    },
+    {
+      "command": "claude-agent-acp",
+      "version": "0.84.0",
+      "artifact_digest": "sha256:fb0723950bfadfa3844be0b4857bc9b046bb65d4328e41f48905c81962869026",
+      "status": "passed"
+    }
+  ],
+  "uses_service_credentials": false,
+  "sends_prompt": false,
+  "previous": {
+    "plugin_version": "3.1.34",
+    "artifact_digest": "sha256:6b00907ae07dc4128da72a1c59b3354e08e84eb9be8e697022b63305257ebe12"
+  },
+  "worker": {
+    "executable_digest": "sha256:b2350db1bd5d01bfa5749edf94aa1e6bc88724fe43be54e31437b95cd9f648ba",
+    "initialize_and_session_new": "passed",
+    "stop_and_descendant_drain": "passed",
+    "sidecar_count": 0,
+    "distinct_generation_coexistence": "passed"
+  }
+}

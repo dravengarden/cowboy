@@ -4582,7 +4582,8 @@ export function PendingPanel({
                       left: 0,
                       top: 0,
                       bottom: 0,
-                      width: 20,
+                      // rem: the Desktop grip follows the global font size.
+                      width: "1.25rem",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -4601,8 +4602,8 @@ export function PendingPanel({
                           {...sortable.handleProps(m.id)}
                           aria-label="Drag to reorder"
                           sx={{
-                            width: 20,
-                            height: 32,
+                            width: "1.25rem",
+                            height: "2rem",
                             p: 0,
                             borderRadius: 1,
                             color: "text.disabled",

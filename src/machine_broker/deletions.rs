@@ -1,16 +1,19 @@
 //! A reader-first, Machine-owned terminal-deletion namespace.
 
 use std::collections::HashSet;
-use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use super::namespace::Stage;
+use super::namespace::{Namespace, valid_id};
+
 const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
+const NOUN: &str = "deletion journal";
+const FILE: &str = "deletions.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,9 +40,7 @@ pub(super) enum WriteCheckpoint {
 }
 
 pub(super) struct Journal {
-    root: PathBuf,
-    root_handle: File,
-    lock: File,
+    namespace: Namespace,
     owner: Owner,
     deleted: HashSet<String>,
     writer_enabled: bool,
@@ -48,93 +49,31 @@ pub(super) struct Journal {
     checkpoint: Option<Box<dyn Fn(WriteCheckpoint) + Send>>,
 }
 
-fn valid_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 512 && !value.contains('\0')
-}
-
 impl Journal {
     pub(super) fn open(path: &Path, owner: Owner, writer_enabled: bool) -> Result<Self> {
-        ensure!(
-            valid_id(&owner.machine_id),
-            "invalid deletion journal Machine identity"
-        );
-        ensure!(
-            owner.service_id.as_deref().is_none_or(valid_id),
-            "invalid deletion journal Service identity"
-        );
-        // Machine state already owns the parent. Flush the newly created
-        // namespace entry too; syncing only files inside it would not make
-        // a first committed deletion survive loss of the parent entry.
-        match std::fs::create_dir(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
-        // Retain the caller's namespace path without resolving links. Resolving
-        // it first would both admit a linked directory and erase the path whose
-        // replacement must end this journal's ownership.
-        let root = std::path::absolute(path)?;
-        let root_handle = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(&root)
-            .context("opening deletion journal directory without following namespace links")?;
-        File::open(root.parent().context("deletion namespace has no parent")?)?.sync_all()?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join(".lock"))?;
-        ensure!(
-            lock.metadata()?.is_file(),
-            "deletion journal lock is not a regular file"
-        );
-        fs2::FileExt::try_lock_exclusive(&lock).context("deletion journal already owned")?;
+        let namespace = Namespace::open(path, &owner, NOUN)?;
         let mut deleted = HashSet::new();
-        match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join("deletions.json"))
-        {
-            Ok(file) => {
+        if let Some(bytes) = namespace.read(FILE, MAX_BYTES)? {
+            let record: Record =
+                serde_json::from_slice(&bytes).context("invalid deletion journal")?;
+            ensure!(record.schema == 1, "unsupported deletion journal schema");
+            ensure!(
+                record.owner == owner,
+                "deletion journal belongs to another Machine or Service"
+            );
+            ensure!(
+                record.deleted.len() <= MAX_RECORDS,
+                "deletion journal exceeds record limit"
+            );
+            for id in record.deleted {
                 ensure!(
-                    file.metadata()?.is_file(),
-                    "deletion journal is not a regular file"
+                    valid_id(&id) && deleted.insert(id),
+                    "invalid or duplicate deletion identity"
                 );
-                let mut bytes = Vec::new();
-                file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes)?;
-                ensure!(
-                    bytes.len() <= MAX_BYTES,
-                    "deletion journal exceeds byte limit"
-                );
-                let record: Record =
-                    serde_json::from_slice(&bytes).context("invalid deletion journal")?;
-                ensure!(record.schema == 1, "unsupported deletion journal schema");
-                ensure!(
-                    record.owner == owner,
-                    "deletion journal belongs to another Machine or Service"
-                );
-                ensure!(
-                    record.deleted.len() <= MAX_RECORDS,
-                    "deletion journal exceeds record limit"
-                );
-                for id in record.deleted {
-                    ensure!(
-                        valid_id(&id) && deleted.insert(id),
-                        "invalid or duplicate deletion identity"
-                    );
-                }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
         let journal = Self {
-            root,
-            root_handle,
-            lock,
+            namespace,
             owner,
             deleted,
             writer_enabled,
@@ -171,19 +110,7 @@ impl Journal {
             !self.poisoned,
             "deletion journal writer is fenced after a storage failure"
         );
-        let root = std::fs::symlink_metadata(&self.root)?;
-        let held = self.root_handle.metadata()?;
-        ensure!(
-            root.is_dir() && root.dev() == held.dev() && root.ino() == held.ino(),
-            "deletion journal directory was replaced"
-        );
-        let lock = std::fs::symlink_metadata(self.root.join(".lock"))?;
-        let held = self.lock.metadata()?;
-        ensure!(
-            lock.is_file() && lock.dev() == held.dev() && lock.ino() == held.ino(),
-            "deletion journal lock was replaced"
-        );
-        Ok(())
+        self.namespace.check()
     }
 
     pub(super) fn mark_deleted(&mut self, session_id: &str) -> Result<()> {
@@ -212,32 +139,17 @@ impl Journal {
             bytes.len() <= MAX_BYTES,
             "deletion journal byte budget exhausted"
         );
-        let pending = self
-            .root
-            .join(format!(".pending-{:032x}", rand::random::<u128>()));
-        let result: Result<()> = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&pending)?;
-            file.write_all(&bytes)?;
+        let result = self.namespace.commit(FILE, &bytes, &mut |stage| {
             #[cfg(test)]
-            self.checkpoint(WriteCheckpoint::Staged);
-            file.sync_all()?;
-            #[cfg(test)]
-            self.checkpoint(WriteCheckpoint::FileSynced);
-            self.check()?;
-            std::fs::rename(&pending, self.root.join("deletions.json"))?;
-            #[cfg(test)]
-            self.checkpoint(WriteCheckpoint::Renamed);
-            self.root_handle.sync_all()?;
-            #[cfg(test)]
-            self.checkpoint(WriteCheckpoint::DirectorySynced);
-            self.check()?;
-            Ok(())
-        })();
+            self.checkpoint(match stage {
+                Stage::Staged => WriteCheckpoint::Staged,
+                Stage::FileSynced => WriteCheckpoint::FileSynced,
+                Stage::Renamed => WriteCheckpoint::Renamed,
+                Stage::DirectorySynced => WriteCheckpoint::DirectorySynced,
+            });
+            #[cfg(not(test))]
+            let _ = stage;
+        });
         if let Err(error) = result {
             self.poisoned = true;
             return Err(error.context("durable Session deletion was not confirmed"));

@@ -1722,20 +1722,20 @@ export async function runDraftDocumentsBrowserConformance(
       "Draft uses the existing Sessions drawer surface",
     );
     {
-      // The formatting bar stays when the keyboard is away and rests at the
-      // bottom; there is no separate navigation capsule. Hide keyboard
-      // appears only while editing.
+      // The formatting bar rests at the bottom with the keyboard away; there
+      // is no navigation capsule, and Hide keyboard needs an actual keyboard.
+      // Focus alone (before the keyboard rises) must not move the bar, or it
+      // flashes onto the home indicator as the keyboard opens.
       (document.activeElement as HTMLElement | null)?.blur();
       await tick();
       const bar = container.querySelector<HTMLElement>("[data-draft-mobile-toolbar]");
-      const hide = container.querySelector<HTMLElement>("[data-draft-hide-keyboard]");
-      check(bar && hide, "Touch Draft renders the formatting capsule");
+      check(bar, "Touch Draft renders the formatting capsule");
       const surface = container.querySelector<HTMLElement>("[data-workspace-document]")!;
-      const barRect = bar.getBoundingClientRect();
+      const rest = bar.getBoundingClientRect();
       check(
-        getComputedStyle(bar).display === "flex" && barRect.height > 0 &&
+        getComputedStyle(bar).display === "flex" && rest.height > 0 &&
           bar.querySelectorAll("[data-draft-tool]").length > 0 &&
-          getComputedStyle(hide).display === "none",
+          !container.querySelector("[data-draft-hide-keyboard]"),
         "Formatting bar is visible with the keyboard hidden, without Hide keyboard",
       );
       check(
@@ -1744,13 +1744,26 @@ export async function runDraftDocumentsBrowserConformance(
         "No navigation capsule on the touch Draft page",
       );
       check(
-        surface.getBoundingClientRect().bottom - barRect.bottom < 40,
-        `Resting bar sits at the bottom (${Math.round(surface.getBoundingClientRect().bottom - barRect.bottom)}px)`,
+        surface.getBoundingClientRect().bottom - rest.bottom < 40,
+        `Resting bar sits at the bottom (${Math.round(surface.getBoundingClientRect().bottom - rest.bottom)}px)`,
       );
       container.querySelector<HTMLElement>("[data-draft-body] .cm-content, [data-draft-body] textarea")
         ?.focus();
       await tick();
-      check(getComputedStyle(hide).display !== "none", "Editing shows Hide keyboard");
+      const focused = bar.getBoundingClientRect();
+      check(
+        Math.abs(focused.bottom - rest.bottom) < 1 && Math.abs(focused.width - rest.width) < 1 &&
+          !container.querySelector("[data-draft-hide-keyboard]"),
+        `Focus before the keyboard rises leaves the bar in place (${Math.round(rest.bottom)} → ${Math.round(focused.bottom)})`,
+      );
+      document.documentElement.style.setProperty("--kb-inset", "300px");
+      await tick();
+      const lifted = bar.getBoundingClientRect();
+      document.documentElement.style.removeProperty("--kb-inset");
+      check(
+        lifted.bottom < rest.bottom - 250,
+        `A keyboard inset lifts the bar (${Math.round(rest.bottom)} → ${Math.round(lifted.bottom)})`,
+      );
     }
     mobileRoot.unmount();
     results.push(

@@ -23,6 +23,7 @@ import {
   PanelLeftIcon,
 } from "./draftChromeIcons";
 import { alpha, type Theme } from "@mui/material/styles";
+import { useKeyboardOpen } from "../keyboardInset";
 import {
   lazy,
   type MutableRefObject,
@@ -90,9 +91,12 @@ const desktopDraftActionSx = {
 };
 
 const positions = new Map<string, ComposerEditorSelection>();
-/** Space under the resting formatting capsule: the home indicator inset,
- *  with a small floor on devices without one. */
-const DRAFT_MOBILE_REST_CLEARANCE = "max(env(safe-area-inset-bottom, 0px), 8px)";
+/** Space under the formatting capsule. At rest it clears the home indicator;
+ *  as the keyboard rises the App column pads by `--kb-inset`, so the same
+ *  amount comes off here and the capsule moves continuously with the keyboard
+ *  instead of first dropping onto the home indicator (no focus-driven jump). */
+const DRAFT_MOBILE_BAR_CLEARANCE =
+  "max(4px, calc(max(env(safe-area-inset-bottom, 0px), 8px) - var(--kb-inset, 0px)))";
 export type DraftFlush = () => Promise<void>;
 
 /** Mobile focus-on-writing chrome (Obsidian): the page owns its Sessions and
@@ -223,6 +227,7 @@ function DraftEditingSession(
   const composing = useRef(false);
   const desktop = useSurfaceProfile().kind === "desktop";
   const focusLayout = !desktop && mobileChrome !== undefined;
+  const keyboardOpen = useKeyboardOpen();
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
   // The title is the document's first line (Obsidian inline title): `␣DR`
@@ -499,9 +504,10 @@ function DraftEditingSession(
     onPointerDown: (e: { preventDefault: () => void }) => e.preventDefault(),
     onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault(),
   };
-  // Always present (see the root's :has rules): a scrolling capsule of
-  // formatting that rests at the bottom and rides above the keyboard while
-  // the body is edited, where a separate control also puts the keyboard away.
+  // Always present: a scrolling capsule of formatting that rests at the bottom
+  // and rides above the keyboard. Hide keyboard appears only while a keyboard
+  // is actually up, not merely while the body has focus: focus arrives before
+  // the keyboard, and iOS can dismiss the keyboard without blurring.
   const focusToolbar = (
     <Stack
       data-draft-mobile-toolbar
@@ -512,7 +518,7 @@ function DraftEditingSession(
         px: 1,
         py: 0.75,
         flexShrink: 0,
-        mb: DRAFT_MOBILE_REST_CLEARANCE,
+        mb: DRAFT_MOBILE_BAR_CLEARANCE,
       }}
     >
       <Stack
@@ -557,6 +563,7 @@ function DraftEditingSession(
           <AttachFile />
         </IconButton>
       </Stack>
+      {keyboardOpen && (
       <IconButton
         data-draft-hide-keyboard
         aria-label="Hide keyboard"
@@ -568,7 +575,6 @@ function DraftEditingSession(
         sx={{
           ...floatingMaterialSx,
           color: "text.primary",
-          display: "none",
           width: 48,
           height: 48,
           flexShrink: 0,
@@ -576,6 +582,7 @@ function DraftEditingSession(
       >
         <KeyboardHideIcon />
       </IconButton>
+      )}
     </Stack>
   );
   const toolbarView = (
@@ -754,15 +761,7 @@ function DraftEditingSession(
         ...(desktop
           ? { containerType: "inline-size", containerName: "draft-editor" }
           : {}),
-        ...(focusLayout && {
-          position: "relative",
-          "&:has([data-draft-body]:focus-within) [data-draft-mobile-toolbar]": {
-            mb: 0,
-          },
-          "&:has([data-draft-body]:focus-within) [data-draft-hide-keyboard]": {
-            display: "inline-flex",
-          },
-        }),
+        ...(focusLayout && { position: "relative" }),
       }}
       data-draft-editor={initial.id}
       data-desktop-region={desktop ? "prompt.composer" : undefined}

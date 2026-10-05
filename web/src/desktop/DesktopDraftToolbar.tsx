@@ -34,11 +34,12 @@ import { formatChord } from "./commands/formatChord";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
-  DESKTOP_COMPOSER_FORMAT_KEYS,
+  DESKTOP_COMPOSER_FORMAT_CHORDS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   DESKTOP_DRAFT_GROUP_KEYS,
   DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderSequence,
   desktopLeaderGroupSequence,
   desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
@@ -110,7 +111,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
-      ...(key ? { sequence: [DESKTOP_WORKSPACE_PREFIX, key] } : {}),
+      ...(key ? { sequence: desktopLeaderSequence(key) } : {}),
       when: () =>
         !isImeComposing() &&
         (!writable || state.current.props.writable) &&
@@ -135,6 +136,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
       return {
         ...command,
         sequence: [DESKTOP_WORKSPACE_PREFIX, DRAFT.group, key],
+        leaderAnywhere: true,
       };
     };
     return [
@@ -205,7 +207,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           `composer.format.${c.id}`,
           c.label,
           (p) => p.onFormat(c.id),
-          DESKTOP_COMPOSER_FORMAT_KEYS[c.id],
+          undefined,
           true,
         ),
         ...formatChord(c.id),
@@ -229,11 +231,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
     <Tooltip
       key={id}
       title={key
-        ? `${label} · ${
-          key.length > 1
-            ? desktopLeaderGroupSequence(key[0]!, key.slice(1))
-            : desktopWorkspaceSequence(key)
-        }`
+        ? `${label} · ${key.includes("+") ? key : desktopWorkspaceSequence(key)}`
         : label}
     >
       <span
@@ -278,12 +276,23 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         >
           {icon}
           {text && <Box component="span" data-draft-action-label>{label}</Box>}
-          {key && (
+          {key && key.includes("+") && (
+            // Rich text: a direct chord, live only while the editor has focus.
+            <DesktopShortcut
+              shortcut={key}
+              compact
+              quiet
+              availability={shortcutAvailability(scoped && !disabled)}
+            />
+          )}
+          {key && !key.includes("+") && (
             <LeaderKeycap
               leaderKey={key}
-              // Document-group keys run from any focus; the rest belong to
+              // `␣D` document keys run from any focus; the rest belong to
               // the editor's scope.
-              scopeAvailable={(key.length > 1 ? !composing : scoped) && !disabled}
+              scopeAvailable={(key.length > 1 && key.startsWith(DRAFT.group)
+                ? !composing
+                : scoped) && !disabled}
               {...(id === "more" && moreAnchor
                 ? { availability: "active" as const }
                 : {})}
@@ -346,7 +355,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
             () => props.onFormat(id),
             id === "sourceMode"
               ? DESKTOP_WORKSPACE_KEYS.toggleSourceMode
-              : DESKTOP_COMPOSER_FORMAT_KEYS[id],
+              : DESKTOP_COMPOSER_FORMAT_CHORDS[id],
             !props.writable && id !== "sourceMode",
           );
         })}
@@ -591,11 +600,9 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           >
             <ListItemIcon>{c.icon}</ListItemIcon>
             <ListItemText>{c.label}</ListItemText>
-            {DESKTOP_COMPOSER_FORMAT_KEYS[c.id] && (
+            {DESKTOP_COMPOSER_FORMAT_CHORDS[c.id] && (
               <DesktopShortcut
-                shortcut={desktopWorkspaceSequence(
-                  DESKTOP_COMPOSER_FORMAT_KEYS[c.id]!,
-                )}
+                shortcut={DESKTOP_COMPOSER_FORMAT_CHORDS[c.id]!}
                 compact
                 quiet
                 availability="inactive"
