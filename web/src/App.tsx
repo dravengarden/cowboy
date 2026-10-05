@@ -5071,7 +5071,7 @@ export function App({
                 {draftRoute.id ? (
                     <Box ref={mobile ? mobilePageRef : undefined}
                         data-mobile-drawer-surface={mobile ? "true" : undefined}
-                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "env(safe-area-inset-top)" : 0 }}>
+                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "var(--cowboy-system-top-clearance)" : 0 }}>
                         <WorkspaceDraftPane id={draftRoute.id} beforeLeave={draftBeforeLeave}
                             onAction={(action) => flushSync(() => setDraftAction(action))}
                             mobileNavigation={mobile

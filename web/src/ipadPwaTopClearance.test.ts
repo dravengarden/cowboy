@@ -167,3 +167,11 @@ Deno.test("cover sheets and shared chrome consume the iPad top-clearance contrac
     ),
   );
 });
+
+Deno.test("the mobile Draft page clears the iPad status bar", () => {
+  assert(
+    appSource.includes(
+      'data-mobile-drawer-surface={mobile ? "true" : undefined}\n                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "var(--cowboy-system-top-clearance)" : 0 }}>',
+    ),
+  );
+});
