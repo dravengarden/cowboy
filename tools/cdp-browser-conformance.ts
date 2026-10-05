@@ -10,7 +10,7 @@ const endpoint = Deno.args[0] ?? "";
 const suite = Deno.args[1] ?? "desktop-composer";
 const themeMode = Deno.args[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
-  "desktop-composer": ["runDesktopComposerBrowserConformance", 10],
+  "desktop-composer": ["runDesktopComposerBrowserConformance", 11],
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
   "editor-plugin-sandbox": ["runEditorPluginSandboxBrowserConformance", 4],
   "session-fold": ["runSessionFoldBrowserConformance", 6],

@@ -57,6 +57,11 @@ import {
   topmostModal,
 } from "./hintTargets";
 import { handleDesktopModalKey } from "./modalNavigation";
+import {
+  handleInputVimKey,
+  installInputVim,
+  isInputVimNormal,
+} from "../vim/inputVim";
 import { GlobalStyles } from "@mui/material";
 import {
   DesktopHintContext,
@@ -143,6 +148,21 @@ export function desktopLeaderGroupAvailable(
   ).some(
     (command) => command.when?.() !== false,
   );
+}
+
+/** A page's own root command (`␣T` Title on a Draft) takes its key over a
+ *  group of the same letter, which needs the other page (Top bar). */
+export function desktopSurfaceCommandOwnsKey(
+  commands: Iterable<DesktopCommand>,
+  key: string,
+): boolean {
+  for (const command of commands) {
+    if (
+      command.surface && desktopLeaderKey(command) === key &&
+      command.when?.() !== false
+    ) return true;
+  }
+  return false;
 }
 
 /** The scope test shared by dispatch, which-key and live keycaps. */
@@ -316,6 +336,8 @@ export function DesktopCommandProvider(
     commands: commandList,
   }), [commandList, execute, register]);
 
+  // Vim Normal/Insert for native text fields follows focus (inputVim).
+  useEffect(() => installInputVim(), []);
   // Leader dismissal outside the key path: pointer input and window blur
   // leave the transient layer, as a click outside which-key does.
   useEffect(() => {
@@ -350,6 +372,16 @@ export function DesktopCommandProvider(
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      // Vim in a native text field (inputVim) goes first: its Insert Esc and
+      // Normal motions belong to the field. An armed leader keeps its
+      // continuation; a composition keeps every key.
+      if (
+        !leaderArmed.current && desktopKeyIntent(event).owner !== "ime" &&
+        handleInputVimKey(event)
+      ) {
+        clearPendingJumpChord();
+        return;
+      }
       const eventElement = event.target instanceof Element ? event.target : null;
       const normalCommandSink = eventElement?.matches("[data-vim-command-sink]") ?? false;
       const vimSinkRegionFocused = normalCommandSink
@@ -362,7 +394,9 @@ export function DesktopCommandProvider(
       // effect installs its next closure. Trust that DOM ownership marker so a
       // newly opened Queue/Draft editor does not lose its first `i` to the stale
       // list keymap, while a sink left behind in an unfocused region remains inert.
+      // A text field in Vim Normal is command chrome: Space arms the leader.
       const textEditorOwnsKey = isTextEditingTarget(event.target) &&
+        !isInputVimNormal(event.target) &&
         !(normalCommandSink && !desktopVimSinkShouldHandleKeys({
           targetIsVimSink: normalCommandSink,
           targetRegionFocused: vimSinkRegionFocused,
@@ -556,6 +590,7 @@ export function DesktopCommandProvider(
           const leader = key.toLowerCase();
           if (
             DESKTOP_LEADER_GROUPS[leader] &&
+            !desktopSurfaceCommandOwnsKey(commands.current.values(), leader) &&
             desktopLeaderGroupAvailable(
               commands.current.values(),
               leader,
@@ -1235,6 +1270,13 @@ export function DesktopCommandProvider(
                   outline: `2px solid ${theme.palette.primary.main}`,
                   outlineOffset: 2,
                   borderRadius: 12,
+                },
+                // Vim Normal in a text field: the one-character selection
+                // is the block cursor; no caret blinks beside it.
+                "[data-vim-input-mode='normal']": { caretColor: "transparent" },
+                "[data-vim-input-mode='normal']::selection": {
+                  background: theme.palette.primary.main,
+                  color: theme.palette.primary.contrastText,
                 },
               })}
             />

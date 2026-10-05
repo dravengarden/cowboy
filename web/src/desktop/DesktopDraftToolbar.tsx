@@ -60,8 +60,8 @@ interface Props {
   onHistory: () => void;
   onExport: () => void;
   onReadableWidth: () => void;
-  /** Move keyboard focus into the title field with its text selected. */
-  onRename: () => void;
+  /** Move the cursor to the title (Vim Normal when Vim is on). */
+  onTitle: () => void;
 }
 
 export default function DesktopDraftToolbar(props: Props): ReactNode {
@@ -119,7 +119,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
     // The open document's own actions take root keys (`␣Y` `␣H` `␣E`) and
     // run from any focus (Sessions, the title field) while this Draft is the
     // workspace item; which-key lists them first, under "Here". Rename is the
-    // shared `␣R` (item.rename), which defers to document.rename here.
+    // title is `␣T`, the cursor to the inline title.
     const documentAction = (
       id: string,
       title: string,
@@ -165,9 +165,10 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
         true,
       ),
       documentAction(
-        "document.rename",
-        "Rename draft (edit title)",
-        (p) => p.onRename(),
+        "document.title",
+        "Go to title",
+        (p) => p.onTitle(),
+        DOCUMENT.title,
       ),
       documentAction(
         "document.copyToSession",

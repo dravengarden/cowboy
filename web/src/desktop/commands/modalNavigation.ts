@@ -17,6 +17,7 @@
 // `[data-desktop-modal-keys='own']` runs its whole keymap itself (Settings).
 
 import { workspaceCommandKey } from "./workspaceCommandKey";
+import { enterInputNormal, inputVimField } from "../vim/inputVim";
 
 /** Regions inside a modal that keep their own keys while focused. */
 export const DESKTOP_MODAL_OWN_KEYS = [
@@ -155,6 +156,14 @@ function modalTabs(root: HTMLElement): HTMLElement[] {
 
 /** Put the Normal cursor on a stop: a text field shows it on its box. */
 export function focusModalStop(stop: HTMLElement): void {
+  // With Vim on, the field itself holds the Normal cursor (inputVim).
+  const vimField = inputVimField(stop);
+  if (vimField) {
+    vimField.focus({ preventScroll: true });
+    enterInputNormal(vimField, vimField.value.length);
+    vimField.scrollIntoView({ block: "nearest" });
+    return;
+  }
   if (isModalTextField(stop)) {
     const host = fieldCursorHost(stop);
     if (!host.hasAttribute("tabindex")) host.tabIndex = -1;

@@ -7,6 +7,7 @@ import {
   desktopCommandInScope,
   desktopLeaderGroupAvailable,
   desktopLeaderGroupCommands,
+  desktopSurfaceCommandOwnsKey,
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import { useDesktopHints, useDesktopLeaderOptional } from "./leaderContext";
@@ -101,6 +102,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     // Groups are one entry each; their commands appear one layer down. An
     // available group takes its key over the root command of the same key.
     for (const [key, name] of Object.entries(DESKTOP_LEADER_GROUPS)) {
+      if (desktopSurfaceCommandOwnsKey(registry.commands, key)) continue;
       if (
         !desktopLeaderGroupAvailable(
           registry.commands,

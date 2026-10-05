@@ -246,8 +246,13 @@ Deno.test("an open Draft's actions are root keys, not a group", () => {
   assertEquals(DESKTOP_DOCUMENT_KEYS.copy, "Y");
   assertEquals(DESKTOP_DOCUMENT_KEYS.readableWidth, "UW");
   for (const key of Object.keys(DESKTOP_DOCUMENT_COMMANDS)) {
-    // Never a global Session meaning other than the surface-scoped `H`.
+    // Only surface-scoped meanings: Schedule (`H`) and the Top bar group
+    // (`T`), which needs a Session page.
     const session = DESKTOP_WORKSPACE_COMMANDS[key];
-    assertEquals(session === undefined || session === "composer.schedule", true);
+    assertEquals(
+      session === undefined || session === "composer.schedule" ||
+        session === "group:t",
+      true,
+    );
   }
 });

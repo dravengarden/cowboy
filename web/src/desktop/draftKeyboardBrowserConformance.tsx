@@ -123,7 +123,7 @@ export async function checkDraftKeyboard(): Promise<string> {
                 onAttach={() => calls.push("attach")}
                 onCopy={() => calls.push("copy")}
                 onHistory={() => calls.push("history")}
-                onRename={() => calls.push("rename")}
+                onTitle={() => calls.push("title")}
                 onExport={() => calls.push("export")}
                 onReadableWidth={() => calls.push("width")}
               />
@@ -285,11 +285,10 @@ export async function checkDraftKeyboard(): Promise<string> {
         key("u", "KeyU");
         key("w", "KeyW");
         check(calls.at(-1) === "width", "␣UW toggles readable width");
-        // `␣R` is the host's item.rename; on a Draft it runs this command.
-        check(
-          registry.execute("document.rename") && calls.at(-1) === "rename",
-          "document.rename edits the title",
-        );
+        // `␣T` puts the cursor on the title.
+        prefix();
+        key("t", "KeyT");
+        check(calls.at(-1) === "title", "␣T goes to the title");
         prefix();
         key("m", "KeyM");
         await tick();

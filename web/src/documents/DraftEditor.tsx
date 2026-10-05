@@ -52,7 +52,8 @@ import { isImeKeyEvent } from "../imeKey";
 import { getVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
-import { DESKTOP_WORKSPACE_KEYS } from "../desktop/commands/workspaceShortcuts";
+import { DESKTOP_DOCUMENT_KEYS } from "../desktop/commands/workspaceShortcuts";
+import { enterInputNormal, inputVimField, isInputVimNormal } from "../desktop/vim/inputVim";
 import { Sheet } from "../Sheet";
 import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
@@ -230,16 +231,18 @@ function DraftEditingSession(
   const keyboardOpen = useKeyboardOpen();
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
-  // The title is the document's first line (Obsidian inline title): `␣R`
-  // selects it for renaming; `↑`/`k` on the body's first line enters it at
-  // the end; `Enter`/`↓`/`Tab` returns to the body start and `Esc` returns
-  // to where the body caret was (FOCUS.md "Draft document").
-  const focusTitle = (select: boolean): void => {
+  // The title is the document's first line (Obsidian inline title): `␣T`
+  // or a Vim Normal `k` on the body's first line puts the cursor on its end
+  // in Normal; `↑` in Insert enters it typing. `Enter`/`↓`/`Tab` (and `j`
+  // in Normal) return to the body start, `Esc` to where the body caret was
+  // (FOCUS.md "Draft document"). With Vim on the title is a Vim field.
+  const focusTitle = (mode: "normal" | "insert"): void => {
     const input = titleInput.current;
     if (!input) return;
     input.focus({ preventScroll: true });
-    if (select) input.select();
-    else input.setSelectionRange(input.value.length, input.value.length);
+    const end = input.value.length;
+    if (mode === "normal" && inputVimField(input)) enterInputNormal(input, end);
+    else input.setSelectionRange(end, end);
   };
   const bodyCaretOnFirstLine = (): boolean => {
     const handle = editor.current;
@@ -443,7 +446,8 @@ function DraftEditingSession(
         if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
         if (e.metaKey || e.ctrlKey || e.altKey) return;
         const toStart = e.key === "Enter" || e.key === "ArrowDown" ||
-          (e.key === "Tab" && !e.shiftKey);
+          (e.key === "Tab" && !e.shiftKey) ||
+          (e.code === "KeyJ" && !e.shiftKey && isInputVimNormal(e.target));
         if (toStart) {
           e.preventDefault();
           editor.current?.focusSelection({ anchor: 0, head: 0 });
@@ -858,7 +862,7 @@ function DraftEditingSession(
                 sx={{ display: "inline-flex", flexShrink: 0 }}
               >
                 <LeaderKeycap
-                  leaderKey={DESKTOP_WORKSPACE_KEYS.rename}
+                  leaderKey={DESKTOP_DOCUMENT_KEYS.title}
                 />
               </Box>
             )}
@@ -994,7 +998,7 @@ function DraftEditingSession(
           if (!up || !bodyCaretOnFirstLine()) return;
           e.preventDefault();
           e.stopPropagation();
-          focusTitle(false);
+          focusTitle(e.key === "ArrowUp" ? "insert" : "normal");
         }}
       >
         <Box
@@ -1087,7 +1091,7 @@ function DraftEditingSession(
               onHistory={() => void openHistory()}
               onExport={() =>
                 exportDraft(title, textRef.current, attachmentsRef.current)}
-              onRename={() => focusTitle(true)}
+              onTitle={() => focusTitle("normal")}
             />
           </Suspense>
         )

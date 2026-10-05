@@ -1,3 +1,4 @@
+import { checkInputVim } from "./desktop/inputVimBrowserConformance";
 import { checkDraftKeyboard } from "./desktop/draftKeyboardBrowserConformance";
 import { checkDraftDestinationDialog } from "./desktop/draftDestinationBrowserConformance";
 import { checkPendingPanelLayout } from "./pendingPanelBrowserConformance";
@@ -607,6 +608,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(await checkDraftDestinationDialog());
     flushSync(() => root.render(null));
     results.push(await checkDraftKeyboard());
+    results.push(await checkInputVim());
     return results;
   } finally {
     clearImeStatus();

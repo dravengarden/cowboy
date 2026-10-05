@@ -66,7 +66,10 @@ export function desktopKeyIntent(
   const modified = event.metaKey || event.ctrlKey || event.altKey;
   if (modified) return { owner: "command", key, modified };
   const element = event.target instanceof Element ? event.target : null;
-  const vimSink = element?.matches("[data-vim-command-sink]") ?? false;
+  // The CodeMirror Normal sink and a native field in Vim Normal (inputVim)
+  // are read-only command surfaces: their keys resolve physically.
+  const vimSink = (element?.matches("[data-vim-command-sink]") ?? false) ||
+    element?.getAttribute?.("data-vim-input-mode") === "normal";
   if (isTextEditingTarget(event.target) && !vimSink) {
     return isImeKeyEvent(event) ? IME : { owner: "text", key };
   }

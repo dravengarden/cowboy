@@ -55,6 +55,8 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
  * in a Draft; the two surfaces are never mounted together.
  */
 export const DESKTOP_DOCUMENT_KEYS = {
+  // The cursor to the title, in Vim Normal when Vim is on.
+  title: "T",
   copy: "Y",
   history: "H",
   export: "E",
@@ -63,6 +65,8 @@ export const DESKTOP_DOCUMENT_KEYS = {
 
 /** Root keys whose meaning belongs to the Draft surface. */
 export const DESKTOP_DOCUMENT_COMMANDS: Readonly<Record<string, string>> = {
+  // On a Draft page `␣T` is the title; the Top bar group needs a Session.
+  t: "document.title",
   y: "document.copyToSession",
   h: "document.history",
   e: "document.export",
@@ -81,7 +85,7 @@ export const DESKTOP_WORKSPACE_KEYS = {
   alternateSession: DESKTOP_LEADER_TAB,
   // Open recent, Vim's jump list (`Ctrl-O`): the last Sessions and Drafts.
   recentSessions: "O",
-  // Rename the current item: the open Draft's title or the current Session.
+  // Rename the current Session (a Draft's name is its title, `␣T`).
   rename: "R",
   commandPalette: "K",
   // The Sessions group mirrors Top bar: the doubled key focuses the surface,

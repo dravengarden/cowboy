@@ -205,21 +205,15 @@ export function DesktopCommandHost({
       run: () => setRecentOpen(true),
     },
     {
+      // A Draft's name is its title: `␣T` (document.title) goes there.
       id: "item.rename",
-      title: "Rename",
-      description: "Rename the open Draft (its title) or the current Session",
+      title: "Rename Session",
+      description: "Rename the current Session",
       group: "Session",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.rename),
-      contextual: true,
-      when: () =>
-        registryRef.current.list().some((command) =>
-          command.id === "document.rename" && command.when?.() !== false
-        ) || !!live.current.onRenameSession,
-      run: () => {
-        if (!registryRef.current.execute("document.rename")) {
-          live.current.onRenameSession?.();
-        }
-      },
+      surface: "session",
+      when: () => !!live.current.onRenameSession,
+      run: () => live.current.onRenameSession?.(),
     },
     {
       id: "session.new",
