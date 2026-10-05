@@ -1,0 +1,478 @@
+{
+  "schema": "cowboy.matrix-codeact-release/v1",
+  "date": "2026-10-05",
+  "sourceRevision": "7727fdd47637d6923cf3758c6233a7196c37556c",
+  "matrix": {
+    "version": "0.3.0",
+    "revision": "67300627e1a5922058f6eeb308d8545b5be737ec",
+    "runtimeManifestSha256": "3dc529821802570806d49a98d7c2b898d96173aee8e5d569ba89e09716e7d96a",
+    "acceptance": "https://github.com/dravengarden/matrix/blob/main/docs/acceptance-codeact-2026-10-05.json"
+  },
+  "fullGate": {
+    "command": "nix develop -c just check-compact",
+    "exitCode": 0,
+    "logSha256": "5cfd7df4eadb9d48469a8bf0739262eeaec3cdc312e0e7246c2b4fdc9dfb72e3"
+  },
+  "native": {
+    "schema": "cowboy.matrix-native-conformance/v1",
+    "accepted": true,
+    "retrieval_mode": "matrix-ts-v1",
+    "checks": [
+      "enrolled_artifact_probes_need_no_native_session_binding",
+      "packaged_codex_native_http_mcp_and_recall",
+      "packaged_codex_ts_compile_batched_read_lazy_shell_and_atomic_commit",
+      "packaged_codex_completed_turn_capture",
+      "packaged_claude_native_http_mcp_and_shared_recall",
+      "packaged_claude_js_batched_read_lazy_shell_and_atomic_commit"
+    ],
+    "not_checked": [
+      "remote execution placement",
+      "live model quality",
+      "native-memory baseline"
+    ]
+  },
+  "remote": {
+    "codex": {
+      "schema": "cowboy.execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "long_state_path_uses_private_short_socket",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "provider_refuses_environment_override",
+        "target_image_read_reaches_native_model_input",
+        "background_job_survives_lost_reply_and_35_second_transport_gap",
+        "cancel_reaches_original_target_job_without_replay",
+        "output_backpressure_survives_35_second_transport_gap",
+        "native_apply_patch_and_command_use_target",
+        "runtime_files_unchanged",
+        "native_target_instructions",
+        "cold_native_resume_automatically_rebinds_each_turn",
+        "cold_resume_retains_history_without_effect_replay",
+        "global_environment_config_unchanged",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "matrix_memory_uses_runtime_service_with_bound_target_scope",
+        "matrix_remote_turns_are_durably_captured",
+        "matrix_remote_native_codeact_reads_shell_and_atomic_commit",
+        "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+        "concurrent_large_input_and_output_do_not_deadlock",
+        "post_flood_commands_and_cancellation_keep_original_executor",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "native_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "launcher_sha256": "bb5360dae4551a880220022c248af8a477d3f7713e3236cd56c6d6805ca37738",
+      "packaged_bridge_sha256": "9528b2fe5ea8c9947f48e7a89d6e08c7ef3dea2358f62cb52ea21501f3702153",
+      "packaged_adapter_sha256": "2fa6ed1a85b8e95b5919828200a59c5dd184b88d1e89066cc56fd5c868d4dedf",
+      "scripted_api_requests": 14,
+      "real_model_requests": 0,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "authenticated_enrolled_transport",
+        "cross_host_network",
+        "signed_provider_release",
+        "subscription_inference",
+        "inline_user_attachments",
+        "native_nested_agents"
+      ],
+      "cursor_expirations": 0
+    },
+    "claude": {
+      "schema": "cowboy.claude-execution-worker-conformance/v1",
+      "accepted": true,
+      "checks": [
+        "machine_owned_worktree",
+        "machine_restart_reattaches_same_keeper_and_binding",
+        "native_control_cannot_replace_bound_execution",
+        "module_readiness_uses_no_model_request",
+        "native_tools_use_target_files_and_processes_without_mcp",
+        "runtime_context_and_guidance_are_replaced",
+        "unicode_quotes_crlf_bytes_preserved",
+        "stale_edit_is_refused",
+        "target_image_enters_model_context",
+        "background_cancel_settles",
+        "bounded_large_read_stays_in_target_tool_result",
+        "native_notebook_edit_preserves_metadata",
+        "native_read_observes_retained_task_output",
+        "lost_start_receipt_and_transport_outage_do_not_replay",
+        "cold_native_resume_preserves_context_reads_and_effects",
+        "background_process_handle_survives_native_resume",
+        "real_compaction_and_next_turn_preserve_target_context",
+        "cold_resume_after_compaction_has_no_runtime_file_locators",
+        "independent_native_searches_execute_concurrently",
+        "native_interrupt_stops_foreground_target_process",
+        "packaged_acp_native_spawn_routes_target_tools",
+        "packaged_acp_cold_load_preserves_binding_history_and_effects",
+        "hot_effort_configuration_preserves_bound_execution",
+        "broken_module_refused_before_model_request",
+        "bare_mode_refused_without_changing_authentication",
+        "malformed_result_denies_without_native_fallback",
+        "bridge_error_denies_without_native_fallback",
+        "matrix_memory_uses_runtime_service_with_bound_target_scope",
+        "matrix_remote_turns_are_durably_captured",
+        "matrix_remote_native_codeact_reads_shell_and_atomic_commit",
+        "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+        "concurrent_large_input_and_output_do_not_deadlock",
+        "post_flood_commands_and_cancellation_keep_original_executor",
+        "target_image_bytes_cross_machine_transport",
+        "idempotent_close_stops_environment_and_preserves_worktree",
+        "closed_environment_cannot_be_recreated"
+      ],
+      "claude_version": "2.1.287",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "executor_version": "0.159.3",
+      "packaged_launcher_sha256": "18c51695c82821b8b11ed36a0496c02745de9879962ec96d6f5cbb8c5a673797",
+      "scripted_api_requests": 41,
+      "native_title_requests": 1,
+      "production_credentials": false,
+      "production_activation": false,
+      "not_checked": [
+        "real_subscription_inference",
+        "cross_host_latency",
+        "native_subagents_and_project_hooks"
+      ],
+      "cursor_expirations": 0
+    }
+  },
+  "claudeNativeContract": {
+    "consultedAt": "2026-10-05",
+    "sources": [
+      "https://code.claude.com/docs/en/tools-reference",
+      "https://code.claude.com/docs/en/plugins/mods/events",
+      "https://code.claude.com/docs/en/plugins/mods/create"
+    ],
+    "cli": "2.1.287",
+    "acp": "0.84.0",
+    "node": "24.21.0",
+    "nativeCliBytesChanged": false,
+    "newExactMatrixToolNames": [
+      "memory_read",
+      "memory_execute",
+      "memory_receipt"
+    ],
+    "unknownNamesDenied": true,
+    "pluginValidate": {
+      "exitCode": 0,
+      "warnings": [
+        "description metadata absent",
+        "author metadata absent"
+      ]
+    },
+    "pluginTest": {
+      "exitCode": 1,
+      "status": "no native test files supplied",
+      "notAcceptedAsPassingSuite": true
+    }
+  },
+  "publication": {
+    "linuxWorker": {
+      "schema_version": 1,
+      "plugin_id": "claude-code",
+      "plugin_version": "3.4.7",
+      "artifact_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1",
+      "platform": {
+        "os": "linux",
+        "architecture": "x86_64"
+      },
+      "probes": [
+        {
+          "command": "claude",
+          "version": "2.1.287",
+          "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+          "status": "passed"
+        },
+        {
+          "command": "claude-agent-acp",
+          "version": "0.84.0",
+          "artifact_digest": "sha256:1007308d7c8abedabb94ff695cc044586ef2def08bf844c9ab9b410a3f31b0aa",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false,
+      "previous": {
+        "plugin_version": "3.4.5",
+        "artifact_digest": "sha256:acebb0153651c858b42c35ae93df0ac42fc038125a430a06f7bd35636d5cff49"
+      },
+      "worker": {
+        "executable_digest": "sha256:b49c5582c3f52fac27cf8a4f495837b8abedd896ca839fd8c81b1788d063b323",
+        "initialize_and_session_new": "passed",
+        "stop_and_descendant_drain": "passed",
+        "sidecar_count": 0,
+        "distinct_generation_coexistence": "passed"
+      }
+    },
+    "macosRuntime": {
+      "schema_version": 1,
+      "plugin_id": "claude-code",
+      "plugin_version": "3.4.7",
+      "artifact_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1",
+      "platform": {
+        "os": "macos",
+        "architecture": "aarch64"
+      },
+      "probes": [
+        {
+          "command": "claude",
+          "version": "2.1.287",
+          "artifact_digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+          "status": "passed"
+        },
+        {
+          "command": "claude-agent-acp",
+          "version": "0.84.0",
+          "artifact_digest": "sha256:1ad49294f8f0e10a2c96669cb2f7cc54bdf1aa159b5c6806d1ea9ead27bb247d",
+          "status": "passed"
+        }
+      ],
+      "uses_service_credentials": false,
+      "sends_prompt": false
+    },
+    "readerConformance": {
+      "schema": "cowboy.catalog-publication-conformance/v1",
+      "accepted": true,
+      "source_revision": "7727fdd47637d6923cf3758c6233a7196c37556c",
+      "candidate": {
+        "release": "/nix/store/q2282m8lz486v42h2iqvr4mbak2zxv5a-cowboy-controller-release",
+        "source_revision": "7fe6c5522d300d6a33522312dad14da9752ef872",
+        "executable_sha256": "sha256:1e94ecc8ac7f5986c4c58cba18e2732a6224a264b159e0e6996a8fff6898271a"
+      },
+      "sdk_sha256": "sha256:4d6176d61bb4c57a8e655b5c038dba9fa38773bae481cd289cc530a80ac5f7d7",
+      "publications": [
+        {
+          "role": "active",
+          "reader": {
+            "release": "/nix/store/q2282m8lz486v42h2iqvr4mbak2zxv5a-cowboy-controller-release",
+            "source_revision": "7fe6c5522d300d6a33522312dad14da9752ef872",
+            "executable_sha256": "sha256:1e94ecc8ac7f5986c4c58cba18e2732a6224a264b159e0e6996a8fff6898271a"
+          },
+          "release": {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.7",
+            "artifact_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:621576ac6866fbbcdd7daeaf7652c22f4bbc5f1c7d9b1da714bd77e6a646118e",
+          "package_digest": "sha256:e0f86fdb65432681dc99d4beaba2c9e46b74b342f16ce50be6fec300cbe4f4d3",
+          "host_bundle_digest": "sha256:e7ed2583c71f174b68d68e0451256fa6bbab7fd146a258623a37626ecf82a6fe",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "next_transaction_recovery",
+          "reader": {
+            "release": "/nix/store/q2282m8lz486v42h2iqvr4mbak2zxv5a-cowboy-controller-release",
+            "source_revision": "7fe6c5522d300d6a33522312dad14da9752ef872",
+            "executable_sha256": "sha256:1e94ecc8ac7f5986c4c58cba18e2732a6224a264b159e0e6996a8fff6898271a"
+          },
+          "release": {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.7",
+            "artifact_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:621576ac6866fbbcdd7daeaf7652c22f4bbc5f1c7d9b1da714bd77e6a646118e",
+          "package_digest": "sha256:e0f86fdb65432681dc99d4beaba2c9e46b74b342f16ce50be6fec300cbe4f4d3",
+          "host_bundle_digest": "sha256:e7ed2583c71f174b68d68e0451256fa6bbab7fd146a258623a37626ecf82a6fe",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        },
+        {
+          "role": "cold",
+          "reader": {
+            "release": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+            "source_revision": "e2a48c8b142c23bd2c551a236479bf47c1d5d84c",
+            "executable_sha256": "sha256:286a81f70e95cbf2996f1735a3370f5c50c8cef09439d633ec0c25c5850166c5"
+          },
+          "release": {
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.7",
+            "artifact_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1"
+          },
+          "release_schema": 4,
+          "code_payload_schema": null,
+          "provider_sdk_version": "3.1.12",
+          "source_envelope_sha256": "sha256:621576ac6866fbbcdd7daeaf7652c22f4bbc5f1c7d9b1da714bd77e6a646118e",
+          "package_digest": "sha256:e0f86fdb65432681dc99d4beaba2c9e46b74b342f16ce50be6fec300cbe4f4d3",
+          "host_bundle_digest": "sha256:e7ed2583c71f174b68d68e0451256fa6bbab7fd146a258623a37626ecf82a6fe",
+          "bridge_cold_reads": [
+            {
+              "status": "visible"
+            },
+            {
+              "status": "visible"
+            }
+          ],
+          "candidate": {
+            "status": "visible"
+          },
+          "candidate_host_preflight": true,
+          "candidate_host_policy": "temporary_exact_pin",
+          "candidate_host_error": null,
+          "reader_compatible": true,
+          "production_signature_checked": false
+        }
+      ],
+      "production_mutated": false,
+      "production_credentials": false,
+      "not_checked": [
+        "production_signature",
+        "actual_role_provenance",
+        "complete_production_catalog_and_host_policy",
+        "historical_pre_host_migration",
+        "runtime_platform_drain_and_installation"
+      ]
+    },
+    "actualHostReaderBinding": {
+      "activeAndNextTransactionRecovery": "/nix/store/q2282m8lz486v42h2iqvr4mbak2zxv5a-cowboy-controller-release",
+      "coldBootstrap": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+      "independentlyChecked": true
+    },
+    "completeCatalogAndActualHostPolicy": [
+      {
+        "reader": "/nix/store/q2282m8lz486v42h2iqvr4mbak2zxv5a-cowboy-controller-release",
+        "mode": "--check-plugin-catalog",
+        "exitCode": 0,
+        "stderr": ""
+      },
+      {
+        "reader": "/nix/store/q2282m8lz486v42h2iqvr4mbak2zxv5a-cowboy-controller-release",
+        "mode": "--check-plugin-hosts",
+        "exitCode": 0,
+        "stderr": ""
+      },
+      {
+        "reader": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+        "mode": "--check-plugin-catalog",
+        "exitCode": 0,
+        "stderr": ""
+      },
+      {
+        "reader": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+        "mode": "--check-plugin-hosts",
+        "exitCode": 0,
+        "stderr": ""
+      }
+    ],
+    "productionSignature": {
+      "verified": true,
+      "publisher": "cowboy-first-party-v1",
+      "verifier": "/nix/store/l408xvkvv4b7zrc0s5bmml1v8vfvmpkz-cowboy-plugin-pack-1.11.0/bin/cowboy-plugin-pack"
+    },
+    "publicBytes": [
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/e0f86fdb65432681dc99d4beaba2c9e46b74b342f16ce50be6fec300cbe4f4d3/claude-code.cowboy-plugin",
+        "digest": "sha256:e0f86fdb65432681dc99d4beaba2c9e46b74b342f16ce50be6fec300cbe4f4d3",
+        "verified": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111/claude.tar.gz",
+        "digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+        "verified": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/1007308d7c8abedabb94ff695cc044586ef2def08bf844c9ab9b410a3f31b0aa/claude-agent-acp.tar.gz",
+        "digest": "sha256:1007308d7c8abedabb94ff695cc044586ef2def08bf844c9ab9b410a3f31b0aa",
+        "verified": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278/claude.tar.gz",
+        "digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+        "verified": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/1ad49294f8f0e10a2c96669cb2f7cc54bdf1aa159b5c6806d1ea9ead27bb247d/claude-agent-acp.tar.gz",
+        "digest": "sha256:1ad49294f8f0e10a2c96669cb2f7cc54bdf1aa159b5c6806d1ea9ead27bb247d",
+        "verified": true
+      }
+    ]
+  },
+  "ovh": {
+    "operation": {
+      "schema": 1,
+      "http_status": 200,
+      "operation_id": "ovh-matrix-codeact-claude-3-4-7-20261005",
+      "data": {
+        "schema": 1,
+        "operation_id": "ovh-matrix-codeact-claude-3-4-7-20261005",
+        "phase": "completed",
+        "machine_receipt": {
+          "state": "applied",
+          "revision": "installation-dc03653a8706a669660ee131d13100ab1dac4413db52dcce5943cc0ef56e20e8"
+        },
+        "reconciliation_performed": true
+      }
+    },
+    "providers": [
+      {
+        "plugin_id": "claude-code",
+        "plugin_version": "3.4.7",
+        "generation_digest": "sha256:b726429401c865dded1996a965a0e3b9ad65ae699602d39cf87a08047fccfbe1",
+        "installation_revision": "installation-dc03653a8706a669660ee131d13100ab1dac4413db52dcce5943cc0ef56e20e8",
+        "state": "active",
+        "rollback_generation_digest": "sha256:acebb0153651c858b42c35ae93df0ac42fc038125a430a06f7bd35636d5cff49",
+        "replica_state": "current",
+        "materialization_state": "current"
+      },
+      {
+        "plugin_id": "codex",
+        "plugin_version": "3.3.2",
+        "generation_digest": "sha256:a833d5b617922fc67938bd5ddf9a43bf9dd928caee2a3242a869014357c3e08f",
+        "installation_revision": "installation-3b26b8a78ae3460a6612938ec3ae0716c22c6014fb7040b84b70ed3775c0e414",
+        "state": "active",
+        "rollback_generation_digest": "sha256:d5b985f3373b199c68e83b813004fee80c2312ad686c69e1fdf6021d03c67fe4",
+        "replica_state": "current",
+        "materialization_state": "current"
+      }
+    ],
+    "controllerActivated": false,
+    "machineActivated": false,
+    "webActivated": false,
+    "iosActivated": false
+  },
+  "limits": [
+    "Scripted native-client model APIs, not subscription inference or representative task quality",
+    "Separate live acceptance used both enrolled identities through production MCP",
+    "No newly created Cowboy-managed cross-host production canary",
+    "No native Mods unit suite was supplied",
+    "Retained sessions keep their signed generation",
+    "Grok and semantic embeddings deferred",
+    "Production usefulness judgments are insufficient; review October 12-19"
+  ]
+}

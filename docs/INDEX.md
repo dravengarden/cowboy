@@ -181,6 +181,7 @@ primary phone/desktop product path.
 - [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
   silent credential renewal, independent device keys, and revocation boundaries
 - [`matrix-memory.md`](matrix-memory.md) — Explicit Matrix enrollment, shared recall/capture, and native memory cutover
+- [`releases/matrix-codeact-2026-10-05.md`](releases/matrix-codeact-2026-10-05.md) — TS/JS CodeAct, native and Remote acceptance, signed Claude 3.4.7 on OVH, and feedback limits
 - [`releases/matrix-memory-2026-10-03.md`](releases/matrix-memory-2026-10-03.md) — Matrix 0.1.1 on OVH, signed Codex/Claude installs, cross-Provider learning, and acceptance limits
 - [`releases/usage-execution-2026-10-01.md`](releases/usage-execution-2026-10-01.md) — Account usage placement release, production pins and remaining OVH Anthropic timeout
 - [`releases/anthropic-usage-timeout-2026-10-01.md`](releases/anthropic-usage-timeout-2026-10-01.md) — OVH preparation root cause, host-only repair and three real account queries
