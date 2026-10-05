@@ -63,6 +63,8 @@ pub mod execution_environment;
 pub mod execution_host;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_protocol;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod execution_target_environment;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]

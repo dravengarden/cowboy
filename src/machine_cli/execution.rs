@@ -407,12 +407,11 @@ impl Manager {
                 return Err(Refusal::PreparationFailed);
             }
         }
-        let environment: BTreeMap<String, String> =
-            crate::execution_protocol::BASE_TARGET_ENVIRONMENT
-                .into_iter()
-                .chain(self.extra_environment.iter().map(String::as_str))
-                .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
-                .collect();
+        let environment: BTreeMap<String, String> = crate::execution_target_environment::BASE
+            .into_iter()
+            .chain(self.extra_environment.iter().map(String::as_str))
+            .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+            .collect();
         let contract = LaunchContract {
             schema: 1,
             session_id: session_id.to_owned(),

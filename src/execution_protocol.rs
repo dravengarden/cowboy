@@ -60,69 +60,6 @@ pub struct LaunchContract {
     pub environment: BTreeMap<String, String>,
 }
 
-/// Variables every target environment carries from the Machine when set.
-pub const BASE_TARGET_ENVIRONMENT: [&str; 12] = [
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "PATH",
-    "SHELL",
-    "TMPDIR",
-    "LANG",
-    "LC_ALL",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_STATE_HOME",
-];
-
-/// Upper bound on base plus operator-declared target variables.
-pub const MAX_TARGET_ENVIRONMENT: usize = 32;
-
-/// Whether a Machine operator may add `name` to target environments, for
-/// host tool locations such as a worktree or cache root. Cowboy, Codex and
-/// Provider namespaces, credential-shaped names, and loader or shell startup
-/// hooks stay closed.
-pub fn operator_target_environment_name(name: &str) -> bool {
-    const RESERVED_PREFIXES: [&str; 10] = [
-        "COWBOY_",
-        "CODEX_",
-        "ANTHROPIC_",
-        "CLAUDE_",
-        "OPENAI_",
-        "DEEPSEEK_",
-        "GEMINI_",
-        "GROK_",
-        "LD_",
-        "DYLD_",
-    ];
-    const RESERVED_SUFFIXES: [&str; 5] = ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIALS"];
-    const RESERVED: [&str; 6] = [
-        "BASH_ENV",
-        "ENV",
-        "IFS",
-        "PROMPT_COMMAND",
-        "SHELLOPTS",
-        "NODE_OPTIONS",
-    ];
-    name.len() <= 64
-        && name
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_uppercase())
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-        && !BASE_TARGET_ENVIRONMENT.contains(&name)
-        && !RESERVED.contains(&name)
-        && !RESERVED_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-        && !RESERVED_SUFFIXES
-            .iter()
-            .any(|suffix| name.ends_with(suffix))
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Executor {

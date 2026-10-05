@@ -120,10 +120,9 @@ fn validate_contract(contract: &LaunchContract) -> Result<()> {
         "invalid executor version"
     );
     ensure!(
-        contract.environment.len() <= wire::MAX_TARGET_ENVIRONMENT
+        contract.environment.len() <= crate::execution_target_environment::MAX
             && contract.environment.iter().all(|(name, value)| {
-                (wire::BASE_TARGET_ENVIRONMENT.contains(&name.as_str())
-                    || wire::operator_target_environment_name(name))
+                crate::execution_target_environment::allowed(name)
                     && value.len() <= 8192
                     && !value.contains('\0')
             }),

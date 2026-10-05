@@ -3611,7 +3611,7 @@ fn validate_execution_env(names: Vec<String>) -> anyhow::Result<Vec<String>> {
     let mut seen = std::collections::BTreeSet::new();
     for name in &names {
         anyhow::ensure!(
-            crate::execution_protocol::operator_target_environment_name(name),
+            crate::execution_target_environment::operator_name_allowed(name),
             "execution environment variable {name:?} is reserved or invalid"
         );
         anyhow::ensure!(
@@ -3620,8 +3620,8 @@ fn validate_execution_env(names: Vec<String>) -> anyhow::Result<Vec<String>> {
         );
     }
     anyhow::ensure!(
-        crate::execution_protocol::BASE_TARGET_ENVIRONMENT.len() + names.len()
-            <= crate::execution_protocol::MAX_TARGET_ENVIRONMENT,
+        crate::execution_target_environment::BASE.len() + names.len()
+            <= crate::execution_target_environment::MAX,
         "too many execution environment variables"
     );
     Ok(names)
@@ -4623,8 +4623,8 @@ mod tests {
         assert!(
             validate_execution_env(vec!["DENO_DIR".to_owned(), "DENO_DIR".to_owned()]).is_err()
         );
-        let too_many = (0..=crate::execution_protocol::MAX_TARGET_ENVIRONMENT
-            - crate::execution_protocol::BASE_TARGET_ENVIRONMENT.len())
+        let too_many = (0..=crate::execution_target_environment::MAX
+            - crate::execution_target_environment::BASE.len())
             .map(|index| format!("TOOL_ROOT_{index}"))
             .collect();
         assert!(validate_execution_env(too_many).is_err());
