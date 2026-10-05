@@ -39,3 +39,13 @@ Deno.test("segmented tabs expose tab or toggle semantics", () => {
     assert(source.includes(`"${key}"`));
   }
 });
+
+Deno.test("Desktop tablists add Vim keys through the shared key intent", () => {
+  assert(source.includes("desktopKeyIntent(event.nativeEvent)"));
+  assert(source.includes('if (intent.owner === "ime") return;'));
+  assert(source.includes('intent.key === "h"'));
+  assert(source.includes('intent.key === "l"'));
+  // Roving keeps focus on the tablist; only activation commits to a panel.
+  assert(source.includes('onChange(next.value, "roving")'));
+  assert(source.includes('onChange(option.value, "activate")'));
+});

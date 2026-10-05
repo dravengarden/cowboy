@@ -99,6 +99,40 @@ the field/search owner may become active. `Esc` only unwinds its innermost
 editor or overlay state; it never arms workspace navigation. Returning to Prompt
 through the workspace prefix preserves Insert/Visual mode, selection, and caret.
 
+### Key ownership and input methods
+
+New Desktop key handlers classify a keydown through `desktopKeyIntent`
+(`commands/keyIntent.ts`) before binding anything. It returns exactly one owner:
+
+- `ime`: `isComposing`, the CM6 composition store, or a native-input
+  composition (tracked document-wide from `compositionstart` until 50 ms after
+  `compositionend`) owns the key. Do nothing and never `preventDefault()`; for
+  `Esc`, only stop propagation so the modal underneath does not close.
+- `text`: an unmodified key aimed at a native field or editor. An IME marker
+  (`Process`, 229, dead/text-service keys) there is `ime`, not text.
+- `command`: a bindable key with its physical identity (`j`, `G`, `1`, `[`,
+  `Escape`). Modified chords become commands once no composition exists,
+  even when an idle CJK source labels them Process/229. Non-editable chrome
+  and the Vim Normal sink resolve physical letters and digits.
+
+Do not compare `event.key` letters or digits in Desktop handlers or add another
+local `isComposing`/229 check; extend the classifier and its tests instead.
+Older handlers (`desktopImeOwnsKey`, `workspaceCommandKey`) retain their
+established behavior and should move onto it when touched.
+
+### Create
+
+Create follows the browser-Vim layering of Vimium and qutebrowser. It opens in
+the title field (Insert). `Esc` or `Ctrl-[` leaves a text field for the
+selected type tab (Normal) instead of closing; a composing IME keeps `Esc`.
+On the tablist, `H/L` (or arrows) moves between Session, Draft and Folder
+without leaving it, `1…3` picks one directly, `I`, `J`, `↓` or `Enter`
+returns to the title, and `Esc` closes. `Mod+Enter` creates from either layer.
+The tab digit keycaps and the hint row under the tablist are live slots:
+available only while the tablist owns focus. Pointer activation still selects
+and focuses the title in one step. The Cancel `Esc` keycap is inactive while a
+text field owns `Esc`.
+
 ### Shortcut slots and bars
 
 Every keyboard-capable action has one discoverable slot. Fixed controls embed

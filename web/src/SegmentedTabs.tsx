@@ -2,6 +2,7 @@ import { type KeyboardEvent, type ReactNode, useRef } from "react";
 import { Box, ButtonBase } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
+import { desktopKeyIntent } from "./desktop/commands/keyIntent";
 
 // The one Cowboy segmented switcher: equal pill
 // segments with no track, the selected one filled with `action.selected` and
@@ -31,6 +32,10 @@ export interface SegmentedTabOption<T extends string> {
   readonly keyShortcuts?: string;
 }
 
+/** `roving` moves the keyboard cursor inside the tablist and keeps focus
+ *  there; `activate` is a click, tap or Enter that commits to the segment. */
+export type SegmentedTabChangeSource = "roving" | "activate";
+
 export function SegmentedTabs<T extends string>({
   value,
   options,
@@ -41,10 +46,11 @@ export function SegmentedTabs<T extends string>({
   disabled = false,
   sx,
   rootProps,
+  vimKeys = false,
 }: {
   readonly value: T | null;
   readonly options: readonly SegmentedTabOption<T>[];
-  readonly onChange: (value: T) => void;
+  readonly onChange: (value: T, source: SegmentedTabChangeSource) => void;
   readonly "aria-label": string;
   /** `tabs` switches views (tablist, arrow keys select); `toggle` chooses an
    *  option inside a form (group of pressed buttons). */
@@ -54,6 +60,10 @@ export function SegmentedTabs<T extends string>({
   readonly sx?: SxProps<Theme>;
   /** Extra attributes for the root, typically `data-*` hooks. */
   readonly rootProps?: Readonly<Record<`data-${string}`, string | undefined>>;
+  /** Desktop Vim grammar for a focused tablist: `h`/`l` beside the arrows and
+   *  `1…9` for a direct segment, resolved from physical keys so an active CJK
+   *  input source cannot turn them into marked text. Touch never sets it. */
+  readonly vimKeys?: boolean;
 }): React.JSX.Element {
   const buttons = useRef(new Map<T, HTMLButtonElement>());
   const tabs = semantics === "tabs";
@@ -65,20 +75,37 @@ export function SegmentedTabs<T extends string>({
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: T) => {
     delete event.currentTarget.dataset.touchActivated;
     if (!tabs || enabled.length === 0) return;
+    let key = event.key;
+    if (vimKeys) {
+      const intent = desktopKeyIntent(event.nativeEvent);
+      if (intent.owner === "ime") return;
+      if (intent.owner === "command" && !intent.modified) {
+        key = intent.key === "h"
+          ? "ArrowLeft"
+          : intent.key === "l"
+          ? "ArrowRight"
+          : intent.key;
+      }
+    }
     const index = enabled.findIndex((option) => option.value === current);
-    const next = event.key === "ArrowRight"
+    const slot = vimKeys && /^[1-9]$/.test(key)
+      ? options[Number(key) - 1]
+      : undefined;
+    const next = slot
+      ? enabled.find((option) => option.value === slot.value)
+      : key === "ArrowRight"
       ? enabled[(index + 1) % enabled.length]
-      : event.key === "ArrowLeft"
+      : key === "ArrowLeft"
       ? enabled[(index - 1 + enabled.length) % enabled.length]
-      : event.key === "Home"
+      : key === "Home"
       ? enabled[0]
-      : event.key === "End"
+      : key === "End"
       ? enabled.at(-1)
       : undefined;
     if (!next) return;
     event.preventDefault();
     buttons.current.get(next.value)?.focus();
-    if (next.value !== value) onChange(next.value);
+    if (next.value !== value) onChange(next.value, "roving");
   };
   return (
     <Box
@@ -140,7 +167,7 @@ export function SegmentedTabs<T extends string>({
             }}
             onKeyDown={(event) => onKeyDown(event, option.value)}
             onClick={(event) => {
-              if (!selected) onChange(option.value);
+              if (!selected) onChange(option.value, "activate");
               if (event.currentTarget.dataset.touchActivated === "true") {
                 event.currentTarget.blur();
               }
