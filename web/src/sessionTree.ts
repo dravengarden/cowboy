@@ -112,6 +112,22 @@ export function displayedSessionOrder<T>(sessions: readonly T[]): T[] {
   return [...sessions].reverse();
 }
 
+const NO_SYNCED_KEYS: readonly string[] = [];
+
+/**
+ * A synced ordering as the tree consumes it: a list of string keys. The value
+ * is replicated from the network and persisted in the local outbox, so a
+ * malformed patch (once, an unprojected per-user `workspace-order` map) must
+ * degrade to "no explicit order" rather than crash every render until the
+ * server's resync lands. A well-formed list keeps its identity for memoization.
+ */
+export function syncedKeyList(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return NO_SYNCED_KEYS;
+  return value.every((key) => typeof key === "string")
+    ? value
+    : value.filter((key): key is string => typeof key === "string");
+}
+
 /**
  * Build the visible rows. `sessions` arrives in display order — one shared
  * direction for Desktop and Mobile — and keeps that order inside each

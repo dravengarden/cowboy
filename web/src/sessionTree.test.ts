@@ -15,6 +15,7 @@ import {
   sessionActivity,
   sessionFoldAction,
   sessionTreeRowKey,
+  syncedKeyList,
 } from "./sessionTree";
 
 function session(
@@ -135,6 +136,25 @@ Deno.test("a parent cycle is cut at the root instead of looping", () => {
     "  (empty)",
     "s1",
   ]);
+});
+
+Deno.test("a malformed synced order degrades to no explicit order", () => {
+  const order = ["session:s2", "session:s1"];
+  assertEquals(syncedKeyList(order) === order, true);
+  assertEquals(syncedKeyList({ owner: ["session:s1"] }), []);
+  assertEquals(syncedKeyList(null), []);
+  assertEquals(syncedKeyList(["session:s1", 7, "draft:d1"]), [
+    "session:s1",
+    "draft:d1",
+  ]);
+  const tree = buildSessionTree(
+    [session("s1"), session("s2")],
+    { folders: [], placement: {} },
+    new Set(),
+    [],
+    syncedKeyList({ owner: ["session:s2"] }),
+  );
+  assertEquals(shape(tree.rows), ["s1", "s2"]);
 });
 
 Deno.test("status priority prefers what needs attention", () => {

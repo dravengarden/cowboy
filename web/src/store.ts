@@ -110,6 +110,7 @@ import {
   sessionFolderMutators,
   type SessionFoldersValue,
 } from "./sessionFolders";
+import { syncedKeyList } from "./sessionTree";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
   acceptsMachineSnapshot,
@@ -3329,10 +3330,10 @@ function commitSessions(): void {
   const titles = titleSync.view();
   setState({
     ...state,
-    sessions: deriveSessions(rawSessions, titles, orderSync.view()),
+    sessions: deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())),
     titleOverrides: titles,
     sessionFolders: foldersSync.view(),
-    workspaceOrder: workspaceOrderSync.view(),
+    workspaceOrder: syncedKeyList(workspaceOrderSync.view()),
   });
 }
 
