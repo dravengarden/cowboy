@@ -104,21 +104,44 @@ and in a queued-message editor), and the focused one runs.
 | `␣U` + `E` | Interface group: Source / live preview (Prompt) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` | Schedule, run next (Composer) |
-| `␣M` + `B/I/X/U/O/M` | Markup group in the focused editor: bold, italic, code, link, list, more formatting (`Mod+B`/`Mod+I` also format, as in Obsidian; off macOS only in Vim Insert or without Vim, so Ctrl-B/Ctrl-I keep their Vim meaning) |
+| `␣M` | More formatting menu (Composer) |
 | `␣D` + `R/V/H/E/W` | Draft group (an open Draft only): rename, copy to a Session, history, export, readable width; otherwise `␣D` focuses Drafts |
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
-style: Top bar `␣T`, Draft `␣D`, Markup `␣M`, Window `␣W`, Interface `␣U`.
+style: Top bar `␣T`, Draft `␣D`, Window `␣W`, Interface `␣U`.
 A group opens only when one of its commands can run in the current focus
-(Markup needs an editor, Interface the Prompt pane; Top bar and Draft run from
+(Interface needs the Prompt pane; Top bar and Draft run from
 anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free root letters: `B E G I O
-R V X Y`.
+become groups instead of taking root letters. Free root letters: `B E G I O R V X Y`.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
 so Option+digit types its character again in text fields.
+
+### Rich text
+
+Formatting is never a leader sequence. Like Obsidian and every document
+editor, it is a direct `Mod` chord, live only while an editor owns focus
+(keycaps are inactive elsewhere and light when the editor is focused):
+
+| Chord | Format |
+| --- | --- |
+| `Mod+B` / `Mod+I` | Bold / italic |
+| `Mod+Shift+X` | Strikethrough |
+| `Mod+Shift+E` | Inline code |
+| `Mod+Shift+K` | Link |
+| `Mod+Shift+7` / `8` / `9` | Numbered list / bulleted list / checklist |
+| `Mod+Alt+1` … `3` | Heading 1–3 |
+| `Mod+Z` / `Mod+Shift+Z` | Undo / redo (the editor's own) |
+
+Deviations from Obsidian are audit-driven: `Mod+K` is the macOS leader and
+Chrome's search elsewhere, so links take `Mod+Shift+K`; `Mod+E` is Chrome's,
+so inline code takes `Mod+Shift+E`; `Mod+Shift+H` is Chrome Home on macOS, so
+highlight, quote, code block and the rest stay in `␣M` More and the palette.
+Off macOS `Mod` is Ctrl: plain `Ctrl+B`/`Ctrl+I` keep their Vim meaning
+outside Vim Insert, while Shift/Alt chords always format. On layouts where
+AltGr is Ctrl+Alt, `Mod+Alt+digit` may type a character instead.
 
 ### Product letters ignore case; Vim motions do not
 
@@ -285,8 +308,8 @@ continuation is optional.
   expand, and More remain visible in the UI and searchable in Command Palette.
 - In the main Composer, leader then `/`, `F`, `A`, `H`, `J` opens slash
   commands, file references, attachments, scheduling or queue priority; `Z`
-  zooms the editor. Formatting is the Markup group: `␣MB` bold, `␣MI` italic,
-  `␣MX` inline code, `␣MU` link, `␣MO` bulleted list, `␣MM` More. These are
+  zooms the editor; `␣M` opens More formatting. Formatting itself is direct
+  chords (see Rich text). These are
   scoped to `prompt.composer`; `␣UE` Source mode retains its whole-Prompt scope.
   Every toolbar button carries its `␣` slot, which lights while the leader is
   armed; tooltips and the Command Palette show the same keycap. A claimed direct chord stops

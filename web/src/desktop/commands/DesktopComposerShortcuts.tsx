@@ -4,7 +4,6 @@ import {
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import {
-  DESKTOP_COMPOSER_FORMAT_KEYS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   desktopLeaderSequence,
@@ -202,11 +201,6 @@ export function DesktopComposerCommandBindings({
       id: `composer.format.${command.id}`,
       title: command.label,
       group: "Prompt formatting",
-      ...(DESKTOP_COMPOSER_FORMAT_KEYS[command.id]
-        ? {
-          sequence: desktopLeaderSequence(DESKTOP_COMPOSER_FORMAT_KEYS[command.id]!),
-        }
-        : {}),
       allowInEditor: true,
       ...formatChord(command.id),
       contexts: ["prompt"],
