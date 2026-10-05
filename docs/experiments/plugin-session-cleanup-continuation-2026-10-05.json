@@ -1,0 +1,378 @@
+{
+  "schema": 1,
+  "sourceRevision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+  "implementationRevisions": [
+    "c1367cd7",
+    "f85ff9ae51ecdd0b859e97598518026e31649471"
+  ],
+  "publishedMainRevision": "83b32ea824d224de8b990e5c2509a17a2d547642",
+  "checks": {
+    "rustGateRevision": "f85ff9ae51ecdd0b859e97598518026e31649471",
+    "allFeatures": {
+      "passed": 1905,
+      "ignored": 58
+    },
+    "standaloneMachine": {
+      "passed": 573,
+      "ignored": 18,
+      "note": "a first run under heavy host load failed unrelated logs::tests::concurrent_process_style_writers_keep_all_committed_events with 'log store busy'; the unloaded rerun passed 573"
+    },
+    "newTests": {
+      "store": 6,
+      "broker": 4
+    },
+    "rustfmt": true,
+    "allFeaturesAllTargetsClippy": true,
+    "standaloneMachineClippy": true,
+    "mutation": "disabling the root identity comparison fails replaced_root_retires_the_continuation_without_touching_either_tree",
+    "flakeFixed": "test-only retry of the fork/exec inherited lock descriptor window when reopening durable namespaces; also fixes the pre-existing journal reopen test",
+    "postGateMerges": "later merges of origin/main brought web, Claude plugin, tool, test-file and Controller src/server.rs changes only; no Machine-owned production source changed after the Rust gates"
+  },
+  "productionConformance": {
+    "schema": 1,
+    "accepted": true,
+    "oldWriter": {
+      "release": "/nix/store/kfkbi1i0l5nxb38lsdbcj93hk4fkyig0-cowboy-machine-writer-host-release",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "e51c79bc3a90f3f9bc1f856cc54039b857df4907",
+        "schema": 1,
+        "sessionDeletionJournal": {
+          "readerSchema": 1,
+          "writerSchema": 1
+        },
+        "workerGeneration": "worker-748825b42b4302fe26ca"
+      },
+      "native": "/nix/store/97hacsqyq4dr5p95dlnxj8xg7nxx897b-cowboy-machine-writer-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "9725ea4b4b6cce5d20d054e0eae288fff1db6d3ffd7aa0cab0f41659af3806ba"
+    },
+    "newWriter": {
+      "release": "/nix/store/gg9v8s05aw27db18l0am2whqip0v6x61-cowboy-machine-writer-host-release",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+        "schema": 1,
+        "sessionDeletionJournal": {
+          "readerSchema": 1,
+          "writerSchema": 1
+        },
+        "workerGeneration": "worker-748825b42b4302fe26ca"
+      },
+      "native": "/nix/store/725l29fksfs1msv3qfjgzjl0lfni7rfk-cowboy-machine-writer-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "27b1e9d020e4862bcfb8cc16def2474a853b558816e330d49e1c0b617571a372"
+    },
+    "readerOnlyFallback": {
+      "release": "/nix/store/fxrxnqxc8wxa2ag4llfbm71q6frwglxb-cowboy-machine-release",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "cef8382d661c26411ab366a056b75853839a5ff0",
+        "schema": 1,
+        "sessionDeletionJournal": {
+          "readerSchema": 1,
+          "writerSchema": 0
+        },
+        "workerGeneration": "worker-748825b42b4302fe26ca"
+      },
+      "native": "/nix/store/rgyf311iyiqyblsbkcshn43ad75qpjvi-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "dcb32a1e66946e73de7f2ecb0092e9498a85f4611a156e4766e0010fa939a5c0"
+    },
+    "defaultReader": {
+      "release": "/nix/store/h71z3rhym7wvqx16ghl7jh9ns8c0sam6-cowboy-machine-release",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+        "schema": 1,
+        "sessionDeletionJournal": {
+          "readerSchema": 1,
+          "writerSchema": 0
+        },
+        "workerGeneration": "worker-748825b42b4302fe26ca"
+      },
+      "native": "/nix/store/ppkrrnk9zcp608rpdgyx404amgh74fmc-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+      "sha256": "0571664cffe491c8adb7a992ccf0005d0dcc568274fa1ff1b9202d782803bca5"
+    },
+    "observations": [
+      {
+        "case": "default-build-runtime-env-cannot-enable-writer",
+        "writerEnabled": false
+      },
+      {
+        "case": "ack-dedup-sigkill-old-new-old-reader-fallback",
+        "revision": "e51c79bc3a90f3f9bc1f856cc54039b857df4907",
+        "recordSha256": "f7ee09d4503e674c28a4f7e18857609072956d5d47cd6092809ac88d1cdece40"
+      },
+      {
+        "case": "lock-replacement",
+        "revision": "e51c79bc3a90f3f9bc1f856cc54039b857df4907",
+        "negativeAck": true
+      },
+      {
+        "case": "storage-failure",
+        "revision": "e51c79bc3a90f3f9bc1f856cc54039b857df4907",
+        "negativeAck": true,
+        "survivingWorkerUntouched": true,
+        "furtherAdmissionFenced": true
+      },
+      {
+        "case": "ack-dedup-sigkill-old-new-old-reader-fallback",
+        "revision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+        "recordSha256": "f7ee09d4503e674c28a4f7e18857609072956d5d47cd6092809ac88d1cdece40"
+      },
+      {
+        "case": "lock-replacement",
+        "revision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+        "negativeAck": true
+      },
+      {
+        "case": "storage-failure",
+        "revision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+        "negativeAck": true,
+        "survivingWorkerUntouched": true,
+        "furtherAdmissionFenced": true
+      },
+      {
+        "case": "authority-absent",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-corrupt",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-duplicate",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-unknown",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-trailing",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-foreign-machine",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-foreign-dataset",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-reader",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-release",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-revision",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-directory",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-symlink",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-fifo",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-oversized",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-mutable",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-wrong-uid",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-profile-owner",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-profile-parent",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-untrusted-link",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-other-writer",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "authority-reader-selected",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "selected-native-mismatch",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "source-unknown",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "source-duplicate",
+        "beforeJournalOpen": true
+      },
+      {
+        "case": "source-oversized",
+        "beforeJournalOpen": true
+      }
+    ],
+    "privateRootMountPidNetworkNamespaces": true,
+    "hostProductionActivation": false,
+    "productionCheckpointHooks": false,
+    "powerLossAcceptance": false,
+    "scope": "exact production writer release binaries with synthetic root selection/floor and private broker IPC; startup authority, ACK/SIGKILL/reopen, failure and reader-only fallback"
+  },
+  "productionConformanceReceiptSha256": "f67f19ed43edc6a4cf8a9258ef32410cfd4cdda7142b28107871d5b532bb0cd4",
+  "activation": {
+    "transaction": "1791179356912329897-9c79b9c379ec",
+    "receipt": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "machine",
+      "transaction": "1791179356912329897-9c79b9c379ec",
+      "revision": "9c79b9c379ec929bc74bc520d473332d1f1a1b41",
+      "workerGeneration": "worker-748825b42b4302fe26ca",
+      "published": false,
+      "release": "/nix/store/gg9v8s05aw27db18l0am2whqip0v6x61-cowboy-machine-writer-host-release",
+      "previousRelease": "/nix/store/kfkbi1i0l5nxb38lsdbcj93hk4fkyig0-cowboy-machine-writer-host-release",
+      "activeRelease": "/nix/store/gg9v8s05aw27db18l0am2whqip0v6x61-cowboy-machine-writer-host-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": true,
+      "startedAt": "2026-10-05T05:49:16.912329897Z",
+      "recordedAt": "2026-10-05T05:49:28.7697127Z",
+      "recovered": false
+    },
+    "startup": [
+      {
+        "timestamp": "2026-10-05T05:49:17.011053Z",
+        "event": "Session deletion journal reader ready",
+        "deletedSessions": 1,
+        "writerEnabled": true
+      },
+      {
+        "timestamp": "2026-10-05T05:49:17.012115Z",
+        "event": "durable Session cleanup continuations ready",
+        "pending": 0
+      }
+    ],
+    "namespace": {
+      "directory": "session-cleanups",
+      "entries": [
+        ".lock"
+      ],
+      "recordPresent": false
+    }
+  },
+  "observation": {
+    "beforeObservedAt": "2026-10-05T05:36:52.226Z",
+    "afterObservedAt": "2026-10-05T05:50:15.803Z",
+    "activationStartedAt": "2026-10-05T05:49:16.912329897Z",
+    "activationRecordedAt": "2026-10-05T05:49:28.7697127Z",
+    "machinePid": {
+      "before": "200864",
+      "after": "1705677"
+    },
+    "controllerPid": {
+      "before": "520525",
+      "after": "520525"
+    },
+    "workersAndKeepersBefore": 20,
+    "workersAndKeepersAfter": 19,
+    "retainedWithIdenticalPidAndState": 19,
+    "exitedBetweenSamples": [
+      {
+        "id": "cowboy-execution-7e84c58fe43739bf8d025d4e83537ecc.service",
+        "pid": "893458",
+        "exitLoggedAt": "2026-10-05T05:43:45Z (before activation start; independent)"
+      }
+    ],
+    "readerFloorSha256Unchanged": true,
+    "sudoersSha256Unchanged": true,
+    "installedOwnerUnchanged": true,
+    "hostSourceUnchanged": true,
+    "controllerReceiptUnchanged": true,
+    "webChangedByIndependentTransaction": {
+      "before": "1791178242013449667-5b57fb5638e0",
+      "after": "1791179341281337661-04a68e999560"
+    },
+    "deletionJournal": {
+      "entries": [
+        "sess-1791127100570"
+      ],
+      "sha256": "f336f467922265cd20594ac57927b7b49f2fd6d0e3efd59cfd1bdabbf441cc2b"
+    },
+    "http": [
+      {
+        "path": "/healthz",
+        "status": 200
+      },
+      {
+        "path": "/version",
+        "status": 200
+      },
+      {
+        "path": "/",
+        "status": 200
+      },
+      {
+        "path": "/sw.js",
+        "status": 200
+      },
+      {
+        "path": "/api/machines/hawk/deployment-health",
+        "status": 200
+      }
+    ]
+  },
+  "retainedWorkerSource": {
+    "component": "cowboy",
+    "dirty": false,
+    "lane": "machine",
+    "repository": "git@github.com:dravengarden/cowboy.git",
+    "revision": "b97c2724bea23834944ded8af98e2de6729f4256",
+    "schema": 1,
+    "sessionDeletionJournal": {
+      "readerSchema": 1,
+      "writerSchema": 0
+    },
+    "workerGeneration": "worker-748825b42b4302fe26ca"
+  },
+  "limits": [
+    "advisory nomination of the original root only; the retry plan, marker progress and target observations are never serialized",
+    "no live production resume was exercised: pending=0 at startup and no real deletion occurred in the window",
+    "a crash between the journal commit and the nomination leaves no record; historical deletions are not reconstructed",
+    "creation time is required; a dev number changed by a reboot refuses rather than matches",
+    "no continuous Session/worktree ownership, durable Session incarnation, I/O deadline, portable writer admission or power-loss proof",
+    "final identity comparison/name unlink remains non-atomic; marker unlinks are not a transaction",
+    "independent Controller and Web transactions occurred outside this task's activation window"
+  ]
+}

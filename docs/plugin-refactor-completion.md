@@ -736,7 +736,9 @@ I/O retry finishes only that phase, refusing marker recreation/replacement or
 identity changes and preserving late contents. This extends the process-local
 plan; it is not a durable cleanup journal or a filesystem transaction.
 
-The [durable cleanup continuation](plugin-session-cleanup-continuation.md) adds
+The [durable cleanup continuation](plugin-session-cleanup-continuation.md)
+([Hawk release](releases/plugin-session-cleanup-continuation-2026-10-05.md), activated;
+startup/admission accepted, no live resume exercised yet) adds
 a separate advisory nomination of the original worktree root for a deletion
 already committed in the terminal journal. A writer-admitted Machine that
 restarts re-observes that exact root object (device, inode and creation time),
@@ -746,7 +748,8 @@ observation. A missing, linked or replaced root retires the nomination without
 effects. Loss of the record leaves the earlier behaviour (artifacts preserved).
 This is cleanup continuity only: no continuous Session/worktree ownership, no
 durable Session incarnation, no I/O deadline, no portable writer admission and
-no crash/power-loss proof.
+no crash/power-loss proof. The [October 5 status](plugin-refactor-status-2026-10-05.md)
+maps every exit and orders the durable-incarnation work.
 
 Linux cleanup defers root marker removal until its streamed content walk
 succeeds, retaining eligibility across partial content I/O failures. Successful

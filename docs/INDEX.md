@@ -143,6 +143,7 @@ primary phone/desktop product path.
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`plugin-refactor-completion.md`](plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
+- [`plugin-refactor-status-2026-10-05.md`](plugin-refactor-status-2026-10-05.md) — Dated per-exit status against production receipts, corrected historical Web recovery and the dependency order for durable Session incarnation
 - [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
 - [`plugin-session-cleanup-root.md`](plugin-session-cleanup-root.md) — Terminal cleanup retains the original directory handle and retires after observed root replacement
 - [`plugin-session-cleanup-markers.md`](plugin-session-cleanup-markers.md) — Directory-relative regular-file marker probes, FIFO refusal and 8 KiB tag bounds
@@ -150,6 +151,7 @@ primary phone/desktop product path.
 - [`plugin-session-cleanup-targets.md`](plugin-session-cleanup-targets.md) — Bounded retained target handles, replacement/marker refusal and Linux content anchoring
 - [`releases/plugin-session-cleanup-finalization-2026-10-05.md`](releases/plugin-session-cleanup-finalization-2026-10-05.md) — Hawk retains markers until content success; 1877/551 tests, partial-error retry fixture, 32 native groups and 19 retained worker/keeper processes
 - [`releases/plugin-session-cleanup-retry-2026-10-05.md`](releases/plugin-session-cleanup-retry-2026-10-05.md) — Hawk retains original target observations across I/O retries; 1892/561 tests, 32 native groups and 19 retained worker/keeper processes
+- [`releases/plugin-session-cleanup-continuation-2026-10-05.md`](releases/plugin-session-cleanup-continuation-2026-10-05.md) — Hawk resumes deleted-Session cleanup after a resident restart; 1905/573 tests, 32 native groups, startup pending=0 and 19 of 20 retained worker/keeper processes
 - [`releases/plugin-session-cleanup-marker-progress-2026-10-05.md`](releases/plugin-session-cleanup-marker-progress-2026-10-05.md) — Hawk resumes owned partial marker finalization; 1894/563 tests, three mount fixtures, 32 native groups and 19 retained worker/keeper processes
 - [`releases/plugin-session-cleanup-leaves-2026-10-05.md`](releases/plugin-session-cleanup-leaves-2026-10-05.md) — Hawk pins leaf identities before unlink; 1876/550 tests, actual file/dir mount fixtures, 32 native groups and 19 retained worker/keeper processes
 - [`releases/plugin-session-cleanup-descendants-2026-10-05.md`](releases/plugin-session-cleanup-descendants-2026-10-05.md) — Hawk recursively retains directory handles/structure; 1874/548 tests, two actual mount fixtures, 32 native groups and 19 retained worker/keeper processes
