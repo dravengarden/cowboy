@@ -1187,11 +1187,14 @@ impl Broker {
                     Err(error)
                         if error
                             .downcast_ref::<crate::session_workspace::CleanupRootChanged>()
-                            .is_some() =>
+                            .is_some()
+                            || error
+                                .downcast_ref::<crate::session_workspace::CleanupTargetChanged>()
+                                .is_some() =>
                     {
                         broker.deleted_session_workspaces.lock().remove(&session_id);
                         tracing::warn!(session = %session_id, %error,
-                            "preserving artifacts after cleanup worktree replacement; retiring cleanup");
+                            "preserving artifacts after observed cleanup directory or marker change; retiring cleanup");
                         return;
                     }
                     Err(error) => {

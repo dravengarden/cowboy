@@ -18,6 +18,7 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CARGO_CACHE_TAG_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
 const MAX_CARGO_CACHE_TAG_BYTES: u64 = 8192;
 const MAX_CLEANUP_DIRECTORIES: usize = 100_000;
+const MAX_CLEANUP_TARGETS: usize = 128;
 
 #[derive(Debug, Deserialize)]
 pub struct PrepareWorkspaceRequest {
@@ -454,17 +455,7 @@ impl std::error::Error for CleanupRootChanged {}
 
 impl CleanupWorkspace {
     fn access_root(&self, logical_root: &Path) -> PathBuf {
-        #[cfg(target_os = "linux")]
-        {
-            let _ = logical_root;
-            // Keep filesystem access attached to the captured object even if
-            // the root pathname changes after its final identity check.
-            PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()))
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            logical_root.to_owned()
-        }
+        directory_access_root(&self.directory, logical_root)
     }
 
     fn verify(&self) -> Result<()> {
@@ -488,6 +479,62 @@ impl CleanupWorkspace {
             || current.ino() != original.ino()
         {
             return Err(CleanupRootChanged.into());
+        }
+        Ok(())
+    }
+}
+
+fn directory_access_root(directory: &File, logical_root: &Path) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = logical_root;
+        PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = directory;
+        logical_root.to_owned()
+    }
+}
+
+#[derive(Debug)]
+pub struct CleanupTargetChanged;
+
+impl std::fmt::Display for CleanupTargetChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("observed Cargo target or its markers changed before cleanup")
+    }
+}
+
+impl std::error::Error for CleanupTargetChanged {}
+
+struct CleanupTarget {
+    path: PathBuf,
+    directory: File,
+}
+
+impl CleanupTarget {
+    fn verify(&self, workspace: &CleanupWorkspace) -> Result<()> {
+        workspace.verify()?;
+        let current = match std::fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Err(CleanupTargetChanged.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let original = self.directory.metadata()?;
+        if !current.is_dir()
+            || current.file_type().is_symlink()
+            || current.dev() != original.dev()
+            || current.ino() != original.ino()
+        {
+            return Err(CleanupTargetChanged.into());
         }
         Ok(())
     }
@@ -597,8 +644,15 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
             }
             let name = entry.file_name();
             let path = entry.path();
-            if name == OsStr::new("target") && is_cargo_target_directory(&path)? {
-                candidates.push(path);
+            if name == OsStr::new("target")
+                && let Some(directory) = observe_cargo_target_directory(&path)?
+            {
+                if candidates.len() >= MAX_CLEANUP_TARGETS {
+                    bail!(
+                        "session cleanup exceeded {MAX_CLEANUP_TARGETS} observed Cargo targets; preserving artifacts"
+                    );
+                }
+                candidates.push(CleanupTarget { path, directory });
                 continue;
             }
             if matches!(name.to_str(), Some(".git" | "node_modules" | "vendor")) {
@@ -608,19 +662,30 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
         }
     }
 
-    candidates.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    remove_cleanup_targets(workspace, &session_root, &access_root, candidates, &|_| {
+        Ok(())
+    })
+}
+
+fn remove_cleanup_targets(
+    workspace: &CleanupWorkspace,
+    session_root: &Path,
+    access_root: &Path,
+    mut candidates: Vec<CleanupTarget>,
+    before_child_remove: &impl Fn(&Path) -> Result<()>,
+) -> Result<Vec<PathBuf>> {
+    candidates.sort_by_key(|target| std::cmp::Reverse(target.path.components().count()));
     let mut removed = Vec::with_capacity(candidates.len());
     for target in candidates {
-        workspace.verify()?;
-        let metadata = std::fs::symlink_metadata(&target)
-            .with_context(|| format!("rechecking Cargo target {}", target.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            bail!("Cargo target changed during cleanup: {}", target.display());
+        target.verify(workspace)?;
+        if !cargo_target_markers_match(&target.directory)? {
+            return Err(CleanupTargetChanged.into());
         }
         let canonical_target = target
+            .path
             .canonicalize()
-            .with_context(|| format!("canonicalizing Cargo target {}", target.display()))?;
-        if !canonical_target.starts_with(&session_root)
+            .with_context(|| format!("canonicalizing Cargo target {}", target.path.display()))?;
+        if !canonical_target.starts_with(session_root)
             || canonical_target.file_name() != Some(OsStr::new("target"))
         {
             bail!(
@@ -628,26 +693,47 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
                 canonical_target.display()
             );
         }
-        workspace.verify()?;
-        std::fs::remove_dir_all(&target)
-            .with_context(|| format!("removing Cargo target {}", target.display()))?;
-        removed.push(session_root.join(target.strip_prefix(&access_root)?));
+        let contents_root = directory_access_root(&target.directory, &target.path);
+        for entry in std::fs::read_dir(&contents_root)? {
+            let entry = entry?;
+            target.verify(workspace)?;
+            before_child_remove(&entry.path())?;
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+            } else {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        target.verify(workspace)?;
+        // Identity verification and this final name unlink are not atomic.
+        // Contents above remain attached to the original target on Linux.
+        std::fs::remove_dir(&target.path)
+            .with_context(|| format!("removing empty Cargo target {}", target.path.display()))?;
+        removed.push(session_root.join(target.path.strip_prefix(access_root)?));
     }
     Ok(removed)
 }
 
-fn is_cargo_target_directory(path: &Path) -> Result<bool> {
+fn observe_cargo_target_directory(path: &Path) -> Result<Option<File>> {
     let Ok(directory) = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
     else {
-        return Ok(false);
+        return Ok(None);
     };
-    if open_regular_cargo_marker(&directory, ".rustc_info.json").is_none() {
+    if cargo_target_markers_match(&directory)? {
+        Ok(Some(directory))
+    } else {
+        Ok(None)
+    }
+}
+
+fn cargo_target_markers_match(directory: &File) -> Result<bool> {
+    if open_regular_cargo_marker(directory, ".rustc_info.json").is_none() {
         return Ok(false);
     }
-    let Some(file) = open_regular_cargo_marker(&directory, "CACHEDIR.TAG") else {
+    let Some(file) = open_regular_cargo_marker(directory, "CACHEDIR.TAG") else {
         return Ok(false);
     };
     if file.metadata()?.len() > MAX_CARGO_CACHE_TAG_BYTES {
@@ -928,6 +1014,137 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_target_budget_preserves_every_candidate_before_any_removal() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-budget");
+        for index in 0..=MAX_CLEANUP_TARGETS {
+            write_cargo_target(&session.join(format!("project-{index}/target")));
+        }
+        let workspace = capture_cleanup_workspace(&managed, "sess-budget", &session).unwrap();
+        let error = cleanup_build_artifacts(&workspace).await.unwrap_err();
+        assert!(error.to_string().contains("observed Cargo targets"));
+        for index in 0..=MAX_CLEANUP_TARGETS {
+            assert!(
+                session
+                    .join(format!("project-{index}/target/debug/deps/libtest.rlib"))
+                    .is_file()
+            );
+        }
+        std::fs::remove_dir_all(session.join(format!("project-{MAX_CLEANUP_TARGETS}"))).unwrap();
+        let removed = cleanup_build_artifacts(&workspace).await.unwrap();
+        assert_eq!(removed.len(), MAX_CLEANUP_TARGETS);
+    }
+
+    fn observed_cleanup_target(
+        temp: &TestDir,
+    ) -> (CleanupWorkspace, PathBuf, PathBuf, CleanupTarget) {
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-observed");
+        let target = session.join("project/target");
+        write_cargo_target(&target);
+        let workspace = capture_cleanup_workspace(&managed, "sess-observed", &session).unwrap();
+        let access_root = workspace.access_root(&session);
+        let path = access_root.join("project/target");
+        let directory = observe_cargo_target_directory(&path).unwrap().unwrap();
+        (
+            workspace,
+            session,
+            access_root,
+            CleanupTarget { path, directory },
+        )
+    }
+
+    #[test]
+    fn observed_target_refuses_replacements_and_marker_withdrawal() {
+        for case in [
+            "new-marked",
+            "new-unmarked",
+            "link",
+            "missing",
+            "parent",
+            "marker",
+        ] {
+            let temp = TestDir::new();
+            let (workspace, session, access_root, observation) = observed_cleanup_target(&temp);
+            let target = session.join("project/target");
+            let original = if case == "parent" {
+                std::fs::rename(session.join("project"), session.join("original-project")).unwrap();
+                write_cargo_target(&target);
+                session.join("original-project/target")
+            } else if case == "marker" {
+                std::fs::remove_file(target.join("CACHEDIR.TAG")).unwrap();
+                target.clone()
+            } else {
+                let original = session.join("original-target");
+                std::fs::rename(&target, &original).unwrap();
+                match case {
+                    "new-marked" => write_cargo_target(&target),
+                    "new-unmarked" => {
+                        std::fs::create_dir(&target).unwrap();
+                        std::fs::write(target.join("source.txt"), "preserve").unwrap();
+                    }
+                    "link" => std::os::unix::fs::symlink(&original, &target).unwrap(),
+                    "missing" => {}
+                    _ => unreachable!(),
+                }
+                original
+            };
+            let error = remove_cleanup_targets(
+                &workspace,
+                &session,
+                &access_root,
+                vec![observation],
+                &|_| Ok(()),
+            )
+            .unwrap_err();
+            assert!(
+                error.downcast_ref::<CleanupTargetChanged>().is_some(),
+                "{case}: {error}"
+            );
+            assert!(original.join("debug/deps/libtest.rlib").is_file(), "{case}");
+            if matches!(case, "new-marked" | "parent") {
+                assert!(target.join("debug/deps/libtest.rlib").is_file(), "{case}");
+            }
+            if case == "new-unmarked" {
+                assert!(target.join("source.txt").is_file());
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn target_rename_after_child_check_never_redirects_contents_into_replacement() {
+        let temp = TestDir::new();
+        let (workspace, session, access_root, observation) = observed_cleanup_target(&temp);
+        let target = session.join("project/target");
+        let original = session.join("original-target");
+        let replaced = std::sync::atomic::AtomicBool::new(false);
+        let error = remove_cleanup_targets(
+            &workspace,
+            &session,
+            &access_root,
+            vec![observation],
+            &|_| {
+                if !replaced.swap(true, Ordering::SeqCst) {
+                    std::fs::rename(&target, &original)?;
+                    write_cargo_target(&target);
+                    std::fs::write(target.join("source.txt"), "replacement source")?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(error.downcast_ref::<CleanupTargetChanged>().is_some());
+        assert!(replaced.load(Ordering::SeqCst));
+        assert!(target.join("debug/deps/libtest.rlib").is_file());
+        assert_eq!(
+            std::fs::read_to_string(target.join("source.txt")).unwrap(),
+            "replacement source"
+        );
+    }
+
+    #[tokio::test]
     async fn cleanup_preserves_targets_with_linked_or_oversized_markers() {
         for case in [
             "linked-info",
@@ -1021,7 +1238,7 @@ mod tests {
         let mut content = format!("{CARGO_CACHE_TAG_SIGNATURE}\n").into_bytes();
         content.resize(usize::try_from(MAX_CARGO_CACHE_TAG_BYTES).unwrap(), b' ');
         std::fs::write(target.join("CACHEDIR.TAG"), content).unwrap();
-        assert!(is_cargo_target_directory(&target).unwrap());
+        assert!(observe_cargo_target_directory(&target).unwrap().is_some());
     }
 
     #[tokio::test]
