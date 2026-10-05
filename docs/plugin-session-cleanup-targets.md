@@ -156,3 +156,6 @@ retry before root marker removal.
 The [retry-observation release](releases/plugin-session-cleanup-retry-2026-10-05.md)
 records process-local retention of original target handles and successful-target
 progress across retries, replacement refusal and exact Hawk preservation receipts.
+The [marker-progress release](releases/plugin-session-cleanup-marker-progress-2026-10-05.md)
+records resumption of cleanup's own partial marker removal, original-marker
+identity checks, late-content preservation and actual marker file-mount refusal.

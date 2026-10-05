@@ -730,6 +730,12 @@ replacements during that plan. It remains process-local, not durable across a
 resident restart; continuous launch-time ownership and Session incarnation
 remain open.
 
+The [marker finalization progress](releases/plugin-session-cleanup-marker-progress-2026-10-05.md)
+records successful marker unlinks and retains the pending original marker handles.
+I/O retry finishes only that phase, refusing marker recreation/replacement or
+identity changes and preserving late contents. This extends the process-local
+plan; it is not a durable cleanup journal or a filesystem transaction.
+
 Linux cleanup defers root marker removal until its streamed content walk
 succeeds, retaining eligibility across partial content I/O failures. Successful
 retry is covered by a real-filesystem failure fixture. Marker finalization is
