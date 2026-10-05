@@ -66,6 +66,8 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     return () => globalThis.clearTimeout(timer);
   }, [armed]);
   if (!leader || !armed || !visible) return null;
+  // Move pick draws its own legend in the Sessions sidebar.
+  if (leader.layer === "move") return null;
 
   const run = (command: DesktopCommand): void => {
     leader.close();

@@ -8,6 +8,9 @@ export type DesktopLeaderLayer =
   | "root"
   | "sessions"
   | "modal"
+  /** Move pick: Sessions folders carry letters; the next letter files the
+   *  subject there (FOCUS.md "Move pick"). */
+  | "move"
   /** A which-key group such as `␣T` (Top bar); the key is lower case. */
   | `group:${string}`;
 

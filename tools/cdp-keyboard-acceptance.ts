@@ -132,9 +132,9 @@ const draftFlow = async (): Promise<void> => {
   await sleep(800);
   check(
     await page.evaluate<boolean>(
-      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣R')",
+      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣T')",
     ),
-    "The title shows its ␣R slot",
+    "The title shows its ␣T slot",
   );
   // Write two lines in the shared Vim editor.
   await click("[data-workspace-document] .cm-content");
@@ -152,13 +152,14 @@ const draftFlow = async (): Promise<void> => {
   check(await titleFocused(), "Vim k on the first body line enters the title");
   check(
     await page.evaluate<boolean>(
-      `${title}.selectionStart === ${title}.value.length`,
+      `${title}.dataset.vimInputMode === "normal" && ${title}.selectionEnd === ${title}.value.length`,
     ),
-    "The title caret lands at its end",
+    "The title takes a Vim Normal block cursor on its last character",
   );
   results.push(
-    "Vim Normal gg then k on the first line enters the title at its end",
+    "Vim Normal gg then k on the first line enters the title in Normal at its end",
   );
+  await key("A", 8);
   await page.send("Input.insertText", { text: " renamed" });
   await key("Enter");
   await sleep(150);
@@ -173,11 +174,22 @@ const draftFlow = async (): Promise<void> => {
   // Insert-mode ArrowUp on the first line also enters the title.
   await key("ArrowUp");
   await sleep(150);
-  check(await titleFocused(), "Insert ↑ on the first line enters the title");
+  check(
+    await page.evaluate<boolean>(
+      `document.activeElement === ${title} && ${title}.dataset.vimInputMode === "insert"`,
+    ),
+    "Insert ↑ on the first line enters the title typing",
+  );
+  await key("Escape");
+  await sleep(100);
+  check(
+    await page.evaluate<boolean>(`${title}.dataset.vimInputMode === "normal"`),
+    "Esc leaves the title's Insert for its Normal",
+  );
   await key("Escape");
   await sleep(150);
-  check(await inBody(), "Esc in the title returns to the body");
-  results.push("Insert ↑ enters the title; Esc returns to the body");
+  check(await inBody(), "A second Esc returns to the body");
+  results.push("Insert ↑ enters the title typing; Esc to its Normal, Esc again to the body");
   // On the Draft page its own actions are root keys: which-key lists them
   // under Here, and Session-only keys (Conversation, Plan, Queue) are absent.
   await key("Escape");
@@ -190,19 +202,40 @@ const draftFlow = async (): Promise<void> => {
   await shot("4-draft-leader");
   check(
     await page.evaluate<boolean>(
-      "['r','y','h','e'].every((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`)) && !['c','l','q','d'].some((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`))",
+      "['t','y','h','e'].every((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`)) && !['c','l','q','d'].some((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`))",
     ),
-    "Draft which-key lists R Y H E and no Session-only keys",
+    "Draft which-key lists T Y H E and no Session-only keys",
   );
-  await key("r");
+  await key("t");
   await sleep(150);
   check(
     await page.evaluate<boolean>(
-      `document.activeElement === ${title} && ${title}.selectionStart === 0 && ${title}.selectionEnd === ${title}.value.length`,
+      `document.activeElement === ${title} && ${title}.dataset.vimInputMode === "normal" && ${title}.selectionEnd === ${title}.value.length && ${title}.selectionStart === ${title}.value.length - 1`,
     ),
-    "␣R focuses the title with its text selected",
+    "␣T puts a Vim Normal block cursor on the title's last character",
   );
-  results.push("Draft which-key: R Y H E at the root, no Session-only keys; ␣R selects the title");
+  // The title is a Vim field: b moves by word, A appends, Esc returns to
+  // Normal, j returns to the body.
+  await key("b");
+  check(
+    await page.evaluate<boolean>(`${title}.selectionStart === ${title}.value.lastIndexOf(" ") + 1`),
+    "b moves to the title's last word",
+  );
+  await shot("4b-title-normal");
+  await key("A", 8);
+  check(
+    await page.evaluate<boolean>(`${title}.dataset.vimInputMode === "insert"`),
+    "A types at the end of the title",
+  );
+  await key("Escape");
+  check(
+    await page.evaluate<boolean>(`${title}.dataset.vimInputMode === "normal"`),
+    "Esc returns the title to Normal",
+  );
+  await key("j");
+  await sleep(150);
+  check(await inBody(), "j in the title's Normal returns to the body");
+  results.push("Draft which-key: T Y H E at the root, no Session-only keys; ␣T puts a Vim Normal cursor on the title; b, A, Esc, j work there");
   await key("Escape");
   await sleep(150);
   await shot("5-draft-page");
@@ -287,7 +320,7 @@ try {
     results.push("Vim f<Space>: a pending Vim command keeps Space");
 
     // 3. IME composition owns Space and Esc.
-    await key("A");
+    await key("A", 8);
     await page.send("Input.imeSetComposition", {
       text: "ni",
       selectionStart: 2,

@@ -41,8 +41,8 @@ const NAVIGATION: ShortcutRow[] = [
       desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsMove),
       desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsOrganize),
     ],
-    title: "New folder / Move session / Organize by project",
-    description: "The Sessions group runs from any focus; the focused row, else the current session, is the subject",
+    title: "New folder / Move pick / Organize by project",
+    description: "Move pick darkens the page and letters every folder; press one to file the focused row (else the current item) there, Esc to leave. M on a row starts it too",
   },
   { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Message the Agent" },
   { keys: [DESKTOP_FOCUS_PLAN_SHORTCUT], title: "Focus Plan" },
@@ -132,16 +132,17 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
   },
   {
     keys: [DESKTOP_SHORTCUTS.rename],
-    title: "Rename the current Session, or the open Draft's title",
+    title: "Rename the current Session",
   },
   {
     keys: [
+      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.title),
       desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.copy),
       desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.history),
       desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.export),
       desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.readableWidth),
     ],
-    title: "On a Draft: copy to a Session, history, export, readable width",
+    title: "On a Draft: title, copy to a Session, history, export, readable width",
     description: "The open Draft's own actions are root keys; H is Schedule in a Session and History in a Draft",
   },
 ];

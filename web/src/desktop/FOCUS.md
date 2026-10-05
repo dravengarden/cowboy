@@ -43,7 +43,7 @@ learning Cowboy; a new feature only picks which ones it uses.
 2. **Motions.** `J/K` vertical, `H/L` horizontal, `gg/G` ends,
    `Ctrl-D/U/F/B` pages, in every list, tree, reader, tablist and form.
 3. **Item verbs.** On the focused item: `L`/`Enter` open, `I` edit or
-   rename, `M` move, `S` settings, `O` order mode, `Shift-J/K` reorder.
+   rename, `M` move (Move pick), `S` settings, `O` order mode, `Shift-J/K` reorder.
 4. **Leader.** `␣` then one key for everything else (below). Its slots are
    drawn on the controls they run.
 5. **Labels.** When a choice is among many visible targets, the targets get
@@ -96,7 +96,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣␣` | Switch session: rows get letter labels (home row first, flat displayed order); press one to open it and land in Prompt |
 | `␣⇥` | Previous Session or Draft (Alt-Tab) |
 | `␣O` | Recent: the jump list of opened Sessions and Drafts (see "Recent") |
-| `␣R` | Rename the current item: the open Draft's title, else the current Session |
+| `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
 | `␣P` `␣C` | Focus Prompt, Conversation |
@@ -110,7 +110,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` | Schedule, run next (Composer; on a Draft `␣H` is History) |
 | `␣M` | More formatting menu (Composer) |
-| `␣Y` `␣H` `␣E` | On a Draft: yank (copy) to a Session, history, export Markdown |
+| `␣T` `␣Y` `␣H` `␣E` | On a Draft: cursor to the title, yank (copy) to a Session, history, export Markdown |
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
@@ -123,10 +123,27 @@ A group opens only when one of its commands can run in the current focus
 from anywhere) and otherwise leaves its key to the root meaning. New families
 become groups instead of taking root letters. Free root letters: `B G I V X`.
 
+#### Vim in text fields
+
+With the Vim setting on, every native Desktop text field (titles, names,
+searches, settings; `vim/inputVim.ts`) is a small Vim buffer, like the
+CodeMirror editors. A field focused by a click or `Tab` types (Insert);
+`Esc`/`Ctrl-[` enters Normal: the field turns read-only, so no input
+method starts marked text, and a one-character block is the cursor.
+Normal has `h l 0 ^ $ w b e W B E f F t T ; ,` (and `j k gg G` in a
+textarea), `x X D C s S r ~ p P`, `d c y` with a motion or doubled,
+`u`/`Ctrl-R`, and `i a I A`. Keys a single-line field has no use for
+pass to its surface: `j`/`k`, `Space` (the leader), `Enter`, `Tab`,
+`Esc`, and inside a dialog the tab digits, `[`/`]` and `gg`/`G`. So in a
+dialog `Esc` goes Insert → Normal → closed, and `J/K` leave the field
+for the next row in Normal; the Draft title's `Esc`/`j`/`Enter` return to
+the body. Yanks also go to the system clipboard. A field opts out with
+`data-desktop-vim="off"`; read-only pickers are not fields.
+
 #### Context keys
 
 What the current page owns needs no prefix beyond the leader. The open
-Draft's own actions are root keys (`␣Y` `␣H` `␣E`, `␣R` rename) rather
+Draft's own actions are root keys (`␣T` title, `␣Y` `␣H` `␣E`) rather
 than a `␣D` group, exactly as the Composer's insert actions are in a
 Session. A letter may mean different things on the two pages only when the
 pages are never mounted together, declared with `surface: "session" |
@@ -160,6 +177,23 @@ top row or keypad) open a row at once; `J/K`, arrows and `Tab` move, `gg`/
 Prompt (a Draft's body), or the Conversation when Prompt is folded. With the
 `Alt+K`/`Cmd+K` prefix, release the modifier before `⇥`: `Alt+Tab` and
 `Cmd+Tab` belong to the operating system.
+
+#### Move pick
+
+Filing an item is a Vim-style pick on the Sessions tree itself, not a
+dialog. `M` on a focused row, or `␣SM` from anywhere (the focused row,
+else the current Session or Draft), arms it: everything but the Sessions
+sidebar darkens, the tree shows only folders (all open) and the item being
+moved (dashed outline), and every valid destination carries a loud letter
+in key priority, home row first (`A S D F G H J K L`, then `Q W E …`,
+then `Z X C …`), in tree order; `Top level` sits in the banner. Past 26
+destinations every letter pair is two keys. The item's current folder and,
+for a folder, itself and its descendants carry none. The letter files it
+and the tree returns, revealing the item where it went; `Esc` (lit in the
+banner) leaves without moving; `Backspace` clears a half-typed pair; any
+other key is ignored, so a slip never files it somewhere unintended. A
+click on a lettered folder also files it. The pointer menus keep their
+Move to… dialog.
 
 ### Rich text
 
@@ -774,14 +808,16 @@ They autosave; `Mod+S` flushes local persistence without sending. The leader
 exposes the same formatting, attachment and Source commands as Sessions.
 
 The document's actions are root keys, available from any focus while a Draft
-is open ("Context keys"): `␣R` rename, `␣Y` copy (yank) to Session drafts
+is open ("Context keys"): `␣T` title, `␣Y` copy (yank) to Session drafts
 (source retained), `␣H` recovery history, `␣E` export Markdown, `␣UW`
 readable width. Each control shows its slot; Desktop draws the document
 actions once, in the bottom bar.
 
 The title behaves as the document's first line, as Obsidian's inline title:
-`␣R` focuses it with the text selected for replacement; `↑` in Insert or a
-plain Vim Normal `k` on the body's first line enters it at the end (a pending
-Vim command such as `dk` keeps its key); `Enter`, `↓` or `Tab` returns to
-the start of the body and `Esc` returns to where the body caret was. Every
+`␣T` puts the cursor on its end: with Vim on, a Normal block cursor (the
+title is a Vim field, "Vim in text fields"), otherwise a caret. A plain Vim
+Normal `k` on the body's first line enters it the same way and `↑` in Insert
+enters it typing (a pending Vim command such as `dk` keeps its key);
+`Enter`, `↓`, `Tab` or Normal `j` returns to the start of the body and `Esc`
+(from Normal) to where the body caret was. Every
 action is also in the Command Palette.

@@ -1517,7 +1517,7 @@ export async function runDraftDocumentsBrowserConformance(
         () => !!container.querySelector("[data-workspace-document]"),
         "Draft reopens after the leader jump",
       );
-      // Draft title: `␣R` renames, Enter returns to the body start, and ↑ on
+      // Draft title: `␣T` goes to it, Enter returns to the body start, and ↑ on
       // the first body line re-enters the title (FOCUS.md "Draft document").
       {
         const titleField = () =>
@@ -1525,21 +1525,22 @@ export async function runDraftDocumentsBrowserConformance(
         await until(() => !!titleField(), "Draft title field");
         check(
           container.querySelector("[data-draft-title-shortcut]")?.textContent
-            ?.includes("␣R"),
-          "The title shows its ␣R slot",
+            ?.includes("␣T"),
+          "The title shows its ␣T slot",
         );
         const leader = isMac ? { metaKey: true } : { altKey: true };
         const at = document.activeElement ?? document.body;
         flushSync(() =>
           at.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", bubbles: true, cancelable: true, ...leader }))
         );
-        press(document.activeElement ?? document.body, "r", "KeyR");
+        press(document.activeElement ?? document.body, "t", "KeyT");
         await tick();
         const field = titleField()!;
         check(
-          document.activeElement === field && field.selectionStart === 0 &&
+          document.activeElement === field &&
+            field.selectionStart === field.value.length &&
             field.selectionEnd === field.value.length,
-          "␣R focuses the title with its text selected",
+          "␣T puts the cursor at the end of the title",
         );
         press(field, "Enter", "Enter");
         await tick();
@@ -1636,6 +1637,58 @@ export async function runDraftDocumentsBrowserConformance(
           !document.querySelector("[data-desktop-hint]"),
         "A label moves the list cursor and clears every label",
       );
+      // Move pick: `m` on a row darkens the page, lights a letter on every
+      // folder, and the letter files the row there; Esc leaves untouched.
+      {
+        const banner = () => document.querySelector("[data-move-pick-banner]");
+        const left = () => row.getBoundingClientRect().left;
+        const unfiled = left();
+        press(row, "m", "KeyM");
+        await until(
+          () => !!banner() && !!document.querySelector("[data-desktop-move-spotlight]"),
+          "m starts Move pick with the page darkened",
+        );
+        const folderLabel = container.querySelector<HTMLElement>(
+          "[data-desktop-folder-row] [data-move-pick-label]",
+        )?.dataset.movePickLabel;
+        check(
+          folderLabel && /^[a-z]$/.test(folderLabel) && banner()?.textContent?.includes("Esc"),
+          "Folders carry home-row letters and the banner shows Esc",
+        );
+        press(document.activeElement ?? document.body, "Escape", "Escape");
+        await until(() => !banner(), "Esc leaves Move pick");
+        check(left() === unfiled, "Esc moves nothing");
+        row.focus();
+        press(row, "m", "KeyM");
+        await until(() => !!banner(), "m starts Move pick again");
+        press(document.activeElement ?? document.body, "q", "KeyQ");
+        await tick();
+        check(banner(), "A key that names no folder keeps the pick open");
+        const label = container.querySelector<HTMLElement>(
+          "[data-desktop-folder-row] [data-move-pick-label]",
+        )!.dataset.movePickLabel!;
+        press(document.activeElement ?? document.body, label, `Key${label.toUpperCase()}`);
+        await until(
+          () => !banner() && left() > unfiled,
+          "The folder's letter files the session into it",
+        );
+        const moved = container.querySelector<HTMLElement>(
+          '[data-desktop-item="integrated-session"]',
+        )!;
+        moved.focus();
+        press(moved, "m", "KeyM");
+        await until(() => !!banner(), "Move pick opens for the filed session");
+        const top = banner()!.querySelector<HTMLElement>("[data-move-pick-label]")
+          ?.dataset.movePickLabel;
+        check(top, "Top level carries a letter once the session is filed");
+        press(document.activeElement ?? document.body, top, `Key${top.toUpperCase()}`);
+        await until(
+          () => !banner() &&
+            container.querySelector<HTMLElement>('[data-desktop-item="integrated-session"]')!
+                .getBoundingClientRect().left === unfiled,
+          "Top level's letter returns it",
+        );
+      }
       // Inside a modal the leader labels that modal's own controls.
       const modifier = isMac ? { metaKey: true } : { altKey: true };
       const prefix = (target: Element) =>

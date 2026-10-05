@@ -5,6 +5,26 @@ import { DESKTOP_JUMP_LABELS } from "./workspaceShortcuts";
  *  it has opened the labelled session. */
 export const DESKTOP_SESSION_JUMP_EVENT = "cowboy:desktop-session-jump";
 
+/** Dispatched on the Sessions list with `{ key, pending }` while the Move
+ *  pick layer is armed; the list sets `pending` to keep the layer open
+ *  (a label prefix, or a key that names no folder). */
+export const DESKTOP_MOVE_PICK_EVENT = "cowboy:desktop-move-pick";
+
+/** Pick labels in key priority, home row first. Past 26 targets every label
+ *  is two letters, so no label is a prefix of another. */
+export function desktopPickLabels(count: number): string[] {
+  const pool = [...DESKTOP_JUMP_LABELS];
+  if (count <= pool.length) return pool.slice(0, count);
+  const labels: string[] = [];
+  for (const first of pool) {
+    for (const second of pool) {
+      if (labels.length === count) return labels;
+      labels.push(first + second);
+    }
+  }
+  return labels;
+}
+
 export interface SessionJumpTarget {
   readonly label: string;
   readonly id: string;

@@ -47,7 +47,10 @@ import { assertShortcutRegistrationAllowed } from "./shortcutRegistrationPolicy"
 import { isImeComposing } from "../vim/imeStatusStore";
 import { vimSinkAwaitsInput } from "../vim/vimSinkInput";
 import { desktopKeyIntent, installNativeCompositionTracker } from "./keyIntent";
-import { DESKTOP_SESSION_JUMP_EVENT } from "./sessionJump";
+import {
+  DESKTOP_MOVE_PICK_EVENT,
+  DESKTOP_SESSION_JUMP_EVENT,
+} from "./sessionJump";
 import {
   activateHint,
   type DesktopHint,
@@ -540,12 +543,22 @@ export function DesktopCommandProvider(
           if (event.repeat) return;
           const layer = leaderLayerRef.current;
           // Backspace climbs one which-key layer instead of closing it.
-          if (key === "Backspace" && layer !== "root") {
+          if (key === "Backspace" && layer !== "root" && layer !== "move") {
             armWorkspaceCommand("root");
             return;
           }
           clearWorkspaceCommand();
           if (key === "Escape") return;
+          if (layer === "move") {
+            // The Sessions list owns the labels; it keeps the layer open
+            // for a label prefix or a key that names no folder.
+            const detail = { key, pending: false };
+            document.querySelector<HTMLElement>(
+              "[data-desktop-region='sessions.list'] ul",
+            )?.dispatchEvent(new CustomEvent(DESKTOP_MOVE_PICK_EVENT, { detail }));
+            if (detail.pending) armWorkspaceCommand("move");
+            return;
+          }
           if (layer.startsWith("group:")) {
             // A group's commands run from anywhere: the group itself is the
             // scope, so region-bound actions (Top bar R/U/…) need no focus

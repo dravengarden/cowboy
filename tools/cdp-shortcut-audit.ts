@@ -106,6 +106,24 @@ try {
   await press("Escape", "Escape", 27);
   await waitFor(`!${palette}`, "Esc in Normal closes the palette");
   console.log(JSON.stringify({ palette_grammar: "ok" }));
+  // Move pick (`␣SM`) from anywhere: the page darkens, folders get letters,
+  // Esc leaves.
+  await press("k", "KeyK", 75, mac ? 4 : 1);
+  await press("s", "KeyS", 83);
+  await press("m", "KeyM", 77);
+  await waitFor(
+    "document.querySelector('[data-move-pick-banner]') && document.querySelector('[data-desktop-move-spotlight]') && document.querySelector('[data-move-pick-label]')",
+    "␣SM starts Move pick",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const pick = await page.send("Page.captureScreenshot", { format: "png" });
+  await Deno.writeFile(
+    `${output}/move-pick.png`,
+    Uint8Array.from(atob(pick.data), (c) => c.charCodeAt(0)),
+  );
+  await press("Escape", "Escape", 27);
+  await waitFor("!document.querySelector('[data-move-pick-banner]')", "Esc leaves Move pick");
+  console.log(JSON.stringify({ move_pick: "ok" }));
 } finally {
   await page.close();
 }

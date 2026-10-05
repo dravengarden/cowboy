@@ -36,7 +36,7 @@ import {
     useState,
 } from "react";
 import type { ComponentProps } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
     Alert,
     alpha,
@@ -296,6 +296,7 @@ function markDesktopUpdateSwapping(): void {
 }
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
+import { ShortcutKeycap } from "./ShortcutKeycap";
 import { DesktopModalKeyHint } from "./desktop/DesktopModalKeyHint";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -303,7 +304,9 @@ import { DESKTOP_SHORTCUTS } from "./desktop/commands/workspaceShortcuts";
 import { useDesktopLeaderOptional } from "./desktop/commands/leaderContext";
 import { desktopRecentItems, recordDesktopVisit, useDesktopVisits } from "./desktop/sessionVisits";
 import {
+    DESKTOP_MOVE_PICK_EVENT,
     DESKTOP_SESSION_JUMP_EVENT,
+    desktopPickLabels,
     publishSessionJumpTargets,
     sessionJumpLabels,
 } from "./desktop/commands/sessionJump";
@@ -586,6 +589,85 @@ function SessionProjectionBadge({
 // Sessions-region row commands shared by the Desktop command layer (which
 // dispatches them as DOM events on the focused row) and the list's own
 // fallback key handler. See docs/sessions-folders.md and desktop/FOCUS.md.
+/** The item a Move pick files (FOCUS.md "Move pick"). */
+interface MovePickSubject {
+    readonly kind: "session" | "folder" | "draft";
+    readonly id: string;
+    /** Its Sessions-tree row key. */
+    readonly key: string;
+    readonly title: string;
+}
+
+/** A Move pick letter: loud on purpose, it is the only thing to read. The
+ *  typed half of a two-letter label fades. */
+function MovePickLabel({ label, typed }: { label: string; typed: string }): React.JSX.Element {
+    const done = typed && label.startsWith(typed) ? typed.length : 0;
+    return (
+        <Box
+            component="kbd"
+            data-move-pick-label={label}
+            sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minWidth: "1.75rem",
+                height: "1.75rem",
+                px: "0.4rem",
+                mr: "0.5rem",
+                flexShrink: 0,
+                borderRadius: "0.45rem",
+                bgcolor: "primary.main",
+                color: "primary.contrastText",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: "0.95rem",
+                fontWeight: 800,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                boxShadow: (theme) => `0 0 0 3px ${alpha(theme.palette.primary.main, 0.3)}, 0 2px 8px ${alpha(theme.palette.common.black, 0.35)}`,
+            }}
+        >
+            {done > 0 && <Box component="span" sx={{ opacity: 0.45 }}>{label.slice(0, done)}</Box>}
+            {label.slice(done)}
+        </Box>
+    );
+}
+
+/** Darkens everything but the Sessions sidebar while a Move pick waits: a
+ *  fixed frame over the sidebar whose huge shadow is the scrim. */
+function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElement | null> }): React.JSX.Element | null {
+    const [rect, setRect] = useState<DOMRect | null>(null);
+    useLayoutEffect(() => {
+        const update = (): void => setRect(
+            anchor.current?.closest<HTMLElement>("[data-desktop-region='sessions.list']")
+                ?.getBoundingClientRect() ?? null,
+        );
+        update();
+        globalThis.addEventListener("resize", update);
+        return () => globalThis.removeEventListener("resize", update);
+    }, [anchor]);
+    if (!rect) return null;
+    return createPortal(
+        <Box
+            aria-hidden
+            data-desktop-move-spotlight
+            sx={{
+                position: "fixed",
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+                pointerEvents: "none",
+                zIndex: (theme) => theme.zIndex.modal - 1,
+                boxShadow: (theme) => `0 0 0 200vmax ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.6 : 0.5)}`,
+                animation: "cowboyMovePickIn 140ms ease-out",
+                "@keyframes cowboyMovePickIn": { from: { opacity: 0 }, to: { opacity: 1 } },
+                "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+            }}
+        />,
+        document.body,
+    );
+}
+
 type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename";
 const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
     l: "open",
@@ -729,6 +811,17 @@ function SessionList({
     const jumpLabels = useMemo(() => sessionJumpLabels(displayedSessions), [displayedSessions]);
     const leader = useDesktopLeaderOptional();
     const sessionLabelsShown = desktop && leader?.armed === true && leader.layer === "sessions";
+    // Move pick (FOCUS.md "Move pick"): the subject waits while every folder
+    // shows a letter; the leader's "move" layer routes the next keys here.
+    const [movePick, setMovePick] = useState<MovePickSubject | null>(null);
+    const [movePrefix, setMovePrefix] = useState("");
+    const movePicking = desktop && movePick !== null && leader?.armed === true &&
+        leader.layer === "move";
+    useEffect(() => {
+        if (movePicking || movePick === null) return;
+        setMovePick(null);
+        setMovePrefix("");
+    }, [movePicking, movePick]);
     useEffect(() => {
         if (!desktop) return;
         publishSessionJumpTargets(displayedSessions.flatMap((session) => {
@@ -743,12 +836,43 @@ function SessionList({
         }));
     }, [activeId, desktop, displayedSessions, jumpLabels]);
     const workspaceOrder = useStoreSelector((snapshot) => snapshot.workspaceOrder);
+    // While picking, every folder is open and only folders and the subject
+    // remain, so each destination is on screen with its letter.
     const tree = useMemo(
-        () => buildSessionTree(displayedSessions, sessionFolders, collapsed, drafts, workspaceOrder),
-        [collapsed, displayedSessions, sessionFolders, drafts, workspaceOrder],
+        () => buildSessionTree(
+            displayedSessions,
+            sessionFolders,
+            movePicking ? NO_COLLAPSED_FOLDERS : collapsed,
+            drafts,
+            workspaceOrder,
+        ),
+        [collapsed, displayedSessions, sessionFolders, drafts, workspaceOrder, movePicking],
     );
-    const rowKeys = tree.rows.map(sessionTreeRowKey);
-    const rowByKey = new Map(tree.rows.map((row): [string, SessionTreeRow] => [sessionTreeRowKey(row), row]));
+    const listRows = movePicking && movePick
+        ? tree.rows.filter((row) => row.kind === "folder" || sessionTreeRowKey(row) === movePick.key)
+        : tree.rows;
+    const rowKeys = listRows.map(sessionTreeRowKey);
+    const rowByKey = new Map(listRows.map((row): [string, SessionTreeRow] => [sessionTreeRowKey(row), row]));
+    const moveTargets = ((): readonly { folder: string | null; label: string }[] => {
+        if (!movePicking || !movePick) return [];
+        const excluded = new Set<string>();
+        let current: string | null;
+        if (movePick.kind === "folder") {
+            excluded.add(movePick.id);
+            for (const candidate of sessionFolders.folders) {
+                if (folderAncestors(sessionFolders, candidate.id).includes(movePick.id)) excluded.add(candidate.id);
+            }
+            current = sessionFolderById(sessionFolders, movePick.id)?.parent ?? null;
+        } else if (movePick.kind === "draft") {
+            current = drafts.find((entry) => entry.id === movePick.id)?.parent_id ?? null;
+        } else current = tree.folderOf.get(movePick.id) ?? null;
+        const folders = [null, ...listRows.flatMap((row) => row.kind === "folder" ? [row.folder.id] : [])]
+            .filter((folder) => folder !== current && !(folder !== null && excluded.has(folder)));
+        const labels = desktopPickLabels(folders.length);
+        return folders.map((folder, index) => ({ folder, label: labels[index]! }));
+    })();
+    const moveLabelOf = (folder: string | null): string | undefined =>
+        moveTargets.find((target) => target.folder === folder)?.label;
     const [folderMenu, setFolderMenu] = useState<{ folder: SessionFolder; el: HTMLElement } | null>(null);
     const [namePrompt, setNamePrompt] = useState<
         { mode: "create"; parent: string | null } | { mode: "rename"; folder: SessionFolder } | null
@@ -794,6 +918,56 @@ function SessionList({
         if (folder) setFolderCollapsed([folder, ...folderAncestors(sessionFolders, folder)], false);
         setMovedRow(key);
     };
+    const startMovePick = (key: string | null): void => {
+        if (!key || !leader) return;
+        const folderId = folderIdFromRowKey(key);
+        const draft = key.startsWith("draft:") ? drafts.find((entry) => `draft:${entry.id}` === key) : undefined;
+        const subject: MovePickSubject | null = folderId
+            ? { kind: "folder", id: folderId, key, title: sessionFolderById(sessionFolders, folderId)?.name ?? "Folder" }
+            : draft
+            ? { kind: "draft", id: draft.id, key, title: draft.title || "Untitled" }
+            : byId.has(key)
+            ? { kind: "session", id: key, key, title: byId.get(key)!.title }
+            : null;
+        if (!subject) return;
+        setMovePrefix("");
+        setMovePick(subject);
+        leader.open("move");
+    };
+    const performMove = (folder: string | null): void => {
+        const subject = movePick;
+        if (!subject) return;
+        setMovePick(null);
+        setMovePrefix("");
+        leader?.close();
+        if (subject.kind === "draft") {
+            void draftRepository().document(subject.id).hydrate()
+                .then(() => draftRepository().document(subject.id).change({ type: "move", parent_id: folder }))
+                .then(() => revealMovedRow(subject.key, folder))
+                .catch((error: Error) => documentNotice(error.message));
+            return;
+        }
+        moveItem({ kind: subject.kind, id: subject.id }, folder);
+    };
+    const onMovePickKey = (detail: { key: string; pending: boolean }): void => {
+        if (detail.key === "Backspace") {
+            setMovePrefix("");
+            detail.pending = true;
+            return;
+        }
+        const typed = movePrefix + detail.key.toLowerCase();
+        const hit = moveTargets.find((target) => target.label === typed);
+        if (hit) {
+            performMove(hit.folder);
+            return;
+        }
+        // A prefix waits for its second letter; any other key is ignored so
+        // a slip never files the item somewhere unintended. Esc leaves.
+        if (moveTargets.some((target) => target.label.startsWith(typed))) setMovePrefix(typed);
+        detail.pending = true;
+    };
+    const onMovePickKeyRef = useRef(onMovePickKey);
+    onMovePickKeyRef.current = onMovePickKey;
     const moveItem = (item: { kind: "session" | "folder"; id: string }, folder: string | null): void => {
         const current = item.kind === "folder"
             ? sessionFolderById(sessionFolders, item.id)?.parent ?? null
@@ -988,6 +1162,7 @@ function SessionList({
             if (command === "open") { onPick(rowKey); focusPrompt(); }
             else if (command === "left") { if (draft.parent_id) focusRow(`folder:${draft.parent_id}`); }
             else if (command === "newFolder") setNamePrompt({ mode: "create", parent: draft.parent_id });
+            else if (command === "move" && desktop) startMovePick(rowKey);
             else onDraftAction({ draft, action: command === "settings" ? "menu" : command });
             return;
         }
@@ -1017,7 +1192,8 @@ function SessionList({
                 else if (session) setMenuAnchor({ row: session, el });
                 return;
             case "move":
-                if (folder) setMovePicker({ kind: "folder", id: folder.id });
+                if (desktop) startMovePick(rowKey);
+                else if (folder) setMovePicker({ kind: "folder", id: folder.id });
                 else if (session) setMovePicker({ kind: "session", id: session.id });
                 return;
             case "newFolder":
@@ -1046,6 +1222,10 @@ function SessionList({
     const selectSessionLabelRef = useRef(selectSessionLabel);
     selectSessionLabelRef.current = selectSessionLabel;
     const runFoldersAction = (action: string, rowKey: string | null): void => {
+        if (action === "move" && desktop) {
+            startMovePick(rowKey ?? activeId);
+            return;
+        }
         if (action === "move") {
             const key = rowKey ?? activeId;
             const draft = drafts.find((entry) => `draft:${entry.id}` === key);
@@ -1198,12 +1378,18 @@ function SessionList({
             if (label !== undefined && selectSessionLabelRef.current(label)) event.preventDefault();
         };
         for (const type of Object.keys(SESSION_ROW_EVENTS)) list.addEventListener(type, onRowCommand);
+        const onMovePickEvent = (event: Event): void => {
+            const detail = (event as CustomEvent<{ key: string; pending: boolean }>).detail;
+            if (detail) onMovePickKeyRef.current(detail);
+        };
         list.addEventListener("cowboy:desktop-folders", onFolders);
         list.addEventListener(DESKTOP_SESSION_JUMP_EVENT, onJump);
+        list.addEventListener(DESKTOP_MOVE_PICK_EVENT, onMovePickEvent);
         return () => {
             for (const type of Object.keys(SESSION_ROW_EVENTS)) list.removeEventListener(type, onRowCommand);
             list.removeEventListener("cowboy:desktop-folders", onFolders);
             list.removeEventListener(DESKTOP_SESSION_JUMP_EVENT, onJump);
+            list.removeEventListener(DESKTOP_MOVE_PICK_EVENT, onMovePickEvent);
         };
     }, [desktop]);
     useEffect(() => {
@@ -1357,8 +1543,51 @@ function SessionList({
             {copyTarget?.kind === "session" && <Box role="status" sx={{ px: 2, py: 0.75, fontSize: "0.75rem", color: "primary.main" }}>
                 Add to {copyTarget.session.title} · Original kept
             </Box>}
+            {movePicking && movePick && <SessionsSpotlight anchor={listRef} />}
             {!mobileDrawer && <Box sx={{ p: 1 }}>
-                <Stack direction="row" spacing={0.75} alignItems="stretch" justifyContent="flex-end">
+                {movePicking && movePick && (
+                    <Box
+                        role="status"
+                        data-move-pick-banner
+                        sx={{
+                            mb: 0.75,
+                            p: 1,
+                            borderRadius: 1.25,
+                            border: 1.5,
+                            borderColor: "primary.main",
+                            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
+                        }}
+                    >
+                        <Typography variant="body2" noWrap sx={{ fontWeight: 700 }}>
+                            Move “{movePick.title}” to…
+                        </Typography>
+                        {moveLabelOf(null) !== undefined && (
+                            <ButtonBase
+                                onPointerDown={(event): void => {
+                                    event.preventDefault();
+                                    performMove(null);
+                                }}
+                                sx={{ mt: 0.75, width: "100%", justifyContent: "flex-start", borderRadius: 1, py: 0.25 }}
+                            >
+                                <MovePickLabel label={moveLabelOf(null)!} typed={movePrefix} />
+                                <Typography variant="body2" sx={{ fontWeight: 600 }}>Top level</Typography>
+                            </ButtonBase>
+                        )}
+                        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 0.75, color: "text.secondary" }}>
+                            <ShortcutKeycap keyLabel="Esc" availability="active" accent />
+                            <Typography variant="caption">cancel</Typography>
+                            <Box sx={{ flex: 1 }} />
+                            <Typography variant="caption">press a folder’s letter</Typography>
+                        </Stack>
+                    </Box>
+                )}
+                <Stack
+                    direction="row"
+                    spacing={0.75}
+                    alignItems="stretch"
+                    justifyContent="flex-end"
+                    sx={movePicking ? { opacity: 0.35, pointerEvents: "none" } : undefined}
+                >
                 {allowNewSession && <Button
                     data-desktop-new-session={desktop ? "true" : undefined}
                     fullWidth
@@ -1439,7 +1668,15 @@ function SessionList({
                 data-desktop-fold-action={desktop ? fold.action ?? undefined : undefined}
                 data-mobile-overflow-layer={mobileDrawer ? "true" : undefined}
                 onKeyDownCapture={onDesktopListKeyDown}
+                data-move-picking={movePicking ? "true" : undefined}
                 sx={{
+                    ...(movePicking && movePick ? {
+                        "& [data-move-pick-dim='true']": { opacity: 0.4 },
+                        [`& [data-desktop-item="${CSS.escape(movePick.key)}"]`]: {
+                            outline: (theme: Theme) => `2px dashed ${theme.palette.primary.main}`,
+                            outlineOffset: -2,
+                        },
+                    } : {}),
                     flex: 1,
                     overflowY: "auto",
                     // A drag slides the lifted row sideways to its target
@@ -1534,6 +1771,13 @@ function SessionList({
                         data-haptic="selection"
                         data-desktop-item={rowKey}
                         data-desktop-folder-row="true"
+                        data-move-pick-dim={movePicking && moveLabelOf(f.id) === undefined ? "true" : undefined}
+                        onPointerDown={movePicking && moveLabelOf(f.id) !== undefined
+                            ? (event): void => {
+                                event.preventDefault();
+                                performMove(f.id);
+                            }
+                            : undefined}
                         data-desktop-pin-active={desktop && pinned ? "true" : undefined}
                         data-drop-target={dropHighlight(row, rowKey) === "header" ? "true" : undefined}
                         aria-expanded={row.expanded}
@@ -1566,6 +1810,9 @@ function SessionList({
                             },
                         }}
                     >
+                        {movePicking && moveLabelOf(f.id) !== undefined && (
+                            <MovePickLabel label={moveLabelOf(f.id)!} typed={movePrefix} />
+                        )}
                         <Box
                             className="cowboy-session-grip cowboy-folder-chevron"
                             aria-hidden
