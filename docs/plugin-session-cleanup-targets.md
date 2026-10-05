@@ -49,3 +49,5 @@ original contents; prior effects are not rolled back.
 
 Hawk activation, native conformance and process-preservation receipts are in the
 [October 5 release](releases/plugin-session-cleanup-targets-2026-10-05.md).
+The subsequent [retained-directory release](releases/plugin-session-cleanup-retained-2026-10-05.md)
+records adoption of content-only cleanup and removal of the final name unlink.
