@@ -814,6 +814,80 @@ impl MachinePluginStore {
         Ok(())
     }
 
+    /// Retire Agent Provider generations that nothing can launch any more.
+    /// `referenced` is the Controller's set of generations still pinned by a
+    /// recoverable session on this Machine; the active and rollback links are
+    /// always kept. Each retired directory is renamed to a tombstone first, so
+    /// an interrupted removal never leaves a launchable partial generation.
+    pub async fn retire_generations(
+        &self,
+        plugin_id: &str,
+        referenced: &BTreeSet<String>,
+    ) -> Result<crate::generation_retention::Outcome> {
+        let _lifecycle = self.lifecycle.lock().await;
+        validate_plugin_id(plugin_id)?;
+        // A pending installation or uninstall owns these links until reconciled.
+        self.operations.ensure_unfenced(plugin_id)?;
+        let installed = self
+            .inventory_one(plugin_id)?
+            .context("Plugin is not installed")?;
+        ensure!(
+            installed.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider,
+            "only Agent Provider generations are retired; Code runtimes own their leases"
+        );
+        let root = self.plugin_root(plugin_id);
+        let mut keep: BTreeSet<String> = referenced
+            .iter()
+            .map(|digest| digest.trim_start_matches("sha256:").to_owned())
+            .collect();
+        keep.extend(read_link_name(&root.join("active")));
+        keep.extend(read_link_name(&root.join("rollback")));
+        let generations = root.join("generations");
+        let mut retention = crate::generation_retention::Outcome {
+            plugin_id: plugin_id.to_owned(),
+            ..crate::generation_retention::Outcome::default()
+        };
+        for entry in fs::read_dir(&generations)
+            .with_context(|| format!("reading {}", generations.display()))?
+        {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let tombstone = if let Some(interrupted) = name.strip_prefix(RETIRED_GENERATION_PREFIX)
+            {
+                ensure!(
+                    is_generation_name(interrupted),
+                    "invalid retired generation"
+                );
+                entry.path()
+            } else if !is_generation_name(&name) || !entry.file_type()?.is_dir() {
+                continue;
+            } else if keep.contains(&name) {
+                retention.retained.push(format!("sha256:{name}"));
+                continue;
+            } else {
+                let tombstone = generations.join(format!("{RETIRED_GENERATION_PREFIX}{name}"));
+                fs::rename(entry.path(), &tombstone)
+                    .with_context(|| format!("retiring generation {name}"))?;
+                retention.retired.push(format!("sha256:{name}"));
+                tombstone
+            };
+            retention.freed_bytes = retention.freed_bytes.saturating_add(tree_bytes(&tombstone));
+            remove_projection::remove(&tombstone)
+                .with_context(|| format!("removing {}", tombstone.display()))?;
+        }
+        if !retention.retired.is_empty() {
+            fs::File::open(&generations)?.sync_all()?;
+            // Proof keys are "<content root>\n<artifact set>".
+            self.runtime_proofs.lock().retain(|key, _| {
+                key.split_once('\n')
+                    .is_none_or(|(content, _)| Path::new(content).exists())
+            });
+        }
+        retention.retained.sort();
+        retention.retired.sort();
+        Ok(retention)
+    }
+
     pub fn inventory(&self) -> Result<Vec<PluginInventory>> {
         let mut output = Vec::new();
         if !self.root.exists() {
@@ -4636,6 +4710,32 @@ fn read_link_name(path: &Path) -> Option<String> {
     target.file_name()?.to_str().map(str::to_owned)
 }
 
+const RETIRED_GENERATION_PREFIX: &str = ".retired-";
+
+/// Generations are named by their lowercase SHA-256 digest.
+fn is_generation_name(name: &str) -> bool {
+    name.len() == 64
+        && name
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Bytes under `path` without following symlinks; unreadable entries count 0.
+fn tree_bytes(path: &Path) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !metadata.is_dir() {
+        return metadata.len();
+    }
+    fs::read_dir(path).map_or(0, |entries| {
+        entries
+            .flatten()
+            .map(|entry| tree_bytes(&entry.path()))
+            .fold(0, u64::saturating_add)
+    })
+}
+
 fn decode_fixed<const N: usize>(value: &str, label: &str) -> Result<[u8; N]> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(value)
@@ -6955,5 +7055,95 @@ mod tests {
                 .contains("non-contributory")
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn retention_fixture(
+        kind: cowboy_plugin_sdk::PluginKind,
+    ) -> (tempfile::TempDir, MachinePluginStore) {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        let generations = store.plugin_root("claude-code").join("generations");
+        for name in ["a", "b", "c", "d"] {
+            fs::create_dir_all(generations.join(name.repeat(64)).join("content")).unwrap();
+        }
+        let inventory = serde_json::json!({
+            "plugin_id": "claude-code",
+            "plugin_version": "3.4.7",
+            "plugin_kind": kind,
+            "generation_digest": format!("sha256:{}", "a".repeat(64)),
+            "contract_fingerprint": "sha256:fixture",
+            "state": PluginInstallationState::Active,
+        });
+        fs::write(
+            generations
+                .join("a".repeat(64))
+                .join("content/plugin-inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        let plugin = store.plugin_root("claude-code");
+        restore_generation_link(&plugin.join("active"), Some(&"a".repeat(64))).unwrap();
+        restore_generation_link(&plugin.join("rollback"), Some(&"b".repeat(64))).unwrap();
+        (root, store)
+    }
+
+    #[tokio::test]
+    async fn retention_keeps_active_rollback_and_pinned_generations_only() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let generations = store.plugin_root("claude-code").join("generations");
+        // An unreferenced generation with read-only content is still removed.
+        let unreferenced = generations.join("d".repeat(64));
+        fs::write(unreferenced.join("content/cli"), b"binary").unwrap();
+        fs::set_permissions(
+            unreferenced.join("content"),
+            fs::Permissions::from_mode(0o500),
+        )
+        .unwrap();
+        // A tombstone left by an interrupted pass is finished; other names stay.
+        fs::create_dir_all(generations.join(format!(".retired-{}", "e".repeat(64)))).unwrap();
+        fs::create_dir_all(generations.join("notes")).unwrap();
+
+        let pinned = BTreeSet::from([format!("sha256:{}", "c".repeat(64))]);
+        let outcome = store
+            .retire_generations("claude-code", &pinned)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.retired, vec![format!("sha256:{}", "d".repeat(64))]);
+        assert_eq!(
+            outcome.retained,
+            ["a", "b", "c"]
+                .map(|name| format!("sha256:{}", name.repeat(64)))
+                .to_vec()
+        );
+        assert!(outcome.freed_bytes >= 6);
+        assert!(!unreferenced.exists());
+        assert!(
+            !generations
+                .join(format!(".retired-{}", "e".repeat(64)))
+                .exists()
+        );
+        assert!(generations.join("notes").exists());
+        for kept in ["a", "b", "c"] {
+            assert!(generations.join(kept.repeat(64)).is_dir());
+        }
+    }
+
+    #[tokio::test]
+    async fn retention_never_touches_code_runtime_generations() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::CodeIntelligence);
+        let error = store
+            .retire_generations("claude-code", &BTreeSet::new())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("only Agent Provider"));
+        assert!(
+            store
+                .plugin_root("claude-code")
+                .join("generations")
+                .join("d".repeat(64))
+                .is_dir()
+        );
     }
 }

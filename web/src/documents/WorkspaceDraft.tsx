@@ -109,11 +109,15 @@ export function WorkspaceDraftRow(
   );
 }
 
-export function WorkspaceDraftPane({ id, beforeLeave, onAction }: {
-  id: string;
-  beforeLeave: MutableRefObject<DraftFlush>;
-  onAction: (action: WorkspaceDraftAction) => void;
-}): React.JSX.Element {
+export function WorkspaceDraftPane(
+  { id, beforeLeave, onAction, onOpenSessions }: {
+    id: string;
+    beforeLeave: MutableRefObject<DraftFlush>;
+    onAction: (action: WorkspaceDraftAction) => void;
+    /** Mobile only: the page owns its Sessions control (no bottom nav). */
+    onOpenSessions?: (() => void) | undefined;
+  },
+): React.JSX.Element {
   const library = useDraftLibrary();
   const draft = library.entries.find((entry) => entry.id === id);
   return (
@@ -126,6 +130,10 @@ export function WorkspaceDraftPane({ id, beforeLeave, onAction }: {
         id={id}
         beforeLeave={beforeLeave}
         onCopyToSession={() => draft && onAction({ draft, action: "copy" })}
+        mobileChrome={onOpenSessions && {
+          onOpenSessions,
+          onMenu: () => draft && onAction({ draft, action: "menu" }),
+        }}
       />
     </Stack>
   );

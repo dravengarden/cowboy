@@ -5249,6 +5249,18 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn deleted_session_generations(
+        &self,
+    ) -> Result<Vec<(String, String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, provider, provider_generation_digest FROM sessions \
+             WHERE deleted_at_ms IS NOT NULL AND provider_generation_digest <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list soft-deleted SQLite session generations")
+    }
+
     pub(super) async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         let retention_ms = retention_days.saturating_mul(86_400_000);
         let result = sqlx::query(

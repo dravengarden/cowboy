@@ -43,6 +43,9 @@ export function machinesForResources(
   );
 }
 
+/** Below this, retired Plugin generations or other owners' data need attention. */
+const LOW_DISK_BYTES = 15 * 1024 ** 3;
+
 /** One line under the Machine name: placement, reachability and freshness. */
 export function machineResourcesCaption(
   machine: MachineSummary,
@@ -56,7 +59,10 @@ export function machineResourcesCaption(
   if (!machine.resources) {
     return `${placement} · resource reporting needs a newer Machine`;
   }
-  return `${placement}${observed}`;
+  const lowDisk = machine.resources.disk_available_bytes < LOW_DISK_BYTES
+    ? ` · low disk: ${formatBytes(machine.resources.disk_available_bytes)} free`
+    : "";
+  return `${placement}${observed}${lowDisk}`;
 }
 
 /** Label/value tiles for one Machine; sessions are always known. */

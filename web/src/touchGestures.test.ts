@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   createRetargetedTouchClickGuard,
+  drawerIgnoresTouch,
   expandedSelection,
   followDetachedTouchStream,
   horizontalSwipe,
@@ -140,4 +141,37 @@ Deno.test("a swipe keeps its touch stream after a render detaches the start node
   assertEquals(seen, ["move", "end"]);
   const noop = { move: () => undefined, end: () => undefined, cancel: () => undefined };
   assertEquals(followDetachedTouchStream(null, noop)(), undefined);
+});
+
+Deno.test("an idle writing page lets its editor yield the drawer swipe", () => {
+  const element = (
+    ancestors: Record<string, unknown>,
+    focusWithin = false,
+  ): Element =>
+    ({
+      closest: (selector: string) => ancestors[selector] ?? null,
+      matches: (selector: string) =>
+        selector === ":focus-within" && focusWithin,
+    }) as unknown as Element;
+  const ignore = "[data-mobile-drawer-ignore]";
+  const idleSwipe = "[data-mobile-drawer-idle-swipe]";
+  assertEquals(drawerIgnoresTouch(element({}), ignore), false);
+  assertEquals(drawerIgnoresTouch(element({ [ignore]: {} }), ignore), true);
+  const blurredPage = element({}, false);
+  assertEquals(
+    drawerIgnoresTouch(
+      element({ [ignore]: {}, [idleSwipe]: blurredPage }),
+      ignore,
+    ),
+    false,
+  );
+  const editingPage = element({}, true);
+  assertEquals(
+    drawerIgnoresTouch(
+      element({ [ignore]: {}, [idleSwipe]: editingPage }),
+      ignore,
+    ),
+    true,
+  );
+  assertEquals(drawerIgnoresTouch(null, ignore), false);
 });
