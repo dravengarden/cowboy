@@ -316,6 +316,21 @@ struct Broker {
     next_lease: AtomicU64,
 }
 
+/// Why a live worker cannot hibernate now, if anything would be lost.
+fn hibernation_refusal(worker: &WorkerSnapshot) -> Option<&'static str> {
+    if worker.state != WorkerState::Running || worker.current_turn_id.is_some() {
+        Some("session is busy")
+    } else if !worker.pending_permissions.is_empty() {
+        Some("session is waiting for a permission decision")
+    } else if worker.background_tasks.unwrap_or(0) > 0 {
+        Some("session has background work in progress")
+    } else if worker.pending_prompt_count > 0 {
+        Some("session has a queued prompt")
+    } else {
+        None
+    }
+}
+
 fn should_recycle_for_explicit_revive(worker: &WorkerSnapshot, desired_generation: &str) -> bool {
     matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
         || (!desired_generation.is_empty()
@@ -1587,6 +1602,62 @@ impl Broker {
         self.resetting_sessions.lock().remove(&session_id);
         self.ensure_session_in_lifecycle(session, &_cleanup_guard)
             .await;
+        self.send_controller(Frame::CommandAck {
+            session_id,
+            command_id,
+            accepted: true,
+            reason: None,
+        });
+    }
+
+    /// Release an idle session's worker without deleting the session. Unlike
+    /// [`Self::reset_session`] nothing relaunches: the declaration is dropped
+    /// and the Controller's next `EnsureSession` resumes the retained native
+    /// thread, exactly as after a Machine restart. A turn, a permission prompt
+    /// or native background work refuses, because stopping would lose it.
+    async fn hibernate_session(self: &Arc<Self>, session_id: String, command_id: String) {
+        let cleanup_gate = self.session_lifecycle_gate(&session_id);
+        let _cleanup_guard = cleanup_gate.lock().await;
+        let snapshot = self
+            .workers
+            .lock()
+            .get(&session_id)
+            .map(|worker| worker.snapshot.clone());
+        let Some(mut snapshot) = snapshot else {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "session has no live worker".to_owned(),
+            );
+            return;
+        };
+        if let Some(reason) = hibernation_refusal(&snapshot).or_else(|| {
+            self.launching
+                .lock()
+                .contains(&session_id)
+                .then_some("session is starting")
+        }) {
+            self.command_rejected(&session_id, command_id, reason.to_owned());
+            return;
+        }
+        // Fence any launch while the worker stops, as a reset does, then
+        // forget the declaration so nothing replaces it.
+        self.cancelled_sessions.lock().insert(session_id.clone());
+        self.sessions.lock().remove(&session_id);
+        self.awaiting_reconnect.lock().remove(&session_id);
+        self.startup_failures.lock().remove(&session_id);
+        self.unpin_fallback(&session_id);
+        self.force_recycle_failed_start(&session_id).await;
+        self.pending_commands.lock().remove(&session_id);
+        self.cancelled_sessions.lock().remove(&session_id);
+        self.session_states.lock().remove(&session_id);
+        snapshot.state = WorkerState::Exited;
+        snapshot.exit_detail = Some("hibernated".to_owned());
+        snapshot.background_tasks = Some(0);
+        tracing::info!(session = %session_id, "session hibernated");
+        self.send_controller(Frame::Snapshot {
+            worker: Box::new(snapshot),
+        });
         self.send_controller(Frame::CommandAck {
             session_id,
             command_id,
@@ -3167,6 +3238,10 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             }
             broker.route_worker(&session_id, WorkerCommand::Drain);
         }
+        CoreCommand::HibernateSession {
+            session_id,
+            command_id,
+        } => broker.hibernate_session(session_id, command_id).await,
         CoreCommand::StopSession {
             session_id,
             command_id,
@@ -4223,6 +4298,78 @@ mod tests {
             1,
         );
         (broker, launch, rx)
+    }
+
+    #[tokio::test]
+    async fn hibernation_refuses_a_busy_worker_and_releases_an_idle_one() {
+        let (broker, launch, mut worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+
+        broker
+            .hibernate_session("sess-1".to_owned(), "hibernate-1".to_owned())
+            .await;
+        let Some(Frame::CommandAck {
+            accepted, reason, ..
+        }) = controller_rx.recv().await
+        else {
+            panic!("busy hibernation acknowledgement");
+        };
+        assert!(!accepted);
+        assert_eq!(reason.as_deref(), Some("session is busy"));
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+
+        let mut idle = broker.snapshots().into_iter().next().expect("worker");
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+        broker.update_snapshot(idle, 1);
+        while controller_rx.try_recv().is_ok() {}
+        while worker_rx.try_recv().is_ok() {}
+
+        broker
+            .hibernate_session("sess-1".to_owned(), "hibernate-2".to_owned())
+            .await;
+        let Some(Frame::Snapshot { worker }) = controller_rx.recv().await else {
+            panic!("hibernated worker snapshot");
+        };
+        assert_eq!(worker.state, WorkerState::Exited);
+        assert_eq!(worker.exit_detail.as_deref(), Some("hibernated"));
+        // The resumable native id survives for the next ensure.
+        assert_eq!(worker.agent_session_id.as_deref(), Some("agent-1"));
+        let Some(Frame::CommandAck { accepted, .. }) = controller_rx.recv().await else {
+            panic!("hibernation acknowledgement");
+        };
+        assert!(accepted);
+        assert!(matches!(
+            worker_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::Stop { .. },
+                ..
+            })
+        ));
+        // Nothing relaunches it: the worker and its declaration are released.
+        assert!(!broker.workers.lock().contains_key("sess-1"));
+        assert!(!broker.sessions.lock().contains_key("sess-1"));
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+    }
+
+    #[test]
+    fn hibernation_keeps_every_kind_of_unfinished_work() {
+        let (broker, _, _) = reconnecting_worker_fixture();
+        let mut worker = broker.snapshots().into_iter().next().expect("worker");
+        worker.state = WorkerState::Running;
+        worker.current_turn_id = None;
+        assert_eq!(hibernation_refusal(&worker), None);
+        worker.pending_permissions = vec!["permission-1".to_owned()];
+        assert!(hibernation_refusal(&worker).is_some());
+        worker.pending_permissions.clear();
+        worker.background_tasks = Some(1);
+        assert!(hibernation_refusal(&worker).is_some());
+        worker.background_tasks = Some(0);
+        worker.pending_prompt_count = 1;
+        assert!(hibernation_refusal(&worker).is_some());
     }
 
     #[test]

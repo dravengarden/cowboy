@@ -90,6 +90,8 @@ fn summary(connected: bool, components: Vec<ComponentInventory>) -> MachineSumma
         plugin_contracts: None,
         capacity: MachineCapacity::default(),
         active_sessions: 0,
+        resources: None,
+        capabilities: crate::machine_protocol::MachineCapabilities::default(),
         pending_updates: Vec::new(),
         convergence: Vec::new(),
         plugin_lifecycle: crate::machine_protocol::PluginLifecycleOwner::Manual,

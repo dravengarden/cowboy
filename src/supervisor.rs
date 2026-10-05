@@ -547,6 +547,35 @@ impl Supervisor {
             .is_ok_and(|runtime| runtime.has_worker(session_id))
     }
 
+    /// Release an idle session's worker to free its Machine memory and slot.
+    /// The session, transcript, worktree and native id remain; opening or
+    /// prompting it later resumes through the ordinary revive path. The Machine
+    /// re-checks idleness atomically and refuses if work started meanwhile.
+    ///
+    /// # Errors
+    /// If the session is unknown, has no live worker, or has unfinished work.
+    pub fn hibernate_session(&self, session_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        let runtime = self.runtime_for_session(session_id)?;
+        if !runtime.has_worker(session_id) {
+            return Err("session is already hibernated".to_owned());
+        }
+        if meta.status != Status::Running || self.hub.session_has_in_flight_prompt(session_id) {
+            return Err("wait for the current turn to finish before hibernating".to_owned());
+        }
+        if meta.background_tasks > 0 {
+            return Err("session has background work in progress".to_owned());
+        }
+        runtime.hibernate(session_id);
+        Ok(())
+    }
+
     /// Replace a session's agent with a fresh context without deleting the
     /// Cowboy session. The remote broker needs an explicit reset operation so
     /// its permanent-delete tombstone cannot poison the replacement launch.

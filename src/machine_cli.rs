@@ -27,6 +27,7 @@ use crate::machine_protocol::{
 
 mod auth_watch;
 pub(crate) mod execution;
+mod host_resources;
 mod installation;
 mod login_process;
 mod projects;
@@ -82,6 +83,8 @@ struct ControllerConfig {
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
+/// Host observations ride the heartbeat, but no more often than this.
+const HOST_RESOURCES_INTERVAL: Duration = Duration::from_secs(30);
 /// The Machine's workspace *configuration*. Root identities deliberately stay
 /// out of it: subscribers restart the Code adapter whenever this changes, and
 /// replacing a root's object changes no trusted path.
@@ -1183,6 +1186,12 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         tokio::spawn(write_controller_messages(socket_sink, controller_write_rx));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
+    let state_dir = config
+        .worktree_root
+        .parent()
+        .unwrap_or(&config.worktree_root)
+        .to_path_buf();
+    let mut resources_due = tokio::time::Instant::now();
     let result: anyhow::Result<()> = async {
         loop {
             tokio::select! {
@@ -1191,6 +1200,22 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                         &controller_write_tx,
                         &MachineFrame::Heartbeat { sent_at_ms: unix_ms() },
                     )?;
+                    if protocol >= crate::machine_protocol::HOST_RESOURCES_PROTOCOL_VERSION
+                        && tokio::time::Instant::now() >= resources_due
+                    {
+                        resources_due = tokio::time::Instant::now() + HOST_RESOURCES_INTERVAL;
+                        if let Some(resources) = host_resources::sample(&state_dir) {
+                            queue_controller_frame(
+                                &controller_write_tx,
+                                &MachineFrame::Event {
+                                    event: MachineEvent::HostResources {
+                                        resources,
+                                        observed_at_ms: unix_ms(),
+                                    },
+                                },
+                            )?;
+                        }
+                    }
                     if protocol >= 2
                         && let Some(event) = config.provider_usage.pending_batch()?
                     {
