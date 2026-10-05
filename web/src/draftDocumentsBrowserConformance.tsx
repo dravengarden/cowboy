@@ -1166,9 +1166,7 @@ export async function runDraftDocumentsBrowserConformance(
       const create = container.querySelector<HTMLElement>("[data-desktop-new-session]")!;
       check(Math.abs(parseFloat(getComputedStyle(create).fontSize) - size * 0.875) < 1, "Sidebar Create label tracks root font");
       const toolbar = create.parentElement!;
-      check(toolbar.scrollWidth <= toolbar.clientWidth + 1, `Sidebar Create/folder/fold controls fit at ${size}px`);
-      const folderIcon = toolbar.querySelector<SVGElement>("button[aria-label=Folders] svg")!;
-      check(Math.abs(folderIcon.getBoundingClientRect().width - size * 1.5) < 1, "Sidebar folder icon follows global font");
+      check(toolbar.scrollWidth <= toolbar.clientWidth + 1, `Sidebar Create/fold controls fit at ${size}px`);
     }
     document.documentElement.style.fontSize = originalFont;
     if (originalScale) document.documentElement.style.setProperty("--cowboy-font-scale", originalScale);

@@ -218,9 +218,9 @@ without `h/l` is not a Vim tree; the actions modal keeps every former action
 lists the region's live map. Command Palette entries: New Session Folder,
 Move Session to Folder…, Organize Sessions by Project, Collapse/Expand All
 Session Folders, Reveal Current Session. No workspace-prefix continuation is
-added; `Cmd/Alt+K N` still creates a session. A folder button beside New
-session opens the same folder-wide actions with the pointer; the fold button
-beside it (see Mobile) is the one-click Focus / Expand all toggle.
+added; `Cmd/Alt+K N` still creates a session. With the pointer, Create's
+Folder variant owns new folders and Organize by project; the fold button
+beside Create (see Mobile) is the one-click Focus / Expand all toggle.
 
 Pointer: see [Drag into folders](#drag-into-folders). Order mode keeps the
 row-above rule, so `j/k` across a header moves a session in or out. The folder actions modal offers

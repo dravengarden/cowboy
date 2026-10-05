@@ -840,7 +840,6 @@ function SessionList({
     const rowKeys = tree.rows.map(sessionTreeRowKey);
     const rowByKey = new Map(tree.rows.map((row): [string, SessionTreeRow] => [sessionTreeRowKey(row), row]));
     const [folderMenu, setFolderMenu] = useState<{ folder: SessionFolder; el: HTMLElement } | null>(null);
-    const [rootMenuEl, setRootMenuEl] = useState<HTMLElement | null>(null);
     const [namePrompt, setNamePrompt] = useState<
         { mode: "create"; parent: string | null } | { mode: "rename"; folder: SessionFolder } | null
     >(null);
@@ -1182,7 +1181,6 @@ function SessionList({
         // (the RenameSessionShell contract).
         flushSync(() => {
             setFolderMenu(null);
-            setRootMenuEl(null);
             setMovePicker(null);
             setNamePrompt(prompt);
         });
@@ -1462,19 +1460,6 @@ function SessionList({
                     Create
                     {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
                 </Button>}
-                <IconButton
-                    aria-label="Folders"
-                    onClick={(e): void => setRootMenuEl(e.currentTarget)}
-                    sx={{
-                        ...(desktop && desktopEmbeddedControlSx()),
-                        width: desktop ? "3rem" : 48,
-                        minHeight: desktop ? "3rem" : 48,
-                        borderRadius: 1.25,
-                        flexShrink: 0,
-                    }}
-                >
-                    <CreateNewFolderOutlined />
-                </IconButton>
                 {fold.action && <Tooltip title={fold.label} describeChild>
                     <IconButton
                         aria-label={fold.label}
@@ -2259,53 +2244,6 @@ function SessionList({
                 </DesktopModalShell>
             )}
             {/* --- Folder layers (docs/sessions-folders.md) --- */}
-            <Menu
-                anchorEl={rootMenuEl}
-                open={!!rootMenuEl}
-                onClose={(): void => setRootMenuEl(null)}
-                slotProps={{ paper: { sx: { minWidth: 220 } } }}
-            >
-                <MenuItem onClick={(): void => openFolderName({ mode: "create", parent: null })}>
-                    <ListItemIcon><CreateNewFolderOutlined fontSize="medium" /></ListItemIcon>
-                    <ListItemText primary="New folder…" />
-                </MenuItem>
-                <MenuItem
-                    disabled={unboundProjects.length === 0}
-                    onClick={(): void => {
-                        organizeSessionsByProject();
-                        setRootMenuEl(null);
-                    }}
-                >
-                    <ListItemIcon><LabelOutlined fontSize="medium" /></ListItemIcon>
-                    <ListItemText
-                        primary="Organize by project"
-                        secondary={unboundProjects.length > 0
-                            ? `${String(unboundProjects.length)} ${unboundProjects.length === 1 ? "project" : "projects"} without a folder`
-                            : "Every project has a folder"}
-                    />
-                </MenuItem>
-                <Divider />
-                <MenuItem
-                    disabled={sessionFolders.folders.length === 0}
-                    onClick={(): void => {
-                        runFoldersAction("collapseAll", null);
-                        setRootMenuEl(null);
-                    }}
-                >
-                    <ListItemIcon><ExpandLess fontSize="medium" /></ListItemIcon>
-                    <ListItemText primary="Collapse all" />
-                </MenuItem>
-                <MenuItem
-                    disabled={sessionFolders.folders.length === 0}
-                    onClick={(): void => {
-                        runFoldersAction("expandAll", null);
-                        setRootMenuEl(null);
-                    }}
-                >
-                    <ListItemIcon><ExpandMore fontSize="medium" /></ListItemIcon>
-                    <ListItemText primary="Expand all" />
-                </MenuItem>
-            </Menu>
             <Menu
                 sx={{ display: desktop ? "none" : undefined }}
                 anchorEl={folderMenu?.el ?? null}
