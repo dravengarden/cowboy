@@ -256,6 +256,8 @@ export function DesktopStatusLine({
   const ordinaryHints: RegionHint[] = [
     ...promptRegions,
     ...regionHints(focusedRegion, status, projection, sourceMode, rawSync.phase === "live"),
+    // Window motion works from every region (FOCUS.md "Window motion").
+    ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
     ...((focusedRegion === "sessions.list" || focusedRegion === "sessions.rail") && itemCount > 0
       ? [{ keys: DESKTOP_SHORTCUTS.switchSession, label: "Switch" }]
       : []),

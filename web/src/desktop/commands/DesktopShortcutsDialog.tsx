@@ -68,6 +68,11 @@ const NAVIGATION: ShortcutRow[] = [
     description:
       `${DESKTOP_FOCUS_PROMPT_SHORTCUT} returns to the editor without changing its Vim mode or caret`,
   },
+  {
+    keys: ["Ctrl+H/J/K/L"],
+    title: "Move to the region left / below / above / right",
+    description: "By on-screen position, as LazyVim's window keys. Works from Vim Normal and every list, reader and bar, and inside dialogs; a field in Vim Insert keeps Ctrl+H/J/K",
+  },
   { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
   {
     keys: [

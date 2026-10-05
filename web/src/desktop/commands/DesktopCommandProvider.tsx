@@ -61,6 +61,13 @@ import {
 } from "./hintTargets";
 import { handleDesktopModalKey } from "./modalNavigation";
 import {
+  type RegionDirection,
+  regionInDirection,
+  regionMotionKey,
+} from "./regionNavigation";
+import { getVimMode } from "../../vimModeStore";
+import { getVimSetting } from "../../vimSetting";
+import {
   handleInputVimKey,
   installInputVim,
   isInputVimNormal,
@@ -166,6 +173,74 @@ export function desktopSurfaceCommandOwnsKey(
     ) return true;
   }
   return false;
+}
+
+/** Where the window motion may take Ctrl+H/J/K/L: Vim Normal anywhere and
+ *  command chrome. A field in Vim Insert keeps them (Vim's Ctrl-H/J/K, as
+ *  in LazyVim); with Vim off a field has no Normal, so they move from it. */
+function regionMotionAllowed(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  if (!element) return true;
+  if (element.matches("[data-vim-command-sink]")) {
+    return getVimMode() === "normal" && !vimSinkAwaitsInput(element);
+  }
+  if (isInputVimNormal(element)) return true;
+  if (isTextEditingTarget(element)) return !getVimSetting();
+  return true;
+}
+
+function visibleRegions(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-desktop-region]")]
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 &&
+        element.closest("[aria-hidden='true'], [inert]") === null;
+    });
+}
+
+/** The region nearest the current one in a direction, by on-screen geometry. */
+export function desktopRegionInDirection(
+  focusedRegion: string | null,
+  direction: RegionDirection,
+): string | null {
+  const regions = visibleRegions();
+  const active = document.activeElement;
+  const current = (active instanceof Element
+    ? active.closest<HTMLElement>("[data-desktop-region]")
+    : null) ??
+    regions.find((element) => element.dataset.desktopRegion === focusedRegion) ??
+    null;
+  if (!current) {
+    return regions.find((element) =>
+      element.dataset.desktopRegion === "prompt.composer"
+    )?.dataset.desktopRegion ?? regions[0]?.dataset.desktopRegion ?? null;
+  }
+  const candidates = regions.filter((element) =>
+    element !== current && !element.contains(current) &&
+    !current.contains(element) &&
+    element.dataset.desktopRegion !== current.dataset.desktopRegion
+  );
+  const index = regionInDirection(
+    current.getBoundingClientRect(),
+    candidates.map((element) => element.getBoundingClientRect()),
+    direction,
+  );
+  return index === null ? null : candidates[index]!.dataset.desktopRegion ?? null;
+}
+
+/** A brief ring on the region a window motion reached. */
+function flashDesktopRegion(region: string): void {
+  const element = document.querySelector<HTMLElement>(
+    `[data-desktop-region="${CSS.escape(region)}"]`,
+  );
+  if (!element) return;
+  element.removeAttribute("data-desktop-region-flash");
+  void element.offsetWidth;
+  element.setAttribute("data-desktop-region-flash", "");
+  globalThis.setTimeout(
+    () => element.removeAttribute("data-desktop-region-flash"),
+    400,
+  );
 }
 
 /** The scope test shared by dispatch, which-key and live keycaps. */
@@ -383,6 +458,28 @@ export function DesktopCommandProvider(
         handleInputVimKey(event)
       ) {
         clearPendingJumpChord();
+        return;
+      }
+      // Window motion (FOCUS.md "Window motion"): Ctrl+H/J/K/L moves to the
+      // nearest region in that direction from any command focus. Dialogs run
+      // it in their own grammar (modalNavigation).
+      const motion = regionMotionKey(event);
+      if (
+        motion && !leaderArmed.current && !event.repeat &&
+        desktopKeyIntent(event).owner !== "ime" &&
+        !desktopOverlayOwnsShortcuts(document) &&
+        workspace.productMode === "agent" &&
+        workspace.selectedSplitter === null &&
+        regionMotionAllowed(event.target)
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        clearPendingJumpChord();
+        const next = desktopRegionInDirection(workspace.focusedRegion, motion);
+        if (next) {
+          workspace.focusRegion(next);
+          flashDesktopRegion(next);
+        }
         return;
       }
       const eventElement = event.target instanceof Element ? event.target : null;
@@ -1283,6 +1380,17 @@ export function DesktopCommandProvider(
                   outline: `2px solid ${theme.palette.primary.main}`,
                   outlineOffset: 2,
                   borderRadius: 12,
+                },
+                // The region a window motion reached rings once.
+                "[data-desktop-region-flash]": {
+                  animation: "cowboyRegionFlash 380ms ease-out",
+                },
+                "@keyframes cowboyRegionFlash": {
+                  from: { boxShadow: `inset 0 0 0 2px ${theme.palette.primary.main}` },
+                  to: { boxShadow: "inset 0 0 0 2px transparent" },
+                },
+                "@media (prefers-reduced-motion: reduce)": {
+                  "[data-desktop-region-flash]": { animation: "none" },
                 },
                 // Vim Normal in a text field: the one-character selection
                 // is the block cursor; no caret blinks beside it.

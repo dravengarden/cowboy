@@ -113,6 +113,24 @@ try {
   await press("Escape", "Escape", 27);
   await waitFor("!document.querySelector('[data-move-pick-banner]')", "Esc leaves Move pick");
   console.log(JSON.stringify({ move_pick: "ok" }));
+  // Window motion (Vim off): Ctrl+H/J/K/L walk the regions by geometry.
+  const regionNow = "document.activeElement?.closest('[data-desktop-region]')?.dataset.desktopRegion";
+  await press("k", "KeyK", 75, mac ? 4 : 1);
+  await press("p", "KeyP", 80);
+  await waitFor(`${regionNow} === 'prompt.composer'`, "␣P focuses the Prompt");
+  const hops: [string, string, number, string][] = [
+    ["l", "KeyL", 76, "conversation.transcript"],
+    ["h", "KeyH", 72, "prompt.composer"],
+    ["h", "KeyH", 72, "sessions.list"],
+    ["l", "KeyL", 76, "prompt.composer"],
+    ["k", "KeyK", 75, "topbar.controls"],
+    ["j", "KeyJ", 74, "prompt.composer"],
+  ];
+  for (const [key, code, keyCode, region] of hops) {
+    await press(key, code, keyCode, 2);
+    await waitFor(`${regionNow} === '${region}'`, `Ctrl+${key.toUpperCase()} reaches ${region}`);
+  }
+  console.log(JSON.stringify({ window_motion: hops.map(([key, , , region]) => `^${key}→${region}`).join(" ") }));
   // The Draft title in the real App (Vim on): `␣T` puts a Normal cursor on
   // it, and each documented way back reaches the body.
   await page.evaluate(`(() => {
@@ -152,6 +170,13 @@ try {
     await waitFor(inBody, `${name} in the title's Normal returns to the body`);
   }
   console.log(JSON.stringify({ draft_title_return: "j, Enter, Esc" }));
+  // With Vim on, the Draft body's Normal moves with Ctrl+H to Sessions.
+  await press("Escape", "Escape", 27);
+  await press("h", "KeyH", 72, 2);
+  await waitFor(`${regionNow} === 'sessions.list'`, "Ctrl+H from the Draft body's Vim Normal reaches Sessions");
+  await press("l", "KeyL", 76, 2);
+  await waitFor(`${regionNow} === 'prompt.composer'`, "Ctrl+L returns to the Draft body");
+  console.log(JSON.stringify({ window_motion_vim: "ok" }));
 } finally {
   await page.close();
 }

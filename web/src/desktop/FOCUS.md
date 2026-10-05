@@ -397,6 +397,28 @@ continuation is optional.
 
 ## Navigation
 
+### Window motion
+
+`Ctrl+H/J/K/L` moves focus to the nearest region left, below, above or
+right of the current one, as LazyVim's window keys and vim-tmux-navigator
+(`commands/regionNavigation.ts`). Regions are read from the screen: a
+candidate must lie wholly beyond the current edge; one overlapping on the
+other axis wins, then the smaller gap. So `H/L` cross Sessions, Prompt and
+Conversation, and `J/K` move inside a column (Composer, Queue, Drafts,
+Plan) and up to the top bar. At the edge nothing moves; collapsed panes are
+skipped (`␣W[` `␣W]` `␣W\\` restore them). The reached region rings once.
+Entering Prompt keeps its Vim mode and caret.
+
+It works wherever Cowboy owns the key: Vim Normal (the editors' sink and
+native fields), lists, the reader, bars. A field in Vim Insert keeps
+`Ctrl+H/J/K` (Vim's backspace, newline, digraph), exactly as LazyVim:
+`Esc` then `Ctrl+L`. With Vim off a field has no Normal, so the motion
+works from it directly. Inside a dialog `Ctrl+H/J/K/L` equal its `H/J/K/L`
+("Modals"). It yields to the leader, an IME composition, menus and Resize
+mode. In a Windows/Linux browser tab it claims Chrome's `Ctrl+H` History,
+`Ctrl+J` Downloads and `Ctrl+L` address bar (`Alt+D`/`F6` still reach
+it); macOS Chrome binds none of them.
+
 - Leader then `P/C`: focus Prompt or Conversation; `␣SS` focuses Sessions
   and `␣TT` the Top Bar.
 - Leader then `L/Q/D`: focus Plan, Queue, or Drafts.

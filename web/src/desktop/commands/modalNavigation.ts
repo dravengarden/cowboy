@@ -17,6 +17,8 @@
 // `[data-desktop-modal-keys='own']` runs its whole keymap itself (Settings).
 
 import { workspaceCommandKey } from "./workspaceCommandKey";
+import { regionMotionKey } from "./regionNavigation";
+import { getVimSetting } from "../../vimSetting";
 import { enterInputNormal, inputVimField } from "../vim/inputVim";
 
 /** Regions inside a modal that keep their own keys while focused. */
@@ -232,7 +234,14 @@ export function handleDesktopModalKey(
     return true;
   };
   // Insert: the field keeps every key except the one that leaves it.
-  if (target && isModalTextField(target)) {
+  // Ctrl+H/J/K/L is the window motion (FOCUS.md "Window motion"): inside a
+  // dialog it moves like H/J/K/L. A field in Vim Insert keeps it (Vim's
+  // Ctrl-H/J/K); without Vim a field has no Normal, so it moves from there.
+  const motion = regionMotionKey(event);
+  const motionFromField = motion !== null && target !== null &&
+    isModalTextField(target) && !getVimSetting() &&
+    !target.closest("[data-desktop-escape='close']");
+  if (target && isModalTextField(target) && !motionFromField) {
     // A launcher's search (the Command Palette) closes on its first Esc.
     if (target.closest("[data-desktop-escape='close']")) return false;
     const escape = (event.key === "Escape" && !event.ctrlKey &&
@@ -243,10 +252,13 @@ export function handleDesktopModalKey(
     enterModalNormal(target);
     return consume();
   }
-  if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) {
+  if (
+    motion === null &&
+    (event.metaKey || event.ctrlKey || event.altKey || event.repeat)
+  ) {
     return false;
   }
-  const key = workspaceCommandKey(event);
+  const key = motion ?? workspaceCommandKey(event);
   const field = target?.hasAttribute(FIELD_CURSOR)
     ? target.querySelector<HTMLElement>(TEXT_FIELD)
     : null;

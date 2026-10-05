@@ -129,6 +129,10 @@ Deno.test("intentional Chrome overrides are limited to reader Vim motions", () =
     "Ctrl+U",
     "Ctrl+F",
     "Ctrl+B",
+    "Ctrl+H",
+    "Ctrl+J",
+    "Ctrl+K",
+    "Ctrl+L",
   ]);
 });
 

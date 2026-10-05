@@ -136,10 +136,16 @@ export function assertChromeShortcutAllowed(
   }
 }
 
-/** Contextual Vim bindings deliberately preferred over Chrome in a reader. */
+/** Contextual Vim bindings deliberately preferred over Chrome: reader paging
+ *  and the window motion (FOCUS.md "Window motion"), which takes Windows/
+ *  Linux History, Downloads, search and address-bar focus from Normal. */
 export const INTENTIONAL_CHROME_VIM_OVERRIDES = [
   "Ctrl+D",
   "Ctrl+U",
   "Ctrl+F",
   "Ctrl+B",
+  "Ctrl+H",
+  "Ctrl+J",
+  "Ctrl+K",
+  "Ctrl+L",
 ] as const;
