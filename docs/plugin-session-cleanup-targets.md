@@ -6,6 +6,15 @@ marked targets and finishes before any removal. Exceeding that limit preserves
 all candidates and releases their handles; the existing directory traversal
 limit remains separate.
 
+The first complete scan is a bounded process-local retry plan shared by cloned
+cleanup workspaces. Ordinary I/O errors retain all observed target handles and
+the successful-target cursor. Retrying does not rescan, adopt same-path marked
+replacements, or reconsider completed targets whose markers have been removed.
+New targets appearing after admission are outside that plan. Successful overall
+completion releases it; a later explicit invocation can observe a new Cargo
+build. Failed collection admits no plan and has no cleanup effects. The plan is
+not durable across resident restart and establishes no launch-time ownership.
+
 Linux collection opens each pending directory and candidate relative to the held
 Session-root descriptor using `openat2` with `BENEATH`, `NO_SYMLINKS` and
 `NO_XDEV`. It enumerates each opened directory through its own descriptor and

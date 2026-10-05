@@ -444,6 +444,7 @@ pub struct CleanupWorkspace {
     session_id: String,
     cwd: PathBuf,
     directory: Arc<File>,
+    cleanup_plan: Arc<parking_lot::Mutex<Option<CleanupPlan>>>,
 }
 
 #[derive(Debug)]
@@ -512,6 +513,22 @@ impl std::fmt::Display for CleanupTargetChanged {
 
 impl std::error::Error for CleanupTargetChanged {}
 
+/// Bounded process-local observations shared by cleanup retries.
+struct CleanupPlan {
+    targets: Vec<CleanupTarget>,
+    completed: Vec<PathBuf>,
+}
+
+impl CleanupPlan {
+    fn new(mut targets: Vec<CleanupTarget>) -> Self {
+        targets.sort_by_key(|target| std::cmp::Reverse(target.path.components().count()));
+        Self {
+            targets,
+            completed: Vec::new(),
+        }
+    }
+}
+
 struct CleanupTarget {
     path: PathBuf,
     directory: File,
@@ -563,6 +580,7 @@ pub fn capture_cleanup_workspace(
         session_id: session_id.to_owned(),
         cwd,
         directory: Arc::new(directory),
+        cleanup_plan: Arc::new(parking_lot::Mutex::new(None)),
     };
     workspace.verify()?;
     Ok(workspace)
@@ -618,6 +636,15 @@ fn validated_cleanup_root(worktree_root: &Path, session_id: &str, cwd: &Path) ->
 }
 
 fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<PathBuf>> {
+    cleanup_build_artifacts_sync_with_hook(workspace, &|_| Ok(()))
+}
+
+fn cleanup_build_artifacts_sync_with_hook(
+    workspace: &CleanupWorkspace,
+    before_child_remove: &impl Fn(&Path) -> Result<()>,
+) -> Result<Vec<PathBuf>> {
+    // Serialize cloned callers; a failed scan admits no plan or cleanup effects.
+    let mut retained_plan = workspace.cleanup_plan.lock();
     workspace.verify()?;
     let session_root = validated_cleanup_root(
         &workspace.worktree_root,
@@ -627,6 +654,31 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
     workspace.verify()?;
 
     let access_root = workspace.access_root(&session_root);
+    if retained_plan.is_none() {
+        *retained_plan = Some(CleanupPlan::new(scan_cleanup_targets(
+            workspace,
+            &access_root,
+        )?));
+    }
+    let result = remove_cleanup_plan(
+        workspace,
+        &session_root,
+        &access_root,
+        retained_plan.as_mut().expect("cleanup plan initialized"),
+        before_child_remove,
+    );
+    if result.is_ok() {
+        // Explicit later invocations can observe newly rebuilt targets; the
+        // deletion broker drops this workspace after successful completion.
+        *retained_plan = None;
+    }
+    result
+}
+
+fn scan_cleanup_targets(
+    workspace: &CleanupWorkspace,
+    access_root: &Path,
+) -> Result<Vec<CleanupTarget>> {
     let mut candidates = Vec::new();
     let mut pending = vec![PathBuf::new()];
     let mut visited = 0_usize;
@@ -636,7 +688,7 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
         if visited > MAX_CLEANUP_DIRECTORIES {
             bail!("session worktree cleanup exceeded {MAX_CLEANUP_DIRECTORIES} directories");
         }
-        let Some(handle) = open_cleanup_scan_directory(workspace, &access_root, &directory)? else {
+        let Some(handle) = open_cleanup_scan_directory(workspace, access_root, &directory)? else {
             continue;
         };
         let directory_path = access_root.join(&directory);
@@ -657,7 +709,7 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
             let path = access_root.join(&relative_path);
             if name == OsStr::new("target")
                 && let Some(directory) =
-                    open_cleanup_scan_directory(workspace, &access_root, &relative_path)?
+                    open_cleanup_scan_directory(workspace, access_root, &relative_path)?
                 && cargo_target_markers_match(&directory)?
             {
                 if candidates.len() >= MAX_CLEANUP_TARGETS {
@@ -675,9 +727,7 @@ fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<Path
         }
     }
 
-    remove_cleanup_targets(workspace, &session_root, &access_root, candidates, &|_| {
-        Ok(())
-    })
+    Ok(candidates)
 }
 
 /// Linux must resolve every scan component from the retained Session root.
@@ -731,18 +781,33 @@ fn open_cleanup_scan_directory(
     }
 }
 
+#[cfg(test)]
 fn remove_cleanup_targets(
     workspace: &CleanupWorkspace,
     session_root: &Path,
     access_root: &Path,
-    mut candidates: Vec<CleanupTarget>,
+    candidates: Vec<CleanupTarget>,
     before_child_remove: &impl Fn(&Path) -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
-    candidates.sort_by_key(|target| std::cmp::Reverse(target.path.components().count()));
-    let mut removed = Vec::with_capacity(candidates.len());
+    remove_cleanup_plan(
+        workspace,
+        session_root,
+        access_root,
+        &mut CleanupPlan::new(candidates),
+        before_child_remove,
+    )
+}
+
+fn remove_cleanup_plan(
+    workspace: &CleanupWorkspace,
+    session_root: &Path,
+    access_root: &Path,
+    plan: &mut CleanupPlan,
+    before_child_remove: &impl Fn(&Path) -> Result<()>,
+) -> Result<Vec<PathBuf>> {
     #[cfg(target_os = "linux")]
     let mut content_entries = 0;
-    for target in candidates {
+    while let Some(target) = plan.targets.get(plan.completed.len()) {
         target.verify(workspace)?;
         if !cargo_target_markers_match(&target.directory)? {
             return Err(CleanupTargetChanged.into());
@@ -762,7 +827,7 @@ fn remove_cleanup_targets(
         #[cfg(target_os = "linux")]
         clear_cleanup_directory(
             workspace,
-            &target,
+            target,
             &target.directory,
             Path::new(""),
             0,
@@ -787,9 +852,10 @@ fn remove_cleanup_targets(
         // Retain the directory structure. A name unlink after identity checking
         // could delete an independently substituted empty directory. Contents
         // above remain attached to the original target on Linux.
-        removed.push(session_root.join(target.path.strip_prefix(access_root)?));
+        plan.completed
+            .push(session_root.join(target.path.strip_prefix(access_root)?));
     }
-    Ok(removed)
+    Ok(plan.completed.clone())
 }
 
 #[cfg(target_os = "linux")]
@@ -1755,6 +1821,123 @@ mod tests {
             access_root,
             CleanupTarget { path, directory },
         )
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_retry_keeps_original_targets_across_workspace_clones() {
+        for case in ["new-marked", "new-unmarked", "link", "missing", "parent"] {
+            let temp = TestDir::new();
+            let (workspace, session, _, _) = observed_cleanup_target(&temp);
+            let target = session.join("project/target");
+            let error = cleanup_build_artifacts_sync_with_hook(&workspace, &|_| {
+                Err(std::io::Error::other("injected content error").into())
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains("injected content error"));
+            let original = if case == "parent" {
+                std::fs::rename(session.join("project"), session.join("original-project")).unwrap();
+                write_cargo_target(&target);
+                session.join("original-project/target")
+            } else {
+                let original = session.join("original-target");
+                std::fs::rename(&target, &original).unwrap();
+                match case {
+                    "new-marked" => write_cargo_target(&target),
+                    "new-unmarked" => {
+                        std::fs::create_dir(&target).unwrap();
+                        std::fs::write(target.join("source.txt"), "preserve").unwrap();
+                    }
+                    "link" => std::os::unix::fs::symlink(&original, &target).unwrap(),
+                    "missing" => {}
+                    _ => unreachable!(),
+                }
+                original
+            };
+            let retry = workspace.clone();
+            let error = cleanup_build_artifacts_sync(&retry).unwrap_err();
+            assert!(
+                error.downcast_ref::<CleanupTargetChanged>().is_some(),
+                "{case}: {error}"
+            );
+            assert!(original.join("debug/deps/libtest.rlib").is_file(), "{case}");
+            if matches!(case, "new-marked" | "parent") {
+                assert!(target.join("debug/deps/libtest.rlib").is_file(), "{case}");
+            }
+            if case == "new-unmarked" {
+                assert!(target.join("source.txt").is_file());
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_retry_finishes_original_plan_without_rescanning_completed_targets() {
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        write_cargo_target(&session.join("other/target"));
+        let markers = std::sync::atomic::AtomicUsize::new(0);
+        let error = cleanup_build_artifacts_sync_with_hook(&workspace, &|path| {
+            if markers.load(Ordering::SeqCst) == 2 {
+                return Err(std::io::Error::other("injected next-target error").into());
+            }
+            if matches!(
+                path.file_name().and_then(OsStr::to_str),
+                Some(".rustc_info.json" | "CACHEDIR.TAG")
+            ) {
+                markers.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("injected next-target error"));
+        let completed = {
+            let plan = workspace.cleanup_plan.lock();
+            assert_eq!(plan.as_ref().unwrap().completed.len(), 1);
+            plan.as_ref().unwrap().completed[0].clone()
+        };
+        std::fs::rename(&completed, session.join("completed-original")).unwrap();
+        write_cargo_target(&completed);
+        let late_target = session.join("late/target");
+        write_cargo_target(&late_target);
+        let cleared = cleanup_build_artifacts_sync(&workspace.clone()).unwrap();
+        assert_eq!(cleared.len(), 2);
+        assert!(cleared.contains(&completed));
+        let pending = cleared.iter().find(|path| **path != completed).unwrap();
+        assert_only_directories(pending);
+        assert_only_directories(&session.join("completed-original"));
+        assert!(completed.join("debug/deps/libtest.rlib").is_file());
+        assert!(late_target.join("debug/deps/libtest.rlib").is_file());
+        assert!(workspace.cleanup_plan.lock().is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_retry_clears_original_target_after_multiple_io_errors() {
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        for _ in 0..2 {
+            cleanup_build_artifacts_sync_with_hook(&workspace.clone(), &|_| {
+                Err(std::io::Error::other("injected content error").into())
+            })
+            .unwrap_err();
+            assert_eq!(
+                workspace
+                    .cleanup_plan
+                    .lock()
+                    .as_ref()
+                    .unwrap()
+                    .targets
+                    .len(),
+                1
+            );
+        }
+        assert_eq!(
+            cleanup_build_artifacts_sync(&workspace.clone()).unwrap(),
+            vec![session.join("project/target")]
+        );
+        assert_only_directories(&session.join("project/target"));
+        assert!(workspace.cleanup_plan.lock().is_none());
     }
 
     #[test]
