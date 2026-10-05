@@ -99,6 +99,20 @@ native `exec-server`, in a private home without Provider authentication. An
 execution-capable Provider explicitly accepts the executor digest. Neither side
 reaches into an installed target Agent's private generation.
 
+The executor's environment is closed: the Machine copies only a fixed base set
+(`HOME`, `PATH`, locale, `TMPDIR`, `SHELL` and the XDG directories) plus the
+names its operator lists in `--execution-env` / `COWBOY_MACHINE_EXECUTION_ENV`,
+typically host tool locations such as a worktree or cache root. Cowboy, Codex
+and Provider namespaces, credential-shaped names (`*_KEY`, `*_TOKEN`, ...) and
+loader or shell startup hooks are refused on both the Machine and the keeper.
+
+Session worktrees live under `--worktree-root` /
+`COWBOY_MACHINE_WORKTREE_ROOT`, by default `<state-dir>/worktrees`. Moving the
+root affects new sessions only: a session whose checkout already exists under
+the default stays there and remains trusted until it is deleted. Deleted-session
+Cargo cleanup covers the configured root, so such a session keeps its build
+artifacts for the host to reclaim.
+
 ### Alternatives considered
 
 | Approach                                          | Fit for this requirement                                                                                                                                                           |
