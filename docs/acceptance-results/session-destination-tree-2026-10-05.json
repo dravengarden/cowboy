@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "change": "Independent Draft Add to Session uses the shared workspace folder projection/order, collapsible directories, selectable Session leaves and direct top-level Sessions. Draft parent/ancestors open initially. Search opens matching paths and clearing restores folds. Provider/project/Machine context disambiguates equal titles. Keyboard tree navigation, IME guard, busy selection lock and Cancel preserve existing unsent copy + exact Undo behavior.",
+  "typecheck": "passed",
+  "lint": "passed with existing warnings",
+  "browser_results": [
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "light",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "a3a05c835660fba0cc81e5331cc95056a275f2aa7069c65a63fe6eb2abf6aef8",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 76ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Session destinations use a shared ordered directory tree; context expansion, folds/search, root leaves, duplicate identities, keyboard/IME guards, busy selection and font fit pass",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    },
+    {
+      "ok": true,
+      "suite": "draft-documents",
+      "theme_mode": "dark",
+      "browser": "Mozilla Firefox 153.0.1",
+      "executable": "/nix/store/70sacvna4w9xvyzmdggszbrns4sj27jh-firefox-unwrapped-153.0.1/bin/firefox",
+      "fixture_sha256": "a3a05c835660fba0cc81e5331cc95056a275f2aa7069c65a63fe6eb2abf6aef8",
+      "isolation": "fresh profile / private loopback namespace / no credentials",
+      "tests": [
+        "Unified Create offers Session/Draft on Desktop and touch; no Machine required for Draft, retained title, IME guard, offline persistence, Draft folders and clear-to-root placement",
+        "Independent machine-free Draft mounts the actual shared editor under StrictMode and persists Unicode through IndexedDB",
+        "Shared template plugin preserves editor undo and refuses composition-time writes",
+        "Directory picker moves documents to top level without changing their content or identity",
+        "Browser IndexedDB retains offline edits and replays them on reconnect",
+        "Concurrent writer conflict preserves both documents and opens the recovered local copy",
+        "Long Markdown stays viewport-rendered (84390 characters; insertion 82ms in this browser)",
+        "Actual Desktop workspace, tabs and toolbar fit 320–1440px at 8–24px fonts; modified browser shortcuts are preserved",
+        "Unmount revokes old plugin editor authority and keeps the saved document",
+        "Session destinations use a shared ordered directory tree; context expansion, folds/search, root leaves, duplicate identities, keyboard/IME guards, busy selection and font fit pass",
+        "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager"
+      ],
+      "physical_device": "not_checked"
+    }
+  ],
+  "runner_deadline": "draft-documents overall deadline is 60 seconds; per-assertion/performance/recovery deadlines unchanged; results count updated from 10 to 11",
+  "verification": "Actual Cowboy themes, 320px pane at 8/16/24px fonts, tree context/folds/search/root/session identity/keyboard/IME/busy assertions; actual App copy sheet creates exact unsent copy and snackbar Undo retains original. No editor/Vim/input implementation changes or new native input acceptance claim.",
+  "release": {
+    "schema": 1,
+    "machine": "hawk",
+    "component": "cowboy",
+    "lane": "web",
+    "transaction": "1791168702466558223-7b3fd5c1a85b",
+    "revision": "7b3fd5c1a85bee9078fd4b91fbca3e1d4629415e",
+    "published": true,
+    "release": "/nix/store/ak62xzkzz1csddp7lniq5lf66wdj0nx0-cowboy-web-release",
+    "previousRelease": "/nix/store/ckf1g1iabfipr50i55vzdblpgg1smllm-cowboy-web-release",
+    "activeRelease": "/nix/store/ak62xzkzz1csddp7lniq5lf66wdj0nx0-cowboy-web-release",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "maintenance": false,
+    "startedAt": "2026-10-05T02:51:42.466558223Z",
+    "recordedAt": "2026-10-05T02:51:42.552319277Z",
+    "recovered": false
+  },
+  "public_healthz": "ok",
+  "public_version": "80f974881b88a2759f60458994d41984",
+  "public_sw": "cowboy-v1842",
+  "public_sw_matches_immutable_release": true,
+  "before_and_after_web_activation_pids": {
+    "controller": 2648009,
+    "machine": 3232214
+  }
+}

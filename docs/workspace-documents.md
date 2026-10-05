@@ -35,8 +35,11 @@ and move into directories. Dropping a Draft on the middle of a Session row
 copies its current text and attachments to that Session's unsent drafts. It
 retains the source, never sends a prompt, and provides a snackbar with Undo.
 Undo removes only the exact unchanged copied row; an edited, sent or scheduled
-copy is retained and explained. Add to Session offers a searchable destination
-picker as the keyboard/touch alternative to dragging.
+copy is retained and explained. Add to Session offers a searchable directory tree using the shared workspace
+folder projection and order. The Draft’s folder and ancestors open initially;
+search reveals matching paths and clearing it restores local folds. Top-level
+Sessions remain direct leaves. Keyboard/touch selection copies to the exact
+Session identity, including when titles are equal.
 
 Trash keeps a tombstone and offers Undo. The shared sidebar exposes Trash when
 it contains documents. Restore is an explicit metadata operation.
