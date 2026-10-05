@@ -15,6 +15,8 @@ import {
 } from "./sessionJump";
 import {
   DESKTOP_LEADER_GLYPH,
+  DESKTOP_LEADER_GROUPS,
+  desktopLeaderGroupKey,
   desktopLeaderKey,
   desktopLeaderLabel,
 } from "./workspaceShortcuts";
@@ -68,8 +70,39 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
   };
   const sessionsLayer = leader.layer === "sessions";
   const modalLayer = leader.layer === "modal";
+  const groupKey = leader.layer.startsWith("group:")
+    ? leader.layer.slice("group:".length)
+    : null;
   const entries: LeaderEntry[] = [];
-  if (!sessionsLayer && !modalLayer) {
+  if (groupKey !== null) {
+    for (const command of registry.commands) {
+      const path = desktopLeaderGroupKey(command);
+      if (path?.group !== groupKey) continue;
+      if (command.contexts && !command.contexts.includes(workspace.focusedPane)) {
+        continue;
+      }
+      // Listed under the group name, not "Here": the group is the scope.
+      const { regions: _regions, ...unscoped } = command;
+      entries.push({
+        key: path.key,
+        command: { ...unscoped, group: DESKTOP_LEADER_GROUPS[groupKey] ?? command.group },
+        enabled: command.when?.() !== false,
+      });
+    }
+  } else if (!sessionsLayer && !modalLayer) {
+    // Groups are one entry each; their commands appear one layer down.
+    for (const [key, name] of Object.entries(DESKTOP_LEADER_GROUPS)) {
+      entries.push({
+        key,
+        command: {
+          id: `group.${key}`,
+          title: `${name} …`,
+          group: "Groups",
+          run: () => leader.open(`group:${key}`),
+        },
+        enabled: true,
+      });
+    }
     const seen = new Set<string>();
     for (const command of registry.commands) {
       const key = desktopLeaderKey(command);
@@ -132,16 +165,26 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     >
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, px: 0.5 }}>
         <ShortcutKeycap
-          keyLabel={sessionsLayer ? desktopLeaderLabel(" ") : DESKTOP_LEADER_GLYPH}
+          keyLabel={sessionsLayer
+            ? desktopLeaderLabel(" ")
+            : groupKey !== null
+            ? desktopLeaderLabel(groupKey)
+            : DESKTOP_LEADER_GLYPH}
           availability="active"
           accent
         />
         <Typography variant="subtitle2" fontWeight={750}>
-          {sessionsLayer ? "Switch session" : modalLayer ? "This dialog" : "Leader"}
+          {sessionsLayer
+            ? "Switch session"
+            : modalLayer
+            ? "This dialog"
+            : groupKey !== null
+            ? DESKTOP_LEADER_GROUPS[groupKey] ?? "Group"
+            : "Leader"}
         </Typography>
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary">
-          {sessionsLayer ? "⌫ back · Esc close" : "Esc close"}
+          {sessionsLayer || groupKey !== null ? "⌫ back · Esc close" : "Esc close"}
         </Typography>
       </Stack>
       {modalLayer

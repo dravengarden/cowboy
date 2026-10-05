@@ -29,7 +29,11 @@ export function LeaderKeycap({
   quiet?: boolean;
 }): React.JSX.Element {
   const leader = useDesktopLeaderOptional();
-  const armed = leader?.armed === true && leader.layer === "root";
+  // A grouped slot (`␣TR`) lights at the root, where its group key is next,
+  // and inside its own group layer.
+  const armed = leader?.armed === true && (leader.layer === "root" ||
+    (leaderKey.length > 1 &&
+      leader.layer === `group:${leaderKey[0]!.toLowerCase()}`));
   const state = availability ??
     leaderShortcutAvailability(scopeAvailable ?? true, armed);
   return (
@@ -79,11 +83,11 @@ export function DesktopShortcut(
   },
 ): React.JSX.Element {
   const strokes = shortcut.split(" → ").filter((stroke) => stroke.length > 0);
-  if (strokes.length === 2 && strokes[0] === DESKTOP_WORKSPACE_PREFIX) {
+  if (strokes.length >= 2 && strokes[0] === DESKTOP_WORKSPACE_PREFIX) {
     return (
       <Stack direction="row" alignItems="center" aria-label={shortcut}>
         <LeaderKeycap
-          leaderKey={strokes[1]!}
+          leaderKey={strokes.slice(1).join("")}
           quiet={quiet || compact}
           {...(availability === "available"
             ? { scopeAvailable: true }

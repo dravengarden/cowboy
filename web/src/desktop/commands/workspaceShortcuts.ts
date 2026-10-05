@@ -25,6 +25,11 @@ export function desktopLeaderLabel(key: string): string {
   return `${DESKTOP_LEADER_GLYPH}${key === " " ? DESKTOP_LEADER_GLYPH : key.toUpperCase()}`;
 }
 
+/** which-key groups: `␣` + group key opens a layer of related commands. */
+export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
+  t: "Top bar",
+};
+
 /** Labels for the `␣␣` session switcher: home row first, then the rest. */
 export const DESKTOP_JUMP_LABELS = "asdfghjklqwertyuiopzxcvbnm";
 
@@ -82,6 +87,10 @@ export function desktopWorkspaceSequence(key: string): string {
   return `${DESKTOP_WORKSPACE_PREFIX} → ${key}`;
 }
 
+export function desktopLeaderGroupSequence(group: string, key: string): string {
+  return `${DESKTOP_WORKSPACE_PREFIX} → ${group} → ${key}`;
+}
+
 /** One source of truth for shortcut registration and every visible hint. */
 export const DESKTOP_SHORTCUTS = {
   shortcuts: "Mod+/",
@@ -90,7 +99,10 @@ export const DESKTOP_SHORTCUTS = {
   saveDraft: "Mod+S",
   newSession: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.newSession),
   settings: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.settings),
-  focusTopbar: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusTopbar),
+  focusTopbar: desktopLeaderGroupSequence(
+    DESKTOP_WORKSPACE_KEYS.focusTopbar,
+    DESKTOP_WORKSPACE_KEYS.focusTopbar,
+  ),
   focusSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
   focusPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
   focusConversation: desktopWorkspaceSequence(
@@ -126,7 +138,8 @@ export const DESKTOP_RESIZE_HINT = DESKTOP_SHORTCUTS.resize;
 export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   s: "workspace.focusSessions",
   p: "workspace.focusPrompt",
-  t: "workspace.focusTopbar",
+  // A group, not a command: `␣T` opens the Top bar layer (`␣TT` focuses it).
+  t: "group:t",
   c: "workspace.focusConversation",
   l: "prompt.focusPlan",
   q: "prompt.focusQueue",
@@ -164,9 +177,23 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
 export function desktopLeaderKey(
   command: { sequence?: readonly string[] },
 ): string | null {
-  const [prefix, key] = command.sequence ?? [];
-  return prefix === DESKTOP_WORKSPACE_PREFIX && key !== undefined
+  const sequence = command.sequence ?? [];
+  const [prefix, key] = sequence;
+  return sequence.length === 2 && prefix === DESKTOP_WORKSPACE_PREFIX &&
+      key !== undefined
     ? key.toLowerCase()
+    : null;
+}
+
+/** `{ group, key }` for a grouped leader command (`␣T R`). */
+export function desktopLeaderGroupKey(
+  command: { sequence?: readonly string[] },
+): { group: string; key: string } | null {
+  const sequence = command.sequence ?? [];
+  const [prefix, group, key] = sequence;
+  return sequence.length === 3 && prefix === DESKTOP_WORKSPACE_PREFIX &&
+      group !== undefined && key !== undefined
+    ? { group: group.toLowerCase(), key: key.toLowerCase() }
     : null;
 }
 

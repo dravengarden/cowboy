@@ -34,6 +34,8 @@ import {
 } from "../desktopSplitterKeyboard";
 import type { DesktopSplitterId } from "../DesktopWorkspaceController";
 import {
+  DESKTOP_LEADER_GROUPS,
+  desktopLeaderGroupKey,
   desktopLeaderKey,
   desktopWorkspaceContinuationKey,
   desktopWorkspaceSequenceOwnsKey,
@@ -442,6 +444,24 @@ export function DesktopCommandProvider(
           }
           clearWorkspaceCommand();
           if (key === "Escape") return;
+          if (layer.startsWith("group:")) {
+            // A group's commands run from anywhere: the group itself is the
+            // scope, so region-bound actions (Top bar R/U/…) need no focus
+            // trip first. Pane contexts and business predicates still apply.
+            const group = layer.slice("group:".length);
+            const command = [...commands.current.values()].find((candidate) => {
+              const path = desktopLeaderGroupKey(candidate);
+              return path?.group === group &&
+                path.key === key.toLowerCase() &&
+                (!candidate.contexts ||
+                  candidate.contexts.includes(workspace.focusedPane));
+            });
+            if (command && command.when?.() !== false) {
+              if (workspace.productMode !== "agent") workspace.setProductMode("agent");
+              command.run();
+            }
+            return;
+          }
           if (layer === "sessions") {
             const list = document.querySelector<HTMLElement>(
               "[data-desktop-region='sessions.list'] ul",
@@ -465,6 +485,10 @@ export function DesktopCommandProvider(
           // it (`/` in the Composer and in a queued-message editor), and the
           // one owning the current focus runs.
           const leader = key.toLowerCase();
+          if (DESKTOP_LEADER_GROUPS[leader]) {
+            armWorkspaceCommand(`group:${leader}`);
+            return;
+          }
           const scoped = (command: DesktopCommand): boolean =>
             desktopCommandInScope(
               command,

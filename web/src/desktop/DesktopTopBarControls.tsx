@@ -40,7 +40,6 @@ import {
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
-import { ShortcutKeycap } from "../ShortcutKeycap";
 import { resolveSessionAction } from "../agentCommands";
 import { ConfirmConsequence } from "../ConfirmConsequence";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
@@ -114,13 +113,15 @@ import {
   desktopSessionActionSx,
 } from "./DesktopEmbeddedControl";
 import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon";
-import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
-import { shortcutAvailability } from "./commands/shortcutAvailability";
-import { DESKTOP_SHORTCUTS } from "./commands/workspaceShortcuts";
+import {
+  DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_PREFIX,
+} from "./commands/workspaceShortcuts";
+import { LeaderKeycap } from "./commands/DesktopKeycap";
 import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
@@ -221,16 +222,20 @@ function SessionActionLabel({
           {label}
         </Typography>
       )}
-      <ShortcutKeycap
-        keyLabel={keyLabel}
-        variant="global"
-        accent={accent}
-        availability={shortcutAvailability(available, accent)}
+      <Box
+        component="span"
         sx={{
+          display: "inline-flex",
           flexShrink: 0,
           ...(density === "full" && { ml: "auto !important" }),
         }}
-      />
+      >
+        <LeaderKeycap
+          leaderKey={`T${keyLabel}`}
+          scopeAvailable={available}
+          {...(accent ? { availability: "active" as const } : {})}
+        />
+      </Box>
     </Stack>
   );
 }
@@ -1104,8 +1109,6 @@ export function DesktopTopBarControls({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
-  const workspace = useDesktopWorkspace();
-  const shortcutsActive = workspace.focusedRegion === "topbar.controls";
   const rawOptions = useStoreSelector((snapshot) =>
     snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
   );
@@ -1527,6 +1530,8 @@ export function DesktopTopBarControls({
       title: "Open Run Configuration",
       group: "Top Bar",
       shortcut: "R",
+      // `␣TR` from anywhere; bare `R` while the bar owns focus.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "R"],
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -1542,6 +1547,8 @@ export function DesktopTopBarControls({
       title: "Open Usage Limits",
       group: "Top Bar",
       shortcut: "U",
+      // `␣TU` from anywhere; bare `U` while the bar owns focus.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "U"],
       regions: ["topbar.controls"],
       run: () =>
         document.querySelector<HTMLButtonElement>(
@@ -1553,6 +1560,8 @@ export function DesktopTopBarControls({
       title: "Verify Product Session",
       group: "Top Bar",
       shortcut: "A",
+      // `␣TA` from anywhere; bare `A` while the bar owns focus.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "A"],
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -1568,6 +1577,8 @@ export function DesktopTopBarControls({
       title: "Reload Session Runtime",
       group: "Top Bar",
       shortcut: "L",
+      // `␣TL` from anywhere; bare `L` while the bar owns focus.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "L"],
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -1583,6 +1594,8 @@ export function DesktopTopBarControls({
       title: "Compact Conversation",
       group: "Top Bar",
       shortcut: "C",
+      // `␣TC` from anywhere; bare `C` while the bar owns focus.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "C"],
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -1598,6 +1611,8 @@ export function DesktopTopBarControls({
       title: "Clear Conversation",
       group: "Top Bar",
       shortcut: "X",
+      // `␣TX` from anywhere; bare `X` while the bar owns focus.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "X"],
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -1740,16 +1755,13 @@ export function DesktopTopBarControls({
               >
                 {configSummary || "Run configuration"}
               </Typography>
-              <ShortcutKeycap
-                keyLabel="R"
-                variant="global"
-                accent={configOpen}
-                availability={shortcutAvailability(
-                  shortcutsActive && !configDisabled,
-                  configOpen,
-                )}
-                sx={{ flexShrink: 0, ml: 0.75 }}
-              />
+              <Box component="span" sx={{ display: "inline-flex", flexShrink: 0, ml: 0.75 }}>
+                <LeaderKeycap
+                  leaderKey="TR"
+                  scopeAvailable={!configDisabled}
+                  {...(configOpen ? { availability: "active" as const } : {})}
+                />
+              </Box>
             </Button>
           </Tooltip>
         )}
@@ -1857,16 +1869,12 @@ export function DesktopTopBarControls({
                 Loading usage…
               </Typography>
             )}
-          <ShortcutKeycap
-            keyLabel="U"
-            variant="global"
-            accent={usageOpen}
-            availability={shortcutAvailability(
-              shortcutsActive,
-              usageOpen,
-            )}
-            sx={{ flexShrink: 0 }}
-          />
+          <Box component="span" sx={{ display: "inline-flex", flexShrink: 0 }}>
+            <LeaderKeycap
+              leaderKey="TU"
+              {...(usageOpen ? { availability: "active" as const } : {})}
+            />
+          </Box>
         </ButtonBase>
       )}
 
@@ -2023,11 +2031,7 @@ export function DesktopTopBarControls({
           data-product-session-alert-host
           sx={{ display: "contents" }}
         />
-        <ShortcutKeycap
-          keyLabel="A"
-          variant="global"
-          availability={shortcutAvailability(shortcutsActive)}
-        />
+        <LeaderKeycap leaderKey="TA" />
       </Box>
 
       <Stack
@@ -2068,7 +2072,7 @@ export function DesktopTopBarControls({
                 label="Reload"
                 keyLabel="L"
                 accent={reloadTarget !== null}
-                available={shortcutsActive && session !== undefined}
+                available={session !== undefined}
                 density={density}
               />
             </Button>
@@ -2112,7 +2116,7 @@ export function DesktopTopBarControls({
                   label="Compact"
                   keyLabel="C"
                   accent={compactConfirm}
-                  available={shortcutsActive && !dead && !compacting}
+                  available={!dead && !compacting}
                   density={density}
                 />
               </Button>
@@ -2156,7 +2160,7 @@ export function DesktopTopBarControls({
                   label="Clear"
                   keyLabel="X"
                   accent={clearConfirm}
-                  available={shortcutsActive && !dead}
+                  available={!dead}
                   density={density}
                 />
               </Button>

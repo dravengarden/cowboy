@@ -1337,6 +1337,40 @@ export async function runDraftDocumentsBrowserConformance(
           !row.querySelector("[data-session-jump-label]"),
         "Labels and which-key disappear after the jump",
       );
+      // Top bar actions run from anywhere through the ␣T group; no focus trip.
+      await until(
+        () =>
+          !!document.querySelector("[data-desktop-topbar-action='usage']"),
+        "The open session shows its Top bar",
+      );
+      check(
+        document.querySelector("[data-desktop-topbar-action='usage']")
+          ?.textContent?.includes("␣TU"),
+        "Top bar actions show one ␣T slot keycap",
+      );
+      row.focus();
+      press(row, " ", "Space");
+      press(row, "t", "KeyT");
+      await until(
+        () => !!document.querySelector('[data-desktop-leader-menu="group:t"]'),
+        "␣T opens the Top bar group in which-key",
+      );
+      check(
+        document.querySelector('[data-leader-entry="u"]') &&
+          document.querySelector('[data-leader-entry="t"]'),
+        "The group lists Usage and Focus Top Bar",
+      );
+      press(row, "u", "KeyU");
+      const usageDialog = () =>
+        [...document.querySelectorAll("[role=dialog]")].some((dialog) =>
+          dialog.textContent?.includes("Usage and activity")
+        );
+      await until(
+        usageDialog,
+        "␣TU opens Usage without focusing the Top bar first",
+      );
+      press(document.activeElement!, "Escape", "Escape");
+      await until(() => !usageDialog(), "Usage closes");
       container.querySelector<HTMLElement>(`[data-desktop-item="draft:${id}"]`)!
         .click();
       await until(

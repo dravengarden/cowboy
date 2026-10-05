@@ -111,7 +111,7 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
   assertEquals(DESKTOP_WORKSPACE_COMMANDS, {
     s: "workspace.focusSessions",
     p: "workspace.focusPrompt",
-    t: "workspace.focusTopbar",
+    t: "group:t",
     c: "workspace.focusConversation",
     l: "prompt.focusPlan",
     q: "prompt.focusQueue",
