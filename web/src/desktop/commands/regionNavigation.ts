@@ -19,7 +19,9 @@ const SLACK = 2;
  * The index of the candidate nearest `from` in `direction`, or null at the
  * edge. A candidate must lie wholly beyond the current edge. Among those,
  * one that overlaps on the cross axis wins over one that does not; then the
- * smaller gap, then the larger overlap, then the closer cross-axis centre.
+ * smaller gap; then reading order, the leftmost (for J/K) or topmost (for
+ * H/L) first, so from the full-width top bar J lands in Prompt and reaches
+ * Conversation only while Prompt is folded; then the closer centre.
  */
 export function regionInDirection(
   from: RegionBox,
@@ -42,7 +44,7 @@ export function regionInDirection(
       : [box.left, box.right, from.left, from.right];
     const overlap = Math.min(end, ownEnd) - Math.max(start, ownStart);
     const centre = Math.abs((start + end) / 2 - (ownStart + ownEnd) / 2);
-    const key = [overlap > SLACK ? 0 : 1, Math.max(0, gap), -overlap, centre];
+    const key = [overlap > SLACK ? 0 : 1, Math.max(0, gap), start, centre];
     if (!best || lexicographicLess(key, best.key)) best = { index, key };
   });
   return best === null ? null : (best as { index: number }).index;

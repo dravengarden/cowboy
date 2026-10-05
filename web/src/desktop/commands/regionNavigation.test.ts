@@ -31,6 +31,13 @@ Deno.test("Ctrl+J/K move within a column and up to the top bar", () => {
   assertEquals(regionInDirection(queue, all, "k"), 2);
   assertEquals(regionInDirection(composer, all, "k"), 1);
   assertEquals(regionInDirection(conversation, all, "k"), 1);
+  // From the full-width top bar J prefers Prompt, the first column under it;
+  // with Prompt folded it reaches Conversation.
+  assertEquals(regionInDirection(topbar, all, "j"), 2);
+  assertEquals(
+    regionInDirection(topbar, [sessions, topbar, conversation], "j"),
+    2,
+  );
   assertEquals(regionInDirection(queue, all, "j"), null);
 });
 

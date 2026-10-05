@@ -409,7 +409,9 @@ centre, top or bottom without moving it.
 right of the current one, as LazyVim's window keys and vim-tmux-navigator
 (`commands/regionNavigation.ts`). Regions are read from the screen: a
 candidate must lie wholly beyond the current edge; one overlapping on the
-other axis wins, then the smaller gap. So `H/L` cross Sessions, Prompt and
+other axis wins, then the smaller gap, then reading order (leftmost for
+`J/K`, topmost for `H/L`): from the full-width top bar `J` lands in Prompt,
+and in Conversation only while Prompt is folded. So `H/L` cross Sessions, Prompt and
 Conversation, and `J/K` move inside a column (Composer, Queue, Drafts,
 Plan) and up to the top bar. At the edge nothing moves; collapsed panes are
 skipped (`␣W[` `␣W]` `␣W\\` restore them). Focus moves without any
