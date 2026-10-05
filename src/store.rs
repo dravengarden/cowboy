@@ -39,6 +39,7 @@ mod cardea_operations;
 mod copy;
 mod core_security;
 pub(crate) mod draft_documents;
+mod workspace_documents;
 pub(crate) use core_security::HandoffPoint;
 mod plugin_installations;
 mod plugin_operations;
@@ -6017,6 +6018,7 @@ impl PostgresStorage {
         folders: &[SessionFolder],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin tx")?;
+        workspace_documents::reparent_workspace_documents!(tx, owner_user_id, folders);
         let keep: Vec<String> = folders.iter().map(|folder| folder.id.clone()).collect();
         sqlx::query(
             "DELETE FROM session_folders \

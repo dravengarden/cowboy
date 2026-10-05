@@ -196,6 +196,7 @@ export function FolderNameShell({
   title,
   initial,
   confirmLabel,
+  normalize = normalizeSessionFolderName,
   helperText,
   extra,
   onClose,
@@ -204,6 +205,7 @@ export function FolderNameShell({
   title: string;
   initial: string;
   confirmLabel: string;
+  normalize?: (name: string) => string | null;
   helperText?: string;
   /** Secondary action rendered under the field (Mobile "Organize by
    *  project"); the action row keeps exactly Cancel + confirm. */
@@ -223,7 +225,7 @@ export function FolderNameShell({
     !desktop,
     () => inputRef.current?.closest("[role='dialog']") ?? null,
   );
-  const normalized = normalizeSessionFolderName(value);
+  const normalized = normalize(value);
   const canSave = normalized !== null && normalized !== initial;
   const submit = (): void => {
     if (normalized !== null && canSave) onConfirm(normalized);

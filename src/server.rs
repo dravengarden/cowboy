@@ -1152,6 +1152,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .await
                 .context("loading persisted auth settings")?;
             hub.load_settings(settings);
+            store
+                .integrate_draft_folders()
+                .await
+                .context("integrating Draft directories")?;
+            hub.restore_workspace_orders(store.load_workspace_orders().await?);
             let folders = store
                 .load_session_folders()
                 .await
@@ -2656,6 +2661,9 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             drafts,
         } => store.update_pending(session_id, queue, drafts).await,
         StoreWrite::UpdateSessionOrder { order } => store.update_session_order(order).await,
+        StoreWrite::UpdateWorkspaceOrder { owner, order } => {
+            store.update_workspace_order(owner, order).await
+        }
         StoreWrite::ReplaceSessionFolders {
             owner_user_id,
             folders,
@@ -18474,6 +18482,17 @@ fn project_outbound(
                     confirmed,
                     resync,
                 })
+            } else if state == "workspace-order" {
+                Some(Outbound::SyncPatch {
+                    value: value
+                        .get(&principal.user_id)
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!([])),
+                    state,
+                    version,
+                    confirmed,
+                    resync,
+                })
             } else if state == "folders" {
                 Some(Outbound::SyncPatch {
                     value: project_folders_value(value, visible, |owner| principal.can_see(owner)),
@@ -19855,6 +19874,21 @@ fn apply_inbound_sync(
             id,
             name,
             &serde_json::json!({ "order": filtered }),
+        );
+    }
+    if sync_state == "workspace-order" {
+        if !principal.can_reorder() {
+            return Err("viewers cannot organize the workspace".to_owned());
+        }
+        return state.hub.sync_apply_as(
+            &crate::session_folders::FolderActor {
+                user_id: Some(principal.user_id.clone()),
+                sees_all: false,
+            },
+            sync_state,
+            id,
+            name,
+            args,
         );
     }
     if sync_state == "folders" {

@@ -1,3 +1,4 @@
+import { useDraftRoute } from "./documents/navigation";
 import { useSyncExternalStore } from "react";
 import { persisted } from "@cowboy/state-store";
 import { conn, useStoreSelector } from "./store";
@@ -39,13 +40,14 @@ function publishActiveSessionToWorker(): void {
   void globalThis.navigator?.serviceWorker?.ready.then((registration) => {
     (registration.active ?? registration.waiting)?.postMessage({
       type: "cowboy.active-session",
-      sessionId: activeSessionId,
+      sessionId: /^#drafts(?:\/|$)/.test(globalThis.location?.hash ?? "") ? null : activeSessionId,
     });
   });
 }
 
 if (typeof globalThis.addEventListener === "function") {
   globalThis.addEventListener("focus", publishActiveSessionToWorker);
+  globalThis.addEventListener("hashchange", publishActiveSessionToWorker);
   globalThis.document?.addEventListener("visibilitychange", publishActiveSessionToWorker);
   publishActiveSessionToWorker();
 }
@@ -55,6 +57,7 @@ export function getActiveSessionId(): string | null {
 }
 
 export function setActiveSessionId(id: string | null): void {
+  if (/^#drafts(?:\/|$)/.test(globalThis.location?.hash ?? "")) globalThis.location.hash = "";
   if (id === activeSessionId) return;
   activeSessionId = id;
   activeSessionStore.set(id);
@@ -77,8 +80,9 @@ export function useActiveSessionId(): string | null {
 
 export function useActiveWorkspaceBinding(): WorkspaceBinding | null {
   const selectedSessionId = useActiveSessionId();
+  const draft = useDraftRoute();
   return useStoreSelector(
-    (snapshot) => resolveWorkspaceBinding(snapshot.sessions, selectedSessionId),
+    (snapshot) => draft.active ? null : resolveWorkspaceBinding(snapshot.sessions, selectedSessionId),
     (previous, next) =>
       previous?.sessionId === next?.sessionId &&
       previous?.cwd === next?.cwd &&

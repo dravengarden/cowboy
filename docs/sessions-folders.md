@@ -7,6 +7,11 @@ Scope: the Sessions sidebar on Mobile (spatial drawer) and Desktop (rail),
 the `"folders"` synced state, and its Controller persistence.
 Non-goal: search/filter of sessions, multi-selection, tags or colors.
 
+2026-10-05: independent Draft documents now share this tree and ordinary
+entry selection; see [Workspace documents](workspace-documents.md) for
+content ownership, mixed ordering, imported directories and copy/Undo.
+Folder totals count both resource kinds; live activity counts only Sessions.
+
 ## Why folders, and why not a copy of Obsidian's explorer
 
 Cowboy's Sessions list is one flat, user-ordered list. A single developer

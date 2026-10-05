@@ -5156,6 +5156,15 @@ impl SqliteStorage {
             .begin()
             .await
             .context("begin SQLite session-folders transaction")?;
+        // Obtain SQLite's write reservation before reading the folder snapshot.
+        sqlx::query("UPDATE draft_document_owners SET revision=revision WHERE 0")
+            .execute(&mut *transaction)
+            .await?;
+        super::workspace_documents::reparent_workspace_documents!(
+            transaction,
+            owner_user_id,
+            folders
+        );
         let timestamp = now_ms();
         // `IS` compares NULL owners as equal, unlike `=`.
         let existing: Vec<String> =

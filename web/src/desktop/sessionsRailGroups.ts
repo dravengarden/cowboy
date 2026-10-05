@@ -3,6 +3,7 @@
 // top-level folder plus one for unfiled sessions, each carrying live counts.
 // Opening an entry lists its sessions (and subfolders) with real titles.
 
+import type { DraftMetadata } from "../documents/model";
 import type { SessionMeta } from "../protocol";
 import {
   type FolderActivity,
@@ -18,6 +19,7 @@ export interface RailGroupSection {
   /** Nesting below the group (0 = the group's own sessions). */
   readonly depth: number;
   readonly sessions: readonly SessionMeta[];
+  readonly drafts?: readonly DraftMetadata[];
 }
 
 export interface RailGroup {
@@ -39,6 +41,7 @@ interface MutableSection {
   title: string | null;
   depth: number;
   sessions: SessionMeta[];
+  drafts: DraftMetadata[];
 }
 
 /**
@@ -52,6 +55,7 @@ export function sessionsRailGroups(
 ): RailGroup[] {
   const groups: RailGroup[] = [];
   const unfiled: SessionMeta[] = [];
+  const unfiledDrafts: DraftMetadata[] = [];
   let open:
     | {
       id: string;
@@ -73,10 +77,12 @@ export function sessionsRailGroups(
       // A subfolder heading stays even when empty; the group's own level
       // only when it holds sessions.
       sections: sections.filter((section) =>
-        section.title !== null || section.sessions.length > 0
+        section.title !== null || section.sessions.length > 0 ||
+        section.drafts.length > 0
       ),
       current: sections.some((section) =>
-        section.sessions.some((session) => session.id === activeId)
+        section.sessions.some((session) => session.id === activeId) ||
+        section.drafts.some((draft) => `draft:${draft.id}` === activeId)
       ),
     });
     open = null;
@@ -91,10 +97,17 @@ export function sessionsRailGroups(
           name: row.folder.name,
           activity: row.activity,
           count: row.sessionCount,
-          sections: [{ folder: row.folder.id, title: null, depth: 0, sessions: [] }],
+          sections: [{
+            folder: row.folder.id,
+            title: null,
+            depth: 0,
+            sessions: [],
+            drafts: [],
+          }],
         };
       } else {
-        unfiled.push(row.session);
+        if (row.kind === "draft") unfiledDrafts.push(row.draft);
+        else unfiled.push(row.session);
       }
       continue;
     }
@@ -105,23 +118,34 @@ export function sessionsRailGroups(
         title: row.folder.name,
         depth: row.depth - 1,
         sessions: [],
+        drafts: [],
       });
     } else {
-      const section = open.sections.find((candidate) => candidate.folder === row.folder) ??
+      const section = open.sections.find((candidate) =>
+        candidate.folder === row.folder
+      ) ??
         open.sections[0];
-      section?.sessions.push(row.session);
+      if (row.kind === "draft") section?.drafts.push(row.draft);
+      else section?.sessions.push(row.session);
     }
   }
   close();
-  if (unfiled.length > 0) {
+  if (unfiled.length > 0 || unfiledDrafts.length > 0) {
     groups.push({
       id: UNFILED_RAIL_GROUP,
       kind: "unfiled",
-      name: groups.length > 0 ? "Unfiled" : "Sessions",
+      name: groups.length > 0 ? "Top level" : "Workspace",
       activity: sessionActivity(unfiled),
-      sessionCount: unfiled.length,
-      sections: [{ folder: null, title: null, depth: 0, sessions: unfiled }],
-      current: unfiled.some((session) => session.id === activeId),
+      sessionCount: unfiled.length + unfiledDrafts.length,
+      sections: [{
+        folder: null,
+        title: null,
+        depth: 0,
+        sessions: unfiled,
+        drafts: unfiledDrafts,
+      }],
+      current: unfiled.some((session) => session.id === activeId) ||
+        unfiledDrafts.some((draft) => `draft:${draft.id}` === activeId),
     });
   }
   return groups;

@@ -64,6 +64,7 @@ interface DragState {
   targetIndex: number;
   /** Horizontal intent in whole `horizontalStep`s (0 when disabled). */
   depthSteps: number;
+  overId?: string | null;
   /** Viewport tops and heights of every row at pickup, in `ids` order. Rows
    *  may differ in height (a folder header is shorter than a session row), so
    *  the drop slot is decided against each row's own midpoint rather than a
@@ -85,6 +86,7 @@ export interface SortableDrag {
   originIndex: number;
   targetIndex: number;
   depthSteps: number;
+  overId?: string | null;
 }
 
 export interface Sortable {
@@ -111,6 +113,8 @@ export function useSortable(opts: {
   /** Called when a drop changed its slot or horizontal intent. A grip tap
    *  is not a move. When present it replaces `onReorder`. */
   onDrop?: ((newIds: string[], drag: SortableDrag) => void) | undefined;
+  /** Opt-in center drops, measured from cached pickup geometry. */
+  itemDrop?: ((id: string) => boolean) | undefined;
   onDragStart?: (() => void) | undefined;
   onDragEnd?: (() => void) | undefined;
   /** Hint at the scrollable container for edge auto-scroll, or null. A getter
@@ -130,6 +134,7 @@ export function useSortable(opts: {
     ids,
     onReorder,
     onDrop,
+    itemDrop,
     onDragStart,
     onDragEnd,
     scrollContainer,
@@ -174,6 +179,7 @@ export function useSortable(opts: {
   const cbRef = useRef({
     onReorder,
     onDrop,
+    itemDrop,
     onDragStart,
     onDragEnd,
     optimisticReorder,
@@ -181,6 +187,7 @@ export function useSortable(opts: {
   cbRef.current = {
     onReorder,
     onDrop,
+    itemDrop,
     onDragStart,
     onDragEnd,
     optimisticReorder,
@@ -249,9 +256,16 @@ export function useSortable(opts: {
       const depthSteps = step
         ? Math.round((lastXRef.current - d.startX) / step)
         : 0;
+      let overId: string | null = null;
+      if (cbRef.current.itemDrop?.(d.id)) {
+        const y = lastYRef.current + scrollDelta;
+        const index = d.tops.findIndex((top, index) => index !== d.originIndex &&
+          y >= top + d.heights[index]! * 0.3 && y <= top + d.heights[index]! * 0.7);
+        overId = index >= 0 ? idsRef.current[index] ?? null : null;
+      }
       // Only a slot or depth change re-renders (to slide the other rows' gap).
-      if (target !== d.targetIndex || depthSteps !== d.depthSteps) {
-        const next = { ...d, targetIndex: target, depthSteps };
+      if (target !== d.targetIndex || depthSteps !== d.depthSteps || overId !== (d.overId ?? null)) {
+        const next = { ...d, targetIndex: target, depthSteps, overId };
         // pointerup can arrive before React commits the last pointermove.
         dragRef.current = next;
         setDrag(next);
@@ -337,12 +351,13 @@ export function useSortable(opts: {
         const moved = d.targetIndex !== d.originIndex;
         if (moved && cbRef.current.optimisticReorder) setOptimistic(next);
         const { onDrop: drop, onReorder: reorder } = cbRef.current;
-        if (drop && (moved || d.depthSteps !== 0)) {
+        if (drop && (moved || d.depthSteps !== 0 || d.overId != null)) {
           drop(next, {
             id: d.id,
             originIndex: d.originIndex,
             targetIndex: d.targetIndex,
             depthSteps: d.depthSteps,
+            overId: d.overId ?? null,
           });
         } else if (!drop && moved) {
           reorder(next);
@@ -497,6 +512,7 @@ export function useSortable(opts: {
       originIndex: drag.originIndex,
       targetIndex: drag.targetIndex,
       depthSteps: drag.depthSteps,
+      overId: drag.overId ?? null,
     }
     : null;
   return {

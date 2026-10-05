@@ -7,8 +7,7 @@ import {
 import { useMemo } from "react";
 import { SegmentedTabs } from "./SegmentedTabs";
 import { WorkspacePicker } from "./WorkspacePicker";
-import { draftFolderTree } from "./documents/model";
-import { useDraftLibrary } from "./documents/store";
+import { useStoreSelector } from "./store";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 
 export type CreateVariant = "session" | "draft" | "folder";
@@ -55,17 +54,17 @@ export function DraftCreationDirectory({ value, onChange }: {
   value: string;
   onChange: (value: string) => void;
 }): React.JSX.Element {
-  const library = useDraftLibrary();
+  const folders = useStoreSelector((snapshot) => snapshot.sessionFolders);
   const choices = useMemo(
-    () => sessionDirectoryChoices(draftFolderTree(library.entries)),
-    [library.entries],
+    () => sessionDirectoryChoices(folders),
+    [folders],
   );
   return (
     <>
       <WorkspacePicker
-        label="Draft directory (optional)"
+        label="Directory (optional)"
         clearable
-        hierarchyPreferenceKey="cowboy.draftDirectoryHierarchy"
+        hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
         entries={choices}
         value={value}
         onChange={onChange}

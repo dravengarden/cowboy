@@ -1,3 +1,4 @@
+import type { DraftMetadata } from "./documents/model";
 // Display rows for the Sessions sidebar: the folder tree with sessions filed
 // into their effective folders (docs/sessions-folders.md). Pure; both the
 // Mobile drawer and the Desktop rail render the same rows.
@@ -56,7 +57,13 @@ export interface EmptyFolderRow {
   readonly depth: number;
 }
 
-export type SessionTreeRow = FolderRow | SessionRow | EmptyFolderRow;
+export interface DraftRow {
+  readonly kind: "draft";
+  readonly draft: DraftMetadata;
+  readonly depth: number;
+  readonly folder: string | null;
+}
+export type SessionTreeRow = FolderRow | SessionRow | DraftRow | EmptyFolderRow;
 
 export function sessionActivity(
   sessions: readonly Pick<SessionMeta, "status" | "background_tasks">[],
@@ -115,6 +122,8 @@ export function buildSessionTree(
   sessions: readonly SessionMeta[],
   value: SessionFoldersValue,
   collapsed: ReadonlySet<string>,
+  drafts: readonly DraftMetadata[] = [],
+  order: readonly string[] = [],
 ): SessionTree {
   const ids = new Set(value.folders.map((folder) => folder.id));
   const parentOf = (folder: SessionFolder): string | null =>
@@ -155,6 +164,15 @@ export function buildSessionTree(
   };
   for (const folder of children.get(null) ?? []) summarize(folder.id);
 
+  const liveDrafts = drafts.filter((draft) =>
+    !draft.deleted && draft.kind === "document"
+  );
+  for (const draft of liveDrafts) {
+    folderOf.set(
+      `draft:${draft.id}`,
+      draft.parent_id && ids.has(draft.parent_id) ? draft.parent_id : null,
+    );
+  }
   const rows: SessionTreeRow[] = [];
   const emit = (parent: string | null, depth: number): void => {
     for (const folder of children.get(parent) ?? []) {
@@ -165,7 +183,12 @@ export function buildSessionTree(
         folder,
         depth,
         expanded,
-        sessionCount: below.length,
+        sessionCount: below.length + liveDrafts.filter((draft) => {
+          const container = folderOf.get(`draft:${draft.id}`);
+          return container === folder.id ||
+            !!container &&
+              folderAncestors(value, container).includes(folder.id);
+        }).length,
         status: mostUrgentStatus(below.map((session) => session.status)),
         activity: sessionActivity(below),
       });
@@ -176,9 +199,35 @@ export function buildSessionTree(
         rows.push({ kind: "empty", folder: folder.id, depth: depth + 1 });
       }
     }
-    for (const session of sessionsIn.get(parent) ?? []) {
-      rows.push({ kind: "session", session, depth, folder: parent });
-    }
+    const items: (SessionRow | DraftRow)[] = [
+      ...liveDrafts.filter((draft) =>
+        folderOf.get(`draft:${draft.id}`) === parent
+      )
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((draft): DraftRow => ({
+          kind: "draft",
+          draft,
+          depth,
+          folder: parent,
+        })),
+      ...(sessionsIn.get(parent) ?? []).map((session): SessionRow => ({
+        kind: "session",
+        session,
+        depth,
+        folder: parent,
+      })),
+    ];
+    const ranks = new Map(order.map((key, index) => [key, index]));
+    // Unseen newly-created resources lead; explicit order persists across devices.
+    items.sort((a, b) =>
+      (ranks.get(
+        a.kind === "draft" ? `draft:${a.draft.id}` : `session:${a.session.id}`,
+      ) ?? -1) -
+      (ranks.get(
+        b.kind === "draft" ? `draft:${b.draft.id}` : `session:${b.session.id}`,
+      ) ?? -1)
+    );
+    rows.push(...items);
   };
   emit(null, 0);
   return { rows, folderOf };
@@ -190,6 +239,8 @@ export function sessionTreeRowKey(row: SessionTreeRow): string {
     ? `folder:${row.folder.id}`
     : row.kind === "empty"
     ? `empty:${row.folder}`
+    : row.kind === "draft"
+    ? `draft:${row.draft.id}`
     : row.session.id;
 }
 

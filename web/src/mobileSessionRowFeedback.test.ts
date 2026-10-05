@@ -3,9 +3,7 @@ import { assertEquals } from "jsr:@std/assert";
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
-const rowStart = appSource.indexOf("const ReliableListItemButton");
-const rowEnd = appSource.indexOf("function SessionList", rowStart);
-const rowSource = appSource.slice(rowStart, rowEnd);
+const rowSource = await Deno.readTextFile(new URL("./ReliableListItemButton.tsx", import.meta.url));
 
 Deno.test("session rows show compact project context", () => {
   assertEquals(

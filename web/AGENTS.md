@@ -127,8 +127,11 @@ out of `src/App.tsx`. `src/auth/*` must not import `src/store.ts` —
 `subscribe()` opens `/ws` on the first listener, and the logged-out branch must
 never construct a WebSocket.
 
-After login, `MachineSetupGate` holds the session apps until a computer is
-enrolled. Setup settings are a subset: theme, Passkeys, and sign out.
+After login, the shared workspace mounts without a Machine gate: independent
+Draft documents need no computer. Create checks Machine/AI readiness only for
+the Session variant. Machines can be enrolled through Settings. Draft and
+Session use the same sidebar, directories and actual editor component; see
+`docs/workspace-documents.md`.
 
 `GET /api/auth/status` decides the surface: HTTP 200 + `me` mounts the apps;
 HTTP 200 + missing `me` is login. If `setup_required` and not

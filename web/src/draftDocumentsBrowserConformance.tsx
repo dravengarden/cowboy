@@ -1,5 +1,11 @@
+import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
+import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { StrictMode } from "react";
-import { CreateDialog } from "./App";
+import { MobileApp } from "./mobile/MobileApp";
+import { openMobileProduct } from "./mobile/appPagerMotion";
+import { AppErrorBoundary } from "./AppErrorBoundary";
+import { type QueuedMessage } from "./store";
+import { App, CreateDialog } from "./App";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { CssBaseline } from "@mui/material";
@@ -32,7 +38,11 @@ async function until(predicate: () => boolean, label: string): Promise<void> {
     if (predicate()) return;
     await tick();
   }
-  throw new Error(`Timed out: ${label}`);
+  throw new Error(
+    `Timed out: ${label}; ${
+      document.body.textContent?.slice(-1200)
+    }; hash=${location.hash}`,
+  );
 }
 function button(label: string): HTMLElement {
   const element = [
@@ -50,8 +60,105 @@ function button(label: string): HTMLElement {
 
 /** Real Draft workspace, shared editor/extension host and dataset-owned IndexedDB.
  * Only remote HTTP is a fixture. Native keyboard acceptance is a separate run. */
-export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
+export async function runDraftDocumentsBrowserConformance(
+  nativeMode = false,
+): Promise<string[]> {
   const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
+  const device = (globalThis as unknown as {
+    CowboyDeviceProof: { proof: (url: string) => Promise<string> };
+  }).CowboyDeviceProof;
+  const originalProof = device.proof;
+  device.proof = () => Promise.resolve("isolated-fixture");
+  let socket: FixtureSocket | undefined;
+  let sharedFolder = "";
+  let copied: (QueuedMessage & { content: unknown })[] = [];
+  let queueVersion = 0;
+  class FixtureSocket {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    static CLOSED = 3;
+    readyState = 1;
+    protocol = "cowboy-sync-v1";
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror = null;
+    constructor() {
+      socket = this;
+      setTimeout(() => {
+        this.onopen?.();
+        this.publish({
+          type: "sessions",
+          sessions: nativeMode
+            ? [{
+              id: "native-session",
+              title: "Session",
+              provider: "codex",
+              cwd: "/fixture",
+              status: "running",
+            }]
+            : [],
+        });
+        this.publish({
+          type: "sync_patch",
+          state: "folders",
+          version: 0,
+          value: {
+            folders: [{
+              id: sharedFolder,
+              name: "Research",
+              parent: null,
+              project: null,
+              position: 0,
+            }],
+            placement: {},
+          },
+          confirmed: [],
+          resync: true,
+        });
+        this.publish({
+          type: "sync_patch",
+          state: "workspace-order",
+          version: 0,
+          value: [],
+          confirmed: [],
+          resync: true,
+        });
+        this.publish({ type: "bootstrap_complete" });
+      }, 20);
+    }
+    publish(message: unknown) {
+      this.onmessage?.({ data: JSON.stringify(message) });
+    }
+    send(data: string) {
+      const command = JSON.parse(data);
+      if (command.type === "add_draft") {
+        copied.push({
+          id: `server-${command.cmid}`,
+          cmid: command.cmid,
+          text: command.text,
+          attachments: [],
+          content: command.content,
+        });
+        setTimeout(
+          () =>
+            this.publish({
+              type: "sync_patch",
+              state: `queue:${command.session_id}`,
+              version: ++queueVersion,
+              value: { queue: [], drafts: copied, inFlight: [] },
+              confirmed: [command.cmid],
+            }),
+          10,
+        );
+      }
+    }
+    close() {
+      this.readyState = 3;
+    }
+  }
+  globalThis.WebSocket = FixtureSocket as unknown as typeof WebSocket;
   const originalMatchMedia = globalThis.matchMedia;
   // Headless Firefox defaults to pointer:none. Exercise the actual Desktop
   // product branch while keeping the real viewport/theme media queries.
@@ -99,6 +206,38 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
         user_id: "draft-fixture",
         database_version: 2,
         outbox_contract: "atomic-delta-v1",
+      }));
+    }
+    if (path.includes("/draft-copies/") && init?.method === "DELETE") {
+      copied = copied.filter((row) => row.cmid !== path.split("/").at(-1));
+      socket?.publish({
+        type: "sync_patch",
+        state: "queue:integrated-session",
+        version: ++queueVersion,
+        value: { queue: [], drafts: copied, inFlight: [] },
+        confirmed: [],
+      });
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    if (path.endsWith("/bootstrap")) {
+      const session = path.split("/")[3]!;
+      return Promise.resolve(Response.json({
+        messages: [
+          {
+            type: "snapshot",
+            session_id: session,
+            events: [],
+            reached_start: true,
+          },
+          {
+            type: "sync_patch",
+            state: `queue:${session}`,
+            version: queueVersion,
+            value: { queue: [], drafts: copied, inFlight: [] },
+            confirmed: [],
+            resync: true,
+          },
+        ],
       }));
     }
     if (path === "/api/drafts") {
@@ -151,8 +290,70 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
     );
   }
   try {
+    if (nativeMode) globalThis.matchMedia = originalMatchMedia;
     await repo.start();
     const folder = await repo.create("Research", null, "folder");
+    sharedFolder = folder;
+    if (nativeMode) {
+      const id = await repo.create("Native Draft", folder, "document", "");
+      globalThis.location.hash = `drafts/${id}`;
+      container.style.cssText = "height:100dvh;width:100%;position:relative";
+      document.body.style.margin = "0";
+      root.render(
+        <SurfaceProvider>
+          <BrowserProductTheme>
+            <CssBaseline />
+            <AppErrorBoundary>
+              <MobileApp themeMode="light" onSetThemeMode={() => {}} />
+            </AppErrorBoundary>
+            <DocumentNotifications />
+          </BrowserProductTheme>
+        </SurfaceProvider>,
+      );
+      const events: { type: string; data: string | null }[] = [];
+      for (
+        const type of [
+          "compositionstart",
+          "compositionupdate",
+          "compositionend",
+          "beforeinput",
+        ]
+      ) {
+        document.addEventListener(type, (event) => {
+          events.push({ type, data: (event as InputEvent).data ?? null });
+          if (events.length > 120) events.shift();
+        });
+      }
+      setInterval(() => {
+        const draft = repo.document(id).get().document;
+        const input = document.querySelector<HTMLTextAreaElement>(
+          "textarea[data-mobile-native-textarea]",
+        );
+        const bridge = (globalThis as unknown as {
+          webkit?: {
+            messageHandlers: {
+              report: { postMessage: (value: unknown) => void };
+            };
+          };
+        }).webkit;
+        bridge?.messageHandlers.report.postMessage({
+          value: input?.value ?? draft?.body,
+          saved: draft?.body,
+          native: !!input,
+          context: activeEditorExtensionPort()?.context,
+          hash: location.hash,
+          focus: document.activeElement === input,
+          selection: input
+            ? { anchor: input.selectionStart, head: input.selectionEnd }
+            : null,
+          events,
+          product: document.querySelector("[data-mobile-product]")
+            ?.getAttribute("data-mobile-product"),
+          sidebarRows: document.querySelectorAll("[data-desktop-item]").length,
+        });
+      }, 200);
+      await new Promise<void>(() => {});
+    }
     // The actual Create dialog must not gate Draft creation on Machine/AI
     // readiness. Exercise Desktop and touch with an empty Machine store.
     for (const touch of [false, true]) {
@@ -165,7 +366,7 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
               <BrowserProductTheme>
                 <CssBaseline />
                 <CreateDialog
-                  initialFolder="session-folder-fixture"
+                  initialFolder={folder}
                   open
                   onClose={() => {
                     closed = true;
@@ -221,8 +422,8 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
         "Draft hides AI configuration",
       );
       check(
-        document.body.textContent?.includes("Draft directory (optional)"),
-        "Draft uses its own optional directory",
+        document.body.textContent?.includes("Directory (optional)"),
+        "Draft shares the optional workspace directory",
       );
       check(
         !button("Create draft").hasAttribute("disabled"),
@@ -232,8 +433,8 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
         'input[role="combobox"]',
       );
       check(
-        directoryInput?.value === "",
-        "Session directory never becomes Draft directory",
+        directoryInput?.value === "Research",
+        "Directory-context creation carries its folder into Draft",
       );
       directoryInput.click();
       await tick();
@@ -245,7 +446,7 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
       folderChoice.click();
       await tick();
       if (touch) {
-        button("Clear Draft directory (optional)").click();
+        button("Clear Directory (optional)").click();
         await tick();
       }
       tab("Session").click();
@@ -563,6 +764,190 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
     results.push(
       "Unmount revokes old plugin editor authority and keeps the saved document",
     );
+    document.documentElement.style.fontSize = "16px";
+    container.style.cssText =
+      "width:1200px;height:800px;position:relative;display:flex";
+    globalThis.location.hash = `drafts/${id}`;
+    const integrated = createRoot(container);
+    flushSync(() =>
+      integrated.render(
+        <StrictMode>
+          <SurfaceProvider>
+            <BrowserProductTheme>
+              <CssBaseline />
+              <AppErrorBoundary>
+                <DesktopWorkspaceProvider>
+                  <DesktopCommandProvider>
+                    <App
+                      themeMode="light"
+                      onSetThemeMode={() => {}}
+                      surface="desktop"
+                    />
+                  </DesktopCommandProvider>
+                </DesktopWorkspaceProvider>
+              </AppErrorBoundary>
+              <DocumentNotifications />
+            </BrowserProductTheme>
+          </SurfaceProvider>
+        </StrictMode>,
+      )
+    );
+    await until(
+      () => !!container.querySelector("[data-workspace-document]"),
+      "Draft opens in the ordinary App",
+    );
+    await until(
+      () => !!container.querySelector(`[data-desktop-item="draft:${id}"]`),
+      "Draft appears in the shared folder tree",
+    );
+    check(
+      ![...container.querySelectorAll("button")].some((item) =>
+        item.textContent?.trim() === "Drafts"
+      ),
+      "No standalone Drafts mode entry",
+    );
+    const rail = container.querySelector(
+      '[data-desktop-region="sessions.list"]',
+    );
+    check(rail, "Draft keeps the ordinary workspace sidebar mounted");
+    const integratedBody = repo.document(id).get().document!.body;
+    socket!.publish({
+      type: "sessions",
+      sessions: [{
+        id: "integrated-session",
+        title: "Real session row",
+        provider: "codex",
+        cwd: "/fixture",
+        status: "running",
+      }],
+    });
+    await until(
+      () =>
+        !!container.querySelector('[data-desktop-item="integrated-session"]'),
+      "Mixed Session and Draft entries",
+    );
+    container.querySelector<HTMLElement>(
+      '[data-desktop-item="integrated-session"]',
+    )!.click();
+    await until(
+      () => !container.querySelector("[data-workspace-document]"),
+      "Session selects the ordinary conversation",
+    );
+    check(
+      container.querySelector('[data-desktop-region="sessions.list"]') === rail,
+      "Switching types preserves the sidebar DOM and folds",
+    );
+    container.querySelector<HTMLElement>(`[data-desktop-item="draft:${id}"]`)!
+      .click();
+    await until(
+      () => !!container.querySelector("[data-workspace-document]"),
+      "Draft reopens in place",
+    );
+    await until(
+      () => activeEditorExtensionPort()?.context.kind === "document",
+      "Shared editor restored",
+    );
+    check(
+      repo.document(id).get().document!.body === integratedBody,
+      "Switching to Session and back preserves exact document content",
+    );
+    // Exercise the production grip path: center drop copies, source survives,
+    // and snackbar Undo removes only its exact unsent copy.
+    const draftRow = container.querySelector<HTMLElement>(
+      `[data-desktop-item="draft:${id}"]`,
+    )!;
+    const sessionRow = container.querySelector<HTMLElement>(
+      '[data-desktop-item="integrated-session"]',
+    )!;
+    const grip = draftRow.querySelector<HTMLElement>(".cowboy-session-grip")!;
+    const from = grip.getBoundingClientRect();
+    const to = sessionRow.getBoundingClientRect();
+    const pointer = (target: EventTarget, type: string, x: number, y: number) =>
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          pointerId: 1,
+          pointerType: "mouse",
+          button: 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    pointer(grip, "pointerdown", from.x + 10, from.y + 10);
+    await tick();
+    pointer(window, "pointermove", from.x + 10, to.y + to.height / 2);
+    await tick();
+    pointer(window, "pointerup", from.x + 10, to.y + to.height / 2);
+    await until(() => copied.length === 1, "Grip drop creates a Session draft");
+    check(
+      copied[0]!.text === integratedBody &&
+        repo.document(id).get().document!.body === integratedBody,
+      "Copy keeps exact source and unsent target text",
+    );
+    await until(
+      () =>
+        [...document.querySelectorAll("button")].some((button) =>
+          button.textContent === "Undo"
+        ),
+      "Copy snackbar has actual Undo",
+    );
+    [...document.querySelectorAll<HTMLElement>("[role=alert] button")].find((
+      item,
+    ) => item.textContent === "Undo")!.click();
+    await until(
+      () => copied.length === 0,
+      "Undo removes the exact copied Session draft",
+    );
+    integrated.unmount();
+    touchCreate = true;
+    localStorage.setItem("cowboy:mobile-product", "review");
+    const mobileRoot = createRoot(container);
+    container.style.cssText = "width:390px;height:800px;position:relative";
+    flushSync(() =>
+      mobileRoot.render(
+        <SurfaceProvider>
+          <BrowserProductTheme>
+            <CssBaseline />
+            <AppErrorBoundary>
+              <MobileApp themeMode="light" onSetThemeMode={() => {}} />
+            </AppErrorBoundary>
+          </BrowserProductTheme>
+        </SurfaceProvider>,
+      )
+    );
+    await until(
+      () => !!container.querySelector("[data-workspace-document]"),
+      "Draft in the actual Mobile shell",
+    );
+    check(
+      container.querySelector("[data-mobile-product]")?.getAttribute(
+        "data-mobile-product",
+      ) === "agent",
+      "Restored Review cannot hide a Draft",
+    );
+    openMobileProduct("review");
+    await tick();
+    check(
+      container.querySelector("[data-mobile-product]")?.getAttribute(
+        "data-mobile-product",
+      ) === "agent",
+      "Draft rejects Code pager navigation",
+    );
+    check(
+      !container.querySelector("[data-mobile-open-code]"),
+      "Draft hides Code controls",
+    );
+    check(
+      container.querySelector(
+        "[data-mobile-drawer-surface='true'] [data-workspace-document]",
+      ),
+      "Draft uses the existing Sessions drawer surface",
+    );
+    mobileRoot.unmount();
+    results.push(
+      "Integrated App mixes Draft and Session in the same directory tree; selection retains sidebar DOM, folds and exact shared-editor content without a separate mode; actual Mobile shell keeps Draft on Agent and rejects the Code pager",
+    );
     return results;
   } finally {
     try {
@@ -571,9 +956,15 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
     await repo.dispose();
     container.remove();
     document.documentElement.style.fontSize = originalFont;
+    globalThis.WebSocket = originalWebSocket;
+    device.proof = originalProof;
     globalThis.fetch = originalFetch;
     globalThis.matchMedia = originalMatchMedia;
   }
 }
 
 export { mountDraftNativeInputFixture } from "./draftNativeInputFixture";
+
+export function mountIntegratedDraftNativeInputFixture(): void {
+  void runDraftDocumentsBrowserConformance(true);
+}

@@ -65,7 +65,8 @@ Deno.test("an explicit Code tap asks the pager to settle without stealing swipe"
   );
   assert(pagerSource.includes("MOBILE_OPEN_PRODUCT_EVENT"));
   assert(pagerSource.includes("mobileProductFromEvent"));
-  assertEquals(pagerSource.includes("openMobileProduct("), false);
+  assert(pagerSource.includes('if (draft.active) openMobileProduct("agent")'));
+  assert(pagerSource.includes('draftActiveRef.current && next !== "agent"'));
 });
 
 Deno.test("product pager paints the touch sample without a frame of lag", () => {

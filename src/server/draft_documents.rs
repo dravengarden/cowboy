@@ -121,7 +121,22 @@ pub(super) async fn mutate(
             "Durable storage is unavailable",
         );
     };
-    match store.mutate_draft_document(&auth.principal.user_id, &mutation).await {
+    let folders = state.hub.sync_value("folders")["folders"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| {
+            serde_json::from_value::<crate::session_folders::SessionFolder>(value).ok()
+        })
+        .filter(|folder| {
+            folder
+                .owner_user_id
+                .as_deref()
+                .is_none_or(|owner| owner == auth.principal.user_id)
+        })
+        .collect::<Vec<_>>();
+    match store.mutate_draft_document_in_workspace(&auth.principal.user_id, &mutation, &folders).await {
         Ok(DraftResult::Applied(document)) => Json(document).into_response(),
         Ok(DraftResult::Conflict(document)) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": "This draft changed elsewhere. Your local version has been kept.", "current": document}))).into_response(),
         Ok(DraftResult::Invalid(message)) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),

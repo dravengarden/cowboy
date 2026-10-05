@@ -1388,6 +1388,10 @@ pub enum StoreWrite {
     },
     /// Persist the manual session ordering (a `position` per id) so a drag-
     /// arranged list survives a daemon restart.
+    UpdateWorkspaceOrder {
+        owner: String,
+        order: Vec<String>,
+    },
     UpdateSessionOrder {
         order: Vec<String>,
     },
@@ -1555,6 +1559,7 @@ struct HubInner {
     /// Sessions-sidebar folder tree + explicit placements, the typed truth
     /// behind the `"folders"` sync state (`docs/sessions-folders.md`).
     folders: Mutex<crate::session_folders::SessionFolders>,
+    workspace_orders: Mutex<HashMap<String, Vec<String>>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     /// One immutable frame is shared by the Web Push observer and every socket:
@@ -1739,6 +1744,7 @@ impl Hub {
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
+                workspace_orders: Mutex::new(HashMap::new()),
                 tx,
                 broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
@@ -1958,6 +1964,10 @@ impl Hub {
 
     /// Restore the persisted sidebar folder tree. Session placements ride on
     /// each [`RestoredSession::folder_id`] instead.
+    pub(crate) fn restore_workspace_orders(&self, orders: Vec<(String, Vec<String>)>) {
+        *self.inner.workspace_orders.lock() = orders.into_iter().collect();
+    }
+
     pub fn restore_session_folders(&self, folders: Vec<crate::session_folders::SessionFolder>) {
         self.inner.folders.lock().set_folders(folders);
     }
@@ -3128,6 +3138,8 @@ impl Hub {
                 )
             }
             "folders" => self.inner.folders.lock().value(),
+            "workspace-order" => serde_json::to_value(&*self.inner.workspace_orders.lock())
+                .expect("workspace orders serialize"),
             _ if state.starts_with("mobile-review:") => {
                 let session_id = &state["mobile-review:".len()..];
                 let sessions = self.inner.sessions.lock();
@@ -3229,6 +3241,10 @@ impl Hub {
         args: &serde_json::Value,
     ) -> Result<(), String> {
         enum Op {
+            WorkspaceOrder {
+                owner: String,
+                order: Vec<String>,
+            },
             Rename {
                 session_id: String,
                 title: String,
@@ -3247,6 +3263,38 @@ impl Hub {
             },
         }
         let op = match (state, name) {
+            ("workspace-order", "reorder") => {
+                let values = args
+                    .get("order")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or("workspace order is missing")?;
+                if values.len() > 12000 {
+                    return Err("workspace order is too large".to_owned());
+                }
+                let mut order = Vec::new();
+                for value in values {
+                    let key = value.as_str().ok_or("invalid workspace item")?;
+                    let valid = key
+                        .strip_prefix("draft:")
+                        .or_else(|| key.strip_prefix("session:"));
+                    if valid.is_none_or(|id| {
+                        id.is_empty()
+                            || id.len() > 160
+                            || !id
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                    }) {
+                        return Err("invalid workspace item".to_owned());
+                    }
+                    if !order.iter().any(|existing| existing == key) {
+                        order.push(key.to_owned());
+                    }
+                }
+                Op::WorkspaceOrder {
+                    owner: actor.user_id.clone().unwrap_or_default(),
+                    order,
+                }
+            }
             ("title", "rename") => {
                 let session_id = args
                     .get("session_id")
@@ -3333,6 +3381,24 @@ impl Hub {
             return Ok(());
         }
         match op {
+            Op::WorkspaceOrder { owner, order } => {
+                let mut orders = self.inner.workspace_orders.lock();
+                let current = orders.entry(owner.clone()).or_default();
+                // Honor newly introduced rows at their submitted positions.
+                // Hidden rows omitted by a folded client retain their relative order.
+                let named: HashSet<&str> = order.iter().map(String::as_str).collect();
+                let retained = current
+                    .iter()
+                    .filter(|key| !named.contains(key.as_str()))
+                    .cloned();
+                *current = order.iter().cloned().chain(retained).take(12_000).collect();
+                if let Some(tx) = self.inner.store_tx.as_ref() {
+                    let _ = tx.send(StoreWrite::UpdateWorkspaceOrder {
+                        owner,
+                        order: current.clone(),
+                    });
+                }
+            }
             Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
             Op::Reorder { order } => self.apply_reorder(&order),
             Op::Folders { mutation, args } => self.apply_folders(actor, &mutation, &args)?,
@@ -3368,7 +3434,7 @@ impl Hub {
                 .collect();
             // Guarantee title + order + folders are present even when untouched
             // this lifetime.
-            for state in ["title", "order", "folders"] {
+            for state in ["title", "order", "folders", "workspace-order"] {
                 if !out.iter().any(|(s, _, _)| s == state) {
                     let version = reg.get(state).map_or(0, |e| e.version);
                     out.push((state.to_owned(), version, Vec::new()));

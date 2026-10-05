@@ -303,6 +303,50 @@ Deno.test("explicit left drag can leave a branch without finding its last row", 
   });
 });
 
+Deno.test("Draft and Session share directories and explicit order without Machine activity", () => {
+  const draft = {
+    id: "note",
+    kind: "document" as const,
+    title: "Note",
+    parent_id: "f-ime",
+    revision: 1,
+    body_revision: 1,
+    metadata_revision: 1,
+    updated_at_ms: 1,
+    deleted: false,
+  };
+  const mixed = buildSessionTree(sessions, value, new Set(), [draft], [
+    "session:s4",
+    "draft:note",
+  ]);
+  const children = mixed.rows.filter((row) =>
+    (row.kind === "draft" || row.kind === "session") && row.folder === "f-ime"
+  );
+  assertEquals(children.map(sessionTreeRowKey), ["s4", "draft:note"]);
+  assertEquals(mixed.folderOf.get("draft:note"), "f-ime");
+  const folder = mixed.rows.find((row) =>
+    row.kind === "folder" && row.folder.id === "f-ime"
+  );
+  if (!folder || folder.kind !== "folder") throw new Error("missing folder");
+  assertEquals(folder.sessionCount, 2);
+  const typed = buildSessionTree(sessions, value, new Set(), [{
+    ...draft,
+    updated_at_ms: 999,
+  }], ["session:s4", "draft:note"]);
+  assertEquals(
+    typed.rows.map(sessionTreeRowKey),
+    mixed.rows.map(sessionTreeRowKey),
+  );
+  const orphan = buildSessionTree(
+    [],
+    { folders: [], placement: {} },
+    new Set(),
+    [draft],
+  );
+  assertEquals(orphan.folderOf.get("draft:note"), null);
+  assertEquals(orphan.rows.map(sessionTreeRowKey), ["draft:note"]);
+});
+
 Deno.test("the fold button focuses the current session, then expands everything", () => {
   const all = new Set(value.folders.map((folder) => folder.id));
   const open = buildSessionTree(sessions, value, new Set());

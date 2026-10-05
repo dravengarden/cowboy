@@ -3,7 +3,14 @@ import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from 
 import { SegmentedTabs } from "./SegmentedTabs";
 import { draftRepository } from "./documents/store";
 import { openDrafts } from "./documents/navigation";
-import { DraftsButton } from "./documents/DraftsButton";
+import { ReliableListItemButton } from "./ReliableListItemButton";
+import { useDraftRoute, leaveDrafts } from "./documents/navigation";
+import { useDraftLibrary } from "./documents/store";
+import type { DraftMetadata } from "./documents/model";
+import type { DraftFlush } from "./documents/DraftEditor";
+import { documentNotice } from "./documents/DocumentNotifications";
+import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, WorkspaceDraftTrash, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
+import { reorderWorkspaceItems } from "./store";
 import { DRAFT_DRAG_TYPE } from "./documents/model";
 import { copyDraftToSession } from "./documents/transfer";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
@@ -26,7 +33,6 @@ import {
     useRef,
     useState,
 } from "react";
-import type { ComponentPropsWithoutRef } from "react";
 import { flushSync } from "react-dom";
 import {
     Alert,
@@ -41,7 +47,6 @@ import {
     GlobalStyles,
     IconButton,
     List,
-    ListItemButton,
     ListItemIcon,
     ListItemText,
     ListSubheader,
@@ -643,81 +648,6 @@ function SessionProjectionBadge({
     );
 }
 
-const ReliableListItemButton = forwardRef<
-    HTMLDivElement,
-    Omit<ComponentPropsWithoutRef<typeof ListItemButton>, "onClick"> & { onActivate: () => void }
->(function ReliableListItemButton(
-    {
-        onActivate,
-        sx,
-        onPointerDownCapture,
-        onPointerDown,
-        onPointerEnter,
-        onKeyDown,
-        ...props
-    },
-    ref,
-) {
-    const tap = useReliableTouchTap<HTMLDivElement>(onActivate);
-    return (
-        <ListItemButton
-            {...props}
-            onPointerDownCapture={(event): void => {
-                // A grip touch stops propagation before the row's bubble
-                // handler. Mark touch in capture so iOS cannot leave the
-                // ancestor ListItemButton's synthetic :hover latched.
-                if (event.pointerType === "touch") {
-                    event.currentTarget.dataset.touchActivated = "true";
-                } else if (event.pointerType === "mouse") {
-                    delete event.currentTarget.dataset.touchActivated;
-                }
-                onPointerDownCapture?.(event);
-            }}
-            onPointerDown={(event): void => {
-                onPointerDown?.(event);
-                tap.onPointerDown(event);
-            }}
-            onPointerEnter={(event): void => {
-                if (event.pointerType === "mouse") {
-                    delete event.currentTarget.dataset.touchActivated;
-                }
-                onPointerEnter?.(event);
-            }}
-            onKeyDown={(event): void => {
-                delete event.currentTarget.dataset.touchActivated;
-                onKeyDown?.(event);
-            }}
-            onPointerMove={tap.onPointerMove}
-            onPointerUp={tap.onPointerUp}
-            onPointerCancel={tap.onPointerCancel}
-            onClick={tap.onClick}
-            ref={ref}
-            sx={[
-                {
-                    touchAction: "manipulation",
-                    // iOS WebKit synthesizes and latches :hover after a finger
-                    // touch. Keep real mouse/keyboard feedback, but let touch
-                    // rows return to their normal selected/unselected material.
-                    "&[data-touch-activated='true']:not(.Mui-selected):hover, &[data-touch-activated='true'].Mui-focusVisible:not(.Mui-selected)": {
-                        bgcolor: "transparent",
-                    },
-                    "&[data-touch-activated='true'].Mui-selected:hover, &[data-touch-activated='true'].Mui-selected.Mui-focusVisible": {
-                        bgcolor: (theme) =>
-                            alpha(
-                                theme.palette.primary.main,
-                                theme.palette.action.selectedOpacity,
-                            ),
-                    },
-                    "&[data-touch-activated='true']:active": {
-                        bgcolor: "action.selected",
-                    },
-                },
-                ...(Array.isArray(sx) ? sx : [sx]),
-            ]}
-        />
-    );
-});
-
 // Sessions-region row commands shared by the Desktop command layer (which
 // dispatches them as DOM events on the focused row) and the list's own
 // fallback key handler. See docs/sessions-folders.md and desktop/FOCUS.md.
@@ -741,7 +671,10 @@ const SESSION_ROW_EVENTS: Readonly<Record<string, SessionRowCommand>> = {
 
 function SessionList({
     sessions,
+    drafts,
     activeId,
+    onDraftAction,
+    onDraftCopy,
     onPick,
     onNew,
     onNewInFolder,
@@ -760,6 +693,9 @@ function SessionList({
     allowNewSession = true,
 }: {
     sessions: SessionMeta[];
+    drafts: readonly DraftMetadata[];
+    onDraftAction: (action: WorkspaceDraftAction) => void;
+    onDraftCopy: (document: string, session: SessionMeta) => void;
     activeId: string | null;
     onPick: (id: string) => void;
     onNew: () => void;
@@ -842,9 +778,10 @@ function SessionList({
     const sessionFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [collapsed, setCollapsed] = useCollapsedSessionFolders();
     const displayedSessions = useMemo(() => displayedSessionOrder(sessions), [sessions]);
+    const workspaceOrder = useStoreSelector((snapshot) => snapshot.workspaceOrder);
     const tree = useMemo(
-        () => buildSessionTree(displayedSessions, sessionFolders, collapsed),
-        [collapsed, displayedSessions, sessionFolders],
+        () => buildSessionTree(displayedSessions, sessionFolders, collapsed, drafts, workspaceOrder),
+        [collapsed, displayedSessions, sessionFolders, drafts, workspaceOrder],
     );
     const rowKeys = tree.rows.map(sessionTreeRowKey);
     const rowByKey = new Map(tree.rows.map((row): [string, SessionTreeRow] => [sessionTreeRowKey(row), row]));
@@ -983,6 +920,20 @@ function SessionList({
         const target = projectedFolder !== undefined
             ? projectedFolder
             : dropTargetFolder(others, index);
+        const workspaceOrder = order.filter((key) => {
+            const row = rowByKey.get(key);
+            return row?.kind === "draft" || row?.kind === "session";
+        }).map((key) => key.startsWith("draft:") ? key : `session:${key}`);
+        reorderWorkspaceItems(workspaceOrder);
+        if (moved.kind === "draft") {
+            if (target !== moved.draft.parent_id) {
+                void draftRepository().document(moved.draft.id).hydrate()
+                    .then(() => draftRepository().document(moved.draft.id).change({ type: "move", parent_id: target }))
+                    .then(() => revealMovedRow(movedKey!, target))
+                    .catch((error: Error) => documentNotice(error.message));
+            }
+            return;
+        }
         const refiled = target !== (tree.folderOf.get(moved.session.id) ?? null);
         if (refiled) {
             placeSessions([moved.session.id], target);
@@ -1009,15 +960,25 @@ function SessionList({
     const [dragIndentPx, setDragIndentPx] = useState(0);
     const projectDrag = (drag: SortableDrag): SessionDropProjection | null => {
         const dragged = rowByKey.get(drag.id);
-        if (dragged?.kind !== "session") return null;
+        if (dragged?.kind !== "session" && dragged?.kind !== "draft") return null;
         const others = tree.rows.filter((row) => sessionTreeRowKey(row) !== drag.id);
         return projectSessionDrop(others, drag.targetIndex, dragged.depth, drag.depthSteps);
     };
     const sortable = useSortable({
         ids: rowKeys,
+        itemDrop: (id) => id.startsWith("draft:"),
         onReorder: (order): void =>
             applyRowOrder(order, sortable.draggingId ?? movedRowKey(rowKeys, order)),
         onDrop: (order, drag): void => {
+            const over = drag.overId ? rowByKey.get(drag.overId) : undefined;
+            if (drag.id.startsWith("draft:") && over?.kind === "session") {
+                onDraftCopy(drag.id.slice(6), over.session);
+                return;
+            }
+            if (drag.id.startsWith("draft:") && over?.kind === "folder") {
+                applyRowOrder(order, drag.id, over.folder.id);
+                return;
+            }
             const projection = projectDrag(drag);
             applyRowOrder(order, drag.id, projection ? projection.folder : undefined);
         },
@@ -1026,6 +987,8 @@ function SessionList({
         dragOffsetX: dragIndentPx,
         optimisticReorder: false,
     });
+    const copyTarget = sortable.drag?.id.startsWith("draft:") && sortable.drag.overId
+        ? rowByKey.get(sortable.drag.overId) : undefined;
     const dropProjection = sortable.drag ? projectDrag(sortable.drag) : null;
     const draggedDepth = sortable.drag
         ? (rowByKey.get(sortable.drag.id)?.depth ?? 0)
@@ -1057,6 +1020,14 @@ function SessionList({
         const folderId = folderIdFromRowKey(rowKey);
         const folder = folderId ? sessionFolderById(sessionFolders, folderId) : undefined;
         const session = folderId ? undefined : byId.get(rowKey);
+        const draft = drafts.find((entry) => `draft:${entry.id}` === rowKey);
+        if (draft) {
+            if (command === "open") { onPick(rowKey); focusPrompt(); }
+            else if (command === "left") { if (draft.parent_id) focusRow(`folder:${draft.parent_id}`); }
+            else if (command === "newFolder") setNamePrompt({ mode: "create", parent: draft.parent_id });
+            else onDraftAction({ draft, action: command === "settings" ? "menu" : command });
+            return;
+        }
         switch (command) {
             case "open":
                 if (folder) {
@@ -1113,6 +1084,11 @@ function SessionList({
     const selectSessionSlotRef = useRef(selectSessionSlot);
     selectSessionSlotRef.current = selectSessionSlot;
     const runFoldersAction = (action: string, rowKey: string | null): void => {
+        if (action === "move") {
+            const key = rowKey ?? activeId;
+            const draft = drafts.find((entry) => `draft:${entry.id}` === key);
+            if (draft) { onDraftAction({ draft, action: "move" }); return; }
+        }
         const currentFolder = ((): string | null => {
             if (!rowKey) return activeId ? tree.folderOf.get(activeId) ?? null : null;
             return folderIdFromRowKey(rowKey) ?? tree.folderOf.get(rowKey) ?? null;
@@ -1400,7 +1376,10 @@ function SessionList({
                 minHeight: 0,
             }}
         >
-            <DraftsButton />
+            <WorkspaceDraftTrash />
+            {copyTarget?.kind === "session" && <Box role="status" sx={{ px: 2, py: 0.75, fontSize: "0.75rem", color: "primary.main" }}>
+                Add to {copyTarget.session.title} · Original kept
+            </Box>}
             {!mobileDrawer && <Box sx={{ p: 1 }}>
                 <Stack direction="row" spacing={0.75} alignItems="stretch" justifyContent="flex-end">
                 {allowNewSession && <Button
@@ -1572,6 +1551,16 @@ function SessionList({
                         style={sortable.itemStyle(rowKey)}
                         // Collapse chrome is paint-only (icon swap, no transform):
                         // this row lives inside the Mobile swipe compositor.
+                        onDragOver={(event) => { if (event.dataTransfer.types.includes(DRAFT_DRAG_TYPE)) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
+                        onDrop={(event) => {
+                            const id = event.dataTransfer.getData(DRAFT_DRAG_TYPE);
+                            if (!id) return;
+                            event.preventDefault(); event.stopPropagation();
+                            void draftRepository().document(id).hydrate()
+                                .then(() => draftRepository().document(id).change({ type: "move", parent_id: f.id }))
+                                .then(() => revealMovedRow(`draft:${id}`, f.id))
+                                .catch((error: Error) => documentNotice(error.message));
+                        }}
                         onActivate={(): void => setFolderCollapsed([f.id], row.expanded)}
                         sx={{
                             ...(desktop && desktopListItemSx()),
@@ -1669,6 +1658,14 @@ function SessionList({
                     </ReliableListItemButton>
                         );
                     }
+                    if (row.kind === "draft") return <WorkspaceDraftRow
+                        key={`draft:${row.draft.id}`} draft={row.draft}
+                        selected={activeId === `draft:${row.draft.id}`} sortable={sortable}
+                        desktop={desktop} onPick={() => onPick(`draft:${row.draft.id}`)} onAction={onDraftAction}
+                        sx={{ ...(desktop && desktopListItemSx()), ...treeGuideSx(row.depth),
+                            ...dropHighlightSx(dropHighlight(row, `draft:${row.draft.id}`)),
+                            pl: folderDepthPl(row.depth), pr: 0.5, mx: mobileDrawer ? 0.5 : 0.75, my: 0.25 }}
+                    />;
                     const s = row.session;
                     const deleting = deletingSessionIds.has(s.id);
                     // Alt/Option+1…0 slots follow the flat displayed session
@@ -1683,6 +1680,7 @@ function SessionList({
                         data-desktop-session-row={desktop ? "true" : undefined}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
                         data-desktop-pin-active={desktop && pinned ? "true" : undefined}
+                        data-workspace-copy-target={copyTarget?.kind === "session" && copyTarget.session.id === s.id ? "true" : undefined}
                         data-session-deleting={deleting ? "true" : undefined}
                         aria-busy={deleting || undefined}
                         aria-disabled={deleting || undefined}
@@ -1698,7 +1696,7 @@ function SessionList({
                             const documentId = event.dataTransfer.getData(DRAFT_DRAG_TYPE);
                             if (!desktop || !documentId) return;
                             event.preventDefault();
-                            void copyDraftToSession(documentId, s.id, s.title).catch((error: Error) => notify(error.message));
+                            onDraftCopy(documentId, s);
                         }}
                         onPointerEnter={desktop
                             ? (event): void => {
@@ -1724,6 +1722,7 @@ function SessionList({
                             ...(desktop && desktopListItemSx()),
                             ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, s.id)),
+                            "&[data-workspace-copy-target='true']": { bgcolor: "action.selected", outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
                             ...(desktop && s.id === activeId && {
                                 // Bind current-session material to the row itself.
                                 // This survives both the in-flow rail and the
@@ -2331,7 +2330,7 @@ function SessionList({
                     open={!!folderMenu}
                     onClose={(): void => setFolderMenu(null)}
                     title="Folder"
-                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} sessions`}
+                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} items`}
                     width={560}
                     onShortcutKeyDown={(event): void => {
                         if (
@@ -2411,7 +2410,7 @@ function SessionList({
                     confirmLabel={namePrompt.mode === "rename" ? "Save" : "Create"}
                     helperText={namePrompt.mode === "create" && namePrompt.parent
                         ? `Inside "${sessionFolderById(sessionFolders, namePrompt.parent)?.name ?? ""}".`
-                        : "Sessions can be moved here from their menu, or file themselves when the folder is bound to a project."}
+                        : "Move Drafts and Sessions here, or bind a project to organize its Sessions automatically."}
                     extra={!desktop && namePrompt.mode === "create" && unboundProjects.length > 0
                         ? (
                             <Button
@@ -2537,18 +2536,19 @@ export function CreateDialog({
     onClose,
     onCreated,
     initialFolder = null,
+    onDraftCreated,
 }: {
     open: boolean;
     onClose: () => void;
     /** Called with a local projection so the UI can focus it before the WS list catches up. */
     onCreated: (session: SessionMeta, folder: string | null) => void;
     initialFolder?: string | null;
+    onDraftCreated?: (id: string) => void;
 }): React.JSX.Element {
     const keyboardOpen = useKeyboardOpen();
     const [variant, setVariant] = useState<CreateVariant>("session");
     const [draftTitle, setDraftTitle] = useState("");
     const selectDraftTitleOnFocus = useRef(true);
-    const [draftDirectory, setDraftDirectory] = useState("");
     const creatingRef = useRef(false);
     const machines = useStoreSelector((snapshot) => snapshot.machines);
     const placement = useProjectPlacement(open, machines);
@@ -2596,7 +2596,6 @@ export function CreateDialog({
         setVariant("session");
         setDraftTitle(defaultDraftTitle());
         selectDraftTitleOnFocus.current = true;
-        setDraftDirectory("");
         creatingRef.current = false;
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setDirectory(initialFolder ?? "");
@@ -2635,19 +2634,18 @@ export function CreateDialog({
         }
         if (variant === "draft") {
             const repository = draftRepository();
-            if (draftDirectory && !repository.get().entries.some((entry) =>
-                entry.id === draftDirectory && entry.kind === "folder" && !entry.deleted
-            )) {
+            if (directory && !sessionDirectories.folders.some((entry) => entry.id === directory)) {
                 setCreateError("The Draft directory was removed. Choose another directory or clear it for the top level.");
                 return;
             }
             creatingRef.current = true;
             setCreating(true);
             setCreateError("");
-            void repository.create(draftTitle.trim() || defaultDraftTitle(), draftDirectory || null)
+            void repository.create(draftTitle.trim() || defaultDraftTitle(), directory || null)
                 .then((id): void => {
                     onClose();
-                    openDrafts(id);
+                    if (onDraftCreated) onDraftCreated(id);
+                    else openDrafts(id);
                 })
                 .catch((error: unknown): void => {
                     setCreateError(error instanceof Error ? error.message : "Draft creation failed");
@@ -2841,11 +2839,11 @@ export function CreateDialog({
                         helperText={variant === "draft"
                             ? "Device local time · replace this name or rename it while editing"
                             : variant === "folder"
-                            ? "Sessions can be moved here from their menu, or file themselves when the folder is bound to a project."
+                            ? "Move Drafts and Sessions here, or bind a project to organize its Sessions automatically."
                             : "Clear to auto-name from the first message"}
                     />
                     {variant === "draft" ? (
-                        <DraftCreationDirectory value={draftDirectory} onChange={setDraftDirectory} />
+                        <DraftCreationDirectory value={directory} onChange={setDirectory} />
                     ) : variant === "folder" ? <>
                         <WorkspacePicker
                             label="Inside folder (optional)"
@@ -2884,7 +2882,7 @@ export function CreateDialog({
                             }}
                         />
                         <WorkspacePicker
-                            label="Sessions directory (optional)"
+                            label="Directory (optional)"
                             clearable
                             hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
                             entries={directoryChoices}
@@ -3144,6 +3142,17 @@ export function App({
     surface: "desktop" | "touch";
     onMobileDrawerOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
+    const draftRoute = useDraftRoute();
+    const draftLibrary = useDraftLibrary();
+    useEffect(() => {
+        if (draftRoute.active && !draftRoute.id && draftLibrary.loaded) {
+            const first = draftLibrary.entries.find((entry) => entry.kind === "document" && !entry.deleted);
+            if (first) openDrafts(first.id);
+            else leaveDrafts();
+        }
+    }, [draftRoute.active, draftRoute.id, draftLibrary.loaded, draftLibrary.entries]);
+    const draftBeforeLeave = useRef<DraftFlush>(() => Promise.resolve());
+    const [draftAction, setDraftAction] = useState<WorkspaceDraftAction | null>(null);
     // Load the signed Provider catalog once at the app boundary so every
     // presentation helper reads the same dynamic identity registry.
     const { catalog: providerCatalog } = useProviderCatalog();
@@ -3530,16 +3539,17 @@ export function App({
     // independent of this device's folds) and labels sessions with the same
     // Alt/Option slots as the list, which number the flat displayed order.
     const railFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    const workspaceOrder = useStoreSelector((snapshot) => snapshot.workspaceOrder);
     const collapsedRail = useMemo(() => {
         if (!sessionsCollapsed) return { groups: [], slots: new Map<string, number>() };
         const ordered = displayedSessionOrder(sessionsForView);
-        const rows = buildSessionTree(ordered, railFolders, NO_COLLAPSED_FOLDERS).rows;
+        const rows = buildSessionTree(ordered, railFolders, NO_COLLAPSED_FOLDERS, draftLibrary.entries, workspaceOrder).rows;
         return {
-            groups: sessionsRailGroups(rows, activeId),
+            groups: sessionsRailGroups(rows, draftRoute.id ? `draft:${draftRoute.id}` : activeId),
             slots: new Map(ordered.map((session, index): [string, number] => [session.id, index])),
         };
-    }, [activeId, railFolders, sessionsCollapsed, sessionsForView]);
-    const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
+    }, [activeId, railFolders, sessionsCollapsed, sessionsForView, draftLibrary.entries, draftRoute.id, workspaceOrder]);
+    const active = draftRoute.active ? null : resolveActiveSession(sessions, activeId, pendingCreatedSession);
     // The boot overlay is showing a picture of the last screen; hand over as
     // soon as the real one is on screen (docs/offline-first-sync.md §Boot
     // presentation). A cached tail counts: it is what the user came to read.
@@ -3617,7 +3627,7 @@ export function App({
     // the reconnect instead, and nothing reloads under the user.
     useEffect(() => {
         const KEY = "cowboy:stall-reloaded";
-        if (sessionsSource !== "none") {
+        if (sessionsSource !== "none" || draftRoute.active) {
             globalThis.sessionStorage.removeItem(KEY);
             return undefined;
         }
@@ -3628,7 +3638,7 @@ export function App({
             }
         }, 7000);
         return () => globalThis.clearTimeout(t);
-    }, [sessionsSource]);
+    }, [sessionsSource, draftRoute.active]);
 
     // Revive-on-open (design §7): tell the daemon which session is focused so it
     // warms that agent — reviving one whose agent died with a daemon restart —
@@ -3652,6 +3662,12 @@ export function App({
     });
 
     function pick(id: string): void {
+        if (draftRoute.id) {
+            void draftBeforeLeave.current().then(() => selectWorkspaceItem(id))
+                .catch((error: Error) => documentNotice(error.message));
+        } else selectWorkspaceItem(id);
+    }
+    function selectWorkspaceItem(id: string): void {
         globalThis.dispatchEvent(
             new CustomEvent("cowboy:transcript-save-viewport"),
         );
@@ -3661,8 +3677,8 @@ export function App({
         // structural loading state. Delaying this until the drawer's settle
         // callback made a successful tap look ignored, then changed everything
         // at once after the motion had finished.
-        openSession(id);
-        setActiveId(id);
+        if (id.startsWith("draft:")) openDrafts(id.slice(6));
+        else { openSession(id); setActiveId(id); }
         if (mobile) {
             // Close before React can rebind the drawer. A session switch used
             // to remount the controller and restore the still-open ref.
@@ -3775,7 +3791,15 @@ export function App({
     const list = (
         <SessionList
             sessions={sessionsForView}
-            activeId={active?.id ?? null}
+            drafts={draftLibrary.entries}
+            onDraftAction={(action) => flushSync(() => setDraftAction(action))}
+            onDraftCopy={(id, session) => {
+                void (async () => {
+                    if (draftRoute.id === id) await draftBeforeLeave.current();
+                    await copyDraftToSession(id, session.id, session.title);
+                })().catch((error: Error) => documentNotice(error.message));
+            }}
+            activeId={draftRoute.id ? `draft:${draftRoute.id}` : active?.id ?? null}
             onPick={pick}
             onNew={openNewSession}
             onNewInFolder={(folder): void => {
@@ -4147,7 +4171,7 @@ export function App({
                         <DesktopSessionsRail
                             groups={collapsedRail.groups}
                             slots={collapsedRail.slots}
-                            activeId={active?.id ?? null}
+                            activeId={draftRoute.id ? `draft:${draftRoute.id}` : active?.id ?? null}
                             allowNewSession
                             onPick={pick}
                             onNew={openNewSession}
@@ -4823,7 +4847,11 @@ export function App({
                                             changeTranscriptProjection(active.id, projection)}
                                     />
                                 )}
-                                <IconButton
+                                {draftRoute.id && <IconButton aria-label="Draft actions" onClick={() => {
+                                    const draft = draftLibrary.entries.find((entry) => entry.id === draftRoute.id);
+                                    if (draft) flushSync(() => setDraftAction({ draft, action: "menu" }));
+                                }}><MoreVert /></IconButton>}
+                                {!draftRoute.active && <IconButton
                                     data-mobile-open-code="true"
                                     onPointerDown={(event): void => {
                                         if (event.pointerType === "touch") {
@@ -4868,13 +4896,20 @@ export function App({
                                     }}
                                 >
                                     <CodeIcon />
-                                </IconButton>
+                                </IconButton>}
                             </>
                         )}
                     </Toolbar>
                 </AppBar>
 
-                {active ? (
+                {draftRoute.id ? (
+                    <Box ref={mobile ? mobilePageRef : undefined}
+                        data-mobile-drawer-surface={mobile ? "true" : undefined}
+                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "env(safe-area-inset-top)" : 0 }}>
+                        <WorkspaceDraftPane id={draftRoute.id} beforeLeave={draftBeforeLeave}
+                            onAction={(action) => flushSync(() => setDraftAction(action))} />
+                    </Box>
+                ) : active ? (
                     splitActive ? (
                         // ===== Two-column split layout (desktop opt-in) =====
                         // A flex ROW below the in-flow AppBar (order 1): composer column
@@ -5161,7 +5196,11 @@ export function App({
             </Stack>
             </Box>
 
+            {draftAction && <WorkspaceDraftActions key={draftAction.draft.id + draftAction.action}
+                request={draftAction} onClose={() => setDraftAction(null)} beforeLeave={draftBeforeLeave}
+                activeId={draftRoute.id} onRemoved={leaveDrafts} />}
             <CreateDialog
+                onDraftCreated={(id) => pick(`draft:${id}`)}
                 open={dialogOpen}
                 initialFolder={newSessionFolderRef.current}
                 onClose={(): void => {

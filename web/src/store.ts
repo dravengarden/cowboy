@@ -254,6 +254,7 @@ export interface State {
   // state-sync channel (docs/sessions-folders.md). Overlaid onto the session
   // list by `buildSessionTree` in the sidebar; never mutates `sessions`.
   sessionFolders: SessionFoldersValue;
+  workspaceOrder: readonly string[];
   // Mobile-only code-review workspace state. The daemon persists and syncs it
   // across Mobile clients; Desktop UI never reads or writes this field.
   mobileReviewStates: Record<string, MobileReviewState>;
@@ -297,6 +298,7 @@ let state: State = {
   optimisticMessages: new Map(),
   titleOverrides: {},
   sessionFolders: EMPTY_SESSION_FOLDERS,
+  workspaceOrder: [],
   mobileReviewStates: {},
   deletingSessionIds: new Set(),
   sessionsSource: "none",
@@ -2109,7 +2111,7 @@ function connect(): void {
   // only for these local reads keeps boot independent of the network and of
   // unrelated queue outboxes; failed reads still settle and allow the list.
   const layoutRestored = Promise.allSettled(restorations.filter((_, index) =>
-    ["title", "order", "folders"].includes(states[index] ?? "")
+    ["title", "order", "folders", "workspace-order"].includes(states[index] ?? "")
   ));
   void hydrateReplica(layoutRestored);
   void (async (): Promise<void> => {
@@ -3108,6 +3110,7 @@ function registerSync<T, M extends Mutators<T>>(
 
 const titleSync = registerSync<TitleMap, typeof titleMutators>("title", { kind: "service", state: "title" }, titleMutators, {});
 const orderSync = registerSync<OrderList, typeof orderMutators>("order", { kind: "service", state: "order" }, orderMutators, []);
+const workspaceOrderSync = registerSync<OrderList, typeof orderMutators>("workspace-order", { kind: "service", state: "workspace-order" }, orderMutators, []);
 const foldersSync = registerSync<SessionFoldersValue, typeof sessionFolderMutators>(
   "folders",
   { kind: "service", state: "folders" },
@@ -3329,6 +3332,7 @@ function commitSessions(): void {
     sessions: deriveSessions(rawSessions, titles, orderSync.view()),
     titleOverrides: titles,
     sessionFolders: foldersSync.view(),
+    workspaceOrder: workspaceOrderSync.view(),
   });
 }
 
@@ -5348,6 +5352,10 @@ export function moveDraft(fromSession: string, id: string, toSession: string): v
 // --- Reorder (drag) ---------------------------------------------------------
 // Optimistic via the "order" sync state: apply the new ordering locally (instant
 // drag result) + send; the arbiter echoes a `sync_patch` every terminal folds.
+
+export function reorderWorkspaceItems(order: string[]): void {
+  workspaceOrderSync.mutate("reorder", { order });
+}
 
 export function reorderSessions(order: string[]): void {
   orderSync.mutate("reorder", { order });
