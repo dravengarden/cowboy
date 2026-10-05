@@ -250,6 +250,40 @@ mod tests {
         }
     }
 
+    /// Sibling tests may fork while a lock descriptor is open; the inherited
+    /// copy lives only until that child execs, so retry just that window.
+    fn reopen(path: &Path) -> Store {
+        for _ in 0..300 {
+            match Store::open(path, owner()) {
+                Ok(store) => return store,
+                Err(error) if format!("{error:#}").contains("already owned") => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("reopening cleanup namespace: {error:#}"),
+            }
+        }
+        panic!("cleanup namespace stayed owned");
+    }
+
+    /// A content or link refusal, never the lock-inheritance window above.
+    fn refused(path: &Path, owner: Owner, expected: &str) {
+        for _ in 0..300 {
+            match Store::open(path, owner.clone()) {
+                Ok(_) => panic!("refused input was admitted"),
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    if message.contains("already owned") {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    assert!(message.contains(expected), "unexpected refusal: {message}");
+                    return;
+                }
+            }
+        }
+        panic!("cleanup namespace stayed owned");
+    }
+
     fn identity(ino: u64) -> RootIdentity {
         RootIdentity {
             dev: 7,
@@ -268,7 +302,7 @@ mod tests {
         // The first observed object stays the only admissible one.
         store.record("sess-1", identity(99)).unwrap();
         drop(store);
-        let mut store = Store::open(root.path(), owner()).unwrap();
+        let mut store = reopen(root.path());
         assert_eq!(
             store.pending(),
             vec![
@@ -279,7 +313,7 @@ mod tests {
         store.retire("sess-1").unwrap();
         store.retire("sess-unknown").unwrap();
         drop(store);
-        let store = Store::open(root.path(), owner()).unwrap();
+        let store = reopen(root.path());
         assert_eq!(store.pending(), vec![("sess-2".into(), identity(2))]);
     }
 
@@ -291,10 +325,10 @@ mod tests {
         drop(store);
         let mut other = owner();
         other.machine_id = "other-machine".into();
-        assert!(Store::open(root.path(), other).is_err());
+        refused(root.path(), other, "another Machine or Service");
         let mut other = owner();
         other.service_id = None;
-        assert!(Store::open(root.path(), other).is_err());
+        refused(root.path(), other, "another Machine or Service");
         let good = std::fs::read(root.path().join(FILE)).unwrap();
         let mut json: serde_json::Value = serde_json::from_slice(&good).unwrap();
         json["future_authority"] = serde_json::json!(true);
@@ -314,7 +348,7 @@ mod tests {
             vec![b' '; MAX_BYTES + 1],
         ] {
             std::fs::write(root.path().join(FILE), &bytes).unwrap();
-            assert!(Store::open(root.path(), owner()).is_err());
+            refused(root.path(), owner(), "");
             // Refusal never rewrites the evidence it refused.
             assert_eq!(std::fs::read(root.path().join(FILE)).unwrap(), bytes);
         }
@@ -328,14 +362,14 @@ mod tests {
         std::fs::write(target.join("retained"), b"unrelated").unwrap();
         let link = parent.path().join("cleanups");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(Store::open(&link, owner()).is_err());
+        refused(&link, owner(), "without following links");
         assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
 
         let root = tempfile::tempdir().unwrap();
         let outside = root.path().join("outside.json");
         std::fs::write(&outside, "{}").unwrap();
         std::os::unix::fs::symlink(&outside, root.path().join(FILE)).unwrap();
-        assert!(Store::open(root.path(), owner()).is_err());
+        refused(root.path(), owner(), "");
         assert_eq!(std::fs::read(&outside).unwrap(), b"{}");
     }
 

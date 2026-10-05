@@ -6126,14 +6126,35 @@ mod tests {
         broker
             .deleted_session_owner_collected
             .store(collected, Ordering::Release);
-        broker.attach_deletion_journal(
+        // A sibling test may be between fork and exec with an inherited copy of
+        // a just-closed namespace lock; only that window is retried.
+        broker.attach_deletion_journal(retry_while_owned(|| {
             deletions::Journal::open(&root.join("deletions"), deletion_fixture_owner(), true)
-                .unwrap(),
-        );
-        broker.attach_cleanup_continuations(
-            cleanups::Store::open(&root.join("cleanups"), deletion_fixture_owner()).unwrap(),
-        );
+        }));
+        broker.attach_cleanup_continuations(retry_while_owned(|| {
+            cleanups::Store::open(&root.join("cleanups"), deletion_fixture_owner())
+        }));
         broker
+    }
+
+    fn retry_while_owned<T>(mut open: impl FnMut() -> Result<T>) -> T {
+        for _ in 0..300 {
+            match open() {
+                Ok(opened) => return opened,
+                Err(error) if format!("{error:#}").contains("already owned") => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("opening durable namespace: {error:#}"),
+            }
+        }
+        panic!("durable namespace stayed owned");
+    }
+
+    /// Release the durable namespaces as process exit would. Detached tasks may
+    /// still hold the broker `Arc`, so waiting for a drop is not deterministic.
+    fn end_resident(broker: &Broker) {
+        drop(broker.deletion_journal.lock().take());
+        drop(broker.cleanup_continuations.lock().take());
     }
 
     fn write_continuation_target(root: &Path) {
@@ -6223,7 +6244,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(workspace.join("target/debug/artifact").is_file());
         drop(rx);
-        drop(first);
+        end_resident(&first);
 
         // The next resident reads the committed deletion and continuation.
         let second = continuation_broker(temp.path(), true);
@@ -6236,8 +6257,7 @@ mod tests {
         assert!(!workspace.join("target/CACHEDIR.TAG").exists());
         assert!(workspace.join("source.rs").is_file());
         assert!(second.deleted_session_workspaces.lock().is_empty());
-        drop(second);
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        end_resident(&second);
 
         // Completion is durable: a later resident has nothing to resume.
         let third = continuation_broker(temp.path(), true);
@@ -6261,9 +6281,7 @@ mod tests {
         )
         .await;
         assert_eq!(pending_continuations(&first), ["sess-swapped"]);
-        // Let the preserved-artifact task release the broker and its locks.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        drop(first);
+        end_resident(&first);
 
         // While no resident is running the root is replaced by a new object.
         std::fs::rename(&workspace, managed.join("original")).unwrap();
