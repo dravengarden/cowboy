@@ -34,13 +34,22 @@ import {
 } from "../desktopSplitterKeyboard";
 import type { DesktopSplitterId } from "../DesktopWorkspaceController";
 import {
+  desktopLeaderKey,
   desktopWorkspaceContinuationKey,
   desktopWorkspaceSequenceOwnsKey,
   DESKTOP_WORKSPACE_COMMANDS,
+  isDesktopLeaderSpace,
   matchesDesktopWorkspacePrefix,
 } from "./workspaceShortcuts";
 import { assertShortcutRegistrationAllowed } from "./shortcutRegistrationPolicy";
 import { isImeComposing } from "../vim/imeStatusStore";
+import { desktopKeyIntent, installNativeCompositionTracker } from "./keyIntent";
+import { DESKTOP_SESSION_JUMP_EVENT } from "./sessionJump";
+import {
+  DesktopLeaderContext,
+  type DesktopLeaderLayer,
+  type DesktopLeaderState,
+} from "./leaderContext";
 
 export interface DesktopCommand {
   id: string;
@@ -77,6 +86,17 @@ const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
   null,
 );
 const DesktopListJumpContext = createContext<string | null>(null);
+
+/** The scope test shared by dispatch, which-key and live keycaps. */
+export function desktopCommandInScope(
+  command: DesktopCommand,
+  focusedPane: DesktopPane,
+  focusedRegion: string | null,
+): boolean {
+  return (!command.contexts || command.contexts.includes(focusedPane)) &&
+    (!command.regions ||
+      (!!focusedRegion && command.regions.includes(focusedRegion)));
+}
 
 // Sessions tree row commands (FOCUS.md, docs/sessions-folders.md). The row
 // decides what each means for a folder versus a session, so the provider only
@@ -148,27 +168,33 @@ export function DesktopCommandProvider(
   const commands = useRef(new Map<string, DesktopCommand>());
   const itemChord = useRef<number | null>(null);
   const pendingJumpChord = useRef<PendingJumpChord | null>(null);
-  const workspaceCommandTimer = useRef<number | null>(null);
+  // Leader state. Like which-key it waits for the next key instead of timing
+  // out under the reader: Esc, a pointer press, window blur or any completed
+  // continuation closes it.
+  const leaderArmed = useRef(false);
+  const leaderLayerRef = useRef<DesktopLeaderLayer>("root");
+  const [leaderLayer, setLeaderLayer] = useState<DesktopLeaderLayer>("root");
+  // A Space consumed as the leader must not also activate a focused button
+  // on keyup (Firefox activates buttons on Space keyup).
+  const swallowSpaceKeyUp = useRef(false);
   const [revision, setRevision] = useState(0);
   const [pendingJumpRegion, setPendingJumpRegion] = useState<string | null>(null);
   const workspace = useDesktopWorkspace();
   const clearWorkspaceCommand = useCallback((): void => {
-    if (workspaceCommandTimer.current !== null) {
-      globalThis.clearTimeout(workspaceCommandTimer.current);
-      workspaceCommandTimer.current = null;
-    }
+    leaderArmed.current = false;
+    leaderLayerRef.current = "root";
+    setLeaderLayer("root");
     workspace.setMode("normal");
   }, [workspace.setMode]);
-  const armWorkspaceCommand = useCallback((): void => {
-    if (workspaceCommandTimer.current !== null) {
-      globalThis.clearTimeout(workspaceCommandTimer.current);
-    }
-    workspace.setMode("command");
-    workspaceCommandTimer.current = globalThis.setTimeout(() => {
-      workspaceCommandTimer.current = null;
-      workspace.setMode("normal");
-    }, 2000);
-  }, [workspace.setMode]);
+  const armWorkspaceCommand = useCallback(
+    (layer: DesktopLeaderLayer = "root"): void => {
+      leaderArmed.current = true;
+      leaderLayerRef.current = layer;
+      setLeaderLayer(layer);
+      workspace.setMode("command");
+    },
+    [workspace.setMode],
+  );
   const clearPendingJumpChord = useCallback((): void => {
     const chord = pendingJumpChord.current;
     if (chord) globalThis.clearTimeout(chord.timer);
@@ -223,14 +249,25 @@ export function DesktopCommandProvider(
     commands: commandList,
   }), [commandList, execute, register]);
 
+  // Leader dismissal outside the key path: pointer input and window blur
+  // leave the transient layer, as a click outside which-key does.
   useEffect(() => {
-    return () => {
-      if (workspaceCommandTimer.current !== null) {
-        globalThis.clearTimeout(workspaceCommandTimer.current);
-        workspaceCommandTimer.current = null;
-      }
+    installNativeCompositionTracker();
+    const dismiss = (event: Event): void => {
+      // which-key entries are clickable; let their click run the command.
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-desktop-leader-menu]")
+      ) return;
+      if (leaderArmed.current) clearWorkspaceCommand();
     };
-  }, []);
+    globalThis.addEventListener("pointerdown", dismiss, true);
+    globalThis.addEventListener("blur", dismiss);
+    return () => {
+      globalThis.removeEventListener("pointerdown", dismiss, true);
+      globalThis.removeEventListener("blur", dismiss);
+    };
+  }, [clearWorkspaceCommand]);
 
   useEffect(() => {
     const chord = pendingJumpChord.current;
@@ -264,7 +301,7 @@ export function DesktopCommandProvider(
         }));
       const workspaceSequenceOwnsKey = desktopWorkspaceSequenceOwnsKey(
         event,
-        workspaceCommandTimer.current !== null,
+        leaderArmed.current,
         isImeComposing(),
       );
       // Composition is an exclusive native-input transaction. `isComposing`
@@ -286,7 +323,7 @@ export function DesktopCommandProvider(
         ) {
           event.stopPropagation();
         }
-        if (workspaceCommandTimer.current !== null) clearWorkspaceCommand();
+        if (leaderArmed.current) clearWorkspaceCommand();
         if (itemChord.current !== null) {
           globalThis.clearTimeout(itemChord.current);
           itemChord.current = null;
@@ -298,7 +335,7 @@ export function DesktopCommandProvider(
       // map. Relinquish the workspace prefix before it consumes those keys.
       if (desktopOverlayOwnsShortcuts(document)) {
         clearPendingJumpChord();
-        if (workspaceCommandTimer.current !== null) clearWorkspaceCommand();
+        if (leaderArmed.current) clearWorkspaceCommand();
         return;
       }
       // Workspace navigation is a browser-safe two-stroke prefix. Capture the
@@ -313,7 +350,22 @@ export function DesktopCommandProvider(
         if (!event.repeat) armWorkspaceCommand();
         return;
       }
-      if (workspaceCommandTimer.current !== null) {
+      // Space is the leader wherever Cowboy owns the key: Vim Normal, lists,
+      // the reader and chrome. Text fields, toggles (native inputs), IME
+      // candidates and auto-repeat keep their native Space.
+      if (
+        !leaderArmed.current && isDesktopLeaderSpace(event) &&
+        !textEditorOwnsKey && workspace.selectedSplitter === null &&
+        desktopKeyIntent(event).owner === "command"
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        swallowSpaceKeyUp.current = true;
+        clearPendingJumpChord();
+        armWorkspaceCommand();
+        return;
+      }
+      if (leaderArmed.current) {
         const key = desktopWorkspaceContinuationKey(event);
         if (key !== null && isModifierKey(key)) return;
         if (key === null) {
@@ -323,21 +375,57 @@ export function DesktopCommandProvider(
         } else {
           event.preventDefault();
           event.stopImmediatePropagation();
+          if (event.code === "Space") swallowSpaceKeyUp.current = true;
           if (event.repeat) return;
+          const layer = leaderLayerRef.current;
+          // Backspace climbs one which-key layer instead of closing it.
+          if (key === "Backspace" && layer !== "root") {
+            armWorkspaceCommand("root");
+            return;
+          }
           clearWorkspaceCommand();
           if (key === "Escape") return;
-          const commandId = DESKTOP_WORKSPACE_COMMANDS[key.toLowerCase()];
-          if (!commandId) return;
-          const command = commands.current.get(commandId);
-          const inContext = command &&
-            (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
-            (!command.regions || (!!workspace.focusedRegion &&
-              command.regions.includes(workspace.focusedRegion)));
-          if (inContext && command.when?.() !== false) {
+          if (layer === "sessions") {
+            const list = document.querySelector<HTMLElement>(
+              "[data-desktop-region='sessions.list'] ul",
+            );
+            const jumped = list !== null && !list.dispatchEvent(
+              new CustomEvent(DESKTOP_SESSION_JUMP_EVENT, {
+                cancelable: true,
+                detail: { label: key.toLowerCase() },
+              }),
+            );
+            if (jumped) {
+              if (workspace.productMode !== "agent") workspace.setProductMode("agent");
+              const target = workspace.collapsedPanes.prompt
+                ? "conversation.transcript"
+                : "prompt.composer";
+              requestAnimationFrame(() => workspace.focusRegion(target));
+            }
+            return;
+          }
+          // A leader key has one meaning; scoped editors may each register
+          // it (`/` in the Composer and in a queued-message editor), and the
+          // one owning the current focus runs.
+          const leader = key.toLowerCase();
+          const scoped = (command: DesktopCommand): boolean =>
+            desktopCommandInScope(
+              command,
+              workspace.focusedPane,
+              workspace.focusedRegion,
+            );
+          const registered = [...commands.current.values()].filter((command) =>
+            desktopLeaderKey(command) === leader
+          );
+          const fallbackId = DESKTOP_WORKSPACE_COMMANDS[leader];
+          const fallback = fallbackId ? commands.current.get(fallbackId) : undefined;
+          const command = registered.find(scoped) ??
+            (fallback && scoped(fallback) ? fallback : undefined);
+          if (command && command.when?.() !== false) {
             if (workspace.productMode !== "agent") workspace.setProductMode("agent");
             if (
               workspace.selectedSplitter !== null &&
-              commandId !== "workspace.enterResize"
+              command.id !== "workspace.enterResize"
             ) workspace.setSelectedSplitter(null);
             command.run();
           }
@@ -352,57 +440,6 @@ export function DesktopCommandProvider(
             `[data-desktop-splitter="${CSS.escape(splitter)}"]`,
           )?.focus({ preventScroll: true })
         );
-      };
-      const selectSessionSlot = (digit: string): void => {
-        const sessionsRegion = document.querySelector<HTMLElement>(
-          "[data-desktop-region='sessions.list']",
-        );
-        // A collapsed Sessions pane is a deliberate layout choice: switching
-        // by slot must not unfold it. Land in the work surface instead, as
-        // opening a session from the list does.
-        if (sessionsRegion?.dataset.desktopPaneCollapsed === "true") {
-          const list = sessionsRegion.querySelector<HTMLElement>("ul");
-          list?.dispatchEvent(
-            new CustomEvent("cowboy:desktop-select-session", {
-              cancelable: true,
-              detail: { digit },
-            }),
-          );
-          const target = workspace.collapsedPanes.prompt
-            ? "conversation.transcript"
-            : "prompt.composer";
-          requestAnimationFrame(() => workspace.focusRegion(target));
-          return;
-        }
-        // The list owns slot numbering (flat session order, independent of
-        // folder folds) and cancels the event once it has switched.
-        const list = sessionsRegion?.querySelector<HTMLElement>("ul");
-        if (
-          list &&
-          !list.dispatchEvent(
-            new CustomEvent("cowboy:desktop-select-session", {
-              cancelable: true,
-              detail: { digit },
-            }),
-          )
-        ) {
-          workspace.focusRegion("sessions.list");
-          return;
-        }
-        const sessions = visibleRegionItems(sessionsRegion);
-        const slot = Number(digit);
-        const session = sessions[slot === 0 ? 9 : slot - 1];
-        if (!session) return;
-        const id = session.dataset.desktopItem;
-        session.click();
-        workspace.focusRegion("sessions.list");
-        if (id) {
-          requestAnimationFrame(() =>
-            sessionsRegion?.querySelector<HTMLElement>(
-              `[data-desktop-item="${CSS.escape(id)}"]`,
-            )?.focus({ preventScroll: true })
-          );
-        }
       };
       if (workspace.selectedSplitter !== null) {
         const visible = visibleDesktopSplitterIds();
@@ -501,21 +538,6 @@ export function DesktopCommandProvider(
             }
             return;
           }
-        }
-      }
-      // Sessions are first-level application navigation. Alt/Option+1…0 is
-      // browser-safe on every Desktop platform and works from Insert and
-      // Reading modes as well as ordinary workspace regions.
-      if (
-        event.altKey && !event.metaKey &&
-        !event.ctrlKey && !event.shiftKey
-      ) {
-        const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
-        if (match?.[1]) {
-          event.preventDefault();
-          event.stopPropagation();
-          selectSessionSlot(match[1]);
-          return;
         }
       }
       if (workspace.productMode === "reading") {
@@ -1010,9 +1032,17 @@ export function DesktopCommandProvider(
         event.stopPropagation();
       }
     };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.code !== "Space" || !swallowSpaceKeyUp.current) return;
+      swallowSpaceKeyUp.current = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
     globalThis.addEventListener("keydown", onKeyDown, true);
+    globalThis.addEventListener("keyup", onKeyUp, true);
     return () => {
       globalThis.removeEventListener("keydown", onKeyDown, true);
+      globalThis.removeEventListener("keyup", onKeyUp, true);
       if (itemChord.current !== null) {
         globalThis.clearTimeout(itemChord.current);
         itemChord.current = null;
@@ -1030,11 +1060,20 @@ export function DesktopCommandProvider(
     workspace,
   ]);
 
+  const leader = useMemo<DesktopLeaderState>(() => ({
+    armed: workspace.mode === "command",
+    layer: leaderLayer,
+    open: (layer = "root") => armWorkspaceCommand(layer),
+    close: clearWorkspaceCommand,
+  }), [armWorkspaceCommand, clearWorkspaceCommand, leaderLayer, workspace.mode]);
+
   return (
     <DesktopCommandContext.Provider value={value}>
-      <DesktopListJumpContext.Provider value={pendingJumpRegion}>
-        {children}
-      </DesktopListJumpContext.Provider>
+      <DesktopLeaderContext.Provider value={leader}>
+        <DesktopListJumpContext.Provider value={pendingJumpRegion}>
+          {children}
+        </DesktopListJumpContext.Provider>
+      </DesktopLeaderContext.Provider>
     </DesktopCommandContext.Provider>
   );
 }

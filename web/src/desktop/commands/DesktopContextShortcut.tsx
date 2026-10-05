@@ -5,6 +5,8 @@ import { useOptionalDesktopWorkspace } from "../DesktopWorkspaceController";
 import { useDesktopListJumpChord } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { shortcutAvailability } from "./shortcutAvailability";
+import { useDesktopLeaderOptional } from "./leaderContext";
+import { DESKTOP_WORKSPACE_PREFIX } from "./workspaceShortcuts";
 
 /**
  * A Desktop-only action wrapper. Pane controls use contextual floating hints;
@@ -51,7 +53,13 @@ export function DesktopContextShortcut({
   const listJumpArmed = useDesktopListJumpChord(ownerRegion ?? "");
   const scopeAvailable = enabled && !listJumpArmed && (alwaysVisible ||
     (!!ownerRegion && workspace?.focusedRegion === ownerRegion));
-  const availability = shortcutAvailability(scopeAvailable, active);
+  const leader = useDesktopLeaderOptional();
+  // A leader badge lights at full strength while the leader is armed and the
+  // badge would run now, so every next key is visible at once.
+  const lit = scopeAvailable && leader?.armed === true &&
+    leader.layer === "root" &&
+    badge.startsWith(`${DESKTOP_WORKSPACE_PREFIX} → `);
+  const availability = shortcutAvailability(scopeAvailable, active || lit);
   const restingTransform = inline
     ? "none"
     : corner
@@ -106,6 +114,12 @@ export function DesktopContextShortcut({
         ...(alwaysVisible && {
           "& .cowboy-context-shortcut": {
             opacity: 0.72,
+            transform: visibleTransform,
+          },
+        }),
+        ...(lit && {
+          "&& .cowboy-context-shortcut": {
+            opacity: 1,
             transform: visibleTransform,
           },
         }),

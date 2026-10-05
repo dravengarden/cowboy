@@ -66,19 +66,21 @@ Deno.test("native save is the only registered semantic Chrome override", () => {
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+J", true));
 });
 
-Deno.test("direct product chords and Alt session slots remain browser-safe", () => {
-  for (const shortcut of ["Mod+Shift+P", "Mod+/", "Mod+.", "Alt+1", "Alt+0"]) {
+Deno.test("direct product chords remain browser-safe", () => {
+  for (const shortcut of ["Mod+Shift+P", "Mod+/", "Mod+."]) {
     assertEquals(chromeShortcutConflict("test.command", shortcut, true), null);
   }
 });
 
 Deno.test("workspace navigation has no global bare-letter shortcut", () => {
   assertEquals(Object.keys(DESKTOP_WORKSPACE_COMMANDS).sort(), [
+    " ",
     ",",
     "/",
     "[",
     "\\",
     "]",
+    "`",
     "a",
     "b",
     "c",
@@ -89,6 +91,7 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
     "h",
     "i",
     "j",
+    "k",
     "l",
     "m",
     "n",
@@ -102,7 +105,6 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
     "v",
     "w",
     "x",
-    "y",
     "z",
   ]);
   // Windows/Linux held-prefix pane folds (Alt + [ ] \) are not Chrome chords.

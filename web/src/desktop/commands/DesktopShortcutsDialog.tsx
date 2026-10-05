@@ -14,7 +14,6 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_SELECT_SHORTCUT,
-  DESKTOP_SESSION_SLOTS_LABEL,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
   desktopWorkspaceSequence,
@@ -103,8 +102,12 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
   { keys: ["Alt+Enter"], title: "Force push the current prompt" },
   { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
   {
-    keys: [DESKTOP_SESSION_SLOTS_LABEL],
-    title: "Switch directly to one of the first ten visible sessions",
+    keys: [DESKTOP_SHORTCUTS.switchSession],
+    title: "Switch session: every session gets a letter label, press it to open",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.alternateSession],
+    title: "Return to the previously open session",
   },
 ];
 
