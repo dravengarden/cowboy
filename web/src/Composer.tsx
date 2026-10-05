@@ -1,6 +1,6 @@
 import { desktopSize } from "./surface/desktopSize";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
-import { DesktopDraftDestinationPicker } from "./desktop/DesktopDraftDestinationPicker";
+import { DraftDestinationPicker } from "./DraftDestinationPicker";
 import { ProtectedImage } from "./ProtectedImage";
 import {
   lazy,
@@ -31,7 +31,6 @@ import {
   keyframes,
   LinearProgress,
   List,
-  ListItemButton,
   ListItemIcon,
   ListItemText,
   Menu,
@@ -3358,8 +3357,9 @@ export function ComposerWorkspace({
           drafts panel) so the snackbar survives when moving the LAST draft
           unmounts that panel. */
       }
-      {desktop && moveSrcId !== null && (
-        <DesktopDraftDestinationPicker
+      {moveSrcId !== null && (
+        <DraftDestinationPicker
+          title="Move draft to…"
           sourceId={sessionId}
           onClose={(): void => setMoveSrcId(null)}
           onPick={(destination): void => {
@@ -3369,59 +3369,6 @@ export function ComposerWorkspace({
           }}
         />
       )}
-      <Sheet
-        open={!desktop && moveSrcId !== null}
-        onClose={(): void => setMoveSrcId(null)}
-        title="Move draft to…"
-        mobileDismiss="footer"
-        portal
-      >
-        {
-          /* Bleed the list to the card so rows share the title inset. A
-            <button> with nowrap cwd otherwise grows to min-content and
-            paints through the right pad; width 100% + flex 0 basis keeps
-            both sides on the same 18px gutter. */
-        }
-        <List disablePadding sx={{ mx: -2.25, pb: 1 }}>
-          {otherSessions.map((s) => (
-            <ListItemButton
-              key={s.id}
-              onClick={(): void => {
-                if (moveSrcId !== null) {
-                  moveDraft(sessionId, moveSrcId, s.id);
-                  setMoveUndo({ id: moveSrcId, toId: s.id, toTitle: s.title });
-                }
-                setMoveSrcId(null);
-              }}
-              sx={{
-                px: 2.25,
-                py: 1.25,
-                width: "100%",
-                maxWidth: "100%",
-                minWidth: 0,
-                overflow: "hidden",
-                boxSizing: "border-box",
-              }}
-            >
-              <ListItemText
-                primary={s.title}
-                secondary={s.cwd}
-                sx={{
-                  my: 0,
-                  minWidth: 0,
-                  flex: "1 1 0px",
-                  overflow: "hidden",
-                  "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  },
-                }}
-              />
-            </ListItemButton>
-          ))}
-        </List>
-      </Sheet>
       <Snackbar
         open={moveUndo !== null}
         autoHideDuration={6000}

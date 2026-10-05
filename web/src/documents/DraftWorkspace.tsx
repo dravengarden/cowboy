@@ -49,7 +49,7 @@ import {
   SESSION_FOLDER_SHEET_HOST,
 } from "../SessionFolderUi";
 import { ConfirmSheet } from "../Sheet";
-import { DesktopDraftDestinationPicker } from "../desktop/DesktopDraftDestinationPicker";
+import { DraftDestinationPicker } from "../DraftDestinationPicker";
 import { buildSessionTree, displayedSessionOrder } from "../sessionTree";
 import { setActiveSessionId } from "../controlPlane";
 import { useStoreSelector } from "../store";
@@ -877,7 +877,8 @@ function DraftWorkspaceBody(
         </ConfirmSheet>
       )}
       {destination && (
-        <DesktopDraftDestinationPicker
+        <DraftDestinationPicker
+          title="Add draft to Session"
           sourceId=""
           onClose={() => setDestination(null)}
           onPick={(session) =>

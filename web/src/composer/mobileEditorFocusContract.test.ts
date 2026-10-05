@@ -655,22 +655,29 @@ Deno.test("move-draft toast can open the destination session", () => {
   assertEquals(toast.includes("Undo"), true);
 });
 
-Deno.test("move-draft destination list matches the Obsidian sheet title inset", () => {
-  const sheetStart = composerSource.indexOf('title="Move draft to…"');
-  const sheet = composerSource.slice(
+Deno.test("move-draft destination is the shared Sessions tree on every surface", async () => {
+  const pickerSource = await Deno.readTextFile(
+    new URL("../DraftDestinationPicker.tsx", import.meta.url),
+  );
+  const pickerStart = composerSource.indexOf("<DraftDestinationPicker");
+  const picker = composerSource.slice(
+    pickerStart,
+    composerSource.indexOf("/>", pickerStart),
+  );
+  assertEquals(pickerStart >= 0, true);
+  assertEquals(picker.includes('title="Move draft to…"'), true);
+  assertEquals(picker.includes("sourceId={sessionId}"), true);
+  // The touch sheet keeps the portal escape and floating dismiss, and lets
+  // its body own the scroll so iOS never nests momentum scrollers.
+  const sheetStart = pickerSource.indexOf("<Sheet");
+  const sheet = pickerSource.slice(
     sheetStart,
-    composerSource.indexOf("</Sheet>", sheetStart),
+    pickerSource.indexOf("</Sheet>", sheetStart),
   );
   assertEquals(sheet.includes("portal"), true);
   assertEquals(sheet.includes('mobileDismiss="footer"'), true);
-  assertEquals(
-    sheet.includes("<List disablePadding sx={{ mx: -2.25, pb: 1 }}>"),
-    true,
-  );
-  assertEquals(sheet.includes('width: "100%"'), true);
-  assertEquals(sheet.includes('flex: "1 1 0px"'), true);
-  assertEquals(sheet.includes('textOverflow: "ellipsis"'), true);
-  assertEquals(sheet.includes("secondaryTypographyProps"), false);
+  assertEquals(sheet.includes("<SessionDestinationTree"), true);
+  assertEquals(sheet.includes("listSx"), false);
 });
 
 Deno.test("fullscreen hide keyboard stays expanded and resumes at the document end", () => {
