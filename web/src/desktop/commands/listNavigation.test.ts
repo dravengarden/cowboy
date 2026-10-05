@@ -6,6 +6,7 @@ Deno.test("pending rows expose stable item-scoped action keys", () => {
   assert.equal(pendingItemActionKey("r"), "return");
   assert.equal(pendingItemActionKey("T"), "schedule");
   assert.equal(pendingItemActionKey("m"), "move");
+  assert.equal(pendingItemActionKey("D"), "document");
   assert.equal(pendingItemActionKey("x"), "remove");
   assert.equal(pendingItemActionKey("l"), null);
 });

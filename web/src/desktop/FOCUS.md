@@ -646,8 +646,13 @@ Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
 `G` jump to the ends, and `'` then a label jumps to any visible row.
 `L`/`Enter` opens the
 selected message editor. `O` pins Order reorder mode
-so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+S`
-saves and `Esc` cancels, with both returning focus to the originating list row.
+so `J/K` moves the message and `Esc` releases it; `Shift+J/K` moves it
+directly. The rows are flat lines of the Prompt with a primary edge on the
+current row; the pointer grip is a slim edge handle revealed on hover or focus
+and carries the `O` hint. Row actions are `S` send, `R` return to drafts, `T`
+schedule, `M` move to another Session, `D` move to independent Drafts and `X`
+remove. Inside the editor, `Mod+S` saves and `Esc` cancels, with both
+returning focus to the originating list row.
 
 ### Draft document
 

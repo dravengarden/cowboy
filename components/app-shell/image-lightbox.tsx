@@ -99,6 +99,11 @@ export interface ImageLightboxProps {
    * chrome when the previewed image is itself an app screenshot.
    */
   controlsBottom?: number | string;
+  /**
+   * Keyboard-first host (Desktop): show the key map above the dock. The keys
+   * themselves are always live, for any attached keyboard.
+   */
+  keyHints?: boolean;
 }
 
 export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | null {
@@ -109,6 +114,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     onClose,
     plate = true,
     controlsBottom,
+    keyHints = false,
   } = props;
   // In dark mode a plated FIXED-colour figure (white-bg diagram / line art) goes
   // dark-native via invert + hue-rotate — the same the in-page figure plate uses
@@ -200,7 +206,17 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     }
   }, [index, images.length, onIndex]);
 
-  const { onPointerDown, onPointerMove, onPointerEnd, onPointerCancel, onImageLoad, zoomBy } = useLightboxGestures({
+  const {
+    onPointerDown,
+    onPointerMove,
+    onPointerEnd,
+    onPointerCancel,
+    onImageLoad,
+    zoomBy,
+    panBy,
+    fit,
+    isZoomed,
+  } = useLightboxGestures({
     imgRef,
     overlayRef,
     open,
@@ -239,20 +255,76 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     if (!open) {
       return;
     }
+    // Keyboard-first map. At fit, h/l and ←/→ change image; zoomed, the
+    // same keys (and j/k, ↑/↓) pan, as a viewer would; [ and ] always change
+    // image. Modified chords and IME composition stay with their owners.
+    const PAN_STEP = 120;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      } else if (e.key === "ArrowLeft") {
-        goPrev();
-      } else if (e.key === "ArrowRight") {
-        goNext();
+      if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) {
+        return;
+      }
+      const pan = (dx: number, dy: number, otherwise?: () => void): boolean => {
+        if (panBy(dx, dy)) return true;
+        if (!otherwise) return false;
+        otherwise();
+        return true;
+      };
+      let handled = true;
+      switch (e.key) {
+        case "Escape":
+        case "q":
+          onClose();
+          break;
+        case "ArrowLeft":
+        case "h":
+          pan(PAN_STEP, 0, goPrev);
+          break;
+        case "ArrowRight":
+        case "l":
+          pan(-PAN_STEP, 0, goNext);
+          break;
+        case "ArrowUp":
+        case "k":
+          handled = pan(0, PAN_STEP);
+          break;
+        case "ArrowDown":
+        case "j":
+          handled = pan(0, -PAN_STEP);
+          break;
+        case "[":
+          goPrev();
+          break;
+        case "]":
+          goNext();
+          break;
+        case "+":
+        case "=":
+          zoomBy(1.5);
+          break;
+        case "-":
+        case "_":
+          zoomBy(1 / 1.5);
+          break;
+        case "0":
+          fit();
+          break;
+        case "1":
+          if (!isZoomed()) zoomBy(2);
+          else fit();
+          break;
+        default:
+          handled = false;
+      }
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
       }
     };
     globalThis.addEventListener("keydown", onKey);
     return () => {
       globalThis.removeEventListener("keydown", onKey);
     };
-  }, [open, onClose, goPrev, goNext]);
+  }, [open, onClose, goPrev, goNext, zoomBy, panBy, fit, isZoomed]);
 
   if (!open || index === null || current === undefined) {
     return null;
@@ -397,6 +469,19 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
         onPointerUp={(e) => e.stopPropagation()}
       >
         {current.alt ? <div style={captionStyle}>{current.alt}</div> : null}
+        {keyHints
+          ? (
+            <div data-lightbox-key-hints style={keyHintsStyle}>
+              {(images.length > 1
+                ? [["H L", "image"], ["+ −", "zoom"], ["0", "fit"], ["H J K L", "pan"], ["Esc", "close"]]
+                : [["+ −", "zoom"], ["0", "fit"], ["H J K L", "pan"], ["Esc", "close"]]).map(([keys, label]) => (
+                  <span key={label} style={{ whiteSpace: "nowrap" }}>
+                    {keys!.split(" ").map((key) => <kbd key={key} style={kbdStyle}>{key}</kbd>)} {label}
+                  </span>
+                ))}
+            </div>
+          )
+          : null}
         <Box
           sx={{
             // Three 44 px targets already consume 132 px before the flex gaps
@@ -520,6 +605,35 @@ const counterSx = {
   whiteSpace: "nowrap",
   userSelect: "none",
 } as const;
+
+// Desktop key map: quiet keycaps on the backdrop, read before reaching for
+// the dock.
+const keyHintsStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
+  gap: "6px 14px",
+  maxWidth: "min(90vw, 720px)",
+  color: "rgba(255, 255, 255, 0.7)",
+  fontSize: 12,
+  lineHeight: 1.6,
+  pointerEvents: "none",
+  userSelect: "none",
+};
+
+const kbdStyle: React.CSSProperties = {
+  display: "inline-block",
+  minWidth: 18,
+  marginRight: 3,
+  padding: "0 5px",
+  border: "1px solid rgba(255, 255, 255, 0.28)",
+  borderRadius: 5,
+  fontFamily: "inherit",
+  fontSize: 11,
+  lineHeight: "17px",
+  textAlign: "center",
+  color: "rgba(255, 255, 255, 0.9)",
+};
 
 const captionStyle: React.CSSProperties = {
   maxWidth: "min(90vw, 680px)",

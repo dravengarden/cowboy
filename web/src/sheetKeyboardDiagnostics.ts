@@ -44,6 +44,11 @@ export function sheetKeyboardGeometry(
     kb_inset: rootStyle.getPropertyValue("--kb-inset").trim() || "unset",
     sheet_top: px(rect?.top),
     sheet_bottom: px(rect?.bottom),
+    // The DOM's own transform: if the sheet looks stranded part-way while
+    // this is its rest value, the compositor (not layout) holds the offset.
+    sheet_transform: sheet instanceof HTMLElement
+      ? sheet.style.transform || "none"
+      : "none",
     sheet_in_root: sheet ? root?.contains(sheet) === true : false,
     active_tag: active?.tagName ?? "none",
     active_in_sheet: sheet && active ? sheet.contains(active) : false,

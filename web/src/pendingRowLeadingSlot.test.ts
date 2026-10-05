@@ -20,7 +20,11 @@ Deno.test("pending rows keep only the reorder grip in their leading slot", () =>
       .test(leading),
   );
   assert(leading.includes('aria-label="Drag to reorder"'));
-  assert(leading.includes('const gripSize = desktop ? "2.75rem" : 44'));
+  assert(leading.includes("const gripSize = 44"));
+  // Desktop is keyboard-first: a slim edge handle, revealed on hover/focus,
+  // carries the `O` reorder hint instead of a permanent 44px gutter.
+  assert(leading.includes('className="cowboy-pending-grip"'));
+  assert(leading.includes('badge="O"'));
   assert(leading.includes("width: gripSize"));
   assert(leading.includes("height: gripSize"));
   assert(leading.includes('position: "absolute"'));

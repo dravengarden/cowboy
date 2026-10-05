@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { ImageLightbox, type ImageLightboxProps } from "@cowboy/app-shell";
 import { isProtectedImageSource } from "./protectedImage";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 
 const EMPTY = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
@@ -29,5 +30,7 @@ export function ProtectedImageLightbox(props: ImageLightboxProps): React.JSX.Ele
   const images = props.images.map((item) => item.kind !== "inline-svg" && isProtectedImageSource(item.src)
     ? { ...item, src: loaded?.source === item.src && source === item.src ? loaded.url : EMPTY }
     : item);
-  return <ImageLightbox {...props} images={images} />;
+  // Desktop is keyboard-first: show the lightbox key map there.
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
+  return <ImageLightbox keyHints={desktop} {...props} images={images} />;
 }
