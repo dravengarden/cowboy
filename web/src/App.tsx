@@ -2067,25 +2067,26 @@ function SessionList({
                                 </Stack>
                             }
                             secondary={
-                                <Stack alignItems="flex-start" sx={{ minWidth: 0 }}>
-                                    {/* Placement belongs with the project it runs: on
-                                        the title line the badge took a third of a
-                                        phone-width row and truncated the title. */}
-                                    <Stack
-                                        direction="row"
-                                        spacing={0.75}
-                                        alignItems="center"
-                                        sx={{ minWidth: 0, maxWidth: "100%" }}
-                                    >
-                                        <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
-                                            {sessionListProjectLabel(s)}
-                                        </Typography>
-                                        <SessionMachineBadge
-                                            session={s}
-                                            onInfo={() => onRequestInfo(s)}
-                                            compact
-                                        />
-                                    </Stack>
+                                // Placement belongs with the project it runs: on
+                                // the title line the badge took a third of a
+                                // phone-width row and truncated the title. The
+                                // pending-send badge shares this line: on its own
+                                // line it grew and shrank the row around every
+                                // send, reflowing the whole list.
+                                <Stack
+                                    direction="row"
+                                    spacing={0.75}
+                                    alignItems="center"
+                                    sx={{ minWidth: 0, maxWidth: "100%" }}
+                                >
+                                    <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
+                                        {sessionListProjectLabel(s)}
+                                    </Typography>
+                                    <SessionMachineBadge
+                                        session={s}
+                                        onInfo={() => onRequestInfo(s)}
+                                        compact
+                                    />
                                     <SessionObligationBadge sessionId={s.id} />
                                 </Stack>
                             }

@@ -45,11 +45,13 @@ export function SessionObligationBadge(
           display: "inline-flex",
           gap: 0.25,
           alignItems: "center",
+          flexShrink: 0,
           color: "info.main",
         }}
       >
-        <CloudUploadOutlined sx={{ fontSize: desktopSize(15) }} />
-        <Typography variant="caption">{pending}</Typography>
+        {/* Inline on the project line: sized by its caption, never taller. */}
+        <CloudUploadOutlined sx={{ fontSize: "1.25em" }} />
+        <Typography variant="caption" sx={{ lineHeight: 1 }}>{pending}</Typography>
       </Box>
     </Tooltip>
   );
