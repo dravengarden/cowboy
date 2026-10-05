@@ -10,6 +10,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import time
 
 import session_deletion_writer_conformance as ipc
 
@@ -47,9 +48,23 @@ class NativeProcess(ipc.Process):
 
 
 def connect(process, role):
-    peer = socket.socket(socket.AF_UNIX)
-    peer.settimeout(5)
-    peer.connect(str(process.socket))
+    # Cold restart can leave the previous socket pathname until the new broker
+    # binds. Retry only connection establishment, never a sent protocol frame.
+    deadline = time.monotonic() + 5
+    while True:
+        peer = socket.socket(socket.AF_UNIX)
+        peer.settimeout(5)
+        try:
+            peer.connect(str(process.socket))
+            break
+        except (FileNotFoundError, ConnectionRefusedError):
+            peer.close()
+            ipc.require(process.child.poll() is None and time.monotonic() < deadline,
+                        f'broker did not accept connection: {process.output()}')
+            time.sleep(0.01)
+        except BaseException:
+            peer.close()
+            raise
     ipc.send(peer, {'type': 'hello', 'role': role, 'min_protocol': 1, 'max_protocol': 2,
                    'build': 'immutable-production-writer',
                    'session_id': 'sess-1' if role == 'worker' else None,
