@@ -5,6 +5,8 @@ import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import {
   type DesktopCommand,
   desktopCommandInScope,
+  desktopLeaderGroupAvailable,
+  desktopLeaderGroupCommands,
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import { useDesktopHints, useDesktopLeaderOptional } from "./leaderContext";
@@ -75,12 +77,14 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
     : null;
   const entries: LeaderEntry[] = [];
   if (groupKey !== null) {
-    for (const command of registry.commands) {
-      const path = desktopLeaderGroupKey(command);
-      if (path?.group !== groupKey) continue;
-      if (command.contexts && !command.contexts.includes(workspace.focusedPane)) {
-        continue;
-      }
+    for (
+      const command of desktopLeaderGroupCommands(
+        registry.commands,
+        groupKey,
+        workspace.focusedPane,
+      )
+    ) {
+      const path = desktopLeaderGroupKey(command)!;
       // Listed under the group name, not "Here": the group is the scope.
       const { regions: _regions, ...unscoped } = command;
       entries.push({
@@ -90,8 +94,16 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
       });
     }
   } else if (!sessionsLayer && !modalLayer) {
-    // Groups are one entry each; their commands appear one layer down.
+    // Groups are one entry each; their commands appear one layer down. An
+    // available group takes its key over the root command of the same key.
     for (const [key, name] of Object.entries(DESKTOP_LEADER_GROUPS)) {
+      if (
+        !desktopLeaderGroupAvailable(
+          registry.commands,
+          key,
+          workspace.focusedPane,
+        )
+      ) continue;
       entries.push({
         key,
         command: {
@@ -103,7 +115,7 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
         enabled: true,
       });
     }
-    const seen = new Set<string>();
+    const seen = new Set<string>(entries.map((entry) => entry.key));
     for (const command of registry.commands) {
       const key = desktopLeaderKey(command);
       if (key === null || seen.has(key)) continue;

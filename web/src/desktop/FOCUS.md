@@ -106,7 +106,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` `␣M` | Schedule, run next, more formatting (Composer) |
 | `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list (`Mod+B`/`Mod+I` also format, as in Obsidian; off macOS only in Vim Insert or without Vim, so Ctrl-B/Ctrl-I keep their Vim meaning) |
-| `␣V` `␣G` | Copy Draft to a Session, Draft history |
+| `␣D` + `R/V/H/E/W` | Draft group (an open Draft only): rename, copy to a Session, history, export, readable width; otherwise `␣D` focuses Drafts |
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
@@ -649,9 +649,21 @@ selected message editor. `O` pins Order reorder mode
 so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+S`
 saves and `Esc` cancels, with both returning focus to the originating list row.
 
+### Draft document
+
 Independent Draft documents share the Prompt editor region and command host.
-They autosave; `Mod+S` flushes local persistence without sending. The workspace
-prefix exposes the same formatting, attachment and Source commands as Sessions,
-plus `V` (copy to Session drafts, source retained) and `G` (recovery history).
-All document actions, including export and readable width, are searchable in the
-Command Palette. Prefix hints show actual scope, composition and armed state.
+They autosave; `Mod+S` flushes local persistence without sending. The leader
+exposes the same formatting, attachment and Source commands as Sessions.
+
+The document itself is a `␣D` group, available from any focus while a Draft is
+open (it shadows `␣D` Focus Drafts, which has no list on that page):
+`␣DR` rename, `␣DV` copy to Session drafts (source retained), `␣DH` recovery
+history, `␣DE` export Markdown, `␣DW` readable width. Each control shows its
+`␣D…` slot; Desktop draws the document actions once, in the bottom bar.
+
+The title behaves as the document's first line, as Obsidian's inline title:
+`␣DR` focuses it with the text selected for replacement; `↑` in Insert or a
+plain Vim Normal `k` on the body's first line enters it at the end (a pending
+Vim command such as `dk` keeps its key); `Enter`, `↓` or `Tab` returns to
+the start of the body and `Esc` returns to where the body caret was. Every
+action is also in the Command Palette.

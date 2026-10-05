@@ -98,6 +98,32 @@ const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
 );
 const DesktopListJumpContext = createContext<string | null>(null);
 
+/** A which-key group opens only when one of its commands can run now;
+ *  otherwise its key keeps its root meaning (`␣D` focuses Drafts unless a
+ *  Draft document is open). Group commands run from any focus: the group is
+ *  their scope, so only pane contexts and business predicates apply. */
+export function desktopLeaderGroupCommands(
+  commands: Iterable<DesktopCommand>,
+  group: string,
+  focusedPane: DesktopPane,
+): DesktopCommand[] {
+  return [...commands].filter((command) => {
+    const path = desktopLeaderGroupKey(command);
+    return path?.group === group &&
+      (!command.contexts || command.contexts.includes(focusedPane));
+  });
+}
+
+export function desktopLeaderGroupAvailable(
+  commands: Iterable<DesktopCommand>,
+  group: string,
+  focusedPane: DesktopPane,
+): boolean {
+  return desktopLeaderGroupCommands(commands, group, focusedPane).some(
+    (command) => command.when?.() !== false,
+  );
+}
+
 /** The scope test shared by dispatch, which-key and live keycaps. */
 export function desktopCommandInScope(
   command: DesktopCommand,
@@ -456,13 +482,13 @@ export function DesktopCommandProvider(
             // scope, so region-bound actions (Top bar R/U/…) need no focus
             // trip first. Pane contexts and business predicates still apply.
             const group = layer.slice("group:".length);
-            const command = [...commands.current.values()].find((candidate) => {
-              const path = desktopLeaderGroupKey(candidate);
-              return path?.group === group &&
-                path.key === key.toLowerCase() &&
-                (!candidate.contexts ||
-                  candidate.contexts.includes(workspace.focusedPane));
-            });
+            const command = desktopLeaderGroupCommands(
+              commands.current.values(),
+              group,
+              workspace.focusedPane,
+            ).find((candidate) =>
+              desktopLeaderGroupKey(candidate)?.key === key.toLowerCase()
+            );
             if (command && command.when?.() !== false) {
               if (workspace.productMode !== "agent") workspace.setProductMode("agent");
               command.run();
@@ -492,7 +518,14 @@ export function DesktopCommandProvider(
           // it (`/` in the Composer and in a queued-message editor), and the
           // one owning the current focus runs.
           const leader = key.toLowerCase();
-          if (DESKTOP_LEADER_GROUPS[leader]) {
+          if (
+            DESKTOP_LEADER_GROUPS[leader] &&
+            desktopLeaderGroupAvailable(
+              commands.current.values(),
+              leader,
+              workspace.focusedPane,
+            )
+          ) {
             armWorkspaceCommand(`group:${leader}`);
             return;
           }

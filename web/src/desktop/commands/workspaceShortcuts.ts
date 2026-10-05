@@ -28,7 +28,19 @@ export function desktopLeaderLabel(key: string): string {
 /** which-key groups: `␣` + group key opens a layer of related commands. */
 export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   t: "Top bar",
+  // Only while a Draft document is open; otherwise `␣D` focuses Drafts.
+  d: "Draft",
 };
+
+/** The `␣D` group of an open Draft document (FOCUS.md "Draft document"). */
+export const DESKTOP_DRAFT_GROUP_KEYS = {
+  group: "D",
+  rename: "R",
+  copy: "V",
+  history: "H",
+  export: "E",
+  readableWidth: "W",
+} as const;
 
 /** Labels for the `␣␣` session switcher: home row first, then the rest. */
 export const DESKTOP_JUMP_LABELS = "asdfghjklqwertyuiopzxcvbnm";
@@ -62,8 +74,6 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerMore: "M",
   // Zoom the focused editor into the fullscreen composer.
   editorExpand: "Z",
-  documentCopy: "V",
-  documentHistory: "G",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
   // matches the panes on screen: Sessions | Prompt | Conversation. They are
   // free under the prefix, and their held-prefix forms (Cmd/Alt + [ ] \) are
@@ -161,8 +171,6 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   h: "composer.schedule",
   j: "composer.jumpFront",
   m: "composer.more",
-  v: "document.copyToSession",
-  g: "document.history",
   ...Object.fromEntries(
     Object.entries(DESKTOP_COMPOSER_FORMAT_KEYS).map(([id, key]) => [
       key.toLowerCase(),

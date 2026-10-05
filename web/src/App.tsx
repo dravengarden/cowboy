@@ -5074,8 +5074,12 @@ export function App({
                         sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "env(safe-area-inset-top)" : 0 }}>
                         <WorkspaceDraftPane id={draftRoute.id} beforeLeave={draftBeforeLeave}
                             onAction={(action) => flushSync(() => setDraftAction(action))}
-                            onOpenSessions={mobile
-                                ? () => settleMobileDrawerRef.current?.(true)
+                            mobileNavigation={mobile
+                                ? {
+                                    onOpenSessions: () => settleMobileDrawerRef.current?.(true),
+                                    onCreate: openNewSession,
+                                    onSettings: () => openSettings("settings"),
+                                }
                                 : undefined} />
                     </Box>
                 ) : active ? (

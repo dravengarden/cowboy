@@ -126,8 +126,6 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     h: "composer.schedule",
     j: "composer.jumpFront",
     m: "composer.more",
-    v: "document.copyToSession",
-    g: "document.history",
     b: "composer.format.bold",
     i: "composer.format.italic",
     x: "composer.format.code",

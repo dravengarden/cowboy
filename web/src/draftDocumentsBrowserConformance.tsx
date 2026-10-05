@@ -877,7 +877,7 @@ export async function runDraftDocumentsBrowserConformance(
           ]
         ) {
           const button = container.querySelector<HTMLElement>(
-            `button[aria-label="${label}"]`,
+            `button.MuiIconButton-root[aria-label="${label}"]`,
           )!;
           if (!button?.getClientRects().length) continue;
           const svg = button.querySelector("svg")!;
@@ -1265,7 +1265,8 @@ export async function runDraftDocumentsBrowserConformance(
       () => copied.length === 0,
       "Undo removes the exact copied Session draft",
     );
-    button("Copy to Session drafts").click();
+    // Desktop shows document actions once, in the bottom bar.
+    button("Copy to Session").click();
     await until(
       () =>
         !!document.querySelector(
@@ -1382,6 +1383,52 @@ export async function runDraftDocumentsBrowserConformance(
         () => !!container.querySelector("[data-workspace-document]"),
         "Draft reopens after the leader jump",
       );
+      // Draft title: `␣DR` renames, Enter returns to the body start, and ↑ on
+      // the first body line re-enters the title (FOCUS.md "Draft document").
+      {
+        const titleField = () =>
+          container.querySelector<HTMLInputElement>("input[aria-label='Draft title']");
+        await until(() => !!titleField(), "Draft title field");
+        check(
+          container.querySelector("[data-draft-title-shortcut]")?.textContent
+            ?.includes("␣DR"),
+          "The title shows its ␣DR slot",
+        );
+        const leader = isMac ? { metaKey: true } : { altKey: true };
+        const at = document.activeElement ?? document.body;
+        flushSync(() =>
+          at.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", bubbles: true, cancelable: true, ...leader }))
+        );
+        press(document.activeElement ?? document.body, "d", "KeyD");
+        press(document.activeElement ?? document.body, "r", "KeyR");
+        await tick();
+        const field = titleField()!;
+        check(
+          document.activeElement === field && field.selectionStart === 0 &&
+            field.selectionEnd === field.value.length,
+          "␣DR focuses the title with its text selected",
+        );
+        press(field, "Enter", "Enter");
+        await tick();
+        check(
+          document.activeElement !== field &&
+            !!document.activeElement?.closest(".cm-editor"),
+          "Enter in the title returns to the body",
+        );
+        press(document.activeElement!, "ArrowUp", "ArrowUp");
+        await tick();
+        check(
+          document.activeElement === field &&
+            field.selectionStart === field.value.length,
+          "↑ on the first body line enters the title at its end",
+        );
+        press(field, "Escape", "Escape");
+        await tick();
+        check(
+          !!document.activeElement?.closest(".cm-editor"),
+          "Esc in the title returns to the body without closing anything",
+        );
+      }
       // `'` labels the focused list's rows; a label moves the cursor.
       const draftRow = container.querySelector<HTMLElement>(
         `[data-desktop-item="draft:${id}"]`,

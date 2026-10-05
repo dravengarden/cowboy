@@ -12,12 +12,21 @@ import {
 import {
   AttachFile,
   HistoryOutlined,
-  KeyboardHideOutlined,
-  MoreHoriz,
   OpenInNew,
   SaveAlt,
-  ViewSidebarOutlined,
 } from "@mui/icons-material";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DownloadIcon,
+  EllipsisIcon,
+  HistoryIcon,
+  KeyboardHideIcon,
+  MenuIcon,
+  PanelLeftIcon,
+  PlusIcon,
+} from "./draftChromeIcons";
+import { useInAppHistory } from "./inAppHistory";
 import { alpha, type Theme } from "@mui/material/styles";
 import {
   lazy,
@@ -43,6 +52,11 @@ import {
 import { seedInlineAttachments } from "../inlineImages";
 import { useVimSetting } from "../vimSetting";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
+import { isImeKeyEvent } from "../imeKey";
+import { getVimMode } from "../vimModeStore";
+import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
+import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
+import { DESKTOP_DRAFT_GROUP_KEYS } from "../desktop/commands/workspaceShortcuts";
 import { Sheet } from "../Sheet";
 import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
@@ -88,6 +102,8 @@ export type DraftFlush = () => Promise<void>;
 export interface DraftMobileChrome {
   onOpenSessions: () => void;
   onMenu: () => void;
+  onCreate: () => void;
+  onSettings: () => void;
 }
 
 export function DraftEditor(
@@ -178,6 +194,7 @@ function DraftEditingSession(
   },
 ): React.JSX.Element {
   const editor = useRef<ComposerEditorHandle | null>(null);
+  const titleInput = useRef<HTMLInputElement | null>(null);
   const mountSeed = useRef(initial.body);
   const owner = draftRepository().document(initial.id);
   const [text, setText] = useState(initial.body);
@@ -209,8 +226,26 @@ function DraftEditingSession(
   const composing = useRef(false);
   const desktop = useSurfaceProfile().kind === "desktop";
   const focusLayout = !desktop && mobileChrome !== undefined;
+  const navHistory = useInAppHistory();
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
+  // The title is the document's first line (Obsidian inline title): `␣DR`
+  // selects it for renaming; `↑`/`k` on the body's first line enters it at
+  // the end; `Enter`/`↓`/`Tab` returns to the body start and `Esc` returns
+  // to where the body caret was (FOCUS.md "Draft document").
+  const focusTitle = (select: boolean): void => {
+    const input = titleInput.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (select) input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
+  };
+  const bodyCaretOnFirstLine = (): boolean => {
+    const handle = editor.current;
+    if (!handle) return false;
+    const { head } = handle.getSelection();
+    return !handle.getValue().slice(0, head).includes("\n");
+  };
   const flush = async (): Promise<void> => {
     clearTimeout(timer.current);
     if (!dirtyRef.current && encoding.current.size === 0) return saving.current;
@@ -401,7 +436,23 @@ function DraftEditingSession(
       placeholder="Untitled"
       fullWidth
       sx={{ flex: 1, minWidth: 0 }}
+      inputRef={titleInput}
       inputProps={{ "aria-label": "Draft title", maxLength: 160 }}
+      onKeyDown={(e) => {
+        if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        const toStart = e.key === "Enter" || e.key === "ArrowDown" ||
+          (e.key === "Tab" && !e.shiftKey);
+        if (toStart) {
+          e.preventDefault();
+          editor.current?.focusSelection({ anchor: 0, head: 0 });
+        } else if (e.key === "Escape") {
+          // Leave the field for the body; never close a surrounding layer.
+          e.preventDefault();
+          e.stopPropagation();
+          editor.current?.focus();
+        }
+      }}
       onChange={(e) => {
         setTitle(e.target.value);
         titleRef.current = e.target.value;
@@ -412,23 +463,35 @@ function DraftEditingSession(
         input: {
           disableUnderline: true,
           sx: focusLayout
-            ? { fontSize: "1.75rem", fontWeight: 700, lineHeight: 1.25 }
+            ? {
+              fontSize: "calc(1.75rem * var(--cowboy-font-scale, 1))",
+              fontWeight: 700,
+              lineHeight: 1.25,
+              letterSpacing: "-0.01em",
+            }
             : { fontSize: "1.4rem", fontWeight: 600 },
         },
       }}
     />
   );
-  // Obsidian's floating controls: opaque paper capsules with a soft lift,
-  // so the writing surface itself carries no bars.
+  // Obsidian's floating controls: opaque capsules lifted by a soft, wide
+  // shadow rather than outlined, with full-strength line icons, so the
+  // writing surface itself carries no bars. Dark mode keeps a hairline
+  // because a shadow cannot separate paper from a dark canvas.
   const floatingMaterialSx = {
-    bgcolor: "background.paper",
+    bgcolor: (t: Theme) =>
+      t.palette.mode === "dark" ? t.palette.background.paper : "#fff",
     borderRadius: 999,
-    border: 1,
-    borderColor: "divider",
+    border: (t: Theme) =>
+      t.palette.mode === "dark" ? `1px solid ${t.palette.divider}` : "none",
     boxShadow: (t: Theme) =>
-      `0 2px 10px ${
-        alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.4 : 0.08)
+      `0 1px 2px ${
+        alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.06)
+      }, 0 4px 18px ${
+        alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.07)
       }`,
+    "& .MuiIconButton-root": { color: "text.primary" },
+    "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
   } as const;
   const formatCommands = toolbar
     .filter((id) => !["mention", "slash", "attach"].includes(id))
@@ -500,11 +563,69 @@ function DraftEditingSession(
           const active = globalThis.document.activeElement;
           if (active instanceof HTMLElement) active.blur();
         }}
-        sx={{ ...floatingMaterialSx, width: 44, height: 44, flexShrink: 0 }}
+        sx={{
+          ...floatingMaterialSx,
+          color: "text.primary",
+          width: 48,
+          height: 48,
+          flexShrink: 0,
+        }}
       >
-        <KeyboardHideOutlined />
+        <KeyboardHideIcon />
       </IconButton>
     </Stack>
+  );
+  // Obsidian's resting navigation capsule: always present while the body is
+  // not being edited, replaced by the format capsule while it is.
+  const navigationBar = mobileChrome && (
+    <Box
+      data-draft-mobile-nav
+      sx={{
+        position: "absolute",
+        left: 16,
+        right: 16,
+        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+        zIndex: 2,
+        display: "flex",
+        justifyContent: "center",
+        pointerEvents: "none",
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-around"
+        sx={{
+          ...floatingMaterialSx,
+          width: "100%",
+          maxWidth: 440,
+          height: 56,
+          px: 1,
+          pointerEvents: "auto",
+        }}
+      >
+        <IconButton
+          aria-label="Back"
+          disabled={!navHistory.canGoBack}
+          onClick={navHistory.back}
+        >
+          <ChevronLeftIcon />
+        </IconButton>
+        <IconButton
+          aria-label="Forward"
+          disabled={!navHistory.canGoForward}
+          onClick={navHistory.forward}
+        >
+          <ChevronRightIcon />
+        </IconButton>
+        <IconButton aria-label="Create" onClick={mobileChrome.onCreate}>
+          <PlusIcon />
+        </IconButton>
+        <IconButton aria-label="Settings" onClick={mobileChrome.onSettings}>
+          <MenuIcon />
+        </IconButton>
+      </Stack>
+    </Box>
   );
   const toolbarView = (
     <Stack
@@ -683,8 +804,12 @@ function DraftEditingSession(
           ? { containerType: "inline-size", containerName: "draft-editor" }
           : {}),
         ...(focusLayout && {
+          position: "relative",
           "&:has([data-draft-body]:focus-within) [data-draft-mobile-toolbar]": {
             display: "flex",
+          },
+          "&:has([data-draft-body]:focus-within) [data-draft-mobile-nav]": {
+            display: "none",
           },
         }),
       }}
@@ -709,24 +834,33 @@ function DraftEditingSession(
               <IconButton
                 aria-label="Open sessions"
                 onClick={mobileChrome.onOpenSessions}
-                sx={{ ...floatingMaterialSx, width: 44, height: 44 }}
+                sx={{
+                  ...floatingMaterialSx,
+                  color: "text.primary",
+                  width: 48,
+                  height: 48,
+                }}
               >
-                <ViewSidebarOutlined sx={{ transform: "scaleX(-1)" }} />
+                <PanelLeftIcon />
               </IconButton>
-              <Stack direction="row" sx={{ ...floatingMaterialSx, px: 0.25 }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                sx={{ ...floatingMaterialSx, height: 48, px: 0.5 }}
+              >
                 <IconButton
                   disabled={historyLoading}
                   aria-label="Recovery history"
                   onClick={() => void openHistory()}
                 >
-                  <HistoryOutlined />
+                  <HistoryIcon />
                 </IconButton>
                 <IconButton
                   aria-label="Export Markdown"
                   onClick={() =>
                     exportDraft(title, textRef.current, attachmentsRef.current)}
                 >
-                  <SaveAlt />
+                  <DownloadIcon />
                 </IconButton>
                 <IconButton
                   aria-label="Draft actions"
@@ -735,7 +869,7 @@ function DraftEditingSession(
                       setError(e.message)
                     )}
                 >
-                  <MoreHoriz />
+                  <EllipsisIcon />
                 </IconButton>
               </Stack>
             </Stack>
@@ -766,35 +900,53 @@ function DraftEditingSession(
             }}
           >
             {titleField}
-            <Tooltip title="Copy to Session drafts">
-              <IconButton
-                aria-label="Copy to Session drafts"
-                onClick={() =>
-                  void flush().then(onCopyToSession).catch((e: Error) =>
-                    setError(e.message)
-                  )}
+            {desktop && (
+              <Box
+                component="span"
+                data-draft-title-shortcut
+                title="Rename: Space D R (Cmd/Alt+K D R from a text field), or ↑ from the first line"
+                sx={{ display: "inline-flex", flexShrink: 0 }}
               >
-                <OpenInNew />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Recovery history">
-              <IconButton
-                disabled={historyLoading}
-                aria-label="Recovery history"
-                onClick={() => void openHistory()}
-              >
-                <HistoryOutlined />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Export Markdown">
-              <IconButton
-                aria-label="Export Markdown"
-                onClick={() =>
-                  exportDraft(title, textRef.current, attachmentsRef.current)}
-              >
-                <SaveAlt />
-              </IconButton>
-            </Tooltip>
+                <LeaderKeycap
+                  leaderKey={`${DESKTOP_DRAFT_GROUP_KEYS.group}${DESKTOP_DRAFT_GROUP_KEYS.rename}`}
+                />
+              </Box>
+            )}
+            {/* Desktop shows these actions once, in the bottom document bar
+                with their `␣D` slots; Mobile keeps them beside the title. */}
+            {!desktop && (
+              <>
+              <Tooltip title="Copy to Session drafts">
+                <IconButton
+                  aria-label="Copy to Session drafts"
+                  onClick={() =>
+                    void flush().then(onCopyToSession).catch((e: Error) =>
+                      setError(e.message)
+                    )}
+                >
+                  <OpenInNew />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Recovery history">
+                <IconButton
+                  disabled={historyLoading}
+                  aria-label="Recovery history"
+                  onClick={() => void openHistory()}
+                >
+                  <HistoryOutlined />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Export Markdown">
+                <IconButton
+                  aria-label="Export Markdown"
+                  onClick={() =>
+                    exportDraft(title, textRef.current, attachmentsRef.current)}
+                >
+                  <SaveAlt />
+                </IconButton>
+              </Tooltip>
+              </>
+            )}
           </Stack>
         )}
       {current.deleted && (
@@ -869,11 +1021,29 @@ function DraftEditingSession(
           minHeight: 0,
           minWidth: 0,
           px: desktop ? 1.5 : 0.5,
-          ...(focusLayout && { pb: "env(safe-area-inset-bottom, 0px)" }),
+          // Rest the last line above the floating navigation capsule.
+          ...(focusLayout && {
+            pb: "calc(max(env(safe-area-inset-bottom, 0px), 12px) + 64px)",
+          }),
         }}
         data-draft-body
         data-mobile-drawer-idle-swipe={focusLayout ? "true" : undefined}
         data-desktop-region={desktop ? "prompt.composer" : undefined}
+        onKeyDownCapture={(e) => {
+          // ↑ in Insert, or a plain Vim Normal `k`, on the first line moves
+          // into the title. A pending Vim command (`dk`, `ck`) keeps its key.
+          if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
+          if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+          const sink = e.target instanceof Element &&
+            e.target.matches("[data-vim-command-sink]");
+          const up = e.key === "ArrowUp" ||
+            (sink && e.code === "KeyK" && getVimMode() === "normal" &&
+              !vimSinkAwaitsInput(e.target));
+          if (!up || !bodyCaretOnFirstLine()) return;
+          e.preventDefault();
+          e.stopPropagation();
+          focusTitle(false);
+        }}
       >
         <Box
           sx={{
@@ -965,11 +1135,17 @@ function DraftEditingSession(
               onHistory={() => void openHistory()}
               onExport={() =>
                 exportDraft(title, textRef.current, attachmentsRef.current)}
+              onRename={() => focusTitle(true)}
             />
           </Suspense>
         )
         : focusLayout
-        ? focusToolbar
+        ? (
+          <>
+            {focusToolbar}
+            {navigationBar}
+          </>
+        )
         : toolbarView}
       <input
         ref={filePicker}

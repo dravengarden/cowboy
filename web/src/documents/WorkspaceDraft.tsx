@@ -26,7 +26,11 @@ import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { ConfirmSheet, Sheet } from "../Sheet";
 import { useStoreSelector } from "../store";
 import { SessionDestinationTree } from "../SessionDestinationTree";
-import { DraftEditor, type DraftFlush } from "./DraftEditor";
+import {
+  DraftEditor,
+  type DraftFlush,
+  type DraftMobileChrome,
+} from "./DraftEditor";
 import { DRAFT_DRAG_TYPE, type DraftChange, type DraftMetadata } from "./model";
 import { draftRepository, useDraftLibrary } from "./store";
 import { documentNotice } from "./DocumentNotifications";
@@ -110,12 +114,14 @@ export function WorkspaceDraftRow(
 }
 
 export function WorkspaceDraftPane(
-  { id, beforeLeave, onAction, onOpenSessions }: {
+  { id, beforeLeave, onAction, mobileNavigation }: {
     id: string;
     beforeLeave: MutableRefObject<DraftFlush>;
     onAction: (action: WorkspaceDraftAction) => void;
-    /** Mobile only: the page owns its Sessions control (no bottom nav). */
-    onOpenSessions?: (() => void) | undefined;
+    /** Mobile only: the page owns its navigation (no session bottom nav). */
+    mobileNavigation?:
+      | Pick<DraftMobileChrome, "onOpenSessions" | "onCreate" | "onSettings">
+      | undefined;
   },
 ): React.JSX.Element {
   const library = useDraftLibrary();
@@ -130,8 +136,8 @@ export function WorkspaceDraftPane(
         id={id}
         beforeLeave={beforeLeave}
         onCopyToSession={() => draft && onAction({ draft, action: "copy" })}
-        mobileChrome={onOpenSessions && {
-          onOpenSessions,
+        mobileChrome={mobileNavigation && {
+          ...mobileNavigation,
           onMenu: () => draft && onAction({ draft, action: "menu" }),
         }}
       />
