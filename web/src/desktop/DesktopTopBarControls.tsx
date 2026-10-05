@@ -92,6 +92,7 @@ import { UsageLogs } from "../UsageLogs";
 import {
   cancelNearestResetSchedule,
   consumeNearestReset,
+  readUsage,
   scheduleNearestReset,
 } from "../usageApi";
 import { PluginSlot } from "../pluginHost";
@@ -233,6 +234,9 @@ function SessionActionLabel({
     </Stack>
   );
 }
+
+/** Same cadence as the session quota notice (ProviderQuotaStatus). */
+const USAGE_POLL_MS = 60_000;
 
 const USAGE_TONE_COLOR: Record<UsageTone, string> = {
   critical: "error.main",
@@ -1212,6 +1216,25 @@ export function DesktopTopBarControls({
   }, [refreshing]);
   useEffect(() => {
     void loadUsage(false);
+  }, []);
+  // The widget is persistent, so it follows the server's snapshot instead of
+  // freezing at mount. A quiet GET only reads the collector's cache (which
+  // schedules its own due refreshes) and never shows the refresh spinner.
+  useEffect(() => {
+    const controller = new AbortController();
+    const poll = (): void => {
+      if (document.visibilityState === "hidden") return;
+      void readUsage(controller.signal).then((next) => {
+        if (!controller.signal.aborted) setSnapshot(next);
+      }).catch(() => undefined);
+    };
+    const timer = window.setInterval(poll, USAGE_POLL_MS);
+    document.addEventListener("visibilitychange", poll);
+    return (): void => {
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
+    };
   }, []);
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 30_000);
