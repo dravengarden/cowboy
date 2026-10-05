@@ -48,6 +48,24 @@ crossings produce the target-change refusal and retire cleanup. A private mount
 fixture covers a same-device descendant bind both before and after opening its
 original handle, preserving foreign and original underlying artifacts.
 
+Before unlinking a nondirectory entry, Linux retains an `O_PATH | O_NOFOLLOW`
+handle opened with the restricted resolve flags. This observes the node itself,
+including a final symlink, without reading contents, opening a device or waiting
+for FIFO peers. While that handle is held, cleanup revalidates the parent and
+opens the current name again to compare device, inode and file type. An observed
+replacement, disappearance or file mount crossing retires cleanup before unlink.
+The [Linux interface](https://man7.org/linux/man-pages/man2/openat2.2.html)
+explicitly allows retaining the final symlink with these flags. Two transient
+leaf handles do not retain an unbounded per-file registry.
+
+Fixtures replace original files and links with new files, links, directories or
+missing paths after the identity handle opens; original and replacement objects
+remain intact. A FIFO-content fixture without a writer finishes under a bounded
+test wait. Actual private-namespace mount fixtures also cover same-device file
+binds before and after the identity open. The parent is checked again before the
+leaf comparison, so the existing ancestor-rename fixture now preserves its
+original artifact as well as replacement contents.
+
 Removal admits at most 64 descendant levels and one million content entries
 across all candidate targets in one pass. It retains the target and descendant
 directory structure: no final directory-name unlink follows an identity check.
@@ -77,7 +95,8 @@ part of the Machine gate.
 This is a scan-time target observation, not continuous Session/worktree ownership
 from launch or terminal deletion. It does not establish a reader/writer lease or
 an atomic tree snapshot. Retaining directory structure avoids directory-name
-unlink races. Nondirectory name observation and unlink are still not atomic: a
+unlink races. The final nondirectory identity comparison and name unlink are
+still not atomic: a
 replacement nondirectory in the original held parent can be unlinked. A rename
 after verification may permit effects on the held original object before refusal;
 there is no claim of an atomic tree snapshot or a freeze on mounts/renames.

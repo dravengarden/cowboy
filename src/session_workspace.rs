@@ -794,11 +794,25 @@ fn remove_cleanup_targets(
 
 #[cfg(target_os = "linux")]
 fn open_cleanup_content_directory(directory: &File, name: &Path) -> Result<File> {
-    use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
-    match openat2(
+    use rustix::fs::OFlags;
+    open_cleanup_content_entry(
         directory,
         name,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn open_cleanup_content_entry(
+    directory: &File,
+    name: &Path,
+    flags: rustix::fs::OFlags,
+) -> Result<File> {
+    use rustix::fs::{Mode, ResolveFlags, openat2};
+    match openat2(
+        directory,
+        name,
+        flags,
         Mode::empty(),
         ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
     ) {
@@ -842,7 +856,7 @@ fn clear_cleanup_directory(
     entries: &mut usize,
     before_child_remove: &impl Fn(&Path) -> Result<()>,
 ) -> Result<()> {
-    use rustix::fs::{AtFlags, unlinkat};
+    use rustix::fs::{AtFlags, OFlags, unlinkat};
     if depth > MAX_CLEANUP_CONTENT_DEPTH {
         bail!("Cargo cleanup exceeded {MAX_CLEANUP_CONTENT_DEPTH} descendant levels");
     }
@@ -874,9 +888,29 @@ fn clear_cleanup_directory(
                 before_child_remove,
             )?;
         } else {
+            // O_PATH pins the node without reading it, opening a device, waiting
+            // for FIFO peers or following a final symbolic link.
+            let flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let original = open_cleanup_content_entry(directory, Path::new(&name), flags)?;
+            let held = original.metadata()?;
+            if held.dev() != observed.dev()
+                || held.ino() != observed.ino()
+                || held.file_type() != observed.file_type()
+            {
+                return Err(CleanupTargetChanged.into());
+            }
             before_child_remove(&entry.path())?;
+            verify_cleanup_content_directory(workspace, target, directory, relative)?;
+            let current = open_cleanup_content_entry(directory, Path::new(&name), flags)?;
+            let current = current.metadata()?;
+            if current.dev() != held.dev()
+                || current.ino() != held.ino()
+                || current.file_type() != held.file_type()
+            {
+                return Err(CleanupTargetChanged.into());
+            }
             // Only unlink this name in the retained parent. Never follow links
-            // or use AT_REMOVEDIR; a replacement directory cannot be entered.
+            // or use AT_REMOVEDIR. The last comparison and unlink are not atomic.
             unlinkat(directory, name, AtFlags::empty())?;
         }
         verify_cleanup_content_directory(workspace, target, directory, relative)?;
@@ -1373,7 +1407,101 @@ mod tests {
             std::fs::read_to_string(debug.join("source.txt")).unwrap(),
             "preserve"
         );
-        assert!(!original.join("deps/libtest.rlib").exists());
+        assert!(original.join("deps/libtest.rlib").is_file());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_leaf_replacement_after_observation_preserves_both_nodes() {
+        for original_link in [false, true] {
+            for replacement in ["regular", "link", "directory", "missing"] {
+                let temp = TestDir::new();
+                let (workspace, session, access, target) = observed_cleanup_target(&temp);
+                let leaf = session.join("project/target/debug/deps/libtest.rlib");
+                let retained = session.join("original-leaf");
+                let foreign = temp.0.join("foreign.txt");
+                std::fs::write(&foreign, "foreign").unwrap();
+                if original_link {
+                    std::fs::remove_file(&leaf).unwrap();
+                    std::os::unix::fs::symlink(&foreign, &leaf).unwrap();
+                }
+                let changed = std::sync::atomic::AtomicBool::new(false);
+                let error =
+                    remove_cleanup_targets(&workspace, &session, &access, vec![target], &|path| {
+                        if path.file_name() == Some(OsStr::new("libtest.rlib")) {
+                            assert!(!changed.swap(true, Ordering::SeqCst));
+                            std::fs::rename(&leaf, &retained)?;
+                            match replacement {
+                                "regular" => std::fs::write(&leaf, "replacement")?,
+                                "link" => std::os::unix::fs::symlink(&foreign, &leaf)?,
+                                "directory" => {
+                                    std::fs::create_dir(&leaf)?;
+                                    std::fs::write(leaf.join("source.txt"), "preserve")?;
+                                }
+                                "missing" => {}
+                                _ => unreachable!(),
+                            }
+                        }
+                        Ok(())
+                    })
+                    .unwrap_err();
+                assert!(changed.load(Ordering::SeqCst));
+                assert!(
+                    error.downcast_ref::<CleanupTargetChanged>().is_some(),
+                    "{original_link}/{replacement}: {error}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&retained).unwrap(),
+                    if original_link {
+                        "foreign"
+                    } else {
+                        "generated\n"
+                    }
+                );
+                assert_eq!(std::fs::read_to_string(&foreign).unwrap(), "foreign");
+                match replacement {
+                    "regular" => assert_eq!(std::fs::read_to_string(&leaf).unwrap(), "replacement"),
+                    "link" => assert!(
+                        std::fs::symlink_metadata(&leaf)
+                            .unwrap()
+                            .file_type()
+                            .is_symlink()
+                    ),
+                    "directory" => assert_eq!(
+                        std::fs::read_to_string(leaf.join("source.txt")).unwrap(),
+                        "preserve"
+                    ),
+                    "missing" => assert!(!leaf.exists()),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_fifo_contents_finish_without_a_writer() {
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        let target = session.join("project/target");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            target.join("debug/deps/pipe"),
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            sender
+                .send(cleanup_build_artifacts_sync(&workspace))
+                .unwrap()
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("content identity pin must not wait for a FIFO writer")
+            .unwrap();
+        thread.join().unwrap();
+        assert_only_directories(&target);
     }
 
     #[test]
@@ -1384,13 +1512,24 @@ mod tests {
             std::env::var("COWBOY_TEST_CLEANUP_MOUNT_NAMESPACE").as_deref(),
             Ok("1")
         );
-        for after_open in [false, true] {
+        for (leaf, after_open) in [(false, false), (false, true), (true, false), (true, true)] {
             let temp = TestDir::new();
             let (workspace, session, access, target) = observed_cleanup_target(&temp);
-            let destination = session.join("project/target/debug/deps");
+            let destination = session.join(if leaf {
+                "project/target/debug/deps/libtest.rlib"
+            } else {
+                "project/target/debug/deps"
+            });
             let original = File::open(&destination).unwrap();
             let outside = temp.0.join("foreign");
             write_cargo_target(&outside);
+            std::fs::write(outside.join("foreign.txt"), "foreign").unwrap();
+            let source = if leaf {
+                outside.join("foreign.txt")
+            } else {
+                outside.clone()
+            };
+            let name = if leaf { "libtest.rlib" } else { "deps" };
             struct MountGuard {
                 path: PathBuf,
                 mounted: std::sync::atomic::AtomicBool,
@@ -1427,12 +1566,12 @@ mod tests {
                 mounted: std::sync::atomic::AtomicBool::new(false),
             };
             if !after_open {
-                guard.mount(&outside);
+                guard.mount(&source);
             }
             let error =
                 remove_cleanup_targets(&workspace, &session, &access, vec![target], &|path| {
-                    if after_open && path.file_name() == Some(OsStr::new("deps")) {
-                        guard.mount(&outside);
+                    if after_open && path.file_name() == Some(OsStr::new(name)) {
+                        guard.mount(&source);
                     }
                     Ok(())
                 })
@@ -1440,15 +1579,25 @@ mod tests {
             assert!(guard.mounted.load(Ordering::SeqCst));
             assert!(
                 error.downcast_ref::<CleanupTargetChanged>().is_some(),
-                "{after_open}: {error}"
+                "leaf={leaf}/after_open={after_open}: {error}"
             );
             assert!(outside.join("debug/deps/libtest.rlib").is_file());
             assert!(outside.join("CACHEDIR.TAG").is_file());
-            assert!(
-                directory_access_root(&original, Path::new("unused"))
-                    .join("libtest.rlib")
-                    .is_file()
+            assert_eq!(
+                std::fs::read_to_string(outside.join("foreign.txt")).unwrap(),
+                "foreign"
             );
+            if leaf {
+                let mut contents = String::new();
+                (&original).read_to_string(&mut contents).unwrap();
+                assert_eq!(contents, "generated\n");
+            } else {
+                assert!(
+                    directory_access_root(&original, Path::new("unused"))
+                        .join("libtest.rlib")
+                        .is_file()
+                );
+            }
         }
     }
 
