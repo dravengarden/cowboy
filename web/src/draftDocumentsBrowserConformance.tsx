@@ -29,6 +29,7 @@ import {
 import { activeEditorExtensionPort } from "./editorExtensions/host";
 import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
+import { isMac } from "./platform";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -1343,6 +1344,88 @@ export async function runDraftDocumentsBrowserConformance(
       await until(
         () => !!container.querySelector("[data-workspace-document]"),
         "Draft reopens after the leader jump",
+      );
+      // `'` labels the focused list's rows; a label moves the cursor.
+      const draftRow = container.querySelector<HTMLElement>(
+        `[data-desktop-item="draft:${id}"]`,
+      )!;
+      draftRow.focus();
+      await tick();
+      press(draftRow, "'", "Quote");
+      await until(
+        () => document.querySelectorAll("[data-desktop-hint]").length >= 2,
+        "' labels every visible Sessions row",
+      );
+      const hint = [...document.querySelectorAll<HTMLElement>("[data-desktop-hint]")]
+        .find((element) => {
+          const rect = element.getBoundingClientRect();
+          const target = row.getBoundingClientRect();
+          return rect.top >= target.top && rect.bottom <= target.bottom;
+        })?.dataset.desktopHint;
+      check(hint, "The session row carries a label");
+      press(draftRow, hint, `Key${hint.toUpperCase()}`);
+      await tick();
+      check(
+        document.activeElement === row &&
+          !document.querySelector("[data-desktop-hint]"),
+        "A label moves the list cursor and clears every label",
+      );
+      // Inside a modal the leader labels that modal's own controls.
+      const modifier = isMac ? { metaKey: true } : { altKey: true };
+      const prefix = (target: Element) =>
+        flushSync(() =>
+          target.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "k",
+              code: "KeyK",
+              bubbles: true,
+              cancelable: true,
+              ...modifier,
+            }),
+          )
+        );
+      prefix(row);
+      press(row, "n", "KeyN");
+      await until(
+        () => !!document.querySelector('[role="tab"][aria-label="Draft"]'),
+        "␣N opens Create",
+      );
+      await tick(250);
+      const title = document.activeElement!;
+      check(title.matches("input"), "Create focuses its title");
+      prefix(title);
+      await until(
+        () => !!document.querySelector('[data-desktop-leader-menu="modal"]'),
+        "The leader inside a dialog lists that dialog's controls",
+      );
+      const draftEntry = [
+        ...document.querySelectorAll<HTMLElement>("[data-modal-leader-entry]"),
+      ].find((entry) => entry.textContent?.endsWith("Draft"));
+      check(draftEntry, "The Draft tab has a dialog label");
+      const dialogLabel = draftEntry.dataset.modalLeaderEntry!;
+      check(
+        document.querySelector(`[data-desktop-hint="${dialogLabel}"]`),
+        "Every dialog label is also painted on its control",
+      );
+      press(
+        title,
+        dialogLabel,
+        /^\d$/.test(dialogLabel)
+          ? `Digit${dialogLabel}`
+          : `Key${dialogLabel.toUpperCase()}`,
+      );
+      await tick();
+      check(
+        document.querySelector('[role="tab"][aria-label="Draft"]')
+            ?.getAttribute("aria-selected") === "true" &&
+          !document.querySelector("[data-desktop-hint]"),
+        "A dialog label activates its control and clears the layer",
+      );
+      press(document.activeElement!, "Escape", "Escape");
+      press(document.activeElement!, "Escape", "Escape");
+      await until(
+        () => !document.querySelector('[role="tab"][aria-label="Draft"]'),
+        "Create closes",
       );
     }
     integrated.unmount();

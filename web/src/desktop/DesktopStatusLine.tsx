@@ -116,7 +116,7 @@ function regionHints(
     case "sessions.rail":
       return [
         { keys: "J/K", label: "Folder" },
-        { keys: "1…9", label: "Open folder" },
+        { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Open" },
         { keys: DESKTOP_SHORTCUTS.toggleSessions, label: "Expand list" },
       ];
@@ -124,6 +124,7 @@ function regionHints(
       return [
         { keys: "J/K", label: "Row" },
         { keys: "GG/G", label: "First/last" },
+        { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Open" },
         { keys: "H", label: "Collapse/up" },
         { keys: "S", label: "Actions" },
@@ -143,7 +144,7 @@ function regionHints(
       return [
         { keys: "J/K", label: "Message" },
         { keys: "GG/G", label: "First/last" },
-        { keys: "G→1…0", label: "Direct jump" },
+        { keys: "'", label: "Labels" },
         { keys: "L/Enter", label: "Edit" },
         { keys: "O", label: "Order mode" },
       ];

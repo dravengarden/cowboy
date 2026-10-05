@@ -57,7 +57,7 @@ Deno.test("the first pending row reserves room for its arrival focus ring", () =
     "data-mobile-pending-scrollport=",
   );
   const rowsStart = composerSource.indexOf(
-    "{sortable.order.map((id, index) => {",
+    "{sortable.order.map((id) => {",
     scrollportStart,
   );
   const scrollport = composerSource.slice(scrollportStart, rowsStart);

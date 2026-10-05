@@ -44,7 +44,11 @@ learning Cowboy; a new feature only picks which ones it uses.
 4. **Leader.** `␣` then one key for everything else (below). Its slots are
    drawn on the controls they run.
 5. **Labels.** When a choice is among many visible targets, the targets get
-   letter labels for the next key (`␣␣` sessions) instead of fixed numbers.
+   letter labels for the next key instead of fixed numbers: `␣␣` opens a
+   session, `'` (Vim's mark jump) moves the cursor to a row of the focused
+   list, and the leader inside a modal labels every control of that modal.
+   Labels are scoped to one list or one modal, appear only while armed and
+   are painted by `DesktopHintLayer`; there is no page-wide hint layer.
 6. **Direct chords.** Only established semantics: `Mod+Enter` send/confirm,
    `Mod+S` save, `Mod+.` stop, `Mod+Shift+P` palette, `Mod+/` help.
 
@@ -219,7 +223,7 @@ wrapping into a second toolbar.
 
 ### Sequential chords
 
-A scoped sequence such as `G` then `1…0` has a three-state transition:
+A scoped sequence such as `'` then a row label has a three-state transition:
 
 1. outside its scope, prefix and continuations are `inactive`;
 2. in scope, the prefix is `available` and continuations remain `inactive`;
@@ -466,13 +470,21 @@ approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
 semantics remain identical across Desktop.
 
-Queue and Draft headers show their sequential `G` prefix and their first ten
-visible rows show `1` through `9`, then `0`. Outside the list all are inactive;
-while the list owns Normal-mode focus, `G` is available and the numeric slots
-remain inactive. Pressing `G` makes the prefix active and numeric slots
-available. A valid slot focuses that exact row and a second `G` focuses the
-first row. Cancellation follows the shared sequential-chord law, so a modified
-global command such as `Cmd/Alt+K` still arms the leader immediately.
+Queue and Draft headers show their `'` label trigger; rows carry no ordinal.
+Outside the list the trigger is inactive; while the list owns Normal-mode
+focus it is available. Pressing it makes it active and paints a letter on
+every visible row (home row first, top to bottom). A label focuses that exact
+row and clears every label. Cancellation follows the shared sequential-chord
+law, so a modified global command such as `Cmd/Alt+K` still arms the leader
+immediately. The same `'` works in Sessions and the collapsed Sessions rail.
+
+Inside a modal, `Space` (on a non-text control) or `Cmd/Alt+K` (anywhere)
+arms the modal's own leader. Every operable control of the topmost modal gets
+a stable mnemonic letter (an explicit `data-leader-key` first, then word
+initials, then any free letter), painted on the control and listed in the
+which-key panel. The next key activates it the way a pointer would: fields
+focus, Selects open, buttons and tabs click. Menus, listboxes and popovers
+keep their own keys and never get labels.
 
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the
@@ -620,9 +632,8 @@ transcript widgets, or destructive actions. Pointer dragging keeps working and
 selecting a bar with the pointer enters the same visible state.
 
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
-`G` jump to the ends, and `1` through `0` jump to one of the first ten visible
-slots once that list owns focus. Clicking a visible number does the same jump.
-`G` then `1…0` remains available as the sequential form. `L`/`Enter` opens the
+`G` jump to the ends, and `'` then a label jumps to any visible row.
+`L`/`Enter` opens the
 selected message editor. `O` pins Order reorder mode
 so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+S`
 saves and `Esc` cancels, with both returning focus to the originating list row.

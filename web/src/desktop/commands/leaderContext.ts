@@ -1,8 +1,10 @@
 import { createContext, useContext } from "react";
+import type { DesktopHint } from "./hintTargets";
 
 /** `root` lists every leader command in scope; `sessions` turns the next key
- *  into a session label (the `␣␣` switcher). */
-export type DesktopLeaderLayer = "root" | "sessions";
+ *  into a session label (the `␣␣` switcher); `modal` labels the controls of
+ *  the topmost modal. */
+export type DesktopLeaderLayer = "root" | "sessions" | "modal";
 
 export interface DesktopLeaderState {
   armed: boolean;
@@ -20,4 +22,11 @@ export const DesktopLeaderContext = createContext<DesktopLeaderState | null>(
 /** Leader state for which-key and live keycaps; null outside Desktop. */
 export function useDesktopLeaderOptional(): DesktopLeaderState | null {
   return useContext(DesktopLeaderContext);
+}
+
+/** Hint labels currently on screen; empty when no label layer is armed. */
+export const DesktopHintContext = createContext<readonly DesktopHint[]>([]);
+
+export function useDesktopHints(): readonly DesktopHint[] {
+  return useContext(DesktopHintContext);
 }

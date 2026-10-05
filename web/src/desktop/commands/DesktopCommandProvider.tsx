@@ -24,7 +24,7 @@ import {
   desktopShouldBlockStaleVimSink,
   desktopVimSinkShouldHandleKeys,
 } from "../desktopComposerOwnership";
-import { listJumpIndex, pendingItemActionKey } from "./listNavigation";
+import { pendingItemActionKey } from "./listNavigation";
 import {
   adjacentDesktopSplitter,
   DESKTOP_SPLITTER_ADJUST_EVENT,
@@ -46,6 +46,15 @@ import { isImeComposing } from "../vim/imeStatusStore";
 import { desktopKeyIntent, installNativeCompositionTracker } from "./keyIntent";
 import { DESKTOP_SESSION_JUMP_EVENT } from "./sessionJump";
 import {
+  activateHint,
+  type DesktopHint,
+  listHints,
+  modalHints,
+  popupOwnsKeys,
+  topmostModal,
+} from "./hintTargets";
+import {
+  DesktopHintContext,
   DesktopLeaderContext,
   type DesktopLeaderLayer,
   type DesktopLeaderState,
@@ -79,7 +88,6 @@ interface DesktopCommandContextValue {
 
 interface PendingJumpChord {
   region: string;
-  timer: number;
 }
 
 const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
@@ -179,13 +187,23 @@ export function DesktopCommandProvider(
   const swallowSpaceKeyUp = useRef(false);
   const [revision, setRevision] = useState(0);
   const [pendingJumpRegion, setPendingJumpRegion] = useState<string | null>(null);
+  // Hint labels on screen (FOCUS.md "Labels"): list `f` rows or the controls
+  // of the topmost modal under its leader.
+  const hintsRef = useRef<readonly DesktopHint[]>([]);
+  const [hints, setHintsState] = useState<readonly DesktopHint[]>([]);
+  const setHints = useCallback((next: readonly DesktopHint[]): void => {
+    if (hintsRef.current.length === 0 && next.length === 0) return;
+    hintsRef.current = next;
+    setHintsState(next);
+  }, []);
   const workspace = useDesktopWorkspace();
   const clearWorkspaceCommand = useCallback((): void => {
     leaderArmed.current = false;
     leaderLayerRef.current = "root";
     setLeaderLayer("root");
+    if (pendingJumpChord.current === null) setHints([]);
     workspace.setMode("normal");
-  }, [workspace.setMode]);
+  }, [setHints, workspace.setMode]);
   const armWorkspaceCommand = useCallback(
     (layer: DesktopLeaderLayer = "root"): void => {
       leaderArmed.current = true;
@@ -196,22 +214,21 @@ export function DesktopCommandProvider(
     [workspace.setMode],
   );
   const clearPendingJumpChord = useCallback((): void => {
-    const chord = pendingJumpChord.current;
-    if (chord) globalThis.clearTimeout(chord.timer);
+    if (pendingJumpChord.current === null) return;
     pendingJumpChord.current = null;
-    setPendingJumpRegion((current) => current === null ? current : null);
-  }, []);
-  const armPendingJumpChord = useCallback((region: string): void => {
-    const current = pendingJumpChord.current;
-    if (current) globalThis.clearTimeout(current.timer);
-    const timer = globalThis.setTimeout(() => {
-      if (pendingJumpChord.current?.timer !== timer) return;
-      pendingJumpChord.current = null;
-      setPendingJumpRegion((armed) => armed === region ? null : armed);
-    }, 1200);
-    pendingJumpChord.current = { region, timer };
-    setPendingJumpRegion(region);
-  }, []);
+    setPendingJumpRegion(null);
+    if (!leaderArmed.current) setHints([]);
+  }, [setHints]);
+  // Like the leader, a label chord waits for its key: Esc, a pointer press,
+  // focus or mode change, or any unrelated key ends it.
+  const armPendingJumpChord = useCallback(
+    (region: string, items: readonly HTMLElement[]): void => {
+      pendingJumpChord.current = { region };
+      setPendingJumpRegion(region);
+      setHints(listHints(items));
+    },
+    [setHints],
+  );
   const register = useCallback((command: DesktopCommand): () => void => {
     assertMacShortcutAllowed(command.id, command.shortcut);
     assertChromeShortcutAllowed(command.id, command.shortcut, isMac);
@@ -260,6 +277,7 @@ export function DesktopCommandProvider(
         event.target.closest("[data-desktop-leader-menu]")
       ) return;
       if (leaderArmed.current) clearWorkspaceCommand();
+      clearPendingJumpChord();
     };
     globalThis.addEventListener("pointerdown", dismiss, true);
     globalThis.addEventListener("blur", dismiss);
@@ -267,7 +285,7 @@ export function DesktopCommandProvider(
       globalThis.removeEventListener("pointerdown", dismiss, true);
       globalThis.removeEventListener("blur", dismiss);
     };
-  }, [clearWorkspaceCommand]);
+  }, [clearPendingJumpChord, clearWorkspaceCommand]);
 
   useEffect(() => {
     const chord = pendingJumpChord.current;
@@ -335,6 +353,45 @@ export function DesktopCommandProvider(
       // map. Relinquish the workspace prefix before it consumes those keys.
       if (desktopOverlayOwnsShortcuts(document)) {
         clearPendingJumpChord();
+        // A modal has its own leader: every control in it gets a mnemonic
+        // label. Menus, listboxes and popovers keep their own keys.
+        const modal = popupOwnsKeys() ? null : topmostModal();
+        if (modal) {
+          const armedHere = leaderArmed.current &&
+            leaderLayerRef.current === "modal";
+          if (!armedHere) {
+            const arm = matchesDesktopWorkspacePrefix(event) ||
+              (isDesktopLeaderSpace(event) && !textEditorOwnsKey &&
+                desktopKeyIntent(event).owner === "command");
+            if (arm) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              if (event.code === "Space") swallowSpaceKeyUp.current = true;
+              if (!event.repeat) {
+                armWorkspaceCommand("modal");
+                setHints(modalHints(modal));
+              }
+              return;
+            }
+          } else {
+            const key = desktopWorkspaceContinuationKey(event);
+            if (key !== null && isModifierKey(key)) return;
+            if (key === null) {
+              clearWorkspaceCommand();
+              return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (event.code === "Space") swallowSpaceKeyUp.current = true;
+            if (event.repeat) return;
+            const target = hintsRef.current.find((hint) =>
+              hint.label === key.toLowerCase()
+            );
+            clearWorkspaceCommand();
+            if (target) activateHint(target.element);
+            return;
+          }
+        }
         if (leaderArmed.current) clearWorkspaceCommand();
         return;
       }
@@ -499,13 +556,12 @@ export function DesktopCommandProvider(
           return;
         }
       }
-      // Queue and Draft direct jumps are a visible, transient `G -> slot`
-      // chord. Once armed, the next non-modifier key belongs exclusively to
-      // that chord: a valid 1-9/0 (or a second G) jumps, while Escape, a
-      // unrelated bare key cancels without leaking through to destructive row
-      // actions such as X. A new modified/global chord cancels G but remains
-      // available (for example Alt+1 switches sessions). Moving focus/editor
-      // mode clears the chord without swallowing the new surface's first key.
+      // List labels are a visible, transient `' -> label` chord. Once armed,
+      // the next non-modifier key belongs exclusively to it: a shown label
+      // moves the cursor to that row, while Escape or an unrelated bare key
+      // cancels without leaking through to destructive row actions such as
+      // X. A new modified/global chord cancels it but still runs. Moving
+      // focus/editor mode clears it without swallowing the new surface's key.
       const pendingChord = pendingJumpChord.current;
       if (pendingChord) {
         const stillOwned = workspace.productMode === "agent" &&
@@ -526,15 +582,13 @@ export function DesktopCommandProvider(
             event.preventDefault();
             event.stopPropagation();
             if (event.repeat) return;
+            const target = hintsRef.current.find((hint) =>
+              hint.label === key.toLowerCase()
+            )?.element;
             clearPendingJumpChord();
-            const region = document.querySelector<HTMLElement>(
-              `[data-desktop-region="${CSS.escape(pendingChord.region)}"]`,
-            );
-            const items = visibleRegionItems(region);
-            const jump = listJumpIndex(key, items.length);
-            if (jump !== null) {
-              items[jump]?.focus({ preventScroll: true });
-              items[jump]?.scrollIntoView({ block: "nearest" });
+            if (target?.isConnected) {
+              target.focus({ preventScroll: true });
+              target.scrollIntoView({ block: "nearest" });
             }
             return;
           }
@@ -777,23 +831,17 @@ export function DesktopCommandProvider(
           const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
             region?.dataset.desktopRegion === "prompt.draft";
           const reordering = pendingList && region?.dataset.desktopReordering === "true";
-          if (pendingList && key === "g") {
+          // `'` (Vim's mark jump) labels the visible rows of the focused
+          // list; the next key moves the cursor there. No row carries a fixed
+          // number, and bare `f` stays free (FOCUS.md forbids a hint layer
+          // on it).
+          if (key === "'" && !reordering && !pinned) {
             event.preventDefault();
             event.stopPropagation();
             if (!event.repeat && region?.dataset.desktopRegion) {
-              armPendingJumpChord(region.dataset.desktopRegion);
+              armPendingJumpChord(region.dataset.desktopRegion, items);
             }
             return;
-          }
-          if (pendingList && !reordering && /^[0-9]$/.test(key)) {
-            const jump = listJumpIndex(key, items.length);
-            if (jump !== null) {
-              event.preventDefault();
-              event.stopPropagation();
-              items[jump]?.focus({ preventScroll: true });
-              items[jump]?.scrollIntoView({ block: "nearest" });
-              return;
-            }
           }
           if (sessionsList && key.toLowerCase() === "o" && !event.repeat) {
             event.preventDefault();
@@ -879,14 +927,10 @@ export function DesktopCommandProvider(
             return;
           }
           // Collapsed Sessions rail: folders are items; `l` opens the focused
-          // folder's menu (Enter already activates it) and 1…9 open a folder
-          // directly. The menu then owns j/k/h/l until it closes.
+          // folder's menu (Enter already activates it). The menu then owns
+          // j/k/h/l until it closes.
           if (region?.dataset.desktopRegion === "sessions.rail" && !event.repeat) {
-            const target = key.toLowerCase() === "l"
-              ? items[active]
-              : /^[1-9]$/.test(key)
-              ? items[Number(key) - 1]
-              : undefined;
+            const target = key.toLowerCase() === "l" ? items[active] : undefined;
             if (target) {
               event.preventDefault();
               event.stopPropagation();
@@ -896,18 +940,16 @@ export function DesktopCommandProvider(
             }
           }
           let next = -1;
-          if (!pendingList) {
-            if (itemChord.current !== null) {
-              globalThis.clearTimeout(itemChord.current);
+          if (itemChord.current !== null) {
+            globalThis.clearTimeout(itemChord.current);
+            itemChord.current = null;
+            if (key === "g") next = 0;
+          } else if (key === "g") {
+            event.preventDefault();
+            itemChord.current = globalThis.setTimeout(() => {
               itemChord.current = null;
-              if (key === "g") next = 0;
-            } else if (key === "g") {
-              event.preventDefault();
-              itemChord.current = globalThis.setTimeout(() => {
-                itemChord.current = null;
-              }, 900);
-              return;
-            }
+            }, 900);
+            return;
           }
           if (key === "j") next = Math.min(items.length - 1, Math.max(0, active + 1));
           else if (key === "k") next = Math.max(0, active < 0 ? items.length - 1 : active - 1);
@@ -1047,16 +1089,13 @@ export function DesktopCommandProvider(
         globalThis.clearTimeout(itemChord.current);
         itemChord.current = null;
       }
-      if (pendingJumpChord.current !== null) {
-        globalThis.clearTimeout(pendingJumpChord.current.timer);
-        pendingJumpChord.current = null;
-      }
     };
   }, [
     armPendingJumpChord,
     armWorkspaceCommand,
     clearPendingJumpChord,
     clearWorkspaceCommand,
+    setHints,
     workspace,
   ]);
 
@@ -1070,9 +1109,11 @@ export function DesktopCommandProvider(
   return (
     <DesktopCommandContext.Provider value={value}>
       <DesktopLeaderContext.Provider value={leader}>
-        <DesktopListJumpContext.Provider value={pendingJumpRegion}>
-          {children}
-        </DesktopListJumpContext.Provider>
+        <DesktopHintContext.Provider value={hints}>
+          <DesktopListJumpContext.Provider value={pendingJumpRegion}>
+            {children}
+          </DesktopListJumpContext.Provider>
+        </DesktopHintContext.Provider>
       </DesktopLeaderContext.Provider>
     </DesktopCommandContext.Provider>
   );
