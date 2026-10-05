@@ -6,7 +6,6 @@ import {
   ListItemButton,
   ListItemText,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -26,10 +25,7 @@ import { useConfirmEnter } from "../Kbd";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { ConfirmSheet, Sheet } from "../Sheet";
 import { useStoreSelector } from "../store";
-import {
-  effectiveSessionFolder,
-  sessionFolderLocation,
-} from "../sessionFolders";
+import { SessionDestinationTree } from "../SessionDestinationTree";
 import { DraftEditor, type DraftFlush } from "./DraftEditor";
 import { DRAFT_DRAG_TYPE, type DraftChange, type DraftMetadata } from "./model";
 import { draftRepository, useDraftLibrary } from "./store";
@@ -148,7 +144,7 @@ export function WorkspaceDraftActions(
   const sessions = useStoreSelector((snapshot) => snapshot.sessions);
   const [action, setAction] = useState(request.action);
   const [busy, setBusy] = useState(false);
-  const [search, setSearch] = useState("");
+  const order = useStoreSelector((snapshot) => snapshot.workspaceOrder);
   const desktop = useSurfaceProfile().kind === "desktop";
   const run = (operation: () => Promise<void>): void => {
     if (busy) return;
@@ -237,51 +233,23 @@ export function WorkspaceDraftActions(
         open
         onClose={busy ? () => {} : onClose}
         title="Add draft to Session"
+        actions={
+          <Button onClick={onClose} disabled={busy} color="inherit">
+            Cancel
+          </Button>
+        }
       >
-        <TextField
-          label="Find Session"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          fullWidth
-          sx={{ mt: 1 }}
+        <SessionDestinationTree
+          sessions={sessions}
+          folders={folders}
+          order={order}
+          initialFolder={request.draft.parent_id}
+          busy={busy}
+          onPick={(session) =>
+            run(() =>
+              copyDraftToSession(request.draft.id, session.id, session.title)
+            )}
         />
-        <List>
-          {sessions.filter((session) =>
-            !session.system &&
-            `${session.title} ${
-              sessionFolderLocation(
-                folders,
-                effectiveSessionFolder(session, folders),
-              )
-            }`.toLocaleLowerCase().includes(search.toLocaleLowerCase())
-          ).map((session) => (
-            <ListItemButton
-              key={session.id}
-              disabled={busy}
-              onClick={() =>
-                run(() =>
-                  copyDraftToSession(
-                    request.draft.id,
-                    session.id,
-                    session.title,
-                  )
-                )}
-            >
-              <ListItemText
-                primary={session.title || "Session"}
-                secondary={sessionFolderLocation(
-                  folders,
-                  effectiveSessionFolder(session, folders),
-                )}
-              />
-            </ListItemButton>
-          ))}
-        </List>
-        {sessions.length === 0 && (
-          <Typography sx={{ p: 2 }}>
-            Create a Session to add this draft.
-          </Typography>
-        )}
       </Sheet>
     );
   }
