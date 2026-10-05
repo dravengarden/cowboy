@@ -53,7 +53,13 @@ import { getVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
 import { DESKTOP_DOCUMENT_KEYS } from "../desktop/commands/workspaceShortcuts";
-import { enterInputNormal, inputVimField, isInputVimNormal } from "../desktop/vim/inputVim";
+import {
+  enterInputNormal,
+  inputVimField,
+  isInputVimNormal,
+  useInputVimMode,
+} from "../desktop/vim/inputVim";
+import { Kbd } from "../Kbd";
 import { Sheet } from "../Sheet";
 import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
@@ -236,6 +242,7 @@ function DraftEditingSession(
   // in Normal; `↑` in Insert enters it typing. `Enter`/`↓`/`Tab` (and `j`
   // in Normal) return to the body start, `Esc` to where the body caret was
   // (FOCUS.md "Draft document"). With Vim on the title is a Vim field.
+  const titleMode = useInputVimMode(titleInput);
   const focusTitle = (mode: "normal" | "insert"): void => {
     const input = titleInput.current;
     if (!input) return;
@@ -854,11 +861,42 @@ function DraftEditingSession(
             }}
           >
             {titleField}
+            {desktop && titleMode !== null && (
+              // While the title owns focus it names the way back to the body
+              // and the keys of its current mode (FOCUS.md "Draft document").
+              <Box
+                component="span"
+                role="note"
+                data-draft-title-hint={titleMode}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  flexShrink: 0,
+                  gap: "0.25rem",
+                  mr: "0.5rem",
+                  color: "text.secondary",
+                  typography: "caption",
+                  whiteSpace: "nowrap",
+                  "@container draft-editor (max-width: 28rem)": { display: "none" },
+                }}
+              >
+                {(titleMode === "normal"
+                  ? [["J", "body"], ["I", "edit"], ["Esc", "back"]]
+                  : titleMode === "insert"
+                  ? [["Esc", "normal"], ["↵", "body"]]
+                  : [["↵", "body"], ["Esc", "back"]]).map(([key, label]) => (
+                    <Box key={key} component="span" sx={{ display: "inline-flex", alignItems: "center", mr: "0.375rem" }}>
+                      <Kbd keys={key!} variant="context" />
+                      <Box component="span" sx={{ ml: "0.25rem" }}>{label}</Box>
+                    </Box>
+                  ))}
+              </Box>
+            )}
             {desktop && (
               <Box
                 component="span"
                 data-draft-title-shortcut
-                title="Rename: Space D R (Cmd/Alt+K D R from a text field), or ↑ from the first line"
+                title="Go to the title: Space T (Cmd/Alt+K T from a text field), or k / ↑ on the first line"
                 sx={{ display: "inline-flex", flexShrink: 0 }}
               >
                 <LeaderKeycap

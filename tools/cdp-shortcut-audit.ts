@@ -113,6 +113,45 @@ try {
   await press("Escape", "Escape", 27);
   await waitFor("!document.querySelector('[data-move-pick-banner]')", "Esc leaves Move pick");
   console.log(JSON.stringify({ move_pick: "ok" }));
+  // The Draft title in the real App (Vim on): `␣T` puts a Normal cursor on
+  // it, and each documented way back reaches the body.
+  await page.evaluate(`(() => {
+    localStorage.setItem("cowboy:vim", "1");
+    dispatchEvent(new StorageEvent("storage", { key: "cowboy:vim", newValue: "1", storageArea: localStorage }));
+    return true;
+  })()`);
+  const box = await page.evaluate<{ x: number; y: number }>(`(() => {
+    const row = document.querySelector('[data-desktop-item^="draft:"]');
+    const rect = row.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: "left", clickCount: 1 });
+  }
+  const titleInput = "document.querySelector(\"input[aria-label='Draft title']\")";
+  await waitFor(`${titleInput} && document.querySelector('[data-workspace-document] .cm-content')`, "Draft opens");
+  const inBody = "Boolean(document.activeElement?.closest('[data-workspace-document] .cm-editor'))";
+  const ways: [string, () => Promise<void>][] = [
+    ["j", () => press("j", "KeyJ", 74)],
+    ["Enter", () => press("Enter", "Enter", 13)],
+    ["Esc", () => press("Escape", "Escape", 27)],
+  ];
+  for (const [name, back] of ways) {
+    await press("k", "KeyK", 75, mac ? 4 : 1);
+    await press("t", "KeyT", 84);
+    await waitFor(
+      `document.activeElement === ${titleInput} && ${titleInput}.dataset.vimInputMode === 'normal'`,
+      `␣T puts a Normal cursor on the title (before ${name})`,
+    );
+    await waitFor("document.querySelector(\"[data-draft-title-hint='normal']\")", "the title names its way back");
+    if (name === "j") {
+      const hint = await page.send("Page.captureScreenshot", { format: "png" });
+      await Deno.writeFile(`${output}/title-normal.png`, Uint8Array.from(atob(hint.data), (c) => c.charCodeAt(0)));
+    }
+    await back();
+    await waitFor(inBody, `${name} in the title's Normal returns to the body`);
+  }
+  console.log(JSON.stringify({ draft_title_return: "j, Enter, Esc" }));
 } finally {
   await page.close();
 }

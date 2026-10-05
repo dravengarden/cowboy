@@ -821,5 +821,7 @@ title is a Vim field, "Vim in text fields"), otherwise a caret. A plain Vim
 Normal `k` on the body's first line enters it the same way and `↑` in Insert
 enters it typing (a pending Vim command such as `dk` keeps its key);
 `Enter`, `↓`, `Tab` or Normal `j` returns to the start of the body and `Esc`
-(from Normal) to where the body caret was. Every
+(from Normal) to where the body caret was. While the title owns focus it names
+these keys beside itself for its current mode (Normal: `J` body, `I` edit,
+`Esc` back; Insert: `Esc` normal, `↵` body). Every
 action is also in the Command Palette.

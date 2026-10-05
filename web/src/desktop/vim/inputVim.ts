@@ -15,6 +15,7 @@
 // surrounding surface keeps its grammar: the dialog moves rows, the leader
 // arms, the Draft title returns to its body.
 
+import { useEffect, useState } from "react";
 import { getVimSetting } from "../../vimSetting";
 import { workspaceCommandKey } from "../commands/workspaceCommandKey";
 import {
@@ -463,4 +464,37 @@ export function installInputVim(): () => void {
     document.removeEventListener("focusout", onFocusOut, true);
     document.removeEventListener("mouseup", onMouseUp, true);
   };
+}
+
+/**
+ * The Vim mode of one field while it owns focus: `normal`, `insert`, or
+ * `plain` (focused, Vim off); null while unfocused. For hints that name the
+ * keys of the field's current mode.
+ */
+export function useInputVimMode(
+  ref: { readonly current: HTMLInputElement | HTMLTextAreaElement | null },
+): "normal" | "insert" | "plain" | null {
+  const [mode, setMode] = useState<"normal" | "insert" | "plain" | null>(null);
+  useEffect(() => {
+    const field = ref.current;
+    if (!field) return undefined;
+    const read = (): void => {
+      if (document.activeElement !== field) setMode(null);
+      else {
+        const vim = field.getAttribute(MODE);
+        setMode(vim === "normal" ? "normal" : vim === "insert" ? "insert" : "plain");
+      }
+    };
+    const observer = new MutationObserver(read);
+    observer.observe(field, { attributes: true, attributeFilter: [MODE] });
+    field.addEventListener("focus", read);
+    field.addEventListener("blur", read);
+    read();
+    return () => {
+      observer.disconnect();
+      field.removeEventListener("focus", read);
+      field.removeEventListener("blur", read);
+    };
+  }, [ref]);
+  return mode;
 }
