@@ -120,23 +120,11 @@ fn validate_contract(contract: &LaunchContract) -> Result<()> {
         "invalid executor version"
     );
     ensure!(
-        contract.environment.len() <= 32
+        contract.environment.len() <= wire::MAX_TARGET_ENVIRONMENT
             && contract.environment.iter().all(|(name, value)| {
-                matches!(
-                    name.as_str(),
-                    "HOME"
-                        | "USER"
-                        | "LOGNAME"
-                        | "PATH"
-                        | "SHELL"
-                        | "TMPDIR"
-                        | "LANG"
-                        | "LC_ALL"
-                        | "XDG_CONFIG_HOME"
-                        | "XDG_DATA_HOME"
-                        | "XDG_CACHE_HOME"
-                        | "XDG_STATE_HOME"
-                ) && value.len() <= 8192
+                (wire::BASE_TARGET_ENVIRONMENT.contains(&name.as_str())
+                    || wire::operator_target_environment_name(name))
+                    && value.len() <= 8192
                     && !value.contains('\0')
             }),
         "invalid target environment"

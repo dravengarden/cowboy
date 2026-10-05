@@ -47,7 +47,9 @@ pub struct Manager {
     service_id: Option<String>,
     machine_id: String,
     root: PathBuf,
-    worktrees: PathBuf,
+    worktrees: crate::session_workspace::WorktreeRoots,
+    /// Operator-declared names added to the base target environment.
+    extra_environment: Vec<String>,
     logs: PathBuf,
     configuration: Option<Configuration>,
     systemd: bool,
@@ -138,13 +140,26 @@ impl Manager {
             service_id,
             machine_id,
             root: state_dir.join("execution").join(namespace),
-            worktrees: state_dir.join("worktrees"),
+            worktrees: crate::session_workspace::WorktreeRoots::single(state_dir.join("worktrees")),
+            extra_environment: Vec::new(),
             logs: crate::logs::directory(state_dir),
             configuration,
             systemd,
             prepare: Mutex::new(()),
             gates: parking_lot::Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Use the Machine's session worktree roots and copy the operator-declared
+    /// variables, already validated by the Machine CLI, into target environments.
+    pub fn with_placement(
+        mut self,
+        worktrees: crate::session_workspace::WorktreeRoots,
+        extra_environment: Vec<String>,
+    ) -> Self {
+        self.worktrees = worktrees;
+        self.extra_environment = extra_environment;
+        self
     }
 
     pub async fn request(&self, request: Request, workspaces: &[MachineWorkspace]) -> Response {
@@ -342,7 +357,7 @@ impl Manager {
                 root: workspace.canonical_path.clone(),
                 session_id: session_id.to_owned(),
             },
-            &self.worktrees,
+            self.worktrees.for_session(session_id),
         )
         .await
         .map_err(|_| Refusal::WorkspaceUnavailable)?;
@@ -392,23 +407,12 @@ impl Manager {
                 return Err(Refusal::PreparationFailed);
             }
         }
-        let environment: BTreeMap<String, String> = [
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "PATH",
-            "SHELL",
-            "TMPDIR",
-            "LANG",
-            "LC_ALL",
-            "XDG_CACHE_HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            "XDG_STATE_HOME",
-        ]
-        .into_iter()
-        .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
-        .collect();
+        let environment: BTreeMap<String, String> =
+            crate::execution_protocol::BASE_TARGET_ENVIRONMENT
+                .into_iter()
+                .chain(self.extra_environment.iter().map(String::as_str))
+                .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
+                .collect();
         let contract = LaunchContract {
             schema: 1,
             session_id: session_id.to_owned(),

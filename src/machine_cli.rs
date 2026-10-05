@@ -76,7 +76,8 @@ struct ControllerConfig {
     providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
-    worktree_root: PathBuf,
+    worktree_roots: crate::session_workspace::WorktreeRoots,
+    state_dir: PathBuf,
     capacity: MachineCapacity,
     local: bool,
     provider_usage: crate::provider_usage_spool::ProviderUsageSpool,
@@ -251,6 +252,19 @@ pub struct Args {
         default_value = ".cowboy-machine"
     )]
     state_dir: PathBuf,
+    /// Session worktree root, for example on a scratch disk. Defaults to
+    /// `<state-dir>/worktrees`; sessions already created there stay in place.
+    #[arg(long, env = "COWBOY_MACHINE_WORKTREE_ROOT")]
+    worktree_root: Option<PathBuf>,
+    /// Extra variable names copied from the Machine into execution
+    /// environments, such as host tool locations. Comma-separated in the
+    /// environment variable.
+    #[arg(
+        long = "execution-env",
+        env = "COWBOY_MACHINE_EXECUTION_ENV",
+        value_delimiter = ','
+    )]
+    execution_env: Vec<String>,
     /// Offline host maintenance: finish one failed uninstall whose active
     /// link is already absent. Requires stopping the resident Machine first.
     /// Without --confirm-uninstall-digest this only validates and reports.
@@ -464,7 +478,12 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         "COWBOY_LOGS_DIR".into(),
         log_directory.display().to_string(),
     );
-    let worktree_root = args.state_dir.join("worktrees");
+    let worktree_roots = machine_worktree_roots(args.worktree_root.clone(), &args.state_dir);
+    let execution_env = validate_execution_env(args.execution_env.clone())?;
+    // Deleted-session Cargo cleanup covers the primary root only. A session
+    // that predates a root move keeps its artifacts on deletion, which the
+    // previous behaviour also did whenever the worktree could not be captured.
+    let worktree_root = worktree_roots.primary().to_path_buf();
     let mut broker = MachineBrokerArgs {
         socket: args.socket,
         worker_command,
@@ -475,7 +494,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         },
         worker_environment,
         provider_store: Arc::clone(&providers),
-        worktree_root: worktree_root.clone(),
+        worktree_root,
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
     };
     let controller_url = args
@@ -553,13 +572,16 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
             serde_json::from_slice(&bytes).context("invalid execution component configuration")
         })
         .transpose()?;
-    let execution = Arc::new(execution::Manager::new(
-        args.service_id.clone(),
-        machine_id.clone(),
-        &args.state_dir,
-        execution_config,
-        matches!(args.spawn_mode, CliSpawnMode::SystemdUser),
-    )?);
+    let execution = Arc::new(
+        execution::Manager::new(
+            args.service_id.clone(),
+            machine_id.clone(),
+            &args.state_dir,
+            execution_config,
+            matches!(args.spawn_mode, CliSpawnMode::SystemdUser),
+        )?
+        .with_placement(worktree_roots.clone(), execution_env),
+    );
     let deletion_service_id = args.service_id.clone();
     let controller = controller_loop(ControllerConfig {
         execution,
@@ -575,7 +597,8 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         providers,
         zed_adapter_socket: zed_adapter_socket.clone(),
         code_adapter_socket: code_adapter_socket.clone(),
-        worktree_root,
+        worktree_roots: worktree_roots.clone(),
+        state_dir: args.state_dir.clone(),
         capacity: MachineCapacity {
             max_sessions: args.max_sessions.max(1),
             draining: args.draining,
@@ -589,7 +612,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         Arc::clone(&components),
         code_adapter_socket,
         args.state_dir.join("bootstrap/cowboy-code-adapter"),
-        args.state_dir.join("worktrees"),
+        worktree_roots,
         Arc::clone(&workspaces),
         log_directory,
         machine_id.clone(),
@@ -872,7 +895,7 @@ async fn supervise_code_adapter(
     components: Arc<ComponentStore>,
     socket: Option<PathBuf>,
     bootstrap: PathBuf,
-    worktree_root: PathBuf,
+    worktree_roots: crate::session_workspace::WorktreeRoots,
     workspaces: Arc<WorkspaceConfig>,
     logs: PathBuf,
     machine_id: String,
@@ -893,7 +916,7 @@ async fn supervise_code_adapter(
         process
             .env("COWBOY_LOGS_DIR", &logs)
             .env("COWBOY_LOGS_MACHINE_ID", &machine_id);
-        for root in code_adapter_trusted_roots(&worktree_root, &workspace_snapshot.workspaces) {
+        for root in code_adapter_trusted_roots(&worktree_roots, &workspace_snapshot.workspaces) {
             process.arg("--workspace").arg(root);
         }
         let mut child = process
@@ -933,10 +956,12 @@ fn select_code_adapter_executable(active: &Path, bootstrap: &Path) -> Option<Pat
 }
 
 fn code_adapter_trusted_roots(
-    worktree_root: &Path,
+    worktree_roots: &crate::session_workspace::WorktreeRoots,
     workspaces: &[MachineWorkspace],
 ) -> Vec<PathBuf> {
-    std::iter::once(worktree_root.to_path_buf())
+    worktree_roots
+        .all()
+        .map(Path::to_path_buf)
         .chain(
             workspaces
                 .iter()
@@ -1187,11 +1212,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         tokio::spawn(write_controller_messages(socket_sink, controller_write_rx));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
-    let state_dir = config
-        .worktree_root
-        .parent()
-        .unwrap_or(&config.worktree_root)
-        .to_path_buf();
+    let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
     let result: anyhow::Result<()> = async {
         loop {
@@ -1245,7 +1266,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                     if let Some(rejection) = reject_untrusted_workspace(
                                         &frame,
                                         &workspace_snapshot.workspaces,
-                                        &config.worktree_root,
+                                        &config.worktree_roots,
                                         Some(&config.execution),
                                     ) {
                                         queue_controller_frame(
@@ -1275,7 +1296,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         providers: Arc::clone(&config.providers),
                                         zed_adapter_socket: config.zed_adapter_socket.clone(),
                                         code_adapter_socket: config.code_adapter_socket.clone(),
-                                        worktree_root: config.worktree_root.clone(),
+                                        worktree_roots: config.worktree_roots.clone(),
                                         workspaces: Arc::clone(&config.workspaces),
                                         login_sessions: Arc::clone(&login_sessions),
                                         runtime_commands: runtime_write_tx.clone(),
@@ -1956,7 +1977,7 @@ struct MachineCommandContext {
     providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
-    worktree_root: PathBuf,
+    worktree_roots: crate::session_workspace::WorktreeRoots,
     workspaces: Arc<WorkspaceConfig>,
     login_sessions: LoginSessions,
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
@@ -1986,7 +2007,7 @@ fn handle_machine_command(
         providers,
         zed_adapter_socket,
         code_adapter_socket,
-        worktree_root,
+        worktree_roots,
         workspaces,
         login_sessions,
         runtime_commands,
@@ -2450,7 +2471,7 @@ fn handle_machine_command(
                     providers,
                     zed_adapter_socket,
                     code_adapter_socket,
-                    worktree_root,
+                    worktree_roots,
                     workspaces: workspaces.snapshot().workspaces,
                     // The live registry, not the advertised snapshot: the root
                     // may have been replaced since the last advertisement.
@@ -2630,7 +2651,7 @@ struct AdapterRequestContext {
     providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
-    worktree_root: PathBuf,
+    worktree_roots: crate::session_workspace::WorktreeRoots,
     workspaces: Vec<MachineWorkspace>,
     root_identities: workspace_identity::SharedRootIdentities,
     session_identities: workspace_identity::SharedSessionRootIdentities,
@@ -2656,7 +2677,7 @@ async fn run_adapter_request(
         providers,
         zed_adapter_socket,
         code_adapter_socket,
-        worktree_root,
+        worktree_roots,
         workspaces,
         root_identities,
         session_identities,
@@ -2709,7 +2730,7 @@ async fn run_adapter_request(
             // enqueued request cannot revive a withdrawn configuration snapshot.
             let _configuration = root_identities.lock();
             let live_workspaces = session_workspaces.snapshot().workspaces;
-            anyhow::ensure!(workspace_path_allowed(&canonical, &live_workspaces, &worktree_root), "Session root is not trusted");
+            anyhow::ensure!(workspace_path_allowed(&canonical, &live_workspaces, &worktree_roots), "Session root is not trusted");
             match &request {
                 Request::Verify { incarnation, .. } | Request::Read { incarnation, .. } => {
                     anyhow::ensure!(incarnation.len() == 32 && incarnation.bytes().all(|b| b.is_ascii_hexdigit()), "invalid Session root identity");
@@ -2774,19 +2795,20 @@ async fn run_adapter_request(
                 serde_json::from_value(payload)
                     .context("decoding workspace preparation request")?;
             validate_session_workspace_root(&request.root, &workspaces)?;
+            let root = worktree_roots.for_session(&request.session_id).to_path_buf();
             return serde_json::to_value(
-                crate::session_workspace::prepare(request, &worktree_root).await?,
+                crate::session_workspace::prepare(request, &root).await?,
             )
             .context("encoding prepared workspace");
         }
-        validate_adapter_workspace(&payload, &workspaces, &worktree_root)?;
+        validate_adapter_workspace(&payload, &workspaces, &worktree_roots)?;
         if adapter == "workspace-extension" {
             use std::os::unix::fs::MetadataExt as _;
             let mut request: crate::workspace_extensions::Request =
                 serde_json::from_value(payload.clone()).context("invalid extension request")?;
             let root = PathBuf::from(&request.root).canonicalize()?;
             anyhow::ensure!(
-                workspace_path_allowed(&root, &workspaces, &worktree_root),
+                workspace_path_allowed(&root, &workspaces, &worktree_roots),
                 "extension workspace unavailable"
             );
             let original_path = request.root.clone();
@@ -2922,7 +2944,7 @@ fn verify_workspace_incarnation(
 fn validate_adapter_workspace(
     payload: &serde_json::Value,
     workspaces: &[MachineWorkspace],
-    worktree_root: &Path,
+    worktree_roots: &crate::session_workspace::WorktreeRoots,
 ) -> anyhow::Result<()> {
     for key in ["path", "worktree"] {
         let Some(value) = payload.get(key).and_then(serde_json::Value::as_str) else {
@@ -2935,7 +2957,7 @@ fn validate_adapter_workspace(
         let canonical = path
             .canonicalize()
             .with_context(|| format!("canonicalizing {value}"))?;
-        if !workspace_path_allowed(&canonical, workspaces, worktree_root) {
+        if !workspace_path_allowed(&canonical, workspaces, worktree_roots) {
             bail!("adapter path is outside the trusted Machine workspaces");
         }
     }
@@ -3527,7 +3549,7 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
 fn reject_untrusted_workspace(
     frame: &crate::runtime_wire::Frame,
     workspaces: &[MachineWorkspace],
-    worktree_root: &Path,
+    worktree_roots: &crate::session_workspace::WorktreeRoots,
     execution: Option<&execution::Manager>,
 ) -> Option<crate::runtime_wire::Frame> {
     let crate::runtime_wire::Frame::CoreCommand {
@@ -3541,7 +3563,7 @@ fn reject_untrusted_workspace(
     } else {
         std::fs::canonicalize(&session.cwd)
             .ok()
-            .is_some_and(|target| workspace_path_allowed(&target, workspaces, worktree_root))
+            .is_some_and(|target| workspace_path_allowed(&target, workspaces, worktree_roots))
     };
     (!allowed).then(|| crate::runtime_wire::Frame::CommandAck {
         session_id: session.session_id.clone(),
@@ -3557,16 +3579,52 @@ fn reject_untrusted_workspace(
 fn workspace_path_allowed(
     target: &Path,
     workspaces: &[MachineWorkspace],
-    worktree_root: &Path,
+    worktree_roots: &crate::session_workspace::WorktreeRoots,
 ) -> bool {
     workspaces.iter().any(|workspace| {
         crate::workspace_roots::canonical_target_within_root(
             target,
             Path::new(&workspace.canonical_path),
         )
-    }) || worktree_root
-        .canonicalize()
-        .is_ok_and(|root| target.starts_with(root))
+    }) || worktree_roots.all().any(|root| {
+        root.canonicalize()
+            .is_ok_and(|root| target.starts_with(root))
+    })
+}
+
+/// Session worktree roots for this Machine: the configured root, with the
+/// `<state-dir>/worktrees` default kept for sessions created before a move.
+fn machine_worktree_roots(
+    configured: Option<PathBuf>,
+    state_dir: &Path,
+) -> crate::session_workspace::WorktreeRoots {
+    let default = state_dir.join("worktrees");
+    match configured {
+        Some(root) => crate::session_workspace::WorktreeRoots::moved(root, default),
+        None => crate::session_workspace::WorktreeRoots::single(default),
+    }
+}
+
+/// Operator-declared execution variables must be distinct, outside the base
+/// set and reserved namespaces, and fit the target environment bound.
+fn validate_execution_env(names: Vec<String>) -> anyhow::Result<Vec<String>> {
+    let mut seen = std::collections::BTreeSet::new();
+    for name in &names {
+        anyhow::ensure!(
+            crate::execution_protocol::operator_target_environment_name(name),
+            "execution environment variable {name:?} is reserved or invalid"
+        );
+        anyhow::ensure!(
+            seen.insert(name),
+            "execution environment variable {name:?} repeats"
+        );
+    }
+    anyhow::ensure!(
+        crate::execution_protocol::BASE_TARGET_ENVIRONMENT.len() + names.len()
+            <= crate::execution_protocol::MAX_TARGET_ENVIRONMENT,
+        "too many execution environment variables"
+    );
+    Ok(names)
 }
 
 fn unix_ms() -> i64 {
@@ -3684,13 +3742,14 @@ mod tests {
     use super::{
         Args, WorkspaceConfig, bootstrap_acp_inventory, code_adapter_trusted_roots,
         disabled_provider_slots_from, load_enrolled_machine_id, load_workspace_snapshot,
-        login_challenge_tokens, managed_provider_environment, npm_package_for_component,
-        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
-        persist_enrolled_machine_id, pin_cli_runtime_args, provider_auth_roll_target,
-        provider_for_component, queue_controller_frame, reject_untrusted_workspace,
-        resolve_runtime_machine_id, select_code_adapter_executable, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
-        write_controller_messages, write_runtime_frames, write_runtime_frames_with_timeout,
+        login_challenge_tokens, machine_worktree_roots, managed_provider_environment,
+        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
+        parse_workspaces, persist_enrolled_machine_id, pin_cli_runtime_args,
+        provider_auth_roll_target, provider_for_component, queue_controller_frame,
+        reject_untrusted_workspace, resolve_runtime_machine_id, select_code_adapter_executable,
+        selected_zed_pair, send_frame_with_timeout, validate_controller_url,
+        validate_execution_env, workspace_path_allowed, write_controller_messages,
+        write_runtime_frames, write_runtime_frames_with_timeout,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_plugins::PluginInventoryReceipt;
@@ -4266,6 +4325,9 @@ mod tests {
         std::fs::create_dir_all(&nested).expect("workspace");
         std::fs::create_dir_all(&managed_session).expect("managed workspace");
         let workspaces = parse_workspaces(&[format!("main={}", root.display())]).expect("parse");
+        // Sessions created before the root moved stay trusted under the old root.
+        let roots =
+            crate::session_workspace::WorktreeRoots::moved(root.join("scratch"), managed.clone());
         let ensure = |cwd: String| Frame::CoreCommand {
             command: CoreCommand::EnsureSession {
                 session: StartSession {
@@ -4292,7 +4354,7 @@ mod tests {
             reject_untrusted_workspace(
                 &ensure(nested.display().to_string()),
                 &workspaces,
-                &managed,
+                &roots,
                 None,
             )
             .is_none()
@@ -4301,7 +4363,7 @@ mod tests {
             reject_untrusted_workspace(
                 &ensure(managed_session.display().to_string()),
                 &[],
-                &managed,
+                &roots,
                 None,
             )
             .is_none()
@@ -4310,7 +4372,7 @@ mod tests {
             reject_untrusted_workspace(
                 &ensure("/definitely/not/a/workspace".to_owned()),
                 &workspaces,
-                &managed,
+                &roots,
                 None,
             )
             .is_some()
@@ -4360,7 +4422,7 @@ mod tests {
         assert!(workspace_path_allowed(
             &synchronized,
             &workspaces,
-            &root.join("unrelated-managed-root")
+            &crate::session_workspace::WorktreeRoots::single(root.join("unrelated-managed-root"))
         ));
         assert!(parse_workspaces(&["relative=missing".to_owned()]).is_err());
         assert!(parse_workspaces(&["parent=/tmp/../pending".to_owned()]).is_err());
@@ -4380,7 +4442,9 @@ mod tests {
             assert!(!workspace_path_allowed(
                 &outside.canonicalize().unwrap(),
                 &pending,
-                &root.join("unrelated-managed-root")
+                &crate::session_workspace::WorktreeRoots::single(
+                    root.join("unrelated-managed-root")
+                )
             ));
             std::fs::remove_dir_all(outside).expect("cleanup outside workspace");
         }
@@ -4506,12 +4570,64 @@ mod tests {
             canonical_path: "/work/project".to_owned(),
         }];
         assert_eq!(
-            code_adapter_trusted_roots(Path::new("/state/worktrees"), &workspaces),
+            code_adapter_trusted_roots(
+                &machine_worktree_roots(None, Path::new("/state")),
+                &workspaces
+            ),
             vec![
                 PathBuf::from("/state/worktrees"),
                 PathBuf::from("/work/project")
             ]
         );
+        assert_eq!(
+            code_adapter_trusted_roots(
+                &machine_worktree_roots(
+                    Some(PathBuf::from("/scratch/sessions")),
+                    Path::new("/state")
+                ),
+                &workspaces
+            ),
+            vec![
+                PathBuf::from("/scratch/sessions"),
+                PathBuf::from("/state/worktrees"),
+                PathBuf::from("/work/project")
+            ]
+        );
+    }
+
+    #[test]
+    fn execution_env_admits_only_distinct_operator_names() {
+        assert_eq!(
+            validate_execution_env(vec![
+                "COLUMBUS_WORKTREE_ROOT".to_owned(),
+                "DENO_DIR".to_owned()
+            ])
+            .unwrap(),
+            ["COLUMBUS_WORKTREE_ROOT", "DENO_DIR"]
+        );
+        for name in [
+            "PATH",
+            "COWBOY_LOGS_DIR",
+            "CODEX_HOME",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "LD_PRELOAD",
+            "deno_dir",
+            "",
+        ] {
+            assert!(
+                validate_execution_env(vec![name.to_owned()]).is_err(),
+                "{name}"
+            );
+        }
+        assert!(
+            validate_execution_env(vec!["DENO_DIR".to_owned(), "DENO_DIR".to_owned()]).is_err()
+        );
+        let too_many = (0..=crate::execution_protocol::MAX_TARGET_ENVIRONMENT
+            - crate::execution_protocol::BASE_TARGET_ENVIRONMENT.len())
+            .map(|index| format!("TOOL_ROOT_{index}"))
+            .collect();
+        assert!(validate_execution_env(too_many).is_err());
     }
 }
 

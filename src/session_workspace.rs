@@ -24,6 +24,56 @@ const MAX_CLEANUP_CONTENT_DEPTH: usize = 64;
 #[cfg(target_os = "linux")]
 const MAX_CLEANUP_CONTENT_ENTRIES: usize = 1_000_000;
 
+/// Where a Machine keeps session worktrees. New sessions are created under
+/// `primary`. After an operator moves the root, sessions created under the
+/// previous default stay there until they are deleted: Cowboy never moves a
+/// live checkout, so the previous root remains trusted and is still used for
+/// those session IDs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeRoots {
+    primary: PathBuf,
+    legacy: Option<PathBuf>,
+}
+
+impl WorktreeRoots {
+    pub fn single(root: PathBuf) -> Self {
+        Self {
+            primary: root,
+            legacy: None,
+        }
+    }
+
+    /// `legacy` is the previous default; it is ignored when it is `primary`.
+    pub fn moved(primary: PathBuf, legacy: PathBuf) -> Self {
+        let legacy = (legacy != primary).then_some(legacy);
+        Self { primary, legacy }
+    }
+
+    pub fn primary(&self) -> &Path {
+        &self.primary
+    }
+
+    pub fn all(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.primary.as_path()).chain(self.legacy.as_deref())
+    }
+
+    /// The root that owns `session_id`: a session whose worktree already exists
+    /// under the previous root keeps it there; every other session, including
+    /// an invalid ID that preparation later rejects, uses the primary root.
+    pub fn for_session(&self, session_id: &str) -> &Path {
+        match &self.legacy {
+            Some(legacy)
+                if validate_session_id(session_id).is_ok()
+                    && std::fs::symlink_metadata(legacy.join(session_id))
+                        .is_ok_and(|metadata| metadata.is_dir()) =>
+            {
+                legacy
+            }
+            _ => &self.primary,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PrepareWorkspaceRequest {
     pub root: String,
@@ -1368,6 +1418,29 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn moved_roots_keep_existing_sessions_under_the_previous_root() {
+        let temp = TestDir::new();
+        let primary = temp.0.join("scratch");
+        let legacy = temp.0.join("worktrees");
+        std::fs::create_dir_all(legacy.join("sess-old")).unwrap();
+        std::fs::write(legacy.join("sess-file"), "").unwrap();
+        let roots = WorktreeRoots::moved(primary.clone(), legacy.clone());
+
+        assert_eq!(roots.for_session("sess-old"), legacy);
+        assert_eq!(roots.for_session("sess-new"), primary);
+        assert_eq!(roots.for_session("sess-file"), primary);
+        assert_eq!(roots.for_session("../worktrees/sess-old"), primary);
+        assert_eq!(
+            roots.all().collect::<Vec<_>>(),
+            [primary.as_path(), legacy.as_path()]
+        );
+
+        let unmoved = WorktreeRoots::moved(legacy.clone(), legacy.clone());
+        assert_eq!(unmoved, WorktreeRoots::single(legacy.clone()));
+        assert_eq!(unmoved.for_session("sess-old"), legacy);
     }
 
     fn git(path: &Path, args: &[&str]) {
