@@ -219,6 +219,8 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_KEYS,
+  desktopWorkspaceSequence,
 } from "./desktop/commands/workspaceShortcuts";
 import { listJumpKey } from "./desktop/commands/listNavigation";
 import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
@@ -748,6 +750,10 @@ function ComposeBar(
         </Suspense>
       )
       : child;
+  // Leader slots (`␣/`, `␣F`, `␣A`, `␣Z`) for the row editor; the badge
+  // lights with the leader while this editor owns focus.
+  const leaderSlot = (child: ReactNode, key: string, title: string): ReactNode =>
+    desktopShortcut(child, desktopWorkspaceSequence(key), `␣ ${key} · ${title}`, !dead);
   return (
     <Stack
       direction="column"
@@ -791,44 +797,56 @@ function ComposeBar(
       >
         <Tooltip title="Slash command / skill">
           <span>
-            <IconButton
-              aria-label="slash command"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => onTrigger("/")}
-            >
-              <Box
-                component="span"
-                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+            {leaderSlot(
+              <IconButton
+                aria-label="slash command"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => onTrigger("/")}
               >
-                /
-              </Box>
-            </IconButton>
+                <Box
+                  component="span"
+                  sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+                >
+                  /
+                </Box>
+              </IconButton>,
+              DESKTOP_WORKSPACE_KEYS.composerSlash,
+              "Slash command",
+            )}
           </span>
         </Tooltip>
         <Tooltip title="Reference a file (@)">
           <span>
-            <IconButton
-              aria-label="reference a file"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => onTrigger("@")}
-            >
-              <AlternateEmail />
-            </IconButton>
+            {leaderSlot(
+              <IconButton
+                aria-label="reference a file"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => onTrigger("@")}
+              >
+                <AlternateEmail />
+              </IconButton>,
+              DESKTOP_WORKSPACE_KEYS.composerReference,
+              "Reference a file",
+            )}
           </span>
         </Tooltip>
         {onAttach && (
           <Tooltip title="Attach image or file">
             <span>
-              <IconButton
-                aria-label="attach image or file"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onAttach}
-              >
-                <AttachFile />
-              </IconButton>
+              {leaderSlot(
+                <IconButton
+                  aria-label="attach image or file"
+                  disabled={dead}
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={onAttach}
+                >
+                  <AttachFile />
+                </IconButton>,
+                DESKTOP_WORKSPACE_KEYS.composerAttach,
+                "Attach",
+              )}
             </span>
           </Tooltip>
         )}
@@ -945,13 +963,17 @@ function ComposeBar(
         {onExpand && (
           <Tooltip title="Expand editor">
             <span>
-              <IconButton
-                aria-label="expand editor"
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onExpand}
-              >
-                <OpenInFull />
-              </IconButton>
+              {leaderSlot(
+                <IconButton
+                  aria-label="expand editor"
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={onExpand}
+                >
+                  <OpenInFull />
+                </IconButton>,
+                DESKTOP_WORKSPACE_KEYS.editorExpand,
+                "Expand editor",
+              )}
             </span>
           </Tooltip>
         )}

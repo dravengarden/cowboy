@@ -148,9 +148,9 @@ Deno.test("source mode uses the workspace prefix because Mod+E is reserved", () 
 });
 
 Deno.test("the mode is discoverable without the palette", () => {
-  // Status line, while the composer owns focus and in workspace command mode.
+  // Status line while the composer owns focus; the armed leader lists it in
+  // the which-key panel from its registered sequence.
   assert(statusLine.includes("keys: DESKTOP_SHORTCUTS.toggleSourceMode"));
-  assert(statusLine.includes("keys: DESKTOP_WORKSPACE_KEYS.toggleSourceMode"));
   assert(statusLine.includes('sourceMode ? "Live preview" : "Source"'));
   // The shortcut guide and the Settings toggle.
   assert(shortcutsDialog.includes("DESKTOP_SHORTCUTS.toggleSourceMode"));

@@ -23,19 +23,15 @@ import {
   COMPOSER_COMMANDS_BY_ID,
 } from "../composerCommands";
 import { useComposerSourceMode } from "../composerSourceMode";
-import { ShortcutKeycap } from "../ShortcutKeycap";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
   useDesktopCommands,
   useOptionalDesktopCommands,
 } from "./commands/DesktopCommandProvider";
-import { DesktopShortcut } from "./commands/DesktopKeycap";
+import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
-import {
-  sequentialShortcutAvailability,
-  shortcutAvailability,
-} from "./commands/shortcutAvailability";
+import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
   DESKTOP_COMPOSER_FORMAT_KEYS,
   DESKTOP_SHORTCUTS,
@@ -88,7 +84,6 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
   }, []);
   const scoped = workspace.focusedRegion === "prompt.composer" && !composing &&
     !overlay;
-  const armed = workspace.mode === "command";
   const state = useRef({ props });
   state.current = { props };
   const commands = useMemo<DesktopCommand[]>(() => {
@@ -241,16 +236,12 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           {icon}
           {text && <Box component="span" data-draft-action-label>{label}</Box>}
           {key && (
-            <ShortcutKeycap
-              keyLabel={key}
-              variant="global"
-              availability={id === "more" && moreAnchor
-                ? "active"
-                : sequentialShortcutAvailability({
-                  scopeAvailable: scoped && !disabled,
-                  armed,
-                  prefix: false,
-                })}
+            <LeaderKeycap
+              leaderKey={key}
+              scopeAvailable={scoped && !disabled}
+              {...(id === "more" && moreAnchor
+                ? { availability: "active" as const }
+                : {})}
             />
           )}
         </Button>
@@ -299,29 +290,6 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           gap: "0.125rem",
         }}
       >
-        <Tooltip title="Workspace prefix → action. Search every action in the Command Palette.">
-          <Box
-            component="span"
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.25rem",
-              mr: "0.5rem",
-            }}
-          >
-            <DesktopShortcut
-              shortcut={DESKTOP_WORKSPACE_PREFIX}
-              compact
-              quiet
-              availability={sequentialShortcutAvailability({
-                scopeAvailable: scoped,
-                armed,
-                prefix: true,
-              })}
-            />
-            <span aria-hidden>→</span>
-          </Box>
-        </Tooltip>
         {props.toolbar.filter((id) =>
           !["slash", "mention", "attach", "sourceMode"].includes(id)
         ).map((id) => {

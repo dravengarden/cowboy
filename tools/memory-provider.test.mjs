@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { codexObservation } from "../plugins/codex/runtime/memory.mjs";
-import { claudeObservation } from "../plugins/claude-code/runtime/memory.mjs";
+import {
+  claudeObservation,
+  MATRIX_TOOLS,
+} from "../plugins/claude-code/runtime/memory.mjs";
+test("Claude permits the exact Matrix CodeAct tools", () => {
+  assert.deepEqual(
+    MATRIX_TOOLS,
+    ["search", "get", "put", "forget", "read", "execute", "receipt"].map(
+      (name) => "mcp__matrix__memory_" + name,
+    ),
+  );
+});
 test("native capture accepts public completions and excludes thinking and images", () => {
   assert.equal(
     codexObservation({

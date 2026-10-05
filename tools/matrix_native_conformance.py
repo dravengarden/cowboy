@@ -26,6 +26,8 @@ parser.add_argument("--matrix-source", type=Path, required=True)
 parser.add_argument("--native-root", type=Path, required=True)
 parser.add_argument("--receipt", type=Path, required=True)
 parser.add_argument("--code-mode", action="store_true", help="Exercise Matrix's bounded Python retrieval through both native clients")
+parser.add_argument("--codeact", action="store_true", help="Exercise TS, JS, shell and transactional writes through both native clients")
+parser.add_argument("--runtime-config", type=Path)
 args = parser.parse_args()
 require([name for _, name in socket.if_nameindex()] == ["lo"], "loopback namespace required")
 require(not args.receipt.exists(), "new receipt required")
@@ -44,6 +46,9 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
     initialize(instance, "fixture", ["fixture"], 7331)
     store = Store(instance)
     access = load(instance / ".matrix/access.json")
+    if args.codeact:
+        require(args.runtime_config is not None, "CodeAct requires an exact contained runtime")
+        (instance / ".matrix/runtime.json").write_bytes(args.runtime_config.read_bytes())
     server = Server(("127.0.0.1", 0), Application(store, access))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     clients = {c["provider"]: c for c in access["clients"]}
@@ -53,6 +58,9 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
     receipt = store.put(binding, {**note, "operation": "seed", "expected_revision": 0})
     memory_tool = "memory_search" if args.code_mode else "memory_get"
     memory_arguments = {"code": "for m in search('release')['results'][:1]: emit({'id':m['id'],'body':get(m['id'])['body']})"} if args.code_mode else {"id": receipt["id"]}
+    if args.codeact:
+        memory_tool = "memory_execute"
+        memory_arguments = {"operation": "native-codeact", "code": "const s = await memory.search({query:'release'}); const r = await memory.read({refs:s.hits.map(h=>h.ref),snapshot:s.snapshot}); await memory.put(" + json.dumps({**note, "topic": "codeact-proof", "expected_revision": 0}) + "); return await shell.exec({command:'jq',args:['-r','.items[0].record.body'],stdin:JSON.stringify(r)});"}
     def config(provider):
         path = root / (provider + "-matrix.json")
         path.write_text(json.dumps({"schema": 1, "provider": provider, "endpoint": f"http://127.0.0.1:{server.server_port}", "token": clients[provider]["token"], "state_dir": str(root / "delivery"), "projects": [{"path": str(runtime), "machine": "fixture-host", "project": "fixture"}]}))
@@ -81,13 +89,16 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         client.send({"method": "initialized", "params": {}})
         thread = client.request("thread/start", {"cwd": str(runtime), "approvalPolicy": "never", "sandbox": "danger-full-access"})["thread"]["id"]
         status = client.request("mcpServerStatus/list", {})
-        require(any(server["name"] == "matrix" and len(server["tools"]) == 4 for server in status["data"]), "Native Matrix tools missing")
+        require(any(server["name"] == "matrix" and len(server["tools"]) == 7 for server in status["data"]), "Native Matrix tools missing")
         complete_turn(client, thread, "Find the release protocol marker.")
         encoded = json.dumps(api.requests)
         require("MATRIX-SHARED-619" in json.dumps(api.requests[0]), "Codex automatic recall missing")
         require("mcp__matrix__" + memory_tool in encoded and "MATRIX-SHARED-619" in encoded, "Codex MCP/recall missing")
         require(any("MATRIX-SHARED-619" in str(item.get("output")) for request in api.requests for item in request.get("input", []) if item.get("type") in ("function_call_output", "custom_tool_call_output")), "Codex MCP did not return Matrix data")
         checks.append("packaged_codex_native_http_mcp_and_recall")
+        if args.codeact:
+            require(store.sequence == 2, "Codex CodeAct mutation was not committed exactly once")
+            checks.append("packaged_codex_ts_compile_batched_read_lazy_shell_and_atomic_commit")
         # Automatic capture includes the actual public final message, no helper history scan.
         deadline = time.monotonic() + 3
         while not store.status()["jobs"] and time.monotonic() < deadline:
@@ -98,6 +109,8 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         client.close()
         api.close()
 
+    if args.codeact:
+        memory_arguments = {**memory_arguments, "language": "js", "operation": "claude-native-codeact", "code": memory_arguments["code"].replace('"topic": "codeact-proof"', '"topic": "claude-codeact-proof"')}
     api = ScriptedApi([tool("mcp__matrix__" + memory_tool, memory_arguments)])
     environment = closed_environment(root / "claude-home")
     environment.update({"ANTHROPIC_BASE_URL": f"http://127.0.0.1:{api.server_port}", "ANTHROPIC_API_KEY": "fake-fixture", "COWBOY_PRIVATE_CLAUDE_EXECUTABLE": str(native / "claude/package/claude"), "COWBOY_MATRIX_CONFIG": config("claude"), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
@@ -112,13 +125,16 @@ with tempfile.TemporaryDirectory(prefix="matrix-native-") as directory:
         outputs = [b for r in api.requests for m in r.get("messages", []) for b in (m.get("content") if isinstance(m.get("content"), list) else []) if b.get("type") == "tool_result"]
         require(any("MATRIX-SHARED-619" in json.dumps(b) for b in outputs), "Claude MCP did not return Matrix data")
         checks.append("packaged_claude_native_http_mcp_and_shared_recall")
+        if args.codeact:
+            require(store.sequence == 3, "Claude CodeAct mutation was not committed exactly once")
+            checks.append("packaged_claude_js_batched_read_lazy_shell_and_atomic_commit")
     finally:
         client.close()
         api.close()
         server.shutdown()
         server.server_close()
 
-report = {"schema": "cowboy.matrix-native-conformance/v1", "accepted": True, "retrieval_mode": "matrix-python-v1" if args.code_mode else "memory_get", "checks": checks, "not_checked": ["remote execution placement", "live model quality", "native-memory baseline"]}
+report = {"schema": "cowboy.matrix-native-conformance/v1", "accepted": True, "retrieval_mode": "matrix-ts-v1" if args.codeact else "matrix-python-v1" if args.code_mode else "memory_get", "checks": checks, "not_checked": ["remote execution placement", "live model quality", "native-memory baseline"]}
 args.receipt.parent.mkdir(parents=True, exist_ok=True)
 args.receipt.write_text(json.dumps(report, indent=2) + "\n")
 print(json.dumps(report))

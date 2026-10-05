@@ -1,6 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   DESKTOP_WORKSPACE_COMMANDS,
+  DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderKey,
+  desktopLeaderLabel,
+  isDesktopLeaderSpace,
   desktopWorkspaceContinuationKey,
   desktopWorkspaceSequenceOwnsKey,
   matchesDesktopWorkspacePrefix,
@@ -124,8 +128,6 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     m: "composer.more",
     v: "document.copyToSession",
     g: "document.history",
-    z: "composer.format.undo",
-    y: "composer.format.redo",
     b: "composer.format.bold",
     i: "composer.format.italic",
     x: "composer.format.code",
@@ -135,6 +137,10 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     "]": "workspace.togglePrompt",
     "\\": "workspace.toggleConversation",
     ",": "settings.open",
+    " ": "session.switch",
+    "`": "session.alternate",
+    k: "commandPalette.open",
+    z: "editor.expand",
   });
 });
 
@@ -160,4 +166,33 @@ Deno.test("pane collapse continuations use physical bracket keys", () => {
     ),
     "\\",
   );
+});
+
+Deno.test("Space arms the leader only as a bare, non-repeated key", () => {
+  const space = {
+    code: "Space",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    repeat: false,
+  };
+  assertEquals(isDesktopLeaderSpace(space), true);
+  // macOS input-source switching, Shift+Space paging and held keys stay native.
+  assertEquals(isDesktopLeaderSpace({ ...space, ctrlKey: true }), false);
+  assertEquals(isDesktopLeaderSpace({ ...space, metaKey: true }), false);
+  assertEquals(isDesktopLeaderSpace({ ...space, shiftKey: true }), false);
+  assertEquals(isDesktopLeaderSpace({ ...space, repeat: true }), false);
+  assertEquals(isDesktopLeaderSpace({ ...space, code: "KeyK" }), false);
+});
+
+Deno.test("leader keycaps draw the glyph and key in one label", () => {
+  assertEquals(desktopLeaderLabel("n"), "␣N");
+  assertEquals(desktopLeaderLabel(" "), "␣␣");
+  assertEquals(desktopLeaderLabel("["), "␣[");
+  assertEquals(
+    desktopLeaderKey({ sequence: [DESKTOP_WORKSPACE_PREFIX, "N"] }),
+    "n",
+  );
+  assertEquals(desktopLeaderKey({ sequence: ["G", "1"] }), null);
 });

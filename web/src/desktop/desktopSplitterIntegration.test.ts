@@ -24,7 +24,7 @@ Deno.test("every Desktop vertical boundary exposes the shared splitter contract"
 });
 
 Deno.test("the workspace prefix enters an exclusive H/L Resize mode", () => {
-  assert(commandsSource.includes("workspaceCommandTimer.current !== null"));
+  assert(commandsSource.includes("leaderArmed.current"));
   assert(commandsSource.includes("DESKTOP_WORKSPACE_COMMANDS"));
   assert(commandsSource.includes("matchesDesktopWorkspacePrefix(event)"));
   assert(commandsSource.includes("key !== null && isModifierKey(key)"));

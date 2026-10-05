@@ -143,6 +143,11 @@ async fn native_worker_execution() {
     std::fs::create_dir_all(&owned).unwrap();
     let executor = owned.join("codex");
     std::fs::copy(&original, &executor).unwrap();
+    // Native code-mode tool calls need the helper from the same pinned package.
+    let code_mode = original.parent().unwrap().join("codex-code-mode-host");
+    if code_mode.is_file() {
+        std::fs::copy(code_mode, owned.join("codex-code-mode-host")).unwrap();
+    }
     std::fs::copy(
         original
             .parent()

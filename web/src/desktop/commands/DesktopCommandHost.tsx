@@ -15,7 +15,10 @@ import {
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
+import { useDesktopLeaderOptional } from "./leaderContext";
+import { DESKTOP_SESSION_ALTERNATE_EVENT } from "./sessionJump";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
+import { DesktopLeaderMenu } from "./DesktopLeaderMenu";
 import {
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
@@ -74,6 +77,9 @@ export function DesktopCommandHost({
 }): React.JSX.Element {
   const registry = useDesktopCommands();
   const workspace = useDesktopWorkspace();
+  const leader = useDesktopLeaderOptional();
+  const leaderRef = useRef(leader);
+  leaderRef.current = leader;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -116,11 +122,43 @@ export function DesktopCommandHost({
       description: "Search every registered Desktop command",
       group: "Open",
       shortcut: DESKTOP_SHORTCUTS.commands,
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.commandPalette],
       allowInEditor: true,
       run: () => {
         setQuery("");
         setSelected(0);
         setPaletteOpen(true);
+      },
+    },
+    {
+      id: "session.switch",
+      title: "Switch Session",
+      description: "Label every session with a letter, then press it to open",
+      group: "Session",
+      sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.switchSession],
+      when: sessionsListMounted,
+      run: () => leaderRef.current?.open("sessions"),
+    },
+    {
+      id: "session.alternate",
+      title: "Previous Session",
+      description: "Return to the session open before this one",
+      group: "Session",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.alternateSession,
+      ],
+      when: sessionsListMounted,
+      run: () => {
+        const opened = sessionsListElement()?.dispatchEvent(
+          new CustomEvent(DESKTOP_SESSION_ALTERNATE_EVENT, { cancelable: true }),
+        ) === false;
+        if (opened) {
+          const target = workspace.collapsedPanes.prompt
+            ? "conversation.transcript"
+            : "prompt.composer";
+          requestAnimationFrame(() => workspace.focusRegion(target));
+        }
       },
     },
     {
@@ -445,6 +483,7 @@ export function DesktopCommandHost({
       {commands.map((command) => (
         <DesktopCommandRegistration key={command.id} command={command} />
       ))}
+      <DesktopLeaderMenu />
       <DesktopShortcutsDialog
         open={shortcutsOpen}
         onClose={(): void => setShortcutsOpen(false)}

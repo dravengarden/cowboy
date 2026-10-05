@@ -1,6 +1,7 @@
 """Optional independent Matrix fixture for the owned native execution gates."""
 import atexit
 import json
+import os
 from pathlib import Path
 import sys
 import threading
@@ -21,6 +22,12 @@ class MatrixFixture:
         initialize(instance, "fixture", ["fixture"], 7331)
         self.store = Store(instance)
         access = load(instance / ".matrix/access.json")
+        self.codeact = bool(os.environ.get("MATRIX_TEST_RUNTIME"))
+        if self.codeact:
+            # This gate owns a PID namespace; the host manager's private socket
+            # cannot validate its peer PID there. Use the authenticated user bus.
+            os.environ["SYSTEMCTL_FORCE_BUS"] = "1"
+            (instance / ".matrix/runtime.json").write_bytes(Path(os.environ["MATRIX_TEST_RUNTIME"]).read_bytes())
         self.server = Server(("127.0.0.1", 0), Application(self.store, access))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         atexit.register(self.server.server_close)
@@ -32,6 +39,12 @@ class MatrixFixture:
         observation = self.store.observe(binding, {"turn": "seed", "learn": False, "events": [{"id": "source", "role": "user", "text": text}]})
         record = self.store.put(binding, {"operation": "seed", "scope": "project", "topic": "fixture-memory", "kind": "fact", "title": "Fixture memory", "body": text, "expected_revision": 0, "sources": [{"event": observation["events"][0], "quote": text}]})
         self.id = record["id"]
+        self.tool = "memory_get"
+        self.arguments = {"id": self.id}
+        if self.codeact:
+            self.tool = "memory_execute"
+            payload = {"scope": "project", "topic": "codeact-proof", "kind": "fact", "title": "CodeAct proof", "body": text, "expected_revision": 0, "sources": [{"event": observation["events"][0], "quote": text}]}
+            self.arguments = {"operation": "remote-native-codeact", "code": "const found=await memory.search({query:'MATRIX_REMOTE_PROOF'}); const read=await memory.read({refs:found.hits.map(h=>h.ref),snapshot:found.snapshot}); await memory.put(" + json.dumps(payload) + "); return await shell.exec({command:'jq',args:['-r','.items[0].record.body'],stdin:JSON.stringify(read)});"}
         path = root / "matrix-client.json"
         path.write_text(json.dumps({"schema": 1, "provider": provider, "endpoint": f"http://127.0.0.1:{self.server.server_port}", "token": client["token"], "state_dir": str(root / "matrix-delivery"), "projects": [{"workspace": descriptor["workspace"]["id"], "machine": descriptor["environment"]["machine_id"], "project": "fixture"}]}))
         path.chmod(0o600)
@@ -44,4 +57,16 @@ class MatrixFixture:
         require(requests and "MATRIX_REMOTE_PROOF" in json.dumps(requests[0]),
                 "Automatic Matrix recall missing before the first native tool call")
         require(bool(self.store.status()["jobs"]), "Native remote turn was not captured")
-        return ["matrix_memory_uses_runtime_service_with_bound_target_scope", "matrix_remote_turns_are_durably_captured"]
+        checks = ["matrix_memory_uses_runtime_service_with_bound_target_scope", "matrix_remote_turns_are_durably_captured"]
+        if self.codeact:
+            outputs = [item for request in requests for item in request.get("input", [])
+                       if item.get("type") in ("custom_tool_call_output", "function_call_output")
+                       and item.get("call_id") == "fixture-memory"]
+            outputs += [block for request in requests for message in request.get("messages", [])
+                        for block in (message.get("content") if isinstance(message.get("content"), list) else [])
+                        if block.get("type") == "tool_result"]
+            require(self.store.sequence == 2, "Remote CodeAct batch was not committed once: "
+                    + json.dumps({"sequence": self.store.sequence, "fixture_outputs": outputs})[:6000])
+            require("MATRIX_REMOTE_PROOF" in json.dumps(requests[1:]), "Remote CodeAct returned no scoped data")
+            checks.append("matrix_remote_native_codeact_reads_shell_and_atomic_commit")
+        return checks
