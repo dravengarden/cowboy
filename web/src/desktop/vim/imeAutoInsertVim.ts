@@ -7,6 +7,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
+import { registerVimSink } from "./vimSinkInput";
 import {
   clearImeStatus,
   setImeCommitted,
@@ -138,6 +139,13 @@ export function createImeAutoInsertVim(): {
         pointerEvents: "none",
         position: "absolute",
         width: "1px",
+      });
+      registerVimSink(this.sink, () => {
+        const input = this.cm?.state?.vim?.inputState as
+          | { operator?: unknown; keyBuffer?: unknown; selectedCharacter?: unknown }
+          | undefined;
+        const buffer = input?.keyBuffer as string | readonly string[] | undefined;
+        return Boolean(input?.operator) || (buffer?.length ?? 0) > 0;
       });
       this.sink.addEventListener("focus", this.onSinkFocus);
       this.sink.addEventListener("blur", this.onSinkBlur);

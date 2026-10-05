@@ -2799,7 +2799,7 @@ export function CreateDialog({
     // Mobile retains its established single-Enter form behaviour.
     useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
     // Vim layers, as in Vimium/qutebrowser: Esc (or Ctrl-[) leaves a text
-    // field for the type tablist, where h/l and 1…3 choose the type and
+    // field for the type tablist, where h/l choose the type and
     // j/i/Enter return to the title; Esc there closes. Keys are classified by
     // desktopKeyIntent, so a composing IME keeps every key, including Esc.
     const onDesktopFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -2853,7 +2853,6 @@ export function CreateDialog({
                     value={variant}
                     disabled={creating}
                     keyboard={desktop}
-                    keysAvailable={focusZone === "tabs"}
                     onChange={(next, source): void => {
                         if (source === "roving") {
                             // The keyboard cursor stays on the tablist; j/i/Enter
@@ -3046,7 +3045,10 @@ export function CreateDialog({
         (variant === "folder" ? normalizeSessionFolderName(folderName) !== null
             : placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd)));
     const createLabel = variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
-    if (navbarAtBottom) {
+    // The cover sheet is the touch presentation. A Desktop window below the
+    // lg breakpoint is still Desktop: it keeps the dialog whose Esc, Mod+Enter
+    // and leader layers the keyboard contract relies on.
+    if (navbarAtBottom && !desktop) {
         return (
             <>
             <DetentSheet
