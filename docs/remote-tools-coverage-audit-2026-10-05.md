@@ -72,7 +72,9 @@ background jobs retain their separate lifetime. Failed/unknown starts are not
 resubmitted. This does not establish cancellation after keeper loss or every
 native queued-tool race; those remain separate acceptance cases.
 
-Publication remains unaccepted. The pre-existing app-shell digest mismatch was
+Claude 3.4.8 was subsequently published and activated on OVH; the exact
+[release and remaining limits](releases/remote-parity-2026-10-05.md) are recorded
+separately from this research. The pre-existing app-shell digest mismatch was
 repaired by an app-shell metadata bump to 1.1.20 and a new append-only component
 release 3.41.0, without changing app-shell functionality or prior registry
 history. Three formatting-only changes repair the existing keyboard acceptance
