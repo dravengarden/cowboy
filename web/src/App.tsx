@@ -169,6 +169,7 @@ import {
 import {
     type SessionFolder,
     folderAncestors,
+    normalizeSessionFolderName,
     sessionFolderById,
     unboundProjectLabels,
 } from "./sessionFolders";
@@ -192,6 +193,9 @@ import {
     FolderPickerShell,
     ProjectPickerShell,
     SESSION_FOLDER_SHEET_HOST,
+    SESSION_FOLDER_CREATED_EVENT,
+    type SessionFolderCreated,
+    announceSessionFolderCreated,
     useCollapsedSessionFolders,
     withFoldersCollapsed,
 } from "./SessionFolderUi";
@@ -931,6 +935,17 @@ function SessionList({
         bottomInset: mobileDrawer ? 84 : 0,
         onLocate: setMovedRow,
     });
+    // A folder made in Create lands in view, like a moved one.
+    const revealMovedRowRef = useRef(revealMovedRow);
+    revealMovedRowRef.current = revealMovedRow;
+    useEffect(() => {
+        const onCreated = (event: Event): void => {
+            const { id, parent } = (event as CustomEvent<SessionFolderCreated>).detail;
+            revealMovedRowRef.current(`folder:${id}`, parent);
+        };
+        globalThis.addEventListener(SESSION_FOLDER_CREATED_EVENT, onCreated);
+        return () => globalThis.removeEventListener(SESSION_FOLDER_CREATED_EVENT, onCreated);
+    }, []);
     const foldersHydrated = sessionFolders.folders.length > 0;
     useEffect(() => {
         if (activeId) revealSession(activeId);
@@ -1928,8 +1943,6 @@ function SessionList({
                         // stays on the trailing edge. Each MobileSheetActionGroup
                         // defaults to width 100%, which would split this row
                         // into two half-width columns instead of two islands.
-                        // Phones use compact slots so two three-action islands
-                        // still leave a clear gap in a 375pt phone's drawer.
                         pl: 2,
                         pr: phone ? 2 : 4,
                         pointerEvents: "none",
@@ -1940,7 +1953,6 @@ function SessionList({
                     }}
                 >
                     <MobileSheetActionGroup
-                        compact={phone}
                         actions={[
                             ...(allowNewSession
                                 ? [{
@@ -1951,12 +1963,6 @@ function SessionList({
                                 }]
                                 : []),
                             {
-                                key: "folder",
-                                label: "New folder",
-                                onPress: (): void => openFolderName({ mode: "create", parent: null }),
-                                icon: <CreateNewFolderOutlined aria-hidden sx={{ fontSize: "1.25em" }} />,
-                            },
-                            {
                                 key: "fold",
                                 label: fold.label,
                                 visible: fold.action !== null,
@@ -1966,7 +1972,6 @@ function SessionList({
                         ]}
                     />
                     <MobileSheetActionGroup
-                        compact={phone}
                         actions={[
                             {
                                 key: "close",
@@ -2553,8 +2558,13 @@ export function CreateDialog({
     const provider = placement.installation?.provider ?? "";
     const desktop = useSurfaceProfile().kind === "desktop";
     const sessionDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    // Session and Folder share one Sessions-tree location: both place an
+    // item in the same tree, so switching between them keeps the choice.
     const [directory, setDirectory] = useState("");
     const directoryChoices = useMemo(() => sessionDirectoryChoices(sessionDirectories), [sessionDirectories]);
+    const [folderName, setFolderName] = useState("");
+    const allSessions = useStoreSelector((snapshot) => snapshot.sessions);
+    const unboundProjects = variant === "folder" ? unboundProjectLabels(allSessions, sessionDirectories) : [];
     const [workItemId, setWorkItemId] = useState("");
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState("");
@@ -2591,6 +2601,7 @@ export function CreateDialog({
         creatingRef.current = false;
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setDirectory(initialFolder ?? "");
+        setFolderName("");
         setWorkItemId("");
         setCreating(false);
         setCreateError("");
@@ -2608,6 +2619,21 @@ export function CreateDialog({
     const theme = useTheme();
     const create = (): void => {
         if (creatingRef.current) return;
+        if (variant === "folder") {
+            const name = normalizeSessionFolderName(folderName);
+            if (name === null) return;
+            if (directory && !sessionDirectories.folders.some((folder) => folder.id === directory)) {
+                setCreateError("The Sessions directory was removed. Choose another directory or Global.");
+                return;
+            }
+            // Folders are synced presentation state: the create is optimistic
+            // and local, so the sheet closes at once and the Sessions list
+            // reveals the new row.
+            const id = createSessionFolder(name, directory || null);
+            if (id) announceSessionFolderCreated(id, directory || null);
+            onClose();
+            return;
+        }
         if (variant === "draft") {
             const repository = draftRepository();
             if (draftDirectory && !repository.get().entries.some((entry) =>
@@ -2752,7 +2778,7 @@ export function CreateDialog({
                         // Flush the new title while still inside the tap gesture:
                         // WebKit can raise the keyboard only for this synchronous focus.
                         globalThis.clearTimeout(titleFocusTimer.current);
-                        const select = next === "session" || selectDraftTitleOnFocus.current;
+                        const select = next === "session" || (next === "draft" && selectDraftTitleOnFocus.current);
                         flushSync(() => {
                             setVariant(next);
                             setCreateError("");
@@ -2771,14 +2797,20 @@ export function CreateDialog({
                 <Stack spacing={2} id="create-variant-panel" role="tabpanel" aria-labelledby={`create-${variant}-tab`}>
                     {variant === "session" && placement.error ? <Alert severity="error">{placement.error}</Alert> : null}
                     <TextField
-                        label="Title"
-                        value={variant === "draft" ? draftTitle : title}
+                        label={variant === "folder" ? "Folder name" : "Title"}
+                        value={variant === "draft" ? draftTitle : variant === "folder" ? folderName : title}
                         onChange={(e): void => {
                             if (variant === "draft") {
                                 selectDraftTitleOnFocus.current = false;
                                 setDraftTitle(e.target.value);
-                            } else setTitle(e.target.value);
+                            } else if (variant === "folder") setFolderName(e.target.value);
+                            else setTitle(e.target.value);
                         }}
+                        // A folder is not a contact: without this iOS reads
+                        // "name" and raises the AutoFill Contact bar
+                        // (FolderNameShell, physical iPad 2026-09-17).
+                        autoComplete={variant === "folder" ? "off" : undefined}
+                        name={variant === "folder" ? "cowboy-session-folder" : undefined}
                         disabled={creating}
                         inputRef={titleRef}
                         autoFocus
@@ -2788,7 +2820,7 @@ export function CreateDialog({
                             // collapses a synchronous select() back to a caret. Same logic as
                             // the session-rename field (Composer.tsx).
                             const input = e.target as HTMLInputElement;
-                            if (variant === "session" || selectDraftTitleOnFocus.current) {
+                            if (variant === "session" || (variant === "draft" && selectDraftTitleOnFocus.current)) {
                                 if (variant === "draft") selectDraftTitleOnFocus.current = false;
                                 requestAnimationFrame(() => {
                                     if (document.activeElement === input) input.select();
@@ -2806,12 +2838,40 @@ export function CreateDialog({
                                 if (!desktop) create();
                             }
                         }}
-                        placeholder={variant === "draft" ? "Untitled" : "Name this session"}
-                        helperText={variant === "draft" ? "Device local time · replace this name or rename it while editing" : "Clear to auto-name from the first message"}
+                        placeholder={variant === "draft" ? "Untitled" : variant === "folder" ? "Name this folder" : "Name this session"}
+                        helperText={variant === "draft"
+                            ? "Device local time · replace this name or rename it while editing"
+                            : variant === "folder"
+                            ? "Sessions can be moved here from their menu, or file themselves when the folder is bound to a project."
+                            : "Clear to auto-name from the first message"}
                     />
                     {variant === "draft" ? (
                         <DraftCreationDirectory value={draftDirectory} onChange={setDraftDirectory} />
-                    ) : <>
+                    ) : variant === "folder" ? <>
+                        <WorkspacePicker
+                            label="Inside folder (optional)"
+                            clearable
+                            hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+                            entries={directoryChoices}
+                            value={directory}
+                            onChange={setDirectory}
+                        />
+                        {unboundProjects.length > 0 ? (
+                            <Button
+                                fullWidth
+                                variant="text"
+                                startIcon={<LabelOutlined />}
+                                disabled={creating}
+                                onClick={(): void => {
+                                    organizeSessionsByProject();
+                                    onClose();
+                                }}
+                                sx={{ justifyContent: "flex-start", textTransform: "none" }}
+                            >
+                                Organize by project instead ({unboundProjects.length} {unboundProjects.length === 1 ? "folder" : "folders"})
+                            </Button>
+                        ) : null}
+                    </> : <>
                         <WorkspacePicker
                             label="Project"
                             entries={placement.projects}
@@ -2864,8 +2924,10 @@ export function CreateDialog({
                 </Stack>
             </Stack>
     );
-    const canCreate = !creating && (variant === "draft" || (placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd)));
-    const createLabel = variant === "draft" ? "Create draft" : "Create session";
+    const canCreate = !creating && (variant === "draft" ||
+        (variant === "folder" ? normalizeSessionFolderName(folderName) !== null
+            : placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd)));
+    const createLabel = variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
     if (navbarAtBottom) {
         return (
             <>

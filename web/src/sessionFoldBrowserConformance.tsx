@@ -6,6 +6,11 @@ import { MobileSheetActionGroup } from "@cowboy/app-shell";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { useSessionFoldControl } from "./SessionFoldControl";
+import { CreateDialog } from "./App";
+import {
+  SESSION_FOLDER_CREATED_EVENT,
+  type SessionFolderCreated,
+} from "./SessionFolderUi";
 import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import type { SessionFoldersValue } from "./sessionFolders";
 import { buildSessionTree, sessionTreeRowKey } from "./sessionTree";
@@ -242,58 +247,77 @@ export async function runSessionFoldBrowserConformance(): Promise<string[]> {
     check(inView("s3-0"), "locate did not bring the row into view");
     results.push("a flat list only locates");
 
-    // The phone drawer footer (375pt phone: 331px drawer) keeps both
-    // three-action islands apart.
-    const actions = (prefix: string) =>
-      ["a", "b", "c"].map((k) => ({
-        key: k,
-        label: `${prefix} ${k}`,
-        onPress() {},
-        icon: k,
-      }));
-    flushSync(() =>
-      root.render(
-        <BrowserProductTheme>
-          <CssBaseline />
-          <Box
-            data-fold-footer
-            sx={{
-              width: 331,
-              display: "flex",
-              justifyContent: "space-between",
-              boxSizing: "border-box",
-              px: 2,
-              "& > [data-mobile-sheet-footer-shield]": {
-                width: "auto",
-                flex: "0 0 auto",
-              },
-            }}
-          >
-            <MobileSheetActionGroup compact actions={actions("left")} />
-            <MobileSheetActionGroup compact actions={actions("right")} />
-          </Box>
-        </BrowserProductTheme>,
-      )
-    );
-    await tick();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const [left, right] = [
-      ...document.querySelectorAll<HTMLElement>(
-        "[data-fold-footer] > [data-mobile-sheet-footer-shield]",
-      ),
-    ].map((el) => el.getBoundingClientRect());
-    check(left && right, "missing footer islands");
-    const footer = document.querySelector("[data-fold-footer]")!
-      .getBoundingClientRect();
-    check(
-      right.left - left.right >= 8 && right.right <= footer.right - 15,
-      `footer islands crowd: ${left.right} -> ${right.left}`,
-    );
-    const target = document.querySelector<HTMLElement>(
-      "[data-fold-footer] button",
-    )!.getBoundingClientRect();
-    check(target.width >= 44 && target.height >= 44, "compact target < 44px");
-    results.push("two compact three-action islands fit a 375pt phone drawer");
+    // "+" creates folders too: Create's Folder tab names and places one.
+    const created: SessionFolderCreated[] = [];
+    const onCreated = (event: Event) =>
+      created.push((event as CustomEvent<SessionFolderCreated>).detail);
+    globalThis.addEventListener(SESSION_FOLDER_CREATED_EVENT, onCreated);
+    let closed = false;
+    try {
+      flushSync(() =>
+        root.render(
+          <SurfaceProvider>
+            <BrowserProductTheme>
+              <CssBaseline />
+              <CreateDialog
+                open
+                onClose={() => {
+                  closed = true;
+                }}
+                onCreated={() => {
+                  throw new Error("Folder must not create a Session");
+                }}
+              />
+            </BrowserProductTheme>
+          </SurfaceProvider>,
+        )
+      );
+      await tick();
+      await tick();
+      const tab = [...document.querySelectorAll<HTMLElement>("[role=tab]")]
+        .find((element) => element.textContent === "Folder");
+      check(tab, "Create has no Folder tab");
+      flushSync(() => tab.click());
+      await tick();
+      const name = document.querySelector<HTMLInputElement>(
+        'input[name="cowboy-session-folder"]',
+      );
+      check(name, "Folder tab has no name field");
+      check(document.activeElement === name, "Folder tab did not focus Name");
+      check(
+        name.autocomplete === "off" && name.value === "",
+        "Folder name must start empty without contact AutoFill",
+      );
+      const confirm = () =>
+        [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+          b.textContent?.startsWith("Create folder")
+        );
+      check(confirm()?.disabled, "an empty folder name can be created");
+      check(
+        document.body.textContent?.includes("Inside folder (optional)") &&
+          !document.body.textContent.includes("AI installation"),
+        "Folder tab shows session-only fields",
+      );
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(name, "  Research  ");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      check(!confirm()?.disabled, "a named folder cannot be created");
+      flushSync(() => confirm()!.click());
+      await tick();
+      check(closed, "Create stayed open after making a folder");
+      check(
+        created.length === 1 && created[0]!.id.startsWith("f-") &&
+          created[0]!.parent === null,
+        `folder announcement ${JSON.stringify(created)}`,
+      );
+    } finally {
+      globalThis.removeEventListener(SESSION_FOLDER_CREATED_EVENT, onCreated);
+    }
+    results.push("Create's Folder tab names, places and announces a folder");
   } finally {
     root.unmount();
     container.remove();
