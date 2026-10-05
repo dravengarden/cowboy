@@ -99,14 +99,22 @@ and in a queued-message editor), and the focused one runs.
 | `␣S` `␣P` `␣C` | Focus Sessions, Prompt, Conversation |
 | `␣T` + `R/U/A/L/C/X/T` | Top bar group: run config, usage, verify, reload, compact, clear; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
-| `␣W` `␣R` | Cycle regions, Resize mode |
-| `␣[` `␣]` `␣\` | Fold Sessions, Prompt, Conversation |
+| `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
-| `␣E` | Source / live preview (Prompt) |
+| `␣U` + `E` | Interface group: Source / live preview (Prompt) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
-| `␣H` `␣J` `␣M` | Schedule, run next, more formatting (Composer) |
-| `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list (`Mod+B`/`Mod+I` also format, as in Obsidian; off macOS only in Vim Insert or without Vim, so Ctrl-B/Ctrl-I keep their Vim meaning) |
+| `␣H` `␣J` | Schedule, run next (Composer) |
+| `␣M` + `B/I/X/U/O/M` | Markup group in the focused editor: bold, italic, code, link, list, more formatting (`Mod+B`/`Mod+I` also format, as in Obsidian; off macOS only in Vim Insert or without Vim, so Ctrl-B/Ctrl-I keep their Vim meaning) |
 | `␣D` + `R/V/H/E/W` | Draft group (an open Draft only): rename, copy to a Session, history, export, readable width; otherwise `␣D` focuses Drafts |
+
+The root keeps what is pressed most (switching, creating, focusing, the
+editor's insert actions); families live one layer down in groups, LazyVim
+style: Top bar `␣T`, Draft `␣D`, Markup `␣M`, Window `␣W`, Interface `␣U`.
+A group opens only when one of its commands can run in the current focus
+(Markup needs an editor, Interface the Prompt pane; Top bar and Draft run from
+anywhere) and otherwise leaves its key to the root meaning. New families
+become groups instead of taking root letters. Free root letters: `B E G I O
+R V X Y`.
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
 Numbered session slots (`Alt/Option+1…0`) are retired: labels replace them,
@@ -254,19 +262,19 @@ continuation is optional.
 
 ## Navigation
 
-- Workspace prefix then `S/P/T/C`: focus Sessions, Prompt, Top Bar, or
-  Conversation.
-- Workspace prefix then `L/Q/D`: focus Plan, Queue, or Drafts.
-- Workspace prefix then `N/W/R/,`: create a Session, cycle visible regions,
-  enter Resize mode, or open Settings.
-- Workspace prefix then `E` (Prompt pane): toggle the composer between live
+- Leader then `S/P/C`: focus Sessions, Prompt or Conversation; `␣TT` focuses
+  the Top Bar.
+- Leader then `L/Q/D`: focus Plan, Queue, or Drafts.
+- Leader then `N` or `,`: create, or open Settings. The Window group
+  `␣WW`/`␣WR` cycles visible regions or enters Resize mode.
+- `␣UE` (Prompt pane): toggle the composer between live
   preview and Source mode. Obsidian binds this to `Mod+E`, which both collision
   audits reject — Chrome owns it for the address bar and desktop apps for a
-  common editor action — so the toggle takes the documented prefix fallback and
-  keeps the same `E` mnemonic. It works from Vim Insert, Normal, and Visual
+  common editor action — so the toggle lives in the Interface group and keeps
+  the `E` mnemonic. It works from Vim Insert, Normal, and Visual
   because the preference is global rather than an edit on the document.
-- Workspace prefix then `[` / `]` / `\`: collapse or expand Sessions, Prompt,
-  or Conversation. The three adjacent keys sit in the same left-to-right
+- `␣W[` / `␣W]` / `␣W\`: collapse or expand Sessions, Prompt, or
+  Conversation. The three adjacent keys sit in the same left-to-right
   order as the panes. See [Pane collapse](#pane-collapse).
 - `␣␣` then a label switches session; ``␣` `` returns to the previous one.
 - `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
@@ -275,11 +283,11 @@ continuation is optional.
   reserves an Option letter; on Windows/Linux, `Alt+K` is additionally the
   workspace prefix. Slash, references, attachments, scheduling, queue priority,
   expand, and More remain visible in the UI and searchable in Command Palette.
-- In the main Composer, workspace prefix then `/`, `F`, `A`, `H`, `J`, `M`
-  opens slash commands, file references, attachments, scheduling, queue priority,
-  or More formatting. Formatting uses the same prefix: `B` bold, `I` italic,
-  `X` inline code, `U` link, `O` bulleted list; `Z` zooms the editor. These are
-  scoped to `prompt.composer`; `E` Source mode retains its whole-Prompt scope.
+- In the main Composer, leader then `/`, `F`, `A`, `H`, `J` opens slash
+  commands, file references, attachments, scheduling or queue priority; `Z`
+  zooms the editor. Formatting is the Markup group: `␣MB` bold, `␣MI` italic,
+  `␣MX` inline code, `␣MU` link, `␣MO` bulleted list, `␣MM` More. These are
+  scoped to `prompt.composer`; `␣UE` Source mode retains its whole-Prompt scope.
   Every toolbar button carries its `␣` slot, which lights while the leader is
   armed; tooltips and the Command Palette show the same keycap. A claimed direct chord stops
   propagation to editor fallbacks. In particular, `Alt+Enter` must never also
@@ -382,7 +390,7 @@ product mode. The state is one global, persisted layout preference
 (`cowboy:desktop-collapsed-panes`), never per Session, and Mobile never reads
 it.
 
-- **Commands.** Workspace prefix then `[` / `]` / `\` toggles Sessions /
+- **Commands.** `␣W[` / `␣W]` / `␣W\` toggles Sessions /
   Prompt / Conversation. The Command Palette also lists each toggle and
   Expand All Panes. Every pane header has a collapse control (chevron plus
   its continuation keycap) at its trailing edge.

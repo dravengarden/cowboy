@@ -28,6 +28,12 @@ export function desktopLeaderLabel(key: string): string {
 /** which-key groups: `␣` + group key opens a layer of related commands. */
 export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   t: "Top bar",
+  // Editor formatting (direct chords such as Mod+B remain).
+  m: "Markup",
+  // Layout: cycle regions, resize, fold panes.
+  w: "Window",
+  // Presentation toggles.
+  u: "Interface",
   // Only while a Draft document is open; otherwise `␣D` focuses Drafts.
   d: "Draft",
 };
@@ -45,6 +51,10 @@ export const DESKTOP_DRAFT_GROUP_KEYS = {
 /** Labels for the `␣␣` session switcher: home row first, then the rest. */
 export const DESKTOP_JUMP_LABELS = "asdfghjklqwertyuiopzxcvbnm";
 
+/**
+ * Leader paths: one character is a root key (`␣N`), two are a group and its
+ * key (`␣MB`). Every slot, sequence and help row derives from these.
+ */
 export const DESKTOP_WORKSPACE_KEYS = {
   switchSession: " ",
   alternateSession: "`",
@@ -57,40 +67,39 @@ export const DESKTOP_WORKSPACE_KEYS = {
   focusQueue: "Q",
   focusDrafts: "D",
   newSession: "N",
-  cycleRegion: "W",
-  resize: "R",
+  cycleRegion: "WW",
+  resize: "WR",
   settings: ",",
   // Obsidian binds live-preview ↔ source to Mod+E, which Cowboy cannot have:
   // Chrome owns it for the address bar and macOS apps for a common editor
   // action (chromeShortcutPolicy / macShortcutPolicy both reject it). The
   // workspace prefix is FOCUS.md's documented fallback, and it keeps the same
   // E mnemonic while working from Vim Insert, Normal and native inputs.
-  toggleSourceMode: "E",
+  toggleSourceMode: "UE",
   composerSlash: "/",
   composerReference: "F",
   composerAttach: "A",
   composerSchedule: "H",
   composerJumpFront: "J",
-  composerMore: "M",
+  composerMore: "MM",
   // Zoom the focused editor into the fullscreen composer.
   editorExpand: "Z",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
-  // matches the panes on screen: Sessions | Prompt | Conversation. They are
-  // free under the prefix, and their held-prefix forms (Cmd/Alt + [ ] \) are
-  // page-cancelable rather than reserved by Chrome or the operating system.
-  toggleSessions: "[",
-  togglePrompt: "]",
-  toggleConversation: "\\",
+  // matches the panes on screen: Sessions | Prompt | Conversation, inside the
+  // Window group (`␣W[` `␣W]` `␣W\\`).
+  toggleSessions: "W[",
+  togglePrompt: "W]",
+  toggleConversation: "W\\",
 } as const;
 
 /** Formatting shares the leader; bare letters remain editor input. Undo and
  *  redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`). */
 export const DESKTOP_COMPOSER_FORMAT_KEYS: Readonly<Record<string, string>> = {
-  bold: "B",
-  italic: "I",
-  code: "X",
-  link: "U",
-  bulletList: "O",
+  bold: "MB",
+  italic: "MI",
+  code: "MX",
+  link: "MU",
+  bulletList: "MO",
 };
 
 /** Obsidian's direct formatting chords. Only formats whose chord has the same
@@ -100,8 +109,16 @@ export const DESKTOP_COMPOSER_FORMAT_CHORDS: Readonly<Record<string, string>> = 
   italic: "Mod+I",
 };
 
-export function desktopWorkspaceSequence(key: string): string {
-  return `${DESKTOP_WORKSPACE_PREFIX} → ${key}`;
+/** The strokes of a leader path, for `DesktopCommand.sequence`. */
+export function desktopLeaderSequence(path: string): string[] {
+  return path === " " ? [DESKTOP_WORKSPACE_PREFIX, " "] : [
+    DESKTOP_WORKSPACE_PREFIX,
+    ...path,
+  ];
+}
+
+export function desktopWorkspaceSequence(path: string): string {
+  return desktopLeaderSequence(path).join(" → ");
 }
 
 export function desktopLeaderGroupSequence(group: string, key: string): string {
@@ -162,24 +179,15 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   q: "prompt.focusQueue",
   d: "prompt.focusDrafts",
   n: "session.new",
-  w: "workspace.cycleRegion",
-  r: "workspace.enterResize",
-  e: "composer.toggleSourceMode",
+  // Groups, not commands: their layers hold formatting, layout and toggles.
+  m: "group:m",
+  w: "group:w",
+  u: "group:u",
   "/": "composer.slash",
   f: "composer.reference",
   a: "composer.attach",
   h: "composer.schedule",
   j: "composer.jumpFront",
-  m: "composer.more",
-  ...Object.fromEntries(
-    Object.entries(DESKTOP_COMPOSER_FORMAT_KEYS).map(([id, key]) => [
-      key.toLowerCase(),
-      `composer.format.${id}`,
-    ]),
-  ),
-  "[": "workspace.toggleSessions",
-  "]": "workspace.togglePrompt",
-  "\\": "workspace.toggleConversation",
   ",": "settings.open",
   " ": "session.switch",
   "`": "session.alternate",

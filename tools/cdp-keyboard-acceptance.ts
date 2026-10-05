@@ -264,6 +264,7 @@ try {
       ),
       "Armed leader lights the ␣A slot",
     );
+    await sleep(250); // let the which-key entrance animation finish
     await shot("1-leader-which-key");
     await key("Escape");
     check(await mode() === "normal", "Esc closes the leader");

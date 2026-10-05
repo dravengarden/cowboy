@@ -175,9 +175,15 @@ export async function runDesktopComposerBrowserConformance(): Promise<
   };
   const prefix = (): void =>
     key("k", "KeyK", isMac ? { metaKey: true } : { altKey: true });
-  const sequence = (letter: string): void => {
+  // A leader path: one key at the root (`A`) or a group and its key (`MB`).
+  const sequence = (path: string): void => {
     prefix();
-    key(letter.toLowerCase(), letter === "/" ? "Slash" : `Key${letter}`);
+    for (const letter of path) {
+      key(
+        letter.toLowerCase(),
+        letter === "/" ? "Slash" : `Key${letter.toUpperCase()}`,
+      );
+    }
   };
   const click = (id: string): void => flushSync(() => button(id).click());
   const results: string[] = [];
@@ -384,7 +390,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
       check(
         commands.list().some((command) =>
           command.id === `composer.format.${id}` &&
-          command.sequence?.[1] === key
+          command.sequence?.slice(1).join("") === key
         ),
         `${id} is searchable with its shortcut`,
       );
@@ -473,7 +479,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
 
     flushSync(() => setOptions({}));
     editorRef.current.focusSelection({ anchor: 2, head: 8 });
-    sequence("B");
+    sequence(DESKTOP_COMPOSER_FORMAT_KEYS.bold!);
     check(
       editorRef.current.getValue() === "A **prompt** worth writing",
       "Bold formats current selection",
@@ -545,7 +551,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
       "Shortcut slots track prefix, focus and IME ownership without consuming bare editor letters",
     );
 
-    sequence("M");
+    sequence(DESKTOP_WORKSPACE_KEYS.composerMore);
     await tick();
     check(
       document.querySelector("[role='menu']"),

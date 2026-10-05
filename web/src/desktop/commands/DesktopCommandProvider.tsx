@@ -77,6 +77,9 @@ export interface DesktopCommand {
   allowInEditor?: boolean | ((target: EventTarget | null) => boolean);
   when?: () => boolean;
   disabledReason?: string | (() => string);
+  /** A grouped leader command that runs from any focus (Top bar, an open
+   *  Draft); others keep their own pane/region scope inside the group. */
+  leaderAnywhere?: boolean;
   /** Reserve a shortcut even while its target is temporarily unavailable. */
   consumeWhenDisabled?: boolean;
   run: () => void;
@@ -100,17 +103,21 @@ const DesktopListJumpContext = createContext<string | null>(null);
 
 /** A which-key group opens only when one of its commands can run now;
  *  otherwise its key keeps its root meaning (`␣D` focuses Drafts unless a
- *  Draft document is open). Group commands run from any focus: the group is
- *  their scope, so only pane contexts and business predicates apply. */
+ *  Draft document is open). `leaderAnywhere` commands (Top bar, the open
+ *  Draft) run from any focus; the rest (Markup in an editor, Interface in
+ *  Prompt) keep their usual scope. */
 export function desktopLeaderGroupCommands(
   commands: Iterable<DesktopCommand>,
   group: string,
   focusedPane: DesktopPane,
+  focusedRegion: string | null,
 ): DesktopCommand[] {
   return [...commands].filter((command) => {
     const path = desktopLeaderGroupKey(command);
     return path?.group === group &&
-      (!command.contexts || command.contexts.includes(focusedPane));
+      (!command.contexts || command.contexts.includes(focusedPane)) &&
+      (command.leaderAnywhere === true ||
+        desktopCommandInScope(command, focusedPane, focusedRegion));
   });
 }
 
@@ -118,8 +125,14 @@ export function desktopLeaderGroupAvailable(
   commands: Iterable<DesktopCommand>,
   group: string,
   focusedPane: DesktopPane,
+  focusedRegion: string | null,
 ): boolean {
-  return desktopLeaderGroupCommands(commands, group, focusedPane).some(
+  return desktopLeaderGroupCommands(
+    commands,
+    group,
+    focusedPane,
+    focusedRegion,
+  ).some(
     (command) => command.when?.() !== false,
   );
 }
@@ -486,6 +499,7 @@ export function DesktopCommandProvider(
               commands.current.values(),
               group,
               workspace.focusedPane,
+              workspace.focusedRegion,
             ).find((candidate) =>
               desktopLeaderGroupKey(candidate)?.key === key.toLowerCase()
             );
@@ -524,6 +538,7 @@ export function DesktopCommandProvider(
               commands.current.values(),
               leader,
               workspace.focusedPane,
+              workspace.focusedRegion,
             )
           ) {
             armWorkspaceCommand(`group:${leader}`);

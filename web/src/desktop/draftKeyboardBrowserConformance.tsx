@@ -285,6 +285,7 @@ export async function checkDraftKeyboard(): Promise<string> {
         }
         prefix();
         key("m", "KeyM");
+        key("m", "KeyM");
         await tick();
         check(
           document.querySelector('[role="menu"]'),
@@ -308,6 +309,7 @@ export async function checkDraftKeyboard(): Promise<string> {
         );
         editorRef.current!.focus();
         prefix();
+        key("m", "KeyM");
         key("b", "KeyB");
         check(
           editorRef.current!.getValue().includes("**"),

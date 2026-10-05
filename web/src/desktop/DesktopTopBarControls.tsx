@@ -1533,6 +1533,7 @@ export function DesktopTopBarControls({
       // `␣TR` from anywhere; bare `R` while the bar owns focus.
       sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "R"],
       regions: ["topbar.controls"],
+      leaderAnywhere: true,
       when: () =>
         document.querySelector(
           "[data-desktop-topbar-action='config']:not(:disabled)",
@@ -1550,6 +1551,7 @@ export function DesktopTopBarControls({
       // `␣TU` from anywhere; bare `U` while the bar owns focus.
       sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "U"],
       regions: ["topbar.controls"],
+      leaderAnywhere: true,
       run: () =>
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='usage']",
@@ -1563,6 +1565,7 @@ export function DesktopTopBarControls({
       // `␣TA` from anywhere; bare `A` while the bar owns focus.
       sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "A"],
       regions: ["topbar.controls"],
+      leaderAnywhere: true,
       when: () =>
         document.querySelector(
           "[data-desktop-topbar-action='reauth']:not(:disabled)",
@@ -1580,6 +1583,7 @@ export function DesktopTopBarControls({
       // `␣TL` from anywhere; bare `L` while the bar owns focus.
       sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "L"],
       regions: ["topbar.controls"],
+      leaderAnywhere: true,
       when: () =>
         document.querySelector(
           "[data-desktop-topbar-action='reload']:not(:disabled)",
@@ -1597,6 +1601,7 @@ export function DesktopTopBarControls({
       // `␣TC` from anywhere; bare `C` while the bar owns focus.
       sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "C"],
       regions: ["topbar.controls"],
+      leaderAnywhere: true,
       when: () =>
         document.querySelector(
           "[data-desktop-topbar-action='compact']:not(:disabled)",
@@ -1614,6 +1619,7 @@ export function DesktopTopBarControls({
       // `␣TX` from anywhere; bare `X` while the bar owns focus.
       sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "X"],
       regions: ["topbar.controls"],
+      leaderAnywhere: true,
       when: () =>
         document.querySelector(
           "[data-desktop-topbar-action='clear']:not(:disabled)",

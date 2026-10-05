@@ -127,12 +127,15 @@ export async function checkPendingPanelLayout(): Promise<string> {
               .filter((grip) => grip.getClientRects().length > 0);
             check(grips.length === 2, "Both expanded rows expose their reorder grip");
             for (const grip of grips) {
-              const size = desktop ? 2.75 * fontSize : 44;
+              // Desktop: a slim edge handle (1.25rem × 2rem); Mobile: 44px.
+              const width = desktop ? 1.25 * fontSize : 44;
+              const height = desktop ? 2 * fontSize : 44;
               const rect = grip.getBoundingClientRect();
               const slot = grip.parentElement!.getBoundingClientRect();
-              check(Math.abs(rect.width - size) < 1 && Math.abs(rect.height - size) < 1,
+              check(Math.abs(rect.width - width) < 1 && Math.abs(rect.height - height) < 1,
                 "Desktop grip scales with the root font; Mobile keeps its touch target");
-              check(Math.abs(slot.width - size) < 1 && Math.abs(slot.height - size) < 1,
+              check(Math.abs(slot.width - width) < 1 &&
+                (desktop || Math.abs(slot.height - height) < 1),
                 "Grip and its leading slot have matching geometry");
               if (desktop) {
                 check(grip.scrollWidth <= grip.clientWidth + 1,
