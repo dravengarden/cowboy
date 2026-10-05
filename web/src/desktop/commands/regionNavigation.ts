@@ -19,7 +19,11 @@ const SLACK = 2;
  * The index of the candidate nearest `from` in `direction`, or null at the
  * edge. A candidate must lie wholly beyond the current edge. Among those,
  * one that overlaps on the cross axis wins over one that does not; then the
- * smaller gap, then the larger overlap, then the closer cross-axis centre.
+ * smaller gap. Candidates sharing that much of the current edge as the best
+ * one (half its overlap or more) are equals, and reading order decides:
+ * the leftmost for J/K, the topmost for H/L. So from the full-width top bar
+ * J lands in Prompt and reaches Conversation only while Prompt is folded,
+ * while from Sessions L passes the thin top bar for Prompt.
  */
 export function regionInDirection(
   from: RegionBox,
@@ -27,8 +31,7 @@ export function regionInDirection(
   direction: RegionDirection,
 ): number | null {
   const horizontal = direction === "h" || direction === "l";
-  let best: { index: number; key: readonly number[] } | null = null;
-  candidates.forEach((box, index) => {
+  const scored = candidates.flatMap((box, index) => {
     const gap = direction === "h"
       ? from.left - box.right
       : direction === "l"
@@ -36,16 +39,39 @@ export function regionInDirection(
       : direction === "k"
       ? from.top - box.bottom
       : box.top - from.bottom;
-    if (gap < -SLACK) return;
+    if (gap < -SLACK) return [];
     const [start, end, ownStart, ownEnd] = horizontal
       ? [box.top, box.bottom, from.top, from.bottom]
       : [box.left, box.right, from.left, from.right];
     const overlap = Math.min(end, ownEnd) - Math.max(start, ownStart);
     const centre = Math.abs((start + end) / 2 - (ownStart + ownEnd) / 2);
-    const key = [overlap > SLACK ? 0 : 1, Math.max(0, gap), -overlap, centre];
-    if (!best || lexicographicLess(key, best.key)) best = { index, key };
+    return [{
+      index,
+      rank: [overlap > SLACK ? 0 : 1, Math.round(Math.max(0, gap) / SLACK)],
+      overlap,
+      start,
+      centre,
+    }];
   });
-  return best === null ? null : (best as { index: number }).index;
+  if (scored.length === 0) return null;
+  const first = scored.reduce((best, candidate) =>
+    lexicographicLess(candidate.rank, best.rank) ? candidate : best
+  );
+  const peers = scored.filter((candidate) =>
+    candidate.rank.every((value, at) => value === first.rank[at])
+  );
+  const widest = Math.max(...peers.map((candidate) => candidate.overlap));
+  const chosen = peers
+    .filter((candidate) => candidate.overlap >= widest / 2)
+    .reduce((best, candidate) =>
+      lexicographicLess(
+          [candidate.start, candidate.centre],
+          [best.start, best.centre],
+        )
+        ? candidate
+        : best
+    );
+  return chosen.index;
 }
 
 function lexicographicLess(

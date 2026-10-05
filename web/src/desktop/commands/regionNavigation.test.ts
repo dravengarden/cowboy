@@ -31,6 +31,13 @@ Deno.test("Ctrl+J/K move within a column and up to the top bar", () => {
   assertEquals(regionInDirection(queue, all, "k"), 2);
   assertEquals(regionInDirection(composer, all, "k"), 1);
   assertEquals(regionInDirection(conversation, all, "k"), 1);
+  // From the full-width top bar J prefers Prompt, the first column under it;
+  // with Prompt folded it reaches Conversation.
+  assertEquals(regionInDirection(topbar, all, "j"), 2);
+  assertEquals(
+    regionInDirection(topbar, [sessions, topbar, conversation], "j"),
+    2,
+  );
   assertEquals(regionInDirection(queue, all, "j"), null);
 });
 
@@ -48,4 +55,9 @@ Deno.test("only plain Ctrl with h/j/k/l by physical key", () => {
   assertEquals(regionMotionKey(event("KeyL", { shiftKey: true })), null);
   assertEquals(regionMotionKey(event("KeyL", { metaKey: true })), null);
   assertEquals(regionMotionKey(event("KeyA")), null);
+});
+
+Deno.test("a thin bar sharing a sliver of the edge does not win", () => {
+  // From Sessions, L passes the top bar (40px of shared edge) for Prompt.
+  assertEquals(regionInDirection(sessions, all, "l"), 2);
 });

@@ -248,6 +248,23 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         borderWidth: "0 0.12em 0.12em 0",
         transform: "rotate(45deg)",
       },
+      // Bold must read as bold in CJK too. PingFang (and most CJK system
+      // fonts) stop at Semibold, so `700` alone barely separates 加粗 from
+      // body text that is already near full contrast. Bold takes the full
+      // ink colour and a hairline stroke that thickens CJK strokes the way
+      // a real Bold cut would; Latin bold only gains a fraction of a pixel.
+      // Headings share the treatment.
+      ".cm-atomic-strong, .cm-atomic-strong *, .cm-line.cm-atomic-h1, .cm-line.cm-atomic-h2, .cm-line.cm-atomic-h3": {
+        color: dark ? "#ffffff" : "#000000",
+        fontWeight: 700,
+        WebkitTextStroke: "0.025em currentColor",
+      },
+      // Inline code is a chip in the body colour, not a second link colour:
+      // the markdown highlighter tints monospace tokens with the accent, which
+      // made `code` indistinguishable from a link.
+      ".cm-atomic-inline-code, .cm-atomic-inline-code *": {
+        color: theme.palette.text.primary,
+      },
       // `==highlight==` (composerHighlight.ts + the mdlive node-class entries).
       // A yellow marker like Obsidian — theme-tuned: a solid warm yellow on
       // light (default dark text stays legible), a translucent amber on dark
