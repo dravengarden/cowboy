@@ -19,6 +19,10 @@ const CARGO_CACHE_TAG_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806
 const MAX_CARGO_CACHE_TAG_BYTES: u64 = 8192;
 const MAX_CLEANUP_DIRECTORIES: usize = 100_000;
 const MAX_CLEANUP_TARGETS: usize = 128;
+#[cfg(target_os = "linux")]
+const MAX_CLEANUP_CONTENT_DEPTH: usize = 64;
+#[cfg(target_os = "linux")]
+const MAX_CLEANUP_CONTENT_ENTRIES: usize = 1_000_000;
 
 #[derive(Debug, Deserialize)]
 pub struct PrepareWorkspaceRequest {
@@ -502,7 +506,7 @@ pub struct CleanupTargetChanged;
 
 impl std::fmt::Display for CleanupTargetChanged {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("observed Cargo target or its markers changed before cleanup")
+        formatter.write_str("observed Cargo cleanup directory or its markers changed")
     }
 }
 
@@ -736,6 +740,8 @@ fn remove_cleanup_targets(
 ) -> Result<Vec<PathBuf>> {
     candidates.sort_by_key(|target| std::cmp::Reverse(target.path.components().count()));
     let mut removed = Vec::with_capacity(candidates.len());
+    #[cfg(target_os = "linux")]
+    let mut content_entries = 0;
     for target in candidates {
         target.verify(workspace)?;
         if !cargo_target_markers_match(&target.directory)? {
@@ -753,24 +759,130 @@ fn remove_cleanup_targets(
                 canonical_target.display()
             );
         }
-        let contents_root = directory_access_root(&target.directory, &target.path);
-        for entry in std::fs::read_dir(&contents_root)? {
-            let entry = entry?;
-            target.verify(workspace)?;
-            before_child_remove(&entry.path())?;
-            if entry.file_type()?.is_dir() {
-                std::fs::remove_dir_all(entry.path())?;
-            } else {
-                std::fs::remove_file(entry.path())?;
+        #[cfg(target_os = "linux")]
+        clear_cleanup_directory(
+            workspace,
+            &target,
+            &target.directory,
+            Path::new(""),
+            0,
+            &mut content_entries,
+            before_child_remove,
+        )?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let contents_root = directory_access_root(&target.directory, &target.path);
+            for entry in std::fs::read_dir(&contents_root)? {
+                let entry = entry?;
+                target.verify(workspace)?;
+                before_child_remove(&entry.path())?;
+                if entry.file_type()?.is_dir() {
+                    std::fs::remove_dir_all(entry.path())?;
+                } else {
+                    std::fs::remove_file(entry.path())?;
+                }
             }
         }
         target.verify(workspace)?;
-        // Retain the empty directory. A pathname unlink after identity checking
+        // Retain the directory structure. A name unlink after identity checking
         // could delete an independently substituted empty directory. Contents
         // above remain attached to the original target on Linux.
         removed.push(session_root.join(target.path.strip_prefix(access_root)?));
     }
     Ok(removed)
+}
+
+#[cfg(target_os = "linux")]
+fn open_cleanup_content_directory(directory: &File, name: &Path) -> Result<File> {
+    use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
+    match openat2(
+        directory,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+    ) {
+        Ok(handle) => Ok(File::from(handle)),
+        Err(
+            rustix::io::Errno::LOOP
+            | rustix::io::Errno::XDEV
+            | rustix::io::Errno::NOENT
+            | rustix::io::Errno::NOTDIR,
+        ) => Err(CleanupTargetChanged.into()),
+        Err(error) => Err(error).context("opening bounded Cargo cleanup descendant"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn verify_cleanup_content_directory(
+    workspace: &CleanupWorkspace,
+    target: &CleanupTarget,
+    directory: &File,
+    relative: &Path,
+) -> Result<()> {
+    target.verify(workspace)?;
+    if !relative.as_os_str().is_empty() {
+        let current = open_cleanup_content_directory(&target.directory, relative)?;
+        let current = current.metadata()?;
+        let original = directory.metadata()?;
+        if current.dev() != original.dev() || current.ino() != original.ino() {
+            return Err(CleanupTargetChanged.into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn clear_cleanup_directory(
+    workspace: &CleanupWorkspace,
+    target: &CleanupTarget,
+    directory: &File,
+    relative: &Path,
+    depth: usize,
+    entries: &mut usize,
+    before_child_remove: &impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, unlinkat};
+    if depth > MAX_CLEANUP_CONTENT_DEPTH {
+        bail!("Cargo cleanup exceeded {MAX_CLEANUP_CONTENT_DEPTH} descendant levels");
+    }
+    verify_cleanup_content_directory(workspace, target, directory, relative)?;
+    let access = directory_access_root(directory, &target.path.join(relative));
+    for entry in std::fs::read_dir(&access)? {
+        let entry = entry?;
+        *entries += 1;
+        if *entries > MAX_CLEANUP_CONTENT_ENTRIES {
+            bail!("Cargo cleanup exceeded {MAX_CLEANUP_CONTENT_ENTRIES} content entries");
+        }
+        verify_cleanup_content_directory(workspace, target, directory, relative)?;
+        let name = entry.file_name();
+        let observed = std::fs::symlink_metadata(entry.path())?;
+        if observed.is_dir() {
+            let child = open_cleanup_content_directory(directory, Path::new(&name))?;
+            let opened = child.metadata()?;
+            if opened.dev() != observed.dev() || opened.ino() != observed.ino() {
+                return Err(CleanupTargetChanged.into());
+            }
+            before_child_remove(&entry.path())?;
+            clear_cleanup_directory(
+                workspace,
+                target,
+                &child,
+                &relative.join(name),
+                depth + 1,
+                entries,
+                before_child_remove,
+            )?;
+        } else {
+            before_child_remove(&entry.path())?;
+            // Only unlink this name in the retained parent. Never follow links
+            // or use AT_REMOVEDIR; a replacement directory cannot be entered.
+            unlinkat(directory, name, AtFlags::empty())?;
+        }
+        verify_cleanup_content_directory(workspace, target, directory, relative)?;
+    }
+    // No directory-name unlink: retain empty descendants as well as the target.
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1023,7 +1135,7 @@ mod tests {
         assert_eq!(removed.len(), 2);
         for path in [session.join("target"), session.join("native/replay/target")] {
             assert!(path.is_dir());
-            assert_eq!(std::fs::read_dir(path).unwrap().count(), 0);
+            assert_only_directories(&path);
         }
         assert!(session.join("examples/target/keep.txt").is_file());
         assert!(outside.join("debug/deps/libtest.rlib").is_file());
@@ -1048,7 +1160,7 @@ mod tests {
             assert!(retained.is_dir());
             assert_eq!(retained.dev(), original.metadata().unwrap().dev());
             assert_eq!(retained.ino(), original.metadata().unwrap().ino());
-            assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+            assert_only_directories(&target);
             assert!(
                 cleanup_build_artifacts(&observation)
                     .await
@@ -1056,6 +1168,18 @@ mod tests {
                     .is_empty()
             );
             write_cargo_target(&target);
+        }
+    }
+
+    fn assert_only_directories(path: &Path) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            assert!(
+                entry.file_type().unwrap().is_dir(),
+                "{}",
+                entry.path().display()
+            );
+            assert_only_directories(&entry.path());
         }
     }
 
@@ -1217,11 +1341,164 @@ mod tests {
             vec![session.join("local/target")]
         );
         assert!(outside.join("target/debug/deps/libtest.rlib").is_file());
+        assert_only_directories(&session.join("local/target"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_descendant_rename_after_leaf_check_preserves_replacement_contents() {
+        let temp = TestDir::new();
+        let (workspace, session, access, target) = observed_cleanup_target(&temp);
+        let debug = session.join("project/target/debug");
+        let original = session.join("original-debug");
+        let replaced = std::sync::atomic::AtomicBool::new(false);
+        let error = remove_cleanup_targets(&workspace, &session, &access, vec![target], &|path| {
+            if path.file_name() == Some(OsStr::new("libtest.rlib")) {
+                assert!(!replaced.swap(true, Ordering::SeqCst));
+                std::fs::rename(&debug, &original)?;
+                std::fs::create_dir_all(debug.join("deps"))?;
+                std::fs::write(debug.join("deps/libtest.rlib"), "replacement")?;
+                std::fs::write(debug.join("source.txt"), "preserve")?;
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(replaced.load(Ordering::SeqCst));
+        assert!(error.downcast_ref::<CleanupTargetChanged>().is_some());
         assert_eq!(
-            std::fs::read_dir(session.join("local/target"))
-                .unwrap()
-                .count(),
-            0
+            std::fs::read_to_string(debug.join("deps/libtest.rlib")).unwrap(),
+            "replacement"
+        );
+        assert_eq!(
+            std::fs::read_to_string(debug.join("source.txt")).unwrap(),
+            "preserve"
+        );
+        assert!(!original.join("deps/libtest.rlib").exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[ignore = "requires explicitly isolated private mount namespace"]
+    fn cleanup_descendant_mount_before_or_after_open_preserves_both_objects() {
+        assert_eq!(
+            std::env::var("COWBOY_TEST_CLEANUP_MOUNT_NAMESPACE").as_deref(),
+            Ok("1")
+        );
+        for after_open in [false, true] {
+            let temp = TestDir::new();
+            let (workspace, session, access, target) = observed_cleanup_target(&temp);
+            let destination = session.join("project/target/debug/deps");
+            let original = File::open(&destination).unwrap();
+            let outside = temp.0.join("foreign");
+            write_cargo_target(&outside);
+            struct MountGuard {
+                path: PathBuf,
+                mounted: std::sync::atomic::AtomicBool,
+            }
+            impl MountGuard {
+                fn mount(&self, source: &Path) {
+                    assert!(
+                        std::process::Command::new("mount")
+                            .arg("--bind")
+                            .arg(source)
+                            .arg(&self.path)
+                            .status()
+                            .unwrap()
+                            .success()
+                    );
+                    self.mounted.store(true, Ordering::SeqCst);
+                }
+            }
+            impl Drop for MountGuard {
+                fn drop(&mut self) {
+                    if self.mounted.load(Ordering::SeqCst) {
+                        assert!(
+                            std::process::Command::new("umount")
+                                .arg(&self.path)
+                                .status()
+                                .unwrap()
+                                .success()
+                        );
+                    }
+                }
+            }
+            let guard = MountGuard {
+                path: destination,
+                mounted: std::sync::atomic::AtomicBool::new(false),
+            };
+            if !after_open {
+                guard.mount(&outside);
+            }
+            let error =
+                remove_cleanup_targets(&workspace, &session, &access, vec![target], &|path| {
+                    if after_open && path.file_name() == Some(OsStr::new("deps")) {
+                        guard.mount(&outside);
+                    }
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(guard.mounted.load(Ordering::SeqCst));
+            assert!(
+                error.downcast_ref::<CleanupTargetChanged>().is_some(),
+                "{after_open}: {error}"
+            );
+            assert!(outside.join("debug/deps/libtest.rlib").is_file());
+            assert!(outside.join("CACHEDIR.TAG").is_file());
+            assert!(
+                directory_access_root(&original, Path::new("unused"))
+                    .join("libtest.rlib")
+                    .is_file()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_retains_descendant_inodes_and_does_not_follow_file_links() {
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        let target = session.join("project/target");
+        let debug = File::open(target.join("debug")).unwrap();
+        let deps = File::open(target.join("debug/deps")).unwrap();
+        let outside = temp.0.join("foreign.txt");
+        std::fs::write(&outside, "foreign").unwrap();
+        std::os::unix::fs::symlink(&outside, target.join("debug/deps/link")).unwrap();
+        cleanup_build_artifacts_sync(&workspace).unwrap();
+        for (path, held) in [
+            (target.join("debug"), debug),
+            (target.join("debug/deps"), deps),
+        ] {
+            let retained = std::fs::metadata(path).unwrap();
+            assert_eq!(retained.dev(), held.metadata().unwrap().dev());
+            assert_eq!(retained.ino(), held.metadata().unwrap().ino());
+        }
+        assert_only_directories(&target);
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "foreign");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cleanup_content_depth_is_bounded_and_preserves_deeper_artifacts() {
+        let temp = TestDir::new();
+        let (workspace, session, _, _) = observed_cleanup_target(&temp);
+        let target = session.join("project/target");
+        let mut deepest = target.clone();
+        for _ in 0..MAX_CLEANUP_CONTENT_DEPTH {
+            deepest.push("d");
+        }
+        std::fs::create_dir_all(&deepest).unwrap();
+        std::fs::write(deepest.join("artifact"), "generated").unwrap();
+        cleanup_build_artifacts_sync(&workspace).unwrap();
+        assert_only_directories(&target);
+        write_cargo_target(&target);
+        deepest.push("extra");
+        std::fs::create_dir(&deepest).unwrap();
+        std::fs::write(deepest.join("artifact"), "preserve").unwrap();
+        let error = cleanup_build_artifacts_sync(&workspace).unwrap_err();
+        assert!(error.to_string().contains("descendant levels"));
+        assert_eq!(
+            std::fs::read_to_string(deepest.join("artifact")).unwrap(),
+            "preserve"
         );
     }
 

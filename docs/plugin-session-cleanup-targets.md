@@ -20,8 +20,8 @@ A filesystem regression replaces a pending ancestor with a link and refuses
 linked and escaping paths. An ignored fixture runs explicitly in a private mount
 namespace, binds same-device directories over both an ancestor and a direct
 target, checks refusal, preserves their original Cargo artifacts and clears a
-separate ordinary target. This is scan-time mount admission; mounts added after
-an accepted open or below a candidate during recursive removal remain open gaps.
+separate ordinary target. This is scan-time mount admission; the additional
+removal-time rules below apply to candidate descendants.
 
 Before removing contents, cleanup checks the candidate's pathname against its
 retained directory handle and revalidates its markers through that handle. A
@@ -37,13 +37,32 @@ Previously the scan remembered only eligible pathnames, so a later replacement
 could receive the recursive removal even when it carried no Cargo markers.
 Returned cleanup paths still use the logical worktree location.
 
-Cleanup clears eligible contents and retains the target directory itself. Linux
-does not perform a final unlink through the mutable target pathname. The returned
-paths identify cleared targets, not removed directories. Both Cargo markers are
-cleared with the other contents, so a second pass skips the empty directory; a
+Linux recursively opens descendant directories with the same restricted
+`openat2` flags. It compares each opened child with the observed device/inode,
+then rechecks its original target-relative directory identity around entry
+operations. Enumeration uses held directory handles; nondirectory unlink uses
+`unlinkat` in the held parent, without following links or requesting directory
+removal. A directory rename after a file check cannot redirect that unlink into
+the replacement tree. Descendant replacement, missing directories and mount
+crossings produce the target-change refusal and retire cleanup. A private mount
+fixture covers a same-device descendant bind both before and after opening its
+original handle, preserving foreign and original underlying artifacts.
+
+Removal admits at most 64 descendant levels and one million content entries
+across all candidate targets in one pass. It retains the target and descendant
+directory structure: no final directory-name unlink follows an identity check.
+Actual fixtures verify retained descendant inodes, removal of file links without
+touching their referents, replacement after the leaf check, and the 64/65-level
+boundary. Bounds can refuse after partial effects and do not impose I/O deadlines.
+
+Cleanup clears eligible files and retains directory structure on Linux. Non-Linux
+Unix retains only the target itself and its previous recursive pathname fallback.
+The returned paths identify cleared targets, not removed directories. Both Cargo
+markers are cleared with the other contents, so a second pass skips unmarked
+directory structure; a
 later Cargo build can recreate markers and artifacts in the same directory.
 Real filesystem tests retain an open handle and check its device/inode against
-the empty directory after cleanup, repeat cleanup without markers, then recreate
+retained directory after cleanup, repeat cleanup without markers, then recreate
 ordinary Cargo contents and clean again.
 
 Real-filesystem fixtures cover same-path marked and unmarked replacement,
@@ -57,9 +76,12 @@ part of the Machine gate.
 
 This is a scan-time target observation, not continuous Session/worktree ownership
 from launch or terminal deletion. It does not establish a reader/writer lease or
-an atomic tree snapshot. Retaining the empty target avoids the former final
-empty-directory name-unlink race. Independent replacement of descendants during recursive child removal,
-filesystem/mount boundaries and general I/O deadlines remain separate gaps.
+an atomic tree snapshot. Retaining directory structure avoids directory-name
+unlink races. Nondirectory name observation and unlink are still not atomic: a
+replacement nondirectory in the original held parent can be unlinked. A rename
+after verification may permit effects on the held original object before refusal;
+there is no claim of an atomic tree snapshot or a freeze on mounts/renames.
+General I/O deadlines and continuous launch-time ownership remain separate gaps.
 Non-Linux Unix targets retain pathname content access with identity checks and
 do not claim Linux descriptor anchoring. A refusal may follow removal of some
 original contents; prior effects are not rolled back.

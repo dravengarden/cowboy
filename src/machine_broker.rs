@@ -5837,7 +5837,9 @@ mod tests {
 
         assert!(broker.deleted_session_workspaces.lock().is_empty());
         assert!(target.is_dir());
-        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        assert!(!target.join(".rustc_info.json").exists());
+        assert!(!target.join("CACHEDIR.TAG").exists());
+        assert!(!target.join("debug/deps/libtest.rlib").exists());
         assert!(workspace.join("source.rs").is_file());
         assert!(workspace.is_dir());
         let _ = std::fs::remove_dir_all(root);
