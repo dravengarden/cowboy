@@ -2890,3 +2890,9 @@ exercised with synthetic events only.
     textarea keeps the gesture. No editor extension, IME or composition code
     changed. Verified in Chrome touch emulation (idle, focused, swipe to
     Sessions); physical iPhone keyboard placement is not yet accepted.
+    While the body is not focused a floating navigation capsule always rests
+    at the bottom (Back, Forward, Create, Settings), as in Obsidian; it hides
+    while editing. Back/Forward use the Navigation API and stay disabled
+    without an in-app entry, so they can never leave Cowboy for the native
+    loader. The page chrome uses Lucide-style stroke icons
+    (`documents/draftChromeIcons.tsx`) on shadow-lifted capsules.
