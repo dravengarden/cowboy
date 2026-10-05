@@ -1,5 +1,11 @@
-import { Tab, Tabs, Typography } from "@mui/material";
+import { Typography } from "@mui/material";
+import {
+  ChatBubbleOutline,
+  DescriptionOutlined,
+  FolderOutlined,
+} from "@mui/icons-material";
 import { useMemo } from "react";
+import { SegmentedTabs } from "./SegmentedTabs";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { draftFolderTree } from "./documents/model";
 import { useDraftLibrary } from "./documents/store";
@@ -13,34 +19,35 @@ export function CreateVariantPicker({ value, disabled, onChange }: {
   onChange: (value: CreateVariant) => void;
 }): React.JSX.Element {
   return (
-    <Tabs
+    <SegmentedTabs
       value={value}
-      onChange={(_, next: CreateVariant) => onChange(next)}
-      variant="fullWidth"
+      onChange={onChange}
       aria-label="Create type"
-    >
-      <Tab
-        id="create-session-tab"
-        aria-controls="create-variant-panel"
-        value="session"
-        label="Session"
-        disabled={disabled}
-      />
-      <Tab
-        id="create-draft-tab"
-        aria-controls="create-variant-panel"
-        value="draft"
-        label="Draft"
-        disabled={disabled}
-      />
-      <Tab
-        id="create-folder-tab"
-        aria-controls="create-variant-panel"
-        value="folder"
-        label="Folder"
-        disabled={disabled}
-      />
-    </Tabs>
+      disabled={disabled}
+      options={[
+        {
+          value: "session",
+          label: "Session",
+          icon: <ChatBubbleOutline />,
+          id: "create-session-tab",
+          controls: "create-variant-panel",
+        },
+        {
+          value: "draft",
+          label: "Draft",
+          icon: <DescriptionOutlined />,
+          id: "create-draft-tab",
+          controls: "create-variant-panel",
+        },
+        {
+          value: "folder",
+          label: "Folder",
+          icon: <FolderOutlined />,
+          id: "create-folder-tab",
+          controls: "create-variant-panel",
+        },
+      ]}
+    />
   );
 }
 

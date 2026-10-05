@@ -37,13 +37,13 @@ Deno.test("control center bracket navigation wraps across tabs", () => {
 });
 
 Deno.test("desktop control center keeps one stable semantic tab panel", () => {
-  assertEquals(appSource.includes("<Tabs"), true);
-  assertEquals(appSource.includes("selectionFollowsFocus"), true);
+  assertEquals(appSource.includes("<SegmentedTabs"), true);
+  assertEquals(appSource.includes("onChange={changeTab}"), true);
   assertEquals(
     appSource.includes('aria-label="Control center sections"'),
     true,
   );
-  assertEquals(appSource.includes("aria-keyshortcuts={shortcut}"), true);
+  assertEquals(appSource.includes("keyShortcuts: shortcut,"), true);
   assertEquals(appSource.includes('role="tabpanel"'), true);
   assertEquals(appSource.includes("controlCenterTabForShortcut(key)"), true);
   assertEquals(appSource.includes("adjacentControlCenterTab(tab"), true);

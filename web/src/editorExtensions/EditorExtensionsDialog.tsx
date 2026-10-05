@@ -9,14 +9,13 @@ import {
   ListItemText,
   Stack,
   Switch,
-  Tab,
-  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { documentNotice } from "../documents/DocumentNotifications";
 import { Sheet } from "../Sheet";
+import { SegmentedTabs } from "../SegmentedTabs";
 import { productSyncPrincipal } from "../productSyncIdentity";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
@@ -134,7 +133,7 @@ function ExtensionWorkbench(
   },
 ): React.JSX.Element {
   const [settings, setSettings] = useState(readSettings);
-  const [tab, setTab] = useState(0);
+  const [tab, setTab] = useState<"tools" | "extensions">("tools");
   const [error, setError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState(() => binding.port.read());
   const [editing, setEditing] = useState<EditorTemplate | null>(null);
@@ -196,20 +195,20 @@ function ExtensionWorkbench(
       onClose={closeEditorExtensions}
       actions={<Button onClick={closeEditorExtensions}>Done</Button>}
     >
-      <Tabs
+      <SegmentedTabs
         value={tab}
-        onChange={(_, next: number) => setTab(next)}
-        variant="fullWidth"
+        onChange={setTab}
         aria-label="Editor extension tools"
-      >
-        <Tab label="Tools" />
-        <Tab label="Extensions" />
-      </Tabs>
+        options={[
+          { value: "tools", label: "Tools" },
+          { value: "extensions", label: "Extensions" },
+        ]}
+      />
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>
       )}
       <Box sx={{ maxHeight: "55dvh", overflowY: "auto", minWidth: 0 }}>
-        {tab === 0
+        {tab === "tools"
           ? (
             <>
               <List dense>

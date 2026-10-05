@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Box, Button, Stack, TextField, Typography } from "@mui/material";
 import { Sheet } from "./Sheet";
-import { SegmentedPill } from "./SegmentedPill";
+import { SegmentedTabs } from "./SegmentedTabs";
 import { confirmationHaptic, navigationHaptic } from "./haptic";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd } from "./Kbd";
@@ -104,7 +104,10 @@ export function ScheduleSheet({
 
         {/* Queue position — both wait for the running turn + respect the pause. */}
         <Stack spacing={0.75}>
-          <SegmentedPill<Delivery>
+          <SegmentedTabs<Delivery>
+            semantics="toggle"
+            fullWidth={false}
+            aria-label="Queue position"
             value={delivery}
             onChange={(v): void => {
               navigationHaptic();

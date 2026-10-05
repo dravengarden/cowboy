@@ -1,9 +1,9 @@
 import {
   AccountTreeOutlined,
+  Close,
   CommitOutlined,
   DescriptionOutlined,
   History,
-  Close,
   Refresh,
   Settings as SettingsIcon,
 } from "@mui/icons-material";
@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MobileSheetActionGroup } from "@cowboy/app-shell";
+import { SegmentedTabs } from "../../SegmentedTabs";
 import { openAppSettings } from "../../appSettings";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
@@ -367,79 +368,25 @@ export function ReviewRepository({
             </Typography>
           )}
         </Stack>
-        <Stack
-          data-mobile-repository-tabs
-          direction="row"
-          role="tablist"
+        <SegmentedTabs
+          rootProps={{ "data-mobile-repository-tabs": "" }}
           aria-label="Repository views"
-          spacing={0.5}
-        >
-          {([
-            ["changes", "Changes", <DescriptionOutlined key="changes" />],
-            ["history", "History", <History key="history" />],
-            ["worktrees", "Worktrees", <AccountTreeOutlined key="worktrees" />],
-          ] as const).map(([value, label, icon]) => {
-            const selected = section === value;
-            return (
-              <Button
-                key={value}
-                role="tab"
-                aria-selected={selected}
-                disableRipple
-                size="small"
-                startIcon={icon}
-                onPointerDown={(event): void => {
-                  if (event.pointerType === "touch") {
-                    event.currentTarget.dataset.touchActivated = "true";
-                  } else if (event.pointerType === "mouse") {
-                    delete event.currentTarget.dataset.touchActivated;
-                  }
-                }}
-                onPointerEnter={(event): void => {
-                  if (event.pointerType === "mouse") {
-                    delete event.currentTarget.dataset.touchActivated;
-                  }
-                }}
-                onKeyDown={(event): void => {
-                  delete event.currentTarget.dataset.touchActivated;
-                }}
-                onClick={(event): void => {
-                  setSection(value);
-                  if (event.currentTarget.dataset.touchActivated === "true") {
-                    event.currentTarget.blur();
-                  }
-                }}
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  borderRadius: 2,
-                  color: "text.secondary",
-                  fontWeight: 500,
-                  bgcolor: "transparent",
-                  textTransform: "none",
-                  "&[aria-selected='true']": {
-                    bgcolor: "action.selected",
-                    color: "primary.main",
-                    fontWeight: 700,
-                  },
-                  "&[data-touch-activated='true'][aria-selected='false']:hover, &[data-touch-activated='true'][aria-selected='false'].Mui-focusVisible": {
-                    bgcolor: "transparent",
-                    color: "text.secondary",
-                  },
-                  "&[data-touch-activated='true'][aria-selected='true']:hover, &[data-touch-activated='true'][aria-selected='true'].Mui-focusVisible": {
-                    bgcolor: "action.selected",
-                    color: "primary.main",
-                  },
-                  "&[data-touch-activated='true']:active": {
-                    bgcolor: "action.selected",
-                  },
-                }}
-              >
-                {label}
-              </Button>
-            );
-          })}
-        </Stack>
+          value={section}
+          onChange={setSection}
+          options={[
+            {
+              value: "changes",
+              label: "Changes",
+              icon: <DescriptionOutlined />,
+            },
+            { value: "history", label: "History", icon: <History /> },
+            {
+              value: "worktrees",
+              label: "Worktrees",
+              icon: <AccountTreeOutlined />,
+            },
+          ]}
+        />
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         {section === "changes"
