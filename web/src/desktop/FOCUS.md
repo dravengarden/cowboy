@@ -153,8 +153,9 @@ overlap. The current page's actions are listed first in which-key, under
 here appears dimmed only when it belongs to the focused surface (an empty Composer's
 Schedule), so Session-only keys (Conversation, Plan, Queue, the Prompt and
 Conversation folds) are absent from a Draft page. Inside a focused surface
-the same principle drops the leader entirely: in the Sessions list `Z` is
-the fold button (`␣SZ` elsewhere).
+the same principle drops the leader entirely: in the Sessions list Vim's
+fold keys run the tree, `za` the fold button (`␣SZ` elsewhere), `zM` close
+and `zR` open every folder.
 
 The shortcut audit (`tools/cdp-shortcut-audit.ts`) lists every visible
 control without a slot. A control is either given one, covered by its
@@ -397,6 +398,11 @@ continuation is optional.
 
 ## Navigation
 
+Every list (Sessions, the rail, Queue, Drafts) has Vim's view motions:
+`Ctrl-D`/`Ctrl-U` move the cursor and the view half a page, `Ctrl-F`/
+`Ctrl-B` a page; `zz`, `zt`, `zb` scroll so the cursor row sits at the
+centre, top or bottom without moving it.
+
 ### Window motion
 
 `Ctrl+H/J/K/L` moves focus to the nearest region left, below, above or
@@ -411,11 +417,11 @@ transition: the focused pane's header and status line already show where it
 is, so an extra flash would only add noise. Entering Prompt keeps its Vim
 mode and caret.
 
-It works wherever Cowboy owns the key: Vim Normal (the editors' sink and
-native fields), lists, the reader, bars. A field in Vim Insert keeps
-`Ctrl+H/J/K` (Vim's backspace, newline, digraph), exactly as LazyVim:
-`Esc` then `Ctrl+L`. With Vim off a field has no Normal, so the motion
-works from it directly. Inside a dialog `Ctrl+H/J/K/L` equal its `H/J/K/L`
+It works everywhere, Insert included: moving between regions never needs a
+mode change first. Vim gives up its Insert `Ctrl-H/J/K` (backspace, newline,
+digraph) and macOS text fields their Emacs `Ctrl-H/K`; Backspace, Enter and
+`Cmd/Option+Delete` remain. Only a pending Vim command (`d`, `f`, `r`, …)
+keeps its next key. Inside a dialog `Ctrl+H/J/K/L` equal its `H/J/K/L`
 ("Modals"). It yields to the leader, an IME composition, menus and Resize
 mode. In a Windows/Linux browser tab it claims Chrome's `Ctrl+H` History,
 `Ctrl+J` Downloads and `Ctrl+L` address bar (`Alt+D`/`F6` still reach

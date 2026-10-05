@@ -24,7 +24,13 @@ import {
   desktopShouldBlockStaleVimSink,
   desktopVimSinkShouldHandleKeys,
 } from "../desktopComposerOwnership";
-import { pendingItemActionKey } from "./listNavigation";
+import {
+  listPageTarget,
+  listScroller,
+  listScrollFor,
+  listViewKey,
+  pendingItemActionKey,
+} from "./listNavigation";
 import {
   adjacentDesktopSplitter,
   DESKTOP_SPLITTER_ADJUST_EVENT,
@@ -61,12 +67,14 @@ import {
 } from "./hintTargets";
 import { handleDesktopModalKey } from "./modalNavigation";
 import {
+  lockEditableForLeader,
+  unlockEditableForLeader,
+} from "./leaderInputLock";
+import {
   type RegionDirection,
   regionInDirection,
   regionMotionKey,
 } from "./regionNavigation";
-import { getVimMode } from "../../vimModeStore";
-import { getVimSetting } from "../../vimSetting";
 import {
   handleInputVimKey,
   installInputVim,
@@ -175,17 +183,49 @@ export function desktopSurfaceCommandOwnsKey(
   return false;
 }
 
-/** Where the window motion may take Ctrl+H/J/K/L: Vim Normal anywhere and
- *  command chrome. A field in Vim Insert keeps them (Vim's Ctrl-H/J/K, as
- *  in LazyVim); with Vim off a field has no Normal, so they move from it. */
+/**
+ * Run a leader continuation's effect after its key has fully landed.
+ *
+ * Under a CJK input source the key arrives as Process/229, and preventing
+ * its keydown cannot stop the input method: after the keydown returns, the
+ * IME composes the letter into whatever owns focus *then*. A command that
+ * moved focus synchronously (into an editor, or onto the transcript, which
+ * forwards typing to the Composer) therefore received the letter: `␣Q` left
+ * a "q" behind. While the key is in flight focus stays where the leader was
+ * armed (a non-editable sink, chrome, or a field the leader locked), so the
+ * composition goes nowhere; the effect runs on that key's keyup.
+ */
+function afterLeaderKey(event: KeyboardEvent, run: () => void): void {
+  if (event.keyCode !== 229 && event.key !== "Process") {
+    run();
+    return;
+  }
+  let done = false;
+  const finish = (): void => {
+    if (done) return;
+    done = true;
+    globalThis.removeEventListener("keyup", onKeyUp, true);
+    globalThis.clearTimeout(timer);
+    run();
+  };
+  const onKeyUp = (up: KeyboardEvent): void => {
+    if (up.code === event.code) finish();
+  };
+  globalThis.addEventListener("keyup", onKeyUp, true);
+  const timer = globalThis.setTimeout(finish, 250);
+}
+
+/** Where the window motion may take Ctrl+H/J/K/L: everywhere, Vim Insert
+ *  and plain text fields included, so moving between regions never needs
+ *  a mode change first. Vim gives up its Insert Ctrl-H/J/K (backspace,
+ *  newline, digraph) and macOS fields their Emacs Ctrl-H/K; Backspace,
+ *  Enter and Cmd/Option+Delete remain. Only a pending Vim command (`d`,
+ *  `f`, `r`, …) keeps its next key. */
 function regionMotionAllowed(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
-  if (!element) return true;
-  if (element.matches("[data-vim-command-sink]")) {
-    return getVimMode() === "normal" && !vimSinkAwaitsInput(element);
+  if (element?.matches("[data-vim-command-sink]")) {
+    return !vimSinkAwaitsInput(element);
   }
-  if (isInputVimNormal(element)) return true;
-  if (isTextEditingTarget(element)) return !getVimSetting();
   return true;
 }
 
@@ -308,6 +348,8 @@ export function DesktopCommandProvider(
 ): React.JSX.Element {
   const commands = useRef(new Map<string, DesktopCommand>());
   const itemChord = useRef<number | null>(null);
+  // A pending `z` in a list: zz / zt / zb, and za / zM / zR in Sessions.
+  const viewChord = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingJumpChord = useRef<PendingJumpChord | null>(null);
   // Leader state. Like which-key it waits for the next key instead of timing
   // out under the reader: Esc, a pointer press, window blur or any completed
@@ -331,6 +373,7 @@ export function DesktopCommandProvider(
   }, []);
   const workspace = useDesktopWorkspace();
   const clearWorkspaceCommand = useCallback((): void => {
+    unlockEditableForLeader();
     leaderArmed.current = false;
     leaderLayerRef.current = "root";
     setLeaderLayer("root");
@@ -339,6 +382,8 @@ export function DesktopCommandProvider(
   }, [setHints, workspace.setMode]);
   const armWorkspaceCommand = useCallback(
     (layer: DesktopLeaderLayer = "root"): void => {
+      // Continuation keys must never reach an input method (leaderInputLock).
+      lockEditableForLeader();
       leaderArmed.current = true;
       leaderLayerRef.current = layer;
       setLeaderLayer(layer);
@@ -568,7 +613,7 @@ export function DesktopCommandProvider(
               hint.label === key.toLowerCase()
             );
             clearWorkspaceCommand();
-            if (target) activateHint(target.element);
+            if (target) afterLeaderKey(event, () => activateHint(target.element));
             return;
           }
         }
@@ -653,27 +698,29 @@ export function DesktopCommandProvider(
             );
             if (command && command.when?.() !== false) {
               if (workspace.productMode !== "agent") workspace.setProductMode("agent");
-              command.run();
+              afterLeaderKey(event, () => command.run());
             }
             return;
           }
           if (layer === "sessions") {
-            const list = document.querySelector<HTMLElement>(
-              "[data-desktop-region='sessions.list'] ul",
-            );
-            const jumped = list !== null && !list.dispatchEvent(
-              new CustomEvent(DESKTOP_SESSION_JUMP_EVENT, {
-                cancelable: true,
-                detail: { label: key.toLowerCase() },
-              }),
-            );
-            if (jumped) {
-              if (workspace.productMode !== "agent") workspace.setProductMode("agent");
-              const target = workspace.collapsedPanes.prompt
-                ? "conversation.transcript"
-                : "prompt.composer";
-              requestAnimationFrame(() => workspace.focusRegion(target));
-            }
+            afterLeaderKey(event, () => {
+              const list = document.querySelector<HTMLElement>(
+                "[data-desktop-region='sessions.list'] ul",
+              );
+              const jumped = list !== null && !list.dispatchEvent(
+                new CustomEvent(DESKTOP_SESSION_JUMP_EVENT, {
+                  cancelable: true,
+                  detail: { label: key.toLowerCase() },
+                }),
+              );
+              if (jumped) {
+                if (workspace.productMode !== "agent") workspace.setProductMode("agent");
+                const target = workspace.collapsedPanes.prompt
+                  ? "conversation.transcript"
+                  : "prompt.composer";
+                requestAnimationFrame(() => workspace.focusRegion(target));
+              }
+            });
             return;
           }
           // A leader key has one meaning; scoped editors may each register
@@ -714,7 +761,7 @@ export function DesktopCommandProvider(
               workspace.selectedSplitter !== null &&
               command.id !== "workspace.enterResize"
             ) workspace.setSelectedSplitter(null);
-            command.run();
+            afterLeaderKey(event, () => command.run());
           }
           return;
         }
@@ -1035,9 +1082,11 @@ export function DesktopCommandProvider(
       // text editors and native controls; those surfaces keep their own j/k,
       // arrows and IME semantics. Regions expose items through a tiny DOM
       // contract so Sessions, Queue and Drafts share one implementation.
+      const viewMotion = listViewKey(event);
       if (
         workspace.mode === "normal" && !textEditorOwnsKey &&
-        !event.ctrlKey && !event.metaKey && !event.altKey
+        (!event.ctrlKey || viewMotion !== null) && !event.metaKey &&
+        !event.altKey
       ) {
         const key = workspaceCommandKey(event);
         const horizontal = region?.dataset.desktopAxis === "horizontal";
@@ -1061,6 +1110,72 @@ export function DesktopCommandProvider(
           const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
             region?.dataset.desktopRegion === "prompt.draft";
           const reordering = pendingList && region?.dataset.desktopReordering === "true";
+          // Vim's view motions in every list (FOCUS.md "Navigation"):
+          // Ctrl-D/U half a page and Ctrl-F/B a page move the cursor and the
+          // view together; zz / zt / zb put the cursor row at the centre /
+          // top / bottom without moving it.
+          if (viewMotion && !reordering && !pinned) {
+            event.preventDefault();
+            event.stopPropagation();
+            const scroller = listScroller(items[0]!);
+            const visible = scroller
+              ? items.filter((item) => {
+                const rect = item.getBoundingClientRect();
+                const view = scroller.getBoundingClientRect();
+                return rect.bottom > view.top && rect.top < view.bottom;
+              }).length
+              : items.length;
+            const next = listPageTarget(active, items.length, visible, viewMotion);
+            if (scroller) {
+              const share = viewMotion.startsWith("half") ? 0.5 : 1;
+              const direction = viewMotion.endsWith("down") ? 1 : -1;
+              scroller.scrollTop += direction * share * scroller.clientHeight;
+            }
+            items[next]?.focus({ preventScroll: true });
+            items[next]?.scrollIntoView({ block: "nearest" });
+            return;
+          }
+          if (viewChord.current !== null && !event.repeat) {
+            globalThis.clearTimeout(viewChord.current);
+            viewChord.current = null;
+            event.preventDefault();
+            event.stopPropagation();
+            const where = ({ z: "center", t: "top", b: "bottom" } as const)[
+              key as "z" | "t" | "b"
+            ];
+            const row = items[Math.max(0, active)];
+            const scroller = row ? listScroller(row) : null;
+            if (where && row && scroller) {
+              const rect = row.getBoundingClientRect();
+              const view = scroller.getBoundingClientRect();
+              scroller.scrollTop = listScrollFor(
+                where,
+                { top: rect.top - view.top, height: rect.height },
+                { scrollTop: scroller.scrollTop, height: scroller.clientHeight },
+              );
+            } else if (sessionsList && (key === "a" || key === "M" || key === "R")) {
+              // Vim's folds on the Sessions tree: za the fold button, zM
+              // close every folder, zR open every folder.
+              region.querySelector<HTMLElement>("ul")?.dispatchEvent(
+                new CustomEvent("cowboy:desktop-folders", {
+                  cancelable: true,
+                  detail: {
+                    action: key === "a" ? "fold" : key === "M" ? "collapseAll" : "expandAll",
+                    row: null,
+                  },
+                }),
+              );
+            }
+            return;
+          }
+          if (key === "z" && !reordering && !pinned && !event.repeat) {
+            event.preventDefault();
+            event.stopPropagation();
+            viewChord.current = globalThis.setTimeout(() => {
+              viewChord.current = null;
+            }, 1200);
+            return;
+          }
           // `'` (Vim's mark jump) labels the visible rows of the focused
           // list; the next key moves the cursor there. No row carries a fixed
           // number, and bare `f` stays free (FOCUS.md forbids a hint layer
@@ -1080,19 +1195,6 @@ export function DesktopCommandProvider(
               new CustomEvent("cowboy:desktop-toggle-pin"),
             );
             items[active]?.focus({ preventScroll: true });
-            return;
-          }
-          // Inside the list the fold button needs no leader: bare `z` (Vim's
-          // fold prefix) is the same action as `␣SZ`.
-          if (sessionsList && !pinned && key === "z" && !event.repeat) {
-            event.preventDefault();
-            event.stopPropagation();
-            region.querySelector<HTMLElement>("ul")?.dispatchEvent(
-              new CustomEvent("cowboy:desktop-folders", {
-                cancelable: true,
-                detail: { action: "fold", row: null },
-              }),
-            );
             return;
           }
           if (sessionsList && pinned && key === "Escape") {

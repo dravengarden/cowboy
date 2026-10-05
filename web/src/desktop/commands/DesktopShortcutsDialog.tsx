@@ -96,6 +96,9 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Shift+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["O"], title: "Toggle continuous Order mode for list reordering" },
   { keys: ["G", "G"], title: "First item" },
+  { keys: ["Ctrl+D/U", "Ctrl+F/B"], title: "Half page / page down and up in a list, cursor and view together" },
+  { keys: ["Z Z", "Z T", "Z B"], title: "Scroll the cursor row to the centre / top / bottom" },
+  { keys: ["Z A", "Shift+Z M", "Shift+Z R"], title: "Sessions: fold button, close every folder, open every folder" },
   { keys: ["Shift+G"], title: "Last item" },
   {
     keys: ["'"],
