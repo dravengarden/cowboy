@@ -68,6 +68,7 @@ import {
 } from "../../store";
 import type { SessionMeta } from "../../protocol";
 import { COARSE_POINTER_ROOT_CLASS } from "../../platform";
+import { SegmentedTabs } from "../../SegmentedTabs";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import { newUuid } from "../../uuid";
 import {
@@ -3721,72 +3722,17 @@ export function ReviewApp({
               </Alert>
             )}
             {!selectedContextProject && (
-              <Stack
-                data-mobile-context-tabs
-                direction="row"
-                role="tablist"
+              <SegmentedTabs
+                rootProps={{ "data-mobile-context-tabs": "" }}
                 aria-label="Context views"
-                spacing={0.5}
-                sx={{ px: 0.75 }}
-              >
-                {(["sessions", "projects"] as const).map((value) => (
-                  <Button
-                    key={value}
-                    role="tab"
-                    aria-selected={contextTab === value}
-                    disableRipple
-                    onPointerDown={(event): void => {
-                      if (event.pointerType === "touch") {
-                        event.currentTarget.dataset.touchActivated = "true";
-                      } else if (event.pointerType === "mouse") {
-                        delete event.currentTarget.dataset.touchActivated;
-                      }
-                    }}
-                    onPointerEnter={(event): void => {
-                      if (event.pointerType === "mouse") {
-                        delete event.currentTarget.dataset.touchActivated;
-                      }
-                    }}
-                    onKeyDown={(event): void => {
-                      delete event.currentTarget.dataset.touchActivated;
-                    }}
-                    onClick={(event): void => {
-                      setContextTab(value);
-                      if (
-                        event.currentTarget.dataset.touchActivated === "true"
-                      ) {
-                        event.currentTarget.blur();
-                      }
-                    }}
-                    sx={{
-                      flex: 1,
-                      minHeight: 40,
-                      borderRadius: 2,
-                      bgcolor: "transparent",
-                      color: "text.secondary",
-                      textTransform: "none",
-                      "&[aria-selected='true']": {
-                        bgcolor: "action.selected",
-                        color: "text.primary",
-                      },
-                      "&[data-touch-activated='true'][aria-selected='false']:hover, &[data-touch-activated='true'][aria-selected='false'].Mui-focusVisible":
-                        {
-                          bgcolor: "transparent",
-                        },
-                      "&[data-touch-activated='true'][aria-selected='true']:hover, &[data-touch-activated='true'][aria-selected='true'].Mui-focusVisible":
-                        {
-                          bgcolor: "action.selected",
-                          color: "text.primary",
-                        },
-                      "&[data-touch-activated='true']:active": {
-                        bgcolor: "action.selected",
-                      },
-                    }}
-                  >
-                    {value === "sessions" ? "Sessions" : "Projects"}
-                  </Button>
-                ))}
-              </Stack>
+                value={contextTab}
+                onChange={setContextTab}
+                sx={{ px: 0.75, boxSizing: "border-box" }}
+                options={[
+                  { value: "sessions", label: "Sessions" },
+                  { value: "projects", label: "Projects" },
+                ]}
+              />
             )}
             {!selectedContextProject && contextTab === "sessions" && (
               <Stack spacing={1.5}>

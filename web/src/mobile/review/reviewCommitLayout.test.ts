@@ -15,7 +15,9 @@ const codeViewerSource = await Deno.readTextFile(
 
 Deno.test("repository history pages older commits instead of a 128-commit wall", () => {
   if (repositorySource.includes("Showing the newest 128 commits")) {
-    throw new Error("History should lazy-load instead of advertising a hard cap");
+    throw new Error(
+      "History should lazy-load instead of advertising a hard cap",
+    );
   }
   if (!repositorySource.includes("HistoryCommitSkeleton")) {
     throw new Error("History needs a transcript-like loading skeleton");
@@ -29,7 +31,7 @@ Deno.test("a commit patch has no inner back chrome and lists files in the strip"
   if (!appSource.includes("commitFileTabs(commitPaths)")) {
     throw new Error("Commit view must put involved files in the tab strip");
   }
-  if (!appSource.includes("allowPin={mode === \"files\"}")) {
+  if (!appSource.includes('allowPin={mode === "files"}')) {
     throw new Error("Commit file tabs must not offer close or pin");
   }
 });
@@ -41,20 +43,16 @@ Deno.test("repository history opens commit content on the main review surface", 
   assertStringIncludes(appSource, 'mode === "git" && commitTarget');
 });
 
-Deno.test("repository tabs retain authoritative selected paint after an iOS touch", () => {
-  const start = repositorySource.indexOf("data-mobile-repository-tabs");
-  const end = repositorySource.indexOf("</Stack>", start);
-  const tabs = repositorySource.slice(start, end);
-  assertStringIncludes(tabs, "disableRipple");
-  assertStringIncludes(tabs, 'event.currentTarget.dataset.touchActivated = "true"');
-  assertStringIncludes(tabs, "event.currentTarget.blur()");
-  assertStringIncludes(tabs, "&[aria-selected='true']");
-  assertStringIncludes(
-    tabs,
-    "[data-touch-activated='true'][aria-selected='true']:hover",
+Deno.test("repository tabs use the shared segmented tabs", () => {
+  // SegmentedTabs.test.ts pins the iOS selected-pill invariants.
+  const start = repositorySource.indexOf("<SegmentedTabs");
+  const tabs = repositorySource.slice(
+    start,
+    repositorySource.indexOf("/>", start),
   );
-  assertStringIncludes(tabs, 'bgcolor: "action.selected"');
-  assertEquals(tabs.includes('"@media (hover: none), (pointer: coarse)"'), false);
+  assertStringIncludes(tabs, "data-mobile-repository-tabs");
+  assertStringIncludes(tabs, 'aria-label="Repository views"');
+  assertEquals(repositorySource.includes('role="tab"'), false);
 });
 
 Deno.test("repository header uses a machine chip and stable project path", () => {

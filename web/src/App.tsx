@@ -1,5 +1,6 @@
 import { defaultDraftTitle } from "./documents/defaultDraftTitle";
 import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
+import { SegmentedTabs } from "./SegmentedTabs";
 import { draftRepository } from "./documents/store";
 import { openDrafts } from "./documents/navigation";
 import { DraftsButton } from "./documents/DraftsButton";
@@ -52,8 +53,6 @@ import {
     Snackbar,
     Stack,
     Switch,
-    Tab,
-    Tabs,
     TextField,
     Toolbar,
     Tooltip,
@@ -5657,48 +5656,18 @@ function DesktopSettingsSectionTabs({
     onChange: (value: SettingsProductFocus) => void;
 }): React.JSX.Element {
     return (
-        <Tabs
+        <SegmentedTabs
             value={value}
-            onChange={(_event, next): void => onChange(next as SettingsProductFocus)}
-            selectionFollowsFocus
+            onChange={onChange}
+            fullWidth={false}
             aria-label="Settings workspace"
-            data-desktop-settings-section-tabs
-            sx={{
-                width: "fit-content",
-                minHeight: 40,
-                "& .MuiTabs-flexContainer": { gap: 0.5 },
-                "& .MuiTabs-indicator": {
-                    height: 2,
-                    borderRadius: 2,
-                },
-                "& .MuiTab-root": {
-                    minWidth: 112,
-                    minHeight: 40,
-                    px: 1.5,
-                    py: 0.75,
-                    borderRadius: 1.5,
-                    textTransform: "none",
-                    justifyContent: "flex-start",
-                    transition: "background-color 120ms ease, color 120ms ease",
-                },
-                "& .MuiTab-root.Mui-selected": {
-                    bgcolor: "action.selected",
-                },
-            }}
-        >
-            <Tab
-                value="agent"
-                icon={<ChatBubbleOutline fontSize="small" />}
-                iconPosition="start"
-                label="Agent"
-            />
-            <Tab
-                value="code"
-                icon={<CodeIcon fontSize="small" />}
-                iconPosition="start"
-                label="Code & diff"
-            />
-        </Tabs>
+            rootProps={{ "data-desktop-settings-section-tabs": "" }}
+            sx={{ gridAutoColumns: "minmax(112px, 1fr)" }}
+            options={[
+                { value: "agent", label: "Agent", icon: <ChatBubbleOutline /> },
+                { value: "code", label: "Code & diff", icon: <CodeIcon /> },
+            ]}
+        />
     );
 }
 
@@ -6902,43 +6871,28 @@ function SettingsShell({
                 </Box>
             </Box>
             {desktop && (
-                <Tabs
+                <SegmentedTabs
                     value={tab}
-                    onChange={(_event, next): void => changeTab(next as ControlCenterTab)}
-                    selectionFollowsFocus
-                    variant="fullWidth"
+                    onChange={changeTab}
                     aria-label="Control center sections"
-                    sx={{
-                        minHeight: 42,
-                        borderBottom: 1,
-                        borderColor: "divider",
-                        "& .MuiTab-root": {
-                            minHeight: 42,
-                            minWidth: 0,
-                            py: 0.5,
-                            textTransform: "none",
-                        },
-                    }}
-                >
-                    {CONTROL_CENTER_TABS.map(({ value, label, shortcut }) => (
-                        <Tab
-                            key={value}
-                            value={value}
-                            id={`control-center-tab-${value}`}
-                            aria-controls={`control-center-panel-${value}`}
-                            aria-keyshortcuts={shortcut}
-                            label={
-                                <Stack component="span" direction="row" spacing={0.75} alignItems="center">
-                                    <Box component="span">{label}</Box>
-                                    <Kbd
-                                        keys={shortcut}
-                                        availability={settingsShortcutsAvailable ? "available" : "inactive"}
-                                    />
-                                </Stack>
-                            }
-                        />
-                    ))}
-                </Tabs>
+                    sx={{ px: 1, py: 0.75, borderBottom: 1, borderColor: "divider", boxSizing: "border-box" }}
+                    options={CONTROL_CENTER_TABS.map(({ value, label, shortcut }) => ({
+                        value,
+                        id: `control-center-tab-${value}`,
+                        controls: `control-center-panel-${value}`,
+                        keyShortcuts: shortcut,
+                        ariaLabel: label,
+                        label: (
+                            <Stack component="span" direction="row" spacing={0.75} alignItems="center" justifyContent="center">
+                                <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</Box>
+                                <Kbd
+                                    keys={shortcut}
+                                    availability={settingsShortcutsAvailable ? "available" : "inactive"}
+                                />
+                            </Stack>
+                        ),
+                    }))}
+                />
             )}
             </Box>
             )}

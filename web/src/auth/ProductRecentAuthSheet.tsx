@@ -4,14 +4,13 @@ import {
   Button,
   CircularProgress,
   Stack,
-  Tab,
-  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalSignInButton } from "./ExternalSignInButton";
 import { ConfirmSheet } from "../Sheet";
+import { SegmentedTabs } from "../SegmentedTabs";
 import { NativeAuthenticationBrowserOpenError } from "../openExternal";
 import { passwordLoginFields } from "./coreSecurity";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
@@ -34,9 +33,9 @@ import {
 import {
   passkeyCancellationMessage,
   passkeyErrorMessage,
-  passkeyPromptWasUntouched,
   passkeyFlowCancelled,
   passkeyFlowSupported,
+  passkeyPromptWasUntouched,
   verifyPasskey,
 } from "./passkeyFlow";
 import { announceProductAuthCookieChanged } from "../productAuthEvents";
@@ -264,7 +263,9 @@ export function ProductRecentAuthSheet({
   };
 
   const verifyProvider = (): void => {
-    if (busy || providerAbort.current || !selectedProvider || !useProviderHandoff) {
+    if (
+      busy || providerAbort.current || !selectedProvider || !useProviderHandoff
+    ) {
       return;
     }
     const abort = new AbortController();
@@ -385,35 +386,24 @@ export function ProductRecentAuthSheet({
               </Button>
             </>
           )}
-          {/* Tapping a verification button and seeing its outcome appear above
+          {
+            /* Tapping a verification button and seeing its outcome appear above
             the fold reads as nothing happening at all. Alerts sit directly
-            above the action that produces them. */}
+            above the action that produces them. */
+          }
           {error && <Alert severity="error">{error}</Alert>}
           {notice && <Alert severity="info">{notice}</Alert>}
           {!verifiedMe && methods.length > 1 && (
-            <Tabs
+            <SegmentedTabs
               value={method}
-              onChange={(_event, value: string) => setMethod(value)}
-              variant="scrollable"
-              scrollButtons="auto"
+              onChange={setMethod}
               aria-label="Verification method"
-              sx={{
-                borderBottom: 1,
-                borderColor: "divider",
-                minHeight: 40,
-                mb: -1,
-                "& .MuiTab-root": { minHeight: 40, py: 0 },
-              }}
-            >
-              {methods.map((candidate) => (
-                <Tab
-                  key={candidate.id}
-                  value={candidate.id}
-                  label={candidate.label}
-                  disabled={busy}
-                />
-              ))}
-            </Tabs>
+              disabled={busy}
+              options={methods.map((candidate) => ({
+                value: candidate.id,
+                label: candidate.label,
+              }))}
+            />
           )}
           {!verifiedMe && method === PASSKEY_METHOD && (
             <Button
@@ -484,8 +474,10 @@ export function ProductRecentAuthSheet({
                   After the secure redirect returns, repeat the Passkey change.
                 </Typography>
               )}
-              {/* A blocked popup or rejected native launch must leave the
-                ordinary same-window sign-in available to a locked session. */}
+              {
+                /* A blocked popup or rejected native launch must leave the
+                ordinary same-window sign-in available to a locked session. */
+              }
               {useProviderHandoff && windowBlocked && (
                 <>
                   <ExternalSignInButton
