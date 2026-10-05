@@ -80,6 +80,32 @@ try {
   );
   await press("Escape", "Escape", 27);
   console.log(JSON.stringify({ recent_rows: rows }));
+  // The Command Palette follows the modal grammar: Esc leaves the search
+  // for Normal, J reaches the results, a second Esc closes.
+  const waitFor = async (expression: string, message: string) => {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (await page.evaluate<boolean>(`Boolean(${expression})`)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(message);
+  };
+  await press("k", "KeyK", 75, mac ? 4 : 1);
+  await press("k", "KeyK", 75);
+  const palette = "document.querySelector('input[aria-label=\"Search commands\"]')";
+  await waitFor(`${palette} && document.activeElement === ${palette}`, "palette opens in its search");
+  await press("Escape", "Escape", 27);
+  await waitFor(
+    `${palette} && document.activeElement?.hasAttribute('data-desktop-field-cursor')`,
+    "Esc in the palette search leaves for Normal",
+  );
+  await press("j", "KeyJ", 74);
+  await waitFor(
+    "document.activeElement?.closest('.MuiList-root') && document.activeElement.closest('[role=dialog]')",
+    "J reaches the palette results",
+  );
+  await press("Escape", "Escape", 27);
+  await waitFor(`!${palette}`, "Esc in Normal closes the palette");
+  console.log(JSON.stringify({ palette_grammar: "ok" }));
 } finally {
   await page.close();
 }

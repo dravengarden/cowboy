@@ -65,9 +65,10 @@ export function desktopModalShortcutGroups(
 export function DesktopModalKeyHint(
   { mode, tabs = 0 }: { mode: DesktopModalMode; tabs?: number },
 ): React.JSX.Element {
+  // One line, so switching mode never shifts the form: Enter is implied.
   const slots = desktopModalShortcutGroups(mode, tabs).flatMap((group) =>
     group.slots
-  );
+  ).filter((slot) => slot.shortcut !== "Enter");
   return (
     <>
       {slots.map((slot, index) => (

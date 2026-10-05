@@ -374,14 +374,49 @@ try {
       ),
       "The dialog label selects Draft",
     );
+    // The modal grammar with trusted keys: Esc leaves the title for Normal,
+    // digits pick the type, j/k walk rows, Esc closes.
     await key("Escape");
+    await until(
+      "document.activeElement?.hasAttribute('data-desktop-field-cursor')",
+      "Esc puts the Normal cursor on the title",
+    );
+    check(
+      await page.evaluate<boolean>(
+        "document.querySelectorAll(\"[role=tab] [data-shortcut-state='available']\").length === 3",
+      ),
+      "Normal lights the 1-3 type digits",
+    );
+    await sleep(200);
+    await shot("3b-create-normal");
+    await key("3");
+    check(
+      await page.evaluate<boolean>(
+        "document.querySelector('[role=tab][aria-label=Folder]')?.getAttribute('aria-selected') === 'true' && document.activeElement?.hasAttribute('data-desktop-field-cursor')",
+      ),
+      "3 picks Folder and keeps the cursor on the title",
+    );
+    await key("k");
+    check(
+      await page.evaluate<boolean>(
+        "document.activeElement?.getAttribute('aria-label') === 'Folder'",
+      ),
+      "k reaches the selected tab",
+    );
+    await key("h");
+    check(
+      await page.evaluate<boolean>(
+        "document.querySelector('[role=tab][aria-label=Draft]')?.getAttribute('aria-selected') === 'true'",
+      ),
+      "h on the tabs selects Draft",
+    );
     await key("Escape");
     await until(
       "!document.querySelector('[role=tab][aria-label=Draft]')",
-      "Create closes with Esc Esc",
+      "Esc in Normal closes Create",
     );
     results.push(
-      `Dialog leader labels Create's controls; trusted "${draft}" selects Draft; Esc Esc closes`,
+      `Dialog leader labels Create's controls; trusted "${draft}" selects Draft; Esc to Normal, 3/k/h move, Esc closes`,
     );
 
     console.log(
