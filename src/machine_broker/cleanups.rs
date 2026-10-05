@@ -8,20 +8,19 @@
 //! so older Machines and reader-only builds need no compatibility floor for it.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::deletions::Owner;
+use super::namespace::{Namespace, valid_id};
 use crate::session_workspace::RootIdentity;
 
 const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const FILE: &str = "cleanups.json";
+const NOUN: &str = "cleanup continuation";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,107 +38,47 @@ struct Record {
 }
 
 pub(super) struct Store {
-    root: PathBuf,
-    root_handle: File,
-    lock: File,
+    namespace: Namespace,
     owner: Owner,
     pending: BTreeMap<String, RootIdentity>,
     poisoned: bool,
-}
-
-fn valid_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 512 && !value.contains('\0')
 }
 
 impl Store {
     /// Only a deletion-writer-admitted Machine opens this namespace; callers
     /// must treat any error as "no durable continuation", never as fatal.
     pub(super) fn open(path: &Path, owner: Owner) -> Result<Self> {
-        ensure!(
-            valid_id(&owner.machine_id),
-            "invalid cleanup Machine identity"
-        );
-        ensure!(
-            owner.service_id.as_deref().is_none_or(valid_id),
-            "invalid cleanup Service identity"
-        );
-        match std::fs::create_dir(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
-        let root = std::path::absolute(path)?;
-        let root_handle = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(&root)
-            .context("opening cleanup continuation directory without following links")?;
-        File::open(root.parent().context("cleanup namespace has no parent")?)?.sync_all()?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join(".lock"))?;
-        ensure!(
-            lock.metadata()?.is_file(),
-            "cleanup continuation lock is not a regular file"
-        );
-        fs2::FileExt::try_lock_exclusive(&lock).context("cleanup continuations already owned")?;
+        let namespace = Namespace::open(path, &owner, NOUN)?;
         let mut pending = BTreeMap::new();
-        match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join(FILE))
-        {
-            Ok(file) => {
+        if let Some(bytes) = namespace.read(FILE, MAX_BYTES)? {
+            let record: Record =
+                serde_json::from_slice(&bytes).context("invalid cleanup continuation")?;
+            ensure!(
+                record.schema == 1,
+                "unsupported cleanup continuation schema"
+            );
+            ensure!(
+                record.owner == owner,
+                "cleanup continuation belongs to another Machine or Service"
+            );
+            ensure!(
+                record.pending.len() <= MAX_RECORDS,
+                "cleanup continuation exceeds record limit"
+            );
+            for entry in record.pending {
                 ensure!(
-                    file.metadata()?.is_file(),
-                    "cleanup continuation record is not a regular file"
+                    valid_id(&entry.session_id)
+                        && pending.insert(entry.session_id, entry.root).is_none(),
+                    "invalid or duplicate cleanup continuation identity"
                 );
-                let mut bytes = Vec::new();
-                file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes)?;
-                ensure!(
-                    bytes.len() <= MAX_BYTES,
-                    "cleanup continuation record exceeds byte limit"
-                );
-                let record: Record =
-                    serde_json::from_slice(&bytes).context("invalid cleanup continuation")?;
-                ensure!(
-                    record.schema == 1,
-                    "unsupported cleanup continuation schema"
-                );
-                ensure!(
-                    record.owner == owner,
-                    "cleanup continuation belongs to another Machine or Service"
-                );
-                ensure!(
-                    record.pending.len() <= MAX_RECORDS,
-                    "cleanup continuation exceeds record limit"
-                );
-                for entry in record.pending {
-                    ensure!(
-                        valid_id(&entry.session_id)
-                            && pending.insert(entry.session_id, entry.root).is_none(),
-                        "invalid or duplicate cleanup continuation identity"
-                    );
-                }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
-        let store = Self {
-            root,
-            root_handle,
-            lock,
+        Ok(Self {
+            namespace,
             owner,
             pending,
             poisoned: false,
-        };
-        store.check()?;
-        Ok(store)
+        })
     }
 
     pub(super) fn contains(&self, session_id: &str) -> bool {
@@ -158,19 +97,7 @@ impl Store {
             !self.poisoned,
             "cleanup continuation writer is fenced after a storage failure"
         );
-        let root = std::fs::symlink_metadata(&self.root)?;
-        let held = self.root_handle.metadata()?;
-        ensure!(
-            root.is_dir() && root.dev() == held.dev() && root.ino() == held.ino(),
-            "cleanup continuation directory was replaced"
-        );
-        let lock = std::fs::symlink_metadata(self.root.join(".lock"))?;
-        let held = self.lock.metadata()?;
-        ensure!(
-            lock.is_file() && lock.dev() == held.dev() && lock.ino() == held.ino(),
-            "cleanup continuation lock was replaced"
-        );
-        Ok(())
+        self.namespace.check()
     }
 
     /// Nominate `session_id`'s root. An existing nomination is kept: the first
@@ -216,25 +143,7 @@ impl Store {
             bytes.len() <= MAX_BYTES,
             "cleanup continuation byte budget exhausted"
         );
-        let pending = self
-            .root
-            .join(format!(".pending-{:032x}", rand::random::<u128>()));
-        let result: Result<()> = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&pending)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            self.check()?;
-            std::fs::rename(&pending, self.root.join(FILE))?;
-            self.root_handle.sync_all()?;
-            self.check()?;
-            Ok(())
-        })();
-        if let Err(error) = result {
+        if let Err(error) = self.namespace.commit(FILE, &bytes, &mut |_| {}) {
             self.poisoned = true;
             return Err(error.context("cleanup continuation update was not confirmed"));
         }
@@ -366,7 +275,7 @@ mod tests {
         std::fs::write(target.join("retained"), b"unrelated").unwrap();
         let link = parent.path().join("cleanups");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        refused(&link, owner(), "without following links");
+        refused(&link, owner(), "without following namespace links");
         assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
 
         let root = tempfile::tempdir().unwrap();
