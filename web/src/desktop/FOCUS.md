@@ -105,7 +105,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣E` | Source / live preview (Prompt) |
 | `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
 | `␣H` `␣J` `␣M` | Schedule, run next, more formatting (Composer) |
-| `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list |
+| `␣B` `␣I` `␣X` `␣U` `␣O` | Bold, italic, code, link, list (`Mod+B`/`Mod+I` also format, as in Obsidian; off macOS only in Vim Insert or without Vim, so Ctrl-B/Ctrl-I keep their Vim meaning) |
 | `␣V` `␣G` | Copy Draft to a Session, Draft history |
 
 Undo/redo stay with the editor (`u`/`Ctrl-R`, `Mod+Z`/`Mod+Shift+Z`).
@@ -208,10 +208,11 @@ Create follows the browser-Vim layering of Vimium and qutebrowser. It opens in
 the title field (Insert). `Esc` or `Ctrl-[` leaves a text field for the
 selected type tab (Normal) instead of closing; a composing IME keeps `Esc`.
 On the tablist, `H/L` (or arrows) moves between Session, Draft and Folder
-without leaving it, `1…3` picks one directly, `I`, `J`, `↓` or `Enter`
-returns to the title, and `Esc` closes. `Mod+Enter` creates from either layer.
-The tab digit keycaps and the hint row under the tablist are live slots:
-available only while the tablist owns focus. Pointer activation still selects
+without leaving it, `I`, `J`, `↓` or `Enter` returns to the title, and
+`Esc` closes. `Mod+Enter` creates from either layer. A direct pick of any
+control (Session, Draft, Folder, Project, …) is the dialog leader
+(`Cmd/Alt+K` or `Space`, then its letter); the tabs carry no digits. The hint
+row under the tablist names only the current layer's keys. Pointer activation still selects
 and focuses the title in one step. The Cancel `Esc` keycap is inactive while a
 text field owns `Esc`.
 
@@ -428,9 +429,8 @@ it.
   their splitters. `␣␣` never unfolds Sessions; it lands in Prompt (or
   Conversation when Prompt is collapsed).
 - **Rail keys.** In `sessions.rail`: `J/K`, `gg`/`G` move between folders;
-  `L` or `Enter` opens the focused folder's menu; `1…9` open a folder
-  directly (contextual digit keycaps appear on the folders only while the
-  rail owns focus). The menu opens on the open Session (or its first) and
+  `L` or `Enter` opens the focused folder's menu; `'` labels the folders
+  for a direct jump. The menu opens on the open Session (or its first) and
   owns the keyboard: `J/K` or arrows move, `L`/`Enter` opens the Session and
   focuses Prompt (Conversation when Prompt is collapsed), `H`/`Esc` returns
   to the same folder in the rail, and its footer lists those keys. MUI's

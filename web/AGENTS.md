@@ -55,6 +55,11 @@ routinely breaks another.
   component styles. The isolated `tools/idb-browser-conformance.ts` runner
   accepts a third argument, `light` or `dark`; exercise both for visual and
   interaction changes. Firefox checks do not establish physical iOS acceptance.
+  The same runner accepts a pinned `/bin/chromium`. For real Chrome on macOS
+  (or hawk), `just cdp-browser-conformance <endpoint> <suite>` runs a suite in
+  a disposable context over the loopback DevTools bridge, and
+  `just desktop-keyboard-acceptance <endpoint> <dir>` drives Desktop keys as
+  trusted input with screenshots. CDP IME composition is not OS IME acceptance.
 
 ## Mobile drawers, Code Review, and long transcripts
 

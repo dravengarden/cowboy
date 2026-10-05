@@ -2593,7 +2593,9 @@ Desktop Vim + IME checks:
       payload no longer deletes the CM6 selection, the textarea never cancels a
       paste that has plain text, and the native shell never issues a second
       web-clipboard read. Pastes carry `input.paste` so undo never joins them
-      with typing. HTML→Markdown conversion (Obsidian's turndown) is not ported.
+      with typing. Desktop CM6 converts semantic clipboard HTML to Markdown
+      (Obsidian's "Auto convert HTML", `composer/htmlToMarkdown.ts`); touch
+      and the native textarea keep the plain-text path unchanged.
     - **Pickers.** Like Obsidian's EditorSuggest, a visible list owns
       Enter/Tab/arrows even while an async `@file` refresh marks it pending;
       Enter pressed while it refreshes accepts the highlighted option once the
@@ -2859,3 +2861,18 @@ Shared fixed-size glyphs use a SurfaceProvider unit: 1rem on Desktop, 16px on
 touch, so global reading size affects Desktop without changing touch pixels.
 Physical iPhone/WeType pitfall #69 remains open; browser checks are not native
 input acceptance.
+
+### 2026-10-05 Editor plugins, Desktop chords and rich paste
+
+Installable editor plugins (docs/editor-plugins.md) edit only through the
+existing version-bound `EditorPort`: a replacement is refused while
+`imeOwnsEditable` holds, after the document or selection changed, or after the
+editor unmounted, and lands as one ordinary CM6 transaction. No extension,
+DOM handler, keyboard adapter or composition code is added to the editor for
+plugins; the sandbox has no editor DOM access. Desktop gains Mod+B/Mod+I (off
+macOS only in Vim Insert or without Vim) as workspace commands, and the CM6
+paste handler converts semantic clipboard HTML to Markdown when `!touchInput`
+and not composing. Touch, the native textarea and every iOS path are unchanged.
+No physical iPhone or real input method was available to this change, so it
+adds no evidence for #69, which remains open; the Desktop chords and paste were
+exercised with synthetic events only.

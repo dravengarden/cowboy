@@ -1,0 +1,48 @@
+{
+  "id": "text-tools",
+  "name": "Text tools",
+  "version": "1.0.0",
+  "description": "Sort lines, insert timestamps and count words in any Draft or Session editor.",
+  "author": "Cowboy examples",
+  "api": { "major": 1, "minor": 0 },
+  "permissions": ["editor:read", "editor:write"],
+  "contexts": ["document", "session"],
+  "surfaces": ["desktop", "touch"],
+  "settings": [
+    {
+      "id": "order",
+      "type": "select",
+      "title": "Sort order",
+      "default": "asc",
+      "options": [
+        { "value": "asc", "label": "A → Z" },
+        { "value": "desc", "label": "Z → A" }
+      ]
+    },
+    {
+      "id": "caseSensitive",
+      "type": "boolean",
+      "title": "Case-sensitive sort",
+      "default": false
+    },
+    {
+      "id": "timestamp",
+      "type": "select",
+      "title": "Timestamp format",
+      "default": "datetime",
+      "options": [
+        { "value": "datetime", "label": "2026-10-05 14:30" },
+        { "value": "date", "label": "2026-10-05" },
+        { "value": "iso", "label": "ISO 8601" }
+      ]
+    },
+    {
+      "id": "wordsPerMinute",
+      "type": "number",
+      "title": "Reading speed (words per minute)",
+      "default": 230,
+      "min": 50,
+      "max": 1000
+    }
+  ]
+}

@@ -41,6 +41,17 @@ build-web:
 
 # Optional real IndexedDB gate. Build .#cowboy-idb-test-browser and pass its
 # absolute /bin/firefox; never use an authenticated/system browser profile.
+# Run a browser fixture in an already running Chrome over a loopback DevTools
+# endpoint (hawk chrome-debug :9222, or the macbook-air bridge :9223) inside a
+# disposable browser context; see tools/cdp-fixture.ts.
+cdp-browser-conformance ENDPOINT SUITE THEME="light":
+    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-browser-conformance.ts "{{ENDPOINT}}" "{{SUITE}}" "{{THEME}}"
+
+# Trusted-input Desktop keyboard acceptance with screenshots (leader, labels,
+# dialog leader, Vim/IME ownership) in a running Chrome.
+desktop-keyboard-acceptance ENDPOINT OUT:
+    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}"
+
 idb-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
 
@@ -113,8 +124,8 @@ workspace-extensions-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" workspace-extensions' conformance "{{BROWSER}}"
 
 idb-conformance-check:
-    deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
-    deno check tools/idb-browser-conformance.ts
+    deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
+    deno check tools/idb-browser-conformance.ts tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
 
 # Retain an actual product-store bundle before and after a latency change.
 send-latency-bundle OUTPUT:
@@ -241,6 +252,11 @@ example-auth-bundle PLUGIN:
 
 # Every bootstrap login host must have an independently buildable signed
 # Plugin source. Discovery deliberately has no list of authentication IDs.
+# Pack an editor plugin directory (manifest.json + main.js) into one
+# installable .cowboy-plugin file; see docs/editor-plugins.md.
+editor-plugin-pack DIR OUT:
+    deno run --allow-read --allow-write="{{OUT}}" tools/editor-plugin-pack.ts "{{DIR}}" "{{OUT}}"
+
 example-auth-build-all:
     #!/usr/bin/env bash
     set -euo pipefail

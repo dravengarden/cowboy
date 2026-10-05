@@ -26,8 +26,16 @@ import {
   expectedRevision,
   projectDraft,
 } from "./documents/model";
-import { activeEditorExtensionPort } from "./editorExtensions/host";
-import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
+import {
+  activeEditorExtensionPort,
+  closeEditorExtensions,
+  openEditorExtensions,
+} from "./editorExtensions/host";
+import {
+  EditorExtensionsCommand,
+  EditorExtensionsDialog,
+} from "./editorExtensions/EditorExtensionsDialog";
+import { editorPluginHost } from "./editorPlugins/appHost";
 import { DocumentNotifications } from "./documents/DocumentNotifications";
 import { isMac } from "./platform";
 
@@ -442,10 +450,8 @@ export async function runDraftDocumentsBrowserConformance(
         );
         check(
           document.querySelector('[data-create-key-hint="text"]') &&
-            document.querySelectorAll(
-                '[role=tab] [data-shortcut-state="inactive"]',
-              ).length === 3,
-          "Insert advertises Esc and keeps type slots inactive",
+            !document.querySelector("[role=tab] [data-shortcut-state]"),
+          "Insert advertises Esc; type tabs carry no digit slots",
         );
         press(sessionTitle, "Escape", { key: "Escape", isComposing: true });
         await tick();
@@ -461,11 +467,8 @@ export async function runDraftDocumentsBrowserConformance(
           "Esc leaves the title for the selected type tab",
         );
         check(
-          document.querySelectorAll(
-              '[role=tab] [data-shortcut-state="available"]',
-            ).length === 3 &&
-            document.querySelector('[data-create-key-hint="tabs"]'),
-          "Type slots and the Normal hint become available on the tablist",
+          document.querySelector('[data-create-key-hint="tabs"]'),
+          "The Normal hint appears on the tablist",
         );
         press(document.activeElement!, "KeyL");
         await tick();
@@ -474,9 +477,9 @@ export async function runDraftDocumentsBrowserConformance(
             document.activeElement?.getAttribute("aria-label") === "Draft",
           "l selects the next type and keeps the keyboard on the tablist",
         );
-        press(document.activeElement!, "Digit3", { key: "3" });
+        press(document.activeElement!, "KeyL");
         await tick();
-        check(selected() === "Folder", "3 picks Folder directly");
+        check(selected() === "Folder", "l reaches Folder");
         press(document.activeElement!, "KeyH");
         await tick();
         check(selected() === "Draft", "h selects the previous type");
@@ -1125,11 +1128,13 @@ export async function runDraftDocumentsBrowserConformance(
               <AppErrorBoundary>
                 <DesktopWorkspaceProvider>
                   <DesktopCommandProvider>
+                    <EditorExtensionsCommand />
                     <App
                       themeMode="light"
                       onSetThemeMode={() => {}}
                       surface="desktop"
                     />
+                    <EditorExtensionsDialog />
                   </DesktopCommandProvider>
                 </DesktopWorkspaceProvider>
               </AppErrorBoundary>
@@ -1458,6 +1463,170 @@ export async function runDraftDocumentsBrowserConformance(
       await until(
         () => !document.querySelector('[role="tab"][aria-label="Draft"]'),
         "Create closes",
+      );
+    }
+    // Installable editor plugin through the production manager: the packed
+    // example file, permission review, sandbox, toolbar + palette command,
+    // editor undo, settings, plugin isolation and uninstall.
+    {
+      const pluginResponse = await originalFetch("/editor-plugin.cowboy-plugin");
+      check(pluginResponse.ok, "Runner serves the packed example plugin");
+      const pluginFile = new File(
+        [await pluginResponse.text()],
+        "text-tools-1.0.0.cowboy-plugin",
+        { type: "application/json" },
+      );
+      await until(
+        () => activeEditorExtensionPort()?.context.kind === "document",
+        "Draft editor is bound before installing",
+      );
+      const content = container.querySelector<HTMLElement>(".cm-content")!;
+      const view = EditorView.findFromDOM(content)!;
+      view.focus();
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "pear\napple\nfig" },
+        selection: { anchor: 0, head: "pear\napple\nfig".length },
+        userEvent: "input.type",
+      });
+      const port = activeEditorExtensionPort()!;
+      openEditorExtensions();
+      await until(
+        () => [...document.querySelectorAll('[role="tab"]')].some((t) => t.textContent === "Extensions"),
+        "Editor extensions opens",
+      );
+      [...document.querySelectorAll<HTMLElement>('[role="tab"]')]
+        .find((t) => t.textContent === "Extensions")!.click();
+      await until(() => !!document.querySelector("[data-editor-plugin-file]"), "Plugin manager is shown");
+      const input = document.querySelector<HTMLInputElement>("[data-editor-plugin-file]")!;
+      const transfer = new DataTransfer();
+      transfer.items.add(pluginFile);
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await until(() => !!document.querySelector("[data-editor-plugin-review]"), "Install review lists permissions");
+      const review = document.querySelector<HTMLElement>("[data-editor-plugin-review]")!;
+      check(
+        review.textContent?.includes("Read the text and selection") &&
+          review.textContent.includes("Replace the selection"),
+        "Review shows the exact requested permissions",
+      );
+      document.querySelector<HTMLElement>("[data-editor-plugin-confirm]")!.click();
+      await until(
+        () => document.querySelector('[data-editor-plugin="text-tools"]')
+          ?.getAttribute("data-editor-plugin-status") === "running",
+        "Installed plugin runs",
+      );
+      const sandbox = document.querySelector<HTMLIFrameElement>("[data-cowboy-editor-plugin-sandbox]");
+      check(
+        sandbox?.getAttribute("sandbox") === "allow-scripts",
+        "Plugin runs in an opaque-origin sandbox",
+      );
+      closeEditorExtensions();
+      await until(
+        () => !!container.querySelector('[data-editor-plugin-command="text-tools:sort-lines"]'),
+        "Plugin contributes a Desktop toolbar button",
+      );
+      // Plugin buttons must not push the toolbar past narrow panes or large fonts.
+      const draftToolbar = container.querySelector<HTMLElement>("[data-desktop-draft-toolbar]")!;
+      for (const [width, font] of [[1200, 16], [800, 32], [640, 24], [480, 24], [480, 16]] as const) {
+        container.style.width = `${width}px`;
+        document.documentElement.style.fontSize = `${font}px`;
+        await tick();
+        check(
+          draftToolbar.scrollWidth <= draftToolbar.clientWidth + 1 &&
+            [...draftToolbar.querySelectorAll<HTMLElement>("[data-editor-plugin-command]")]
+              .every((b) => b.getBoundingClientRect().right <= draftToolbar.getBoundingClientRect().right + 1),
+          `Plugin toolbar fits ${width}px at ${font}px: ${draftToolbar.scrollWidth}/${draftToolbar.clientWidth} ${[...draftToolbar.querySelectorAll<HTMLElement>("[data-editor-plugin-command]")].map((b) => Math.round(b.getBoundingClientRect().right)).join(",")} vs ${Math.round(draftToolbar.getBoundingClientRect().right)} ${getComputedStyle(draftToolbar).display} ${[...draftToolbar.children].map((c) => c.tagName + ":" + Math.round(c.getBoundingClientRect().width) + ":" + (c as HTMLElement).scrollWidth).join(" ")}`,
+        );
+      }
+      container.style.width = "1200px";
+      document.documentElement.style.fontSize = "16px";
+      await tick();
+      view.focus();
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      container.querySelector<HTMLElement>('[data-editor-plugin-command="text-tools:sort-lines"]')!.click();
+      await until(() => port.read().text === "apple\nfig\npear", "Toolbar runs the plugin command");
+      check(undo(view), "Plugin edit is one ordinary undo step");
+      check(port.read().text === "pear\napple\nfig", "Undo restores the exact pre-plugin text");
+      // The palette path runs the same registered command.
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      await editorPluginHost().updateSettings("text-tools", { order: "desc" });
+      await tick(100);
+      await editorPluginHost().runCommand("text-tools", "sort-lines", port);
+      check(port.read().text === "pear\nfig\napple", "Settings reach the running plugin");
+      // A hostile plugin cannot reach the network, App storage or parent DOM,
+      // and its failure leaves the other plugin running.
+      const probeManifest = {
+        id: "probe",
+        name: "Probe",
+        version: "1.0.0",
+        description: "Sandbox probe",
+        author: "Conformance",
+        api: { major: 1, minor: 0 },
+        permissions: [],
+        contexts: ["document"],
+        surfaces: ["desktop"],
+        settings: [],
+      } as const;
+      const probeMain = `definePlugin({ async onload(ctx) {
+        const results = [];
+        // Bypass the prelude's convenience shadowing: the CSP must still block.
+        let realFetch;
+        for (let o = self; o && !realFetch; o = Object.getPrototypeOf(o)) {
+          const d = Object.getOwnPropertyDescriptor(o, "fetch");
+          if (d && typeof d.value === "function") realFetch = d.value;
+        }
+        self.addEventListener("securitypolicyviolation", (e) => { self.__violation = e.effectiveDirective || e.violatedDirective; });
+        if (!realFetch) results.push("no-fetch");
+        else {
+          try { await realFetch.call(self, ${JSON.stringify(`${location.origin}/api/sync/dataset`)}); results.push("fetch-open"); }
+          catch { results.push("fetch-blocked"); }
+        }
+        await new Promise((r) => setTimeout(r, 50));
+        results.push(self.origin === "null" ? "opaque-origin" : "app-origin:" + self.origin);
+        results.push(typeof document === "undefined" ? "no-dom" : "dom");
+        ctx.addCommand({ id: "report", title: results.join(","), description: "csp:" + (self.__violation || "none"), run() {} });
+        ctx.addCommand({ id: "explode", title: "Explode", run() { throw new Error("boom"); } });
+      }});`;
+      const { editorPluginDigest } = await import("./editorPlugins/manifest");
+      const probePackage = JSON.stringify({
+        format: "cowboy-editor-plugin/1",
+        manifest: probeManifest,
+        main: probeMain,
+        digest: await editorPluginDigest(probeManifest, probeMain),
+      });
+      const probe = await editorPluginHost().install(await editorPluginHost().inspect(probePackage));
+      check(probe.ok, `Probe plugin installs: ${probe.message}`);
+      const probeView = editorPluginHost().getSnapshot().plugins.find((p) => p.manifest.id === "probe")!;
+      const report = probeView.commands.find((c) => c.id === "report")!.title;
+      check(report === "fetch-blocked,opaque-origin,no-dom", `Sandbox isolation: ${report}`);
+      const csp = probeView.commands.find((x) => x.id === "report")!.description;
+      check(csp === "csp:connect-src", `The sandbox CSP blocks network: ${csp}`);
+      (globalThis as { __pluginCsp?: string }).__pluginCsp = csp;
+      let exploded = false;
+      try {
+        await editorPluginHost().runCommand("probe", "explode", port);
+      } catch {
+        exploded = true;
+      }
+      check(exploded, "A throwing command reports its failure");
+      check(
+        editorPluginHost().getSnapshot().plugins.every((p) => p.status === "running"),
+        "One command failure does not stop any plugin",
+      );
+      // Expired authority: the document changes before the plugin writes.
+      check(
+        !port.replaceSelection("stale", { ...port.read(), revision: port.read().revision - 1 }),
+        "A stale document version is refused",
+      );
+      await editorPluginHost().uninstall("probe");
+      await editorPluginHost().uninstall("text-tools");
+      await until(
+        () => !document.querySelector("[data-cowboy-editor-plugin-sandbox]") &&
+          !container.querySelector("[data-editor-plugin-toolbar]"),
+        "Uninstall removes sandboxes and toolbar contributions",
+      );
+      results.push(
+        `Installable editor plugin: packed example file installs through the review UI into an opaque-origin sandbox; toolbar and palette run one command with editor undo and live settings; network (${(globalThis as { __pluginCsp?: string }).__pluginCsp}), App storage and DOM are unreachable; failures stay isolated; uninstall removes code and contributions`,
       );
     }
     integrated.unmount();

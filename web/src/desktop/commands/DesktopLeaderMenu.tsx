@@ -145,8 +145,8 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
         zIndex: (theme) => theme.zIndex.modal + 2,
         width: sessionsLayer || modalLayer
           ? "min(26rem, calc(100vw - 32px))"
-          : "min(52rem, calc(100vw - 32px))",
-        maxHeight: "min(70vh, 36rem)",
+          : "min(72rem, calc(100vw - 32px))",
+        maxHeight: "min(50vh, 30rem)",
         overflow: "auto",
         p: 1.25,
         borderRadius: 2,
@@ -261,9 +261,9 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(15rem, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))",
               columnGap: 2,
-              rowGap: 1.25,
+              rowGap: 0.75,
             }}
           >
             {[...groups.entries()].map(([group, list]) => (
@@ -314,7 +314,7 @@ function entrySx(current: boolean): object {
     alignItems: "center",
     gap: 1,
     px: 0.75,
-    py: 0.4,
+    py: 0.2,
     borderRadius: 1,
     justifyContent: "flex-start",
     bgcolor: current ? "action.selected" : "transparent",

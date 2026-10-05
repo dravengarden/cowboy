@@ -523,6 +523,21 @@ impl RemoteRuntime {
         queue_config_value(&self.shared, session_id, config_id, value);
     }
 
+    /// Release an idle session's worker on its Machine without deleting the
+    /// session. The declaration stays: reconnect replays it adopt-only, which
+    /// never launches, and the next ensure resumes the retained native thread.
+    /// A refusal therefore leaves both sides unchanged.
+    pub fn hibernate(&self, session_id: &str) {
+        let command_id = self.next_id("hibernate");
+        self.queue(
+            command_id.clone(),
+            CoreCommand::HibernateSession {
+                session_id: session_id.to_owned(),
+                command_id,
+            },
+        );
+    }
+
     pub fn stop(&self, session_id: &str) {
         fail_config_startup(
             &self.shared,

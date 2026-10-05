@@ -22,7 +22,11 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 25;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 26;
+/// Machines report host memory, swap, load and disk, and accept a
+/// non-destructive session hibernation that stops only the live worker.
+pub const HOST_RESOURCES_PROTOCOL_VERSION: u16 = 26;
+pub const SESSION_HIBERNATION_PROTOCOL_VERSION: u16 = 26;
 pub const PROJECT_REGISTRY_PROTOCOL_VERSION: u16 = 24;
 pub const EXECUTION_ENVIRONMENT_PROTOCOL_VERSION: u16 = 23;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
@@ -250,6 +254,39 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+/// Host resources a Machine observes for its own runtime. Load is reported in
+/// thousandths so the type stays `Eq` like the rest of the protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostResources {
+    pub memory_total_bytes: u64,
+    pub memory_available_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub swap_free_bytes: u64,
+    pub load_1m_milli: u64,
+    pub cpu_count: u32,
+    /// Filesystem holding the Machine state directory.
+    pub disk_total_bytes: u64,
+    pub disk_available_bytes: u64,
+    /// Memory charged to the Agent worker slice, when the host uses one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_memory_bytes: Option<u64>,
+    pub uptime_seconds: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineCapabilities {
+    /// Accepts non-destructive session hibernation.
+    #[serde(default)]
+    pub hibernation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedHostResources {
+    #[serde(flatten)]
+    pub resources: HostResources,
+    pub observed_at_ms: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineCapacity {
     #[serde(default = "default_max_sessions")]
@@ -392,6 +429,12 @@ pub struct MachineSummary {
     pub capacity: MachineCapacity,
     #[serde(default)]
     pub active_sessions: u32,
+    /// Latest host observation from a Machine that reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ObservedHostResources>,
+    /// Optional features the connected Machine negotiated.
+    #[serde(default)]
+    pub capabilities: MachineCapabilities,
     #[serde(default)]
     pub pending_updates: Vec<ComponentId>,
     /// Why an automatic component has not converged yet. Absent entries are
@@ -1204,6 +1247,12 @@ pub enum MachineEvent {
     PluginInventory {
         #[serde(alias = "providers")]
         plugins: Vec<PluginInventory>,
+        observed_at_ms: i64,
+    },
+    /// Periodic host observation; sent only at
+    /// [`HOST_RESOURCES_PROTOCOL_VERSION`] or later.
+    HostResources {
+        resources: HostResources,
         observed_at_ms: i64,
     },
     ProviderAuthReceipt {

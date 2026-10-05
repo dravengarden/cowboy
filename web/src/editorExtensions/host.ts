@@ -8,12 +8,25 @@ const editors = new Map<
 let current: ComposerEditorHandle | null = null;
 let dialog: ComposerEditorHandle | null = null;
 const listeners = new Set<() => void>();
+let tracksFocus = false;
+
+/** Commands run from the palette or a toolbar after focus left the editor;
+ * they target the editor the user last worked in, not the last one mounted. */
+function trackEditorFocus(): void {
+  if (tracksFocus || typeof document === "undefined") return;
+  tracksFocus = true;
+  document.addEventListener("focusin", () => {
+    const focused = [...editors.keys()].find((entry) => entry.hasFocus());
+    if (focused) current = focused;
+  }, true);
+}
 
 export function bindEditorExtensions(
   editor: ComposerEditorHandle,
   context: EditorContext,
   ownsIme: () => boolean,
 ): () => void {
+  trackEditorFocus();
   let alive = true;
   let lastText = editor.getValue();
   let revision = 0;

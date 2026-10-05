@@ -21,11 +21,13 @@ if (
   suite !== "workspace-picker" && suite !== "project-placement" &&
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
-  suite !== "draft-documents"
+  suite !== "draft-documents" && suite !== "editor-plugin-sandbox"
 ) {
   throw new Error("unknown suite");
 }
-const entry = suite === "draft-documents"
+const entry = suite === "editor-plugin-sandbox"
+  ? "runEditorPluginSandboxBrowserConformance"
+  : suite === "draft-documents"
   ? "runDraftDocumentsBrowserConformance"
   : suite === "session-fold"
   ? "runSessionFoldBrowserConformance"
@@ -93,6 +95,26 @@ try {
   }).output();
   if (!built.success) throw new Error("browser fixture bundle failed");
   const script = await Deno.readTextFile(bundle);
+  // The Draft suite installs the example editor plugin from a file packed by
+  // the same tool authors use, so packaging is part of the acceptance.
+  let editorPlugin: string | null = null;
+  if (suite === "draft-documents") {
+    const packed = `${temporary}/text-tools.cowboy-plugin`;
+    const pack = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-read",
+        `--allow-write=${packed}`,
+        "tools/editor-plugin-pack.ts",
+        "examples/editor-plugins/text-tools",
+        packed,
+      ],
+      stdout: "null",
+      stderr: "inherit",
+    }).output();
+    if (!pack.success) throw new Error("editor plugin pack failed");
+    editorPlugin = await Deno.readTextFile(packed);
+  }
   const digest = Array.from(
     new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script)),
@@ -110,6 +132,14 @@ try {
       if (request.method === "GET" && url.pathname === "/fixture.js") {
         return new Response(script, {
           headers: { "Content-Type": "text/javascript" },
+        });
+      }
+      if (
+        editorPlugin !== null && request.method === "GET" &&
+        url.pathname === "/editor-plugin.cowboy-plugin"
+      ) {
+        return new Response(editorPlugin, {
+          headers: { "Content-Type": "application/json" },
         });
       }
       if (
@@ -145,7 +175,10 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
             headers: {
               "Content-Type": "text/html",
               "Content-Security-Policy":
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+                // worker-src blob: lets the editor plugin sandbox (a srcdoc
+                // frame inheriting this policy) start its Worker, as on the
+                // production App, which sends no CSP.
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src blob:",
             },
           },
         );
@@ -176,6 +209,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         "--headless",
         "--no-sandbox",
         "--disable-gpu",
+        // Match headless Firefox's 1366x768 Desktop viewport so both engines
+        // exercise the same layout branch.
+        "--window-size=1366,768",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",
@@ -199,7 +235,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   }).spawn();
   deadline = setTimeout(
     () => report.reject(new Error("browser conformance timed out")),
-    suite === "draft-documents" ? 60_000 : 30_000,
+    // The integrated-App suite is long; a loaded build host must not turn
+    // scheduling latency into a spurious failure.
+    suite === "draft-documents" ? 150_000 : 30_000,
   );
   void child.status.then(() =>
     report.reject(new Error("browser exited before report"))
@@ -210,7 +248,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "sign-in" || suite === "session-move"
+      (suite === "sign-in" || suite === "session-move" ||
+          suite === "editor-plugin-sandbox"
         ? 4
         : suite === "session-fold"
         ? 6
@@ -227,7 +266,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "settings-recovery"
         ? 9
         : suite === "draft-documents"
-        ? 11
+        ? 12
         : suite === "desktop-composer"
         ? 10
         : suite === "code-buffer-cleanup"

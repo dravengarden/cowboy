@@ -296,6 +296,14 @@ pub enum CoreCommand {
         session_id: String,
         command_id: String,
     },
+    /// Stop only an idle session's live worker, retaining its worktree,
+    /// transcript and resumable native id; the next ensure resumes it.
+    /// Sent only to Machines at
+    /// [`crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION`].
+    HibernateSession {
+        session_id: String,
+        command_id: String,
+    },
     SetDesiredGeneration {
         generation: String,
         /// Concrete worker executable for this generation. Optional keeps the
@@ -320,7 +328,8 @@ impl CoreCommand {
             | Self::Permission { session_id, .. }
             | Self::SetConfigOption { session_id, .. }
             | Self::DrainSession { session_id, .. }
-            | Self::StopSession { session_id, .. } => Some(session_id),
+            | Self::StopSession { session_id, .. }
+            | Self::HibernateSession { session_id, .. } => Some(session_id),
             Self::SetDesiredGeneration { .. } | Self::RollProvider { .. } => None,
         }
     }

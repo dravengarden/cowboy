@@ -10,6 +10,7 @@ import { useDraftLibrary } from "./documents/store";
 import type { DraftMetadata } from "./documents/model";
 import type { DraftFlush } from "./documents/DraftEditor";
 import { documentNotice } from "./documents/DocumentNotifications";
+import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 import { WorkspaceDraftRow, WorkspaceDraftPane, WorkspaceDraftActions, WorkspaceDraftTrash, type WorkspaceDraftAction } from "./documents/WorkspaceDraft";
 import { reorderWorkspaceItems } from "./store";
 import { DRAFT_DRAG_TYPE } from "./documents/model";
@@ -79,6 +80,7 @@ import {
     Code as CodeIcon,
     CreateNewFolderOutlined,
     DeleteOutline,
+    BedtimeOutlined,
     DragIndicator,
     DriveFileMoveOutlined,
     DriveFileRenameOutline,
@@ -772,6 +774,18 @@ function SessionList({
         if (!menuAnchor) return;
         setSessionNotificationsMuted(menuAnchor.row.id, !menuSessionMuted);
         setMenuAnchor(null);
+    };
+    const sessionMachines = useStoreSelector((snapshot) => snapshot.machines);
+    const menuHibernate = menuAnchor
+        ? hibernateAvailability(menuAnchor.row, sessionMachines)
+        : null;
+    const hibernateMenuSession = (): void => {
+        if (!menuAnchor || menuHibernate !== "ready") return;
+        const session = menuAnchor.row;
+        setMenuAnchor(null);
+        void hibernateSession(session.id)
+            .then(() => documentNotice(`${session.title || "Session"} is hibernating; it resumes when you open it.`))
+            .catch((error: Error) => documentNotice(error.message));
     };
     const menuProjection = useExploreSessionState(
         menuAnchor?.row.id ?? "__session-menu-none__",
@@ -2111,6 +2125,17 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary={menuSessionMuted ? "Unmute notifications" : "Mute notifications"} />
                 </MenuItem>
+                {menuHibernate && (
+                    <MenuItem disabled={menuHibernate === "busy"} onClick={hibernateMenuSession}>
+                        <ListItemIcon>
+                            <BedtimeOutlined fontSize="medium" />
+                        </ListItemIcon>
+                        <ListItemText
+                            primary="Hibernate"
+                            secondary={menuHibernate === "busy" ? "Available after the current turn" : "Free its memory; resumes when opened"}
+                        />
+                    </MenuItem>
+                )}
                 <Divider />
                 <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
                     View mode
@@ -2221,6 +2246,12 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuSessionMuted ? "Unmute notifications" : "Mute notifications"}</Box>
                                 <Kbd keys="N" />
                             </Button>
+                            {menuHibernate && (
+                                <Button data-session-shortcut="z" fullWidth disabled={menuHibernate === "busy"} startIcon={<BedtimeOutlined />} onClick={hibernateMenuSession} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{menuHibernate === "busy" ? "Hibernate after this turn" : "Hibernate"}</Box>
+                                    <Kbd keys="Z" />
+                                </Button>
+                            )}
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>View mode</Typography>
                             {([
@@ -2768,7 +2799,7 @@ export function CreateDialog({
     // Mobile retains its established single-Enter form behaviour.
     useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
     // Vim layers, as in Vimium/qutebrowser: Esc (or Ctrl-[) leaves a text
-    // field for the type tablist, where h/l and 1…3 choose the type and
+    // field for the type tablist, where h/l choose the type and
     // j/i/Enter return to the title; Esc there closes. Keys are classified by
     // desktopKeyIntent, so a composing IME keeps every key, including Esc.
     const onDesktopFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -2822,7 +2853,6 @@ export function CreateDialog({
                     value={variant}
                     disabled={creating}
                     keyboard={desktop}
-                    keysAvailable={focusZone === "tabs"}
                     onChange={(next, source): void => {
                         if (source === "roving") {
                             // The keyboard cursor stays on the tablist; j/i/Enter
@@ -3015,7 +3045,10 @@ export function CreateDialog({
         (variant === "folder" ? normalizeSessionFolderName(folderName) !== null
             : placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd)));
     const createLabel = variant === "draft" ? "Create draft" : variant === "folder" ? "Create folder" : "Create session";
-    if (navbarAtBottom) {
+    // The cover sheet is the touch presentation. A Desktop window below the
+    // lg breakpoint is still Desktop: it keeps the dialog whose Esc, Mod+Enter
+    // and leader layers the keyboard contract relies on.
+    if (navbarAtBottom && !desktop) {
         return (
             <>
             <DetentSheet

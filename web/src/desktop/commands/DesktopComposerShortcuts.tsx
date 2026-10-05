@@ -10,6 +10,7 @@ import {
   DESKTOP_WORKSPACE_PREFIX,
 } from "./workspaceShortcuts";
 import { COMPOSER_COMMANDS } from "../../composerCommands";
+import { formatChord } from "./formatChord";
 import { toggleComposerSourceMode } from "../../composerSourceMode";
 
 export function DesktopComposerCommandBindings({
@@ -228,6 +229,7 @@ export function DesktopComposerCommandBindings({
         }
         : {}),
       allowInEditor: true,
+      ...formatChord(command.id),
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       run: () => state.current.onFormat(command.id),

@@ -45,6 +45,7 @@ import {
 } from "./workspaceShortcuts";
 import { assertShortcutRegistrationAllowed } from "./shortcutRegistrationPolicy";
 import { isImeComposing } from "../vim/imeStatusStore";
+import { vimSinkAwaitsInput } from "../vim/vimSinkInput";
 import { desktopKeyIntent, installNativeCompositionTracker } from "./keyIntent";
 import { DESKTOP_SESSION_JUMP_EVENT } from "./sessionJump";
 import {
@@ -412,9 +413,15 @@ export function DesktopCommandProvider(
       // Space is the leader wherever Cowboy owns the key: Vim Normal, lists,
       // the reader and chrome. Text fields, toggles (native inputs), IME
       // candidates and auto-repeat keep their native Space.
+      // The focused Vim Normal sink is "text-owned" for ordinary keys (Vim
+      // runs them), but Space is the leader there exactly as in LazyVim,
+      // unless a Vim command is still waiting for its argument.
+      const vimNormalLeader = normalCommandSink && vimSinkRegionFocused &&
+        !vimSinkAwaitsInput(event.target);
       if (
         !leaderArmed.current && isDesktopLeaderSpace(event) &&
-        !textEditorOwnsKey && workspace.selectedSplitter === null &&
+        (!textEditorOwnsKey || vimNormalLeader) &&
+        workspace.selectedSplitter === null &&
         desktopKeyIntent(event).owner === "command"
       ) {
         event.preventDefault();

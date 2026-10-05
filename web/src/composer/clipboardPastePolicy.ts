@@ -20,8 +20,9 @@ export function htmlIsOnlyImage(html: string): boolean {
 /**
  * Obsidian lets rich text win over clipboard files unless its HTML is just
  * the copied picture. Office and spreadsheet apps put a rendered PNG beside
- * the table's HTML and plain text; attaching that PNG loses the text. Cowboy
- * inserts the plain-text representation (it does not convert HTML).
+ * the table's HTML and plain text; attaching that PNG loses the text. Desktop
+ * then converts semantic HTML to Markdown (htmlToMarkdown.ts); touch inserts
+ * the plain-text representation.
  */
 export function pastedTextBeatsFiles(
   clipboard: Pick<DataTransfer, "getData">,

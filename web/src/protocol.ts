@@ -67,6 +67,10 @@ export interface MachineSummary {
   plugin_contracts?: PluginContractInventory;
   capacity: { max_sessions: number; draining: boolean };
   active_sessions: number;
+  // Latest host observation; absent from Machines that do not report one.
+  resources?: MachineHostResources;
+  // Absent on a daemon that predates negotiated Machine capabilities.
+  capabilities?: { hibernation: boolean };
   pending_updates?: readonly { kind: string; slot?: string }[];
   // Why an automatic component has not converged yet. Absent entries are
   // converged; the Controller owns the decision, this is only its report.
@@ -75,6 +79,20 @@ export interface MachineSummary {
   // predates the Service-side declaration.
   plugin_lifecycle?: "manual" | "managed";
 }
+
+export type MachineHostResources = {
+  memory_total_bytes: number;
+  memory_available_bytes: number;
+  swap_total_bytes: number;
+  swap_free_bytes: number;
+  load_1m_milli: number;
+  cpu_count: number;
+  disk_total_bytes: number;
+  disk_available_bytes: number;
+  agent_memory_bytes?: number;
+  uptime_seconds: number;
+  observed_at_ms: number;
+};
 
 export type MachineComponentConvergence = {
   id: { kind: string; slot?: string };
