@@ -1,3 +1,4 @@
+import { defaultDraftTitle } from "./documents/defaultDraftTitle";
 import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
 import { draftRepository } from "./documents/store";
 import { openDrafts } from "./documents/navigation";
@@ -2500,6 +2501,7 @@ export function CreateDialog({
     const keyboardOpen = useKeyboardOpen();
     const [variant, setVariant] = useState<CreateVariant>("session");
     const [draftTitle, setDraftTitle] = useState("");
+    const selectDraftTitleOnFocus = useRef(true);
     const [draftDirectory, setDraftDirectory] = useState("");
     const creatingRef = useRef(false);
     const machines = useStoreSelector((snapshot) => snapshot.machines);
@@ -2541,7 +2543,8 @@ export function CreateDialog({
     useEffect(() => {
         if (!open) return undefined;
         setVariant("session");
-        setDraftTitle("");
+        setDraftTitle(defaultDraftTitle());
+        selectDraftTitleOnFocus.current = true;
         setDraftDirectory("");
         creatingRef.current = false;
         setTitle(`New session ${sessionCountRef.current + 1}`);
@@ -2571,7 +2574,7 @@ export function CreateDialog({
             creatingRef.current = true;
             setCreating(true);
             setCreateError("");
-            void repository.create(draftTitle.trim() || "Untitled", draftDirectory || null)
+            void repository.create(draftTitle.trim() || defaultDraftTitle(), draftDirectory || null)
                 .then((id): void => {
                     onClose();
                     openDrafts(id);
@@ -2710,7 +2713,12 @@ export function CreateDialog({
                     <TextField
                         label="Title"
                         value={variant === "draft" ? draftTitle : title}
-                        onChange={(e): void => variant === "draft" ? setDraftTitle(e.target.value) : setTitle(e.target.value)}
+                        onChange={(e): void => {
+                            if (variant === "draft") {
+                                selectDraftTitleOnFocus.current = false;
+                                setDraftTitle(e.target.value);
+                            } else setTitle(e.target.value);
+                        }}
                         disabled={creating}
                         inputRef={titleRef}
                         autoFocus={desktop}
@@ -2720,7 +2728,12 @@ export function CreateDialog({
                             // collapses a synchronous select() back to a caret. Same logic as
                             // the session-rename field (Composer.tsx).
                             const input = e.target as HTMLInputElement;
-                            if (variant === "session") requestAnimationFrame(() => input.select());
+                            if (variant === "session" || selectDraftTitleOnFocus.current) {
+                                if (variant === "draft") selectDraftTitleOnFocus.current = false;
+                                requestAnimationFrame(() => {
+                                    if (document.activeElement === input) input.select();
+                                });
+                            }
                         }}
                         onKeyDown={(e): void => {
                             // Mobile keeps its touch-form Enter behaviour. Desktop uses the
@@ -2734,7 +2747,7 @@ export function CreateDialog({
                             }
                         }}
                         placeholder={variant === "draft" ? "Untitled" : "Name this session"}
-                        helperText={variant === "draft" ? "Optional · you can rename it while editing" : "Clear to auto-name from the first message"}
+                        helperText={variant === "draft" ? "Device local time · replace this name or rename it while editing" : "Clear to auto-name from the first message"}
                     />
                     {variant === "draft" ? (
                         <DraftCreationDirectory value={draftDirectory} onChange={setDraftDirectory} />

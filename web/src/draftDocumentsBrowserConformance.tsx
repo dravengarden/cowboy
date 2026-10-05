@@ -184,6 +184,7 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
         const item = [...document.querySelectorAll<HTMLElement>("[role=tab]")]
           .find((element) => element.textContent === name);
         check(item, `Create variant ${name}`);
+        item.focus();
         return item;
       };
       check(
@@ -194,6 +195,16 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
       await tick();
       const title = document.querySelector<HTMLInputElement>("input");
       check(title, "Draft title field");
+      check(
+        /^Draft \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(title.value),
+        "Draft starts with a local date/time name",
+      );
+      title.focus();
+      await tick();
+      check(
+        title.selectionStart === 0 && title.selectionEnd === title.value.length,
+        "First focus selects the generated name for replacement",
+      );
       const setter = Object.getOwnPropertyDescriptor(
         HTMLInputElement.prototype,
         "value",
@@ -243,6 +254,16 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
         document.querySelector<HTMLInputElement>("input")?.value ===
           "独立 draft 🌏",
         "Switching variants preserves entered title",
+      );
+      const editedTitle = document.querySelector<HTMLInputElement>("input")!;
+      editedTitle.focus();
+      editedTitle.setSelectionRange(2, 2);
+      editedTitle.blur();
+      editedTitle.focus();
+      await tick();
+      check(
+        editedTitle.selectionStart === 2 && editedTitle.selectionEnd === 2,
+        "Returning to a custom title preserves the caret",
       );
       // IME candidate confirmation must never create either variant.
       document.dispatchEvent(

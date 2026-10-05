@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "feature": "Local-time Draft default names",
+  "behavior": [
+    "Create pre-fills Draft YYYY-MM-DD HH:mm:ss using device-local time, captured once per opening.",
+    "First Draft title focus selects the generated name; after editing, re-focus preserves the caret.",
+    "Variant switches preserve the entered name; clearing creates with a fresh timestamp fallback.",
+    "Draft workspace quick creation uses the same naming function."
+  ],
+  "validation": {
+    "web_typecheck": "passed",
+    "web_lint": "passed with existing warnings",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "firefox": {
+      "suite": "draft-documents",
+      "light": 9,
+      "dark": 9,
+      "new_checks": [
+        "Prefilled timestamp format",
+        "First-focus selection",
+        "Custom title re-focus caret preservation"
+      ]
+    },
+    "limits": [
+      "Browser tests do not establish physical iOS keyboard acceptance.",
+      "No shared editor implementation changed."
+    ]
+  },
+  "delivery": {
+    "service_worker": "cowboy-v1835",
+    "component": "web"
+  }
+}
