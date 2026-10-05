@@ -64,7 +64,7 @@ changes to core authority before a reviewed bootstrap and migration design.
 | Authentication replica | Derived Machine copy: `(machine_id, provider_id, auth_generation)` |
 | Session runtime | `(session_id, machine_id, provider_id, provider_generation_digest)` |
 | Project | Target Machine: `(machine_id, project_id)`, with independent display name and real directory |
-| AI placement policy | Cowboy Service: permitted Local/Remote placement per Machine and preferred runtime |
+| AI placement policy | Cowboy Service: permitted Local/Remote placement per Machine and preferred runtime, intersected with Controller-host Provider runtime restrictions |
 
 The [native project contract](native-projects.md) owns registration, discovery
 and new-session selection. Machine protocol 24 adds closed project management;

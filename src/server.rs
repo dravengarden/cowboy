@@ -154,6 +154,7 @@ const fn provider_session_has_active_turn(status: crate::agent_model::Status) ->
 #[derive(Clone)]
 struct ProviderAuthExecutor {
     machine_id: String,
+    connection: crate::machine_control::ConnectionToken,
     provider_id: String,
     provider_version: String,
     generation_digest: String,
@@ -165,6 +166,10 @@ struct ProviderAuthExecutor {
 }
 
 impl ProviderAuthExecutor {
+    fn active(&self, control: &MachineControl, timestamp: i64) -> bool {
+        self.expires_at_ms > timestamp && control.is_current(&self.connection)
+    }
+
     fn accepts_candidate(
         &self,
         machine_id: &str,
@@ -201,13 +206,16 @@ fn reconcile_provider_auth_executors(
     executors: &mut HashMap<String, ProviderAuthExecutor>,
     provider_id: &str,
     timestamp: i64,
+    control: &MachineControl,
 ) -> ProviderAuthReconciliation {
-    let expired: Vec<_> = executors
-        .iter()
-        .filter(|(_, executor)| executor.expires_at_ms < timestamp)
-        .map(|(request_id, executor)| (executor.provider_id.clone(), request_id.clone()))
-        .collect();
-    executors.retain(|_, executor| executor.expires_at_ms >= timestamp);
+    let mut expired = Vec::new();
+    executors.retain(|request_id, executor| {
+        let active = executor.active(control, timestamp);
+        if !active {
+            expired.push((executor.provider_id.clone(), request_id.clone()));
+        }
+        active
+    });
     let active = executors
         .iter()
         .filter(|(_, executor)| executor.provider_id == provider_id)
@@ -988,6 +996,9 @@ fn scheduled_reset_failure_policy(
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
+    let runtime_restrictions = Arc::new(crate::project_placement::RuntimeRestrictions::parse(
+        &args.provider_runtime_machines,
+    )?);
     if args.check_plugin_catalog {
         let catalog = crate::plugin_catalog::PluginCatalog::inspect(
             &args.data_dir,
@@ -1258,7 +1269,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Some(args.data_dir.join("usage-snapshot.json")),
         Arc::clone(&plugin_catalog),
         Arc::clone(&machine_control),
-    );
+    )
+    .with_runtime_restrictions(Arc::clone(&runtime_restrictions));
     usage.restore_execution_settings().await?;
     let runtime_router = RuntimeRouter::new();
     // Usage collectors and authenticated Machine connections must share this
@@ -1506,12 +1518,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             }
         })
     };
-    let supervisor = Arc::new(Supervisor::new(
-        hub.clone(),
-        args.workspace_root.clone(),
-        session_id_floor,
-        Arc::clone(&runtime_router),
-    ));
+    let supervisor = Arc::new(
+        Supervisor::new(
+            hub.clone(),
+            args.workspace_root.clone(),
+            session_id_floor,
+            Arc::clone(&runtime_router),
+        )
+        .with_runtime_restrictions(runtime_restrictions),
+    );
     let mut local_sinks: Vec<Box<dyn crate::logs::EvidenceSink>> = Vec::new();
     if matches!(
         args.telemetry_local_backend,
@@ -2814,7 +2829,7 @@ fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), 
     else {
         return Ok(());
     };
-    state.supervisor.send(session_id, AgentCommand::Cancel)?;
+    state.supervisor.request_cancel_for_recycle(session_id)?;
     let hub = state.hub.clone();
     let supervisor = Arc::clone(&state.supervisor);
     let session_id = session_id.to_owned();
@@ -11891,6 +11906,12 @@ async fn connected_provider_authentication_executors(
         for installed in providers.into_iter().filter(|provider| {
             provider.state == crate::machine_protocol::PluginInstallationState::Active
         }) {
+            if !state
+                .supervisor
+                .runtime_allowed(&installed.plugin_id, &machine.id)
+            {
+                continue;
+            }
             if state
                 .provider_catalog
                 .package(
@@ -12679,7 +12700,12 @@ async fn api_provider_auth_start(
     let timestamp = now_ms();
     let reconciliation = {
         let mut executors = state.provider_auth_executors.lock();
-        reconcile_provider_auth_executors(&mut executors, &provider_id, timestamp)
+        reconcile_provider_auth_executors(
+            &mut executors,
+            &provider_id,
+            timestamp,
+            &state.machine_control,
+        )
     };
     let active_request_id = state
         .provider_auth
@@ -12696,6 +12722,9 @@ async fn api_provider_auth_start(
     let candidates = state.machine_control.connected_machine_ids();
     let mut executor = None;
     for machine_id in candidates {
+        if !state.supervisor.runtime_allowed(&provider_id, &machine_id) {
+            continue;
+        }
         if current_machine_plugin(&state, &machine_id, &provider_id)
             .await
             .is_ok_and(|installed| {
@@ -12710,9 +12739,13 @@ async fn api_provider_auth_start(
     let Some(machine_id) = executor else {
         return (
             StatusCode::CONFLICT,
-            "No connected Machine has this exact Agent Plugin release installed for temporary authentication",
+            "No permitted connected Machine has this exact Agent Plugin release installed for temporary authentication",
         )
             .into_response();
+    };
+    let connection = match state.machine_control.operation_connection(&machine_id) {
+        Ok(connection) => connection,
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
     };
     let request_id = machine_request_id("provider-login");
     let expected_generation = state
@@ -12722,7 +12755,12 @@ async fn api_provider_auth_start(
     let timestamp = now_ms();
     let expires_at_ms = timestamp.saturating_add(15 * 60 * 1_000);
     let mut executors = state.provider_auth_executors.lock();
-    let reconciliation = reconcile_provider_auth_executors(&mut executors, &provider_id, timestamp);
+    let reconciliation = reconcile_provider_auth_executors(
+        &mut executors,
+        &provider_id,
+        timestamp,
+        &state.machine_control,
+    );
     let active_request_id = state
         .provider_auth
         .active_authentication_request(&provider_id);
@@ -12741,6 +12779,7 @@ async fn api_provider_auth_start(
         request_id.clone(),
         ProviderAuthExecutor {
             machine_id: machine_id.clone(),
+            connection: connection.clone(),
             provider_id: provider_id.clone(),
             provider_version: request.provider_version.clone(),
             generation_digest: request.generation_digest.clone(),
@@ -12768,8 +12807,8 @@ async fn api_provider_auth_start(
         state.provider_auth_executors.lock().remove(&request_id);
         return (StatusCode::CONFLICT, error.to_string()).into_response();
     }
-    if let Err(error) = state.machine_control.send(
-        &machine_id,
+    if let Err(error) = state.machine_control.send_on_connection(
+        &connection,
         crate::machine_protocol::MachineCommand::BeginLogin {
             request_id: request_id.clone(),
             provider: provider_id.clone(),
@@ -12810,18 +12849,22 @@ async fn api_provider_auth_events(
         )
             .into_response();
     };
-    if executor.expires_at_ms < now_ms() {
+    if !executor.active(&state.machine_control, now_ms()) {
         state.provider_auth_executors.lock().remove(&request_id);
         state
             .provider_auth
             .cancel_authentication(&provider_id, &request_id);
-        let _ = state.machine_control.send(
-            &executor.machine_id,
+        let _ = state.machine_control.send_on_connection(
+            &executor.connection,
             crate::machine_protocol::MachineCommand::CancelLogin {
                 request_id: request_id.clone(),
             },
         );
-        return (StatusCode::NOT_FOUND, "authentication request expired").into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            "authentication request expired or its Machine disconnected; start a new authorization",
+        )
+            .into_response();
     }
     let events: Vec<_> = state
         .machine_control
@@ -12854,17 +12897,17 @@ async fn api_provider_auth_submit(
         .lock()
         .get(&request_id)
         .cloned();
-    let Some(executor) = executor
-        .filter(|value| value.provider_id == provider_id && value.expires_at_ms >= now_ms())
-    else {
+    let Some(executor) = executor.filter(|value| {
+        value.provider_id == provider_id && value.active(&state.machine_control, now_ms())
+    }) else {
         return (
             StatusCode::NOT_FOUND,
             "authentication request is not active",
         )
             .into_response();
     };
-    match state.machine_control.send(
-        &executor.machine_id,
+    match state.machine_control.send_on_connection(
+        &executor.connection,
         crate::machine_protocol::MachineCommand::SubmitLoginCode {
             request_id,
             code: request.code,
@@ -12900,8 +12943,8 @@ async fn api_provider_auth_cancel(
     state
         .provider_auth
         .cancel_authentication(&provider_id, &request_id);
-    match state.machine_control.send(
-        &executor.machine_id,
+    match state.machine_control.send_on_connection(
+        &executor.connection,
         crate::machine_protocol::MachineCommand::CancelLogin { request_id },
     ) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
@@ -13272,6 +13315,9 @@ async fn accept_service_auth_candidate(
         let executor = executors
             .get_mut(request_id)
             .ok_or_else(|| "authentication executor is no longer active".to_owned())?;
+        if !executor.active(&state.machine_control, now_ms()) {
+            return Err("authentication executor expired or disconnected".to_owned());
+        }
         if !executor.accepts_candidate(
             machine_id,
             provider_id,
@@ -15223,6 +15269,16 @@ async fn api_new_session(
     if !principal.role.at_least(crate::admin::AdminRole::Operator) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if !state
+        .supervisor
+        .runtime_allowed(&req.provider, &req.machine_id)
+    {
+        return (
+            StatusCode::CONFLICT,
+            "Provider policy does not permit this runtime Machine",
+        )
+            .into_response();
+    }
     let mut cwd = req.cwd;
     let session_id = state.supervisor.reserve_session_id();
     if web_session_is_missing_machine(&req.machine_id, &req.origin) {
@@ -15665,8 +15721,17 @@ mod machine_provider_tests {
 
     #[test]
     fn authentication_candidate_is_bound_to_the_exact_executor_release() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let control = crate::machine_control::MachineControl::default();
         let executor = ProviderAuthExecutor {
             machine_id: "hawk".to_owned(),
+            connection: control.install(
+                "hawk".into(),
+                "fixture".into(),
+                false,
+                crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+                tx,
+            ),
             provider_id: "gemini".to_owned(),
             provider_version: "1.0.0".to_owned(),
             generation_digest: "sha256:release".to_owned(),
@@ -20503,12 +20568,31 @@ mod provider_install_tests {
 
 #[cfg(test)]
 mod provider_auth_resume_tests {
-    use super::{ProviderAuthExecutor, reconcile_provider_auth_executors};
+    use super::{MachineControl, ProviderAuthExecutor, reconcile_provider_auth_executors};
     use std::collections::HashMap;
 
-    fn executor(provider_id: &str, method: &str, expires_at_ms: i64) -> ProviderAuthExecutor {
+    fn control() -> MachineControl {
+        let control = MachineControl::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        control.install(
+            "machine".into(),
+            "fixture".into(),
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+            tx,
+        );
+        control
+    }
+
+    fn executor(
+        control: &MachineControl,
+        provider_id: &str,
+        method: &str,
+        expires_at_ms: i64,
+    ) -> ProviderAuthExecutor {
         ProviderAuthExecutor {
             machine_id: "machine".to_owned(),
+            connection: control.operation_connection("machine").unwrap(),
             provider_id: provider_id.to_owned(),
             provider_version: "1.0.0".to_owned(),
             generation_digest: "sha256:generation".to_owned(),
@@ -20522,19 +20606,20 @@ mod provider_auth_resume_tests {
 
     #[test]
     fn page_reload_recovers_the_existing_provider_authentication() {
+        let control = control();
         let mut executors = HashMap::from([
             (
                 "claude-request".to_owned(),
-                executor("claude-code", "claude-account", 2_000),
+                executor(&control, "claude-code", "claude-account", 2_000),
             ),
             (
                 "codex-request".to_owned(),
-                executor("codex", "chatgpt-account", 3_000),
+                executor(&control, "codex", "chatgpt-account", 3_000),
             ),
         ]);
 
         let reconciliation =
-            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000);
+            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000, &control);
 
         assert!(reconciliation.expired.is_empty());
         let (request_id, active) = reconciliation
@@ -20551,19 +20636,20 @@ mod provider_auth_resume_tests {
 
     #[test]
     fn expired_authentication_is_removed_instead_of_resumed() {
+        let control = control();
         let mut executors = HashMap::from([
             (
                 "expired-claude".to_owned(),
-                executor("claude-code", "claude-account", 999),
+                executor(&control, "claude-code", "claude-account", 999),
             ),
             (
                 "current-codex".to_owned(),
-                executor("codex", "chatgpt-account", 2_000),
+                executor(&control, "codex", "chatgpt-account", 2_000),
             ),
         ]);
 
         let reconciliation =
-            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000);
+            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000, &control);
 
         assert_eq!(
             reconciliation.expired,
@@ -20572,6 +20658,42 @@ mod provider_auth_resume_tests {
         assert!(reconciliation.active.is_none());
         assert_eq!(executors.len(), 1);
         assert!(executors.contains_key("current-codex"));
+    }
+
+    #[test]
+    fn connection_replacement_and_deadline_revoke_resume_and_candidate_admission() {
+        let control = control();
+        let old = executor(&control, "claude-code", "claude-account", 2_000);
+        assert!(old.active(&control, 1_999));
+        assert!(!old.active(&control, 2_000));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        // Even a reused epoch string is a distinct authenticated connection.
+        control.install(
+            "machine".into(),
+            "fixture".into(),
+            false,
+            crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+            tx,
+        );
+        assert!(!old.active(&control, 1_000));
+        assert!(
+            control
+                .send_on_connection(
+                    &old.connection,
+                    crate::machine_protocol::MachineCommand::SubmitLoginCode {
+                        request_id: "old".into(),
+                        code: "fixture".into(),
+                    }
+                )
+                .is_err()
+        );
+        assert!(rx.try_recv().is_err());
+        let mut executors = HashMap::from([("old".into(), old)]);
+        let result =
+            reconcile_provider_auth_executors(&mut executors, "claude-code", 1_000, &control);
+        assert!(result.active.is_none());
+        assert_eq!(result.expired, [("claude-code".into(), "old".into())]);
+        assert!(executors.is_empty());
     }
 }
 

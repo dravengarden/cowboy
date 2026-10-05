@@ -11,6 +11,14 @@ the selected identity. An offline or incompatible pinned Machine produces an
 unavailable result; Cowboy never silently falls back to another Machine.
 Existing cached usage remains historical data, not evidence of a fresh query.
 
+Controller-host `--provider-runtime-machine PROVIDER=MACHINE` restrictions
+intersect this selection by the exact Plugin/Provider identity, independently
+of the usage account key. An explicit conflicting choice or an unavailable
+allowed Machine produces an unavailable result. Automatic cannot bypass the
+restriction, and a restricted account cannot fall back to a Controller-local
+bootstrap command. The preference remains editable for recovery after a host
+policy change, without granting permission to a currently denied route.
+
 The selection applies to the account's collection, activity decoration and
 supported usage-reset operations. Session-reported usage remains associated
 with the session and does not become account-plan usage.

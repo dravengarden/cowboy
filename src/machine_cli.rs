@@ -28,6 +28,7 @@ use crate::machine_protocol::{
 mod auth_watch;
 pub(crate) mod execution;
 mod installation;
+mod login_process;
 mod projects;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
@@ -43,6 +44,16 @@ struct LoginSession {
 }
 
 type LoginSessions = Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
+
+struct LoginConnection(LoginSessions);
+
+impl Drop for LoginConnection {
+    fn drop(&mut self) {
+        for (_, login) in self.0.lock().drain() {
+            let _ = login.cancel.send(true);
+        }
+    }
+}
 
 struct LoginIo {
     cancel: tokio::sync::watch::Receiver<bool>,
@@ -1160,6 +1171,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     // and dropping this connection discards the short-lived queue.
     let (runtime_write_tx, runtime_write_rx) = tokio::sync::mpsc::unbounded_channel();
     let login_sessions: LoginSessions = Arc::default();
+    let login_connection = LoginConnection(Arc::clone(&login_sessions));
     let (socket_sink, mut socket_stream) = socket.split();
     // Runtime streams can produce more than a small frame-count bound while the
     // WebSocket sink is flushing one large message. Keep the read/heartbeat loop
@@ -1276,6 +1288,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     }.await;
     // Revoke queued Plugin effects before cleaning up this connection's I/O.
     drop(plugin_execution);
+    // Login tasks belong to this authenticated connection. They cannot promote
+    // credentials after it is gone, nor retain each other's channel senders.
+    drop(login_connection);
     controller_writer.abort();
     runtime_writer.abort();
     result
@@ -2992,6 +3007,11 @@ fn authentication_process(
     };
     process.env("HOME", home);
     process.envs(environment);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        process.as_std_mut().process_group(0);
+    }
     process
 }
 
@@ -3076,6 +3096,8 @@ async fn run_login(
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {
+    let deadline = tokio::time::Instant::now() + login_process::TIMEOUT;
+    let expires_at_ms = unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64);
     let Some(method_id) = auth_method.filter(|value| !value.trim().is_empty()) else {
         login.sessions.lock().remove(&request_id);
         let _ = events.send(MachineEvent::CommandResult {
@@ -3168,7 +3190,7 @@ async fn run_login(
         }
     };
     let mut process = authentication_process(&command, &arguments, &environment, &terminal, &home);
-    let mut child = match process
+    let child = match process
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3187,7 +3209,6 @@ async fn run_login(
             return;
         }
     };
-    let mut stdin = child.stdin.take().expect("piped stdin");
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider: provider.clone(),
@@ -3195,86 +3216,45 @@ async fn run_login(
         account_label: None,
         detail: Some("starting browser authorization".to_owned()),
     });
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    let mut stdout = tokio::io::BufReader::new(stdout).lines();
-    let mut stderr = tokio::io::BufReader::new(stderr).lines();
-    let mut stdout_open = true;
-    let mut stderr_open = true;
     let mut verification_url = None;
     let mut user_code = None;
     let mut challenge_sent = false;
-    loop {
-        let line = tokio::select! {
-            line = stdout.next_line(), if stdout_open => {
-                if matches!(line, Ok(None)) { stdout_open = false; }
-                line
-            },
-            line = stderr.next_line(), if stderr_open => {
-                if matches!(line, Ok(None)) { stderr_open = false; }
-                line
-            },
-            changed = login.cancel.changed() => {
-                if changed.is_ok() && *login.cancel.borrow() {
-                    let _ = child.kill().await;
-                    let _ = providers.discard_auth_candidate(&provider, &request_id);
-                    login.sessions.lock().remove(&request_id);
-                    let _ = events.send(MachineEvent::LoginState {
-                        request_id,
-                        provider,
-                        state: AuthState::SignedOut,
-                        account_label: None,
-                        detail: Some("login cancelled".to_owned()),
-                    });
-                    return;
-                }
-                continue;
-            },
-            code = login.input.recv() => {
-                if let Some(code) = code
-                    && (stdin.write_all(code.as_bytes()).await.is_err()
-                        || stdin.write_all(b"\n").await.is_err())
-                {
-                    let _ = child.kill().await;
-                }
-                continue;
+    let status = login_process::run(
+        child,
+        &mut login.cancel,
+        &mut login.input,
+        deadline,
+        |line| {
+            let (line_url, line_code) = login_challenge_tokens(&line);
+            if line_url.is_some() {
+                verification_url = line_url;
             }
-        };
-        let Ok(Some(line)) = line else {
-            if !stdout_open && !stderr_open {
-                break;
+            if line_code.is_some() {
+                user_code = line_code;
             }
-            continue;
-        };
-        let (line_url, line_code) = login_challenge_tokens(&line);
-        if line_url.is_some() {
-            verification_url = line_url;
-        }
-        if line_code.is_some() {
-            user_code = line_code;
-        }
-        let browser_device_flow = challenge == cowboy_provider_sdk::AuthChallenge::DeviceCode;
-        let challenge_ready = !browser_device_flow || user_code.is_some();
-        if !challenge_sent
-            && challenge_ready
-            && let Some(url) = verification_url.clone()
-        {
-            let _ = events.send(MachineEvent::LoginChallenge {
-                request_id: request_id.clone(),
-                provider: provider.clone(),
-                verification_url: url,
-                user_code: user_code.clone(),
-                input_required: !browser_device_flow,
-                input_label: None,
-                secret_input: false,
-                expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
-            });
-            challenge_sent = true;
-        }
-    }
-    let status = child.wait().await;
+            let browser_device_flow = challenge == cowboy_provider_sdk::AuthChallenge::DeviceCode;
+            let challenge_ready = !browser_device_flow || user_code.is_some();
+            if !challenge_sent
+                && challenge_ready
+                && let Some(url) = verification_url.clone()
+            {
+                let _ = events.send(MachineEvent::LoginChallenge {
+                    request_id: request_id.clone(),
+                    provider: provider.clone(),
+                    verification_url: url,
+                    user_code: user_code.clone(),
+                    input_required: !browser_device_flow,
+                    input_label: None,
+                    secret_input: false,
+                    expires_at_ms,
+                });
+                challenge_sent = true;
+            }
+        },
+    )
+    .await;
     login.sessions.lock().remove(&request_id);
-    let signed_in = status.is_ok_and(|status| status.success());
+    let signed_in = status.as_ref().is_ok_and(|status| status.success());
     let candidate = signed_in
         .then(|| providers.export_auth_candidate(&provider, &method_id, &home))
         .transpose();
@@ -3300,6 +3280,8 @@ async fn run_login(
         provider: provider.clone(),
         state: if service_ready {
             AuthState::Pending
+        } else if matches!(status, Err(login_process::Failure::Cancelled)) {
+            AuthState::SignedOut
         } else {
             AuthState::Error
         },
@@ -3307,7 +3289,7 @@ async fn run_login(
         detail: if service_ready {
             Some("login completed; promoting credentials to Cowboy Service".to_owned())
         } else if !signed_in {
-            Some("provider login did not complete".to_owned())
+            Some(status.err().map_or("provider login did not complete", |error| error.detail()).to_owned())
         } else {
             candidate.err().map(|error| format!(
                 "login completed but credentials could not be promoted to Cowboy Service scope: {error:#}"
@@ -3342,6 +3324,8 @@ async fn run_secret_input_login(
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {
+    let deadline = tokio::time::Instant::now() + login_process::TIMEOUT;
+    let expires_at_ms = unix_ms().saturating_add(login_process::TIMEOUT.as_millis() as i64);
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider: provider.clone(),
@@ -3357,17 +3341,12 @@ async fn run_secret_input_login(
         input_required: true,
         input_label: Some(method_label),
         secret_input: true,
-        expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
+        expires_at_ms,
     });
-    let candidate = tokio::select! {
-        changed = login.cancel.changed() => {
-            if changed.is_ok() && *login.cancel.borrow() { Err(anyhow::anyhow!("login cancelled")) }
-            else { Err(anyhow::anyhow!("login interrupted")) }
-        },
-        input = login.input.recv() => match input {
-            Some(secret) => providers.auth_candidate_from_secret(&provider, &method_id, &secret),
-            None => Err(anyhow::anyhow!("login input closed")),
-        },
+    let candidate = match login_process::input(&mut login.cancel, &mut login.input, deadline).await
+    {
+        Ok(secret) => providers.auth_candidate_from_secret(&provider, &method_id, &secret),
+        Err(error) => Err(anyhow::anyhow!(error.detail())),
     };
     login.sessions.lock().remove(&request_id);
     let service_ready = candidate.is_ok();

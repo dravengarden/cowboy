@@ -131,6 +131,7 @@ pub struct UsageService {
     cache_path: Option<PathBuf>,
     warming: Arc<AtomicBool>,
     execution_machines: Arc<parking_lot::RwLock<BTreeMap<String, String>>>,
+    runtime_restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
 }
 
 enum PluginCommandRoute {
@@ -227,7 +228,16 @@ impl UsageService {
             cache_path,
             warming: Arc::new(AtomicBool::new(false)),
             execution_machines: Arc::default(),
+            runtime_restrictions: Arc::default(),
         }
+    }
+
+    pub(crate) fn with_runtime_restrictions(
+        mut self,
+        restrictions: Arc<crate::project_placement::RuntimeRestrictions>,
+    ) -> Self {
+        self.runtime_restrictions = restrictions;
+        self
     }
 
     #[must_use]
@@ -251,9 +261,16 @@ impl UsageService {
         let released_hosts = runtime.exact_usage_hosts(account);
         let preferred_machine = self.execution_machines.read().get(account).cloned();
         if released_hosts.is_empty() {
-            if preferred_machine.is_some() {
+            if preferred_machine.is_some()
+                || runtime.default_hosts().iter().any(|host| {
+                    host.usage
+                        .as_ref()
+                        .is_some_and(|usage| usage.account == account)
+                        && !self.runtime_restrictions.allows(&host.id, "local")
+                })
+            {
                 return PluginCommandRoute::Unavailable(
-                    "Configured usage Machine requires a released Plugin host".to_owned(),
+                    "Usage Machine policy requires a released Plugin host".to_owned(),
                 );
             }
             return PluginCommandRoute::Bootstrap;
@@ -299,7 +316,7 @@ impl UsageService {
                     })
             })
             .collect::<Vec<_>>();
-        execution::select_candidate(preferred_machine.as_deref(), candidates).map_or_else(
+        execution::select_candidate(preferred_machine.as_deref(), candidates, &self.runtime_restrictions).map_or_else(
             || {
                 PluginCommandRoute::Unavailable(
                     preferred_machine.map_or_else(
