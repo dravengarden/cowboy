@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "feature": "Create title automatic focus and selection",
+  "behavior": [
+    "Create claims the keyboard within the mobile opening gesture and transfers focus to Title after mount, selecting the default name.",
+    "Switching to Draft synchronously commits the new title then focuses and selects it in the same gesture, without another Title tap.",
+    "Variant switch cancels pending opening focus so it cannot select an edited Draft later.",
+    "Previously edited Draft titles are not forcibly selected on re-focus."
+  ],
+  "validation": {
+    "web_typecheck": "passed",
+    "web_lint": "passed with existing warnings",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "firefox": {
+      "suite": "draft-documents",
+      "light": 9,
+      "dark": 9,
+      "focus_check": "Selecting Draft focuses and selects the generated name on actual Desktop and touch branches without manually focusing Title."
+    },
+    "limits": [
+      "Browser DOM focus/selection tests do not prove the physical iOS software keyboard behavior.",
+      "No shared composer editor implementation changed."
+    ]
+  },
+  "delivery": {
+    "component": "web",
+    "service_worker": "cowboy-v1836"
+  }
+}

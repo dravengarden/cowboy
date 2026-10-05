@@ -75,7 +75,7 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
     appSource.indexOf("const openNewSession = (): void => {"),
     appSource.indexOf("const [pendingCreatedSession"),
   );
-  assertEquals(opener.includes("claimKeyboard()"), false);
+  assertEquals(opener.includes("if (mobile) claimKeyboard();"), true);
   assertEquals(
     appSource.includes("const openNewSession = (): void => {"),
     true,

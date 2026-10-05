@@ -2532,14 +2532,14 @@ export function CreateDialog({
     // otherwise survive and show the last-typed value.
     const [title, setTitle] = useState<string>("");
     const titleRef = useRef<HTMLInputElement>(null);
+    const titleFocusTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
     // Session count, captured in a ref so its default name is computed at open
     // time WITHOUT a session arriving mid-edit clobbering what you're typing.
     const sessionCount = useStoreSelector((snapshot) => snapshot.sessions.length);
     const sessionCountRef = useRef(sessionCount);
     sessionCountRef.current = sessionCount;
-    // A fresh Create starts on Session, with separate title/directory state
-    // for Draft. Desktop selects the default title for immediate typing;
-    // touch waits for a Title tap so both variants are visible without a keyboard.
+    // A fresh Create selects its default title for immediate replacement.
+    // Touch transfers the opener's in-gesture keyboard claim after mounting.
     useEffect(() => {
         if (!open) return undefined;
         setVariant("session");
@@ -2552,13 +2552,16 @@ export function CreateDialog({
         setWorkItemId("");
         setCreating(false);
         setCreateError("");
-        if (!desktop) return undefined;
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus({ preventScroll: true });
             titleRef.current?.select();
         }, 120);
-        return () => globalThis.clearTimeout(t);
-    }, [open, desktop]);
+        titleFocusTimer.current = t;
+        return () => {
+            globalThis.clearTimeout(t);
+            if (titleFocusTimer.current === t) titleFocusTimer.current = undefined;
+        };
+    }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     const create = (): void => {
@@ -2704,8 +2707,23 @@ export function CreateDialog({
                     value={variant}
                     disabled={creating}
                     onChange={(next): void => {
-                        setVariant(next);
-                        setCreateError("");
+                        // Flush the new title while still inside the tap gesture:
+                        // WebKit can raise the keyboard only for this synchronous focus.
+                        globalThis.clearTimeout(titleFocusTimer.current);
+                        const select = next === "session" || selectDraftTitleOnFocus.current;
+                        flushSync(() => {
+                            setVariant(next);
+                            setCreateError("");
+                        });
+                        const input = titleRef.current;
+                        input?.focus({ preventScroll: true });
+                        if (input && select) {
+                            if (next === "draft") selectDraftTitleOnFocus.current = false;
+                            input.select();
+                            requestAnimationFrame(() => {
+                                if (document.activeElement === input) input.select();
+                            });
+                        }
                     }}
                 />
                 <Stack spacing={2} id="create-variant-panel" role="tabpanel" aria-labelledby={`create-${variant}-tab`}>
@@ -2721,7 +2739,7 @@ export function CreateDialog({
                         }}
                         disabled={creating}
                         inputRef={titleRef}
-                        autoFocus={desktop}
+                        autoFocus
                         onFocus={(e): void => {
                             // Select the whole default ("New session N") on EVERY focus, so
                             // tapping the field replaces it in one go. Deferred a frame — iOS
@@ -3148,8 +3166,8 @@ export function App({
     });
     const [dialogOpen, setDialogOpen] = useState(false);
     const openNewSession = (): void => {
-        // Start with both creation variants visible on touch surfaces. The
-        // user can choose Draft before raising the keyboard by tapping Title.
+        // Preserve the in-gesture keyboard claim until Create's Title mounts.
+        if (mobile) claimKeyboard();
         setDialogOpen(true);
     };
     const [pendingCreatedSession, setPendingCreatedSession] = useState<SessionMeta | null>(null);

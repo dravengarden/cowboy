@@ -199,11 +199,13 @@ export async function runDraftDocumentsBrowserConformance(): Promise<string[]> {
         /^Draft \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(title.value),
         "Draft starts with a local date/time name",
       );
-      title.focus();
-      await tick();
+      check(
+        document.activeElement === title,
+        "Selecting Draft automatically focuses Title",
+      );
       check(
         title.selectionStart === 0 && title.selectionEnd === title.value.length,
-        "First focus selects the generated name for replacement",
+        "Selecting Draft automatically selects the generated name for replacement",
       );
       const setter = Object.getOwnPropertyDescriptor(
         HTMLInputElement.prototype,
