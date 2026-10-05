@@ -1,5 +1,8 @@
 # Original Session directory during terminal cleanup
 
+The [October 5 Hawk release](releases/plugin-session-cleanup-root-2026-10-05.md)
+records the active artifact and bounded continuity evidence.
+
 Terminal StopSession captures the validated managed worktree directory before
 dispatching the worker stop. The asynchronous cleanup retains an open directory
 handle while waiting for process-exit proof. A failed capture preserves artifacts
