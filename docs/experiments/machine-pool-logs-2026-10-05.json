@@ -1,0 +1,20 @@
+{
+  "schema": "cowboy.logs-conformance/v1",
+  "accepted": true,
+  "binary_sha256": "4681fc7042eefe03349a4326e67edbaf7bc326f572801b49e7eafd85823a7806",
+  "ssh_alias": null,
+  "checks": [
+    "schema derives actual command arguments",
+    "RUST_LOG=off still records correlated redacted failure",
+    "analysis evidence identity is queryable",
+    "source aggregation is independent of page size",
+    "deterministic analysis returns evidence with coverage limits",
+    "tail drains pages and suppresses repeated evidence IDs",
+    "periodic analysis is bounded and emits JSONL",
+    "OTLP protobuf export refuses truncated evidence",
+    "RPC is read-only and refuses recursive remote execution",
+    "partial-source failure is explicit with nonzero default exit",
+    "short retention config resolves rotation and supports idle maintenance"
+  ],
+  "limits": "Isolated CLI fixture; not a production rollout or external Collector receipt."
+}
