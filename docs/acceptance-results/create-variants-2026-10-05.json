@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "feature": "Unified Create variants",
+  "behavior": [
+    "Sessions plus button, desktop Create button and empty-workspace entrance open one Create dialog with Session and Draft tabs.",
+    "Start on Session for the existing shortcut workflow; preserve separate titles and directory selections when switching variants.",
+    "Draft uses optional title (Untitled fallback) and its own optional folder selector; clear selects the true top level.",
+    "Draft creation requires durable device persistence, but never requires a Machine, project, Provider or server connectivity.",
+    "Touch opens without claiming the keyboard, keeping both creation variants discoverable; tapping Title raises the keyboard. Desktop retains selected-title focus and Mod+Enter.",
+    "Explicit Create session/Create draft confirmation labels; disabled variant switching during creation and synchronous double-submit guard.",
+    "No creation snackbar: opening the persisted destination supplies the success feedback."
+  ],
+  "validation": {
+    "web_typecheck": "passed",
+    "web_lint": "passed with pre-existing warnings",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "firefox": {
+      "suite": "draft-documents",
+      "light": 9,
+      "dark": 9,
+      "create_coverage": [
+        "Actual production Create dialog under StrictMode on Desktop and touch branches",
+        "Empty Machine inventory disables Session but leaves Draft usable",
+        "Title and Draft folder survive variant switches",
+        "Session folder does not leak into Draft placement",
+        "Select a Draft folder, clear to root, create both placements",
+        "IME candidate Enter cannot create",
+        "Offline creation stores locally before navigating",
+        "Double click creates exactly one Draft"
+      ]
+    },
+    "limits": [
+      "Firefox touch-branch checks are not iOS native keyboard or physical-device acceptance.",
+      "Existing physical iPhone/WeType issue #69 remains open.",
+      "No editor implementation was changed by this entrance fix."
+    ]
+  },
+  "delivery": {
+    "service_worker": "cowboy-v1834",
+    "component": "web",
+    "controller_restart": false,
+    "machine_restart": false,
+    "revision": "3c8e6ee2445de61595c5ef6bb6f3ee46d7bd1c2f",
+    "published_to": "origin/main",
+    "activation": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791159786585626927-3c8e6ee2445d",
+      "revision": "3c8e6ee2445de61595c5ef6bb6f3ee46d7bd1c2f",
+      "published": true,
+      "release": "/nix/store/ydbdysn3b1j4qxfh3vq8d4m5cm4i8n6j-cowboy-web-release",
+      "previousRelease": "/nix/store/vxvahfyw4b2n2ypjq2gwc2hldrlp18j5-cowboy-web-release",
+      "activeRelease": "/nix/store/ydbdysn3b1j4qxfh3vq8d4m5cm4i8n6j-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-05T00:23:06.585626927Z",
+      "recordedAt": "2026-10-05T00:23:06.67966476Z",
+      "recovered": false
+    },
+    "production_version": "e2e62b9b474ebf3a14d0d8bdcaf505b4",
+    "healthz": "ok",
+    "assets": [
+      {
+        "path": "/",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "e2e62b9b474ebf3a14d0d8bdcaf505b4057c0cc0d7eff81d56931e1936721c95",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/sw.js",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "fc5cef5a0b563d6466bb33f895beeb82b91dfba5b882899bb272448c17445039",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/assets/main-B5UL_qXd.js",
+        "status": 200,
+        "cache_control": "public, max-age=31536000, immutable",
+        "sha256": "106a23e131f8a91f6862fa8e5af29d318b60f43061a79f393fdad4c39886b5dc",
+        "matches_immutable_release": true
+      }
+    ],
+    "controller_pid_before_and_after": 803041,
+    "machine_pid_before_and_after": 733209,
+    "installed_user_pwa_reload_observed": false
+  }
+}

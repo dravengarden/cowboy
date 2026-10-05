@@ -1,3 +1,4 @@
+import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
 import { DesktopDraftDestinationPicker } from "./desktop/DesktopDraftDestinationPicker";
 import { ProtectedImage } from "./ProtectedImage";
 import {
@@ -251,6 +252,7 @@ import {
   moveDraft,
   openSession,
   type QueuedMessage,
+  notify,
   queuedToDraft,
   removeDraft,
   removeQueued,
@@ -5756,6 +5758,12 @@ function PendingRow({
           onClick: onSchedule,
         }]
         : []),
+      ...(!message.schedule ? [{
+        key: "document",
+        label: "Move to independent Drafts",
+        icon: <DriveFileMoveOutlined fontSize="small" />,
+        onClick: (): void => { void moveSessionDraftToDocument(sessionId, message).catch((error: Error) => notify(error.message)); },
+      }] : []),
       ...(onMove
         ? [{
           key: "move",

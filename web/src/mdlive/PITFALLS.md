@@ -2775,3 +2775,45 @@ Desktop Vim + IME checks:
     default 65% font size. Mobile retains its 44px touch target. No editor,
     CM6, caret, IME or native keyboard behavior changes. Browser checks cover
     both panels and surfaces at 50%, 65%, 100% and 150% in both themes.
+
+
+117. **Independent Drafts use the same `PlatformComposerEditor` as Sessions.**
+    The context is a document id, never a fake Session or Machine. Submit and
+    file-completion capabilities are optional; a document cannot send a prompt.
+    CM6 receives a frozen mount seed. A remote save, rename, folder move or
+    trash operation must not replace the live document, reset undo, or unmount
+    marked text. Concurrent content stays local until explicitly recovered.
+    Draft full-height native-textarea styles are scoped to the new workspace.
+    Desktop toolbar sizing, tabs and sidebar use available canvas width; touch
+    retains native promotion, composition-end hold and its own layout.
+
+    The shared editor-extension facade follows the gateway lifetime. Child
+    imperative handles change during focus/renders: tying plugin ownership to
+    those refs closed the tools sheet on focus and revoked ordinary commands.
+    A stable forwarding facade keeps the actual current native/CM6 child,
+    while a layout-effect owner revokes access on unmount. Do not freeze a child
+    handle or keep its authority alive after the gateway closes. Extension
+    writes compare text/revision/selection, respect the existing IME hold, and
+    use the existing undo transaction. No CM6 or Vim/IME extension is removed.
+
+    The `draft-documents` browser suite covers StrictMode, real CM6/IDB,
+    Unicode, offline replay, independent content/placement clocks, conflict
+    recovery, templates/undo, IME fences, 84k text viewport rendering and
+    Desktop 320–1440px/8–24px fonts. Force fine-pointer/hover in the
+    headless fixture and assert the actual Desktop context: Firefox otherwise
+    takes the touch branch. Keep rem-sized toolbar padding proportional too. Existing `desktop-composer` checks both
+    themes and touch layout. These are browser checks, not physical IME
+    acceptance. The isolated native-input fixture uses the actual shared
+    component in WKWebView; record its native results separately. #69 remains
+    open, including physical WeType behaviour.
+
+    Architecture reference (checked 2026-10-04): Obsidian stable Desktop
+    1.13.7; 1.14.4 is early access. Retain Cowboy's current editor and borrow
+    Obsidian's versioned Editor facade, commands, scoped resource ownership and
+    unload cleanup: https://docs.obsidian.md/Plugins/Editor/Editor and
+    https://docs.obsidian.md/plugins/guides/lifecycle-management . Built-in
+    templates and outline/statistics exercise this contract in both contexts.
+    This is an extension host, not Obsidian binary compatibility or an alternate
+    plugin installer. Future distributable extensions must enter Cowboy's
+    existing signed Plugin lifecycle and declared capabilities; core Web does
+    not download/evaluate arbitrary community JavaScript.

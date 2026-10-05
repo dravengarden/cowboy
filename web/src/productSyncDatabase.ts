@@ -143,6 +143,7 @@ export function localStorageDatasetCache(
 }
 
 export type ProductSyncScope =
+  | { readonly kind: "document"; readonly document: string; readonly state: "entry" }
   | {
     readonly kind: "service";
     readonly state: "title" | "order" | "folders";
@@ -154,6 +155,10 @@ export type ProductSyncScope =
   };
 
 function suffix(scope: ProductSyncScope): string {
+  if (scope.kind === "document") {
+    if (scope.state !== "entry" || !/^[A-Za-z0-9_-]{1,128}$/.test(scope.document)) invalid();
+    return `document:${scope.document}:entry`;
+  }
   if (scope.kind === "service") {
     if (
       scope.state !== "title" && scope.state !== "order" &&
@@ -175,7 +180,7 @@ function suffix(scope: ProductSyncScope): string {
 export type ProductCacheScope =
   | {
     readonly kind: "service";
-    readonly state: "sessions" | "machines";
+    readonly state: "sessions" | "machines" | "drafts";
   }
   | {
     readonly kind: "session";
@@ -190,7 +195,7 @@ const CACHE_SESSION_STATES = ["tail", "delivery", "draft"] as const;
 
 function cacheSuffix(scope: ProductCacheScope): string {
   if (scope.kind === "service") {
-    if (scope.state !== "sessions" && scope.state !== "machines") invalid();
+    if (scope.state !== "sessions" && scope.state !== "machines" && scope.state !== "drafts") invalid();
     return `service:${scope.state}`;
   }
   if (
@@ -357,6 +362,16 @@ export function createProductSyncDatabase(
         },
       };
     },
+    async draftDocumentIds(): Promise<string[]> {
+      const identity = await ready();
+      assertAdmission();
+      const keys = await owner.listKeys({ strict: true, limit: 20000 });
+      assertAdmission();
+      const start = `${prefix(identity)}document:`;
+      return keys.filter((key) => key.startsWith(start) && key.endsWith(":entry"))
+        .map((key) => key.slice(start.length, -6))
+        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
+    },
     async queueSessions(): Promise<string[]> {
       const identity = await ready();
       assertAdmission();
@@ -429,6 +444,7 @@ export function createProductSyncDatabase(
         key.startsWith(start) && (
           key === `${start}service:sessions` ||
           key === `${start}service:machines` ||
+          key === `${start}service:drafts` ||
           CACHE_SESSION_STATES.some((state) =>
             key.startsWith(`${start}session:`) && key.endsWith(`:${state}`)
           )

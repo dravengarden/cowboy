@@ -21,12 +21,13 @@ export const DEFAULT_COMPOSER_TOOLBAR: readonly string[] = [
   "mention",
   "slash",
   "sourceMode",
+  "extensions",
 ];
 
 // Migrate only an exact retired default. A genuinely curated device order is
 // user-owned and must remain untouched, so a list is retired here ONLY when it
 // was itself a shipped default — never because it merely looks close to one.
-const RETIRED_COMPOSER_TOOLBARS: readonly (readonly string[])[] = [[
+const RETIRED_COMPOSER_TOOLBARS: readonly (readonly string[])[] = [DEFAULT_COMPOSER_TOOLBAR.filter((id) => id !== "extensions"), [
   "undo",
   "redo",
   "heading",

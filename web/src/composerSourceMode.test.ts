@@ -107,7 +107,9 @@ Deno.test("mobile reaches source mode through the curatable toolbar registry", (
   assert(DEFAULT_COMPOSER_TOOLBAR.includes("sourceMode"));
   // An uncurated device that still holds the retired default is carried
   // forward; a curated order stays exactly as the user left it.
-  const retired = DEFAULT_COMPOSER_TOOLBAR.filter((id) => id !== "sourceMode");
+  const retired = DEFAULT_COMPOSER_TOOLBAR.filter((id) => id !== "sourceMode" && id !== "extensions");
+  const curatedWithExtensions = DEFAULT_COMPOSER_TOOLBAR.filter((id) => id !== "sourceMode");
+  assertEquals(normalizeComposerToolbarOrder(curatedWithExtensions, () => true), curatedWithExtensions);
   assertEquals(
     normalizeComposerToolbarOrder(retired, () => true),
     [...DEFAULT_COMPOSER_TOOLBAR],

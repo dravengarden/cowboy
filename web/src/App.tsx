@@ -1,3 +1,10 @@
+import { defaultDraftTitle } from "./documents/defaultDraftTitle";
+import { CreateVariantPicker, DraftCreationDirectory, type CreateVariant } from "./CreateVariantPicker";
+import { draftRepository } from "./documents/store";
+import { openDrafts } from "./documents/navigation";
+import { DraftsButton } from "./documents/DraftsButton";
+import { DRAFT_DRAG_TYPE } from "./documents/model";
+import { copyDraftToSession } from "./documents/transfer";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PriorSendDecisionSheet } from "./PriorSendDecisionSheet";
@@ -1379,6 +1386,7 @@ function SessionList({
                 minHeight: 0,
             }}
         >
+            <DraftsButton />
             {!mobileDrawer && <Box sx={{ p: 1 }}>
                 <Stack direction="row" spacing={0.75} alignItems="stretch" justifyContent="flex-end">
                 {allowNewSession && <Button
@@ -1394,7 +1402,7 @@ function SessionList({
                         letterSpacing: "0.08em",
                     } : undefined}
                 >
-                    New session
+                    Create
                     {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
                 </Button>}
                 <IconButton
@@ -1667,6 +1675,17 @@ function SessionList({
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
+                        onDragOver={(event): void => {
+                            if (desktop && event.dataTransfer.types.includes(DRAFT_DRAG_TYPE)) {
+                                event.preventDefault(); event.dataTransfer.dropEffect = "copy";
+                            }
+                        }}
+                        onDrop={(event): void => {
+                            const documentId = event.dataTransfer.getData(DRAFT_DRAG_TYPE);
+                            if (!desktop || !documentId) return;
+                            event.preventDefault();
+                            void copyDraftToSession(documentId, s.id, s.title).catch((error: Error) => notify(error.message));
+                        }}
                         onPointerEnter={desktop
                             ? (event): void => {
                                 if (event.pointerType !== "mouse" || s.id === activeId) return;
@@ -1926,7 +1945,7 @@ function SessionList({
                             ...(allowNewSession
                                 ? [{
                                     key: "new",
-                                    label: "New session",
+                                    label: "Create",
                                     onPress: onNew,
                                     icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
                                 }]
@@ -2488,18 +2507,6 @@ type WorkspaceChoice = {
 
 type MachineChoice = MachineSummary;
 
-function useProductMachines(): {
-    machines: readonly MachineChoice[] | null;
-    canStartSession: boolean;
-} {
-    const machines = useStoreSelector((snapshot) => snapshot.machines);
-    const loaded = useStoreSelector((snapshot) => snapshot.machinesLoaded);
-    return {
-        machines: loaded ? machines : null,
-        canStartSession: machines.some((machine) => machine.schedulable),
-    };
-}
-
 function EmptyWorkspaceState({
     onNewSession,
 }: {
@@ -2514,14 +2521,14 @@ function EmptyWorkspaceState({
                 startIcon={<Add />}
                 onClick={onNewSession}
             >
-                New session
+                Create
                 {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
             </Button>
         </>
     );
 }
 
-function NewSessionDialog({
+export function CreateDialog({
     open,
     onClose,
     onCreated,
@@ -2534,6 +2541,11 @@ function NewSessionDialog({
     initialFolder?: string | null;
 }): React.JSX.Element {
     const keyboardOpen = useKeyboardOpen();
+    const [variant, setVariant] = useState<CreateVariant>("session");
+    const [draftTitle, setDraftTitle] = useState("");
+    const selectDraftTitleOnFocus = useRef(true);
+    const [draftDirectory, setDraftDirectory] = useState("");
+    const creatingRef = useRef(false);
     const machines = useStoreSelector((snapshot) => snapshot.machines);
     const placement = useProjectPlacement(open, machines);
     const machineId = placement.machineId;
@@ -2562,18 +2574,21 @@ function NewSessionDialog({
     // otherwise survive and show the last-typed value.
     const [title, setTitle] = useState<string>("");
     const titleRef = useRef<HTMLInputElement>(null);
+    const titleFocusTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
     // Session count, captured in a ref so its default name is computed at open
     // time WITHOUT a session arriving mid-edit clobbering what you're typing.
     const sessionCount = useStoreSelector((snapshot) => snapshot.sessions.length);
     const sessionCountRef = useRef(sessionCount);
     sessionCountRef.current = sessionCount;
-    // On open: reset to a fresh "New session N" default (N keeps it distinct if
-    // you open several without renaming), then transfer the in-gesture keyboard
-    // claim onto the title field and select the default so typing replaces it.
-    // The opener calls claimKeyboard() on touch; this delay only transfers
-    // focus after the sheet mounts the field (same timing as rename).
+    // A fresh Create selects its default title for immediate replacement.
+    // Touch transfers the opener's in-gesture keyboard claim after mounting.
     useEffect(() => {
         if (!open) return undefined;
+        setVariant("session");
+        setDraftTitle(defaultDraftTitle());
+        selectDraftTitleOnFocus.current = true;
+        setDraftDirectory("");
+        creatingRef.current = false;
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setDirectory(initialFolder ?? "");
         setWorkItemId("");
@@ -2583,11 +2598,41 @@ function NewSessionDialog({
             titleRef.current?.focus({ preventScroll: true });
             titleRef.current?.select();
         }, 120);
-        return () => globalThis.clearTimeout(t);
+        titleFocusTimer.current = t;
+        return () => {
+            globalThis.clearTimeout(t);
+            if (titleFocusTimer.current === t) titleFocusTimer.current = undefined;
+        };
     }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     const create = (): void => {
+        if (creatingRef.current) return;
+        if (variant === "draft") {
+            const repository = draftRepository();
+            if (draftDirectory && !repository.get().entries.some((entry) =>
+                entry.id === draftDirectory && entry.kind === "folder" && !entry.deleted
+            )) {
+                setCreateError("The Draft directory was removed. Choose another directory or clear it for the top level.");
+                return;
+            }
+            creatingRef.current = true;
+            setCreating(true);
+            setCreateError("");
+            void repository.create(draftTitle.trim() || defaultDraftTitle(), draftDirectory || null)
+                .then((id): void => {
+                    onClose();
+                    openDrafts(id);
+                })
+                .catch((error: unknown): void => {
+                    setCreateError(error instanceof Error ? error.message : "Draft creation failed");
+                })
+                .finally((): void => {
+                    creatingRef.current = false;
+                    setCreating(false);
+                });
+            return;
+        }
         if (creating || !placement.ready || !providerAvailable(provider) || !machineId || !cwd) return;
         if (directory && !sessionDirectories.folders.some((folder) => folder.id === directory)) {
             setCreateError("The Sessions directory was removed. Choose another directory or Global.");
@@ -2596,6 +2641,7 @@ function NewSessionDialog({
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
         // id back synchronously and can focus the new session the moment it's
         // created.
+        creatingRef.current = true;
         setCreating(true);
         setCreateError("");
         void (async (): Promise<void> => {
@@ -2686,6 +2732,7 @@ function NewSessionDialog({
                         : "Session creation failed",
                 );
             } finally {
+                creatingRef.current = false;
                 setCreating(false);
             }
         })();
@@ -2698,86 +2745,127 @@ function NewSessionDialog({
     const form = (
             <Stack spacing={2} sx={{ mt: 1 }}>
                 {createError ? <Alert severity="error">{createError}</Alert> : null}
-                {placement.error ? <Alert severity="error">{placement.error}</Alert> : null}
-                <TextField
-                    label="Title"
-                    value={title}
-                    onChange={(e): void => setTitle(e.target.value)}
-                    inputRef={titleRef}
-                    autoFocus
-                    onFocus={(e): void => {
-                        // Select the whole default ("New session N") on EVERY focus, so
-                        // tapping the field replaces it in one go. Deferred a frame — iOS
-                        // collapses a synchronous select() back to a caret. Same logic as
-                        // the session-rename field (Composer.tsx).
-                        const input = e.target as HTMLInputElement;
-                        requestAnimationFrame(() => input.select());
-                    }}
-                    onKeyDown={(e): void => {
-                        // Mobile keeps its touch-form Enter behaviour. Desktop uses the
-                        // modal-wide Mod+Enter handler; bare Enter must never confirm.
-                        if (
-                            e.key === "Enter" && !e.shiftKey &&
-                            !isImeKeyEvent(e.nativeEvent)
-                        ) {
-                            e.preventDefault();
-                            if (!desktop) create();
+                <CreateVariantPicker
+                    value={variant}
+                    disabled={creating}
+                    onChange={(next): void => {
+                        // Flush the new title while still inside the tap gesture:
+                        // WebKit can raise the keyboard only for this synchronous focus.
+                        globalThis.clearTimeout(titleFocusTimer.current);
+                        const select = next === "session" || selectDraftTitleOnFocus.current;
+                        flushSync(() => {
+                            setVariant(next);
+                            setCreateError("");
+                        });
+                        const input = titleRef.current;
+                        input?.focus({ preventScroll: true });
+                        if (input && select) {
+                            if (next === "draft") selectDraftTitleOnFocus.current = false;
+                            input.select();
+                            requestAnimationFrame(() => {
+                                if (document.activeElement === input) input.select();
+                            });
                         }
                     }}
-                    placeholder="Name this session"
-                    helperText="Clear to auto-name from the first message"
                 />
-                <WorkspacePicker
-                    label="Project"
-                    entries={placement.projects}
-                    value={placement.project?.value ?? ""}
-                    defaultValue={placement.defaultProjectValue}
-                    configuredDefault={placement.configuredDefaultProject}
-                    onDefaultChange={placement.setDefaultProject}
-                    onChange={(value): void => {
-                        placement.selectProject(value);
-                        setWorkItemId("");
-                    }}
-                />
-                <WorkspacePicker
-                    label="Sessions directory (optional)"
-                    clearable
-                    hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
-                    entries={directoryChoices}
-                    value={directory}
-                    onChange={setDirectory}
-                />
-                <AiInstallationPicker
-                    installations={placement.installations}
-                    value={placement.installation?.value ?? ""}
-                    onChange={placement.selectInstallation}
-                    helperText={placement.loading ? "Checking available AI installations…" : placement.installation
-                        ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
-                        : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
-                        : "No ready AI installation can use this project. Check Machines in Settings."}
-                />
-                <Typography variant="caption" color="text.secondary">
-                    Git projects open in a session worktree. Other directories are shared in place.
-                </Typography>
-                {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
+                <Stack spacing={2} id="create-variant-panel" role="tabpanel" aria-labelledby={`create-${variant}-tab`}>
+                    {variant === "session" && placement.error ? <Alert severity="error">{placement.error}</Alert> : null}
                     <TextField
-                        select
-                        label="Durable work item"
-                        value={workItemId}
-                        onChange={(e): void => setWorkItemId(e.target.value)}
-                        helperText="Optional · resumes durable context in the selected Provider runtime"
-                    >
-                        <MenuItem value="">New task</MenuItem>
-                        {selectedWorkspace.active_work_items.map((item) => (
-                            <MenuItem key={item.id} value={item.id}>
-                                {item.title}{item.blocked ? " · blocked" : ""}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                ) : null}
+                        label="Title"
+                        value={variant === "draft" ? draftTitle : title}
+                        onChange={(e): void => {
+                            if (variant === "draft") {
+                                selectDraftTitleOnFocus.current = false;
+                                setDraftTitle(e.target.value);
+                            } else setTitle(e.target.value);
+                        }}
+                        disabled={creating}
+                        inputRef={titleRef}
+                        autoFocus
+                        onFocus={(e): void => {
+                            // Select the whole default ("New session N") on EVERY focus, so
+                            // tapping the field replaces it in one go. Deferred a frame — iOS
+                            // collapses a synchronous select() back to a caret. Same logic as
+                            // the session-rename field (Composer.tsx).
+                            const input = e.target as HTMLInputElement;
+                            if (variant === "session" || selectDraftTitleOnFocus.current) {
+                                if (variant === "draft") selectDraftTitleOnFocus.current = false;
+                                requestAnimationFrame(() => {
+                                    if (document.activeElement === input) input.select();
+                                });
+                            }
+                        }}
+                        onKeyDown={(e): void => {
+                            // Mobile keeps its touch-form Enter behaviour. Desktop uses the
+                            // modal-wide Mod+Enter handler; bare Enter must never confirm.
+                            if (
+                                e.key === "Enter" && !e.shiftKey &&
+                                !isImeKeyEvent(e.nativeEvent)
+                            ) {
+                                e.preventDefault();
+                                if (!desktop) create();
+                            }
+                        }}
+                        placeholder={variant === "draft" ? "Untitled" : "Name this session"}
+                        helperText={variant === "draft" ? "Device local time · replace this name or rename it while editing" : "Clear to auto-name from the first message"}
+                    />
+                    {variant === "draft" ? (
+                        <DraftCreationDirectory value={draftDirectory} onChange={setDraftDirectory} />
+                    ) : <>
+                        <WorkspacePicker
+                            label="Project"
+                            entries={placement.projects}
+                            value={placement.project?.value ?? ""}
+                            defaultValue={placement.defaultProjectValue}
+                            configuredDefault={placement.configuredDefaultProject}
+                            onDefaultChange={placement.setDefaultProject}
+                            onChange={(value): void => {
+                                placement.selectProject(value);
+                                setWorkItemId("");
+                            }}
+                        />
+                        <WorkspacePicker
+                            label="Sessions directory (optional)"
+                            clearable
+                            hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+                            entries={directoryChoices}
+                            value={directory}
+                            onChange={setDirectory}
+                        />
+                        <AiInstallationPicker
+                            installations={placement.installations}
+                            value={placement.installation?.value ?? ""}
+                            onChange={placement.selectInstallation}
+                            helperText={placement.loading ? "Checking available AI installations…" : placement.installation
+                                ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
+                                : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
+                                : "No ready AI installation can use this project. Check Machines in Settings."}
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Git projects open in a session worktree. Other directories are shared in place.
+                        </Typography>
+                        {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
+                            <TextField
+                                select
+                                label="Durable work item"
+                                value={workItemId}
+                                onChange={(e): void => setWorkItemId(e.target.value)}
+                                helperText="Optional · resumes durable context in the selected Provider runtime"
+                            >
+                                <MenuItem value="">New task</MenuItem>
+                                {selectedWorkspace.active_work_items.map((item) => (
+                                    <MenuItem key={item.id} value={item.id}>
+                                        {item.title}{item.blocked ? " · blocked" : ""}
+                                    </MenuItem>
+                                ))}
+                            </TextField>
+                        ) : null}
+                    </>}
+                </Stack>
             </Stack>
     );
-    const canCreate = !creating && placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd);
+    const canCreate = !creating && (variant === "draft" || (placement.ready && providerAvailable(provider) && Boolean(provider && machineId && cwd)));
+    const createLabel = variant === "draft" ? "Create draft" : "Create session";
     if (navbarAtBottom) {
         return (
             <>
@@ -2786,7 +2874,7 @@ function NewSessionDialog({
                 onClose={creating ? (): void => {} : onClose}
                 cover
                 frosted
-                ariaLabel="New session"
+                ariaLabel="Create"
                 keyboardOpen={keyboardOpen}
                 surfaceColor={theme.palette.background.default}
                 footer={
@@ -2796,7 +2884,7 @@ function NewSessionDialog({
                             flat
                             onCancel={creating ? (): void => {} : onClose}
                             cancelDisabled={creating}
-                            confirmLabel={creating ? "Creating…" : "Create"}
+                            confirmLabel={creating ? "Creating…" : createLabel}
                             onConfirm={create}
                             confirmDisabled={!canCreate}
                             confirmBusy={creating}
@@ -2807,7 +2895,7 @@ function NewSessionDialog({
                 header={
                     <Box sx={{ pl: 2, pr: 2, pb: 1 }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                            New session
+                            Create
                         </Typography>
                     </Box>
                 }
@@ -2823,7 +2911,7 @@ function NewSessionDialog({
         <Sheet
             open={open}
             onClose={creating ? (): void => {} : onClose}
-            title="New session"
+            title="Create"
             actions={
                 <>
                     <Button onClick={onClose} color="inherit" disabled={creating}>
@@ -2842,7 +2930,7 @@ function NewSessionDialog({
                         variant="contained"
                         disabled={!canCreate}
                     >
-                        {creating ? "Preparing…" : "Create"}
+                        {creating ? "Creating…" : createLabel}
                         <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
@@ -3119,12 +3207,8 @@ export function App({
         if (drawerOpen) settleMobileDrawerRef.current?.(false);
     });
     const [dialogOpen, setDialogOpen] = useState(false);
-    const { canStartSession } = useProductMachines();
     const openNewSession = (): void => {
-        if (!canStartSession) return;
-        // iOS only raises the software keyboard for an in-gesture focus. The
-        // New Session title field mounts after the sheet opens, so claim here
-        // and transfer once the field exists — same contract as rename.
+        // Preserve the in-gesture keyboard claim until Create's Title mounts.
         if (mobile) claimKeyboard();
         setDialogOpen(true);
     };
@@ -3637,7 +3721,7 @@ export function App({
                 newSessionFolderRef.current = folder;
                 openNewSession();
             }}
-            allowNewSession={canStartSession}
+            allowNewSession
             onClose={mobile
                 ? (): void => settleMobileDrawerRef.current?.(false)
                 : undefined}
@@ -4003,7 +4087,7 @@ export function App({
                             groups={collapsedRail.groups}
                             slots={collapsedRail.slots}
                             activeId={active?.id ?? null}
-                            allowNewSession={canStartSession}
+                            allowNewSession
                             onPick={pick}
                             onNew={openNewSession}
                             renderStatus={(s): React.ReactNode => (
@@ -5016,7 +5100,7 @@ export function App({
             </Stack>
             </Box>
 
-            <NewSessionDialog
+            <CreateDialog
                 open={dialogOpen}
                 initialFolder={newSessionFolderRef.current}
                 onClose={(): void => {

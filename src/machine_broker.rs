@@ -257,7 +257,7 @@ struct WorkerRegistration {
 
 #[derive(Clone)]
 struct DeletedWorkspace {
-    cwd: String,
+    workspace: crate::session_workspace::CleanupWorkspace,
     command_id: String,
 }
 
@@ -1156,11 +1156,7 @@ impl Broker {
                         .confirm_deleted_session_owner_exit(&session_id)
                         .await?;
                     broker.workers.lock().remove(&session_id);
-                    let removed = crate::session_workspace::cleanup_build_artifacts(
-                        &broker.args.worktree_root,
-                        &session_id,
-                        Path::new(&workspace.cwd),
-                    )
+                    let removed = crate::session_workspace::cleanup_build_artifacts(&workspace.workspace)
                     .await?;
                     if broker
                         .deleted_session_workspaces
@@ -1186,6 +1182,16 @@ impl Broker {
                             targets = removed.len(),
                             "reclaimed deleted session Cargo targets"
                         );
+                        return;
+                    }
+                    Err(error)
+                        if error
+                            .downcast_ref::<crate::session_workspace::CleanupRootChanged>()
+                            .is_some() =>
+                    {
+                        broker.deleted_session_workspaces.lock().remove(&session_id);
+                        tracing::warn!(session = %session_id, %error,
+                            "preserving artifacts after cleanup worktree replacement; retiring cleanup");
                         return;
                     }
                     Err(error) => {
@@ -3043,13 +3049,23 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             broker.unpin_fallback(&session_id);
             drop(cancelled);
             if let Some(cwd) = cleanup_cwd {
-                broker.deleted_session_workspaces.lock().insert(
-                    session_id.clone(),
-                    DeletedWorkspace {
-                        cwd,
-                        command_id: cleanup_command_id.clone(),
-                    },
-                );
+                match crate::session_workspace::capture_cleanup_workspace(
+                    &broker.args.worktree_root,
+                    &session_id,
+                    Path::new(&cwd),
+                ) {
+                    Ok(workspace) => {
+                        broker.deleted_session_workspaces.lock().insert(
+                            session_id.clone(),
+                            DeletedWorkspace {
+                                workspace,
+                                command_id: cleanup_command_id.clone(),
+                            },
+                        );
+                    }
+                    Err(error) => tracing::warn!(session = %session_id, %error,
+                        "preserving deleted session artifacts because the worktree could not be captured"),
+                }
             }
             if broker.workers.lock().contains_key(&session_id) {
                 broker.route_worker(&session_id, WorkerCommand::Stop { command_id });
@@ -5147,6 +5163,9 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_reset_revokes_delete_tombstone_before_relaunch() {
+        let temp = tempfile::tempdir().expect("cleanup root");
+        let workspace = temp.path().join("sess-reset");
+        std::fs::create_dir(&workspace).expect("cleanup workspace");
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
@@ -5164,7 +5183,12 @@ mod tests {
         broker.deleted_session_workspaces.lock().insert(
             "sess-reset".to_owned(),
             DeletedWorkspace {
-                cwd: "/work".to_owned(),
+                workspace: crate::session_workspace::capture_cleanup_workspace(
+                    temp.path(),
+                    "sess-reset",
+                    &workspace,
+                )
+                .expect("original cleanup workspace"),
                 command_id: "delete-before-reset".to_owned(),
             },
         );
@@ -5278,7 +5302,12 @@ mod tests {
         broker.deleted_session_workspaces.lock().insert(
             "sess-reset-race".to_owned(),
             DeletedWorkspace {
-                cwd: workspace.display().to_string(),
+                workspace: crate::session_workspace::capture_cleanup_workspace(
+                    &worktree_root,
+                    "sess-reset-race",
+                    &workspace,
+                )
+                .expect("original cleanup workspace"),
                 command_id: "delete-before-reset".to_owned(),
             },
         );
@@ -5664,6 +5693,72 @@ mod tests {
             .expect("replacement worker wait");
         assert!(!replacement_status.success());
         assert!(broker.direct_worker_pids.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn replacement_before_cleanup_retires_the_original_observation_without_deleting_targets()
+    {
+        let temp = tempfile::tempdir().expect("cleanup fixture");
+        let managed = temp.path().join("worktrees");
+        let workspace = managed.join("sess-replaced");
+        let original = managed.join("original");
+        let write_target = |root: &Path| {
+            let target = root.join("target");
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+            std::fs::write(
+                target.join("CACHEDIR.TAG"),
+                "Signature: 8a477f597d28d172789f06886806bc55\n",
+            )
+            .unwrap();
+            std::fs::write(target.join("artifact"), "preserve").unwrap();
+        };
+        write_target(&workspace);
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: temp.path().join("unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: managed.clone(),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        broker
+            .deleted_session_owner_collected
+            .store(true, Ordering::Release);
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-replaced".into());
+        broker.deleted_session_workspaces.lock().insert(
+            "sess-replaced".into(),
+            DeletedWorkspace {
+                workspace: crate::session_workspace::capture_cleanup_workspace(
+                    &managed,
+                    "sess-replaced",
+                    &workspace,
+                )
+                .unwrap(),
+                command_id: "delete".into(),
+            },
+        );
+        let gate = broker.session_lifecycle_gate("sess-replaced");
+        let guard = gate.lock().await;
+        broker.cleanup_deleted_session("sess-replaced", "delete");
+        std::fs::rename(&workspace, &original).unwrap();
+        write_target(&workspace);
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !broker.deleted_session_workspaces.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacement ends cleanup without retry");
+        assert!(workspace.join("target/artifact").is_file());
+        assert!(original.join("target/artifact").is_file());
+        assert!(broker.cancelled_sessions.lock().contains("sess-replaced"));
     }
 
     #[tokio::test]

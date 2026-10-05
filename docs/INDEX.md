@@ -79,7 +79,7 @@ primary phone/desktop product path.
 - [`product-sync-datasets.md`](product-sync-datasets.md) — Immutable Service/user browser datasets, version-fenced outboxes, explicit legacy recovery and Controller/Web rollout
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
-- [`plugin-session-deletion-journal.md`](plugin-session-deletion-journal.md) — Reader-first terminal Session records, component reader floor and bounded recovery; production writer remains disabled
+- [`plugin-session-deletion-journal.md`](plugin-session-deletion-journal.md) — Terminal Session records, component reader floor, bounded recovery and Hawk writer admission
 - [`plugin-activation-authority.md`](plugin-activation-authority.md) — Independent old-tool authority audit and selected trusted-administrator scope; stronger isolation remains unimplemented
 - [`releases/plugin-session-deletion-reader-2026-10-03.md`](releases/plugin-session-deletion-reader-2026-10-03.md) — Initial bounded reader, IPC fixtures and Hawk writer-disabled activation
 - [`releases/plugin-session-deletion-compatibility-2026-10-03.md`](releases/plugin-session-deletion-compatibility-2026-10-03.md) — Immutable reader declarations and component activation/rollback admission
@@ -109,6 +109,7 @@ primary phone/desktop product path.
 - [`releases/plugin-deletion-namespace-path-2026-10-04.md`](releases/plugin-deletion-namespace-path-2026-10-04.md) — Logical deletion namespace identity, linked-directory refusal and exact native controls
 - [`experiments/plugin-deletion-immutable-writer-2026-10-04.md`](experiments/plugin-deletion-immutable-writer-2026-10-04.md) — Independent private writer ELFs, actual reader bridge and nondeployable owner refusal
 - [`releases/plugin-deletion-owner-writer-admission-2026-10-04.md`](releases/plugin-deletion-owner-writer-admission-2026-10-04.md) — Installed host-owner writer declaration admission behind the durable reader floor; production writer remains disabled
+- [`releases/plugin-deletion-production-writer-2026-10-04.md`](releases/plugin-deletion-production-writer-2026-10-04.md) — Exact production writer binaries, 32 private-root IPC/authority groups and retained-generation Hawk activation
 - [`releases/plugin-portable-reader-floor-2026-10-04.md`](releases/plugin-portable-reader-floor-2026-10-04.md) — Portable monotonic reader floor and retained signed anchor; bootstrap/recovery and committed deletion admission stay closed
 - [`releases/plugin-host-startup-integrity-2026-10-04.md`](releases/plugin-host-startup-integrity-2026-10-04.md) — Offline portable cached-host signature, package and selection checks before exec; committed-state admission and writer remain closed
 - [`releases/plugin-host-cache-integrity-2026-10-04.md`](releases/plugin-host-cache-integrity-2026-10-04.md) — Signed staged Machine host bytes checked before probe and pointer publication; cached startup admission remains closed
@@ -140,6 +141,11 @@ primary phone/desktop product path.
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`plugin-refactor-completion.md`](plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
+- [`plugin-session-worktree-containment.md`](plugin-session-worktree-containment.md) — Preparation refuses linked checkouts and escaping selections before mutating reused branches
+- [`plugin-session-cleanup-root.md`](plugin-session-cleanup-root.md) — Terminal cleanup retains the original directory handle and retires after observed root replacement
+- [`plugin-session-cleanup-markers.md`](plugin-session-cleanup-markers.md) — Directory-relative regular-file marker probes, FIFO refusal and 8 KiB tag bounds
+- [`releases/plugin-session-cleanup-root-2026-10-05.md`](releases/plugin-session-cleanup-root-2026-10-05.md) — Hawk cleanup-root activation, integrated Rust checks, 32 native writer groups and 18 retained worker/keeper processes
+- [`releases/plugin-session-worktree-containment-2026-10-04.md`](releases/plugin-session-worktree-containment-2026-10-04.md) — Hawk writer-host activation, 535 Machine tests, 32 native writer groups and 18 retained worker/keeper processes
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract

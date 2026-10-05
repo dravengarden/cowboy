@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "feature": "Local-time Draft default names",
+  "behavior": [
+    "Create pre-fills Draft YYYY-MM-DD HH:mm:ss using device-local time, captured once per opening.",
+    "First Draft title focus selects the generated name; after editing, re-focus preserves the caret.",
+    "Variant switches preserve the entered name; clearing creates with a fresh timestamp fallback.",
+    "Draft workspace quick creation uses the same naming function."
+  ],
+  "validation": {
+    "web_typecheck": "passed",
+    "web_lint": "passed with existing warnings",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "firefox": {
+      "suite": "draft-documents",
+      "light": 9,
+      "dark": 9,
+      "new_checks": [
+        "Prefilled timestamp format",
+        "First-focus selection",
+        "Custom title re-focus caret preservation"
+      ]
+    },
+    "limits": [
+      "Browser tests do not establish physical iOS keyboard acceptance.",
+      "No shared editor implementation changed."
+    ]
+  },
+  "delivery": {
+    "service_worker": "cowboy-v1835",
+    "component": "web",
+    "revision": "693cded4f75c0f8e4b7d1813cb01fb8536e416f5",
+    "published_to": "origin/main",
+    "activation": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791160757250366545-693cded4f75c",
+      "revision": "693cded4f75c0f8e4b7d1813cb01fb8536e416f5",
+      "published": true,
+      "release": "/nix/store/iqhdy8v3cvqnj6zahw2p7zs4v2lbg0v8-cowboy-web-release",
+      "previousRelease": "/nix/store/ydbdysn3b1j4qxfh3vq8d4m5cm4i8n6j-cowboy-web-release",
+      "activeRelease": "/nix/store/iqhdy8v3cvqnj6zahw2p7zs4v2lbg0v8-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-05T00:39:17.250366545Z",
+      "recordedAt": "2026-10-05T00:39:17.289967766Z",
+      "recovered": false
+    },
+    "healthz": "ok",
+    "production_version": "770091138769336b48c6fd4fa7701111",
+    "assets": [
+      {
+        "path": "/",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "770091138769336b48c6fd4fa77011110ee5129c98a391456a96246afb5275b5",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/sw.js",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "13382f60599bddfcddbf14eb9758b49317d25030e639037ed9dda15d5e90334f",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/assets/main-Df4FFmOf.js",
+        "status": 200,
+        "cache_control": "public, max-age=31536000, immutable",
+        "sha256": "e21c52fc4f0723d745e4df5da0d753634686c3e6d32e4100f698787c75ee4549",
+        "matches_immutable_release": true
+      }
+    ],
+    "controller_pid_before_and_after": 803041,
+    "machine_pid_before_and_after": 2069302,
+    "installed_user_pwa_reload_observed": false
+  }
+}

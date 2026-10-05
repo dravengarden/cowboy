@@ -34,6 +34,9 @@ import {
 import { initializeAppIcons } from "./appIcons";
 import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
 import { installBrowserDevice } from "./browserDevice";
+import { useDraftRoute } from "./documents/navigation";
+import { DocumentNotifications } from "./documents/DocumentNotifications";
+import { EditorExtensionsDialog } from "./editorExtensions/EditorExtensionsDialog";
 
 installBrowserDevice();
 
@@ -47,6 +50,11 @@ const releasePluginHostScope = ownPluginHostLifecycle(globalThis);
 import.meta.hot?.dispose(releasePluginHostScope);
 
 initializeAppIcons();
+
+const DraftWorkspace = lazy(async () => {
+  const module = await import("./documents/DraftWorkspace");
+  return { default: module.DraftWorkspace };
+});
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
@@ -75,6 +83,7 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
+  const draftRoute = useDraftRoute();
   // The static boot shell cannot run this rule, so it reuses the answer
   // (docs/offline-first-sync.md §Boot presentation).
   const desktop = surface.kind === "desktop";
@@ -106,12 +115,15 @@ function Root(): React.JSX.Element {
       <AppErrorBoundary>
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
-            <MachineSetupGate>
-              {/* The document's own boot skeleton, so the moment between the
-                  gates resolving and the lazy surface chunk evaluating neither
-                  goes white nor changes shape. */}
-              <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
-            </MachineSetupGate>
+            {draftRoute.active ? (
+              <Suspense fallback={<BootSkeleton />}><DraftWorkspace id={draftRoute.id} /></Suspense>
+            ) : (
+              <MachineSetupGate>
+                <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
+              </MachineSetupGate>
+            )}
+            <DocumentNotifications />
+            <EditorExtensionsDialog />
           </DeviceAuthorizationRoute>
         </ProductAuthGate>
       </AppErrorBoundary>

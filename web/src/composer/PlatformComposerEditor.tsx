@@ -5,6 +5,8 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useId,
+  useMemo,
   useState,
 } from "react";
 import {
@@ -35,12 +37,16 @@ import {
   shouldUseNativeTouchEditor,
 } from "./mobileCompactEditorPolicy";
 
+import { bindEditorExtensions } from "../editorExtensions/host";
+
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
 
 export interface PlatformComposerEditorProps
   extends Omit<ComposerEditorProps, "vim" | "touchInput"> {
   /** Desktop preference. Touch surfaces always force this off. */
   vim?: boolean;
+  /** Independent document context; never a synthetic Session id. */
+  documentId?: string;
   /** Focus the final interactive CM6 instance at the end of its seed document. */
   focusEndOnMount?: boolean;
   /**
@@ -65,10 +71,11 @@ export const PlatformComposerEditor = forwardRef<
   ComposerEditorHandle,
   PlatformComposerEditorProps
 >(function PlatformComposerEditor(
-  { vim = false, nativeValue, focusEndOnMount = false, ...props },
+  { vim = false, nativeValue, focusEndOnMount = false, documentId, ...props },
   ref,
 ): React.JSX.Element {
   const surface = useSurfaceProfile();
+  const editorId = useId();
   const touchValue = nativeValue ?? props.value;
   // This ref describes the LAST COMMITTED editor, not the last render attempt.
   // React can replay a render before commit; mutating it during render consumed
@@ -80,16 +87,32 @@ export const PlatformComposerEditor = forwardRef<
   const demotionSelectionRef = useRef<ComposerEditorSelection | null>(null);
   const demotionFocusPendingRef = useRef(false);
   const childEditorRef = useRef<ComposerEditorHandle | null>(null);
+  // Child imperative handles are refreshed on renders. Keep extension identity
+  // stable through focus changes and native/CM6 promotion, while routing every
+  // call to the current child. Only the gateway lifetime owns registration.
+  const extensionHandle = useMemo(() => new Proxy({} as ComposerEditorHandle, {
+    get: (_, property) => (...args: unknown[]) => {
+      const child = childEditorRef.current;
+      if (!child) {
+        if (property === "getValue") return "";
+        if (property === "getSelection") return { anchor: 0, head: 0 };
+        if (property === "hasFocus") return false;
+        return undefined;
+      }
+      const method = Reflect.get(child, property) as (...args: unknown[]) => unknown;
+      return Reflect.apply(method, child, args);
+    },
+  }), []);
   const forwardedRefRef = useRef(ref);
   forwardedRefRef.current = ref;
   const bindEditorRef = useCallback(
     (handle: ComposerEditorHandle | null): void => {
       childEditorRef.current = handle;
       const forwarded = forwardedRefRef.current;
-      if (typeof forwarded === "function") forwarded(handle);
-      else if (forwarded !== null) forwarded.current = handle;
+      if (typeof forwarded === "function") forwarded(handle ? extensionHandle : null);
+      else if (forwarded !== null) forwarded.current = handle ? extensionHandle : null;
     },
-    [],
+    [extensionHandle],
   );
   const surfaceKindRef = useRef(surface.kind);
   surfaceKindRef.current = surface.kind;
@@ -104,6 +127,12 @@ export const PlatformComposerEditor = forwardRef<
   const composingRef = useRef(false);
   const compositionEndedAtRef = useRef(0);
   const compositionEndHoldTimerRef = useRef(0);
+  useLayoutEffect(() => bindEditorExtensions(extensionHandle, {
+    kind: props.sessionId ? "session" : "document",
+    id: props.sessionId ?? documentId ?? editorId,
+    surface: surface.kind === "desktop" ? "desktop" : "touch",
+  }, () => !childEditorRef.current || imeOwnsEditable(composingRef.current, compositionEndedAtRef.current, Date.now())), [extensionHandle, documentId, editorId, props.sessionId, surface.kind]);
+
   const [, setImeHoldEpoch] = useState(0);
   const nativeImeOwns = (): boolean =>
     imeOwnsEditable(

@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "feature": "Create title automatic focus and selection",
+  "behavior": [
+    "Create claims the keyboard within the mobile opening gesture and transfers focus to Title after mount, selecting the default name.",
+    "Switching to Draft synchronously commits the new title then focuses and selects it in the same gesture, without another Title tap.",
+    "Variant switch cancels pending opening focus so it cannot select an edited Draft later.",
+    "Previously edited Draft titles are not forcibly selected on re-focus."
+  ],
+  "validation": {
+    "web_typecheck": "passed",
+    "web_lint": "passed with existing warnings",
+    "web_tests": {
+      "passed": 2042,
+      "failed": 0
+    },
+    "firefox": {
+      "suite": "draft-documents",
+      "light": 9,
+      "dark": 9,
+      "focus_check": "Selecting Draft focuses and selects the generated name on actual Desktop and touch branches without manually focusing Title."
+    },
+    "limits": [
+      "Browser DOM focus/selection tests do not prove the physical iOS software keyboard behavior.",
+      "No shared composer editor implementation changed."
+    ]
+  },
+  "delivery": {
+    "component": "web",
+    "service_worker": "cowboy-v1836",
+    "revision": "679428b587fab5d8da3a4570249ac033d0538d5c",
+    "published_to": "origin/main",
+    "activation": {
+      "schema": 1,
+      "machine": "hawk",
+      "component": "cowboy",
+      "lane": "web",
+      "transaction": "1791160987026327172-679428b587fa",
+      "revision": "679428b587fab5d8da3a4570249ac033d0538d5c",
+      "published": true,
+      "release": "/nix/store/bpg2lxh9h12fpjipmdrib1qb9q0wviin-cowboy-web-release",
+      "previousRelease": "/nix/store/iqhdy8v3cvqnj6zahw2p7zs4v2lbg0v8-cowboy-web-release",
+      "activeRelease": "/nix/store/bpg2lxh9h12fpjipmdrib1qb9q0wviin-cowboy-web-release",
+      "outcome": "succeeded",
+      "phase": "committed",
+      "maintenance": false,
+      "startedAt": "2026-10-05T00:43:07.026327172Z",
+      "recordedAt": "2026-10-05T00:43:07.066887599Z",
+      "recovered": false
+    },
+    "healthz": "ok",
+    "production_version": "59cb99202d8a0502004cf695ecd763ca",
+    "assets": [
+      {
+        "path": "/",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "59cb99202d8a0502004cf695ecd763cac40a04d5cdf4294a0d1bc0fa03420531",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/sw.js",
+        "status": 200,
+        "cache_control": "no-store",
+        "sha256": "07bf30c6ed70af3ea5fb438c75d4064dd8405df0e7ee9119a96cb783ad4a7960",
+        "matches_immutable_release": true
+      },
+      {
+        "path": "/assets/main-BANG3pYu.js",
+        "status": 200,
+        "cache_control": "public, max-age=31536000, immutable",
+        "sha256": "5be9d126485a35e5e84d5fa8bde243c52222cfad2dae471e2a4bebacda3f942a",
+        "matches_immutable_release": true
+      }
+    ],
+    "installed_user_pwa_reload_observed": false
+  }
+}

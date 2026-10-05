@@ -2,7 +2,12 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
+use std::io::Read as _;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -11,6 +16,7 @@ use tokio::process::Command;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CARGO_CACHE_TAG_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
+const MAX_CARGO_CACHE_TAG_BYTES: u64 = 8192;
 const MAX_CLEANUP_DIRECTORIES: usize = 100_000;
 
 #[derive(Debug, Deserialize)]
@@ -197,6 +203,12 @@ pub async fn prepare(
                     checkout.display()
                 )
             })?;
+        if !path.starts_with(&checkout) {
+            bail!(
+                "selected workspace escapes new session worktree {}",
+                checkout.display()
+            );
+        }
         Ok::<_, anyhow::Error>(path)
     }
     .await;
@@ -331,9 +343,27 @@ async fn reuse_existing(
     session_branch: &str,
     session_branch_ref: &str,
 ) -> Result<PreparedWorkspace> {
+    let metadata =
+        std::fs::symlink_metadata(destination).context("reading existing session worktree")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "existing session worktree is not a real directory: {}",
+            destination.display()
+        );
+    }
     let checkout = destination
         .canonicalize()
         .with_context(|| format!("canonicalizing existing worktree {}", destination.display()))?;
+    let managed_root = destination
+        .parent()
+        .context("session worktree has no parent")?
+        .canonicalize()?;
+    if checkout.parent() != Some(managed_root.as_path()) {
+        bail!(
+            "existing session worktree is outside managed root: {}",
+            checkout.display()
+        );
+    }
     let source_common = PathBuf::from(
         git_output(
             repository,
@@ -354,6 +384,16 @@ async fn reuse_existing(
     if source_common != destination_common {
         bail!(
             "existing session path {} belongs to another repository",
+            checkout.display()
+        );
+    }
+    let path = checkout
+        .join(relative_path)
+        .canonicalize()
+        .context("canonicalizing selected workspace in existing worktree")?;
+    if !path.starts_with(&checkout) {
+        bail!(
+            "selected workspace escapes existing session worktree {}",
             checkout.display()
         );
     }
@@ -381,16 +421,6 @@ async fn reuse_existing(
         }
     }
     let revision = git_output(&checkout, ["rev-parse", "HEAD^{commit}"]).await?;
-    let path = checkout
-        .join(relative_path)
-        .canonicalize()
-        .with_context(|| {
-            format!(
-                "canonicalizing selected workspace {} in existing worktree {}",
-                relative_path.display(),
-                checkout.display()
-            )
-        })?;
     Ok(PreparedWorkspace {
         path: path.display().to_string(),
         source_path: source.display().to_string(),
@@ -401,32 +431,105 @@ async fn reuse_existing(
     })
 }
 
+/// Original directory object observed when terminal deletion was accepted.
+/// Keeping the handle prevents inode reuse while asynchronous cleanup waits.
+#[derive(Clone)]
+pub struct CleanupWorkspace {
+    worktree_root: PathBuf,
+    session_id: String,
+    cwd: PathBuf,
+    directory: Arc<File>,
+}
+
+#[derive(Debug)]
+pub struct CleanupRootChanged;
+
+impl std::fmt::Display for CleanupRootChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("original cleanup worktree directory was replaced or removed")
+    }
+}
+
+impl std::error::Error for CleanupRootChanged {}
+
+impl CleanupWorkspace {
+    fn access_root(&self, logical_root: &Path) -> PathBuf {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = logical_root;
+            // Keep filesystem access attached to the captured object even if
+            // the root pathname changes after its final identity check.
+            PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            logical_root.to_owned()
+        }
+    }
+
+    fn verify(&self) -> Result<()> {
+        let path = self.worktree_root.join(&self.session_id);
+        let current = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Err(CleanupRootChanged.into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let original = self.directory.metadata()?;
+        if !current.is_dir()
+            || current.file_type().is_symlink()
+            || current.dev() != original.dev()
+            || current.ino() != original.ino()
+        {
+            return Err(CleanupRootChanged.into());
+        }
+        Ok(())
+    }
+}
+
+/// Capture the original directory before waiting for the stopped worker to exit.
+pub fn capture_cleanup_workspace(
+    worktree_root: &Path,
+    session_id: &str,
+    cwd: &Path,
+) -> Result<CleanupWorkspace> {
+    validate_session_id(session_id)?;
+    let worktree_root = std::path::absolute(worktree_root)?;
+    let cwd = std::path::absolute(cwd)?;
+    validated_cleanup_root(&worktree_root, session_id, &cwd)?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(worktree_root.join(session_id))?;
+    let workspace = CleanupWorkspace {
+        worktree_root,
+        session_id: session_id.to_owned(),
+        cwd,
+        directory: Arc::new(directory),
+    };
+    workspace.verify()?;
+    Ok(workspace)
+}
+
 /// Remove Cargo build directories from a permanently stopped session worktree.
 ///
 /// The Git worktree and every source file remain intact. A directory is eligible
 /// only when it is named `target`, carries both Cargo cache markers, and stays
 /// within the exact Machine-owned worktree for `session_id`.
-pub async fn cleanup_build_artifacts(
-    worktree_root: &Path,
-    session_id: &str,
-    cwd: &Path,
-) -> Result<Vec<PathBuf>> {
-    validate_session_id(session_id)?;
-    let worktree_root = worktree_root.to_path_buf();
-    let session_id = session_id.to_owned();
-    let cwd = cwd.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        cleanup_build_artifacts_sync(&worktree_root, &session_id, &cwd)
-    })
-    .await
-    .context("joining session build-artifact cleanup")?
+pub async fn cleanup_build_artifacts(workspace: &CleanupWorkspace) -> Result<Vec<PathBuf>> {
+    let workspace = workspace.clone();
+    tokio::task::spawn_blocking(move || cleanup_build_artifacts_sync(&workspace))
+        .await
+        .context("joining session build-artifact cleanup")?
 }
 
-fn cleanup_build_artifacts_sync(
-    worktree_root: &Path,
-    session_id: &str,
-    cwd: &Path,
-) -> Result<Vec<PathBuf>> {
+fn validated_cleanup_root(worktree_root: &Path, session_id: &str, cwd: &Path) -> Result<PathBuf> {
     let managed_root = worktree_root
         .canonicalize()
         .with_context(|| format!("canonicalizing worktree root {}", worktree_root.display()))?;
@@ -459,11 +562,24 @@ fn cleanup_build_artifacts_sync(
             session_root.display()
         );
     }
+    Ok(session_root)
+}
 
+fn cleanup_build_artifacts_sync(workspace: &CleanupWorkspace) -> Result<Vec<PathBuf>> {
+    workspace.verify()?;
+    let session_root = validated_cleanup_root(
+        &workspace.worktree_root,
+        &workspace.session_id,
+        &workspace.cwd,
+    )?;
+    workspace.verify()?;
+
+    let access_root = workspace.access_root(&session_root);
     let mut candidates = Vec::new();
-    let mut pending = vec![session_root.clone()];
+    let mut pending = vec![access_root.clone()];
     let mut visited = 0_usize;
     while let Some(directory) = pending.pop() {
+        workspace.verify()?;
         visited = visited.saturating_add(1);
         if visited > MAX_CLEANUP_DIRECTORIES {
             bail!("session worktree cleanup exceeded {MAX_CLEANUP_DIRECTORIES} directories");
@@ -495,6 +611,7 @@ fn cleanup_build_artifacts_sync(
     candidates.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     let mut removed = Vec::with_capacity(candidates.len());
     for target in candidates {
+        workspace.verify()?;
         let metadata = std::fs::symlink_metadata(&target)
             .with_context(|| format!("rechecking Cargo target {}", target.display()))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -511,22 +628,58 @@ fn cleanup_build_artifacts_sync(
                 canonical_target.display()
             );
         }
+        workspace.verify()?;
         std::fs::remove_dir_all(&target)
             .with_context(|| format!("removing Cargo target {}", target.display()))?;
-        removed.push(target);
+        removed.push(session_root.join(target.strip_prefix(&access_root)?));
     }
     Ok(removed)
 }
 
 fn is_cargo_target_directory(path: &Path) -> Result<bool> {
-    if !path.join(".rustc_info.json").is_file() {
+    let Ok(directory) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    else {
+        return Ok(false);
+    };
+    if open_regular_cargo_marker(&directory, ".rustc_info.json").is_none() {
         return Ok(false);
     }
-    let tag_path = path.join("CACHEDIR.TAG");
-    let Ok(tag) = std::fs::read_to_string(&tag_path) else {
+    let Some(file) = open_regular_cargo_marker(&directory, "CACHEDIR.TAG") else {
+        return Ok(false);
+    };
+    if file.metadata()?.len() > MAX_CARGO_CACHE_TAG_BYTES {
+        return Ok(false);
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_CARGO_CACHE_TAG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_CARGO_CACHE_TAG_BYTES
+    {
+        return Ok(false);
+    }
+    let Ok(tag) = std::str::from_utf8(&bytes) else {
         return Ok(false);
     };
     Ok(tag.lines().any(|line| line == CARGO_CACHE_TAG_SIGNATURE))
+}
+
+fn open_regular_cargo_marker(directory: &File, name: &str) -> Option<File> {
+    use rustix::fs::{Mode, OFlags, openat};
+    let file = File::from(
+        openat(
+            directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()?,
+    );
+    file.metadata().ok()?.is_file().then_some(file)
 }
 
 fn validate_session_id(value: &str) -> Result<()> {
@@ -718,15 +871,157 @@ mod tests {
         std::os::unix::fs::symlink(outside.parent().unwrap(), session.join("linked-outside"))
             .unwrap();
 
-        let removed = cleanup_build_artifacts(&managed, "sess-clean", &selected)
-            .await
-            .unwrap();
+        let observed = capture_cleanup_workspace(&managed, "sess-clean", &selected).unwrap();
+        let removed = cleanup_build_artifacts(&observed).await.unwrap();
 
         assert_eq!(removed.len(), 2);
         assert!(!session.join("target").exists());
         assert!(!session.join("native/replay/target").exists());
         assert!(session.join("examples/target/keep.txt").is_file());
         assert!(outside.join("debug/deps/libtest.rlib").is_file());
+    }
+
+    #[tokio::test]
+    async fn cleanup_refuses_replaced_directory_and_preserves_both_objects() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-replaced");
+        let original = managed.join("retained-original");
+        write_cargo_target(&session.join("target"));
+        let observation = capture_cleanup_workspace(&managed, "sess-replaced", &session).unwrap();
+        std::fs::rename(&session, &original).unwrap();
+        write_cargo_target(&session.join("target"));
+        std::fs::write(
+            session.join("target/debug/deps/libtest.rlib"),
+            "replacement",
+        )
+        .unwrap();
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            std::fs::read_to_string(
+                observation
+                    .access_root(&session)
+                    .join("target/debug/deps/libtest.rlib")
+            )
+            .unwrap(),
+            "generated\n"
+        );
+        let error = cleanup_build_artifacts(&observation).await.unwrap_err();
+        assert!(error.downcast_ref::<CleanupRootChanged>().is_some());
+        assert!(session.join("target/debug/deps/libtest.rlib").is_file());
+        assert!(original.join("target/debug/deps/libtest.rlib").is_file());
+
+        std::fs::remove_dir_all(&session).unwrap();
+        let error = cleanup_build_artifacts(&observation).await.unwrap_err();
+        assert!(error.downcast_ref::<CleanupRootChanged>().is_some());
+        std::fs::write(&session, "replacement file").unwrap();
+        let error = cleanup_build_artifacts(&observation).await.unwrap_err();
+        assert!(error.downcast_ref::<CleanupRootChanged>().is_some());
+        std::fs::remove_file(&session).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&original, &session).unwrap();
+            let error = cleanup_build_artifacts(&observation).await.unwrap_err();
+            assert!(error.downcast_ref::<CleanupRootChanged>().is_some());
+            assert!(original.join("target/debug/deps/libtest.rlib").is_file());
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_preserves_targets_with_linked_or_oversized_markers() {
+        for case in [
+            "linked-info",
+            "linked-tag",
+            "oversized-tag",
+            "invalid-tag",
+            "tag-directory",
+        ] {
+            let temp = TestDir::new();
+            let managed = temp.0.join("managed");
+            let session = managed.join("sess-marker");
+            let target = session.join("target");
+            write_cargo_target(&target);
+            match case {
+                "linked-info" | "linked-tag" => {
+                    let name = if case == "linked-info" {
+                        ".rustc_info.json"
+                    } else {
+                        "CACHEDIR.TAG"
+                    };
+                    let external = temp.0.join("external-marker");
+                    std::fs::rename(target.join(name), &external).unwrap();
+                    std::os::unix::fs::symlink(&external, target.join(name)).unwrap();
+                }
+                "oversized-tag" => {
+                    let mut content = format!("{CARGO_CACHE_TAG_SIGNATURE}\n").into_bytes();
+                    content.resize(
+                        usize::try_from(MAX_CARGO_CACHE_TAG_BYTES + 1).unwrap(),
+                        b' ',
+                    );
+                    std::fs::write(target.join("CACHEDIR.TAG"), content).unwrap();
+                }
+                "invalid-tag" => std::fs::write(target.join("CACHEDIR.TAG"), [0xff]).unwrap(),
+                "tag-directory" => {
+                    std::fs::remove_file(target.join("CACHEDIR.TAG")).unwrap();
+                    std::fs::create_dir(target.join("CACHEDIR.TAG")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let observation = capture_cleanup_workspace(&managed, "sess-marker", &session).unwrap();
+            assert!(
+                cleanup_build_artifacts(&observation)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{case}"
+            );
+            assert!(target.join("debug/deps/libtest.rlib").is_file(), "{case}");
+        }
+    }
+
+    #[test]
+    fn cleanup_fifo_markers_finish_without_a_writer_and_preserve_artifacts() {
+        for name in [".rustc_info.json", "CACHEDIR.TAG"] {
+            let temp = TestDir::new();
+            let managed = temp.0.join("managed");
+            let session = managed.join("sess-fifo");
+            let target = session.join("target");
+            write_cargo_target(&target);
+            std::fs::remove_file(target.join(name)).unwrap();
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                target.join(name),
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .unwrap();
+            let observation = capture_cleanup_workspace(&managed, "sess-fifo", &session).unwrap();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let thread = std::thread::spawn(move || {
+                sender
+                    .send(cleanup_build_artifacts_sync(&observation))
+                    .unwrap();
+            });
+            assert!(
+                receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("marker probing must not wait for a FIFO writer")
+                    .unwrap()
+                    .is_empty()
+            );
+            thread.join().unwrap();
+            assert!(target.join("debug/deps/libtest.rlib").is_file());
+        }
+    }
+
+    #[test]
+    fn bounded_cache_tag_accepts_exact_size_limit() {
+        let temp = TestDir::new();
+        let target = temp.0.join("target");
+        write_cargo_target(&target);
+        let mut content = format!("{CARGO_CACHE_TAG_SIGNATURE}\n").into_bytes();
+        content.resize(usize::try_from(MAX_CARGO_CACHE_TAG_BYTES).unwrap(), b' ');
+        std::fs::write(target.join("CACHEDIR.TAG"), content).unwrap();
+        assert!(is_cargo_target_directory(&target).unwrap());
     }
 
     #[tokio::test]
@@ -739,17 +1034,9 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         write_cargo_target(&session.join("target"));
 
-        assert!(
-            cleanup_build_artifacts(&managed, "sess-clean", &outside)
-                .await
-                .is_err()
-        );
+        assert!(capture_cleanup_workspace(&managed, "sess-clean", &outside).is_err());
         assert!(session.join("target").is_dir());
-        assert!(
-            cleanup_build_artifacts(&managed, "../escape", &session)
-                .await
-                .is_err()
-        );
+        assert!(capture_cleanup_workspace(&managed, "../escape", &session).is_err());
     }
 
     #[tokio::test]
@@ -1060,6 +1347,96 @@ mod tests {
         git(&source, &["remote", "rename", "origin", "upstream"]);
         assert!(prepare(remote_request(), &managed).await.is_err());
         assert!(!managed.join("sess-remote").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn refuses_linked_checkout_and_escaping_selection_without_mutating_existing_work() {
+        let temp = TestDir::new();
+        let source = temp.0.join("source");
+        let managed = temp.0.join("managed");
+        let outside = temp.0.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "outside").unwrap();
+        git(&temp.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.invalid"]);
+        std::os::unix::fs::symlink(&outside, source.join("nested")).unwrap();
+        git(&source, &["add", "nested"]);
+        git(&source, &["commit", "-m", "linked subdirectory"]);
+        // The selected source subdirectory is a dirty real directory, while
+        // the committed version to be isolated links outside the checkout.
+        std::fs::remove_file(source.join("nested")).unwrap();
+        std::fs::create_dir(source.join("nested")).unwrap();
+        let request = |root: &Path, id: &str| PrepareWorkspaceRequest {
+            root: root.display().to_string(),
+            session_id: id.to_owned(),
+        };
+        let error = prepare(request(&source.join("nested"), "sess-new"), &managed)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("escapes new session worktree"));
+        assert!(!managed.join("sess-new").exists());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "outside"
+        );
+
+        std::os::unix::fs::symlink(&source, managed.join("sess-link")).unwrap();
+        let error = prepare(request(&source, "sess-link"), &managed)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not a real directory"));
+        assert!(
+            std::fs::symlink_metadata(managed.join("sess-link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let existing = managed.join("sess-existing");
+        git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                existing.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        std::fs::write(existing.join("dirty.txt"), "preserve").unwrap();
+        let error = prepare(request(&source.join("nested"), "sess-existing"), &managed)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("escapes existing session worktree")
+        );
+        assert!(current_branch(&existing).await.unwrap().is_none());
+        assert!(
+            !git_ref_exists(&source, "refs/heads/cowboy/sess-existing")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(existing.join("dirty.txt")).unwrap(),
+            "preserve"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "outside"
+        );
+        // Internal links remain compatible; only an escape is refused.
+        std::fs::remove_file(existing.join("nested")).unwrap();
+        std::fs::create_dir(existing.join("internal")).unwrap();
+        std::os::unix::fs::symlink("internal", existing.join("nested")).unwrap();
+        let reused = prepare(request(&source.join("nested"), "sess-existing"), &managed)
+            .await
+            .unwrap();
+        assert_eq!(Path::new(&reused.path), existing.join("internal"));
+        assert!(!reused.created);
     }
 
     #[tokio::test]
