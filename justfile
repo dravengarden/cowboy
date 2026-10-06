@@ -455,6 +455,10 @@ execution-claude-turn-conformance CLI VERSION SHA256 RECEIPT:
 execution-claude-task-stop-conformance KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA RECEIPT:
     unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; exec setpriv --inh-caps=-all --ambient-caps=-all python3 tools/claude_native_task_stop_probe.py "$@"' conformance --keeper "{{KEEPER}}" --claude "{{CLAUDE}}" --claude-sha256 "{{CLAUDE_SHA}}" --executor "{{EXECUTOR}}" --executor-sha256 "{{EXECUTOR_SHA}}" --receipt "{{RECEIPT}}"
 
+# Research child tool/context inheritance with native Claude and a resident keeper.
+execution-claude-agent-research KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA RECEIPT *ARGS:
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; exec setpriv --inh-caps=-all --ambient-caps=-all python3 tools/claude_native_agent_probe.py "$@"' research --keeper "{{KEEPER}}" --claude "{{CLAUDE}}" --claude-sha256 "{{CLAUDE_SHA}}" --executor "{{EXECUTOR}}" --executor-sha256 "{{EXECUTOR_SHA}}" --receipt "{{RECEIPT}}" {{ARGS}}
+
 # Includes two real 35-second observations of executor process retention/expiry.
 execution-lifetime-conformance CLI VERSION SHA256 RECEIPT:
     deno check tools/execution_environment_lifetime_probe.ts

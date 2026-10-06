@@ -104,7 +104,7 @@ to introduce more restrictions.
 | Project hooks | Claude launch suppresses settings sources; Codex remote hook placement not established by current receipt | Execute target-owned hooks at target, preserve native lifecycle/decisions and trusted configuration; separate runtime-owned hooks |
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
 | Permission modes | Claude bound launch selects `bypassPermissions`; remote tools must not be presented as supporting every native permission mode | Design explicit mapping for approval, deny, modified input and concurrent approval cancellation; test denial before any target effect |
-| Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance; Claude Agent/Task paths remain restricted | Separately test grandchildren, live-child resume, cancellation, background, teammate and worktree paths |
+| Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance; Claude research proves child Read/context and native completion through a fixture keeper bridge, while shipping Agent/Task paths remain restricted | Claude task-handle reads, completion projection and child ownership remain gaps; separately test grandchildren, live-child resume, cancellation, background, teammate and worktree paths |
 | Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
@@ -602,8 +602,52 @@ Codex already selects the execution environment at thread start and every turn.
 Determine whether native child creation inherits this selection; prove it with
 distinct runtime/target markers. If it does not, use the narrowest native child
 creation extension. Claude's Mod `agent.spawn` is a candidate for binding and
-context propagation, but child tool callbacks and implicit IO must be tested.
+context propagation. The pinned child callback research below establishes an
+explicit Read route; implicit IO still needs separate acceptance.
 Never assume a parent interceptor automatically covers descendants.
+
+#### Claude native Agent research (2026-10-06)
+
+The offline `execution-claude-agent-research` recipe uses Claude 2.1.287,
+executor 0.159.3, a resident keeper and a disposable copy of the shipping Mod.
+It enables Agent only in that disposable fixture. Native child `Read` reaches
+`tool.call` with an `agentId`, reads target bytes through the keeper, and retains
+target instructions and cwd. Runtime workspace bytes and instructions do not
+reach the child. Native asynchronous `system/task_notification` delivers the
+child result. Scripted API routing identifies the child by its prompt rather
+than assuming parent/child request order. Completion matches the native task ID
+in both already consumed frames and subsequent frames: a fast child can finish
+before the parent result. Readiness uses `/cost` without an API request. These
+are native runtime tests with zero real model requests.
+
+The baseline also exposes runtime-home task-output paths in model context and
+completion frames. Adding `--project-task-output` projects the native Agent
+result's `outputFile` and exact corresponding text to `cowboy-agent://<agentId>`.
+This removes that path from model context while preserving target Read and native
+completion. It does **not** implement handle reads or project outgoing completion
+frames: their `output_file` still names the runtime-home file.
+
+Before production enablement, retain an exact native task-to-handle registration
+scoped to session/binding/generation, project client completion frames using that
+registration, and route handle reads to the owning task. Preserve child `agentId`
+at the production bridge boundary and partition cancellation by child ownership;
+the current bridge drops it. Validate permission modes, cancellation races,
+resume, descendants, worktrees and implicit IO. Do not replace arbitrary path
+substrings in user content or infer ownership from a task ID alone.
+
+Run `just execution-claude-agent-research KEEPER CLAUDE CLAUDE_SHA EXECUTOR
+EXECUTOR_SHA NEW_RECEIPT` inside the pinned shell, once without and once with
+`--project-task-output`. The recipe isolates network and PID namespaces. Its
+Unix socket must use `/tmp/cowboy-claude-mod-*`; inherited Nix temporary roots do
+not satisfy the shipping bridge validator. Disabling all nonessential Claude
+traffic also blocks Mod Unix HTTP, so this fixture uses individual telemetry
+switches instead. Those setup failures are not evidence of native incompatibility.
+
+Evidence: [baseline and projection receipts](experiments/claude-native-agent-research-2026-10-06.json).
+This is same-host shared-filesystem research with a fixture Read bridge and
+full-access permissions, not acceptance of enrolled worker transport, cross-host
+execution, autonomous model continuation, or production Agent support. No
+production runtime or capability admission is changed by this experiment.
 
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A
