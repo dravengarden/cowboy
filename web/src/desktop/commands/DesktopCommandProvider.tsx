@@ -471,12 +471,11 @@ export function DesktopCommandProvider(
     const chord = pendingJumpChord.current;
     if (
       chord &&
-      (workspace.productMode !== "agent" || workspace.mode !== "normal" ||
-        workspace.focusedRegion !== chord.region)
+      (workspace.mode !== "normal" || workspace.focusedRegion !== chord.region)
     ) {
       clearPendingJumpChord();
     }
-  }, [clearPendingJumpChord, workspace.focusedRegion, workspace.mode, workspace.productMode]);
+  }, [clearPendingJumpChord, workspace.focusedRegion, workspace.mode]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -498,7 +497,6 @@ export function DesktopCommandProvider(
         motion && !leaderArmed.current && !event.repeat &&
         desktopKeyIntent(event).owner !== "ime" &&
         !desktopOverlayOwnsShortcuts(document) &&
-        workspace.productMode === "agent" &&
         workspace.selectedSplitter === null &&
         regionMotionAllowed(event.target)
       ) {
@@ -697,7 +695,6 @@ export function DesktopCommandProvider(
               desktopLeaderGroupKey(candidate)?.key === key.toLowerCase()
             );
             if (command && command.when?.() !== false) {
-              if (workspace.productMode !== "agent") workspace.setProductMode("agent");
               afterLeaderKey(event, () => command.run());
             }
             return;
@@ -714,7 +711,6 @@ export function DesktopCommandProvider(
                 }),
               );
               if (jumped) {
-                if (workspace.productMode !== "agent") workspace.setProductMode("agent");
                 const target = workspace.collapsedPanes.prompt
                   ? "conversation.transcript"
                   : "prompt.composer";
@@ -756,7 +752,6 @@ export function DesktopCommandProvider(
               registered.find(scoped) ??
               (fallback && scoped(fallback) ? fallback : undefined);
           if (command && command.when?.() !== false) {
-            if (workspace.productMode !== "agent") workspace.setProductMode("agent");
             if (
               workspace.selectedSplitter !== null &&
               command.id !== "workspace.enterResize"
@@ -841,8 +836,7 @@ export function DesktopCommandProvider(
       // focus/editor mode clears it without swallowing the new surface's key.
       const pendingChord = pendingJumpChord.current;
       if (pendingChord) {
-        const stillOwned = workspace.productMode === "agent" &&
-          workspace.mode === "normal" &&
+        const stillOwned = workspace.mode === "normal" &&
           workspace.focusedRegion === pendingChord.region &&
           !textEditorOwnsKey;
         if (!stillOwned) {
@@ -870,87 +864,6 @@ export function DesktopCommandProvider(
             return;
           }
         }
-      }
-      if (workspace.productMode === "reading") {
-        const key = workspaceCommandKey(event);
-        const readingSidebarOwnsKey = Boolean(eventElement?.closest(
-          "[data-reading-question-sidebar]",
-        ));
-        if (!event.metaKey && !event.ctrlKey && !event.altKey) {
-          const product = key.toLowerCase();
-          if (key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            workspace.setProductMode("agent");
-            requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
-          } else if (product === "p") {
-            event.preventDefault();
-            event.stopPropagation();
-            const closing = workspace.readingSidebarOpen;
-            workspace.setReadingSidebarOpen(!closing);
-            if (closing) {
-              requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
-            }
-          } else if (product === "v") {
-            event.preventDefault();
-            event.stopPropagation();
-            commands.current.get("conversation.toggleProjection")?.run();
-          } else if (product === "f") {
-            event.preventDefault();
-            event.stopPropagation();
-            document.querySelector<HTMLButtonElement>(
-              "[data-desktop-product-mode='reading'] [data-desktop-conversation-follow]",
-            )?.click();
-          }
-        }
-        // The docked question directory is its own Vim list. Its J/K, gg/G,
-        // Ctrl-D/U, L/Enter and H bindings must reach PageList instead of
-        // scrolling the transcript behind it. Reading-level Esc/P/V/F above
-        // remain available from either side of the workspace.
-        if (readingSidebarOwnsKey) return;
-        const scroller = document.querySelector<HTMLElement>(
-          "[data-desktop-product-mode='reading'] [data-desktop-transcript-scroller]",
-        );
-        let readingAction: string | null = null;
-        if (!event.metaKey && !event.altKey && !textEditorOwnsKey) {
-          if (event.ctrlKey) {
-            readingAction = ({
-              d: "half-page-down",
-              u: "half-page-up",
-              f: "page-down",
-              b: "page-up",
-            } as Record<string, string>)[key.toLowerCase()] ?? null;
-          } else if (!event.shiftKey || key === "G") {
-            if (itemChord.current !== null) {
-              globalThis.clearTimeout(itemChord.current);
-              itemChord.current = null;
-              if (key === "g") readingAction = "oldest";
-            } else if (key === "g") {
-              event.preventDefault();
-              itemChord.current = globalThis.setTimeout(() => {
-                itemChord.current = null;
-              }, 900);
-              return;
-            } else {
-              readingAction = ({
-                j: "line-down",
-                k: "line-up",
-                G: "latest",
-              } as Record<string, string>)[key] ?? null;
-            }
-          }
-        }
-        if (readingAction && scroller) {
-          event.preventDefault();
-          event.stopPropagation();
-          scroller.dispatchEvent(new CustomEvent("cowboy:desktop-transcript-nav", {
-            detail: { action: readingAction },
-          }));
-        }
-        // Reading owns an isolated command domain. Unhandled keys continue to
-        // the reading surface (native selection/find/copy and Explore's [ ]
-        // paging), but never enter Agent's pane, queue, draft, or session map.
-        return;
       }
       const region = workspace.focusedRegion
         ? document.querySelector<HTMLElement>(

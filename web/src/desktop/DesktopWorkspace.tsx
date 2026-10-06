@@ -1,6 +1,5 @@
-import { alpha, Box, Button, Stack, Typography } from "@mui/material";
-import { ArrowBack, ListAltOutlined } from "@mui/icons-material";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { alpha, Box, Typography } from "@mui/material";
+import { useMemo } from "react";
 import {
   type DesktopPane,
   useDesktopWorkspace,
@@ -8,12 +7,8 @@ import {
 import { DesktopConnectionNotice } from "./DesktopConnectionNotice";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
-import { DesktopReadingModeControl } from "./DesktopReadingModeControl";
-import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
-import { ShortcutKeycap } from "../ShortcutKeycap";
 import { HintTooltip } from "../HintTooltip";
 import type { TranscriptProjection } from "../explore/exploreStore";
-import { DesktopReadingQuestionDirectory } from "../explore/ExploreSurface";
 import { DesktopProjectionToggle } from "../explore/ProjectionToggle";
 import {
   type DesktopCommand,
@@ -25,19 +20,11 @@ import {
 } from "./commands/workspaceShortcuts";
 import { DesktopSplitterHint } from "./DesktopSplitterHint";
 import {
-  clampReadingQuestionsWidth,
   COMPOSER_COL_MAX,
   COMPOSER_COL_MIN,
   DESKTOP_CONVERSATION_MIN,
   DESKTOP_PROMPT_MIN,
-  readingQuestionsWidthStore,
-  READING_QUESTIONS_MAX,
-  READING_QUESTIONS_MIN,
 } from "../desktopLayout";
-import {
-  DESKTOP_SPLITTER_ADJUST_EVENT,
-  splitterAdjustment,
-} from "./desktopSplitterKeyboard";
 import {
   DesktopCollapsedPaneRail,
   DesktopPaneCollapseButton,
@@ -187,248 +174,19 @@ export function DesktopWorkspace({
   const workspace = useDesktopWorkspace();
   const promptCollapsed = workspace.collapsedPanes.prompt;
   const conversationCollapsed = workspace.collapsedPanes.conversation;
-  const [questionsWidth, setQuestionsWidth] = useState(
-    readingQuestionsWidthStore.get,
-  );
-  const [questionsResizing, setQuestionsResizing] = useState(false);
-  const questionsWidthRef = useRef(questionsWidth);
-  questionsWidthRef.current = questionsWidth;
-  useEffect(() => {
-    const onKeyboardResize = (event: Event): void => {
-      const adjustment = splitterAdjustment(event);
-      if (adjustment?.splitter !== "questions-page") return;
-      setQuestionsWidth((current) => {
-        const next = clampReadingQuestionsWidth(current + adjustment.delta);
-        questionsWidthRef.current = next;
-        readingQuestionsWidthStore.set(next);
-        return next;
-      });
-    };
-    globalThis.addEventListener(DESKTOP_SPLITTER_ADJUST_EVENT, onKeyboardResize);
-    return (): void =>
-      globalThis.removeEventListener(
-        DESKTOP_SPLITTER_ADJUST_EVENT,
-        onKeyboardResize,
-      );
-  }, []);
-  useEffect(() => {
-    if (!questionsResizing) return undefined;
-    const previousCursor = document.body.style.cursor;
-    const previousSelect = document.body.style.userSelect;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    return (): void => {
-      document.body.style.cursor = previousCursor;
-      document.body.style.userSelect = previousSelect;
-    };
-  }, [questionsResizing]);
-  function startQuestionsResize(event: React.PointerEvent<HTMLDivElement>): void {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = questionsWidthRef.current;
-    const element = event.currentTarget;
-    element.setPointerCapture(event.pointerId);
-    setQuestionsResizing(true);
-    const onMove = (moveEvent: PointerEvent): void => {
-      setQuestionsWidth(clampReadingQuestionsWidth(
-        startWidth + (moveEvent.clientX - startX),
-      ));
-    };
-    const onUp = (): void => {
-      element.releasePointerCapture(event.pointerId);
-      element.removeEventListener("pointermove", onMove);
-      element.removeEventListener("pointerup", onUp);
-      setQuestionsResizing(false);
-      readingQuestionsWidthStore.set(questionsWidthRef.current);
-    };
-    element.addEventListener("pointermove", onMove);
-    element.addEventListener("pointerup", onUp);
-  }
   const conversationShortcutsActive = workspace.focusedPane === "conversation";
-  const projectionPageName = workspace.productMode === "reading" ? "Page" : "Explore";
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleProjection",
-    title: `Switch to ${projection === "history" ? projectionPageName : "History"}`,
-    description: `Toggle the Conversation between History and ${projectionPageName}`,
+    title: `Switch to ${projection === "history" ? "Explore" : "History"}`,
+    description: "Toggle the Conversation between History and Explore",
     group: "Conversation",
     shortcut: "V",
     contexts: ["conversation"],
     run: () => onProjectionChange(
       projection === "history" ? "explore" : "history",
     ),
-  }), [onProjectionChange, projection, projectionPageName]);
+  }), [onProjectionChange, projection]);
   useDesktopCommand(toggleProjectionCommand);
-
-  if (workspace.productMode === "reading") {
-    return (
-      <Box
-        data-desktop-product-mode="reading"
-        sx={{
-          position: "fixed",
-          inset: 0,
-          zIndex: (theme) => theme.zIndex.modal - 1,
-          display: "flex",
-          flexDirection: "column",
-          bgcolor: "background.default",
-        }}
-      >
-        <Stack
-          component="header"
-          direction="row"
-          alignItems="center"
-          spacing={1}
-          sx={{
-            minHeight: 48,
-            px: 2,
-            borderBottom: 1,
-            borderColor: "divider",
-            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.72),
-          }}
-        >
-          <Typography variant="overline" sx={{ fontWeight: 750, letterSpacing: "0.1em" }}>
-            Reading
-          </Typography>
-          <DesktopProjectionToggle
-            projection={projection}
-            pageLabel="Page"
-            onChange={onProjectionChange}
-            shortcutActive
-          />
-          <Button
-            aria-pressed={workspace.readingSidebarOpen}
-            size="small"
-            color={workspace.readingSidebarOpen ? "primary" : "inherit"}
-            variant="outlined"
-            startIcon={<ListAltOutlined fontSize="small" />}
-            onClick={(): void => {
-              const closing = workspace.readingSidebarOpen;
-              workspace.setReadingSidebarOpen(!closing);
-              if (closing) {
-                requestAnimationFrame(() =>
-                  workspace.focusRegion("conversation.transcript"));
-              }
-            }}
-            sx={{
-              ...desktopEmbeddedControlSx({ active: true, open: workspace.readingSidebarOpen }),
-              height: 34,
-              px: 0.9,
-              gap: 0.65,
-              textTransform: "none",
-              "& .MuiButton-startIcon": { mr: 0 },
-            }}
-          >
-            Pages
-            <ShortcutKeycap keyLabel="P" variant="global" accent sx={{ ml: 0.15 }} />
-          </Button>
-          <Box sx={{ flex: 1 }} />
-          <DesktopConversationControls
-            sessionId={sessionId}
-            projection={projection}
-            shortcutActive
-          />
-          <Button
-            size="small"
-            color="inherit"
-            variant="outlined"
-            startIcon={<ArrowBack fontSize="small" />}
-            onClick={(): void => workspace.setProductMode("agent")}
-            sx={{
-              ...desktopEmbeddedControlSx({ active: true }),
-              height: 34,
-              px: 0.9,
-              gap: 0.65,
-              textTransform: "none",
-              "& .MuiButton-startIcon": { mr: 0 },
-            }}
-          >
-            Agent
-            <ShortcutKeycap keyLabel="Esc" variant="global" accent sx={{ ml: 0.15 }} />
-          </Button>
-        </Stack>
-        <Box
-          data-desktop-pane="conversation"
-          data-desktop-pane-focused="true"
-          sx={{ flex: 1, minHeight: 0, display: "flex" }}
-        >
-          {workspace.readingSidebarOpen && (
-            <DesktopReadingQuestionDirectory
-              sessionId={sessionId}
-              projection={projection}
-              width={questionsWidth}
-              onClose={(): void => {
-                workspace.setReadingSidebarOpen(false);
-                requestAnimationFrame(() =>
-                  workspace.focusRegion("conversation.transcript"));
-              }}
-            />
-          )}
-          {workspace.readingSidebarOpen && (
-            <HintTooltip
-              title="Resize layout"
-              shortcut={DESKTOP_SHORTCUTS.resize}
-              followCursor
-              placement="right"
-              disableHoverListener={questionsResizing ||
-                workspace.selectedSplitter === "questions-page"}
-            >
-              <Box
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize page index"
-                aria-valuemin={READING_QUESTIONS_MIN}
-                aria-valuemax={READING_QUESTIONS_MAX}
-                aria-valuenow={Math.round(questionsWidth)}
-                data-desktop-splitter="questions-page"
-                data-desktop-splitter-selected={
-                  workspace.selectedSplitter === "questions-page" ? "true" : undefined
-                }
-                tabIndex={-1}
-                onPointerDown={startQuestionsResize}
-                sx={{
-                  flex: "0 0 auto",
-                  alignSelf: "stretch",
-                  width: "1px",
-                  bgcolor: questionsResizing ||
-                      workspace.selectedSplitter === "questions-page"
-                    ? "primary.main"
-                    : "divider",
-                  transition: "background-color 120ms",
-                  position: "relative",
-                  cursor: "col-resize",
-                  touchAction: "none",
-                  zIndex: 3,
-                  "&::after": {
-                    content: '""',
-                    position: "absolute",
-                    top: 0,
-                    bottom: 0,
-                    left: "-11px",
-                    right: "-11px",
-                  },
-                  "&:hover": { bgcolor: "primary.main" },
-                  "&:focus": { outline: "none" },
-                }}
-              >
-                {workspace.selectedSplitter === "questions-page" && (
-                  <DesktopSplitterHint />
-                )}
-              </Box>
-            </HintTooltip>
-          )}
-          <Box
-            data-desktop-region="conversation.transcript"
-            data-desktop-navigation="scroll"
-            data-desktop-focused="true"
-            tabIndex={-1}
-            sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}
-          >
-            {conversation}
-          </Box>
-        </Box>
-      </Box>
-    );
-  }
 
   return (
     <Box
@@ -582,14 +340,6 @@ export function DesktopWorkspace({
                 projection={projection}
                 onChange={onProjectionChange}
                 shortcutActive={conversationShortcutsActive}
-              />
-              <DesktopReadingModeControl
-                shortcutActive={conversationShortcutsActive}
-                onEnter={(): void => {
-                  workspace.setProductMode("reading");
-                  requestAnimationFrame(() =>
-                    workspace.focusRegion("conversation.transcript"));
-                }}
               />
               <DesktopConversationControls
                 sessionId={sessionId}

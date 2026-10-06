@@ -222,8 +222,7 @@ AltGr is Ctrl+Alt, `Mod+Alt+digit` may type a character instead.
 
 ### Product letters ignore case; Vim motions do not
 
-Bare contextual product shortcuts (`F` Follow, `Z` Reading, `V`
-History/Explore, top-bar `R`/`U`/`A`/`L`/`C`/`X`, run-config mnemonics) match the physical letter with
+Bare contextual product shortcuts (`F` Follow, `V` History/Explore, top-bar `R`/`U`/`A`/`L`/`C`/`X`, run-config mnemonics) match the physical letter with
 or without Shift. They are not a second Shift-modified command. Vim regions
 keep case: `g`/`gg` versus `G`, and list/transcript `j`/`k`/`h`/`l`. Modified
 chords (`Mod+Enter`, `Shift+J`) still require their exact Shift state.
@@ -468,7 +467,7 @@ it); macOS Chrome binds none of them.
 - In Sessions, the filled row is the currently open session only while
   Sessions owns focus; a distinct accent cursor shows the row selected by
   `j/k` for the next `l`/Enter action. Switching to a Conversation tab
-  (History/Explore/Reading) must un-highlight the session row so the tab is
+  (History/Explore) must un-highlight the session row so the tab is
   the only selected chrome.
 - `Enter`: default item action. In Sessions, `l` and `Enter` open the selected
   session and move focus to its Prompt editor; entering the Sessions region
@@ -701,7 +700,7 @@ and installed PWAs. Every registered command must pass both checked-in audits:
 - A Chrome chord may be overridden only when the Cowboy action has the same
   established semantic or is a standard Vim reader motion in an exclusively
   owned context. The current browser exceptions are `Ctrl/Cmd+S` Save Draft and
-  Conversation/Reading `Ctrl+D/U/F/B`; macOS additionally treats `Cmd+.` Stop
+  Conversation `Ctrl+D/U/F/B`; macOS additionally treats `Cmd+.` Stop
   as a matching native-style semantic action. Additions require an explicit
   policy entry, tests, visible help, and an update to this section.
 - When Cowboy has no command, do not swallow the event. Chrome Find, Open,
@@ -773,23 +772,9 @@ state and J/K focus. When Conversation or Prompt owns focus, session rows stay
 unmarked so the tab or editor is the only highlighted selection; the live
 session remains identifiable from its status mark and the open transcript.
 
-Desktop product modes are separate command domains. Agent is the default mode;
-`Z` enters Reading only while Conversation owns focus. Reading covers the Agent
-chrome, `Esc` returns to Agent, `V` switches History/Page, `P` toggles one shared
-question directory, and `F` follows the live edge. The directory is available in
-both projections: History selection locates the question root in the continuous
-transcript, while Page selection opens that isolated question. Its focused Vim
-list owns `J/K`, `gg/G`, `Ctrl-D/U`, `Ctrl-F/B`, `L`/Enter and `H`; Reading-level
-`Esc/P/V/F` remain available. Following from an older Page returns to the latest
-question before resuming live output. Agent pane/session/queue commands must not
-leak into Reading. Future Code mode uses the same product-mode boundary rather
-than adding another Agent overlay.
-
-The Agent Conversation header exposes Reading as its own embedded action between
-the History/Explore projection switch and Following. Reading is not a third
-projection: entering it preserves the selected projection and changes only the
-product mode. Its visible `Z` slot is inactive outside Conversation and available
-while Conversation owns focus, matching the registered command exactly.
+Desktop has no separate full-screen Reading mode. Folding Sessions (`␣W[`) and
+Prompt (`␣W]`) gives the Conversation the whole window while keeping the same
+regions, keys and session context; Explore's `P` opens the Page Index.
 
 Workspace prefix then `P` always enters `prompt.composer`, even when Sessions,
 Conversation, Plan, Queue, or Draft currently owns focus. It restores the
@@ -811,7 +796,7 @@ stop.
 
 Workspace prefix then `R` selects the nearest visible vertical boundary and enters layout
 Resize mode without moving it: Sessions / Prompt from Sessions, Prompt /
-Conversation from either work pane, or Page index / Page in Reading mode.
+Conversation from either work pane.
 The selected bar uses the shared accent and keycap language; `H/L` moves it by
 16px, `Shift-H/L` moves it by 48px, `Tab` cycles visible bars, and `Esc` or
 `Enter` returns to the previously focused region.
