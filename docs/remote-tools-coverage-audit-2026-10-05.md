@@ -333,7 +333,7 @@ replace the existing shipped remote tool facade on these results alone.
 
 #### Lost start acknowledgement in the shipped facade
 
-The 2026-10-06 follow-up found a separate facade gap. `start` saves the original
+The 2026-10-06 follow-up found a separate gap in facade 3.4.8. `start` saves the original
 process ID before submitting the command, but `startForeground` only adds it
 to the foreground set after a successful reply. `cancelForeground` ignores a
 rejected pending start. Consequently an interrupt can return successfully even
@@ -341,13 +341,11 @@ when that rejected start was already admitted and its target process remains
 live. This is not the shell-prefix signal-forwarding issue above.
 
 The deterministic `lost start acknowledgement retains the original job for
-recovery without replay` regression injects admission before reply failure,
-observes the interrupt outcome, reopens the saved facade state with a recovered
-transport, and terminates the original ID with native TaskStop. It requires
-exactly one start, one terminate, a closed output record and an unaffected
-independent peer. The recovery assertions are acceptance conditions; the
-diagnostic showing a fulfilled interrupt with a live target records an open
-defect, not acceptable cancellation behavior. This is a facade simulation, not
+recovery without replay` regression injects admission before reply failure.
+The 3.4.9 candidate requires an explicit pending ID and a persisted cancellation
+intent; reopening the state with a recovered transport automatically terminates
+that same ID. It requires exactly one start, one terminate, a closed output
+record and an unaffected independent peer. This is a facade simulation, not
 native Claude, a real reconnect or a cross-host acceptance test.
 Both this regression and the earlier pending-TaskStop regression live in
 `tools/claude-remote-routing.test.mjs`, which `claude-remote-check` runs. The
@@ -367,15 +365,20 @@ That lower-level capability does not automatically repair the facade:
 internally, while the facade retains only the process identity. A transport
 failure can prevent the facade from observing whether admission has settled.
 
-The repair must retain cancellation intent against the original submission,
-reconcile admission before confirming cancellation, and preserve the original
-handle across recovery. Merely swallowing the start error is wrong; merely
-issuing terminate on error can race admission or fail on the same disconnected
-transport. A missing process before admission settles is not proof of stopped
-execution. Acceptance must include delayed success, lost reply after admission,
-cancel before admission, target loss, process exit during cancellation, and
-independent concurrent/background tasks. No production cancellation change is
-claimed by this audit/regression addition.
+The 3.4.9 candidate registers foreground identity before submission, persists
+cancel intent before target IO, and waits independently for pending starts.
+Only an observed closed target clears the intent. Missing/unknown admission,
+lost replies and transport errors retain it for bounded-interval observations
+or cold runtime recovery; no command is resubmitted. Native model interruption
+is still forwarded, but its success response becomes an explicit pending/error
+response if target cancellation is unconfirmed or intent could not be saved.
+Output collection and failed state-save rollback preserve concurrent cancel
+intent without consuming its output cursor. Tests cover missing admission,
+delayed exit, failed intent persistence and concurrent output commits/rollback.
+This does not establish arbitrary process-tree, SIGKILL, cross-host filesystem
+or permission parity. Cancellation after total keeper/incarnation loss cannot
+claim that the old process stopped. Release/activation requires the exact
+packaged native acceptance in addition to these source tests.
 
 The official [shell-prefix contract](https://code.claude.com/docs/en/env-vars),
 checked 2026-10-06, also includes hook, status-line and stdio MCP shell commands;

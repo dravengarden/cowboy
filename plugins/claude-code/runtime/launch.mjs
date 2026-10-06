@@ -257,6 +257,7 @@ async function bridge(child, tools, context, memory) {
   ready.catch(() => {});
   let initial;
   let initialReply;
+  const pendingInterrupts = new Map();
   let stage = "initialize";
   const checkId = randomUUID();
   const privateCommand = "cowboy-execution-ready-" + context.nonce;
@@ -314,7 +315,23 @@ async function bridge(child, tools, context, memory) {
           });
           continue;
         }
-        if (subtype === "interrupt") await tools.cancelForeground();
+        if (subtype === "interrupt") {
+          try {
+            const pending = await tools.cancelForeground();
+            if (pending.length) {
+              pendingInterrupts.set(
+                frame.request_id,
+                "Target cancellation is pending; retained task handles: " +
+                  pending.map((id) => `cowboy-task://${id}`).join(", "),
+              );
+            }
+          } catch {
+            pendingInterrupts.set(
+              frame.request_id,
+              "Target cancellation could not be saved; inspect target tasks before retrying commands",
+            );
+          }
+        }
       }
       // These local commands can change native tools/settings or launch local
       // helpers. Ordinary text, /compact and harmless local status remain native.
@@ -402,6 +419,22 @@ async function bridge(child, tools, context, memory) {
         continue;
       }
       if (stage === "ready") {
+        if (
+          frame.type === "control_response" &&
+          pendingInterrupts.has(frame.response.request_id)
+        ) {
+          const error = pendingInterrupts.get(frame.response.request_id);
+          pendingInterrupts.delete(frame.response.request_id);
+          await send(process.stdout, {
+            type: "control_response",
+            response: {
+              subtype: "error",
+              request_id: frame.response.request_id,
+              error,
+            },
+          });
+          continue;
+        }
         const observation = claudeObservation(frame);
         if (memory && observation) memory.add(...observation);
         if (memory && frame.type === "result" && !frame.local_command) {

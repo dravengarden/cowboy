@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -33,6 +33,7 @@ test("lost start acknowledgement retains the original job for recovery without r
       live.add(params.processId);
       admitted.resolve(params.processId);
       await reply.promise;
+      connection.closed = true;
       throw new Error("Execution unavailable or result unknown; no replay");
     }
     throw new Error("Original transport is unavailable");
@@ -45,14 +46,12 @@ test("lost start acknowledgement retains the original job for recovery without r
   assert.ok(persisted.jobs[id]);
   const interrupt = tools.cancelForeground();
   reply.resolve();
-  const cancellation = await Promise.allSettled([interrupt]);
+  assert.deepEqual(await interrupt, [id]);
   assert.match((await running).deny, /result unknown/);
   assert.ok(live.has(id));
-  // This is an observed audit gap, not a cancellation acceptance condition.
-  t.diagnostic(
-    `lost-ack interrupt outcome: ${
-      cancellation[0].status
-    }; target remains live`,
+  assert.equal(
+    JSON.parse(await readFile(state, "utf8")).jobs[id].cancelRequested,
+    true,
   );
 
   const recovered = {
@@ -72,13 +71,17 @@ test("lost start acknowledgement retains the original job for recovery without r
   };
   const resumed = new WorkspaceTools(recovered, binding, state);
   await resumed.load();
-  const stopped = await resumed.nativeCall("TaskStop", { task_id: id });
+  assert.equal(resumed.state.jobs[id].cancelRequested, false);
+  const stopped = await resumed.nativeCall("Read", {
+    file_path: `${TASK_OUTPUT_PREFIX}${id}`,
+  });
   assert.equal(stopped.deny, undefined);
   assert.equal(resumed.state.jobs[id].closed, true);
   assert.ok(live.has(peer));
   assert.deepEqual(calls, [
     { method: "process/start", id },
     { method: "process/terminate", id },
+    { method: "process/read", id },
     { method: "process/read", id },
   ]);
 });
@@ -133,6 +136,109 @@ test("TaskStop reports pending until the target confirms closure and retains its
     assert.equal(methods.includes("process/start"), false);
   } finally {
     Date.now = original;
+  }
+});
+
+test("unknown admission and delayed exit retain cancellation until confirmed", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-cancel-admission-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let admitted = false;
+  let closed = false;
+  const calls = [];
+  const connection = {
+    async call(method, params) {
+      calls.push(method);
+      assert.equal(params.processId, "original");
+      if (!admitted) throw new Error("process not found");
+      if (method === "process/terminate") return {};
+      assert.equal(method, "process/read");
+      return {
+        closed,
+        exited: closed,
+        chunks: [],
+        exitCode: closed ? 143 : null,
+      };
+    },
+  };
+  const tools = new WorkspaceTools(connection, {
+    workspace: { cwd: "/target" },
+    environment: { id: "admission-fixture" },
+  }, join(directory, "state.json"));
+  t.after(() => clearTimeout(tools.cancelTimer));
+  tools.state.jobs.original = {
+    afterSeq: null,
+    exited: false,
+    cancelRequested: true,
+  };
+  await tools.save();
+  await tools.load();
+  assert.equal(tools.state.jobs.original.cancelRequested, true);
+  admitted = true;
+  await tools.reconcileCancellations();
+  assert.equal(tools.state.jobs.original.cancelRequested, true);
+  closed = true;
+  await tools.reconcileCancellations();
+  assert.equal(tools.state.jobs.original.cancelRequested, false);
+  assert.equal(tools.state.jobs.original.afterSeq, null);
+  assert.equal(calls.includes("process/start"), false);
+});
+
+test("failed cancellation persistence does not send terminate or lose prior state", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-cancel-save-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const state = join(directory, "state.json");
+  const calls = [];
+  const tools = new WorkspaceTools({
+    call: async (method) => calls.push(method),
+  }, {
+    workspace: { cwd: "/target" },
+    environment: { id: "save-fixture" },
+  }, state);
+  tools.state.jobs.original = { afterSeq: null, exited: false };
+  tools.foreground.add("original");
+  await mkdir(state);
+  await assert.rejects(tools.cancelForeground());
+  assert.equal(tools.state.jobs.original.cancelRequested, undefined);
+  assert.deepEqual(calls, []);
+});
+
+test("in-flight output commits and rollback preserve newer cancellation intent", async (t) => {
+  for (const failSave of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), "cowboy-cancel-output-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const observed = Promise.withResolvers();
+    const response = Promise.withResolvers();
+    const connection = {
+      closed: true,
+      async call(method) {
+        assert.equal(method, "process/read");
+        observed.resolve();
+        return await response.promise;
+      },
+    };
+    const state = join(directory, "state.json");
+    const tools = new WorkspaceTools(connection, {
+      workspace: { cwd: "/target" },
+      environment: { id: "output-fixture" },
+    }, state);
+    tools.state.jobs.original = { afterSeq: null, exited: false };
+    tools.foreground.add("original");
+    const reading = tools.collectOutput("original", 0);
+    await observed.promise;
+    assert.deepEqual(await tools.cancelForeground(), ["original"]);
+    if (failSave) {
+      await rename(state, state + ".previous");
+      await mkdir(state);
+    }
+    response.resolve({
+      closed: false,
+      exited: false,
+      chunks: [],
+      exitCode: null,
+    });
+    if (failSave) await assert.rejects(reading);
+    else await reading;
+    assert.equal(tools.state.jobs.original.cancelRequested, true);
   }
 });
 

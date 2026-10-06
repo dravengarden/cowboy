@@ -167,7 +167,7 @@ export class WorkspaceTools {
       jobs: {},
     };
     this.foreground = new Set();
-    this.startingForeground = new Set();
+    this.startingForeground = new Map();
     this.operations = new Map();
     this.saves = Promise.resolve();
   }
@@ -190,6 +190,7 @@ export class WorkspaceTools {
       if (error.code !== "ENOENT") throw error;
     }
     await this.cleanupTemporaryStates();
+    await this.reconcileCancellations();
   }
 
   async cleanupTemporaryStates() {
@@ -370,11 +371,10 @@ export class WorkspaceTools {
     }
   }
 
-  async start(argv) {
+  async start(argv, processId = randomUUID()) {
     if (Object.keys(this.state.jobs).length >= 4096) {
       throw new Error("Session process limit reached");
     }
-    const processId = randomUUID();
     // Record an intended process before submission. A lost start result is
     // never retried; the retained id can still be observed or cancelled.
     this.state.jobs[processId] = { afterSeq: null, exited: false };
@@ -467,9 +467,13 @@ export class WorkspaceTools {
       if (result.closed || size >= MAX_OUTPUT) break;
     } while (Date.now() < deadline);
     await this.save(() => {
-      this.state.jobs[processId] = job;
+      const beforeSave = this.state.jobs[processId];
+      this.state.jobs[processId] = {
+        ...job,
+        cancelRequested: beforeSave?.cancelRequested,
+      };
       return () => {
-        this.state.jobs[processId] = previous;
+        this.state.jobs[processId] = beforeSave;
       };
     });
     return {
@@ -483,15 +487,15 @@ export class WorkspaceTools {
   }
 
   async startForeground(argv) {
-    const starting = this.start(argv).then((id) => {
-      this.foreground.add(id);
-      return id;
-    });
-    this.startingForeground.add(starting);
+    const id = randomUUID();
+    this.foreground.add(id);
+    const starting = this.start(argv, id);
+    this.startingForeground.set(id, starting);
     try {
       return await starting;
     } finally {
-      this.startingForeground.delete(starting);
+      this.startingForeground.delete(id);
+      if (!this.state.jobs[id]) this.foreground.delete(id);
     }
   }
 
@@ -996,24 +1000,80 @@ export class WorkspaceTools {
   }
 
   async cancelForeground() {
-    const stopped = new Set();
-    const stop = (processId) => {
-      if (stopped.has(processId)) return;
-      stopped.add(processId);
-      return this.connection.call("process/terminate", { processId });
-    };
-    // A submitted start is already part of this foreground operation. Wait
-    // for its identity acknowledgement before terminating, so cancellation
-    // cannot overtake admission. Existing jobs stop without waiting for it.
-    // Failed starts retain their ordinary error/unknown-result handling;
-    // never resubmit them in order to cancel.
-    await Promise.all(
-      [
-        ...[...this.foreground].map(stop),
-        ...[...this.startingForeground].map((starting) =>
-          starting.then(stop, () => {})
-        ),
-      ],
-    );
+    const ids = [...this.foreground];
+    // Persist intent before touching the target. A lost start reply does not
+    // prove non-admission, and must not remove the original cancellation ID.
+    await this.save(() => {
+      const previous = new Map();
+      for (const id of ids) {
+        const job = this.state.jobs[id];
+        if (!job || job.closed) continue;
+        previous.set(id, job);
+        this.state.jobs[id] = { ...job, cancelRequested: true };
+      }
+      return () => {
+        for (const [id, job] of previous) this.state.jobs[id] = job;
+      };
+    });
+    await Promise.all(ids.map(async (id) => {
+      // Existing tasks stop immediately; pending starts settle independently.
+      await this.startingForeground.get(id)?.catch(() => {});
+      await this.reconcileCancellation(id);
+    }));
+    this.scheduleCancellations();
+    return ids.filter((id) => this.state.jobs[id]?.cancelRequested);
+  }
+
+  async reconcileCancellation(id) {
+    if (!this.state.jobs[id]?.cancelRequested || this.connection.closed) return;
+    try {
+      await this.connection.call("process/terminate", { processId: id }).catch(
+        () => {},
+      );
+      // This observation does not advance the task's output cursor. Do not
+      // wait behind its foreground output collection to deliver cancellation.
+      const result = await this.connection.call("process/read", {
+        processId: id,
+        afterSeq: this.state.jobs[id]?.afterSeq ?? null,
+        maxBytes: 1,
+        waitMs: 1,
+      });
+      if (!result.closed) return;
+      await this.save(() => {
+        const previous = this.state.jobs[id];
+        if (!previous) return;
+        this.state.jobs[id] = { ...previous, cancelRequested: false };
+        return () => this.state.jobs[id] = previous;
+      });
+      this.foreground.delete(id);
+    } catch {
+      // Missing/unknown before admission settles is not cancellation proof.
+      // Keep the intent for another observation or a cold runtime resume.
+    }
+  }
+
+  async reconcileCancellations() {
+    for (const [id, job] of Object.entries(this.state.jobs)) {
+      if (job.cancelRequested && !this.startingForeground.has(id)) {
+        await this.reconcileCancellation(id);
+      }
+    }
+    this.scheduleCancellations();
+  }
+
+  scheduleCancellations() {
+    if (
+      this.cancelTimer || this.connection.closed ||
+      !Object.values(this.state.jobs).some((job) => job.cancelRequested)
+    ) return;
+    this.cancelTimer = setTimeout(async () => {
+      try {
+        await this.reconcileCancellations();
+      } finally {
+        this.cancelTimer = undefined;
+        this.scheduleCancellations();
+      }
+    }, 1000);
+    this.cancelTimer.unref();
   }
 }
