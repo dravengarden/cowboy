@@ -8,3 +8,7 @@ schema = 1
 # generations that no open, hibernated or unpurged session pins.
 # duration string such as "6h", from 10m to 7d; applies live.
 # generation_retention_interval = "6h"
+# Minimum time between extra retention passes for one Device whose
+# available disk is below its declared `disk.low_watermark`.
+# duration string such as "6h", from 5m to 7d; applies live.
+# urgent_retention_cooldown = "1h"

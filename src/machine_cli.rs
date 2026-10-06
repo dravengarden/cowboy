@@ -81,6 +81,7 @@ struct ControllerConfig {
     capacity: MachineCapacity,
     local: bool,
     provider_usage: crate::provider_usage_spool::ProviderUsageSpool,
+    device_config: crate::config::Handle,
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
@@ -464,6 +465,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         current_platform(),
         std::env::consts::ARCH.to_owned(),
     )?);
+    providers.use_device_config(device_config.clone());
     // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
     // bootstrap. Unadmitted Machines still open read-only without adoption.
     const INSTALLATION_TRACKING_ENABLED: bool = true;
@@ -630,6 +632,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         },
         local: args.local,
         provider_usage: provider_usage.clone(),
+        device_config: device_config.clone(),
     });
     let provider_usage_listener =
         crate::provider_usage_spool::serve(args.provider_usage_socket, provider_usage);
@@ -1251,7 +1254,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                         && tokio::time::Instant::now() >= resources_due
                     {
                         resources_due = tokio::time::Instant::now() + HOST_RESOURCES_INTERVAL;
-                        if let Some(resources) = host_resources::sample(&state_dir) {
+                        if let Some(mut resources) = host_resources::sample(&state_dir) {
+                            resources.disk_low_watermark_bytes = Some(config.device_config.get(
+                                &crate::config::schema::DEVICE_DISK_LOW_WATERMARK,
+                            ));
                             queue_controller_frame(
                                 &controller_write_tx,
                                 &MachineFrame::Event {

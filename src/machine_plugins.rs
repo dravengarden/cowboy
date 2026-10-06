@@ -269,6 +269,9 @@ pub(crate) struct MachinePluginStore {
     /// keyed by content root and signed artifact set. See [`RuntimeStamp`]
     /// for why an unchanged stamp proves the bytes are unchanged.
     runtime_proofs: parking_lot::Mutex<std::collections::HashMap<String, Vec<RuntimeStamp>>>,
+    /// The Device configuration, once the daemon has loaded it. Retention
+    /// policy reads it live; without it the artifact cache is never pruned.
+    device_config: std::sync::OnceLock<crate::config::Handle>,
     #[cfg(test)]
     runtime_verifications: AtomicU64,
     #[cfg(test)]
@@ -339,11 +342,17 @@ impl MachinePluginStore {
             code_runtimes: CodeRuntimeHost::default(),
             operations,
             runtime_proofs: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            device_config: std::sync::OnceLock::new(),
             #[cfg(test)]
             runtime_verifications: AtomicU64::new(0),
             #[cfg(test)]
             runtime_full_comparisons: AtomicU64::new(0),
         })
+    }
+
+    /// Attach the daemon's live Device configuration (first call wins).
+    pub fn use_device_config(&self, config: crate::config::Handle) {
+        let _ = self.device_config.set(config);
     }
 
     #[must_use]
@@ -895,6 +904,20 @@ impl MachinePluginStore {
                 key.split_once('\n')
                     .is_none_or(|(content, _)| Path::new(content).exists())
             });
+        }
+        // Same lock as installation, so no install can be reading the cache.
+        if let (Some(config), Some(state)) = (self.device_config.get(), self.root.parent()) {
+            let unreferenced_after =
+                config.get(&crate::config::schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
+            match artifact_cache::retire_unreferenced(state, &self.root, unreferenced_after) {
+                Ok(retired) if retired.files > 0 => tracing::info!(
+                    files = retired.files,
+                    freed_bytes = retired.bytes,
+                    "retired unreferenced runtime artifact cache entries"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "artifact cache retention failed"),
+            }
         }
         retention.retained.sort();
         retention.retired.sort();
