@@ -149,6 +149,7 @@ primary phone/desktop product path.
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`plugin-refactor-completion.md`](plugin-refactor-completion.md) — Current implementation, production-acceptance and independent-recovery exit checklist
+- [`plugin-domain-executor-binding.md`](plugin-domain-executor-binding.md) — The rule for binding resolved results to domain executors as the telemetry code states it, an inventory of which domains have it, and why no generic mechanism is built
 - [`plugin-state-lease-design.md`](plugin-state-lease-design.md) — Design (unimplemented, deliberately): the contract a state lease must satisfy, and the finding that no dataset has multiple holders so there is no consumer to build it for yet
 - [`plugin-state-dataset-design.md`](plugin-state-dataset-design.md) — Design (unimplemented) for general state-dataset compatibility: inventory, advisory versus safety-critical rule, ten-point contract and factoring of the duplicated namespace and owner code
 - [`releases/durable-state-diagnostics-2026-10-06.md`](releases/durable-state-diagnostics-2026-10-06.md) — Hawk Machine and Controller releases of the durable-state report; first live read matched the files (7 deletions, 7 lineages)
