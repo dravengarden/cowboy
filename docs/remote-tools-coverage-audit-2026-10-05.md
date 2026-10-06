@@ -466,6 +466,16 @@ those two edits; the source regression supplies the deterministic overlap.
 Record packaged acceptance and deployment separately; source tests alone do
 not accept a release.
 
+The [3.4.11 release receipt](experiments/claude-alias-mutation-release-2026-10-06.json)
+records 34 packaged Claude scenarios plus six transport checks, accepted in
+84.00 seconds. It also includes 3.4.10/3.4.11 worker coexistence, Linux/macOS
+version probes, three Catalog reader roles, five public artifact hash checks,
+and the full quality gate before and after main integration. OVH's
+`ovh-claude-code-3-4-11-converge` completed with HTTP 204 and an applied Machine
+receipt. Independent inventory confirmed 3.4.11 active, 3.4.10 available for
+rollback and current authentication/materialization. Installation verification
+sent no production inference prompt.
+
 This session-local queue does not synchronize other sessions or external
 processes. It does not supply OS-level compare-and-write, prevent symlink
 retargeting, or resolve an unknown target write after a lost acknowledgement.
