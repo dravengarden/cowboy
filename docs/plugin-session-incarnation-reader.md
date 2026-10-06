@@ -36,7 +36,31 @@ it, and the floor is anchored by the activation after it. The native writer
 startup parser and the reader-conformance manifest accept the declaration only
 as reader 1 / writer 0, and still refuse unknown fields.
 
-## Status: published, not activated
+## Status: activated on Hawk (2026-10-06)
+
+The reader, the bounded cleanup retries and the shared `namespace.rs` are in the
+Machine release `48d3054d` that another task activated on Hawk as transaction
+`1791247667920288462-48d3054db95c` (writer host release
+`/nix/store/nmr8a6kr…`, worker generation `worker-135348a7…`, pin advanced to
+`8909c1c8`). Startup logged `Session incarnation reader ready incarnations=0`,
+the deletion journal reader with `deleted_sessions=5 writer_enabled=true`, and
+`durable Session cleanup continuations ready pending=0`. No incarnation record
+exists, and the owner has **not** yet created the incarnation reader floor: the
+previous release did not declare the dataset, so the first reader-only transition
+creates none and the next activation anchors `48d3054d`. A writer is still
+refused until that floor exists.
+
+The native conformance extension was run on built artifacts afterwards, comparing
+the active `48d3054d` writer with the `a0394f67` writer and reader-only
+releases of the same worker generation: **37 groups accepted**, including the
+five incarnation vectors (default reader owns an empty namespace and refuses an
+invalid record before binding; valid record reopened untouched; corrupt,
+foreign-owner and shared-lineage records refused before binding). The
+[receipt](experiments/incarnation-reader-native-conformance-2026-10-06.json) also
+covers the deletion journal after the `namespace.rs` refactor. The activating
+task's own acceptance of `48d3054d` is separate and was not reviewed here.
+
+## Earlier status: published, not activated
 
 Source is on main (`4d792318`) after the full Rust gate on the integrated tree
 (585 standalone and 1918 all-features tests, both Clippy gates, Rustfmt). The
