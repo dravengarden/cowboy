@@ -1575,6 +1575,7 @@ impl SqliteSessionRow {
             agent_session_id: self.agent_session_id,
             system: self.system,
             paused: false,
+            closing: false,
             context_used: 0,
             context_size: 0,
             usage: None,

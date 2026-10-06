@@ -8804,6 +8804,7 @@ impl SessionRow {
             // Transient — the manual pause is in-memory only (not persisted), so a
             // restored session always comes back un-paused.
             paused: false,
+            closing: false,
             // Not persisted — a fresh usage_update re-seeds it right after revive.
             context_used: 0,
             context_size: 0,
@@ -8847,6 +8848,7 @@ mod storage_contract_tests {
             origin: SessionOrigin::Web,
             agent_session_id: None,
             paused: false,
+            closing: false,
             system: false,
             context_used: 0,
             context_size: 0,
