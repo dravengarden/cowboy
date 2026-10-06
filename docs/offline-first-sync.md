@@ -408,11 +408,14 @@ window never clips the connection state. Click opens the command palette filtere
 
 **Connection notice.** The status line alone was too quiet: a lasting outage
 went unnoticed until a send sat waiting. Once `offline`, `unreachable`,
-`degraded` or `waiting` outlasts the presentation debounce, a tinted strip
-sits at the top of the prompt pane, where the eyes are when writing. It says
-whether the device or the server is the thing to check, the retry countdown,
-the last sync age and what happens to queued messages, with Retry now; on
-recovery it flashes "Reconnected" and leaves. A short `connecting` blip stays
+`degraded` or `waiting` outlasts the presentation debounce, a tinted chip
+appears in the Prompt pane header, where the eyes are when writing. The
+header has a fixed height, so the chip never moves the editor or its caret
+(an earlier strip above the editor pushed the text down on every flap). It
+shows the phase and the retry countdown, last sync age and queued-message
+outcome on one line, with Retry now; its hover hint adds whether the device
+or the server is the thing to check. On recovery it flashes "Reconnected"
+and leaves. A short `connecting` blip stays
 in the status line only. While the server is not live the send button and its
 shortcut hint read "Queue", because that is what a send does.
 

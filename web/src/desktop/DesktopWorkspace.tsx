@@ -58,12 +58,16 @@ function PaneHeader({
   pane,
   shortcut,
   actions,
+  status,
   collapsible = false,
   children,
 }: {
   pane: DesktopPane;
   shortcut: { value: string; title: string };
   actions?: React.ReactNode;
+  /** Transient state shown in the fixed-height header so it never shifts the
+   * pane body (the connection notice). */
+  status?: React.ReactNode;
   collapsible?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -130,7 +134,19 @@ function PaneHeader({
             </Box>
           </Box>
         )
-        : <Box sx={{ flex: 1 }} />}
+        : (
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              mx: 1,
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            {status}
+          </Box>
+        )}
       <DesktopRegionShortcut
         shortcut={shortcut.value}
         title={shortcut.title}
@@ -237,6 +253,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="prompt"
+          status={<DesktopConnectionNotice />}
           collapsible
           shortcut={{
             value: DESKTOP_FOCUS_PROMPT_SHORTCUT,
@@ -255,7 +272,6 @@ export function DesktopWorkspace({
             flexDirection: "column",
           }}
         >
-          <DesktopConnectionNotice />
           {prompt}
         </Box>
       </Box>
