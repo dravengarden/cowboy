@@ -142,6 +142,12 @@ a slot, is idle (no turn, queued prompt or background task), is not a system
 session, does not have Provider cache protection enabled, and has had no event
 for `sessions.reclaim_min_idle`.
 
+Opening a hibernated session always revives it, even on a full Device, because
+the Machine treats capacity as advisory. With reclaim enabled, the Service then
+hibernates the longest-idle eligible session other than the one just opened
+whenever the Device holds more workers than its capacity. This never delays or
+refuses the open.
+
 Hibernation sends no model request and the conversation resumes when the
 session is opened (`docs/hibernation-token-audit-2026-10-06.md`). Keeping the
 idle threshold at or above the longest Provider prompt-cache lifetime means a
