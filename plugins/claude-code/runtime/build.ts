@@ -70,6 +70,7 @@ try {
       "tools.mjs",
       "read-range.mjs",
       "context-mod.js",
+      "hook-proxy.mjs",
       "memory.mjs",
     ];
     const digests: Record<string, string> = {};

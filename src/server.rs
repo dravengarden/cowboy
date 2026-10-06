@@ -5034,6 +5034,14 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if matches!(path, "/api/sessions" | "/api/execution-sessions") && method == Method::POST {
         return RouteAuth::ProductOperator;
     }
+    // Content-free durable-state counts of one Machine, for operators and AI
+    // diagnosis. It exposes no Session, lineage or path.
+    if matches!(*method, Method::GET | Method::HEAD)
+        && path.starts_with("/api/machines/")
+        && path.ends_with("/durable-state")
+    {
+        return RouteAuth::ProductOrAdminOperator;
+    }
     if matches!(path, "/api/project-policies" | "/api/project-placements")
         || (path.starts_with("/api/machines/")
             && (path.ends_with("/projects") || path.ends_with("/project-policy")))
@@ -10166,6 +10174,10 @@ async fn serve_axum(
             "/api/machines/{id}/deployment-health",
             get(api_machine_deployment_health),
         )
+        .route(
+            "/api/machines/{id}/durable-state",
+            get(api_machine_durable_state),
+        )
         // Protocol-v4/web compatibility adapter. Delete after every supported
         // client consumes protocol-v5 Plugin inventory from `/plugins`.
         .route(
@@ -11823,6 +11835,42 @@ fn machine_workspace_ids_sha256(inventory: &serde_json::Value) -> Option<String>
         .collect::<Option<Vec<_>>>()?;
     ids.sort_unstable();
     Some(crate::admin::hex_sha256(&serde_json::to_vec(&ids).ok()?))
+}
+
+/// Content-free counts and writer flags of one connected Machine's durable state
+/// (terminal deletions, Session lineages, pending cleanup). Each dataset is read
+/// separately, so it is not an atomic snapshot. The Machine's reply is validated
+/// against a closed schema and never proxied as free-form JSON; a Machine that
+/// predates the report answers with an error, which is surfaced as such.
+async fn api_machine_durable_state(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    if !state.runtime_router.connected(&machine_id) {
+        return (StatusCode::NOT_FOUND, "Machine is not connected").into_response();
+    }
+    let reply = match state
+        .machine_control
+        .adapter_request(&machine_id, "durable-state", serde_json::json!({}))
+        .await
+    {
+        Ok(reply) => reply,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Machine did not report durable state: {error}"),
+            )
+                .into_response();
+        }
+    };
+    match crate::durable_state::DurableState::from_reply(reply) {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            format!("Machine reported invalid durable state: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn api_machine_deployment_health(
@@ -22685,6 +22733,12 @@ mod product_auth_api_tests {
         assert_eq!(
             classify_route(&Method::GET, "/api/machines/m-123/deployment-health"),
             RouteAuth::Public
+        );
+        // Durable-state counts are operational diagnostics: never public, and
+        // reachable by the product UI and by the Operator CLI.
+        assert_eq!(
+            classify_route(&Method::GET, "/api/machines/m-123/durable-state"),
+            RouteAuth::ProductOrAdminOperator
         );
         for path in [
             "/api/metrics",

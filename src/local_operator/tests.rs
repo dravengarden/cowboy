@@ -95,6 +95,19 @@ fn install_cli_requires_a_version_digest_and_durable_operation_identity() {
 }
 
 #[test]
+fn durable_state_cli_names_exactly_one_machine_and_nothing_else() {
+    assert!(TestCli::try_parse_from(["operator", "durable-state"]).is_err());
+    assert!(
+        TestCli::try_parse_from(["operator", "durable-state", "--machine", "hawk", "--all"])
+            .is_err()
+    );
+    let args = TestCli::try_parse_from(["operator", "durable-state", "--machine", "hawk"]).unwrap();
+    assert!(
+        matches!(args.args.command, OperatorCommand::DurableState { machine } if machine == "hawk")
+    );
+}
+
+#[test]
 fn installation_reconciliation_cli_requires_the_exact_fenced_identity() {
     assert!(
         TestCli::try_parse_from([

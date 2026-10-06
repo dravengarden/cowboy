@@ -131,6 +131,7 @@
           ./src/execution_protocol.rs
           ./src/execution_host.rs
           ./src/execution_target_environment.rs
+          ./src/durable_state.rs
           ./src/execution_host
           ./src/bin/cowboy-execution-host.rs
           ./src/code_buffer_read.rs
@@ -754,6 +755,7 @@
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs
         test -e ${machine-src}/src/session_workspace.rs
+        test -e ${machine-src}/src/durable_state.rs
         test -e ${machine-src}/src/machine_broker/deletions.rs
         test -e ${machine-src}/src/session_deletion_admission.rs
         test -e ${machine-src}/src/session_deletion_admission/reader_floor.rs

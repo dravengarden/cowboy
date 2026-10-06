@@ -70,6 +70,10 @@ export const DESCRIPTIONS = {
     "Terminate a Bash command and observe its exit using the returned task_id. Handles survive resume.",
 };
 
+function shellLiteral(value) {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 function checkedString(value, name, max = MAX_FILE) {
   if (
     typeof value !== "string" || value.includes("\0") ||
@@ -295,6 +299,177 @@ export class WorkspaceTools {
     }
   }
 
+  // Project hook settings as the target project declares them. The target is
+  // their source of truth; this is a session-start snapshot.
+  async projectHooks() {
+    const hooks = {};
+    for (const name of ["settings.json", "settings.local.json"]) {
+      // Missing means none. Any other read failure stops the session rather
+      // than starting it without the project's guards.
+      const bytes = await this.bytes(
+        posix.join(this.cwd, ".claude", name),
+        true,
+      );
+      if (!bytes) continue;
+      let settings;
+      try {
+        settings = JSON.parse(decode(bytes));
+      } catch {
+        // Native 2.1.287 skips an unparsable settings file and still starts.
+        continue;
+      }
+      if (settings?.disableAllHooks === true) return {};
+      for (const [event, groups] of Object.entries(settings?.hooks ?? {})) {
+        if (!Array.isArray(groups)) continue;
+        hooks[event] = [...(hooks[event] ?? []), ...groups];
+      }
+    }
+    return hooks;
+  }
+
+  // Run one hook command beside the project, with the hook's JSON input on
+  // stdin. The executor cannot close a piped stdin, so the input travels in a
+  // private file that the shell opens as stdin and unlinks before the command.
+  async runHook({ command, argv, input, timeoutMs, call, transcript }) {
+    checkedString(command, "hook command", MAX_OUTPUT);
+    const home = this.home();
+    if (!home || !this.shell) throw new Error("Target hook shell unavailable");
+    const directory = posix.join(home, ".cache", "cowboy", "hook-input");
+    const file = posix.join(directory, randomUUID() + ".json");
+    // A private target copy of the runtime transcript for this hook run.
+    const copy = transcript
+      ? posix.join(directory, randomUUID() + ".jsonl")
+      : undefined;
+    // Known before submission: a lost start reply can still be cancelled.
+    const id = randomUUID();
+    let started = false;
+    let settled = false;
+    // Both files are removed on every exit path, including a cancelled or
+    // failed start; the shell's own unlink is only the normal path.
+    try {
+      await this.privateDirectory(directory);
+      if (copy) {
+        await this.connection.call("fs/writeFile", {
+          path: pathToFileURL(copy).href,
+          dataBase64: transcript.toString("base64"),
+        });
+        input = JSON.stringify({ ...JSON.parse(input), transcript_path: copy });
+      }
+      await this.connection.call("fs/writeFile", {
+        path: pathToFileURL(file).href,
+        dataBase64: Buffer.from(input).toString("base64"),
+      });
+      // Shell form runs through the shell; exec form runs its argv directly
+      // (resolved on PATH), with the project placeholder as a plain string.
+      started = true;
+      await this.startForeground(
+        argv
+          ? [
+            this.shell,
+            "-c",
+            'exec 0<"$1" && rm -f -- "$1" && shift && exec "$@"',
+            this.shell,
+            file,
+            ...argv.map((value) =>
+              value.replaceAll("${CLAUDE_PROJECT_DIR}", this.cwd)
+            ),
+          ]
+          : [
+            this.shell,
+            "-c",
+            'exec 0<"$1" && rm -f -- "$1" && exec "$0" -c "$2"',
+            this.shell,
+            file,
+            command,
+          ],
+        call,
+        { CLAUDE_PROJECT_DIR: this.cwd, CLAUDE_ENV_FILE: this.envFile() },
+        id,
+      );
+      const streams = { stdout: [], stderr: [] };
+      const limits = { stdout: 0, stderr: 0 };
+      let afterSeq = null;
+      let result;
+      const deadline = Date.now() + timeoutMs;
+      do {
+        result = await this.connection.call("process/read", {
+          processId: id,
+          afterSeq,
+          maxBytes: 65536,
+          waitMs: Math.max(1, Math.min(1000, deadline - Date.now())),
+        });
+        for (const chunk of result.chunks) {
+          afterSeq = chunk.seq;
+          const bytes = Buffer.from(chunk.chunk, "base64");
+          if (limits[chunk.stream] + bytes.length > MAX_FILE) continue;
+          limits[chunk.stream] += bytes.length;
+          streams[chunk.stream].push(bytes);
+        }
+      } while (!result.closed && Date.now() < deadline);
+      if (!result.closed) {
+        settled = true;
+        await this.cancelTasks([id]);
+        return { timedOut: true };
+      }
+      settled = true;
+      if (this.state.jobs[id]) {
+        delete this.state.jobs[id];
+        await this.save();
+      }
+      return {
+        exitCode: result.exitCode,
+        stdout: Buffer.concat(streams.stdout).toString("utf8"),
+        stderr: Buffer.concat(streams.stderr).toString("utf8"),
+      };
+    } finally {
+      // Lost output observation: stop the target command through the
+      // durable reconciler rather than abandon an untracked process.
+      if (started && !settled) await this.cancelTasks([id]).catch(() => {});
+      this.foreground.delete(id);
+      if (call?.id) this.calls.delete(call.id);
+      for (const path of [file, copy]) {
+        if (!path) continue;
+        await this.connection.call("fs/remove", {
+          path: pathToFileURL(path).href,
+          force: true,
+        }).catch(() => {});
+      }
+    }
+  }
+
+  // The target counterpart of native's per-session CLAUDE_ENV_FILE.
+  envFile() {
+    return posix.join(
+      this.home() ?? "/",
+      ".cache",
+      "cowboy",
+      "hook-input",
+      `env-${this.state.binding.slice(0, 24)}.sh`,
+    );
+  }
+
+  // Hook inputs and transcript copies hold session content. Their directory
+  // is the user's own 0700 directory (not a link) before anything is written.
+  async privateDirectory(directory) {
+    this.privateDirectories ??= new Map();
+    if (!this.privateDirectories.has(directory)) {
+      const created = this.command([
+        this.shell,
+        "-c",
+        'umask 077 && mkdir -p -- "$1" && test -d "$1" && test ! -L "$1" && test -O "$1" && chmod 700 -- "$1"',
+        this.shell,
+        directory,
+      ]).then((result) => {
+        if (result.exitCode !== 0) {
+          throw new Error("Target hook directory is not private");
+        }
+      });
+      this.privateDirectories.set(directory, created);
+      created.catch(() => this.privateDirectories.delete(directory));
+    }
+    await this.privateDirectories.get(directory);
+  }
+
   // Target-side symlink resolution; missing trailing components are kept.
   // Without a target Python the path is unresolved (callers then ask).
   async realpath(path) {
@@ -440,7 +615,7 @@ export class WorkspaceTools {
     }
   }
 
-  async start(argv, processId = randomUUID(), call) {
+  async start(argv, processId = randomUUID(), call, set = {}) {
     if (Object.keys(this.state.jobs).length >= 4096) {
       throw new Error("Session process limit reached");
     }
@@ -482,7 +657,7 @@ export class WorkspaceTools {
         inherit: "all",
         ignoreDefaultExcludes: false,
         exclude: [],
-        set: {},
+        set,
         includeOnly: [],
       },
     });
@@ -577,10 +752,9 @@ export class WorkspaceTools {
     };
   }
 
-  async startForeground(argv, call) {
-    const id = randomUUID();
+  async startForeground(argv, call, set, id = randomUUID()) {
     this.foreground.add(id);
-    const starting = this.start(argv, id, call);
+    const starting = this.start(argv, id, call, set);
     this.startingForeground.set(id, starting);
     try {
       return await starting;
@@ -723,7 +897,17 @@ export class WorkspaceTools {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
       const timeout = bounded(args.timeout, 120000, 1, 600000);
-      const argv = [this.shell, "-c", command];
+      // As natively, Bash first loads what project hooks wrote to
+      // CLAUDE_ENV_FILE; only sessions with project hooks have one.
+      const argv = [
+        this.shell,
+        "-c",
+        this.hookEnvironment
+          ? `if [ -f ${shellLiteral(this.envFile())} ]; then . ${
+            shellLiteral(this.envFile())
+          }; fi\n${command}`
+          : command,
+      ];
       const id = await (args.run_in_background
         ? this.start(argv, undefined, call)
         : this.startForeground(argv, call));
@@ -740,6 +924,21 @@ export class WorkspaceTools {
       }
       try {
         const result = await this.collect(id, timeout);
+        // Natively a non-zero exit is a tool error, so project
+        // PostToolUseFailure hooks run instead of PostToolUse.
+        if (result.closed && result.exitCode !== 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `Exit code ${result.exitCode}\n${result.output}`
+                .replace(/\n$/, "") +
+                (result.output_limit
+                  ? `\n[Output limit reached; read ${TASK_OUTPUT_PREFIX}${result.task_id} for more.]`
+                  : ""),
+            }],
+            isError: true,
+          };
+        }
         return text(JSON.stringify(result), this.bashResult(result));
       } finally {
         this.foreground.delete(id);
