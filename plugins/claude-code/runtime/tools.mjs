@@ -602,14 +602,22 @@ export class WorkspaceTools {
     };
   }
 
-  // Preserve read/edit order for the same path without serializing independent
-  // files, searches or commands. Bash can modify arbitrary files, just like an
-  // external writer; read stamps detect those changes before a later edit.
+  // Preserve read/edit order for the same lexical path. Serialize mutations
+  // across paths too: symlinks and hard links can name the same target, and the
+  // executor exposes no stable file identity for a narrower lock. Independent
+  // reads, searches and commands remain concurrent. This session-local queue
+  // is not an atomic lock against Bash or unrelated target processes.
   call(name, args) {
     const operation = Promise.resolve().then(() => {
       if (["read", "write", "edit", "notebookedit"].includes(name)) {
         const path = this.path(args.file_path ?? args.notebook_path);
-        return this.ordered(`file:${path}`, () => this.invoke(name, args));
+        return this.ordered(
+          `file:${path}`,
+          () =>
+            name === "read"
+              ? this.invoke(name, args)
+              : this.ordered("file-mutations", () => this.invoke(name, args)),
+        );
       }
       return this.invoke(name, args);
     });

@@ -276,6 +276,28 @@ def main():
         context_checked(api.requests)
         checks.extend(["native_image_to_text_write_reports_success", "target_symlink_write_preserves_link_and_mode",
                        "tilde_read_uses_target_home_and_shares_absolute_path_stamp", "invalid_utf8_read_reports_decode_failure"])
+        for kind in ["symlink", "hardlink"]:
+            source = args.target / f"race-{kind}-source.txt"
+            alias = args.target / f"race-{kind}-alias.txt"
+            source.write_text("before\n")
+            if kind == "symlink":
+                alias.symlink_to(source)
+            else:
+                os.link(source, alias)
+            first = tool("Edit", {"file_path": source.name, "old_string": "before", "new_string": "first"})
+            second = tool("Edit", {"file_path": alias.name, "old_string": "before", "new_string": "second"})
+            api.steps.extend([[], tool("Read", {"file_path": source.name}),
+                              tool("Read", {"file_path": alias.name}), first + second])
+            client.prompt(timeout=90)
+            blocks = list(outputs(api.requests[-1]))
+            first_result = next(block for block in blocks if block.get("tool_use_id") == first[0]["id"])
+            second_result = next(block for block in blocks if block.get("tool_use_id") == second[0]["id"])
+            require(not first_result.get("is_error") and second_result.get("is_error")
+                    and "changed" in json.dumps(second_result), "aliased edits silently overwrote each other")
+            require(source.read_text() == "first\n" and alias.read_text() == "first\n"
+                    and source.stat().st_ino == alias.stat().st_ino, "aliased edit changed file identity or lost content")
+            checks.append(f"native_{kind}_alias_edit_rejects_stale_read")
+        context_checked(api.requests)
         # Each search reads a FIFO. Its writer supplies content only after BOTH
         # readers have opened their pipes: sequential native/facade dispatch
         # cannot pass. This exercises native read-only scheduling and the target route.

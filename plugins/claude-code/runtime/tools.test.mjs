@@ -811,6 +811,57 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("aliased file mutations cannot both validate the same stale bytes", {
+  timeout: 3000,
+}, async (t) => {
+  const { tools, files, connection } = await fixture(t);
+  files.set("/target with space/source", Buffer.from("before"));
+  files.set("/target with space/independent", Buffer.from("available"));
+  const original = connection.call.bind(connection);
+  const entered = deferred();
+  const release = deferred();
+  let writes = 0;
+  connection.call = async (method, params) => {
+    const path = params.path ? fileURLToPath(params.path) : "";
+    if (path.endsWith("/alias")) {
+      params = { ...params, path: "file:///target%20with%20space/source" };
+    }
+    if (method === "fs/writeFile") {
+      writes++;
+      if (writes === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+    }
+    return original(method, params);
+  };
+  await tools.nativeCall("Read", { file_path: "source" });
+  await tools.nativeCall("Read", { file_path: "alias" });
+  const first = tools.nativeCall("Edit", {
+    file_path: "source",
+    old_string: "before",
+    new_string: "first",
+  });
+  await entered.promise;
+  const second = tools.nativeCall("Edit", {
+    file_path: "alias",
+    old_string: "before",
+    new_string: "second",
+  });
+  // A separate real state save gives the queued mutation time to progress,
+  // while also proving reads are not blocked by a pending target write.
+  const independent = await tools.nativeCall("Read", {
+    file_path: "independent",
+  });
+  assert.equal(independent.deny, undefined);
+  release.resolve();
+  const results = await Promise.all([first, second]);
+  assert.equal(results[0].deny, undefined);
+  assert.match(results[1].deny ?? "", /changed/);
+  assert.equal(writes, 1);
+  assert.equal(files.get("/target with space/source").toString(), "first");
+});
+
 test("independent reads proceed while same-file edits wait for their read", {
   timeout: 2000,
 }, async (t) => {

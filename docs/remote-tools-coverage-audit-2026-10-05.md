@@ -437,6 +437,40 @@ rename/unlink, nonregular files, cross-platform path behavior and arbitrary
 external writers remain separate audit cases. No previously supported feature
 was disabled, and the full local/remote parity audit remains open.
 
+### Aliased concurrent mutations follow-up
+
+The next 2026-10-06 audit reproduced silent lost edits within one facade:
+two previously read paths naming the same target could both check the original
+bytes, both return success, and overwrite one another. Lexical per-path queues
+do not protect symlink or hard-link aliases. The regression holds the first
+target write pending while admitting the second alias edit, and proves an
+independent read completes before releasing the write. Before the fix the
+second edit incorrectly succeeded; after the fix it reports a stale-read
+conflict and only one target write occurs.
+
+Plugin 3.4.11 serializes file mutations across paths within the same facade,
+from the initial read/check through write acknowledgement and state commit.
+The pinned executor metadata has no stable inode identity for a narrower lock.
+Existing per-path ordering still governs reads and edits on the same lexical
+path; independent reads, searches, commands and process cancellation retain
+their separate queues. Mutation failure does not poison the queue because its
+existing ordering primitive schedules subsequent operations after either
+completion or rejection. Native pins, tool schemas, permissions and allowed
+tools are unchanged.
+
+The source gate passes 67 tests. The native fixture now checks actual symlink
+and hard-link pairs, submitting two edits in the same scripted native response:
+the first succeeds, the second rejects the stale stamp, and both names retain
+the first edit and inode identity. Native scheduling may already serialize
+those two edits; the source regression supplies the deterministic overlap.
+Record packaged acceptance and deployment separately; source tests alone do
+not accept a release.
+
+This session-local queue does not synchronize other sessions or external
+processes. It does not supply OS-level compare-and-write, prevent symlink
+retargeting, or resolve an unknown target write after a lost acknowledgement.
+Those remain explicit gaps; no additional tool was disabled.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
