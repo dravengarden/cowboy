@@ -5,7 +5,9 @@ import {
   topBarDensity,
   topBarWidth,
   USAGE_SEGMENT_WIDTH_PX,
+  USAGE_WINDOW_WIDTH_PX,
   usageCountdown,
+  usagePercentSegmentWidth,
   usageRemainingTone,
 } from "./topBarDensity.ts";
 
@@ -66,19 +68,29 @@ Deno.test("the countdown is what buys the narrower quota segment", () => {
   assertEquals(3 * 156 - 3 * USAGE_SEGMENT_WIDTH_PX, 156);
 });
 
+Deno.test("a second account window costs a column, not a segment", () => {
+  assertEquals(usagePercentSegmentWidth(1), USAGE_SEGMENT_WIDTH_PX);
+  assertEquals(
+    usagePercentSegmentWidth(2),
+    USAGE_SEGMENT_WIDTH_PX + USAGE_WINDOW_WIDTH_PX,
+  );
+  assert(USAGE_WINDOW_WIDTH_PX < USAGE_SEGMENT_WIDTH_PX);
+  assertEquals(usagePercentSegmentWidth(0), USAGE_SEGMENT_WIDTH_PX);
+});
+
 const topBar = await Deno.readTextFile(
   new URL("./DesktopTopBarControls.tsx", import.meta.url),
 );
 const app = await Deno.readTextFile(new URL("../App.tsx", import.meta.url));
 
 Deno.test("the quota strip spends its width on the countdown, not a stamp", () => {
-  assert(topBar.includes("usageCountdown(provider.resetsAt, now)"));
+  assert(topBar.includes("usageCountdown(window.resetsAt, now)"));
   // The 30s tick is threaded in, so the countdown cannot quietly go stale.
   assert(topBar.includes("now={clock}"));
   // The absolute stamp stays as the fallback for a reset this client cannot
   // place on a clock, and the U panel still prints both forms.
-  assert(topBar.includes("`resets ${shortResetTime(provider.resetsAt)}`"));
-  assert(topBar.includes("USAGE_SEGMENT_WIDTH_PX"));
+  assert(topBar.includes("`resets ${shortResetTime(window.resetsAt)}`"));
+  assert(topBar.includes("usagePercentSegmentWidth("));
   assert(topBar.includes("USAGE_BALANCE_SEGMENT_WIDTH_PX"));
   assertEquals(topBar.includes("balance ? 286 : 156"), false);
   // One segmented control: the group paints the surface, the segments rule.

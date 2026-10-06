@@ -90,8 +90,8 @@ import {
   usageCardProviders,
   usageLimits,
   usagePluginId,
-  usageResetProvider,
   usageRefreshing,
+  usageResetProvider,
   usageResetSchedule,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
@@ -104,10 +104,11 @@ import { PluginSlot } from "../pluginHost";
 import { useProviderCatalog } from "../providerCatalog";
 import {
   formatCompactCurrency,
-  usageWidgetHasBalance,
   type UsageBalanceWidget,
+  usageWidgetHasBalance,
   type UsageWidgetProvider,
   usageWidgetProviders,
+  type UsageWidgetWindow,
 } from "../usageWidget";
 import { DesktopModal } from "./DesktopModal";
 import {
@@ -140,11 +141,11 @@ import {
   ACTION_ICON_WIDTH_PX,
   type TopBarDensity,
   topBarDensity,
-  type UsageTone,
-  usageCountdown,
-  usageRemainingTone,
   USAGE_BALANCE_SEGMENT_WIDTH_PX,
-  USAGE_SEGMENT_WIDTH_PX,
+  usageCountdown,
+  usagePercentSegmentWidth,
+  usageRemainingTone,
+  type UsageTone,
 } from "./topBarDensity";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
@@ -274,6 +275,36 @@ function balanceUsageSummary(provider: UsageBalanceWidget): string {
   ].filter((part) => part !== undefined).join(" · ");
 }
 
+/** One account window as a column: the remaining share over its period and
+ *  countdown. The countdown, not the stamp: "resets Sep 20 02:00 PM" was the
+ *  widest thing in the strip and still made you do the subtraction; the U
+ *  panel keeps the absolute form (it prints both). Falls back to the stamp
+ *  when an account reports a reset this client cannot place on a clock. */
+function usageWindowColumn(
+  window: UsageWidgetWindow,
+  now: number,
+): { primary: string; secondary: string; remaining: number } {
+  return {
+    primary: `${String(window.remaining)}%`,
+    secondary: `${window.periodLabel} · ${
+      usageCountdown(window.resetsAt, now) ??
+        `resets ${shortResetTime(window.resetsAt)}`
+    }`,
+    remaining: window.remaining,
+  };
+}
+
+/** Hairline between windows of one account. Lighter than the solid account
+ *  rule: without it `67% 69%` reads as one pair and the eye has to drop to
+ *  the second line to learn which number belongs to which window. */
+function usageWindowRuleSx(index: number): Record<string, string | number> {
+  return index === 0 ? {} : {
+    pl: 0.75,
+    borderLeft: "1px dotted",
+    borderColor: "divider",
+  };
+}
+
 function UsageProviderSummary(
   { provider, first, now }: {
     provider: UsageWidgetProvider;
@@ -285,22 +316,25 @@ function UsageProviderSummary(
   },
 ): React.JSX.Element {
   const balance = usageWidgetHasBalance(provider);
+  // An account with several windows (Anthropic 5h + Weekly) keeps ONE
+  // segment: the provider name heads the first column only, whitespace groups
+  // its windows, and the 1px rule still means "next account". Each column
+  // reads like a single-window segment, so the eye learns one pattern.
+  const columns: {
+    primary: string;
+    secondary: string;
+    remaining?: number;
+  }[] = balance
+    ? [{
+      primary: formatCompactCurrency(provider.balance, provider.currency),
+      secondary: balanceUsageSummary(provider),
+    }]
+    : (provider.windows ?? [provider]).map((window) =>
+      usageWindowColumn(window, now)
+    );
   const width = balance
     ? USAGE_BALANCE_SEGMENT_WIDTH_PX
-    : USAGE_SEGMENT_WIDTH_PX;
-  const primary = balance
-    ? formatCompactCurrency(provider.balance, provider.currency)
-    : `${String(provider.remaining)}%`;
-  const secondary = balance
-    ? balanceUsageSummary(provider)
-    // The countdown, not the stamp. "resets Sep 20 02:00 PM" was the widest
-    // thing in the strip and still made you do the subtraction; the U panel
-    // keeps the absolute form (it prints both). Falls back to the stamp when an
-    // account reports a reset this client cannot place on a clock.
-    : `${provider.periodLabel} · ${
-      usageCountdown(provider.resetsAt, now) ??
-        `resets ${shortResetTime(provider.resetsAt)}`
-    }`;
+    : usagePercentSegmentWidth(columns.length);
   return (
     <Box
       data-usage-provider={provider.kind}
@@ -312,50 +346,69 @@ function UsageProviderSummary(
         px: 0.75,
         py: 0.25,
         textAlign: "left",
+        display: "grid",
+        // Row-major: every primary, then every secondary, so each window's
+        // countdown sits under its own percentage.
+        gridTemplateColumns: `repeat(${String(columns.length)}, auto)`,
+        columnGap: 0.75,
         // One segmented control, not three floating chips: the group paints the
         // surface and 1px rules separate the accounts, which reads calmer and
         // returns the per-card gutters to the toolbar.
         ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
       }}
     >
-      <Stack direction="row" spacing={0.55}>
+      {columns.map((column, index) => (
+        <Stack
+          key={`primary-${String(index)}`}
+          direction="row"
+          spacing={0.55}
+          sx={{ minWidth: 0, ...usageWindowRuleSx(index) }}
+        >
+          {index === 0 && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              fontWeight={700}
+              noWrap
+            >
+              {provider.label}
+            </Typography>
+          )}
+          <Typography
+            variant="caption"
+            fontWeight={800}
+            noWrap
+            sx={{
+              flexShrink: 0,
+              fontVariantNumeric: "tabular-nums",
+              // A bare number is not scannable: 0% and 95% render identically
+              // until one of them is red.
+              color: column.remaining === undefined
+                ? "text.primary"
+                : USAGE_TONE_COLOR[usageRemainingTone(column.remaining)],
+            }}
+          >
+            {column.primary}
+          </Typography>
+        </Stack>
+      ))}
+      {columns.map((column, index) => (
         <Typography
+          key={`secondary-${String(index)}`}
           variant="caption"
           color="text.secondary"
-          fontWeight={700}
-          noWrap
-        >
-          {provider.label}
-        </Typography>
-        <Typography
-          variant="caption"
-          fontWeight={800}
           noWrap
           sx={{
-            flexShrink: 0,
+            display: "block",
+            minWidth: 0,
+            ...usageWindowRuleSx(index),
+            fontSize: "0.625rem",
             fontVariantNumeric: "tabular-nums",
-            // A bare number is not scannable: 0% and 95% render identically
-            // until one of them is red.
-            color: balance
-              ? "text.primary"
-              : USAGE_TONE_COLOR[usageRemainingTone(provider.remaining)],
           }}
         >
-          {primary}
+          {column.secondary}
         </Typography>
-      </Stack>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        noWrap
-        sx={{
-          display: "block",
-          fontSize: "0.625rem",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {secondary}
-      </Typography>
+      ))}
     </Box>
   );
 }
@@ -530,7 +583,9 @@ function DesktopUsageExtras(
                         {schedule ? "Scheduled" : "Schedule"}
                       </Typography>
                       {!schedule && (
-                        <ArrowForwardRounded sx={{ fontSize: desktopSize(15) }} />
+                        <ArrowForwardRounded
+                          sx={{ fontSize: desktopSize(15) }}
+                        />
                       )}
                       {!schedule && <Kbd keys="S" />}
                     </Stack>
@@ -1080,7 +1135,11 @@ function RecommendedPresetControls({
                     <Typography
                       variant="caption"
                       color="primary.main"
-                      sx={{ flexShrink: 0, fontSize: "0.625rem", fontWeight: 750 }}
+                      sx={{
+                        flexShrink: 0,
+                        fontSize: "0.625rem",
+                        fontWeight: 750,
+                      }}
                     >
                       Default
                     </Typography>
@@ -1661,7 +1720,7 @@ export function DesktopTopBarControls({
       width +
       (usageWidgetHasBalance(provider)
         ? USAGE_BALANCE_SEGMENT_WIDTH_PX
-        : USAGE_SEGMENT_WIDTH_PX),
+        : usagePercentSegmentWidth(provider.windows?.length ?? 1)),
     0,
   ) + 44;
   const actionCount = 2 + Number(Boolean(compactAction)) +
@@ -1758,7 +1817,10 @@ export function DesktopTopBarControls({
               >
                 {configSummary || "Run configuration"}
               </Typography>
-              <Box component="span" sx={{ display: "inline-flex", flexShrink: 0, ml: 0.75 }}>
+              <Box
+                component="span"
+                sx={{ display: "inline-flex", flexShrink: 0, ml: 0.75 }}
+              >
                 <LeaderKeycap
                   leaderKey="TR"
                   scopeAvailable={!configDisabled}
