@@ -1,0 +1,131 @@
+{
+  "schema": "cowboy.claude-write-outcome-audit/v1",
+  "date": "2026-10-06",
+  "base_commit": "0fda732057a2bffde6e899737e59b5a597289905",
+  "test_source_sha256": {
+    "src/worker_execution/tests.rs": "d17319db573e2d027ae18bfd930611f0c60c4c22578954451aab0e36e6b5fd12",
+    "tools/claude-remote-routing.test.mjs": "15d774913dab8369dfd4a1e7b3f934a94105d33169a9a562c9ee6330af4049a3",
+    "tools/execution_claude_worker_conformance.py": "5dd5c2cde84a2702edb4a0944905665b158ef8972e8f6b149bbafa6fb8208b0e"
+  },
+  "plugin": "claude-code",
+  "plugin_version": "3.4.12",
+  "artifact_digest": "sha256:47141b95f17d21f435731170f66aa66c95e98a09f5df266737cae2946fd9cb81",
+  "runtime_source_changed": false,
+  "new_release_published": false,
+  "gates": {
+    "source_tests": 76,
+    "source_gate": "passed",
+    "full_quality_gate": "passed",
+    "diff_review": "complete active-task diff reviewed; no production-code changes",
+    "docs_index": "global check fails at pre-existing data-transfer-toolkit INDEX front matter; changed audit page remains indexed; no new Markdown page"
+  },
+  "source_fault_matrix": {
+    "tools": [
+      "Write",
+      "Edit",
+      "NotebookEdit"
+    ],
+    "boundaries": [
+      "request does not apply",
+      "target applies but facade loses reply"
+    ],
+    "verified": [
+      "uncertain result is not reported as success",
+      "persisted read stamp is not advanced",
+      "cold load does not resubmit a write",
+      "direct repeat after changed target bytes requires a fresh Read",
+      "Read observes actual target content without replay",
+      "uncertain notebook insertion remains one cell"
+    ],
+    "transport": "mock"
+  },
+  "native": {
+    "schema": "cowboy.claude-execution-worker-conformance/v1",
+    "accepted": true,
+    "checks": [
+      "machine_owned_worktree",
+      "machine_restart_reattaches_same_keeper_and_binding",
+      "native_control_cannot_replace_bound_execution",
+      "module_readiness_uses_no_model_request",
+      "native_tools_use_target_files_and_processes_without_mcp",
+      "runtime_context_and_guidance_are_replaced",
+      "unicode_quotes_crlf_bytes_preserved",
+      "stale_edit_is_refused",
+      "target_image_enters_model_context",
+      "background_cancel_settles",
+      "bounded_large_read_stays_in_target_tool_result",
+      "native_notebook_edit_preserves_metadata",
+      "native_read_observes_retained_task_output",
+      "lost_start_receipt_and_transport_outage_do_not_replay",
+      "cold_native_resume_preserves_context_reads_and_effects",
+      "background_process_handle_survives_native_resume",
+      "lost_file_write_completion_preserves_later_external_change",
+      "real_compaction_and_next_turn_preserve_target_context",
+      "cold_resume_after_compaction_has_no_runtime_file_locators",
+      "native_bash_preserves_utf8_split_across_streams",
+      "native_image_to_text_write_reports_success",
+      "target_symlink_write_preserves_link_and_mode",
+      "tilde_read_uses_target_home_and_shares_absolute_path_stamp",
+      "invalid_utf8_read_reports_decode_failure",
+      "native_symlink_alias_edit_rejects_stale_read",
+      "native_hardlink_alias_edit_rejects_stale_read",
+      "independent_native_searches_execute_concurrently",
+      "native_interrupt_stops_foreground_target_process",
+      "packaged_acp_native_spawn_routes_target_tools",
+      "packaged_acp_cold_load_preserves_binding_history_and_effects",
+      "hot_effort_configuration_preserves_bound_execution",
+      "broken_module_refused_before_model_request",
+      "bare_mode_refused_without_changing_authentication",
+      "malformed_result_denies_without_native_fallback",
+      "bridge_error_denies_without_native_fallback",
+      "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+      "concurrent_large_input_and_output_do_not_deadlock",
+      "post_flood_commands_and_cancellation_keep_original_executor",
+      "target_image_bytes_cross_machine_transport",
+      "idempotent_close_stops_environment_and_preserves_worktree",
+      "closed_environment_cannot_be_recreated"
+    ],
+    "claude_version": "2.1.287",
+    "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+    "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "executor_version": "0.159.3",
+    "packaged_launcher_sha256": "0dc41b853bdbf76262e4806d6b8c473b9ec57666aae1f5ccc2980651b051a628",
+    "scripted_api_requests": 62,
+    "native_title_requests": 1,
+    "production_credentials": false,
+    "production_activation": false,
+    "not_checked": [
+      "real_subscription_inference",
+      "cross_host_latency",
+      "native_subagents_and_project_hooks"
+    ],
+    "cursor_expirations": 0
+  },
+  "native_duration_seconds": 114.54,
+  "native_fault": {
+    "injection": "discard actual completed fs/writeFile response after verifying original bytes and independently replacing them",
+    "verification": "same operation identity on retry; later native Read observes independent writer bytes; positive assertion that fault occurred",
+    "boundary": "real worker, wire codecs, target Manager, private IPC and keeper in isolated loopback; not production enrollment or WAN fault"
+  },
+  "production_observation": {
+    "plugin_id": "claude-code",
+    "plugin_version": "3.4.12",
+    "plugin_kind": "agent_provider",
+    "generation_digest": "sha256:47141b95f17d21f435731170f66aa66c95e98a09f5df266737cae2946fd9cb81",
+    "installation_revision": "installation-21f8eaafc199070e91ebc0e9c82a1faee054f27fc87fa6eb9445a69209c5a0a1",
+    "contract_fingerprint": "sha256:13ddf4a4ef1620e07b39c436ab705812ecabf2e47629a948817d7016beac0be9",
+    "state": "active",
+    "rollback_generation_digest": "sha256:b43576bf76fea23a09c093ee69be15204a220a9e2a7e6e26e87f5e72bac2b383",
+    "active_session_leases": 0,
+    "auth_generation": 61,
+    "replica_state": "current",
+    "materialization_state": "current"
+  },
+  "not_proven": [
+    "outcome recovery after permanent keeper operation-history loss",
+    "end-to-end facade lost-connection cold resume for file mutations (source mock only)",
+    "OS-level compare-and-write or protection against arbitrary external writer races",
+    "complete permission, native notification, hook and subagent parity",
+    "real production model inference or token usage; no production prompt sent"
+  ]
+}

@@ -210,6 +210,20 @@ def main():
         time.sleep(1.2)
         require((args.target / "retained.txt").read_text() == retained, "resumed process handle did not stop target job")
         checks.extend(["cold_native_resume_preserves_context_reads_and_effects", "background_process_handle_survives_native_resume"])
+        # The Rust relay discards the real completed write reply and changes
+        # the target independently. A replay would erase that later change.
+        api.steps.extend([[], tool("Write", {"file_path": "lost-write-receipt.txt", "content": "native-write-before-loss\n"}),
+                          tool("Read", {"file_path": "lost-write-receipt.txt"})])
+        client.prompt(timeout=90)
+        write_results = list(outputs(api.requests[-1]))[-2:]
+        require(len(write_results) == 2 and not any(block.get("is_error") for block in write_results),
+                "retained write result did not reach native Claude")
+        require("external-write-after-commit" in json.dumps(write_results[-1]),
+                "native Read did not observe the independent post-write change")
+        require((args.target / "lost-write-receipt.txt").read_text() == "external-write-after-commit\n",
+                "lost write completion replayed over a later target mutation")
+        require(not (args.runtime / "lost-write-receipt.txt").exists(), "write escaped to runtime")
+        checks.append("lost_file_write_completion_preserves_later_external_change")
         api.steps.extend([[], [{"type": "text", "text": "<summary>Continue the target fixture. The target project instructions remain authoritative.</summary>"}],
                           tool("Read", {"file_path": "fixture.txt"})])
         client.prompt(text="/compact", timeout=90)

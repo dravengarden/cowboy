@@ -3,12 +3,128 @@ import test from "node:test";
 import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   DESCRIPTIONS,
   NATIVE_TOOLS,
   TASK_OUTPUT_PREFIX,
   WorkspaceTools,
 } from "../plugins/claude-code/runtime/tools.mjs";
+
+test("unknown file mutations preserve read authority and never replay on cold load", async (t) => {
+  const cases = [
+    {
+      name: "Write",
+      before: "before",
+      args: { file_path: "file", content: "after" },
+    },
+    {
+      name: "Edit",
+      before: "anchor",
+      args: {
+        file_path: "file",
+        old_string: "anchor",
+        new_string: "anchor appended",
+      },
+    },
+    {
+      name: "NotebookEdit",
+      before: JSON.stringify({ cells: [], metadata: {} }),
+      args: {
+        notebook_path: "file",
+        edit_mode: "insert",
+        cell_type: "markdown",
+        new_source: "one cell",
+      },
+    },
+  ];
+  for (const entry of cases) {
+    for (const applied of [false, true]) {
+      await t.test(`${entry.name}: effect ${applied ? "applied" : "not admitted"}`, async (t) => {
+        const directory = await mkdtemp(
+          join(tmpdir(), "cowboy-unknown-write-"),
+        );
+        t.after(() => rm(directory, { recursive: true, force: true }));
+        const state = join(directory, "state.json");
+        const binding = {
+          workspace: { cwd: "/target" },
+          environment: { id: "unknown-write" },
+        };
+        let bytes = Buffer.from(entry.before);
+        let submitted = 0;
+        let loseReply = true;
+        const connection = {
+          async call(method, params) {
+            if (this.closed) {
+              throw new Error("Execution unavailable; no replay");
+            }
+            const path = fileURLToPath(params.path);
+            if (method === "fs/createDirectory") return {};
+            assert.equal(path, "/target/file");
+            if (method === "fs/getMetadata") {
+              return { isFile: true, size: bytes.length };
+            }
+            if (method === "fs/readFile") {
+              return { dataBase64: bytes.toString("base64") };
+            }
+            assert.equal(method, "fs/writeFile");
+            submitted++;
+            if (applied || !loseReply) {
+              bytes = Buffer.from(params.dataBase64, "base64");
+            }
+            if (loseReply) {
+              this.closed = true;
+              throw new Error(
+                "Execution unavailable or result unknown; no replay",
+              );
+            }
+            return {};
+          },
+        };
+        const tools = new WorkspaceTools(connection, binding, state);
+        await tools.load();
+        assert.equal(
+          (await tools.nativeCall("Read", { file_path: "file" })).deny,
+          undefined,
+        );
+        const stamp = tools.state.reads["/target/file"];
+        assert.match(
+          (await tools.nativeCall(entry.name, entry.args)).deny,
+          /result unknown/,
+        );
+        const observed = Buffer.from(bytes);
+        assert.equal(submitted, 1);
+        assert.equal(
+          JSON.parse(await readFile(state)).reads["/target/file"],
+          stamp,
+        );
+        connection.closed = false;
+        loseReply = false;
+        const resumed = new WorkspaceTools(connection, binding, state);
+        await resumed.load();
+        assert.equal(submitted, 1);
+        assert.deepEqual(bytes, observed);
+        if (applied) {
+          assert.match(
+            (await resumed.nativeCall(entry.name, entry.args)).deny,
+            /Read it before editing/,
+          );
+          assert.equal(submitted, 1);
+          assert.deepEqual(bytes, observed);
+        }
+        assert.equal(
+          (await resumed.nativeCall("Read", { file_path: "file" })).deny,
+          undefined,
+        );
+        assert.equal(submitted, 1);
+        if (applied && entry.name === "NotebookEdit") {
+          assert.equal(JSON.parse(bytes).cells.length, 1);
+        }
+        if (!applied) assert.equal(bytes.toString(), entry.before);
+      });
+    }
+  }
+});
 
 test("lost start acknowledgement retains the original job for recovery without replay", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-lost-start-"));

@@ -437,6 +437,45 @@ rename/unlink, nonregular files, cross-platform path behavior and arbitrary
 external writers remain separate audit cases. No previously supported feature
 was disabled, and the full local/remote parity audit remains open.
 
+### Unknown file-write outcome follow-up
+
+The subsequent 2026-10-06 audit separates two failure boundaries. If the worker
+loses a target completion while the keeper still retains it, transport recovery
+must observe or retry the same operation identity without reapplying the write.
+If the facade itself loses its connection and cannot receive a result, it must
+report uncertainty and must not grant a new read stamp or replay during cold
+load. File-content equality alone cannot prove an earlier operation's outcome.
+
+The source matrix covers Write, Edit and NotebookEdit with both an applied
+effect and a request that never applies. It verifies an uncertain result,
+unchanged persisted read authority, no cold-load mutation, and rejection of
+blind repeat mutations when the original effect changed target bytes. A fresh
+Read reports the actual target bytes; the notebook insertion remains one cell.
+These six cases use a mock transport and do not establish power-loss durability
+or atomicity against another writer.
+
+The packaged native fixture now discards a real successful fs/writeFile
+completion, after independently replacing the just-written target contents.
+It retains the original operation ID and requires the later native Read to
+observe the independent writer's bytes. A replay would overwrite those bytes
+and fail the check. A positive assertion also requires the lost-completion
+injection to have occurred, so an unexercised fault cannot silently pass.
+The fixture changes neither production Provider code nor its private pins.
+
+The retained signed 3.4.12 adapter passes 35 packaged Claude scenarios plus six
+transport checks (41 total) in 114.54 seconds. The source gate passes 76 tests,
+including the six new fault cases and their parent test. This is additional
+acceptance of the existing artifact, not a new Plugin release. Independent OVH
+inventory still reports that exact 3.4.12 generation active. The
+[write-outcome receipt](experiments/claude-write-outcome-audit-2026-10-06.json)
+binds the tested artifact, test-source hashes and observed installation.
+
+Permanent loss of the keeper's operation history and facade reconnection to
+an unresolved mutation still require explicit observation rather than invented
+success or automatic resubmission. This work does not provide OS-level
+compare-and-write, external-writer isolation, native notification parity or
+complete permission/subagent coverage.
+
 ### Durable explicit cancellation follow-up
 
 The next 2026-10-06 audit reproduced a cancellation recovery gap: foreground
