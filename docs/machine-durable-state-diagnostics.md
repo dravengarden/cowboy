@@ -44,5 +44,6 @@ Each dataset is read separately: this is not an atomic snapshot across datasets,
 count can move between two reads. It reports what the Machine holds in memory for its
 open namespaces, not an audit of the files, and says nothing about the root-owned floors.
 It does not report incarnation values, so it cannot show a lineage change. There is no
-Web panel or CLI subcommand yet; the route is the consumer. A report from the Operator CLI
-needs that CLI to call the route.
+Web panel yet. `cowboy operator durable-state --machine <id>` reads it through the private
+Operator endpoint, which reuses the same handler; it is live on Hawk
+([release](releases/durable-state-diagnostics-2026-10-06.md)).
