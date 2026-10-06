@@ -830,6 +830,30 @@ inventory reports 3.6.0 active with 3.5.0 retained for rollback. Cowboy's
 worker still selects bypass at every Claude start, so default sessions keep
 their prior behavior; no live session was restarted.
 
+#### Project hooks research (2026-10-06)
+
+Target project hooks are still not loaded in the Claude remote lane (empty
+setting sources). Measurements on 2.1.287 decide what a faithful design can
+use. Hooks passed with `--settings` do run in this lane, and lifecycle events
+(SessionStart, UserPromptSubmit, Stop and others) are independent of tool
+bodies. The shell prefix receives each hook command as one argument with stdin
+piped, so an exact-command proxy could run registered target hook commands on
+the target while leaving runtime-owned commands local. Hook stdin still names
+the runtime `cwd` and transcript.
+
+Tool hooks are the obstacle. Settings PreToolUse/PostToolUse run only when the
+`tool.call` chain reaches core, and the facade answers target tools before
+that. A Mod proxy invoked with `$.tool.call` reaches the settings hooks only if
+no Mod answers its body; answering the body suppresses them, and a proxy hidden
+from the model is not callable. Native tool hooks therefore cannot wrap the
+target file tools on this build. Options: redirect native Bash bodies to the
+target through the shell prefix (Bash only, with the snapshot/cwd/cancellation
+work recorded above), reproduce the documented hook input/output contract in an
+adapter for target tools, or keep hooks unloaded. Loading only lifecycle hooks
+would silently skip a project's PreToolUse guards and PostToolUse formatters,
+so no partial loading was shipped. Evidence:
+[project hooks research](experiments/claude-project-hooks-research-2026-10-06.json).
+
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A
 multi-tool code block is not a transaction: post-tool rejection cannot undo
