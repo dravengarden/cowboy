@@ -4,7 +4,7 @@ Fourth step of the [durable incarnation design](plugin-session-incarnation-desig
 after the [reader](plugin-session-incarnation-reader.md) and the
 [writer](plugin-session-incarnation-writer.md), which is active on Hawk. The change
 is written, tested and **deliberately not on `main`**: it is the local branch
-`incarnation-carriage-20261006` (head `58a26dc7`, two commits on top of `477768bd`) in
+`incarnation-carriage-20261006` (head `eeb37e5e`: two carriage commits on `477768bd`, merged with `main` at `f9421bc1`, checked out at `worktrees/incarnation-carriage-20261006`) in
 the Cowboy repository that backs the task worktrees. It has not been pushed because
 pushing a remote branch needs review, and merging it would harm other work (below).
 
@@ -41,10 +41,9 @@ pushing a remote branch needs review, and merging it would harm other work (belo
 Tests cover the wire both ways, stamping only by an admitted writer (and overwriting a
 forged value), the scope semantics above, ingestion of snapshots through the real frame
 handler, and the two existing ABA consumers (cached diff pages and buffer-apply
-authorization) gaining a lineage variant. At the first commit the full gate passed
-(619 standalone, 1960 all-features) except Clippy; after the simplification Clippy and
-the targeted tests passed. The full test suites were **not re-run on the final
-commit** of that branch.
+authorization) gaining a lineage variant. The branch, merged with the then-current `main`
+(`f9421bc1`) as head `eeb37e5e`, passed the full gate on that exact commit: Rustfmt,
+both Clippy configurations, 621 standalone and 1962 all-features tests.
 
 ## Why it is held
 
