@@ -197,6 +197,26 @@ pub(super) fn check(source: &Path) -> Result<()> {
         .context("bootstrap must support the portable Session deletion and host cache guard before installation")
 }
 
+/// `exec` fails with ETXTBSY while any process still holds the file open for
+/// writing. A concurrent `fork` elsewhere in the process can briefly hand a child
+/// the descriptor of a script that was just written, and it clears as soon as that
+/// child execs. Retry for a short, bounded time instead of reporting a failed
+/// guard; any other error, or persistent busyness, still fails the probe.
+fn spawn_when_not_busy(command: &mut Command) -> std::io::Result<Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 100 =>
+            {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+}
+
 fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
     let source = source
         .canonicalize()
@@ -225,23 +245,23 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
                 .mode(0o600)
                 .open(path)
         };
+        let mut command = Command::new(&source);
+        command
+            .env_clear()
+            .env("HOME", scratch.0.join("home"))
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .env("XDG_CACHE_HOME", scratch.0.join("cache"))
+            .env("XDG_DATA_HOME", scratch.0.join("data"))
+            .arg("--check-portable-session-deletion")
+            .arg("--state-dir")
+            .arg(&state)
+            .current_dir(&scratch.0)
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(output_file(&stdout_path)?)
+            .stderr(output_file(&stderr_path)?);
         let mut probe = Probe(
-            Command::new(&source)
-                .env_clear()
-                .env("HOME", scratch.0.join("home"))
-                .env("XDG_CONFIG_HOME", scratch.0.join("config"))
-                .env("XDG_CACHE_HOME", scratch.0.join("cache"))
-                .env("XDG_DATA_HOME", scratch.0.join("data"))
-                .arg("--check-portable-session-deletion")
-                .arg("--state-dir")
-                .arg(&state)
-                .current_dir(&scratch.0)
-                .process_group(0)
-                .stdin(Stdio::null())
-                .stdout(output_file(&stdout_path)?)
-                .stderr(output_file(&stderr_path)?)
-                .spawn()
-                .context("starting offline bootstrap guard probe")?,
+            spawn_when_not_busy(&mut command).context("starting offline bootstrap guard probe")?,
         );
         let deadline = Instant::now() + timeout;
         let status = loop {
@@ -323,6 +343,41 @@ fn check_with_timeout(source: &Path, timeout: Duration) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_script_briefly_open_for_writing_is_retried_not_reported_as_a_failed_guard() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("probe");
+        let mut writer = File::create(&script).unwrap();
+        writer.write_all(b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // While a writer holds the file, exec really fails with ETXTBSY.
+        let direct = Command::new(&script).spawn();
+        assert_eq!(
+            direct.err().map(|error| error.kind()),
+            Some(std::io::ErrorKind::ExecutableFileBusy)
+        );
+        // The retry rides out the window; it ends when the descriptor closes.
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(writer);
+        });
+        let mut command = Command::new(&script);
+        let mut child = spawn_when_not_busy(&mut command).expect("spawn after the writer closed");
+        assert!(child.wait().unwrap().success());
+        releaser.join().unwrap();
+    }
+
+    #[test]
+    fn other_spawn_errors_are_not_retried() {
+        let started = Instant::now();
+        let mut command = Command::new("/nonexistent/cowboy-probe");
+        let error = spawn_when_not_busy(&mut command).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
     use super::*;
     use std::os::unix::fs::PermissionsExt as _;
 

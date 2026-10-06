@@ -12,7 +12,10 @@ retained worker source `b97c2724…`); Controller and Web were moved by independ
 tasks. **Update 2026-10-06 (later):** the incarnation writer is also active on Hawk
 ([release](releases/incarnation-writer-2026-10-06.md)); steps 1-3 of the durable
 incarnation design are done and step 4, carriage to the Controller with stale
-observation refusal, is next. Nothing consumes the lineage yet.
+observation refusal, is implemented and tested but held on a local branch because
+its wire change would block host-only Machine releases until the worker pin
+advances ([record](plugin-session-incarnation-carriage.md)). Nothing consumes the
+lineage in production yet.
 
 **Update 2026-10-06:** another task completed the worker-pool maintenance (Machine
 `48d3054d`, `worker-135348a7…`, pin `8909c1c8`) and the items below are now active;
