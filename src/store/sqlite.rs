@@ -5249,6 +5249,16 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, plugin_id FROM plugin_uninstall_operations \
+             WHERE phase NOT IN ('completed', 'compensated', 'aborted')",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list unfinished SQLite Plugin uninstalls")
+    }
+
     pub(super) async fn deleted_session_generations(
         &self,
     ) -> Result<Vec<(String, String, String)>> {
