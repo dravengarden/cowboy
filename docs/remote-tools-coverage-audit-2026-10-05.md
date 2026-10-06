@@ -331,6 +331,52 @@ operation even if its acknowledgement is lost, and distinguish explicit cancel
 from a connection failure. Do not enable this experimental prefix globally or
 replace the existing shipped remote tool facade on these results alone.
 
+#### Lost start acknowledgement in the shipped facade
+
+The 2026-10-06 follow-up found a separate facade gap. `start` saves the original
+process ID before submitting the command, but `startForeground` only adds it
+to the foreground set after a successful reply. `cancelForeground` ignores a
+rejected pending start. Consequently an interrupt can return successfully even
+when that rejected start was already admitted and its target process remains
+live. This is not the shell-prefix signal-forwarding issue above.
+
+The deterministic `lost start acknowledgement retains the original job for
+recovery without replay` regression injects admission before reply failure,
+observes the interrupt outcome, reopens the saved facade state with a recovered
+transport, and terminates the original ID with native TaskStop. It requires
+exactly one start, one terminate, a closed output record and an unaffected
+independent peer. The recovery assertions are acceptance conditions; the
+diagnostic showing a fulfilled interrupt with a live target records an open
+defect, not acceptable cancellation behavior. This is a facade simulation, not
+native Claude, a real reconnect or a cross-host acceptance test.
+Both this regression and the earlier pending-TaskStop regression live in
+`tools/claude-remote-routing.test.mjs`, which `claude-remote-check` runs. The
+earlier test was moved out of the immutable Plugin source tree after the
+follow-up full gate found its unchanged-version source fingerprint mismatch;
+the pinned Plugin source bytes are restored without deleting its test coverage.
+
+The keeper has an existing durable operation observation surface. Its
+`execution-keeper-conformance` separately discards a start reply, leaves all
+control clients disconnected for 35 seconds, observes the original operation,
+and cancels the original live process without running the command again.
+The [fresh keeper receipt](experiments/claude-lost-ack-keeper-2026-10-06.json)
+records all 11 checks passing with the exact executor and keeper hashes. It
+explicitly does not prove enrolled transport or Provider integration.
+That lower-level capability does not automatically repair the facade:
+`worker_execution::Client::invoke` currently allocates the operation identity
+internally, while the facade retains only the process identity. A transport
+failure can prevent the facade from observing whether admission has settled.
+
+The repair must retain cancellation intent against the original submission,
+reconcile admission before confirming cancellation, and preserve the original
+handle across recovery. Merely swallowing the start error is wrong; merely
+issuing terminate on error can race admission or fail on the same disconnected
+transport. A missing process before admission settles is not proof of stopped
+execution. Acceptance must include delayed success, lost reply after admission,
+cancel before admission, target loss, process exit during cancellation, and
+independent concurrent/background tasks. No production cancellation change is
+claimed by this audit/regression addition.
+
 The official [shell-prefix contract](https://code.claude.com/docs/en/env-vars),
 checked 2026-10-06, also includes hook, status-line and stdio MCP shell commands;
 the Bash argument contains the full native shell setup. These have different

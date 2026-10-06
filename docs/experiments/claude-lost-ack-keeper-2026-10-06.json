@@ -1,0 +1,28 @@
+{
+  "schema": "cowboy.execution-keeper-conformance/v1",
+  "accepted": true,
+  "keeper_sha256": "c325332ffd4b753b693b80b606093ee73b4cd3d6bd7ebc3d6b29041bbd2e47d4",
+  "executor": {
+    "version": "0.159.3",
+    "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+  },
+  "checks": [
+    "exact_pinned_executor_and_target_context",
+    "file_bytes_preserved",
+    "repeated_write_does_not_overwrite_later_edit",
+    "changed_operation_arguments_refused",
+    "capability_binding_and_missing_operation_enforced",
+    "lost_start_receipt_recovers_without_reexecution",
+    "job_survives_35_seconds_without_control_clients",
+    "runtime_auth_environment_not_inherited",
+    "original_process_can_be_cancelled_after_disconnect",
+    "workspace_inode_replacement_refuses_new_effects",
+    "same_incarnation_restart_refused_without_replay"
+  ],
+  "disconnected_ms": 35000,
+  "cleanup": true,
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "proves_enrolled_transport": false,
+  "proves_provider_integration": false
+}

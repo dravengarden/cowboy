@@ -1,9 +1,140 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   DESCRIPTIONS,
   NATIVE_TOOLS,
+  TASK_OUTPUT_PREFIX,
+  WorkspaceTools,
 } from "../plugins/claude-code/runtime/tools.mjs";
+
+test("lost start acknowledgement retains the original job for recovery without replay", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-lost-start-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const binding = {
+    workspace: { cwd: "/target with space" },
+    environment: { id: "lost-start-fixture" },
+  };
+  const connection = {};
+  const state = join(directory, "state.json");
+  const tools = new WorkspaceTools(connection, binding, state);
+  await tools.load();
+  const admitted = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  const live = new Set();
+  const calls = [];
+  const peer = "independent-background-peer";
+  live.add(peer);
+  connection.call = async (method, params) => {
+    calls.push({ method, id: params.processId });
+    if (method === "process/start") {
+      live.add(params.processId);
+      admitted.resolve(params.processId);
+      await reply.promise;
+      throw new Error("Execution unavailable or result unknown; no replay");
+    }
+    throw new Error("Original transport is unavailable");
+  };
+  const running = tools.nativeCall("Bash", { command: "sleep 600" });
+  const id = await admitted.promise;
+  // Admission is positive before the response is lost. Missing confirmation
+  // cannot mean that no target process exists.
+  const persisted = JSON.parse(await readFile(state, "utf8"));
+  assert.ok(persisted.jobs[id]);
+  const interrupt = tools.cancelForeground();
+  reply.resolve();
+  const cancellation = await Promise.allSettled([interrupt]);
+  assert.match((await running).deny, /result unknown/);
+  assert.ok(live.has(id));
+  // This is an observed audit gap, not a cancellation acceptance condition.
+  t.diagnostic(
+    `lost-ack interrupt outcome: ${
+      cancellation[0].status
+    }; target remains live`,
+  );
+
+  const recovered = {
+    async call(method, params) {
+      calls.push({ method, id: params.processId });
+      assert.equal(params.processId, id);
+      if (method === "process/terminate") {
+        assert.ok(live.delete(id));
+        return {};
+      }
+      if (method === "process/read") {
+        assert.equal(live.has(id), false);
+        return { chunks: [], exited: true, closed: true, exitCode: 143 };
+      }
+      throw new Error(`Unexpected recovery operation ${method}`);
+    },
+  };
+  const resumed = new WorkspaceTools(recovered, binding, state);
+  await resumed.load();
+  const stopped = await resumed.nativeCall("TaskStop", { task_id: id });
+  assert.equal(stopped.deny, undefined);
+  assert.equal(resumed.state.jobs[id].closed, true);
+  assert.ok(live.has(peer));
+  assert.deepEqual(calls, [
+    { method: "process/start", id },
+    { method: "process/terminate", id },
+    { method: "process/read", id },
+  ]);
+});
+
+test("TaskStop reports pending until the target confirms closure and retains its handle", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-pending-stop-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const connection = {};
+  const tools = new WorkspaceTools(connection, {
+    workspace: { cwd: "/target with space" },
+    environment: { id: "pending-stop-fixture" },
+  }, join(directory, "state.json"));
+  await tools.load();
+  tools.state.jobs.pending = { afterSeq: null, exited: false };
+  let clock = 0;
+  let closed = false;
+  const methods = [];
+  connection.call = async (method, params) => {
+    methods.push(method);
+    assert.equal(params.processId, "pending");
+    if (method === "process/terminate") return {};
+    assert.equal(method, "process/read");
+    clock += params.waitMs;
+    return {
+      chunks: [],
+      exited: closed,
+      closed,
+      exitCode: closed ? 143 : null,
+    };
+  };
+  const original = Date.now;
+  try {
+    Date.now = () => clock;
+    const stop = await tools.nativeCall("TaskStop", { task_id: "pending" });
+    assert.equal(
+      stop.result.message,
+      "Termination requested; inspect its output handle.",
+    );
+    assert.equal(stop.result.task_id, "pending");
+    assert.equal(tools.state.jobs.pending.closed, false);
+    assert.equal(clock, 10000);
+    closed = true;
+    const output = await tools.nativeCall("Read", {
+      file_path: `${TASK_OUTPUT_PREFIX}pending`,
+    });
+    assert.match(output.result.file.content, /Exit code: 143/);
+    assert.equal(tools.state.jobs.pending.closed, true);
+    assert.equal(
+      methods.filter((method) => method === "process/terminate").length,
+      1,
+    );
+    assert.equal(methods.includes("process/start"), false);
+  } finally {
+    Date.now = original;
+  }
+});
 
 let fixtureId = 0;
 async function routingFixture({ memory = false } = {}) {
