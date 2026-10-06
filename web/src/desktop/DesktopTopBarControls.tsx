@@ -294,17 +294,6 @@ function usageWindowColumn(
   };
 }
 
-/** Hairline between windows of one account. Lighter than the solid account
- *  rule: without it `67% 69%` reads as one pair and the eye has to drop to
- *  the second line to learn which number belongs to which window. */
-function usageWindowRuleSx(index: number): Record<string, string | number> {
-  return index === 0 ? {} : {
-    pl: 0.75,
-    borderLeft: "1px dotted",
-    borderColor: "divider",
-  };
-}
-
 function UsageProviderSummary(
   { provider, first, now }: {
     provider: UsageWidgetProvider;
@@ -317,8 +306,8 @@ function UsageProviderSummary(
 ): React.JSX.Element {
   const balance = usageWidgetHasBalance(provider);
   // An account with several windows (Anthropic 5h + Weekly) keeps ONE
-  // segment: the provider name heads the first column only, whitespace groups
-  // its windows, and the 1px rule still means "next account". Each column
+  // segment: the provider name heads the first column only and column
+  // alignment, not a divider, ties each number to its window. Each column
   // reads like a single-window segment, so the eye learns one pattern.
   const columns: {
     primary: string;
@@ -348,9 +337,11 @@ function UsageProviderSummary(
         textAlign: "left",
         display: "grid",
         // Row-major: every primary, then every secondary, so each window's
-        // countdown sits under its own percentage.
+        // percentage sits directly over its own `5h · 30m`. That alignment is
+        // the grouping; a rule between windows would split one account into
+        // what reads as two segments. Rules mean "next account" only.
         gridTemplateColumns: `repeat(${String(columns.length)}, auto)`,
-        columnGap: 0.75,
+        columnGap: 1.25,
         // One segmented control, not three floating chips: the group paints the
         // surface and 1px rules separate the accounts, which reads calmer and
         // returns the per-card gutters to the toolbar.
@@ -362,7 +353,7 @@ function UsageProviderSummary(
           key={`primary-${String(index)}`}
           direction="row"
           spacing={0.55}
-          sx={{ minWidth: 0, ...usageWindowRuleSx(index) }}
+          sx={{ minWidth: 0 }}
         >
           {index === 0 && (
             <Typography
@@ -401,7 +392,6 @@ function UsageProviderSummary(
           sx={{
             display: "block",
             minWidth: 0,
-            ...usageWindowRuleSx(index),
             fontSize: "0.625rem",
             fontVariantNumeric: "tabular-nums",
           }}
