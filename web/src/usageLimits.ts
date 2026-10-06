@@ -464,6 +464,34 @@ export function fullResetTime(epochSeconds: number | undefined): string {
   } ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** Locale date with year and minute time, e.g. "6 Oct 2026 at 12:00". */
+export function fullDateTime(epochSeconds: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(epochSeconds * 1000));
+}
+
+/** Countdown plus absolute time, e.g. "in 2h 3m · 6 Oct 2026 at 12:00".
+ *  Callers supply the "Resets" wording as a prefix or a sibling row label. */
+export function resetCountdown(
+  epochSeconds: number,
+  now = Date.now(),
+): string {
+  const mins = Math.ceil(Math.max(0, epochSeconds * 1000 - now) / 60_000);
+  const relative = mins < 60
+    ? `${String(mins)}m`
+    : mins < 1440
+    ? `${String(Math.floor(mins / 60))}h ${String(mins % 60)}m`
+    : `${String(Math.floor(mins / 1440))}d ${
+      String(Math.floor((mins % 1440) / 60))
+    }h`;
+  return `in ${relative} · ${fullDateTime(epochSeconds)}`;
+}
+
 export function shortResetTime(epochSeconds: number | undefined): string {
   if (epochSeconds === undefined) return "No reset";
   const date = new Date(epochSeconds * 1000);

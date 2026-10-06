@@ -31,6 +31,7 @@ import {
   acceptedScheduleTime,
   accountManageUrl,
   accountProviderLabel,
+  fullDateTime,
   type JsonRecord,
   nearestAvailableResetCredit,
   num,
@@ -39,6 +40,7 @@ import {
   providerUsageSlotContext,
   record,
   relativeUpdateTime,
+  resetCountdown,
   scheduledResetCountdown,
   usageAvailableStatus,
   usageCardProviders,
@@ -116,29 +118,10 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-function fullDateTime(epochSeconds: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(epochSeconds * 1000));
-}
-
 function resetText(epochSeconds: number | undefined): string | undefined {
-  if (epochSeconds === undefined) return undefined;
-  const date = new Date(epochSeconds * 1000);
-  const delta = Math.max(0, date.getTime() - Date.now());
-  const mins = Math.ceil(delta / 60_000);
-  const relative = mins < 60
-    ? `${String(mins)}m`
-    : mins < 1440
-    ? `${String(Math.floor(mins / 60))}h ${String(mins % 60)}m`
-    : `${String(Math.floor(mins / 1440))}d ${
-      String(Math.floor((mins % 1440) / 60))
-    }h`;
-  return `Resets in ${relative} · ${fullDateTime(epochSeconds)}`;
+  return epochSeconds === undefined
+    ? undefined
+    : `Resets ${resetCountdown(epochSeconds)}`;
 }
 
 function providerUsageEmptyMessage(usage: ProviderUsage): string {

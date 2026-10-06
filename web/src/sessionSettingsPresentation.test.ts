@@ -159,7 +159,10 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
   assertEquals(weekly[0]?.value, "63% remaining");
   assertEquals(weekly[0]?.remaining, 63);
   assertEquals(weekly[1]?.label, "Resets");
-  assertEquals((weekly[1]?.value ?? "").length > 0, true);
+  assertEquals(
+    /^in \d+d \d+h · .*2026/.test(weekly[1]?.value ?? ""),
+    true,
+  );
   assertEquals(weekly.at(-1), {
     id: "usage-updated",
     label: "Updated",
