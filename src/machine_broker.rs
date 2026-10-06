@@ -287,6 +287,9 @@ struct Broker {
     /// resident restart can finish artifact cleanup. Present only on a Machine
     /// admitted to write the deletion journal.
     cleanup_continuations: Mutex<Option<cleanups::Store>>,
+    /// Test-only record of cache-protection revocations that were attempted.
+    #[cfg(test)]
+    revoked_cache_protection: Mutex<Vec<(String, &'static str)>>,
     /// In-process attempts before a Session with a durable nomination stops
     /// retrying, and the first backoff delay. Giving up releases its retained
     /// handles; the nomination retries after the next Machine restart.
@@ -367,6 +370,10 @@ impl Broker {
         if !crate::deepseek_cache::supported_behavior(&configuration) {
             return;
         }
+        #[cfg(test)]
+        self.revoked_cache_protection
+            .lock()
+            .push((session_id.to_owned(), reason));
         let provider = session.provider.clone();
         let session_id = session_id.to_owned();
         tokio::spawn(async move {
@@ -412,6 +419,8 @@ impl Broker {
             cancelled_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
             cleanup_continuations: Mutex::new(None),
+            #[cfg(test)]
+            revoked_cache_protection: Mutex::new(Vec::new()),
             cleanup_retry: Mutex::new((CLEANUP_ATTEMPT_LIMIT, Duration::from_secs(1))),
             incarnation_reader: Mutex::new(None),
             deleted_session_workspaces: Mutex::new(HashMap::new()),
@@ -1685,7 +1694,14 @@ impl Broker {
         // Fence any launch while the worker stops, as a reset does, then
         // forget the declaration so nothing replaces it.
         self.cancelled_sessions.lock().insert(session_id.clone());
-        self.sessions.lock().remove(&session_id);
+        // A sleeping session must not keep paying for its prompt cache: the
+        // provider gateway replays an unrevoked snapshot with real model
+        // requests (`cache_keepalive`). Delete, reset and provider roll already
+        // revoke it; hibernation releases the same resource.
+        let released = self.sessions.lock().remove(&session_id);
+        if let Some(session) = released {
+            self.revoke_cache_protection(&session, &session_id, "session_hibernated");
+        }
         self.awaiting_reconnect.lock().remove(&session_id);
         self.startup_failures.lock().remove(&session_id);
         self.unpin_fallback(&session_id);
@@ -4413,6 +4429,42 @@ mod tests {
         assert!(!broker.workers.lock().contains_key("sess-1"));
         assert!(!broker.sessions.lock().contains_key("sess-1"));
         assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+    }
+
+    #[tokio::test]
+    async fn hibernation_revokes_gateway_cache_protection_only_for_gateway_providers() {
+        for gateway in [true, false] {
+            let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+            let broker = Arc::new(broker);
+            let (controller_tx, _controller_rx) = mpsc::unbounded_channel();
+            broker.install_controller(controller_tx);
+            let mut idle = broker.snapshots().into_iter().next().expect("worker");
+            idle.state = WorkerState::Running;
+            idle.current_turn_id = None;
+            broker.update_snapshot(idle, 1);
+            let mut session = launch.clone();
+            if gateway {
+                session.provider = "claude-deepseek".to_owned();
+                let behavior = crate::provider_behavior::legacy_behavior("claude-deepseek");
+                assert!(
+                    crate::deepseek_cache::supported_behavior(&behavior.configuration),
+                    "fixture must use a cache-protected gateway behavior"
+                );
+                session.provider_behavior = Some(behavior);
+            }
+            broker.sessions.lock().insert("sess-1".to_owned(), session);
+            broker
+                .hibernate_session("sess-1".to_owned(), "hibernate-cache".to_owned())
+                .await;
+            assert!(!broker.workers.lock().contains_key("sess-1"));
+            let revoked = broker.revoked_cache_protection.lock().clone();
+            let expected: Vec<(String, &'static str)> = if gateway {
+                vec![("sess-1".to_owned(), "session_hibernated")]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(revoked, expected);
+        }
     }
 
     #[test]
