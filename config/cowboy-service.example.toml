@@ -12,6 +12,16 @@ schema = 1
 # available disk is below its declared `disk.low_watermark`.
 # duration string such as "6h", from 5m to 7d; applies live.
 # urgent_retention_cooldown = "1h"
+# Move sessions that have been exited without a worker for
+# `plugins.repin_dormant_after` to their Device's installed Provider release,
+# when its native session contract is unchanged, so their old generation can be
+# retired. They resume on the new release when opened, like an explicit Reload.
+# boolean (true or false); applies live.
+# repin_dormant_sessions = false
+# How long a session must stay dormant before it is re-pinned. Measured
+# across Controller restarts from the first retention pass that saw it dormant.
+# duration string such as "6h", from 1h to 365d; applies live.
+# repin_dormant_after = "7d"
 
 [sessions]
 # When a new session targets a Device whose session slots are full, hibernate

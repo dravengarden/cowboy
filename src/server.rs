@@ -10,6 +10,7 @@
 //! Machine connections use one-time enrollment plus an OpenSSH Ed25519
 //! challenge before WebSocket protocol negotiation.
 
+mod dormant_pins;
 mod secure_transport;
 mod session_provider_updates;
 mod session_reclaim;
@@ -2909,6 +2910,9 @@ async fn run_generation_retention(state: Arc<AppState>) {
             .get(&crate::config::schema::PLUGIN_GENERATION_RETENTION_INTERVAL);
         if last_pass.is_none_or(|at| at.elapsed() >= interval) {
             last_pass = Some(tokio::time::Instant::now());
+            // Re-pin long-dormant sessions first so this pass can retire the
+            // generations they no longer hold.
+            dormant_pins::repin(&state).await;
             generation_retention_pass(&state, None).await;
         } else {
             let cooldown = state
