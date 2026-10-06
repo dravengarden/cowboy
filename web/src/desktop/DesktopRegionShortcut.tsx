@@ -1,8 +1,9 @@
-import { Box, type SxProps, type Theme, Tooltip } from "@mui/material";
+import { Box, type SxProps, type Theme } from "@mui/material";
 import type { DesktopPane } from "./DesktopWorkspaceController";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopShortcut } from "./commands/DesktopKeycap";
 import { ShortcutKeycap } from "../ShortcutKeycap";
+import { HintTooltip } from "../HintTooltip";
 
 export function DesktopRegionShortcut({
   shortcut,
@@ -24,7 +25,7 @@ export function DesktopRegionShortcut({
   if (showWhenPane && workspace.focusedPane !== showWhenPane) return <></>;
   if (hideWhenRegion && workspace.focusedRegion === hideWhenRegion) return <></>;
   return (
-    <Tooltip title={`${title} · ${shortcut}`} enterDelay={450}>
+    <HintTooltip title={title} shortcut={shortcut} enterDelay={450}>
       <Box
         component="span"
         data-desktop-region-shortcut
@@ -34,6 +35,6 @@ export function DesktopRegionShortcut({
           ? <ShortcutKeycap keyLabel={singleKeycap} variant="global" accent />
           : <DesktopShortcut shortcut={shortcut} quiet />}
       </Box>
-    </Tooltip>
+    </HintTooltip>
   );
 }

@@ -6,7 +6,6 @@ import {
   ListItemText,
   Menu,
   MenuItem,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import {
@@ -30,6 +29,7 @@ import {
   useOptionalDesktopCommands,
 } from "./commands/DesktopCommandProvider";
 import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
+import { HintTooltip } from "../HintTooltip";
 import { formatChord } from "./commands/formatChord";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
@@ -228,11 +228,11 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
     disabled = false,
     text = false,
   ): ReactNode => (
-    <Tooltip
+    <HintTooltip
       key={id}
-      title={key
-        ? `${label} · ${key.includes("+") ? key : desktopWorkspaceSequence(key)}`
-        : label}
+      title={label}
+      shortcut={key &&
+        (key.includes("+") ? key : desktopWorkspaceSequence(key))}
     >
       <span
         data-draft-document-secondary={["copy", "history", "export"].includes(
@@ -302,7 +302,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           )}
         </Button>
       </span>
-    </Tooltip>
+    </HintTooltip>
   );
   return (
     <Box
@@ -410,7 +410,11 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           gap: "0.25rem",
         }}
       >
-        <Tooltip title="Save locally now. Drafts also save automatically; server synchronization continues in the background.">
+        <HintTooltip
+          title="Save locally now"
+          shortcut="Mod+S"
+          detail="Drafts also save automatically; server synchronization continues in the background."
+        >
           <span>
             <Button
               data-draft-action="save"
@@ -443,7 +447,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
               />
             </Button>
           </span>
-        </Tooltip>
+        </HintTooltip>
         {action(
           "copy",
           "Copy to Session",
@@ -469,7 +473,10 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
           props.onExport,
           DOCUMENT.export,
         )}
-        <Tooltip title="Search all editing and document actions">
+        <HintTooltip
+          title="Search all editing and document actions"
+          shortcut={DESKTOP_SHORTCUTS.commands}
+        >
           <Button
             size="small"
             color="inherit"
@@ -488,7 +495,7 @@ function ConnectedToolbar(props: Props): React.JSX.Element {
               availability={shortcutAvailability(!overlay && !composing)}
             />
           </Button>
-        </Tooltip>
+        </HintTooltip>
         <Box sx={{ flex: 1 }} />
         <Typography
           variant="caption"

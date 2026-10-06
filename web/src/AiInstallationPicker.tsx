@@ -9,6 +9,7 @@ import type { ProviderCatalogEntry } from "@cowboy/provider-ui";
 import { machineCapacityLabel } from "./machineCapacity";
 import type { MachineSummary } from "./protocol";
 import { ProviderIcon } from "./ProviderIcon";
+import { HintTooltip } from "./HintTooltip";
 
 interface Installation {
   value: string;
@@ -70,9 +71,11 @@ export function AiInstallationPicker({
                 }}
               >
                 {icon(selected)}
-                <Typography component="span" noWrap title={selected.label}>
-                  {selected.label}
-                </Typography>
+                <HintTooltip title={selected.label}>
+                  <Typography component="span" noWrap>
+                    {selected.label}
+                  </Typography>
+                </HintTooltip>
               </Box>
             ),
         },

@@ -83,6 +83,8 @@ pub(crate) fn sample(state_dir: &Path) -> Option<HostResources> {
             .ok()
             .and_then(|text| parse_uptime_seconds(&text))
             .unwrap_or(0),
+        // The caller attaches the configured watermark.
+        disk_low_watermark_bytes: None,
     })
 }
 

@@ -41,6 +41,7 @@ import { isImeKeyEvent } from "./imeKey";
 import { desktopKeyIntent } from "./desktop/commands/keyIntent";
 import { useDialogFocus } from "./useDialogInputFocus";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { HintTooltip } from "./HintTooltip";
 
 // Geometry follows the Sessions sidebar (App.tsx SessionList) so a picker
 // reads as the same tree: rows indent by MARGIN, one step clears the parent
@@ -404,87 +405,90 @@ export function SessionDestinationTree(
                   (r.kind === "session" && r.session.id !== currentId)
                 );
             return (
-              <ReliableListItemButton
+              <HintTooltip
                 key={id}
-                role="treeitem"
-                data-session-destination-row={id}
-                data-session-destination-index={index}
-                data-session-destination-folder={folder
-                  ? row.folder.id
-                  : undefined}
-                data-session-destination-session={!folder
-                  ? row.session.id
-                  : undefined}
-                data-session-destination-current={current ? "true" : undefined}
                 title={folder
                   ? sessionFolderLocation(folders, row.folder.id)
                   : `${sessionFolderLocation(folders, row.folder)}\n${
                     sessionDisplayDirectory(row.session)
                   }`}
-                aria-level={row.depth + 1}
-                aria-expanded={folder ? row.expanded : undefined}
-                aria-current={current ? "true" : undefined}
-                aria-disabled={busy || current || undefined}
-                tabIndex={visibleFocus === id || firstTarget ? 0 : -1}
-                onFocus={() => setFocusId(id)}
-                onActivate={() => {
-                  if (busy || current) return;
-                  if (folder) { if (!needle) toggle(row.folder.id); }
-                  else onPick(row.session);
-                }}
-                sx={{
-                  ...guideSx(row.depth),
-                  position: "relative",
-                  ml: `${String(row.depth * INDENT_STEP)}px`,
-                  pl: `${String(ROW_PL.touch)}px`,
-                  pr: 1,
-                  my: "2px",
-                  gap: 0.75,
-                  minHeight: folder ? 44 : 52,
-                  py: 0.5,
-                  borderRadius: "10px",
-                  ...(current && {
-                    cursor: "default",
-                    "&:hover": { bgcolor: "transparent" },
-                  }),
-                  ...(busy && { opacity: 0.6, pointerEvents: "none" }),
-                  [FINE]: {
-                    pl: `${String(ROW_PL.fine)}px`,
-                    minHeight: folder ? 32 : 40,
-                    py: 0.25,
-                  },
-                }}
               >
-                <Box
-                  component="span"
-                  aria-hidden={folder || undefined}
+                <ReliableListItemButton
+                  role="treeitem"
+                  data-session-destination-row={id}
+                  data-session-destination-index={index}
+                  data-session-destination-folder={folder
+                    ? row.folder.id
+                    : undefined}
+                  data-session-destination-session={!folder
+                    ? row.session.id
+                    : undefined}
+                  data-session-destination-current={current ? "true" : undefined}
+                  aria-level={row.depth + 1}
+                  aria-expanded={folder ? row.expanded : undefined}
+                  aria-current={current ? "true" : undefined}
+                  aria-disabled={busy || current || undefined}
+                  tabIndex={visibleFocus === id || firstTarget ? 0 : -1}
+                  onFocus={() => setFocusId(id)}
+                  onActivate={() => {
+                    if (busy || current) return;
+                    if (folder) { if (!needle) toggle(row.folder.id); }
+                    else onPick(row.session);
+                  }}
                   sx={{
-                    width: CHEVRON.touch,
-                    flexShrink: 0,
-                    display: "grid",
-                    placeItems: "center",
-                    color: "text.secondary",
-                    [FINE]: { width: CHEVRON.fine },
+                    ...guideSx(row.depth),
+                    position: "relative",
+                    ml: `${String(row.depth * INDENT_STEP)}px`,
+                    pl: `${String(ROW_PL.touch)}px`,
+                    pr: 1,
+                    my: "2px",
+                    gap: 0.75,
+                    minHeight: folder ? 44 : 52,
+                    py: 0.5,
+                    borderRadius: "10px",
+                    ...(current && {
+                      cursor: "default",
+                      "&:hover": { bgcolor: "transparent" },
+                    }),
+                    ...(busy && { opacity: 0.6, pointerEvents: "none" }),
+                    [FINE]: {
+                      pl: `${String(ROW_PL.fine)}px`,
+                      minHeight: folder ? 32 : 40,
+                      py: 0.25,
+                    },
                   }}
                 >
-                  {folder
-                    ? row.expanded
-                      ? <ExpandMore sx={{ fontSize: "1.375rem" }} />
-                      : <ChevronRight sx={{ fontSize: "1.375rem" }} />
-                    : (
-                      <StatusDot
-                        status={row.session.status}
-                        backgroundTasks={row.session.background_tasks}
-                      />
-                    )}
-                </Box>
-                {folder ? <FolderRowContent row={row} /> : (
-                  <SessionRowContent
-                    session={row.session}
-                    current={current}
-                  />
-                )}
-              </ReliableListItemButton>
+                  <Box
+                    component="span"
+                    aria-hidden={folder || undefined}
+                    sx={{
+                      width: CHEVRON.touch,
+                      flexShrink: 0,
+                      display: "grid",
+                      placeItems: "center",
+                      color: "text.secondary",
+                      [FINE]: { width: CHEVRON.fine },
+                    }}
+                  >
+                    {folder
+                      ? row.expanded
+                        ? <ExpandMore sx={{ fontSize: "1.375rem" }} />
+                        : <ChevronRight sx={{ fontSize: "1.375rem" }} />
+                      : (
+                        <StatusDot
+                          status={row.session.status}
+                          backgroundTasks={row.session.background_tasks}
+                        />
+                      )}
+                  </Box>
+                  {folder ? <FolderRowContent row={row} /> : (
+                    <SessionRowContent
+                      session={row.session}
+                      current={current}
+                    />
+                  )}
+                </ReliableListItemButton>
+              </HintTooltip>
             );
           })}
         </List>

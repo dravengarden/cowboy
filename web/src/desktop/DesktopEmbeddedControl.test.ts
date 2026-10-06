@@ -4,9 +4,6 @@ import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon.ts";
 const conversationControlsSource = await Deno.readTextFile(
   new URL("./DesktopConversationControls.tsx", import.meta.url),
 );
-const readingModeSource = await Deno.readTextFile(
-  new URL("./DesktopReadingModeControl.tsx", import.meta.url),
-);
 const projectionToggleSource = await Deno.readTextFile(
   new URL("../explore/ProjectionToggle.tsx", import.meta.url),
 );
@@ -45,7 +42,6 @@ Deno.test("desktop Follow delegates its glyph to the global font-scale primitive
 Deno.test("Conversation top-bar selection is not derived from shared shortcut availability", () => {
   for (const source of [
     projectionToggleSource,
-    readingModeSource,
     conversationControlsSource,
   ]) {
     assertEquals(

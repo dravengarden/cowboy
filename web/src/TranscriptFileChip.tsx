@@ -1,6 +1,7 @@
 import { InsertDriveFileOutlined, PictureAsPdfOutlined } from "@mui/icons-material";
 import { Box, Stack, Typography } from "@mui/material";
 import { MESSAGE_PREVIEW_MAX_WIDTH_PX } from "./messageBubble";
+import { HintTooltip } from "./HintTooltip";
 
 const MIME_LABELS: Record<string, string> = {
   "application/pdf": "PDF",
@@ -36,53 +37,54 @@ export function TranscriptFileChip({
   const kind = attachmentKindLabel(name, mimeType);
   const Icon = kind === "PDF" ? PictureAsPdfOutlined : InsertDriveFileOutlined;
   return (
-    <Stack
-      data-transcript-file-attachment="true"
-      direction="row"
-      spacing={1}
-      alignItems="center"
-      title={name}
-      sx={{
-        width: "fit-content",
-        // `fit-content` already shrinks to a narrow bubble.
-        maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX,
-        my: 0.5,
-        py: 0.75,
-        pl: 1,
-        pr: 1.5,
-        borderRadius: 1,
-        border: 1,
-        borderColor: invert ? "rgba(255,255,255,0.28)" : "divider",
-        bgcolor: invert ? "rgba(255,255,255,0.14)" : "action.hover",
-        color: invert ? "inherit" : "text.primary",
-      }}
-    >
-      <Box
-        aria-hidden
+    <HintTooltip title={name}>
+      <Stack
+        data-transcript-file-attachment="true"
+        direction="row"
+        spacing={1}
+        alignItems="center"
         sx={{
-          display: "grid",
-          placeItems: "center",
-          width: 32,
-          height: 32,
-          flexShrink: 0,
-          borderRadius: 0.75,
-          bgcolor: invert ? "rgba(255,255,255,0.18)" : "background.paper",
+          width: "fit-content",
+          // `fit-content` already shrinks to a narrow bubble.
+          maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX,
+          my: 0.5,
+          py: 0.75,
+          pl: 1,
+          pr: 1.5,
+          borderRadius: 1,
+          border: 1,
+          borderColor: invert ? "rgba(255,255,255,0.28)" : "divider",
+          bgcolor: invert ? "rgba(255,255,255,0.14)" : "action.hover",
+          color: invert ? "inherit" : "text.primary",
         }}
       >
-        <Icon fontSize="small" />
-      </Box>
-      <Box sx={{ minWidth: 0 }}>
-        <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
-          {name}
-        </Typography>
-        <Typography
-          variant="caption"
-          noWrap
-          sx={{ display: "block", opacity: 0.72, color: "inherit" }}
+        <Box
+          aria-hidden
+          sx={{
+            display: "grid",
+            placeItems: "center",
+            width: 32,
+            height: 32,
+            flexShrink: 0,
+            borderRadius: 0.75,
+            bgcolor: invert ? "rgba(255,255,255,0.18)" : "background.paper",
+          }}
         >
-          {kind}
-        </Typography>
-      </Box>
-    </Stack>
+          <Icon fontSize="small" />
+        </Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+            {name}
+          </Typography>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{ display: "block", opacity: 0.72, color: "inherit" }}
+          >
+            {kind}
+          </Typography>
+        </Box>
+      </Stack>
+    </HintTooltip>
   );
 }

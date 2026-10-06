@@ -1,6 +1,7 @@
 import { Alert, Box, Button, Typography } from "@mui/material";
 import { openAppSettings } from "../../appSettings";
 import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer";
+import { HintTooltip } from "../../HintTooltip";
 
 export const reviewCodeStatusAction = {
   textTransform: "none",
@@ -131,9 +132,11 @@ export function ReviewCodeStatus(
       }
       sx={reviewCodeStatusRow}
     >
-      <Typography variant="body2" noWrap title={detail}>
-        {summary}
-      </Typography>
+      <HintTooltip title={detail}>
+        <Typography variant="body2" noWrap>
+          {summary}
+        </Typography>
+      </HintTooltip>
     </Alert>
   );
 }

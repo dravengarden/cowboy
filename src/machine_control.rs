@@ -499,6 +499,19 @@ impl MachineControl {
         }
     }
 
+    /// Machines whose latest report shows less available disk than their
+    /// declared low watermark, with that report.
+    pub(crate) fn below_disk_watermark(
+        &self,
+    ) -> Vec<(String, crate::machine_protocol::ObservedHostResources)> {
+        self.host_resources
+            .read()
+            .iter()
+            .filter(|(_, observed)| observed.resources.below_disk_watermark())
+            .map(|(machine, observed)| (machine.clone(), observed.clone()))
+            .collect()
+    }
+
     /// Latest host resources a Machine reported, if any.
     pub(crate) fn host_resources(
         &self,

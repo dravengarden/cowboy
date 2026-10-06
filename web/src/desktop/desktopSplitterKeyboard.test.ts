@@ -6,15 +6,11 @@ import {
   splitterAdjustment,
 } from "./desktopSplitterKeyboard.ts";
 
-Deno.test("splitter selection follows the focused pane and Reading surface", () => {
+Deno.test("splitter selection follows the focused pane", () => {
   const agent = ["sessions-prompt", "prompt-conversation"] as const;
-  assertEquals(preferredDesktopSplitter(agent, "sessions", "agent"), "sessions-prompt");
-  assertEquals(preferredDesktopSplitter(agent, "prompt", "agent"), "prompt-conversation");
-  assertEquals(preferredDesktopSplitter(agent, "conversation", "agent"), "prompt-conversation");
-  assertEquals(
-    preferredDesktopSplitter(["questions-page"], "conversation", "reading"),
-    "questions-page",
-  );
+  assertEquals(preferredDesktopSplitter(agent, "sessions"), "sessions-prompt");
+  assertEquals(preferredDesktopSplitter(agent, "prompt"), "prompt-conversation");
+  assertEquals(preferredDesktopSplitter(agent, "conversation"), "prompt-conversation");
 });
 
 Deno.test("Tab cycles visible splitters in both directions", () => {
@@ -32,11 +28,11 @@ Deno.test("Tab cycles visible splitters in both directions", () => {
 Deno.test("width resize keeps a selected bar and otherwise follows the focused pane", () => {
   const visible = ["sessions-prompt", "prompt-conversation"] as const;
   assertEquals(
-    resolveDesktopResizeSplitter(visible, "sessions-prompt", "prompt", "agent"),
+    resolveDesktopResizeSplitter(visible, "sessions-prompt", "prompt"),
     "sessions-prompt",
   );
   assertEquals(
-    resolveDesktopResizeSplitter(visible, null, "prompt", "agent"),
+    resolveDesktopResizeSplitter(visible, null, "prompt"),
     "prompt-conversation",
   );
 });
@@ -44,9 +40,9 @@ Deno.test("width resize keeps a selected bar and otherwise follows the focused p
 Deno.test("splitter adjustment accepts only the typed DOM contract", () => {
   assertEquals(
     splitterAdjustment(new CustomEvent("resize", {
-      detail: { splitter: "questions-page", delta: -16 },
+      detail: { splitter: "prompt-conversation", delta: -16 },
     })),
-    { splitter: "questions-page", delta: -16 },
+    { splitter: "prompt-conversation", delta: -16 },
   );
   assertEquals(
     splitterAdjustment(new CustomEvent("resize", {

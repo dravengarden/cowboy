@@ -53,8 +53,6 @@ Deno.test("Page view terminology is consistent across user-facing surfaces", () 
     desktopWorkspaceSource;
   assertEquals(composerSource.includes("Page view"), true);
   assertEquals(exploreSurfaceSource.includes('title="Page Index"'), true);
-  assertEquals(exploreSurfaceSource.includes("            Pages\n"), true);
-  assertEquals(desktopWorkspaceSource.includes("Pages"), true);
   for (const retired of [
     "Question pages",
     "Question Navigator",

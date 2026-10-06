@@ -1,6 +1,5 @@
 import type {
   DesktopPane,
-  DesktopProductMode,
   DesktopSplitterId,
 } from "./DesktopWorkspaceController";
 
@@ -20,10 +19,9 @@ export function splitterAdjustment(event: Event): DesktopSplitterAdjustment | nu
   const detail = event.detail as Record<string, unknown>;
   const splitter = detail.splitter;
   const delta = detail.delta;
-  if (
-    splitter !== "sessions-prompt" && splitter !== "prompt-conversation" &&
-    splitter !== "questions-page"
-  ) return null;
+  if (splitter !== "sessions-prompt" && splitter !== "prompt-conversation") {
+    return null;
+  }
   return typeof delta === "number" && Number.isFinite(delta)
     ? { splitter, delta }
     : null;
@@ -36,20 +34,15 @@ export function visibleDesktopSplitterIds(
     .filter((element) => element.offsetParent !== null)
     .map((element) => element.dataset.desktopSplitter)
     .filter((id): id is DesktopSplitterId =>
-      id === "sessions-prompt" || id === "prompt-conversation" ||
-      id === "questions-page"
+      id === "sessions-prompt" || id === "prompt-conversation"
     );
 }
 
 export function preferredDesktopSplitter(
   visible: readonly DesktopSplitterId[],
   pane: DesktopPane,
-  productMode: DesktopProductMode,
 ): DesktopSplitterId | null {
   if (visible.length === 0) return null;
-  if (productMode === "reading" && visible.includes("questions-page")) {
-    return "questions-page";
-  }
   if (pane === "sessions" && visible.includes("sessions-prompt")) {
     return "sessions-prompt";
   }
@@ -72,8 +65,7 @@ export function resolveDesktopResizeSplitter(
   visible: readonly DesktopSplitterId[],
   selected: DesktopSplitterId | null,
   pane: DesktopPane,
-  productMode: DesktopProductMode,
 ): DesktopSplitterId | null {
   if (selected && visible.includes(selected)) return selected;
-  return preferredDesktopSplitter(visible, pane, productMode);
+  return preferredDesktopSplitter(visible, pane);
 }

@@ -10,6 +10,7 @@ import {
   productCapacityAlertHost,
   subscribeProductCapacityAlertHost,
 } from "./productCapacityAlertHost";
+import { HintTooltip } from "../HintTooltip";
 
 function capacityMessage(
   status: "waiting" | "channel_limit" | "lost" | "unavailable",
@@ -66,33 +67,34 @@ export function ProductActiveCapacityGuard(): React.JSX.Element | null {
   const content = capacityMessage(capacity.status, capacity.position);
   const urgent = capacity.status !== "waiting";
   const reminder = (
-    <Button
-      data-product-capacity-alert-button
-      data-desktop-topbar-action={!mobile ? "capacity" : undefined}
-      aria-label={`${content.label}. Open active-client management`}
-      title={content.title}
-      variant="outlined"
-      color={urgent ? "error" : "warning"}
-      size="small"
-      startIcon={<DevicesRounded fontSize="small" />}
-      onClick={() => setOpen(true)}
-      sx={{
-        pointerEvents: "auto",
-        maxWidth: mobile ? "min(17rem, calc(100vw - 24px))" : 172,
-        minHeight: mobile ? 44 : undefined,
-        px: mobile ? 1.5 : 0.75,
-        borderRadius: mobile ? 999 : undefined,
-        bgcolor: "background.paper",
-        boxShadow: mobile ? 8 : "none",
-        textTransform: "none",
-        whiteSpace: "nowrap",
-        "&:hover": { bgcolor: "background.paper" },
-      }}
-    >
-      <Typography variant="caption" fontWeight={800} noWrap>
-        {content.label}
-      </Typography>
-    </Button>
+    <HintTooltip title={content.title}>
+      <Button
+        data-product-capacity-alert-button
+        data-desktop-topbar-action={!mobile ? "capacity" : undefined}
+        aria-label={`${content.label}. Open active-client management`}
+        variant="outlined"
+        color={urgent ? "error" : "warning"}
+        size="small"
+        startIcon={<DevicesRounded fontSize="small" />}
+        onClick={() => setOpen(true)}
+        sx={{
+          pointerEvents: "auto",
+          maxWidth: mobile ? "min(17rem, calc(100vw - 24px))" : 172,
+          minHeight: mobile ? 44 : undefined,
+          px: mobile ? 1.5 : 0.75,
+          borderRadius: mobile ? 999 : undefined,
+          bgcolor: "background.paper",
+          boxShadow: mobile ? 8 : "none",
+          textTransform: "none",
+          whiteSpace: "nowrap",
+          "&:hover": { bgcolor: "background.paper" },
+        }}
+      >
+        <Typography variant="caption" fontWeight={800} noWrap>
+          {content.label}
+        </Typography>
+      </Button>
+    </HintTooltip>
   );
   const reminderSurface = open
     ? null

@@ -23,16 +23,6 @@ Deno.test("bare F is a physical f, so Follow cannot look up a shifted F", () => 
   assertEquals(providerSource.includes('f: "toggle-following"'), false);
 });
 
-Deno.test("Reading product letters p/v/f are case-insensitive and not Shift-gated", () => {
-  const reading = providerSource.slice(
-    providerSource.indexOf('if (workspace.productMode === "reading")'),
-    providerSource.indexOf("The docked question directory"),
-  );
-  assert(reading.includes("const product = key.toLowerCase()"));
-  assert(reading.includes('product === "f"'));
-  assertEquals(reading.includes("&& !event.shiftKey"), false);
-});
-
 Deno.test("Follow is also a conversation command so F works without the scroller map", () => {
   assert(hostSource.includes('id: "conversation.toggleFollow"'));
   assert(hostSource.includes('shortcut: "F"'));

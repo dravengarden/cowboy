@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { alpha, Box, ButtonBase, Stack, Typography } from "@mui/material";
 import { ShortcutKeycap } from "../../ShortcutKeycap";
+import { HintTooltip } from "../../HintTooltip";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import {
   type DesktopCommand,
@@ -310,28 +311,34 @@ export function DesktopLeaderMenu(): React.JSX.Element | null {
                   {group}
                 </Typography>
                 {list.map((entry) => (
-                  <ButtonBase
+                  <HintTooltip
                     key={entry.key}
-                    data-leader-entry={entry.key}
-                    disabled={!entry.enabled}
-                    onClick={() => run(entry.command)}
-                    title={entry.command.description}
-                    sx={entrySx(false)}
+                    // A disabled entry has no pointer events; an empty title
+                    // keeps MUI from wrapping it.
+                    title={entry.enabled ? entry.command.description ?? "" : ""}
+                    placement="left"
                   >
-                    <ShortcutKeycap
-                      keyLabel={desktopLeaderLabel(entry.key).slice(DESKTOP_LEADER_GLYPH.length)}
-                      availability={entry.enabled ? "active" : "inactive"}
-                      accent={entry.enabled}
-                    />
-                    <Typography
-                      variant="body2"
-                      noWrap
-                      color={entry.enabled ? "text.primary" : "text.disabled"}
-                      sx={{ flex: 1, minWidth: 0, textAlign: "left" }}
+                    <ButtonBase
+                      data-leader-entry={entry.key}
+                      disabled={!entry.enabled}
+                      onClick={() => run(entry.command)}
+                      sx={entrySx(false)}
                     >
-                      {entry.command.title}
-                    </Typography>
-                  </ButtonBase>
+                      <ShortcutKeycap
+                        keyLabel={desktopLeaderLabel(entry.key).slice(DESKTOP_LEADER_GLYPH.length)}
+                        availability={entry.enabled ? "active" : "inactive"}
+                        accent={entry.enabled}
+                      />
+                      <Typography
+                        variant="body2"
+                        noWrap
+                        color={entry.enabled ? "text.primary" : "text.disabled"}
+                        sx={{ flex: 1, minWidth: 0, textAlign: "left" }}
+                      >
+                        {entry.command.title}
+                      </Typography>
+                    </ButtonBase>
+                  </HintTooltip>
                 ))}
               </Box>
             ))}

@@ -156,7 +156,6 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
 ];
 
 const CONVERSATION: ShortcutRow[] = [
-  { keys: ["Z"], title: "Enter full-screen Reading mode" },
   { keys: ["J/K"], title: "Scroll down / up by one reading line" },
   { keys: ["Ctrl+D/U"], title: "Scroll down / up by half a page" },
   { keys: ["Ctrl+F/B"], title: "Scroll down / up by a page" },
