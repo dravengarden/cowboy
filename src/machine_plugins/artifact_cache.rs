@@ -65,6 +65,84 @@ pub(super) fn read(state: &Path, digest: &str) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// What one artifact cache retention pass removed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Retired {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Remove cached runtime blobs that no retained generation of any Plugin
+/// references and that were not written within `unreferenced_after`.
+///
+/// Only content-addressed blob names are considered, so in-flight atomic
+/// writes are never touched. A wrongly kept blob costs space; a removed blob
+/// only means a later installation downloads it again, because retained
+/// generations remain an independent reuse source.
+pub(super) fn retire_unreferenced(
+    state: &Path,
+    plugins: &Path,
+    unreferenced_after: std::time::Duration,
+) -> Result<Retired> {
+    let directory = state.join("artifact-cache");
+    if !directory.try_exists()? {
+        return Ok(Retired::default());
+    }
+    validate_directory(&directory)?;
+    let referenced = referenced_runtime_digests(plugins);
+    let cutoff = SystemTime::now()
+        .checked_sub(unreferenced_after)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut retired = Retired::default();
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.len() != 64
+            || !name.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || referenced.contains(&name)
+        {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() || metadata.modified()? > cutoff {
+            continue;
+        }
+        fs::remove_file(entry.path())?;
+        retired.files += 1;
+        retired.bytes = retired.bytes.saturating_add(metadata.len());
+    }
+    if retired.files > 0 {
+        fs::File::open(&directory)?.sync_all()?;
+    }
+    Ok(retired)
+}
+
+/// Lowercase hex digests of every runtime artifact any retained generation
+/// of any Plugin records. Unreadable generations contribute nothing.
+fn referenced_runtime_digests(plugins: &Path) -> BTreeSet<String> {
+    let mut referenced = BTreeSet::new();
+    let Ok(plugin_dirs) = fs::read_dir(plugins) else {
+        return referenced;
+    };
+    for plugin in plugin_dirs.flatten() {
+        let Ok(generations) = fs::read_dir(plugin.path().join("generations")) else {
+            continue;
+        };
+        for generation in generations.flatten() {
+            let Ok(metadata) = read_installed_runtime(&generation.path().join("content")) else {
+                continue;
+            };
+            referenced.extend(metadata.commands.values().filter_map(|command| {
+                command
+                    .artifact_digest
+                    .strip_prefix("sha256:")
+                    .map(str::to_ascii_lowercase)
+            }));
+        }
+    }
+    referenced
+}
+
 /// A Plugin retains only a few generations; bound the scan regardless.
 const MAX_RETAINED_GENERATIONS: usize = 64;
 
@@ -179,6 +257,67 @@ mod tests {
         assert_eq!(
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn retention_removes_only_old_unreferenced_content_addressed_blobs() {
+        use std::time::{Duration, SystemTime};
+        let state = tempfile::tempdir().unwrap();
+        let cache = state.path().join("artifact-cache");
+        fs::DirBuilder::new().mode(0o700).create(&cache).unwrap();
+        let blob = |bytes: &[u8], age: Duration| {
+            let hash = format!("{:x}", Sha256::digest(bytes));
+            let path = cache.join(&hash);
+            fs::write(&path, bytes).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(SystemTime::now() - age)
+                .unwrap();
+            (hash, path)
+        };
+        let week = Duration::from_hours(7 * 24);
+        let (referenced_hash, referenced) = blob(b"still installed", 2 * week);
+        let (_, superseded) = blob(b"superseded runtime", 2 * week);
+        let (_, recent) = blob(b"freshly preloaded", Duration::from_mins(1));
+        let temporary = cache.join(".partial.tmp");
+        fs::write(&temporary, b"in-flight write").unwrap();
+
+        let plugins = state.path().join("plugins");
+        let content = plugins.join("claude-code/generations/g1/content");
+        fs::create_dir_all(content.join("runtime")).unwrap();
+        fs::write(
+            content.join("runtime/metadata.json"),
+            serde_json::json!({"schema_version": 2, "commands": {"claude": {
+                "executable": "runtime/x/claude",
+                "artifact": "runtime/x/artifact.tar.gz",
+                "artifact_digest": format!("sha256:{referenced_hash}"),
+            }}})
+            .to_string(),
+        )
+        .unwrap();
+
+        let retired = retire_unreferenced(state.path(), &plugins, week).unwrap();
+        assert_eq!(retired.files, 1);
+        assert_eq!(retired.bytes, b"superseded runtime".len() as u64);
+        assert!(!superseded.exists());
+        assert!(
+            referenced.exists(),
+            "a retained generation still references it"
+        );
+        assert!(recent.exists(), "younger than the threshold");
+        assert!(temporary.exists(), "not a content-addressed blob");
+        // Idempotent, and a missing cache directory is not an error.
+        assert_eq!(
+            retire_unreferenced(state.path(), &plugins, week).unwrap(),
+            Retired::default()
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            retire_unreferenced(empty.path(), &plugins, week).unwrap(),
+            Retired::default()
         );
     }
 

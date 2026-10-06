@@ -12,3 +12,16 @@ schema = 1
 # An explicit --draining / COWBOY_MACHINE_DRAINING still takes precedence.
 # boolean (true or false); needs a restart.
 # draining = false
+
+[disk]
+# When free space on the filesystem holding the Device state falls below
+# this, the Controller runs an extra retention pass for this Device.
+# "0B" disables the trigger.
+# size string such as "1.5GiB", from 0B to 16TiB; applies live.
+# low_watermark = "15GiB"
+
+[retention]
+# Remove a cached runtime artifact once no retained Plugin generation
+# references it and it has not been written for this long.
+# duration string such as "6h", from 1h to 365d; applies live.
+# artifact_cache_unreferenced_after = "7d"

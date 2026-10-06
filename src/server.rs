@@ -2890,99 +2890,134 @@ fn referenced_generations(
     referenced
 }
 
-/// Ask each connected Machine to retire Agent Provider generations no
-/// recoverable session pins. The Machine keeps the active and rollback
-/// generations itself and refuses while an installation is unreconciled.
+/// How often the retention task compares each Device's reported disk with its
+/// declared `disk.low_watermark` between scheduled passes.
+const URGENT_RETENTION_POLL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Run a retention pass every `plugins.generation_retention_interval`, and an
+/// extra pass for one Device as soon as its available disk falls below the
+/// watermark it declared, at most once per `plugins.urgent_retention_cooldown`.
+/// Both settings are re-read live.
 async fn run_generation_retention(state: Arc<AppState>) {
     tokio::time::sleep(GENERATION_RETENTION_DELAY).await;
-    let mut first = true;
+    let mut last_pass: Option<tokio::time::Instant> = None;
+    let mut urgent_passes: HashMap<String, tokio::time::Instant> = HashMap::new();
     loop {
-        if !first {
-            tokio::time::sleep(
-                state
-                    .service_config
-                    .get(&crate::config::schema::PLUGIN_GENERATION_RETENTION_INTERVAL),
-            )
-            .await;
-        }
-        first = false;
-        let Ok(machines) = state.machine_snapshots.load().await else {
-            continue;
-        };
-        let mut referenced = referenced_generations(&state.hub.session_list());
-        // Soft-deleted sessions stay recoverable until purged. Without that
-        // list a pass could retire their generations, so skip it entirely.
-        let Some(store) = state.store.as_ref() else {
-            continue;
-        };
-        match store.deleted_session_generations().await {
-            Ok(deleted) => {
-                for (machine_id, provider, digest) in deleted {
-                    referenced
-                        .entry((machine_id, provider))
-                        .or_default()
-                        .insert(digest);
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "skipping Plugin generation retention");
-                continue;
-            }
-        }
-        for machine in machines {
-            if !machine.connected || !machine.capabilities.hibernation {
-                // Machines older than protocol 26 lack the retention adapter.
-                continue;
-            }
-            let providers: Vec<String> = machine
-                .plugins
-                .iter()
-                .filter(|plugin| {
-                    plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
-                        && plugin.state == crate::machine_protocol::PluginInstallationState::Active
-                })
-                .map(|plugin| plugin.plugin_id.clone())
-                .collect();
-            for plugin_id in providers {
-                let request = crate::generation_retention::Request {
-                    referenced: referenced
-                        .get(&(machine.id.clone(), plugin_id.clone()))
-                        .cloned()
-                        .unwrap_or_default(),
-                    plugin_id,
-                };
-                if !request.is_valid() {
-                    tracing::warn!(machine = %machine.id, plugin = %request.plugin_id, "skipping invalid generation retention request");
+        let interval = state
+            .service_config
+            .get(&crate::config::schema::PLUGIN_GENERATION_RETENTION_INTERVAL);
+        if last_pass.is_none_or(|at| at.elapsed() >= interval) {
+            last_pass = Some(tokio::time::Instant::now());
+            generation_retention_pass(&state, None).await;
+        } else {
+            let cooldown = state
+                .service_config
+                .get(&crate::config::schema::PLUGIN_URGENT_RETENTION_COOLDOWN);
+            for (machine, observed) in state.machine_control.below_disk_watermark() {
+                if urgent_passes
+                    .get(&machine)
+                    .is_some_and(|at| at.elapsed() < cooldown)
+                {
                     continue;
                 }
-                let plugin_id = request.plugin_id.clone();
-                let payload = match serde_json::to_value(&request) {
-                    Ok(payload) => payload,
-                    Err(_) => continue,
-                };
-                match state
-                    .machine_control
-                    .adapter_request(&machine.id, crate::generation_retention::ADAPTER, payload)
-                    .await
-                    .and_then(|value| {
-                        serde_json::from_value::<crate::generation_retention::Outcome>(value)
-                            .map_err(|error| error.to_string())
-                    }) {
-                    Ok(outcome) if !outcome.retired.is_empty() => tracing::info!(
-                        machine = %machine.id,
-                        plugin = %plugin_id,
-                        retired = ?outcome.retired,
-                        freed_bytes = outcome.freed_bytes,
-                        "retired unreferenced Plugin generations"
-                    ),
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(
-                        machine = %machine.id,
-                        plugin = %plugin_id,
-                        %error,
-                        "Plugin generation retention failed"
-                    ),
-                }
+                tracing::warn!(
+                    %machine,
+                    disk_available_bytes = observed.resources.disk_available_bytes,
+                    disk_low_watermark_bytes = ?observed.resources.disk_low_watermark_bytes,
+                    "Device disk is below its low watermark; retiring Plugin generations now"
+                );
+                urgent_passes.insert(machine.clone(), tokio::time::Instant::now());
+                generation_retention_pass(&state, Some(&machine)).await;
+            }
+        }
+        tokio::time::sleep(URGENT_RETENTION_POLL).await;
+    }
+}
+
+/// Ask each connected Machine (or only `only`) to retire Agent Provider
+/// generations no recoverable session pins. The Machine keeps the active and
+/// rollback generations itself and refuses while an installation is
+/// unreconciled; the same request also prunes its unreferenced artifact cache.
+async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
+    let Ok(machines) = state.machine_snapshots.load().await else {
+        return;
+    };
+    let mut referenced = referenced_generations(&state.hub.session_list());
+    // Soft-deleted sessions stay recoverable until purged. Without that
+    // list a pass could retire their generations, so skip it entirely.
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    match store.deleted_session_generations().await {
+        Ok(deleted) => {
+            for (machine_id, provider, digest) in deleted {
+                referenced
+                    .entry((machine_id, provider))
+                    .or_default()
+                    .insert(digest);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "skipping Plugin generation retention");
+            return;
+        }
+    }
+    for machine in machines {
+        if only.is_some_and(|id| id != machine.id) {
+            continue;
+        }
+        if !machine.connected || !machine.capabilities.hibernation {
+            // Machines older than protocol 26 lack the retention adapter.
+            continue;
+        }
+        let providers: Vec<String> = machine
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
+                    && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+            })
+            .map(|plugin| plugin.plugin_id.clone())
+            .collect();
+        for plugin_id in providers {
+            let request = crate::generation_retention::Request {
+                referenced: referenced
+                    .get(&(machine.id.clone(), plugin_id.clone()))
+                    .cloned()
+                    .unwrap_or_default(),
+                plugin_id,
+            };
+            if !request.is_valid() {
+                tracing::warn!(machine = %machine.id, plugin = %request.plugin_id, "skipping invalid generation retention request");
+                continue;
+            }
+            let plugin_id = request.plugin_id.clone();
+            let payload = match serde_json::to_value(&request) {
+                Ok(payload) => payload,
+                Err(_) => continue,
+            };
+            match state
+                .machine_control
+                .adapter_request(&machine.id, crate::generation_retention::ADAPTER, payload)
+                .await
+                .and_then(|value| {
+                    serde_json::from_value::<crate::generation_retention::Outcome>(value)
+                        .map_err(|error| error.to_string())
+                }) {
+                Ok(outcome) if !outcome.retired.is_empty() => tracing::info!(
+                    machine = %machine.id,
+                    plugin = %plugin_id,
+                    retired = ?outcome.retired,
+                    freed_bytes = outcome.freed_bytes,
+                    "retired unreferenced Plugin generations"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    machine = %machine.id,
+                    plugin = %plugin_id,
+                    %error,
+                    "Plugin generation retention failed"
+                ),
             }
         }
     }
