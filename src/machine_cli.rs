@@ -82,6 +82,7 @@ struct ControllerConfig {
     local: bool,
     provider_usage: crate::provider_usage_spool::ProviderUsageSpool,
     device_config: crate::config::Handle,
+    durable_state: crate::machine_broker::DurableStateView,
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
@@ -601,6 +602,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         .with_placement(worktree_roots.clone(), execution_env),
     );
     let deletion_service_id = args.service_id.clone();
+    let durable_state = crate::machine_broker::DurableStateView::default();
     let controller = controller_loop(ControllerConfig {
         execution,
         controller_url,
@@ -633,6 +635,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         local: args.local,
         provider_usage: provider_usage.clone(),
         device_config: device_config.clone(),
+        durable_state: durable_state.clone(),
     });
     let provider_usage_listener =
         crate::provider_usage_spool::serve(args.provider_usage_socket, provider_usage);
@@ -660,6 +663,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
                 machine_id,
                 service_id: deletion_service_id,
             },
+            durable_state,
         ),
         controller,
         provider_usage_listener,
@@ -1331,6 +1335,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         workspaces: Arc::clone(&config.workspaces),
                                         login_sessions: Arc::clone(&login_sessions),
                                         runtime_commands: runtime_write_tx.clone(),
+                                        durable_state: config.durable_state.clone(),
                                     }, &plugin_execution);
                                 }
                                 _ => {}
@@ -2012,6 +2017,7 @@ struct MachineCommandContext {
     workspaces: Arc<WorkspaceConfig>,
     login_sessions: LoginSessions,
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
+    durable_state: crate::machine_broker::DurableStateView,
 }
 
 fn provider_auth_roll_target(
@@ -2042,6 +2048,7 @@ fn handle_machine_command(
         workspaces,
         login_sessions,
         runtime_commands,
+        durable_state,
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
@@ -2511,6 +2518,7 @@ fn handle_machine_command(
                     session_workspaces: Arc::clone(&workspaces),
                     workspace_incarnation,
                     events,
+                    durable_state,
                 },
             ));
         }
@@ -2689,6 +2697,7 @@ struct AdapterRequestContext {
     session_workspaces: Arc<WorkspaceConfig>,
     workspace_incarnation: Option<String>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    durable_state: crate::machine_broker::DurableStateView,
 }
 
 #[derive(Deserialize)]
@@ -2696,6 +2705,22 @@ struct AdapterRequestContext {
 struct ProviderCacheStatusRequest {
     configuration: cowboy_provider_sdk::ConfigurationBehavior,
     session_id: String,
+}
+
+/// Content-free counts and writer flags for diagnostics. The request carries
+/// nothing and the reply names no Session, lineage or path.
+fn durable_state_reply(
+    payload: &serde_json::Value,
+    view: &crate::machine_broker::DurableStateView,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::ensure!(
+        payload.as_object().is_some_and(serde_json::Map::is_empty),
+        "invalid durable state request"
+    );
+    let status = view
+        .status()
+        .context("durable state is not available yet")?;
+    serde_json::to_value(status).context("encoding durable state")
 }
 
 async fn run_adapter_request(
@@ -2715,6 +2740,7 @@ async fn run_adapter_request(
         session_workspaces,
         workspace_incarnation,
         events,
+        durable_state,
     } = context;
     // A carried root identity is checked first, before decoding, path admission
     // or any read. Refusal here touches no file and cancels no request the Code
@@ -2820,6 +2846,9 @@ async fn run_adapter_request(
                 &request.session_id,
             )
             .await;
+        }
+        if adapter == "durable-state" {
+            return durable_state_reply(&payload, &durable_state);
         }
         if adapter == "workspace" {
             let request: crate::session_workspace::PrepareWorkspaceRequest =
@@ -3765,6 +3794,25 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    #[test]
+    fn durable_state_requests_are_empty_and_wait_for_a_broker() {
+        let view = crate::machine_broker::DurableStateView::default();
+        let empty = serde_json::json!({});
+        // No broker has attached yet (startup), so there is nothing to report.
+        let error = super::durable_state_reply(&empty, &view).unwrap_err();
+        assert!(format!("{error:#}").contains("not available yet"));
+        // A request that carries anything at all is refused before any read.
+        for payload in [
+            serde_json::json!({"sessionId": "sess-1"}),
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!("durable-state"),
+        ] {
+            let error = super::durable_state_reply(&payload, &view).unwrap_err();
+            assert!(format!("{error:#}").contains("invalid durable state request"));
+        }
+    }
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 

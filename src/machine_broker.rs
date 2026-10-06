@@ -271,6 +271,25 @@ struct DeletedWorkspace {
     command_id: String,
 }
 
+/// A read-only, content-free view of the broker's durable state for diagnostics.
+/// It holds the broker weakly, so it never keeps one alive, and is empty until a
+/// broker attaches. Counts and flags only; see `crate::durable_state`.
+#[derive(Clone, Default)]
+pub(crate) struct DurableStateView(Arc<Mutex<Option<std::sync::Weak<Broker>>>>);
+
+impl DurableStateView {
+    fn attach(&self, broker: &Arc<Broker>) {
+        *self.0.lock() = Some(Arc::downgrade(broker));
+    }
+
+    /// `None` until a broker is attached (or after it ended). Each dataset is
+    /// read separately, so this is not an atomic snapshot across datasets.
+    pub(crate) fn status(&self) -> Option<crate::durable_state::DurableState> {
+        let broker = self.0.lock().as_ref()?.upgrade()?;
+        Some(broker.durable_state())
+    }
+}
+
 struct Broker {
     args: MachineBrokerArgs,
     controller: Mutex<Option<Controller>>,
@@ -1306,6 +1325,35 @@ impl Broker {
         })
         .await
         .context("joining Session incarnation retirement")?
+    }
+
+    fn durable_state(&self) -> crate::durable_state::DurableState {
+        use crate::durable_state::{Continuations, DurableState, Incarnations, Journal};
+        let deletion_journal = self
+            .deletion_journal
+            .lock()
+            .as_ref()
+            .map(|journal| Journal {
+                writer_enabled: journal.writer_enabled(),
+                deleted_sessions: journal.deleted().len() as u64,
+            });
+        let session_incarnations = self.incarnations.lock().as_ref().map(|store| Incarnations {
+            writer_enabled: store.writer_enabled(),
+            lineages: store.len() as u64,
+        });
+        let cleanup_continuations =
+            self.cleanup_continuations
+                .lock()
+                .as_ref()
+                .map(|store| Continuations {
+                    pending: store.pending().len() as u64,
+                });
+        DurableState {
+            schema: DurableState::SCHEMA,
+            deletion_journal,
+            session_incarnations,
+            cleanup_continuations,
+        }
     }
 
     fn has_deleted_session_owner_exit_proof(&self) -> bool {
@@ -2919,7 +2967,7 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
 
 #[cfg(test)]
 async fn run(args: MachineBrokerArgs) -> Result<()> {
-    run_broker(args, None, None, None).await
+    run_broker(args, None, None, None, DurableStateView::default()).await
 }
 
 /// Default production builds stay read-only. The dedicated writer build must
@@ -2930,6 +2978,7 @@ pub(crate) async fn run_with_deletion_reader(
     cleanup_path: PathBuf,
     incarnation_path: PathBuf,
     owner: deletions::Owner,
+    durable_state: DurableStateView,
 ) -> Result<()> {
     let writer_enabled =
         crate::session_deletion_admission::owner_writer::admitted(&path, &owner.machine_id)
@@ -2999,7 +3048,14 @@ pub(crate) async fn run_with_deletion_reader(
     } else {
         None
     };
-    run_broker(args, Some(journal), continuations, Some(incarnations)).await
+    run_broker(
+        args,
+        Some(journal),
+        continuations,
+        Some(incarnations),
+        durable_state,
+    )
+    .await
 }
 
 async fn run_broker(
@@ -3007,8 +3063,10 @@ async fn run_broker(
     journal: Option<deletions::Journal>,
     continuations: Option<cleanups::Store>,
     incarnations: Option<incarnations::Store>,
+    durable_state: DurableStateView,
 ) -> Result<()> {
     let broker = Arc::new(Broker::new(args));
+    durable_state.attach(&broker);
     if let Some(store) = incarnations {
         *broker.incarnations.lock() = Some(store);
     }
@@ -4625,6 +4683,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_durable_state_view_reports_counts_and_flags_without_content() {
+        let root = tempfile::tempdir().unwrap();
+        let view = DurableStateView::default();
+        // Empty until a broker attaches.
+        assert!(view.status().is_none());
+
+        let (broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        view.attach(&broker);
+        // A broker with no durable namespaces reports none of them.
+        let bare = view.status().unwrap();
+        assert_eq!(bare.schema, 1);
+        assert!(bare.deletion_journal.is_none());
+        assert!(bare.session_incarnations.is_none());
+        assert!(bare.cleanup_continuations.is_none());
+
+        broker.attach_deletion_journal(
+            deletions::Journal::open(
+                &root.path().join("deletions"),
+                deletion_fixture_owner(),
+                true,
+            )
+            .unwrap(),
+        );
+        broker
+            .deletion_journal
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mark_deleted("sess-secret-1")
+            .unwrap();
+        attach_incarnations(&broker, &root.path().join("incarnations"), true);
+        broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-secret-2", incarnations::Origin::Minted)
+            .unwrap();
+        broker.attach_cleanup_continuations(
+            cleanups::Store::open(&root.path().join("cleanups"), deletion_fixture_owner()).unwrap(),
+        );
+        let state = view.status().unwrap();
+        let journal = state.deletion_journal.unwrap();
+        assert_eq!(
+            (journal.writer_enabled, journal.deleted_sessions),
+            (true, 1)
+        );
+        let lineages = state.session_incarnations.unwrap();
+        assert_eq!((lineages.writer_enabled, lineages.lineages), (true, 1));
+        assert_eq!(state.cleanup_continuations.unwrap().pending, 0);
+
+        // A reader-only build says so, and nothing reported names a Session,
+        // lineage value or path.
+        *broker.incarnations.lock() = None;
+        attach_incarnations(&broker, &root.path().join("incarnations"), false);
+        assert!(
+            !view
+                .status()
+                .unwrap()
+                .session_incarnations
+                .unwrap()
+                .writer_enabled
+        );
+        let text = serde_json::to_string(&view.status().unwrap()).unwrap();
+        assert!(!text.contains("sess-") && !text.contains("/"));
+
+        // The view never keeps a broker alive.
+        drop(broker);
+        assert!(view.status().is_none());
+    }
+
+    #[tokio::test]
     async fn a_declaration_mints_one_lineage_and_replays_keep_it() {
         let root = tempfile::tempdir().unwrap();
         let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
@@ -5194,7 +5325,13 @@ mod tests {
         args.worktree_root = root.path().join("worktrees");
         let journal =
             deletions::Journal::open(&journal_root, deletion_fixture_owner(), true).unwrap();
-        let server = tokio::spawn(run_broker(args.clone(), Some(journal), None, None));
+        let server = tokio::spawn(run_broker(
+            args.clone(),
+            Some(journal),
+            None,
+            None,
+            DurableStateView::default(),
+        ));
         tokio::time::timeout(Duration::from_secs(2), async {
             while !socket.exists() {
                 tokio::task::yield_now().await;
@@ -5242,7 +5379,13 @@ mod tests {
         .await
         .expect("old namespace owner exits");
         assert!(journal.deleted().contains("sess-1"));
-        let server = tokio::spawn(run_broker(args, Some(journal), None, None));
+        let server = tokio::spawn(run_broker(
+            args,
+            Some(journal),
+            None,
+            None,
+            DurableStateView::default(),
+        ));
         let (deleted_reader, deleted_writer, reply) =
             tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
