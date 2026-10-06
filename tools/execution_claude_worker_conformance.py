@@ -454,6 +454,188 @@ def permission_phases(args, api, client, context_checked, checks):
     client.permission = None
 
 
+def hook_phases(args, api, client, native, session, context_checked, checks):
+    """Target project hooks: lifecycle and native-tool hooks run by native
+    through the proxy, facade tool hooks by the adapter, all on the target."""
+    hooks_dir = args.target / ".claude"
+    hooks_dir.mkdir(exist_ok=True)
+    marker = lambda name: f'printf "%s\\n" {name} >> "$CLAUDE_PROJECT_DIR/hook-events.txt"'
+    # The hook reads its transcript_path on the target and requires content.
+    transcript_readable = ("python3 -c 'import json,os,sys; p=json.load(sys.stdin).get(\"transcript_path\"); "
+                           "sys.exit(0 if p and os.path.getsize(p) > 0 else 1)'")
+    (hooks_dir / "settings.json").write_text(json.dumps({"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command",
+                                      "command": marker("SessionStart") + '; printf "%s" "$CLAUDE_PROJECT_DIR" > hook-project-dir.txt'
+                                                 + "; echo 'export COWBOY_HOOK_ENV=from-session-start' >> \"$CLAUDE_ENV_FILE\""},
+                                     # Exec form: no shell, placeholder substituted as a plain string.
+                                     {"type": "command", "command": "sh", "args": [
+                                         "-c", 'printf "%s\\n" ExecForm >> "$1/hook-events.txt"', "sh", "${CLAUDE_PROJECT_DIR}"]}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": marker("UserPromptSubmit")}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": (
+            transcript_readable + " && " + marker("StopTranscript") + "; " + marker("Stop"))}]}],
+        "PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command",
+              "command": "if grep -q FORBIDDEN; then echo blocked-by-target-hook >&2; exit 2; fi"}]},
+            {"matcher": "Agent", "hooks": [{"type": "command",
+              "command": "if grep -q HOOK_CHILD_MUST_NOT_RUN; then " + marker("Agent") +
+                         "; echo agent-blocked-by-target-hook >&2; exit 2; fi"}]},
+            # A subagent's facade tool hook input names its agent.
+            {"matcher": "Read", "hooks": [{"type": "command",
+              "command": 'cat >> "$CLAUDE_PROJECT_DIR/hook-read-inputs.jsonl"; echo >> "$CLAUDE_PROJECT_DIR/hook-read-inputs.jsonl"'}]},
+        ],
+        # Races the host prompt: the slow host would deny; the hook approves an amended call.
+        "PermissionRequest": [{"matcher": "Bash", "hooks": [{"type": "command", "command":
+            "if grep -q PERMREQ_PROBE; then " + marker("PermissionRequest") + "; printf '%s' "
+            """'{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","""
+            """"updatedInput":{"command":"printf hook-approved > permreq.txt"}}}}'; fi"""}]}],
+        "PostToolUseFailure": [{"matcher": "Read", "hooks": [{"type": "command", "command": marker("ReadFailed") +
+            """; printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":"TARGET_FAILURE_CONTEXT"}}'"""}]},
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": marker("BashFailed") +
+             """; printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUseFailure","additionalContext":"TARGET_BASH_FAILURE"}}'"""}]}],
+        "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": marker("BashPost")}]},
+                        {"matcher": "Write", "hooks": [{"type": "command", "command": transcript_readable + " && " +
+            marker("PostTranscript") + "; " + marker("PostWrite") +
+            """; printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"TARGET_POST_CONTEXT"}}'"""},
+            {"type": "command", "async": True, "command":
+             """cat > /dev/null; printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ASYNC_POST_CONTEXT"}}'"""}]}],
+    }}))
+    issued = {}
+    steps = {
+        "HOOK_BLOCK": tool("Bash", {"command": "printf FORBIDDEN >> forbidden.txt"}),
+        "HOOK_WRITE": tool("Write", {"file_path": "hooked.txt", "content": "hooked\n"}),
+        "HOOK_AGENT": tool("Agent", {"description": "Blocked child", "prompt": "HOOK_CHILD_MUST_NOT_RUN"}),
+        "HOOK_ENV": tool("Bash", {"command": 'printf "%s" "$COWBOY_HOOK_ENV" > hook-env.txt'}),
+        "HOOK_FAIL": tool("Read", {"file_path": "hook-missing-file.txt"}),
+        "HOOK_BASH_FAIL": tool("Bash", {"command": "echo partial-output; exit 3"}),
+        "HOOK_PERMREQ": tool("Bash", {"command": "printf PERMREQ_PROBE > permreq.txt"}),
+        "HOOK_SPAWN": tool("Agent", {"description": "Hooked child", "prompt": "CHILD_READS_WITH_HOOK",
+                                     "subagent_type": "general-purpose"}),
+    }
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        if isinstance(last.get("content"), list) and any(
+                block.get("type") == "tool_result" and block.get("tool_use_id") in issued for block in last["content"]):
+            return [{"type": "text", "text": "HOOK_DONE"}]
+        latest = " ".join(text_blocks(last))
+        if "CHILD_READS_WITH_HOOK" in latest:
+            call = tool("Read", {"file_path": "hooked.txt"})
+            issued[call[0]["id"]] = "HOOK_CHILD_READ"
+            return call
+        for name, call in steps.items():
+            if name in latest:
+                issued[call[0]["id"]] = name
+                return call
+        raise ProbeFailure("unexpected hook phase request: " + latest[:200])
+
+    def result_of(name):
+        for request in reversed(api.requests):
+            blocks = [block for block in outputs(request) if issued.get(block.get("tool_use_id")) == name]
+            if blocks:
+                return json.dumps(blocks) + json.dumps(request["messages"][-1])
+        raise ProbeFailure("hook phase result missing")
+
+    client.close()
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 20)
+    client = native(session)
+    client.ready()
+    phase_start = len(api.requests)
+    hook_inputs = Path.home() / ".cache/cowboy/hook-input"
+    inputs_before = set(hook_inputs.iterdir() if hook_inputs.exists() else [])
+    events = args.target / "hook-events.txt"
+    asked = []
+
+    def slow_host(request):
+        # Stays undecided long enough for the target hook to answer first.
+        asked.append(request)
+        time.sleep(5)
+        return {"behavior": "deny", "message": "HOST_DENIED_TOO_LATE"}
+
+    def mode(value):
+        request_id = f"fixture-hook-mode-{value}-{len(api.requests)}"
+        client.send({"type": "control_request", "request_id": request_id,
+                     "request": {"subtype": "set_permission_mode", "mode": value}})
+        reply = client.until(lambda frame: frame.get("type") == "control_response" and
+                             frame["response"].get("request_id") == request_id)
+        require(reply["response"]["subtype"] == "success", "native rejected the permission mode")
+
+    for name in steps:
+        if name == "HOOK_PERMREQ":
+            client.permission = slow_host
+            mode("default")
+        client.prompt(text=name, timeout=60)
+        if name == "HOOK_PERMREQ":
+            mode("bypassPermissions")
+            client.permission = None
+    require(len(asked) == 1 and (args.target / "permreq.txt").read_text() == "hook-approved" and
+            "HOST_DENIED_TOO_LATE" not in result_of("HOOK_PERMREQ"),
+            "target PermissionRequest hook did not answer the pending prompt")
+    read_inputs = [json.loads(line) for line in (args.target / "hook-read-inputs.jsonl").read_text().splitlines()
+                   if line.strip()]
+    require(any(item.get("agent_type") == "general-purpose" and item.get("agent_id") and
+                item.get("tool_input") == {"file_path": "hooked.txt"} for item in read_inputs),
+            f"a subagent's facade tool hook input lacked its agent: {read_inputs[-1:]}")
+    require(not (args.target / "forbidden.txt").exists() and
+            "PreToolUse:Bash hook error: [if grep -q FORBIDDEN" in result_of("HOOK_BLOCK") and
+            "blocked-by-target-hook" in result_of("HOOK_BLOCK"), "target PreToolUse hook did not block before the effect")
+    require((args.target / "hooked.txt").read_text() == "hooked\n" and
+            "PostToolUse:Write hook additional context: TARGET_POST_CONTEXT" in json.dumps(api.requests[-1]),
+            "target PostToolUse context did not reach the model")
+    deadline = time.monotonic() + 10
+    while "Stop" not in (events.read_text() if events.exists() else "") and time.monotonic() < deadline:
+        time.sleep(0.1)
+    recorded = events.read_text().split()
+    # Agent runs natively: native applies the proxied target hook's block.
+    require("agent-blocked-by-target-hook" in result_of("HOOK_AGENT") and
+            "HOOK_CHILD_MUST_NOT_RUN" not in json.dumps([request.get("messages", [])[:1] for request in api.requests]),
+            "native Agent tool hook did not block on the target")
+    require(any("PostToolUse:Write async hook additional context: ASYNC_POST_CONTEXT" in json.dumps(request)
+                for request in api.requests[phase_start:]), "async target hook context did not reach a later request")
+    require((args.target / "hook-env.txt").read_text() == "from-session-start",
+            "SessionStart CLAUDE_ENV_FILE exports did not reach target Bash")
+    require("PostToolUseFailure:Read hook additional context: TARGET_FAILURE_CONTEXT" in result_of("HOOK_FAIL"),
+            "target PostToolUseFailure feedback did not reach the model")
+    # As natively, a non-zero Bash exit is a tool error: failure hooks run, PostToolUse does not.
+    failed_bash = result_of("HOOK_BASH_FAIL")
+    require('"is_error": true' in failed_bash and "Exit code 3\\npartial-output" in failed_bash and
+            "PostToolUseFailure:Bash hook additional context: TARGET_BASH_FAILURE" in failed_bash,
+            "a non-zero target Bash exit was not a native tool error with failure hook feedback")
+    require(recorded.count("BashFailed") == 1 and recorded.count("BashPost") == 2,
+            f"Bash success/failure hooks ran out of turn: {recorded}")
+    for name in ["SessionStart", "ExecForm", "UserPromptSubmit", "Agent", "PostWrite", "PostTranscript", "ReadFailed",
+                 "PermissionRequest", "Stop", "StopTranscript"]:
+        require(name in recorded, f"target {name} hook did not run on the target")
+    # The fixture executor shares this host's HOME; only new entries count.
+    leftovers = set(hook_inputs.iterdir() if hook_inputs.exists() else []) - inputs_before
+    require(not leftovers, f"hook input or transcript copies were left on the target: {sorted(leftovers)[:3]}")
+    require(hook_inputs.stat().st_mode & 0o777 == 0o700, "target hook input directory is not private")
+    require((args.target / "hook-project-dir.txt").read_text() == str(args.target),
+            "hook CLAUDE_PROJECT_DIR is not the target project")
+    require(not (args.runtime / "hook-events.txt").exists() and not (args.runtime / "hook-project-dir.txt").exists(),
+            "a project hook ran on the runtime")
+    # History still holds the permission phase's scripted collision path.
+    collision = str(args.runtime / "perm-collision.txt")
+    for request in api.requests[phase_start:]:
+        encoded = json.dumps(request)
+        stripped = encoded.replace(collision, "")
+        for leak in [str(args.runtime), str(args.runtime.parent / "claude-home")]:
+            if leak in stripped:
+                position = stripped.index(leak)
+                print("hook phase leak diagnostic:", stripped[max(0, position - 600):position + 300])
+        if "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" not in encoded:
+            print("hook phase guidance diagnostic:", encoded[:600])
+        require(encoded.count(str(args.runtime)) == encoded.count(collision) and
+                str(args.runtime.parent / "claude-home") not in encoded and
+                "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" in encoded, "runtime context reached model")
+    checks.extend(["project_lifecycle_hooks_run_on_target", "native_tool_hooks_run_on_target",
+                   "session_start_env_file_reaches_target_bash", "facade_tool_failure_hooks_run_on_target",
+                   "nonzero_bash_exit_is_native_tool_error", "permission_request_hook_answers_pending_prompt",
+                   "subagent_tool_hooks_name_the_agent",
+                   "facade_pre_tool_hook_blocks_before_target_effect", "facade_post_tool_hook_context_reaches_model"])
+    return client
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -773,6 +955,7 @@ def main():
         checks.append("native_interrupt_stops_foreground_target_process")
         client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
         permission_phases(args, api, client, context_checked, checks)
+        client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
         title_requests = len(api.title_requests)
@@ -828,7 +1011,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
@@ -885,7 +1068,7 @@ def main():
         print(f"accepted {len(checks)} packaged Claude worker checks")
     finally:
         if client:
-            if isinstance(client, Claude) and client.process.poll() is not None:
+            if isinstance(client, Claude) and client.process.poll() is not None and not client.stderr.closed:
                 client.stderr.seek(0)
                 print(client.stderr.read().decode()[-2000:])
             client.close()

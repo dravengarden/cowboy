@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { AGENT_ID, NATIVE_TOOLS } from "./tools.mjs";
@@ -9,12 +9,14 @@ const BODY_KEYS = {
   "/tool": ["id,input,tool", "id,input,owner,tool"],
   "/result": ["id"],
   "/cancel": ["id"],
+  "/withdraw": ["id"],
   "/agent": ["agentId,outputFile,owner,toolUseId"],
   "/agent-complete": ["agentId,answer,isAborted,reason"],
   "/agent-stop": ["agentId"],
   "/agent-resume": ["agentId"],
   "/permission": ["id,input,reason,tool", "id,input,owner,reason,tool"],
   "/resolve": ["path"],
+  "/hook": null,
   "/link": ["path"],
 };
 
@@ -23,9 +25,28 @@ const BODY_KEYS = {
 // Each observation holds a pending Mods fetch. Claude 2.1.287 processes no
 // other native work meanwhile (new turns, TaskStop, agent aborts), so keep the
 // idle hold short; a ready result is still answered immediately.
+// A hook may read native's transcript; the target gets a bounded copy of
+// one under native's own projects directory, never another runtime file.
+const MAX_TRANSCRIPT = 8 * 1024 * 1024;
+
+async function transcriptCopy(path, root) {
+  if (
+    typeof path !== "string" || !root || !path.startsWith(root + "/") ||
+    !path.endsWith(".jsonl") || path.split("/").includes("..")
+  ) return undefined;
+  try {
+    const stat = await lstat(path);
+    return stat.isFile() && stat.size <= MAX_TRANSCRIPT
+      ? await readFile(path)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function startModBridge(
   tools,
-  { waitMs = 1000, permissions } = {},
+  { waitMs = 1000, permissions, transcriptRoot } = {},
 ) {
   const directory = await mkdtemp("/tmp/cowboy-claude-mod-");
   await chmod(directory, 0o700);
@@ -67,7 +88,7 @@ export async function startModBridge(
       }
       if (
         request.method !== "POST" ||
-        (request.url !== "/ready" && !BODY_KEYS[request.url])
+        (request.url !== "/ready" && !Object.hasOwn(BODY_KEYS, request.url))
       ) {
         answer(404, { deny: "Unknown execution operation" });
         return;
@@ -87,9 +108,19 @@ export async function startModBridge(
         return;
       }
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      // /hook has required fields and independent optional ones.
+      const hookKeys = ["command", "id", "input", "timeout"];
+      const hookOptional = ["argv", "owner", "transcriptPath"];
       if (
         !call || typeof call !== "object" ||
-        !BODY_KEYS[request.url].includes(Object.keys(call).sort().join(","))
+        (request.url === "/hook"
+          ? !hookKeys.every((key) => key in call) ||
+            !Object.keys(call).every((key) =>
+              hookKeys.includes(key) || hookOptional.includes(key)
+            )
+          : !BODY_KEYS[request.url].includes(
+            Object.keys(call).sort().join(","),
+          ))
       ) {
         answer(400, { deny: "Invalid execution call" });
         return;
@@ -140,6 +171,14 @@ export async function startModBridge(
         (request.url === "/tool" && (!NATIVE_TOOLS.includes(call.tool) ||
           !call.input || typeof call.input !== "object" ||
           Array.isArray(call.input) ||
+          (call.owner !== undefined && !AGENT_ID.test(call.owner)))) ||
+        (request.url === "/hook" && (typeof call.command !== "string" ||
+          !call.input || typeof call.input !== "object" ||
+          Array.isArray(call.input) || !Number.isSafeInteger(call.timeout) ||
+          call.timeout < 1 || call.timeout > 3600 ||
+          (call.argv !== undefined && (!Array.isArray(call.argv) ||
+            !call.argv.length ||
+            !call.argv.every((value) => typeof value === "string"))) ||
           (call.owner !== undefined && !AGENT_ID.test(call.owner))))
       ) {
         answer(400, { deny: "Invalid execution call" });
@@ -203,6 +242,15 @@ export async function startModBridge(
         answer(200, approval.result);
         return;
       }
+      if (request.url === "/withdraw") {
+        // A project PermissionRequest hook answered: withdraw only the host
+        // prompt. The call itself stays admissible.
+        const approval = approvals.get(call.id);
+        if (approval && !approval.result) permissions.cancel(call.id);
+        approvals.delete(call.id);
+        answer(200, { withdrawn: true });
+        return;
+      }
       if (request.url === "/cancel") {
         // A pending approval is withdrawn from the host as well.
         if (approvals.get(call.id) && !approvals.get(call.id).result) {
@@ -249,11 +297,33 @@ export async function startModBridge(
         const operation = { bytes: 0 };
         outstanding++;
         admitted.set(call.id, operation);
+        const owned = {
+          id: call.id,
+          ...(call.owner === undefined ? {} : { owner: call.owner }),
+        };
+        // A target hook command shares admission, observation and
+        // cancellation with tools; the session's mode completes its input.
         operation.ready = Promise.resolve().then(() =>
-          tools.nativeCall(call.tool, call.input, {
-            id: call.id,
-            ...(call.owner === undefined ? {} : { owner: call.owner }),
-          })
+          request.url === "/hook"
+            ? transcriptCopy(call.transcriptPath, transcriptRoot).then((
+              transcript,
+            ) =>
+              tools.runHook({
+                transcript,
+                argv: call.argv,
+                command: call.command,
+                // The launcher's live mode, not one recorded at the last prompt.
+                input: JSON.stringify({
+                  ...call.input,
+                  ...(permissions?.mode
+                    ? { permission_mode: permissions.mode }
+                    : {}),
+                }),
+                timeoutMs: call.timeout * 1000,
+                call: owned,
+              })
+            ).then((hook) => ({ hook }))
+            : tools.nativeCall(call.tool, call.input, owned)
         ).catch(() => ({
           deny:
             "Execution result unavailable; inspect state before repeating a mutation",

@@ -57,9 +57,25 @@ AskUserQuestion and, only for enrolled sessions, the exact Matrix memory tools
 listed in that module. Native `Agent` runs background subagents whose own tool
 calls carry `agentId` through the same routing; `SendMessage` and `TaskStop`
 reach native only for this session's registered agents. Unknown tools are
-denied. Project hooks/skills, custom agents, agent isolation, implicit file
+denied. Project skills, custom agents, agent isolation, implicit file
 attachments, plan files and PDF extraction remain unsupported by this lane;
 adopting any of them is a separate capability change.
+
+Target project hooks (`.claude/settings.json` and `settings.local.json`, read
+from the target at session start) are passed to native with `--settings`.
+Native runs lifecycle and native-tool hooks; `CLAUDE_CODE_SHELL_PREFIX` routes
+each registered command to `hook-proxy.mjs`, which runs it on the target. The
+facade answers target tools before native hooks, so `context-mod.js` runs
+PreToolUse, PostToolUse, PostToolUseFailure and PermissionRequest for them and
+reproduces native's input, output folding and model-visible messages. Each
+candidate CLI must be re-measured against these assumptions: the shell
+prefix gets shell-form hooks as one argument with placeholders unsubstituted;
+exec-form hooks bypass it; `classic.*` events (including `SubagentStart`)
+carry the base hook input; facade calls never reach settings tool hooks;
+PermissionRequest hooks race the host prompt; and a non-zero Bash exit is a
+tool error. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
+`nonzero_bash_exit_is_native_tool_error`) cover these; the native baselines
+are in the project hooks receipt.
 
 Target tools are gated by native `$.tool.check` under the session's permission
 mode, with asks raised to the SDK host as native `can_use_tool` requests by the

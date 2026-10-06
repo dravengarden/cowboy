@@ -492,6 +492,7 @@ async function routingFixture({ memory = false, agents = {} } = {}) {
     targetCwd: "/target",
     runtimeCwd: "/runtime",
     targetHome: "/home/target",
+    hooks: { commands: [], tool: {} },
     memory,
   };
   const calls = [];

@@ -9,6 +9,22 @@ const agentRegistrations = new Map();
 // call only once native can process the stop; this also covers a missed abort.
 const stoppedAgents = new Set();
 const agentTypes = ["general-purpose", "claude", "Explore", "Plan"];
+// Native's base hook input, as its classic events last reported it.
+const hookBase = {};
+// Native agent id -> its agent type, from SubagentStart.
+const subagentTypes = new Map();
+
+export function recordHookBase(event) {
+  for (const key of ["session_id", "transcript_path", "prompt_id"]) {
+    if (typeof event?.[key] === "string") hookBase[key] = event[key];
+  }
+  if (typeof event?.permission_mode === "string") {
+    hookBase.permission_mode = event.permission_mode;
+  }
+  if (event?.effort && typeof event.effort === "object") {
+    hookBase.effort = event.effort;
+  }
+}
 
 // The native output file is a runtime-home JSONL transcript. Replace only
 // the exact registered locator in the launch result and its notification.
@@ -189,12 +205,296 @@ async function decide($, event, input) {
   };
 }
 
-async function permit($, event, input, abandoned, abandon) {
+// Native hook matchers: absent, empty or "*" match all; otherwise a
+// case-sensitive regular expression matched against the whole tool name.
+export function hookMatches(matcher, tool) {
+  if (matcher === undefined || matcher === "" || matcher === "*") return true;
+  try {
+    return new RegExp("^(?:" + matcher + ")$").test(tool);
+  } catch {
+    return matcher === tool;
+  }
+}
+
+// One tool hook's effect, as native reports it to the model. Non-zero exits
+// other than 2, timeouts and unparsable output are non-blocking.
+export function hookOutcome(event, tool, command, run) {
+  if (!run || run.timedOut) return {};
+  if (run.exitCode === 2) {
+    // A PermissionRequest exit 2 decides nothing; the prompt still asks.
+    if (event === "PermissionRequest") return {};
+    return event === "PreToolUse"
+      ? {
+        deny:
+          `PreToolUse:${tool} hook error: [${command}]: ${run.stderr.trim()}`,
+      }
+      : {
+        context: [
+          `${event}:${tool} hook blocking error from command: "${command}": [${command}]: ${run.stderr}`,
+        ],
+      };
+  }
+  if (run.exitCode !== 0) return {};
+  let output;
+  try {
+    output = JSON.parse(run.stdout.trim());
+  } catch {
+    return {};
+  }
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return {};
+  }
+  const specific = output.hookSpecificOutput ?? {};
+  if (event === "PermissionRequest") {
+    // Natively the first hook decision answers the pending prompt.
+    const decision = specific.decision;
+    if (decision?.behavior === "deny") {
+      return {
+        deny: typeof decision.message === "string"
+          ? decision.message
+          : "Permission denied by a project hook.",
+        ...(decision.interrupt === true ? { stop: "" } : {}),
+      };
+    }
+    if (decision?.behavior !== "allow") return {};
+    return decision.updatedInput &&
+        typeof decision.updatedInput === "object" &&
+        !Array.isArray(decision.updatedInput)
+      ? { allow: true, input: decision.updatedInput }
+      : { allow: true };
+  }
+  const outcome = { context: [] };
+  if (output.continue === false) outcome.stop = output.stopReason ?? "";
+  if (typeof specific.additionalContext === "string") {
+    outcome.context.push(
+      `${event}:${tool} hook additional context: ${specific.additionalContext}`,
+    );
+  }
+  if (event === "PostToolUse") {
+    if (output.decision === "block") {
+      outcome.context.unshift(
+        `PostToolUse:${tool} hook blocking error from command: "${command}": ${
+          output.reason ?? ""
+        }`,
+      );
+    }
+    return outcome;
+  }
+  if (event !== "PreToolUse") return outcome;
+  const decision = specific.permissionDecision ??
+    (output.decision === "block"
+      ? "deny"
+      : output.decision === "approve"
+      ? "allow"
+      : undefined);
+  const reason = specific.permissionDecisionReason ?? output.reason ?? "";
+  if (decision === "deny") {
+    outcome.deny = `PreToolUse:${tool} hook error: ${reason}`;
+  } else if (decision === "ask") outcome.ask = reason;
+  else if (decision === "allow") outcome.allow = true;
+  if (
+    specific.updatedInput && typeof specific.updatedInput === "object" &&
+    !Array.isArray(specific.updatedInput)
+  ) outcome.input = specific.updatedInput;
+  return outcome;
+}
+
+// `run` is the calling tool's lifecycle: its abandonment cancels this hook's
+// target command too, and an abandoned call starts or awaits no hook.
+async function runTargetHook($, entry, input, owner, run) {
+  if (run.abandoned()) return undefined;
+  const id = "hook-" + crypto.randomUUID();
+  run.hooks.push(id);
+  const { transcript_path: transcriptPath, ...rest } = input;
+  let response = await bridgePost($, "/hook", {
+    id,
+    command: entry.command,
+    ...(entry.argv ? { argv: entry.argv } : {}),
+    input: rest,
+    timeout: entry.timeout,
+    ...(owner === undefined ? {} : { owner }),
+    ...(typeof transcriptPath === "string" ? { transcriptPath } : {}),
+  });
+  while (response.ok && response.status === 202 && !run.abandoned()) {
+    response = await bridgePost($, "/result", { id });
+  }
+  if (run.abandoned()) {
+    run.abandon();
+    return undefined;
+  }
+  const hook = response.ok ? JSON.parse(response.text).hook : undefined;
+  // The bridge or target could not run it: not the hook's own outcome.
+  return hook ?? { unavailable: true };
+}
+
+// Project PreToolUse/PostToolUse hooks for a facade tool, run on the target in
+// parallel (identical commands once) and folded as native folds them.
+async function toolHooks($, event, call, input, run, response, error) {
+  const matching = (context.hooks.tool[event] ?? []).filter((group) =>
+    hookMatches(group.matcher, call.tool)
+  );
+  const unsupported = matching.find((group) => group.unsupported);
+  // A permission hook that cannot run decides nothing: the prompt still asks.
+  if (unsupported && event !== "PermissionRequest") {
+    return {
+      context: [],
+      deny:
+        `The project's ${event} ${unsupported.unsupported} for ${call.tool} cannot run in this execution environment, so the call did not run.`,
+    };
+  }
+  const entries = [
+    ...new Map(
+      matching.filter((group) => !group.unsupported).map((group) => {
+        const entry = context.hooks.commands[group.index];
+        return [entry.command, entry];
+      }),
+    ).values(),
+  ];
+  if (!entries.length) return { context: [] };
+  let session;
+  try {
+    session = hookBase.session_id ?? await $.session.id();
+  } catch {
+    session = undefined;
+  }
+  const hookInput = {
+    ...hookBase,
+    ...(typeof session === "string" ? { session_id: session } : {}),
+    cwd: context.targetCwd,
+    ...(call.agentId === undefined ? {} : { agent_id: call.agentId }),
+    ...(subagentTypes.has(call.agentId)
+      ? { agent_type: subagentTypes.get(call.agentId) }
+      : {}),
+    hook_event_name: event,
+    tool_name: call.tool,
+    tool_input: input,
+    // Native sends no suggestions for these calls (see permit) and no tool
+    // use id to a PermissionRequest hook.
+    ...(event === "PermissionRequest"
+      ? { permission_suggestions: [] }
+      : { tool_use_id: call.tool_use_id }),
+    ...(response === undefined ? {} : { tool_response: response }),
+    ...(error === undefined ? {} : { error }),
+  };
+  const runOne = (entry) =>
+    runTargetHook($, entry, hookInput, call.agentId, run).catch(() => ({
+      unavailable: true,
+    }));
+  // Async hooks run in the background, as natively: they cannot decide, and
+  // their additionalContext/systemMessage reach the model on its next turn.
+  for (const entry of entries.filter((entry) => entry.async)) {
+    runOne(entry).then((result) => deliverAsync($, event, call, result))
+      .catch(() => {});
+  }
+  const runs = await Promise.all(
+    entries.filter((entry) => !entry.async).map(async (entry) => {
+      const result = await runOne(entry);
+      // A racing caller acts on each outcome as it arrives.
+      run.each?.(hookOutcome(event, call.tool, entry.command, result));
+      return { entry, result };
+    }),
+  );
+  // A guard that could not run must not let the call proceed unchecked.
+  const unavailable = runs.find(({ result }) => result?.unavailable);
+  if (event === "PreToolUse" && unavailable) {
+    return {
+      context: [],
+      deny:
+        `PreToolUse:${call.tool} hook could not run on the target, so the call did not run.`,
+    };
+  }
+  const outcomes = runs.map(({ entry, result }) =>
+    hookOutcome(event, call.tool, entry.command, result)
+  );
+  const folded = { context: outcomes.flatMap((item) => item.context ?? []) };
+  for (const key of ["deny", "ask", "allow", "input", "stop"]) {
+    const found = outcomes.find((item) => item[key] !== undefined);
+    if (found) folded[key] = found[key];
+  }
+  return folded;
+}
+
+export function asyncHookNotes(event, tool, run) {
+  if (run?.exitCode !== 0) return [];
+  let output;
+  try {
+    output = JSON.parse(run.stdout.trim());
+  } catch {
+    return [];
+  }
+  const notes = [];
+  if (typeof output?.hookSpecificOutput?.additionalContext === "string") {
+    notes.push(
+      `${event}:${tool} async hook additional context: ${output.hookSpecificOutput.additionalContext}`,
+    );
+  }
+  if (typeof output?.systemMessage === "string") {
+    notes.push(`${event}:${tool} async hook: ${output.systemMessage}`);
+  }
+  return notes;
+}
+
+// A model-visible row for the next request; it starts no turn.
+async function deliverAsync($, event, call, run) {
+  const notes = asyncHookNotes(event, call.tool, run);
+  if (!notes.length) return;
+  await $.session.append({
+    message: {
+      type: "user",
+      content: [{
+        type: "text",
+        text: `<system-reminder>\n${notes.join("\n")}\n</system-reminder>`,
+      }],
+    },
+    ...(call.agentId === undefined ? {} : { agentId: call.agentId }),
+  });
+}
+
+// Project PermissionRequest hooks for a prompt the host has not answered.
+// Natively they race the prompt and each other: the first decision withdraws
+// it, and of decisions arriving together a deny wins (measured on 2.1.287).
+// They have their own lifecycle: the host's answer cancels them without
+// abandoning the call.
+function permissionHooks($, event, input, run) {
+  let done = false;
+  const own = [];
+  const decisions = [];
+  const hookRun = {
+    each: (outcome) => {
+      if (outcome.deny !== undefined || outcome.allow) decisions.push(outcome);
+    },
+    hooks: { push: (id) => (own.push(id), run.hooks.push(id)) },
+    abandoned: () => done || run.abandoned(),
+    abandon: () => {
+      if (run.abandoned()) return run.abandon();
+      for (const id of own) bridgePost($, "/cancel", { id }).catch(() => {});
+    },
+  };
+  toolHooks($, "PermissionRequest", event, input, hookRun).catch(() => {});
+  return {
+    decision: () =>
+      decisions.find((item) => item.deny !== undefined) ?? decisions[0],
+    settle: () => {
+      if (done) return;
+      done = true;
+      hookRun.abandon();
+    },
+  };
+}
+
+async function permit($, event, input, run, hook = {}) {
+  const { abandoned, abandon } = run;
   let check;
   try {
     check = await decide($, event, input);
   } catch {
     return { deny: "Permission check unavailable; the tool did not run." };
+  }
+  // A PreToolUse hook decides before the permission prompt, as natively:
+  // "allow" skips it and "ask" requests it; a deny rule still refuses.
+  if (check?.decision === "ask" && hook.allow) check = { decision: "allow" };
+  if (check?.decision !== "deny" && hook.ask !== undefined) {
+    check = { decision: "ask", reason: hook.ask };
   }
   if (check?.decision === "allow") return { input };
   if (check?.decision !== "ask") {
@@ -202,38 +502,61 @@ async function permit($, event, input, abandoned, abandon) {
       deny: "Permission denied" + (check?.reason ? ": " + check.reason : "."),
     };
   }
-  for (;;) {
-    const response = await bridgePost($, "/permission", {
-      id: event.tool_use_id,
-      tool: event.tool,
-      input,
-      reason: typeof check.reason === "string" ? check.reason : null,
-      ...(event.agentId === undefined ? {} : { owner: event.agentId }),
-    });
-    if (abandoned()) {
-      abandon();
-      return { deny: "Tool call was cancelled" };
+  let hooks;
+  try {
+    for (;;) {
+      const decided = hooks?.decision();
+      if (decided) {
+        await bridgePost($, "/withdraw", { id: event.tool_use_id });
+        if (decided.stop !== undefined) $.turn.abort().catch(() => {});
+        return decided.deny !== undefined
+          ? { deny: decided.deny }
+          : { input: decided.input ?? input };
+      }
+      const response = await bridgePost($, "/permission", {
+        id: event.tool_use_id,
+        tool: event.tool,
+        input,
+        reason: typeof check.reason === "string" ? check.reason : null,
+        ...(event.agentId === undefined ? {} : { owner: event.agentId }),
+      });
+      if (abandoned()) {
+        abandon();
+        return { deny: "Tool call was cancelled" };
+      }
+      if (!response.ok) {
+        return {
+          deny: "Permission request unavailable; the tool did not run.",
+        };
+      }
+      if (response.status === 202) {
+        // The host is really prompting (dontAsk denies at once): start the
+        // project's PermissionRequest hooks against it.
+        hooks ??= permissionHooks($, event, input, run);
+        continue;
+      }
+      return hostAnswer(JSON.parse(response.text), input);
     }
-    if (!response.ok) {
-      return { deny: "Permission request unavailable; the tool did not run." };
-    }
-    if (response.status === 202) continue;
-    const result = JSON.parse(response.text);
-    if (result.behavior !== "allow") {
-      return {
-        deny: typeof result.message === "string" && result.message
-          ? result.message
-          : "The user denied this tool use.",
-      };
-    }
-    // The host may amend the call; native runs the updated input.
-    const updated = result.updatedInput;
+  } finally {
+    hooks?.settle();
+  }
+}
+
+function hostAnswer(result, input) {
+  if (result.behavior !== "allow") {
     return {
-      input: updated && typeof updated === "object" && !Array.isArray(updated)
-        ? updated
-        : input,
+      deny: typeof result.message === "string" && result.message
+        ? result.message
+        : "The user denied this tool use.",
     };
   }
+  // The host may amend the call; native runs the updated input.
+  const updated = result.updatedInput;
+  return {
+    input: updated && typeof updated === "object" && !Array.isArray(updated)
+      ? updated
+      : input,
+  };
 }
 
 function bridgePost($, path, value) {
@@ -459,14 +782,46 @@ export function register(on) {
     // An interrupted turn or stopped agent abandons this call. Cancel only
     // the target processes it started; the bridge also refuses late admission.
     let cancelled = false;
+    const hooks = [];
     const abandon = () => {
       if (cancelled) return;
       cancelled = true;
-      bridgePost($, "/cancel", { id: event.tool_use_id }).catch(() => {});
+      for (const id of [event.tool_use_id, ...hooks]) {
+        bridgePost($, "/cancel", { id }).catch(() => {});
+      }
     };
+    const run = { abandoned, abandon, hooks };
     signal?.addEventListener("abort", abandon, { once: true });
     try {
-      const permitted = await permit($, event, requested, abandoned, abandon);
+      // A PostToolUse review that cannot run after the effect refuses first.
+      const unsupported = ["PostToolUse", "PostToolUseFailure"].flatMap((
+        name,
+      ) =>
+        (context.hooks.tool[name] ?? []).map((group) => ({ ...group, name }))
+      ).find((group) =>
+        group.unsupported && hookMatches(group.matcher, event.tool)
+      );
+      if (unsupported) {
+        return {
+          deny:
+            `The project's ${unsupported.name} ${unsupported.unsupported} for ${event.tool} cannot run in this execution environment, so the call did not run.`,
+        };
+      }
+      // Natively a PreToolUse continue:false still runs the tool, then ends
+      // the turn (measured on 2.1.287); the stop is applied after it.
+      const pre = await toolHooks($, "PreToolUse", event, requested, run);
+      if (abandoned()) {
+        abandon();
+        return { deny: "Tool call was cancelled" };
+      }
+      if (pre.deny) return { deny: pre.deny };
+      const permitted = await permit(
+        $,
+        event,
+        pre.input ?? requested,
+        run,
+        pre,
+      );
       if (permitted.deny) return permitted;
       const input = permitted.input;
       let path = "/tool";
@@ -489,7 +844,43 @@ export function register(on) {
           };
         }
         const result = JSON.parse(response.text);
-        if (response.status !== 202) return result;
+        if (response.status !== 202) {
+          if (result.result === undefined) {
+            if (typeof result.deny !== "string") return result;
+            // The target operation failed: the project's failure hooks run,
+            // and their feedback follows the error the model reads.
+            const failure = await toolHooks(
+              $,
+              "PostToolUseFailure",
+              event,
+              input,
+              run,
+              undefined,
+              result.deny,
+            );
+            // A PreToolUse stop still ends the turn after a failed call;
+            // natively a PostToolUseFailure continue:false does not.
+            if (pre.stop !== undefined) $.turn.abort().catch(() => {});
+            // PreToolUse context still reaches the model after a failure.
+            const notes = [...pre.context, ...failure.context];
+            return notes.length
+              ? { deny: [result.deny, ...notes].join("\n\n") }
+              : result;
+          }
+          const post = await toolHooks(
+            $,
+            "PostToolUse",
+            event,
+            input,
+            run,
+            result.result,
+          );
+          const reminders = [...pre.context, ...post.context];
+          // Natively the tool still ran; continue:false then ends the turn.
+          const stop = pre.stop ?? post.stop;
+          if (stop !== undefined) $.turn.abort().catch(() => {});
+          return reminders.length ? { ...result, context: reminders } : result;
+        }
         if (result.pending !== event.tool_use_id) {
           throw new Error("Execution identity changed");
         }
@@ -547,6 +938,23 @@ export function register(on) {
           : event.text,
       }),
   );
+  // Every classic event carries native's base hook input, hooks or not.
+  on("classic.SessionStart", (_$, event, next) => {
+    recordHookBase(event);
+    return next(event);
+  });
+  on("classic.UserPromptSubmit", (_$, event, next) => {
+    recordHookBase(event);
+    return next(event);
+  });
+  // A subagent's tool hooks name its type, as natively.
+  on("classic.SubagentStart", (_$, event, next) => {
+    if (
+      typeof event?.agent_id === "string" &&
+      typeof event.agent_type === "string" && subagentTypes.size < 4096
+    ) subagentTypes.set(event.agent_id, event.agent_type);
+    return next(event);
+  });
   on("turn.complete", async ($, event, next) => {
     if (event.agentId !== undefined && agentOutputs.has(event.agentId)) {
       if (event.isAborted === true) stoppedAgents.add(event.agentId);
@@ -580,6 +988,8 @@ export function register(on) {
         typeof value === "string" && value.startsWith("/") &&
         (value === "/" || !value.endsWith("/"))
       ) ||
+      !loaded.hooks || !Array.isArray(loaded.hooks.commands) ||
+      !loaded.hooks.tool || typeof loaded.hooks.tool !== "object" ||
       !(loaded.targetHome === null ||
         (typeof loaded.targetHome === "string" &&
           loaded.targetHome.startsWith("/"))) ||
