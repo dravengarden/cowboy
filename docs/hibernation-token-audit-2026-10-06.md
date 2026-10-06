@@ -47,8 +47,9 @@ not deployed on Hawk and no idle-timeout policy exists or has been approved.
   without the call and shows other providers are untouched. The gateway is in the
   signed Plugin runtime, outside this repository, so its actual replay behavior for
   a revoked or stopped session was not observed; this is a conservative fix from
-  the call graph, not a measured token saving. The revocation reaches the real
-  gateway only on a Machine that has this change active.
+  the call graph, not a measured token saving. It is active on Hawk since the
+  [2026-10-06 release](releases/hibernation-cache-revoke-2026-10-06.md); no real
+  DeepSeek session has been hibernated to observe it.
 - **Gemini, Grok and DeepSeek** resume paths were not measured; the zero-request
   wake assertions cover Codex (and Claude's existing check) only.
 - **Claude** and the fixtures use scripted APIs; this is not supported-device or

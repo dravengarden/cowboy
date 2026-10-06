@@ -45,10 +45,11 @@ Machine release `48d3054d` that another task activated on Hawk as transaction
 `8909c1c8`). Startup logged `Session incarnation reader ready incarnations=0`,
 the deletion journal reader with `deleted_sessions=5 writer_enabled=true`, and
 `durable Session cleanup continuations ready pending=0`. No incarnation record
-exists, and the owner has **not** yet created the incarnation reader floor: the
-previous release did not declare the dataset, so the first reader-only transition
-creates none and the next activation anchors `48d3054d`. A writer is still
-refused until that floor exists.
+exists. The owner had not yet created the incarnation reader floor then (the
+previous release did not declare the dataset); the next activation, the
+[2026-10-06 hibernation release](releases/hibernation-cache-revoke-2026-10-06.md),
+anchored it at `48d3054d`. A writer declaration is now admissible by the owner,
+but none exists.
 
 The native conformance extension was run on built artifacts afterwards, comparing
 the active `48d3054d` writer with the `a0394f67` writer and reader-only
