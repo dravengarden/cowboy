@@ -1904,7 +1904,7 @@ function SessionList({
                             ...rowIndentSx(row.depth), pr: 0.5, my: 0.25 }}
                     />;
                     const s = row.session;
-                    const deleting = deletingSessionIds.has(s.id);
+                    const deleting = deletingSessionIds.has(s.id) || s.closing === true;
                     const jumpLabel = sessionLabelsShown ? jumpLabels.get(s) : undefined;
                     return (
                     <ReliableListItemButton

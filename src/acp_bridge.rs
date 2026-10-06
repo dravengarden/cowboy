@@ -2249,6 +2249,7 @@ mod tests {
             origin: crate::core::SessionOrigin::Api,
             agent_session_id: None,
             paused: false,
+            closing: false,
             system: false,
             context_used: 0,
             context_size: 0,
