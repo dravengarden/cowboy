@@ -276,6 +276,45 @@ export class WorkspaceTools {
     await saved;
   }
 
+  home() {
+    const home = this.connection.info?.userHomeDir;
+    if (!home) return undefined;
+    const path = fileURLToPath(home);
+    return posix.isAbsolute(path) ? posix.resolve(path) : undefined;
+  }
+
+  async isSymlink(path) {
+    checkedString(path, "file path", 16384);
+    try {
+      return (await this.connection.call("fs/getMetadata", {
+        path: pathToFileURL(path).href,
+      })).isSymlink === true;
+    } catch (error) {
+      if (missing(error)) return false;
+      throw error;
+    }
+  }
+
+  // Target-side symlink resolution; missing trailing components are kept.
+  // Without a target Python the path is unresolved (callers then ask).
+  async realpath(path) {
+    checkedString(path, "file path", 16384);
+    if (!this.rangePython) return null;
+    const result = await this.command([
+      this.rangePython,
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      "import os,sys;sys.stdout.write(os.path.realpath(sys.argv[1]))",
+      path,
+    ]);
+    return result.exitCode === 0 && result.output.startsWith("/") &&
+        !result.output_limit
+      ? result.output
+      : null;
+  }
+
   path(value) {
     checkedString(value, "file path", 16384);
     if (value === "~" || value.startsWith("~/")) {

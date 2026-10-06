@@ -103,7 +103,7 @@ to introduce more restrictions.
 | Shell environment | Claude starts a new shell with fixed binding cwd and target environment | Test `cd`, exports, login startup, shell snapshots, quoting, signals, pipe status and shell availability; preserve documented native persistence semantics |
 | Project hooks | Claude launch suppresses settings sources; Codex remote hook placement not established by current receipt | Execute target-owned hooks at target, preserve native lifecycle/decisions and trusted configuration; separate runtime-owned hooks |
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
-| Permission modes | Claude bound launch selects `bypassPermissions`; remote tools must not be presented as supporting every native permission mode | Design explicit mapping for approval, deny, modified input and concurrent approval cancellation; test denial before any target effect |
+| Permission modes | Claude 3.6.0 drops the forced bypass: native `$.tool.check` decides each target call under the session's mode and rules, asks reach the SDK host in native `can_use_tool` shape, denial precedes any target effect, amended input runs, dontAsk denies, and abandoned asks are withdrawn (packaged acceptance) | No "always allow" rule persistence, auto-mode classifier or command-string path mapping; plan mode stays refused |
 | Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance. Claude 3.5.0 admits native background subagents: child calls carry `agentId`, launch/notification/client locators use `cowboy-agent://`, outcomes are durable across resume, TaskStop/interrupt cancel the child's target commands (packaged worker acceptance) | Partial output stream, permission modes, grandchildren, teammates, worktree/remote isolation, custom agents and native-runtime crash with a live agent remain unaccepted; those inputs are refused |
 | Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
@@ -755,6 +755,70 @@ permission modes other than the bound bypass mode, native-runtime or keeper
 crash with a live agent, cross-host latency and real-model continuation. A
 stopped agent's own background (`run_in_background`) jobs keep their retained
 handles; native behavior for that case was not measured.
+
+#### Native permission modes (Plugin 3.6.0)
+
+Before 3.6.0 the bound launch forced `bypassPermissions`, and the facade answered
+`tool.call` itself, which skips native permission evaluation. Users who switched a
+remote session to another mode still got bypass behavior for target tools. Cowboy
+continues to select bypass by default, so default sessions are unchanged.
+
+The pinned 2.1.287 types document `$.tool.check({tool, input})`: the engine's own
+rules-and-mode decision, with no tool body or dialog. Offline baselines with
+native local tools showed it agrees with native prompts in `default` and
+`acceptEdits`: every `ask` matched a real native `can_use_tool` request and every
+`allow` matched none. In `dontAsk` it still reports `ask` while native denies
+silently, so the launcher converts that case to denial.
+
+Native judges paths on its own filesystem. File-tool paths are therefore
+resolved as target paths (target cwd, `..`, target home): inside the target
+workspace they are checked at the runtime-workspace equivalent, everything else
+under a root native can never treat as its workspace or home. Native review
+found that the first, partial mapping let a target path that collided with the
+runtime workspace be auto-approved; the packaged collision case and a negative
+control now cover it. The arguments as written are also checked, so a rule
+naming a target path still decides and any deny wins.
+
+Native-local baselines showed symlinks matter in every mode: a `Write` onto a
+symlink is refused ("Write to the link's target path instead"), and edits,
+reads and Bash paths that resolve outside the workspace lose workspace-scoped
+auto-approval. Remote `Write` reproduces the refusal from target metadata (a
+behavior change: 3.5.0 wrote through such links). When an allowance depends on
+the path being inside the workspace, the target real path is resolved and
+checked; an outside or unresolvable destination asks.
+
+| Mode decision | Native local | Remote 3.6.0 |
+| --- | --- | --- |
+| allow | Tool runs | Target tool runs; no host request |
+| deny (rule) | Refused | Refused before any target effect |
+| ask | `can_use_tool` to the SDK host | Same request shape from the launcher (`tool_use_id`, `agent_id`, `decision_reason`), matched by a private request id; deny has no target effect, `updatedInput` is executed |
+| ask in dontAsk | Denied without a request | Same |
+| abandoned while asking | Request withdrawn | `control_cancel_request` to the host; the call never runs |
+| host `setMode` / `interrupt` | Applied by native | Applied to native through its own control requests |
+
+Gaps, by design rather than impossibility: permission suggestions are sent
+empty because an approved persistent rule could not reach native's own rule
+store, so "always allow" is not offered; auto mode's classifier is not asked
+(`check` excludes it), so those calls prompt instead. Bash command strings are
+not rewritten: target-absolute paths in commands may prompt where a local run
+would not, a command naming the runtime workspace asks unless native would allow
+it regardless, and in `acceptEdits` a filesystem command through a target
+symlink escaping the workspace is auto-approved where native-local asks. That
+last case is a residual safety gap; native exposes no paths for an allowed
+command, and a `cd` probe cannot separate it because native asks for the `cd`
+itself. In non-bypass modes each in-workspace path call may cost one target
+`realpath`. The ACP permission preview may read runtime paths for diffs. Plan
+mode remains refused.
+
+Source tests cover decisions, path mapping, approval polling, cancellation and
+the request shape. Packaged acceptance switches modes through the host and
+checks target bytes for denial, amended approval, read-only allow, acceptEdits
+with relative and target-absolute paths, an outside-workspace ask, a runtime
+path collision, a write under an escaping directory symlink, dontAsk, bypass and
+Write onto a symlink. Disposable candidates without the gate, or with the
+earlier partial path mapping, fail. Four native review rounds found and fixed
+the collision, rule-matching, mode-blind command and symlink defects; the last
+round reported none.
 
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A

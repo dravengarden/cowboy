@@ -558,15 +558,22 @@ async function modFixture() {
           instructions: "target instructions",
           git: "target git",
           agents: { resumed: "/runtime/resumed.output" },
+          targetCwd: "/target",
+          runtimeCwd: "/runtime",
+          targetHome: "/home/target",
           memory: false,
         }),
     },
     command: { register: () => {} },
+    tool: { check: async () => ({ decision: "allow" }) },
     http: {
       fetch: async (url, options) => {
         const path = url.slice("http://cowboy-execution".length);
         posts.push({ path, body: JSON.parse(options.body) });
         const response = responses.get(path)?.() ??
+          (path === "/link"
+            ? { ok: true, status: 200, text: '{"symlink":false}' }
+            : undefined) ??
           { ok: true, status: 200, text: '{"ready":true}' };
         return response;
       },

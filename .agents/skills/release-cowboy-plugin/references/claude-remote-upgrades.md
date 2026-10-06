@@ -61,6 +61,12 @@ denied. Project hooks/skills, custom agents, agent isolation, implicit file
 attachments, plan files and PDF extraction remain unsupported by this lane;
 adopting any of them is a separate capability change.
 
+Target tools are gated by native `$.tool.check` under the session's permission
+mode, with asks raised to the SDK host as native `can_use_tool` requests by the
+launcher. Re-verify for each CLI that `check` still agrees with native prompts
+per mode (dontAsk is converted by the launcher) and that the request/response
+shapes are unchanged; the `native_permission_*` and mode checks cover these.
+
 Agent support depends on observed Mods behavior, so re-verify it for every CLI
 candidate: the idle and queued (`delivery`/`queued_command`) notification
 shapes, `turn.complete` agent outcomes, `next.signal` on abandoned held calls,

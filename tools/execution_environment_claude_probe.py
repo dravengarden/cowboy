@@ -186,6 +186,7 @@ class Claude:
                  custom_system_prompt=False, extra_arguments=(), model="claude-sonnet-4-6", bound_native=False,
                  disallowed=None):
         self.fixture = fixture
+        self.permission = None
         self.frames = queue.Queue(maxsize=1000)
         self.messages = []
         self.stderr = tempfile.TemporaryFile()
@@ -235,7 +236,14 @@ class Claude:
                 raise frame
             require(frame is not None, f"native Claude exited with status {self.process.poll()}")
             self.messages.append(frame)
-            if frame.get("type") == "control_request":
+            if frame.get("type") == "control_request" and frame["request"]["subtype"] == "can_use_tool":
+                # Opt-in SDK host approval; without a handler any ask is a failure.
+                require(self.permission is not None, "unexpected native permission request")
+                self.send({"type": "control_response", "response": {
+                    "subtype": "success", "request_id": frame["request_id"],
+                    "response": self.permission(frame["request"]),
+                }})
+            elif frame.get("type") == "control_request":
                 request = frame["request"]
                 require(request["subtype"] == "mcp_message", "unexpected native control request")
                 require(request["server_name"] == "workspace", "unknown native MCP server")

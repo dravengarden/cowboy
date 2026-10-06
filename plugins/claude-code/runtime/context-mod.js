@@ -56,6 +56,186 @@ export function targetTaskNotification(event, outputs) {
   };
 }
 
+const PATH_KEYS = ["file_path", "notebook_path", "path"];
+// Never a runtime working directory or a runtime-special location.
+const OUTSIDE = "/.cowboy-target-outside";
+
+// The target path a tool argument names: relative to the target workspace,
+// with ".." and the target home resolved lexically (symlinks are not).
+export function targetPath(value, { targetCwd, targetHome }) {
+  let path = value;
+  if (path === "~" || path.startsWith("~/")) {
+    if (!targetHome) return null;
+    path = targetHome + path.slice(1);
+  } else if (!path.startsWith("/")) path = targetCwd + "/" + path;
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part && part !== ".") parts.push(part);
+  }
+  return "/" + parts.join("/");
+}
+
+export function insideWorkspace(path, targetCwd) {
+  return targetCwd === "/" || path === targetCwd ||
+    path.startsWith(targetCwd + "/");
+}
+
+// Native permission evaluation resolves working directories on the runtime.
+// Present target workspace paths at their runtime workspace equivalent, and
+// every other target path under a root that native can never treat as its
+// workspace, home or another special runtime location.
+export function permissionInput(input, paths, outside = false) {
+  const mapped = { ...input };
+  for (const key of PATH_KEYS) {
+    if (typeof mapped[key] !== "string") continue;
+    const path = targetPath(mapped[key], paths);
+    if (path === null) mapped[key] = OUTSIDE + "/~" + mapped[key].slice(1);
+    else if (!outside && insideWorkspace(path, paths.targetCwd)) {
+      const rest = paths.targetCwd === "/"
+        ? path
+        : path.slice(paths.targetCwd.length);
+      mapped[key] = paths.runtimeCwd + rest;
+    } else mapped[key] = OUTSIDE + path;
+  }
+  return mapped;
+}
+
+async function targetQuery($, path, value) {
+  const response = await bridgePost($, path, value);
+  return response.ok ? JSON.parse(response.text) : {};
+}
+
+// Native rules and mode decide first, through the engine's own check (no
+// native body runs). Only an "ask" reaches the host's approval dialog. Native
+// judges paths on its own filesystem; these follow the target's instead.
+async function decide($, event, input) {
+  const tool = event.tool;
+  const check = await $.tool.check({
+    tool,
+    input: permissionInput(input, context),
+  });
+  // A rule naming a target path matches the arguments as written, as it
+  // would locally. A deny under either reading refuses the call.
+  const original = await $.tool.check({ tool, input });
+  if (original?.decision === "deny") return original;
+  if (check?.decision === "deny") return check;
+  if (original?.rule) return original;
+  const key = PATH_KEYS.find((name) => typeof input[name] === "string");
+  const path = key && targetPath(input[key], context);
+  // Native refuses, in every mode, to Write onto a symbolic link.
+  if (tool === "Write" && typeof path === "string") {
+    const link = await targetQuery($, "/link", { path });
+    if (link.symlink !== false) {
+      const real = link.symlink === true
+        ? (await targetQuery($, "/resolve", { path })).path
+        : null;
+      return link.symlink === true && typeof real === "string"
+        ? {
+          decision: "deny",
+          reason:
+            `Refusing to write ${path}: it is a symbolic link. Write to the link's target path instead: ${real}.`,
+        }
+        : { decision: "ask", reason: `${path} could not be inspected.` };
+    }
+  }
+  if (check?.decision !== "allow") return check;
+  // Commands run unchanged. One naming the runtime workspace, which is not
+  // the target's, was judged against the wrong project: ask only if native
+  // would not also allow it with that path outside (e.g. outside bypass).
+  if (
+    tool === "Bash" && typeof input.command === "string" &&
+    !insideWorkspace(context.runtimeCwd, context.targetCwd) &&
+    input.command.includes(context.runtimeCwd)
+  ) {
+    const outside = await $.tool.check({
+      tool,
+      input: {
+        ...input,
+        command: input.command.split(context.runtimeCwd).join(
+          OUTSIDE + context.runtimeCwd,
+        ),
+      },
+    });
+    if (outside?.decision === "allow") return check;
+    return {
+      decision: "ask",
+      reason: "The command names a path outside the target workspace.",
+    };
+  }
+  if (
+    typeof path !== "string" || !insideWorkspace(path, context.targetCwd)
+  ) return check;
+  // Allowed only because it is inside the workspace? Natively the path is
+  // resolved through symlinks first; an outside destination loses that.
+  const outside = await $.tool.check({
+    tool,
+    input: permissionInput(input, context, true),
+  });
+  if (outside?.decision === "allow") return check;
+  const real = (await targetQuery($, "/resolve", { path })).path;
+  if (typeof real !== "string") {
+    return { decision: "ask", reason: `${path} could not be resolved.` };
+  }
+  if (real === path) return check;
+  const resolved = await $.tool.check({
+    tool,
+    input: permissionInput({ ...input, [key]: real }, context),
+  });
+  return resolved?.decision === "allow" ? check : {
+    decision: resolved?.decision === "deny" ? "deny" : "ask",
+    reason:
+      `${path} resolves through a symlink to ${real}, which is outside the allowed working directories.`,
+  };
+}
+
+async function permit($, event, input, abandoned, abandon) {
+  let check;
+  try {
+    check = await decide($, event, input);
+  } catch {
+    return { deny: "Permission check unavailable; the tool did not run." };
+  }
+  if (check?.decision === "allow") return { input };
+  if (check?.decision !== "ask") {
+    return {
+      deny: "Permission denied" + (check?.reason ? ": " + check.reason : "."),
+    };
+  }
+  for (;;) {
+    const response = await bridgePost($, "/permission", {
+      id: event.tool_use_id,
+      tool: event.tool,
+      input,
+      reason: typeof check.reason === "string" ? check.reason : null,
+      ...(event.agentId === undefined ? {} : { owner: event.agentId }),
+    });
+    if (abandoned()) {
+      abandon();
+      return { deny: "Tool call was cancelled" };
+    }
+    if (!response.ok) {
+      return { deny: "Permission request unavailable; the tool did not run." };
+    }
+    if (response.status === 202) continue;
+    const result = JSON.parse(response.text);
+    if (result.behavior !== "allow") {
+      return {
+        deny: typeof result.message === "string" && result.message
+          ? result.message
+          : "The user denied this tool use.",
+      };
+    }
+    // The host may amend the call; native runs the updated input.
+    const updated = result.updatedInput;
+    return {
+      input: updated && typeof updated === "object" && !Array.isArray(updated)
+        ? updated
+        : input,
+    };
+  }
+}
+
 function bridgePost($, path, value) {
   return $.http.fetch("http://cowboy-execution" + path, {
     socketPath: context.socketPath,
@@ -271,11 +451,11 @@ export function register(on) {
     const signal = next.signal;
     const abandoned = () => signal?.aborted || stoppedAgents.has(event.agentId);
     if (abandoned()) return { deny: "Tool call was cancelled" };
-    const input = { ...event };
-    delete input.tool;
-    delete input.tool_use_id;
-    delete input.agentId;
-    delete input.consent;
+    const requested = { ...event };
+    delete requested.tool;
+    delete requested.tool_use_id;
+    delete requested.agentId;
+    delete requested.consent;
     // An interrupted turn or stopped agent abandons this call. Cancel only
     // the target processes it started; the bridge also refuses late admission.
     let cancelled = false;
@@ -286,6 +466,9 @@ export function register(on) {
     };
     signal?.addEventListener("abort", abandon, { once: true });
     try {
+      const permitted = await permit($, event, requested, abandoned, abandon);
+      if (permitted.deny) return permitted;
+      const input = permitted.input;
       let path = "/tool";
       let body = {
         id: event.tool_use_id,
@@ -393,6 +576,13 @@ export function register(on) {
       !/^[a-f0-9]{64}$/.test(loaded.bridgeToken) ||
       !loaded.descriptions || typeof loaded.descriptions !== "object" ||
       !loaded.agents || typeof loaded.agents !== "object" ||
+      ![loaded.targetCwd, loaded.runtimeCwd].every((value) =>
+        typeof value === "string" && value.startsWith("/") &&
+        (value === "/" || !value.endsWith("/"))
+      ) ||
+      !(loaded.targetHome === null ||
+        (typeof loaded.targetHome === "string" &&
+          loaded.targetHome.startsWith("/"))) ||
       ![loaded.environment, loaded.instructions, loaded.git].every((value) =>
         typeof value === "string" && value.length <= 262144
       )

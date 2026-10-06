@@ -547,9 +547,9 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
-    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs
+    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs
     deno fmt --check plugins/claude-code/runtime
-    deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs
+    deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs
     deno check plugins/claude-code/runtime/build.ts
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
