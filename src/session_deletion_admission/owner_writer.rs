@@ -10,8 +10,41 @@ use anyhow::{Context as _, Result, bail, ensure};
 use serde::Deserialize;
 
 const PROFILE: &str = "/nix/var/nix/profiles/columbus-components/cowboy-machine";
-const FLOOR: &str =
+const DELETION_FLOOR: &str =
     "/var/lib/hawk-component-deployments/cowboy-machine/session-deletion-reader-floor.json";
+const INCARNATION_FLOOR: &str =
+    "/var/lib/hawk-component-deployments/cowboy-machine/session-incarnation-reader-floor.json";
+
+/// The durable Machine datasets whose writer the component owner can admit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dataset {
+    Deletion,
+    Incarnation,
+}
+
+impl Dataset {
+    fn floor(self) -> &'static str {
+        match self {
+            Self::Deletion => DELETION_FLOOR,
+            Self::Incarnation => INCARNATION_FLOOR,
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Deletion => "Session deletion",
+            Self::Incarnation => "Session incarnation",
+        }
+    }
+
+    /// Compile-time build selector. Runtime environment can never enable a writer.
+    fn build(self) -> Option<&'static str> {
+        match self {
+            Self::Deletion => option_env!("COWBOY_SESSION_DELETION_WRITER_BUILD"),
+            Self::Incarnation => option_env!("COWBOY_SESSION_INCARNATION_WRITER_BUILD"),
+        }
+    }
+}
 const LIMIT: u64 = 8192;
 
 #[derive(Deserialize)]
@@ -80,7 +113,22 @@ impl Floor {
 }
 
 impl Source {
-    fn validate(&self, revision: &str) -> Result<()> {
+    fn validate(&self, revision: &str, dataset: Dataset) -> Result<()> {
+        // An incarnation writer additionally needs the deletion writer: ending a
+        // lineage follows the committed terminal deletion.
+        let incarnations = self.session_incarnations.as_ref();
+        ensure!(
+            match dataset {
+                Dataset::Deletion => incarnations.is_none_or(|declaration| {
+                    declaration.reader_schema == 1 && declaration.writer_schema <= 1
+                }),
+                Dataset::Incarnation => incarnations.is_some_and(|declaration| {
+                    declaration.reader_schema == 1 && declaration.writer_schema == 1
+                }),
+            },
+            "component {} writer source does not declare this dataset's writer",
+            dataset.noun()
+        );
         ensure!(
             revision_valid(revision)
                 && self.schema == 1
@@ -100,14 +148,9 @@ impl Source {
                                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
                     })
                 && self.session_deletion_journal.reader_schema == 1
-                && self.session_deletion_journal.writer_schema == 1
-                && self
-                    .session_incarnations
-                    .as_ref()
-                    .is_none_or(|declaration| {
-                        declaration.reader_schema == 1 && declaration.writer_schema == 0
-                    }),
-            "component Session deletion writer source does not match this native build"
+                && self.session_deletion_journal.writer_schema == 1,
+            "component {} writer source does not match this native build",
+            dataset.noun()
         );
         Ok(())
     }
@@ -191,21 +234,25 @@ fn selected_release(profile: &Path) -> Result<PathBuf> {
 /// Default builds never consult these authorities or admit a writer. Only the
 /// dedicated clean Nix writer build can pass the fixed root selection and floor.
 pub(crate) fn admitted(namespace: &Path, machine: &str) -> Result<bool> {
-    match option_env!("COWBOY_SESSION_DELETION_WRITER_BUILD") {
+    admitted_dataset(Dataset::Deletion, namespace, machine)
+}
+
+pub(crate) fn admitted_dataset(dataset: Dataset, namespace: &Path, machine: &str) -> Result<bool> {
+    match dataset.build() {
         None => return Ok(false),
         Some("schema1") => {}
-        Some(_) => bail!("unsupported compiled Session deletion writer build"),
+        Some(_) => bail!("unsupported compiled {} writer build", dataset.noun()),
     }
     let revision = option_env!("COWBOY_SESSION_DELETION_WRITER_REVISION")
-        .context("Session deletion writer build has no source revision")?;
+        .with_context(|| format!("{} writer build has no source revision", dataset.noun()))?;
     let profile = Path::new(PROFILE);
-    let release =
-        selected_release(profile).context("reading component Session deletion writer selection")?;
+    let release = selected_release(profile)
+        .with_context(|| format!("reading component {} writer selection", dataset.noun()))?;
     let source: Source = serde_json::from_slice(&read_regular(
         &release.join("etc/cowboy-release/source.json"),
         0,
     )?)?;
-    source.validate(revision)?;
+    source.validate(revision, dataset)?;
     let wrapper = release.join("libexec/cowboy-machine").canonicalize()?;
     let native = wrapper
         .parent()
@@ -213,7 +260,7 @@ pub(crate) fn admitted(namespace: &Path, machine: &str) -> Result<bool> {
         .join(".cowboy-machine-wrapped");
     ensure!(
         native.canonicalize()? == std::env::current_exe()?.canonicalize()?,
-        "component Session deletion writer native executable is not selected"
+        "component Session writer native executable is not selected"
     );
     let native_metadata = std::fs::symlink_metadata(&native)?;
     ensure!(
@@ -221,9 +268,10 @@ pub(crate) fn admitted(namespace: &Path, machine: &str) -> Result<bool> {
         "component writer native is not a regular file"
     );
     trusted_metadata(&native_metadata, 0)?;
-    trusted_parents(Path::new(FLOOR))?;
-    let floor: Floor = serde_json::from_slice(&read_regular(Path::new(FLOOR), 0)?)
-        .context("reading component Session deletion writer floor")?;
+    let floor_path = Path::new(dataset.floor());
+    trusted_parents(floor_path)?;
+    let floor: Floor = serde_json::from_slice(&read_regular(floor_path, 0)?)
+        .with_context(|| format!("reading component {} writer floor", dataset.noun()))?;
     floor.validate(namespace, machine)?;
     ensure!(
         selected_release(profile)? == release,
@@ -283,10 +331,15 @@ mod tests {
     fn source_requires_exact_clean_machine_writer_revision() {
         let bytes = r#"{"schema":1,"component":"cowboy","lane":"machine","repository":"git@github.com:dravengarden/cowboy.git","revision":"0123456789012345678901234567890123456789","dirty":false,"workerGeneration":"worker-01234567890123456789","sessionDeletionJournal":{"readerSchema":1,"writerSchema":1}}"#;
         let source: Source = serde_json::from_str(bytes).unwrap();
-        source.validate(&source.revision).unwrap();
+        source
+            .validate(&source.revision, Dataset::Deletion)
+            .unwrap();
         assert!(
             source
-                .validate("1123456789012345678901234567890123456789")
+                .validate(
+                    "1123456789012345678901234567890123456789",
+                    Dataset::Deletion
+                )
                 .is_err()
         );
         for (old, new) in [
@@ -295,12 +348,16 @@ mod tests {
             (r#""lane":"machine""#, r#""lane":"controller""#),
         ] {
             let changed: Source = serde_json::from_str(&bytes.replace(old, new)).unwrap();
-            assert!(changed.validate(&source.revision).is_err());
+            assert!(
+                changed
+                    .validate(&source.revision, Dataset::Deletion)
+                    .is_err()
+            );
         }
     }
 
     #[test]
-    fn incarnation_declaration_is_optional_reader_only_and_closed() {
+    fn incarnation_declaration_selects_each_writer_and_stays_closed() {
         let bytes = r#"{"schema":1,"component":"cowboy","lane":"machine","repository":"git@github.com:dravengarden/cowboy.git","revision":"0123456789012345678901234567890123456789","dirty":false,"workerGeneration":"worker-0123456789abcdef0123","sessionDeletionJournal":{"readerSchema":1,"writerSchema":1}}"#;
         let with = |declaration: &str| {
             format!(
@@ -308,20 +365,47 @@ mod tests {
                 &bytes[..bytes.len() - 1]
             )
         };
-        let accepted = with(r#"{"readerSchema":1,"writerSchema":0}"#);
-        let source: Source = serde_json::from_str(&accepted).unwrap();
-        source.validate(&source.revision).unwrap();
-        // An artifact predating the dataset remains admissible.
-        let legacy: Source = serde_json::from_str(bytes).unwrap();
-        legacy.validate(&legacy.revision).unwrap();
+        let validate = |text: &str, dataset| {
+            let source: Source = serde_json::from_str(text).unwrap();
+            source.validate(&source.revision, dataset)
+        };
+        // The deletion writer tolerates an absent, reader-only or writer declaration.
+        for text in [
+            bytes.to_owned(),
+            with(r#"{"readerSchema":1,"writerSchema":0}"#),
+            with(r#"{"readerSchema":1,"writerSchema":1}"#),
+        ] {
+            validate(&text, Dataset::Deletion).unwrap();
+        }
         for refused in [
-            r#"{"readerSchema":1,"writerSchema":1}"#,
             r#"{"readerSchema":0,"writerSchema":0}"#,
             r#"{"readerSchema":2,"writerSchema":0}"#,
+            r#"{"readerSchema":1,"writerSchema":2}"#,
         ] {
-            let source: Source = serde_json::from_str(&with(refused)).unwrap();
-            assert!(source.validate(&source.revision).is_err(), "{refused}");
+            assert!(
+                validate(&with(refused), Dataset::Deletion).is_err(),
+                "{refused}"
+            );
         }
+        // The incarnation writer needs its own writer declaration, not merely a reader.
+        validate(
+            &with(r#"{"readerSchema":1,"writerSchema":1}"#),
+            Dataset::Incarnation,
+        )
+        .unwrap();
+        for text in [
+            bytes.to_owned(),
+            with(r#"{"readerSchema":1,"writerSchema":0}"#),
+            with(r#"{"readerSchema":0,"writerSchema":1}"#),
+        ] {
+            assert!(validate(&text, Dataset::Incarnation).is_err());
+        }
+        // ...and the deletion writer it depends on.
+        let deletion_reader_only = with(r#"{"readerSchema":1,"writerSchema":1}"#).replace(
+            r#""sessionDeletionJournal":{"readerSchema":1,"writerSchema":1}"#,
+            r#""sessionDeletionJournal":{"readerSchema":1,"writerSchema":0}"#,
+        );
+        assert!(validate(&deletion_reader_only, Dataset::Incarnation).is_err());
         for malformed in [
             r#"{"readerSchema":1}"#,
             r#"{"readerSchema":1,"writerSchema":0,"enableWriter":true}"#,

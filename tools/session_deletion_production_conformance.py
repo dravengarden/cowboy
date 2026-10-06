@@ -18,6 +18,7 @@ import session_deletion_writer_conformance as ipc
 PROFILE_PARENT = Path('/nix/var/nix/profiles/columbus-components')
 FLOOR_PARENT = Path('/var/lib/hawk-component-deployments/cowboy-machine')
 FLOOR_NAME = 'session-deletion-reader-floor.json'
+INCARNATION_FLOOR_NAME = 'session-incarnation-reader-floor.json'
 MOUNT = '/run/current-system/sw/bin/mount'
 UMOUNT = '/run/current-system/sw/bin/umount'
 
@@ -88,6 +89,10 @@ class Authority:
         return self.floors / FLOOR_NAME
 
     @property
+    def incarnation_floor(self):
+        return self.floors / INCARNATION_FLOOR_NAME
+
+    @property
     def profile(self):
         return self.profiles / 'cowboy-machine'
 
@@ -102,6 +107,12 @@ class Authority:
         self.floor.write_text(json.dumps(value))
         self.floor.chmod(0o644)
         os.chown(self.floor, 0, 0)
+        # The incarnation writer is admitted behind its own floor; writers that
+        # predate the dataset simply ignore it.
+        value = dict(value, dataset=str(state / 'session-incarnations'))
+        self.incarnation_floor.write_text(json.dumps(value))
+        self.incarnation_floor.chmod(0o644)
+        os.chown(self.incarnation_floor, 0, 0)
 
 
 @contextmanager
@@ -135,6 +146,24 @@ def refuse(release, state, reason=None):
     with NativeProcess(release, state, fixture=False) as process:
         process.refused(reason or 'admitting component Session deletion writer')
     ipc.require(not (state / 'session-deletions').exists(), 'refused writer opened journal namespace')
+    ipc.require(not (state / 'session-incarnations').exists(), 'refused writer opened incarnation namespace')
+
+
+def ensure(peer, session_id, generation):
+    ipc.send(peer, {'type': 'core_command', 'command': {'command': 'ensure_session', 'session': {
+        'session_id': session_id, 'provider': 'codex', 'cwd': '/work', 'generation': generation,
+        'adopt_only': True}}})
+
+
+def lineage(path, session_id):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if path.exists():
+            for entry in json.loads(path.read_text())['entries']:
+                if entry['session_id'] == session_id:
+                    return entry
+        time.sleep(0.02)
+    return None
 
 
 def main():
@@ -178,7 +207,7 @@ def main():
                     ipc.ack(peer, True)
                 ipc.require(not (state / 'session-deletions/deletions.json').exists(), 'default reader wrote a terminal record')
                 ipc.require(not (state / 'session-cleanups').exists(), 'default reader opened the cleanup continuation namespace')
-                ipc.require('Session incarnation reader ready' in process.output()
+                ipc.require('Session incarnation namespace ready' in process.output()
                             and (state / 'session-incarnations/.lock').is_file()
                             and not (state / 'session-incarnations/incarnations.json').exists(),
                             'default reader did not own an empty incarnation namespace')
@@ -260,6 +289,77 @@ def main():
                 observations.append({'case': 'ack-dedup-sigkill-old-new-old-reader-fallback',
                                      'revision': writer['source']['revision'],
                                      'recordSha256': hashlib.sha256(captured).hexdigest()})
+            if writer is new:
+                with tempfile.TemporaryDirectory(prefix='cw-lineage-', dir='/tmp') as temporary:
+                    state = Path(temporary)
+                    record = state / 'session-incarnations/incarnations.json'
+                    authority.select(new)
+                    authority.admit(state)
+                    with NativeProcess(new, state, fixture=False) as process:
+                        process.ready(fixture=False)
+                        ipc.require('Session incarnation namespace ready' in process.output()
+                                    and 'writer_enabled=true' in process.output(), 'incarnation writer did not admit')
+                        peer, welcome = connect(process, 'core')
+                        with peer:
+                            ipc.require(welcome['type'] == 'welcome', 'core welcome missing')
+                            ensure(peer, 'sess-ens', new['source']['workerGeneration'])
+                            first = lineage(record, 'sess-ens')
+                            ipc.require(first is not None and first['epoch'] == 1 and first['origin'] == 'minted'
+                                        and len(first['incarnation']) == 32, 'declaration did not mint a lineage')
+                            captured = record.read_bytes()
+                            ensure(peer, 'sess-ens', new['source']['workerGeneration'])
+                            time.sleep(0.3)
+                            ipc.require(record.read_bytes() == captured, 'a replayed declaration rewrote the lineage')
+                    for reopener, writing in ((new, True), (reader, False), (old, True)):
+                        cold(reopener, state, authority, False, writing)
+                        ipc.require(record.read_bytes() == captured, 'reopen rewrote the lineage record')
+                    authority.select(new)
+                    authority.admit(state)
+                    with NativeProcess(new, state, fixture=False) as process:
+                        process.ready(fixture=False)
+                        peer, welcome = connect(process, 'core')
+                        with peer:
+                            ipc.send(peer, {'type': 'core_command', 'command': {
+                                'command': 'stop_session', 'session_id': 'sess-ens', 'command_id': 'lineage-delete'}})
+                            ipc.ack(peer, True, 'lineage-delete')
+                            ipc.require(json.loads((state / 'session-deletions/deletions.json').read_text())['deleted'] == ['sess-ens'],
+                                        'wrong terminal record')
+                            ipc.require(json.loads(record.read_text())['entries'] == [],
+                                        'deletion did not end the lineage')
+                    observations.append({'case': 'incarnation-writer-mints-once-and-reopens', 'revision': writer['source']['revision'],
+                                         'recordSha256': hashlib.sha256(captured).hexdigest()})
+                with tempfile.TemporaryDirectory(prefix='cw-lineage-fail-', dir='/tmp') as temporary:
+                    state = Path(temporary)
+                    authority.select(new)
+                    authority.admit(state)
+                    with NativeProcess(new, state, fixture=False) as process:
+                        process.ready(fixture=False)
+                        (state / 'session-incarnations/incarnations.json').mkdir()
+                        peer, welcome = connect(process, 'core')
+                        with peer:
+                            ensure(peer, 'sess-ens', new['source']['workerGeneration'])
+                            outcome = ipc.ack(peer, False, 'ensure:sess-ens')
+                            ipc.require('durable Session incarnation was not confirmed' in outcome['reason'],
+                                        'wrong incarnation refusal')
+                    observations.append({'case': 'incarnation-storage-failure-refuses-launch', 'revision': writer['source']['revision'],
+                                         'negativeAck': True})
+                for condition in ('absent', 'corrupt', 'foreign-dataset', 'foreign-machine', 'mutable', 'wrong-uid'):
+                    with tempfile.TemporaryDirectory(prefix='cw-lineage-floor-', dir='/tmp') as temporary:
+                        state = Path(temporary)
+                        authority.select(new)
+                        authority.admit(state)
+                        floor = authority.incarnation_floor
+                        value = json.loads(floor.read_text())
+                        if condition == 'absent': floor.unlink()
+                        elif condition == 'corrupt': floor.write_text('{}')
+                        elif condition == 'foreign-dataset':
+                            floor.write_text(json.dumps(dict(value, dataset=str(state / 'other'))))
+                        elif condition == 'foreign-machine':
+                            floor.write_text(json.dumps(dict(value, machine='foreign')))
+                        elif condition == 'mutable': floor.chmod(0o666)
+                        elif condition == 'wrong-uid': os.chown(floor, 1000, 1000)
+                        refuse(new, state, 'admitting component Session incarnation writer')
+                        observations.append({'case': 'incarnation-floor-' + condition, 'beforeNamespaceOpen': True})
             with tempfile.TemporaryDirectory(prefix='cw-lock-', dir='/tmp') as temporary:
                 state = Path(temporary)
                 authority.select(writer)

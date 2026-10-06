@@ -427,6 +427,7 @@
         cowboy-machine.overrideAttrs (_old: {
           pname = "cowboy-machine-writer";
           COWBOY_SESSION_DELETION_WRITER_BUILD = "schema1";
+          COWBOY_SESSION_INCARNATION_WRITER_BUILD = "schema1";
           COWBOY_SESSION_DELETION_WRITER_REVISION = release-revision;
         });
 
@@ -667,11 +668,11 @@
             readerSchema = 1;
             writerSchema = if writer then 1 else 0;
           };
-          # Reader only: this build validates the incarnation namespace but no
-          # release writes it.
+          # Every build reads and validates the incarnation namespace; only the
+          # dedicated writer release writes it, behind its own root floor.
           sessionIncarnations = {
             readerSchema = 1;
-            writerSchema = 0;
+            writerSchema = if writer then 1 else 0;
           };
         })}
         EOF

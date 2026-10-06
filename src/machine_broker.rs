@@ -294,9 +294,9 @@ struct Broker {
     /// retrying, and the first backoff delay. Giving up releases its retained
     /// handles; the nomination retries after the next Machine restart.
     cleanup_retry: Mutex<(usize, Duration)>,
-    /// Validated durable Session incarnation namespace. Read-only: it is held for
-    /// exclusive ownership and refusal of invalid state; no writer exists yet.
-    incarnation_reader: Mutex<Option<incarnations::Reader>>,
+    /// Validated durable Session incarnation namespace. Writes are refused unless
+    /// the dedicated writer build was admitted by the component owner.
+    incarnations: Mutex<Option<incarnations::Store>>,
     /// Session workspaces awaiting generated-artifact cleanup after their
     /// process owner has been stopped and collected. Source worktrees and
     /// branches are retained.
@@ -422,7 +422,7 @@ impl Broker {
             #[cfg(test)]
             revoked_cache_protection: Mutex::new(Vec::new()),
             cleanup_retry: Mutex::new((CLEANUP_ATTEMPT_LIMIT, Duration::from_secs(1))),
-            incarnation_reader: Mutex::new(None),
+            incarnations: Mutex::new(None),
             deleted_session_workspaces: Mutex::new(HashMap::new()),
             session_lifecycle_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
@@ -1240,6 +1240,70 @@ impl Broker {
         });
     }
 
+    /// Make sure the Session has a durable incarnation before any worker is
+    /// declared or adopted. An existing lineage is kept (replayed declarations,
+    /// reconnects and wake never rotate it). A build whose writer was not
+    /// admitted neither writes nor refuses anything.
+    async fn ensure_incarnation(
+        self: &Arc<Self>,
+        session_id: &str,
+        origin: incarnations::Origin,
+    ) -> Result<()> {
+        match self.incarnations.lock().as_ref() {
+            None => return Ok(()),
+            Some(store) if !store.writer_enabled() || store.get(session_id).is_some() => {
+                return Ok(());
+            }
+            Some(_) => {}
+        }
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            if let Some(store) = broker.incarnations.lock().as_mut() {
+                store.mint(&session_id, origin)?;
+            }
+            Ok(())
+        })
+        .await
+        .context("joining Session incarnation write")?
+    }
+
+    /// Start a new lineage for a reset, committed before its first effect.
+    async fn rotate_incarnation(self: &Arc<Self>, session_id: &str) -> Result<()> {
+        match self.incarnations.lock().as_ref() {
+            Some(store) if store.writer_enabled() => {}
+            _ => return Ok(()),
+        }
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            if let Some(store) = broker.incarnations.lock().as_mut() {
+                store.rotate(&session_id)?;
+            }
+            Ok(())
+        })
+        .await
+        .context("joining Session incarnation rotation")?
+    }
+
+    /// Drop the record of a Session whose terminal deletion is already committed.
+    async fn end_incarnation(self: &Arc<Self>, session_id: &str) -> Result<()> {
+        match self.incarnations.lock().as_ref() {
+            Some(store) if store.writer_enabled() && store.get(session_id).is_some() => {}
+            _ => return Ok(()),
+        }
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            if let Some(store) = broker.incarnations.lock().as_mut() {
+                store.end(&session_id)?;
+            }
+            Ok(())
+        })
+        .await
+        .context("joining Session incarnation retirement")?
+    }
+
     fn has_deleted_session_owner_exit_proof(&self) -> bool {
         #[cfg(test)]
         if self.deleted_session_owner_collected.load(Ordering::Acquire) {
@@ -1460,6 +1524,21 @@ impl Broker {
             );
             return;
         }
+        // Durable lineage first: no declaration, worker launch or adoption proceeds
+        // without one when the writer is admitted.
+        let origin = if self.workers.lock().contains_key(&session.session_id) {
+            incarnations::Origin::Adopted
+        } else {
+            incarnations::Origin::Minted
+        };
+        if let Err(error) = self.ensure_incarnation(&session.session_id, origin).await {
+            self.command_rejected(
+                &session.session_id,
+                format!("ensure:{}", session.session_id),
+                format!("durable Session incarnation was not confirmed: {error}"),
+            );
+            return;
+        }
         let adopt_only = session.adopt_only;
         let mut session = session;
         // `adopt_only` describes this controller message, not how a future
@@ -1603,6 +1682,16 @@ impl Broker {
         })();
         if let Err(error) = journal_admission {
             self.command_rejected(&session_id, command_id, error.to_string());
+            return;
+        }
+        // The new lineage is durable before the reset's first effect; if it
+        // cannot be confirmed the old lineage stays current and nothing changes.
+        if let Err(error) = self.rotate_incarnation(&session_id).await {
+            self.command_rejected(
+                &session_id,
+                command_id,
+                format!("durable Session incarnation was not confirmed: {error}"),
+            );
             return;
         }
         self.revoke_cache_protection(&session, &session_id, "session_reset");
@@ -2817,6 +2906,15 @@ pub(crate) async fn run_with_deletion_reader(
             .context("admitting component Session deletion writer")?;
     let cleanup_owner = owner.clone();
     let incarnation_owner = owner.clone();
+    // Both writers are admitted before any durable namespace is opened, so a
+    // refusal leaves every namespace exactly as it was.
+    let incarnation_writer_enabled = writer_enabled
+        && crate::session_deletion_admission::owner_writer::admitted_dataset(
+            crate::session_deletion_admission::owner_writer::Dataset::Incarnation,
+            &incarnation_path,
+            &incarnation_owner.machine_id,
+        )
+        .context("admitting component Session incarnation writer")?;
     let journal =
         tokio::task::spawn_blocking(move || deletions::Journal::open(&path, owner, writer_enabled))
             .await
@@ -2827,16 +2925,24 @@ pub(crate) async fn run_with_deletion_reader(
         "Session deletion journal reader ready"
     );
     // Every build reads and validates the incarnation namespace and refuses to
-    // start on invalid state, like the deletion journal. No build writes it.
+    // start on invalid state, like the deletion journal. Only the dedicated
+    // writer build behind the incarnation floor, and only together with an
+    // admitted deletion writer, may write it (admitted above, before any
+    // namespace was opened).
     let incarnations = tokio::task::spawn_blocking(move || {
-        incarnations::Reader::open(&incarnation_path, &incarnation_owner)
+        incarnations::Store::open(
+            &incarnation_path,
+            &incarnation_owner,
+            incarnation_writer_enabled,
+        )
     })
     .await
-    .context("joining Session incarnation reader open")?
+    .context("joining Session incarnation open")?
     .context("opening Session incarnation namespace")?;
     tracing::info!(
         incarnations = incarnations.len(),
-        "Session incarnation reader ready"
+        writer_enabled = incarnation_writer_enabled,
+        "Session incarnation namespace ready"
     );
     // Cleanup effects resume from durable state only on a Machine already
     // admitted to write terminal deletions. The advisory namespace can never
@@ -2870,11 +2976,11 @@ async fn run_broker(
     args: MachineBrokerArgs,
     journal: Option<deletions::Journal>,
     continuations: Option<cleanups::Store>,
-    incarnations: Option<incarnations::Reader>,
+    incarnations: Option<incarnations::Store>,
 ) -> Result<()> {
     let broker = Arc::new(Broker::new(args));
-    if let Some(reader) = incarnations {
-        *broker.incarnation_reader.lock() = Some(reader);
+    if let Some(store) = incarnations {
+        *broker.incarnations.lock() = Some(store);
     }
     if let Some(journal) = journal {
         broker.attach_deletion_journal(journal);
@@ -3349,6 +3455,13 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 );
                 return;
             }
+            // The journal commit above is the deletion decision; a record that
+            // cannot be dropped is harmless because every reader treats the ID
+            // as terminal.
+            if let Err(error) = broker.end_incarnation(&session_id).await {
+                tracing::warn!(session = %session_id, %error,
+                    "deleted Session's incarnation record was retained");
+            }
             let cleanup_command_id = command_id.clone();
             let cleanup_session = broker.sessions.lock().get(&session_id).cloned();
             let cleanup_cwd = cleanup_session.as_ref().map(|session| session.cwd.clone());
@@ -3556,6 +3669,7 @@ mod tests {
     use super::*;
 
     mod deletion_process;
+    mod incarnation_process;
 
     #[test]
     fn process_probe_refuses_to_treat_permission_failure_as_exit() {
@@ -4465,6 +4579,269 @@ mod tests {
             };
             assert_eq!(revoked, expected);
         }
+    }
+
+    fn attach_incarnations(broker: &Broker, root: &Path, writer: bool) {
+        *broker.incarnations.lock() = Some(incarnation_process::open(root, writer));
+    }
+
+    fn lineage(broker: &Broker) -> Option<(String, u64, incarnations::Origin)> {
+        broker
+            .incarnations
+            .lock()
+            .as_ref()
+            .and_then(|store| store.get("sess-1"))
+            .map(|entry| (entry.incarnation.clone(), entry.epoch, entry.origin))
+    }
+
+    #[tokio::test]
+    async fn a_declaration_mints_one_lineage_and_replays_keep_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        attach_incarnations(&broker, &root.path().join("incarnations"), true);
+        let mut adopt = launch.clone();
+        adopt.adopt_only = true;
+        broker.ensure_session(adopt.clone()).await;
+        // A worker already runs, so the first record is an adoption.
+        let (first, epoch, origin) = lineage(&broker).expect("lineage minted before adoption");
+        assert_eq!((epoch, origin), (1, incarnations::Origin::Adopted));
+        broker.ensure_session(adopt).await;
+        assert_eq!(lineage(&broker).unwrap().0, first);
+        while let Ok(frame) = controller_rx.try_recv() {
+            assert!(!matches!(
+                frame,
+                Frame::CommandAck {
+                    accepted: false,
+                    ..
+                }
+            ));
+        }
+
+        // A durably deleted ID is refused before any lineage can be created.
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-gone".to_owned());
+        let mut gone = launch;
+        gone.session_id = "sess-gone".to_owned();
+        broker.ensure_session(gone).await;
+        assert!(
+            broker
+                .incarnations
+                .lock()
+                .as_ref()
+                .unwrap()
+                .get("sess-gone")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reader_only_build_neither_writes_nor_refuses_launches() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        attach_incarnations(&broker, &root.path().join("incarnations"), false);
+        let mut adopt = launch;
+        adopt.adopt_only = true;
+        broker.ensure_session(adopt).await;
+        assert!(lineage(&broker).is_none());
+        assert!(!root.path().join("incarnations/incarnations.json").exists());
+        while let Ok(frame) = controller_rx.try_recv() {
+            assert!(!matches!(
+                frame,
+                Frame::CommandAck {
+                    accepted: false,
+                    ..
+                }
+            ));
+        }
+        assert!(broker.workers.lock().contains_key("sess-1"));
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_lineage_refuses_the_launch_without_declaring_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        let namespace = root.path().join("incarnations");
+        attach_incarnations(&broker, &namespace, true);
+        std::fs::create_dir(namespace.join("incarnations.json")).unwrap();
+        broker.sessions.lock().remove("sess-1");
+        let mut adopt = launch;
+        adopt.adopt_only = true;
+        broker.ensure_session(adopt).await;
+        let Some(Frame::CommandAck {
+            accepted, reason, ..
+        }) = controller_rx.recv().await
+        else {
+            panic!("launch refusal acknowledgement");
+        };
+        assert!(!accepted);
+        assert!(
+            reason
+                .unwrap()
+                .contains("durable Session incarnation was not confirmed")
+        );
+        assert!(!broker.sessions.lock().contains_key("sess-1"));
+    }
+
+    #[tokio::test]
+    async fn reset_rotates_before_any_effect_and_refuses_when_unconfirmed() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        let namespace = root.path().join("incarnations");
+        attach_incarnations(&broker, &namespace, true);
+        let before = broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-1", incarnations::Origin::Adopted)
+            .unwrap();
+
+        // Unconfirmed rotation: old lineage current, nothing stopped or fenced.
+        std::fs::remove_file(namespace.join("incarnations.json")).unwrap();
+        std::fs::create_dir(namespace.join("incarnations.json")).unwrap();
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-1".into(),
+                command_id: "reset-refused".into(),
+            },
+        )
+        .await;
+        let Some(Frame::CommandAck {
+            accepted, reason, ..
+        }) = controller_rx.recv().await
+        else {
+            panic!("reset refusal acknowledgement");
+        };
+        assert!(!accepted);
+        assert!(
+            reason
+                .unwrap()
+                .contains("durable Session incarnation was not confirmed")
+        );
+        assert_eq!(broker.sessions.lock().get("sess-1"), Some(&launch));
+        assert!(broker.workers.lock().contains_key("sess-1"));
+        assert!(broker.resetting_sessions.lock().is_empty());
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+        assert_eq!(lineage(&broker).unwrap().0, before);
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_rotation_starts_a_new_lineage_and_hibernation_keeps_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, _controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        attach_incarnations(&broker, &root.path().join("incarnations"), true);
+        let before = broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-1", incarnations::Origin::Adopted)
+            .unwrap();
+        broker.rotate_incarnation("sess-1").await.unwrap();
+        let (rotated, epoch, origin) = lineage(&broker).unwrap();
+        assert_ne!(rotated, before);
+        assert_eq!((epoch, origin), (2, incarnations::Origin::Reset));
+
+        let mut idle = broker.snapshots().into_iter().next().expect("worker");
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+        broker.update_snapshot(idle, 1);
+        broker
+            .hibernate_session("sess-1".to_owned(), "hibernate-lineage".to_owned())
+            .await;
+        assert!(!broker.workers.lock().contains_key("sess-1"));
+        assert_eq!(lineage(&broker).unwrap().0, rotated);
+    }
+
+    #[tokio::test]
+    async fn deletion_ends_the_lineage_only_after_the_journal_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        broker.attach_deletion_journal(
+            deletions::Journal::open(
+                &root.path().join("deletions"),
+                deletion_fixture_owner(),
+                true,
+            )
+            .unwrap(),
+        );
+        attach_incarnations(&broker, &root.path().join("incarnations"), true);
+        broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-1", incarnations::Origin::Adopted)
+            .unwrap();
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-1".into(),
+                command_id: "delete-lineage".into(),
+            },
+        )
+        .await;
+        assert!(broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(lineage(&broker).is_none());
+        while let Ok(frame) = controller_rx.try_recv() {
+            assert!(!matches!(
+                frame,
+                Frame::CommandAck {
+                    accepted: false,
+                    ..
+                }
+            ));
+        }
+
+        // A rejected journal write leaves the lineage in place.
+        let (broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, _controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        let journal_root = root.path().join("deletions-failing");
+        broker.attach_deletion_journal(
+            deletions::Journal::open(&journal_root, deletion_fixture_owner(), true).unwrap(),
+        );
+        std::fs::create_dir(journal_root.join("deletions.json")).unwrap();
+        attach_incarnations(&broker, &root.path().join("incarnations-kept"), true);
+        broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-1", incarnations::Origin::Adopted)
+            .unwrap();
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-1".into(),
+                command_id: "delete-refused".into(),
+            },
+        )
+        .await;
+        assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
+        assert!(lineage(&broker).is_some());
     }
 
     #[test]
