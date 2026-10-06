@@ -4514,7 +4514,7 @@ export function App({
                         shortcut={DESKTOP_SHORTCUTS.resize}
                         followCursor
                         placement="right"
-                        disableHoverListener={resizing ||
+                        suppressed={resizing ||
                             desktopWorkspace?.selectedSplitter === "sessions-prompt"}
                     >
                         <Box

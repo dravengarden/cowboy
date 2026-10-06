@@ -16,6 +16,10 @@ pub const PLUGIN_GENERATION_RETENTION_INTERVAL: Key<Duration> =
     Key::new(Scope::Service, "plugins.generation_retention_interval");
 pub const PLUGIN_URGENT_RETENTION_COOLDOWN: Key<Duration> =
     Key::new(Scope::Service, "plugins.urgent_retention_cooldown");
+pub const SESSIONS_RECLAIM_ON_CAPACITY: Key<bool> =
+    Key::new(Scope::Service, "sessions.reclaim_on_capacity");
+pub const SESSIONS_RECLAIM_MIN_IDLE: Key<Duration> =
+    Key::new(Scope::Service, "sessions.reclaim_min_idle");
 
 pub static SERVICE_FIELDS: &[Field] = &[
     Field {
@@ -37,6 +41,23 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(1)),
         reload: Reload::Live,
         doc: "Minimum time between extra retention passes for one Device whose\navailable disk is below its declared `disk.low_watermark`.",
+    },
+    Field {
+        key: "sessions.reclaim_on_capacity",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "When a new session targets a Device whose session slots are full, hibernate\nthe longest-idle eligible session on it first instead of refusing.\nHibernation sends no model request and the session resumes when opened.",
+    },
+    Field {
+        key: "sessions.reclaim_min_idle",
+        kind: Kind::Duration {
+            min: Duration::from_mins(5),
+            max: Duration::from_hours(7 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(1)),
+        reload: Reload::Live,
+        doc: "A session is eligible for reclaim only after this long without any event.\nKeep it at or above the longest Provider prompt-cache lifetime so a\nreclaimed session's cache has already expired and resuming costs nothing\nextra.",
     },
 ];
 

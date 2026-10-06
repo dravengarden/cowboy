@@ -12,6 +12,7 @@
 
 mod secure_transport;
 mod session_provider_updates;
+mod session_reclaim;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
@@ -15662,7 +15663,15 @@ async fn api_new_session(
                     && holds_worker_slot(&state.runtime_router, session)
             })
             .count();
-        if capacity.draining || active_sessions >= capacity.max_sessions as usize {
+        // A draining Device never gets a slot back; a full one may, if the
+        // Service is configured to hibernate its longest-idle session.
+        let reclaimed = !capacity.draining
+            && active_sessions >= capacity.max_sessions as usize
+            && state
+                .service_config
+                .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+            && session_reclaim::reclaim_slot(&state, &req.machine_id).await;
+        if !reclaimed && (capacity.draining || active_sessions >= capacity.max_sessions as usize) {
             return (
                 StatusCode::CONFLICT,
                 format!("machine {:?} is draining or at capacity", req.machine_id),
@@ -19658,7 +19667,7 @@ fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
 }
 
 fn handle_command(
-    state: &AppState,
+    state: &Arc<AppState>,
     principal: &ProductPrincipal,
     text: &str,
     held: &mut HashMap<String, (String, u64)>,
@@ -20004,7 +20013,15 @@ fn handle_command(
                 // toast is broadcast (which would otherwise read as a hard
                 // failure).
                 match state.supervisor.ensure_alive(&session_id) {
-                    Ok(_) => Ok(()),
+                    Ok(revived) => {
+                        if revived {
+                            tokio::spawn(session_reclaim::rebalance_after_wake(
+                                Arc::clone(state),
+                                session_id.clone(),
+                            ));
+                        }
+                        Ok(())
+                    }
                     Err(e) => {
                         tracing::warn!(
                             session_id = %session_id,

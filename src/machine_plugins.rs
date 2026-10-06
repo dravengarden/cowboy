@@ -1401,6 +1401,12 @@ impl MachinePluginStore {
         Ok(prepared)
     }
 
+    /// Whether an installation this process is driving currently fences
+    /// `plugin`. Launch admission waits for it instead of failing the start.
+    pub fn install_in_progress(&self, plugin_id: &str) -> bool {
+        self.operations.installing(plugin_id)
+    }
+
     pub fn launch_context(
         &self,
         provider_id: &str,

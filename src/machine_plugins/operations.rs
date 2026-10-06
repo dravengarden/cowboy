@@ -195,6 +195,10 @@ impl Journal {
         Self::lookup(&self.state.lock(), step)
     }
 
+    pub(super) fn installing(&self, plugin: &str) -> bool {
+        self.install_attempts.installing(plugin)
+    }
+
     pub(super) fn ensure_unfenced(&self, plugin: &str) -> Result<()> {
         self.install_attempts.ensure_unfenced(plugin)?;
         self.installations.ensure_unfenced(plugin)?;

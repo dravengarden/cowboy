@@ -46,6 +46,10 @@ const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
 const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
 const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Longest a worker start waits for a live Provider installation that fences
+/// its Plugin; an upgrade normally resolves in about a minute.
+const PROVIDER_INSTALL_LAUNCH_WAIT: Duration = Duration::from_secs(300);
+const PROVIDER_INSTALL_LAUNCH_POLL: Duration = Duration::from_millis(250);
 
 fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
     let detail = format!("{error:#}");
@@ -2412,13 +2416,39 @@ impl Broker {
                 session.provider_generation_digest.clone(),
                 session.provider_auth_generation,
             );
-            Some(
-                tokio::task::spawn_blocking(move || {
-                    store.launch_context(&provider_id, &digest, auth_generation)
-                })
-                .await
-                .context("Provider launch verification task failed")??,
-            )
+            // An Operator install fences the Plugin until it resolves (about a
+            // minute for a Provider upgrade). A start in that window waits for
+            // the install rather than reporting a crashed Agent; a fence with
+            // no live installer still fails at once for reconciliation.
+            let install_deadline = Instant::now() + PROVIDER_INSTALL_LAUNCH_WAIT;
+            loop {
+                let launch = {
+                    let (store, provider_id, digest) =
+                        (Arc::clone(&store), provider_id.clone(), digest.clone());
+                    tokio::task::spawn_blocking(move || {
+                        store.launch_context(&provider_id, &digest, auth_generation)
+                    })
+                    .await
+                    .context("Provider launch verification task failed")?
+                };
+                match launch {
+                    Ok(launch) => break Some(launch),
+                    Err(error)
+                        if store.install_in_progress(&provider_id)
+                            && Instant::now() < install_deadline
+                            && !self.cancelled_sessions.lock().contains(&session.session_id) =>
+                    {
+                        tracing::info!(
+                            session = %session.session_id,
+                            provider = %provider_id,
+                            %error,
+                            "worker launch waiting for Provider installation"
+                        );
+                        tokio::time::sleep(PROVIDER_INSTALL_LAUNCH_POLL).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         };
         tracing::info!(
             session = %session.session_id,
@@ -6949,6 +6979,47 @@ mod tests {
         third.resume_cleanup_continuations();
         wait_for_no_continuations(&third).await;
         assert!(!workspace.join("target/debug/artifact").exists());
+    }
+
+    #[tokio::test]
+    async fn an_expired_cleanup_budget_is_retried_not_retired_as_a_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join("worktrees");
+        let workspace = managed.join("sess-slow");
+        write_continuation_target(&workspace);
+        let broker = continuation_broker(temp.path(), true);
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-slow".to_owned());
+        broker.deleted_session_workspaces.lock().insert(
+            "sess-slow".to_owned(),
+            DeletedWorkspace {
+                workspace: crate::session_workspace::capture_cleanup_workspace(
+                    &managed,
+                    "sess-slow",
+                    &workspace,
+                )
+                .unwrap()
+                .with_removal_budget(Duration::ZERO),
+                command_id: "delete".into(),
+            },
+        );
+        let task = broker.cleanup_deleted_session("sess-slow", "delete");
+        // Long enough for the first failing pass, short of its one-second backoff.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        // The workspace stays registered and the task keeps retrying: a spent
+        // budget is neither a root nor a target change, so cleanup is not retired.
+        assert!(!task.is_finished());
+        assert!(
+            broker
+                .deleted_session_workspaces
+                .lock()
+                .contains_key("sess-slow")
+        );
+        assert!(workspace.join("target/debug/artifact").is_file());
+        assert!(workspace.join("target/CACHEDIR.TAG").is_file());
+        task.abort();
     }
 
     #[tokio::test]

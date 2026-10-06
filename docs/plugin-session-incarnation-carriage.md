@@ -4,7 +4,7 @@ Fourth step of the [durable incarnation design](plugin-session-incarnation-desig
 after the [reader](plugin-session-incarnation-reader.md) and the
 [writer](plugin-session-incarnation-writer.md), which is active on Hawk. The change
 is written, tested and **deliberately not on `main`**: it is the local branch
-`incarnation-carriage-20261006` (head `eeb37e5e`: two carriage commits on `477768bd`, merged with `main` at `f9421bc1`, checked out at `worktrees/incarnation-carriage-20261006`) in
+`incarnation-carriage-20261006` (gated at `eeb37e5e`: two carriage commits on `477768bd` merged with `main` at `f9421bc1`; now `6a38c580`, checked out at `worktrees/incarnation-carriage-20261006`) in
 the Cowboy repository that backs the task worktrees. It has not been pushed because
 pushing a remote branch needs review, and merging it would harm other work (below).
 
@@ -60,6 +60,15 @@ Controller release plus a Machine release that carries the new pin.
 
 Until then the lineage reaches nothing: the Controller learns no value and no
 observation is fenced by it.
+
+## Update after the next pin advance
+
+Another task advanced the pin again (`551474a3`, `5b3547a6`, generation
+`worker-d62183a8…`) on 2026-10-06. The branch was merged with that `main` as head
+`6a38c580` without conflicts, and the host-only writer release still refuses to build
+because `runtime_wire.rs` differs from the retained bundle, as expected. That head was
+not re-gated; the gate result above is for `eeb37e5e`. The carriage still needs a pin
+that includes it.
 
 ## Limits
 

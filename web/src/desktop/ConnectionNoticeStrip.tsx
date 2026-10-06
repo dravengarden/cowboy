@@ -1,12 +1,20 @@
 import { desktopSize } from "../surface/desktopSize";
 import CheckIcon from "@mui/icons-material/Check";
 import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
-import { alpha, Box, Button, Stack, Typography } from "@mui/material";
+import { alpha, Box, Button, Typography } from "@mui/material";
 import type { ConnectionNotice } from "./connectionNotice";
 import { DesktopShortcut } from "./commands/DesktopKeycap";
 import { DESKTOP_SHORTCUTS } from "./commands/workspaceShortcuts";
+import { HintTooltip } from "../HintTooltip";
 
-/** The Desktop connection notice as painted; the container owns timing. */
+/**
+ * The Desktop connection notice as painted; the container owns timing.
+ *
+ * It lives inside the Prompt pane header, one line high, so appearing or
+ * leaving never moves the editor or its caret. A strip above the editor
+ * pushed the text down every time the connection flapped. What to check and
+ * the sync details sit in the hover hint.
+ */
 export function ConnectionNoticeStrip({
   notice,
   onRetry,
@@ -15,52 +23,71 @@ export function ConnectionNoticeStrip({
   onRetry: () => void;
 }): React.JSX.Element {
   const color = `${notice.tone}.main`;
+  const detail = notice.hint !== null || notice.meta !== null
+    ? (
+      <>
+        {notice.hint !== null && <Box component="span" sx={{ display: "block" }}>{notice.hint}</Box>}
+        {notice.meta !== null && <Box component="span" sx={{ display: "block" }}>{notice.meta}</Box>}
+      </>
+    )
+    : undefined;
   return (
     <Box
       role="status"
       aria-live="polite"
       data-desktop-connection-notice={notice.tone}
       sx={{
-        mx: 1,
-        mt: 0.75,
-        px: 1.25,
-        py: 0.75,
+        minWidth: 0,
+        maxWidth: "100%",
         display: "flex",
-        alignItems: "flex-start",
-        gap: 1,
-        borderRadius: 1.5,
-        border: 1,
-        borderColor: (theme) => alpha(theme.palette[notice.tone].main, 0.32),
-        bgcolor: (theme) => alpha(theme.palette[notice.tone].main, 0.08),
+        alignItems: "center",
+        gap: 0.75,
       }}
     >
-      {notice.tone === "success"
-        ? <CheckIcon sx={{ fontSize: desktopSize(16), mt: "2px", color }} />
-        : <CloudOffOutlinedIcon sx={{ fontSize: desktopSize(16), mt: "2px", color }} />}
-      <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
-        <Typography
-          variant="body2"
-          sx={{ fontWeight: 650, color, lineHeight: 1.4 }}
+      <HintTooltip title={notice.title} detail={detail}>
+        <Box
+          sx={{
+            minWidth: 0,
+            flexShrink: 1,
+            overflow: "hidden",
+            height: 24,
+            px: 1,
+            display: "flex",
+            alignItems: "center",
+            gap: 0.75,
+            borderRadius: 999,
+            border: 1,
+            borderColor: (theme) => alpha(theme.palette[notice.tone].main, 0.32),
+            bgcolor: (theme) => alpha(theme.palette[notice.tone].main, 0.1),
+          }}
         >
-          {notice.title}
-        </Typography>
-        {notice.hint !== null && (
+          {notice.tone === "success"
+            ? <CheckIcon sx={{ fontSize: desktopSize(14), color, flexShrink: 0 }} />
+            : <CloudOffOutlinedIcon sx={{ fontSize: desktopSize(14), color, flexShrink: 0 }} />}
+          {/* The phase outranks the countdown when the column is narrow. */}
           <Typography
             variant="caption"
-            sx={{ color: "text.primary", lineHeight: 1.4 }}
+            noWrap
+            sx={{ fontWeight: 650, color, lineHeight: 1, flexShrink: 1, minWidth: 0 }}
           >
-            {notice.hint}
+            {notice.title}
           </Typography>
-        )}
-        {notice.meta !== null && (
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", lineHeight: 1.4 }}
-          >
-            {notice.meta}
-          </Typography>
-        )}
-      </Stack>
+          {notice.countdown !== null && (
+            <Typography
+              variant="caption"
+              noWrap
+              sx={{
+                color: "text.secondary",
+                lineHeight: 1,
+                minWidth: 0,
+                flexShrink: 1000,
+              }}
+            >
+              {notice.countdown}
+            </Typography>
+          )}
+        </Box>
+      </HintTooltip>
       {notice.canRetry && (
         <Button
           size="small"
@@ -76,7 +103,8 @@ export function ConnectionNoticeStrip({
             fontWeight: 600,
             borderRadius: 999,
             py: 0,
-            minHeight: 26,
+            minHeight: 24,
+            height: 24,
           }}
         >
           Retry now
