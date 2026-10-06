@@ -216,6 +216,10 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
         .route("/v1/plugins/refresh", post(api_plugin_catalog_refresh))
         .route("/v1/machines", get(api_machines))
         .route("/v1/machines/{id}/plugins", get(api_machine_plugins))
+        .route(
+            "/v1/machines/{id}/durable-state",
+            get(api_machine_durable_state),
+        )
         .route("/v1/machines/{id}/refresh", post(api_machine_refresh))
         .route("/v1/project-policies", get(projects::policies))
         .route("/v1/project-placements", get(projects::placements))
