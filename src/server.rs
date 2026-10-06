@@ -12,6 +12,7 @@
 
 mod secure_transport;
 mod session_provider_updates;
+mod session_reclaim;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
@@ -15662,7 +15663,15 @@ async fn api_new_session(
                     && holds_worker_slot(&state.runtime_router, session)
             })
             .count();
-        if capacity.draining || active_sessions >= capacity.max_sessions as usize {
+        // A draining Device never gets a slot back; a full one may, if the
+        // Service is configured to hibernate its longest-idle session.
+        let reclaimed = !capacity.draining
+            && active_sessions >= capacity.max_sessions as usize
+            && state
+                .service_config
+                .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+            && session_reclaim::reclaim_slot(&state, &req.machine_id).await;
+        if !reclaimed && (capacity.draining || active_sessions >= capacity.max_sessions as usize) {
             return (
                 StatusCode::CONFLICT,
                 format!("machine {:?} is draining or at capacity", req.machine_id),

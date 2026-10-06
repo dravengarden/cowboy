@@ -122,6 +122,8 @@ as a deprecated override for one release.
 | --- | --- | --- | --- |
 | Service | `plugins.generation_retention_interval` | `"6h"` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
+| Service | `sessions.reclaim_on_capacity` | `false` | live |
+| Service | `sessions.reclaim_min_idle` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
 | Device | `capacity.draining` | `false` | restart |
 | Device | `disk.low_watermark` | `"15GiB"` | live |
@@ -129,6 +131,23 @@ as a deprecated override for one release.
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
 convenience.
+
+## Session reclaim on capacity
+
+Off by default. With `sessions.reclaim_on_capacity = true`, a new session that
+targets a full Device first hibernates that Device's longest-idle eligible
+session, waits up to 20 seconds for its slot, then proceeds; otherwise the
+request is refused exactly as before. A session is eligible only when it holds
+a slot, is idle (no turn, queued prompt or background task), is not a system
+session, does not have Provider cache protection enabled, and has had no event
+for `sessions.reclaim_min_idle`.
+
+Hibernation sends no model request and the conversation resumes when the
+session is opened (`docs/hibernation-token-audit-2026-10-06.md`). Keeping the
+idle threshold at or above the longest Provider prompt-cache lifetime means a
+reclaimed session's cache had already expired, so reclaiming it adds no token
+cost. Idle time is measured by the running Controller; after a restart every
+session counts as freshly active.
 
 ## Disk retention
 

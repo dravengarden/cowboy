@@ -668,6 +668,10 @@ struct Session {
     event_count: u64,
     reached_start: bool,
     next_seq: u64,
+    /// When this Controller last appended an event to the session. Monotonic
+    /// and process-local: a restart treats every session as just active, so
+    /// idle-based policies wait a full idle period before acting.
+    last_activity: std::time::Instant,
     /// Last seen agent-advertised config options (raw ACP
     /// `configOptions` array — see acp.rs intercept). `None` until the agent
     /// fires its first `config_option_update` notification. Re-sent to every
@@ -2188,6 +2192,7 @@ impl Hub {
                         event_count,
                         reached_start,
                         next_seq,
+                        last_activity: std::time::Instant::now(),
                         config_options,
                         config_preferences,
                         queue,
@@ -2416,6 +2421,16 @@ impl Hub {
     pub fn session_is_system(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).is_some_and(|s| s.meta.system)
+    }
+
+    /// How long ago this Controller last appended an event to the session.
+    #[must_use]
+    pub fn session_idle_for(&self, session_id: &str) -> Option<std::time::Duration> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|session| session.last_activity.elapsed())
     }
 
     #[must_use]
@@ -2707,6 +2722,7 @@ impl Hub {
                     event_count: 0,
                     reached_start: true,
                     next_seq: 0,
+                    last_activity: std::time::Instant::now(),
                     config_options: None,
                     config_preferences: config_preferences.clone(),
                     queue: Vec::new(),
@@ -4023,6 +4039,7 @@ impl Hub {
             }
             let seq = s.next_seq;
             s.next_seq += 1;
+            s.last_activity = std::time::Instant::now();
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
                 seq,
