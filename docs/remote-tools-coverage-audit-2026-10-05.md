@@ -820,6 +820,16 @@ earlier partial path mapping, fail. Four native review rounds found and fixed
 the collision, rule-matching, mode-blind command and symlink defects; the last
 round reported none.
 
+The [3.6.0 release receipt](experiments/claude-permission-modes-release-2026-10-06.json)
+binds source `4c10a6f0` and artifact
+`sha256:a3a9012fdb45c1f22268718789cbd71567729eca152d924791fee49dab1f2975`: 59
+packaged checks on the exact package, 3.5.0/3.6.0 worker coexistence, Linux and
+actual macOS probes, three current Controller reader roles and five public
+artifact digests. OVH operation `ovh-claude-code-3-6-0-converge` completed;
+inventory reports 3.6.0 active with 3.5.0 retained for rollback. Cowboy's
+worker still selects bypass at every Claude start, so default sessions keep
+their prior behavior; no live session was restarted.
+
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A
 multi-tool code block is not a transaction: post-tool rejection cannot undo
