@@ -179,7 +179,6 @@ fn a_changed_machine_lineage_retires_observations_but_repeats_do_not() {
     assert!(hub.set_machine_lineage("session", Some("a".repeat(32).as_str())));
     assert!(!hub.code_scope_is_current(&process_local));
     let first = hub.session_code_scope("session").unwrap();
-    assert!(first.string_bytes() > process_local.string_bytes());
     // Every later snapshot of the same lineage keeps it current.
     assert!(!hub.set_machine_lineage("session", Some("a".repeat(32).as_str())));
     assert!(hub.code_scope_is_current(&first));

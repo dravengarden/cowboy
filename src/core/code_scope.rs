@@ -56,11 +56,6 @@ pub(crate) struct SessionCodeScope {
     cwd: String,
     owner_user_id: Option<String>,
     execution_binding: Option<Arc<crate::execution_environment::BindingV1>>,
-    /// The owning Machine's durable lineage for this Session, when it reports
-    /// one. Part of equality: a reset (new lineage), a Machine that starts or
-    /// stops reporting one, or any other change retires every earlier
-    /// observation instead of updating it in place.
-    machine_lineage: Option<String>,
 }
 
 impl SessionCodeScope {
@@ -70,7 +65,6 @@ impl SessionCodeScope {
             + self.workspace_id.as_ref().map_or(0, String::len)
             + self.cwd.len()
             + self.owner_user_id.as_ref().map_or(0, String::len)
-            + self.machine_lineage.as_ref().map_or(0, String::len)
             + self
                 .execution_binding
                 .as_deref()
@@ -109,7 +103,6 @@ impl SessionCodeScope {
             cwd,
             owner_user_id: session.meta.owner_user_id.clone(),
             execution_binding: execution_binding.map(Arc::new),
-            machine_lineage: session.machine_lineage.clone(),
         })
     }
 
@@ -136,9 +129,11 @@ impl Hub {
     }
 
     /// Record the durable lineage the owning Machine reported for a Session.
-    /// Returns whether it changed. Because the lineage is part of the observation
-    /// scope, a change makes every earlier observation stale; an unchanged value
-    /// (every reconnect and snapshot of the same lineage) leaves them current.
+    /// Returns whether it changed. A change (a reset's new lineage, a Machine
+    /// that starts or stops reporting one) gives the Session a new observation
+    /// lifetime, so every earlier observation is stale and none is updated in
+    /// place; an unchanged value (every reconnect and snapshot of the same
+    /// lineage) leaves them current.
     pub(crate) fn set_machine_lineage(&self, session_id: &str, lineage: Option<&str>) -> bool {
         let mut sessions = self.inner.sessions.lock();
         let Some(session) = sessions.get_mut(session_id) else {
