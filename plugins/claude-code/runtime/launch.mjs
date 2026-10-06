@@ -29,8 +29,6 @@ import {
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 const forbiddenTools = [
-  "Agent",
-  "Task",
   "Skill",
   "EnterWorktree",
   "ExitWorktree",
@@ -42,6 +40,27 @@ const forbiddenTools = [
   "EnterPlanMode",
   "ExitPlanMode",
 ];
+
+// Native lifecycle tools. context-mod.js restricts Agent and SendMessage to
+// background agents of this session; their own tools still route to target.
+const NATIVE_PASSTHROUGH = [
+  "TodoWrite",
+  "AskUserQuestion",
+  "Agent",
+  "SendMessage",
+];
+
+// Client completion frames name the native runtime-home output file. Replace
+// only the exact locator registered for that agent with its handle.
+export function targetTaskFrame(frame, agents) {
+  const agent = frame.type === "system" && typeof frame.task_id === "string" &&
+      Object.hasOwn(agents, frame.task_id)
+    ? agents[frame.task_id]
+    : undefined;
+  return agent && frame.output_file === agent.outputFile
+    ? { ...frame, output_file: "cowboy-agent://" + frame.task_id }
+    : frame;
+}
 
 export function nativeArguments(args, plugin, memoryConfig) {
   const values = new Set([
@@ -163,7 +182,7 @@ export function nativeArguments(args, plugin, memoryConfig) {
     "--permission-mode",
     "bypassPermissions",
     "--tools",
-    [...NATIVE_TOOLS, "TodoWrite", "AskUserQuestion"].join(","),
+    [...NATIVE_TOOLS, ...NATIVE_PASSTHROUGH].join(","),
     "--disallowedTools",
     [...disallowed].join(","),
     "--setting-sources",
@@ -316,21 +335,23 @@ async function bridge(child, tools, context, memory) {
           continue;
         }
         if (subtype === "interrupt") {
-          try {
-            const pending = await tools.cancelForeground();
-            if (pending.length) {
-              pendingInterrupts.set(
-                frame.request_id,
-                "Target cancellation is pending; retained task handles: " +
-                  pending.map((id) => `cowboy-task://${id}`).join(", "),
-              );
-            }
-          } catch {
-            pendingInterrupts.set(
-              frame.request_id,
-              "Target cancellation could not be saved; inspect target tasks before retrying commands",
+          // Native aborts the turn and background agents before it answers.
+          // Cancelling target processes first lets a held child call return
+          // their exit status to a still-running agent, which then continues.
+          let cancelling;
+          const cancel = () =>
+            cancelling ??= tools.cancelForeground().then(
+              (pending) =>
+                pending.length
+                  ? "Target cancellation is pending; retained task handles: " +
+                    pending.map((id) => `cowboy-task://${id}`).join(", ")
+                  : undefined,
+              () =>
+                "Target cancellation could not be saved; inspect target tasks before retrying commands",
             );
-          }
+          pendingInterrupts.set(frame.request_id, cancel);
+          // An unresponsive native process must not keep target work alive.
+          setTimeout(cancel, 5000).unref();
         }
       }
       // These local commands can change native tools/settings or launch local
@@ -388,6 +409,13 @@ async function bridge(child, tools, context, memory) {
         continue;
       }
       if (stage === "cost" && frame.type === "result") {
+        // A resumed session can first settle an agent notification queued
+        // by its previous process. Only one that made no model request may
+        // precede readiness; it never reaches the client.
+        if (
+          frame.origin?.kind === "task-notification" && !frame.is_error &&
+          frame.num_turns === 0 && frame.duration_api_ms === 0
+        ) continue;
         if (
           frame.is_error || frame.local_command !== "cost" ||
           frame.duration_api_ms !== 0
@@ -423,24 +451,30 @@ async function bridge(child, tools, context, memory) {
           frame.type === "control_response" &&
           pendingInterrupts.has(frame.response.request_id)
         ) {
-          const error = pendingInterrupts.get(frame.response.request_id);
+          const cancel = pendingInterrupts.get(frame.response.request_id);
           pendingInterrupts.delete(frame.response.request_id);
-          await send(process.stdout, {
-            type: "control_response",
-            response: {
-              subtype: "error",
-              request_id: frame.response.request_id,
-              error,
-            },
-          });
-          continue;
+          const error = await cancel();
+          if (error) {
+            await send(process.stdout, {
+              type: "control_response",
+              response: {
+                subtype: "error",
+                request_id: frame.response.request_id,
+                error,
+              },
+            });
+            continue;
+          }
         }
         const observation = claudeObservation(frame);
         if (memory && observation) memory.add(...observation);
         if (memory && frame.type === "result" && !frame.local_command) {
           await memory.finish();
         }
-        await send(process.stdout, cleanCommands(frame));
+        await send(
+          process.stdout,
+          cleanCommands(targetTaskFrame(frame, tools.state.agents)),
+        );
       } else if (frame.type === "control_request") {
         throw new Error(
           "Unexpected native request during execution initialization",
@@ -497,8 +531,8 @@ async function native(args) {
     );
     if (memory) {
       const nativeCall = tools.nativeCall.bind(tools);
-      tools.nativeCall = async (tool, input) => {
-        const result = await nativeCall(tool, input);
+      tools.nativeCall = async (tool, input, call) => {
+        const result = await nativeCall(tool, input, call);
         memory.add(
           "tool",
           JSON.stringify(
@@ -515,6 +549,7 @@ async function native(args) {
     context.socketPath = modBridge.socketPath;
     context.bridgeToken = modBridge.token;
     context.descriptions = DESCRIPTIONS;
+    context.agents = tools.agentLocators();
     context.memory = Boolean(memory);
     const plugin = join(stage, "plugin");
     await mkdir(join(plugin, ".claude-plugin"), { recursive: true });

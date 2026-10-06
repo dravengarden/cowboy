@@ -353,7 +353,6 @@ export function DesktopCommandHost({
         const splitter = preferredDesktopSplitter(
           visibleDesktopSplitterIds(),
           workspace.focusedPane,
-          workspace.productMode,
         );
         if (splitter) {
           workspace.setSelectedSplitter(splitter);
@@ -461,18 +460,6 @@ export function DesktopCommandHost({
         );
         if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
         requestAnimationFrame(() => workspace.focusRegion("prompt.draft"));
-      },
-    },
-    {
-      id: "conversation.enterReadingMode",
-      title: "Enter Reading Mode",
-      description: "Open the conversation in a distraction-free reading workspace",
-      group: "Conversation",
-      shortcut: "Z",
-      contexts: ["conversation"],
-      run: () => {
-        workspace.setProductMode("reading");
-        requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
       },
     },
     {

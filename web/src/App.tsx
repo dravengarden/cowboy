@@ -297,6 +297,7 @@ function markDesktopUpdateSwapping(): void {
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ShortcutKeycap } from "./ShortcutKeycap";
+import { HintTooltip } from "./HintTooltip";
 import { DesktopModalKeyHint } from "./desktop/DesktopModalKeyHint";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -4508,64 +4509,72 @@ export function App({
                     branch, so iPad/iPhone never render it. Invisible until
                     hover/drag; an accent line marks it on hover, the full
                     strip tints while dragging. */}
-                    <Box
-                        role="separator"
-                        aria-orientation="vertical"
-                        aria-label="Resize sidebar"
-                        title={`Resize layout · ${DESKTOP_SHORTCUTS.resize}`}
-                        aria-valuemin={SIDEBAR_MIN}
-                        aria-valuemax={SIDEBAR_MAX}
-                        aria-valuenow={Math.round(sidebarWidth)}
-                        data-desktop-splitter="sessions-prompt"
-                        data-desktop-splitter-selected={
-                            desktopWorkspace?.selectedSplitter === "sessions-prompt"
-                                ? "true"
-                                : undefined
-                        }
-                        tabIndex={-1}
-                        onPointerDown={startResize}
-                        sx={{
-                            position: "absolute",
-                            top: 0,
-                            // Wide hit area centred on the edge — easy to grab; the
-                            // visible 1px accent line stays centred via `::after`.
-                            right: -11,
-                            width: 22,
-                            height: "100%",
-                            cursor: "col-resize",
-                            zIndex: 2,
-                            // Centered VSCode-style hairline: a SOLID 1px line
-                            // (divider) that just recolours to the accent on hover /
-                            // while dragging — never thickens. Identical to the
-                            // composer-column divider below so the two read the same.
-                            "&::after": {
-                                content: '""',
+                    <HintTooltip
+                        title="Resize layout"
+                        shortcut={DESKTOP_SHORTCUTS.resize}
+                        followCursor
+                        placement="right"
+                        disableHoverListener={resizing ||
+                            desktopWorkspace?.selectedSplitter === "sessions-prompt"}
+                    >
+                        <Box
+                            role="separator"
+                            aria-orientation="vertical"
+                            aria-label="Resize sidebar"
+                            aria-valuemin={SIDEBAR_MIN}
+                            aria-valuemax={SIDEBAR_MAX}
+                            aria-valuenow={Math.round(sidebarWidth)}
+                            data-desktop-splitter="sessions-prompt"
+                            data-desktop-splitter-selected={
+                                desktopWorkspace?.selectedSplitter === "sessions-prompt"
+                                    ? "true"
+                                    : undefined
+                            }
+                            tabIndex={-1}
+                            onPointerDown={startResize}
+                            sx={{
                                 position: "absolute",
                                 top: 0,
-                                left: "50%",
-                                transform: "translateX(-50%)",
-                                width: "1px",
+                                // Wide hit area centred on the edge — easy to grab; the
+                                // visible 1px accent line stays centred via `::after`.
+                                right: -11,
+                                width: 22,
                                 height: "100%",
-                                bgcolor: resizing ||
-                                        desktopWorkspace?.selectedSplitter ===
-                                            "sessions-prompt"
-                                    ? "primary.main"
-                                    : "divider",
-                                transition: "background-color 120ms",
-                            },
-                            "&:hover::after": {
-                                bgcolor: "primary.main",
-                            },
-                            "&:focus": { outline: "none" },
-                        }}
-                    >
-                        {desktopWorkspace?.selectedSplitter ===
-                                "sessions-prompt" && (
-                            <Suspense fallback={null}>
-                                <DesktopSplitterHint />
-                            </Suspense>
-                        )}
-                    </Box>
+                                cursor: "col-resize",
+                                zIndex: 2,
+                                // Centered VSCode-style hairline: a SOLID 1px line
+                                // (divider) that just recolours to the accent on hover /
+                                // while dragging — never thickens. Identical to the
+                                // composer-column divider below so the two read the same.
+                                "&::after": {
+                                    content: '""',
+                                    position: "absolute",
+                                    top: 0,
+                                    left: "50%",
+                                    transform: "translateX(-50%)",
+                                    width: "1px",
+                                    height: "100%",
+                                    bgcolor: resizing ||
+                                            desktopWorkspace?.selectedSplitter ===
+                                                "sessions-prompt"
+                                        ? "primary.main"
+                                        : "divider",
+                                    transition: "background-color 120ms",
+                                },
+                                "&:hover::after": {
+                                    bgcolor: "primary.main",
+                                },
+                                "&:focus": { outline: "none" },
+                            }}
+                        >
+                            {desktopWorkspace?.selectedSplitter ===
+                                    "sessions-prompt" && (
+                                <Suspense fallback={null}>
+                                    <DesktopSplitterHint />
+                                </Suspense>
+                            )}
+                        </Box>
+                    </HintTooltip>
                 </Stack>
                 </>
             ) : null}
@@ -5120,20 +5129,23 @@ export function App({
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
                                             badge={DESKTOP_SHORTCUTS.settings}
-                                            shortcut={`${DESKTOP_SHORTCUTS.settings} · Settings`}
                                             placement="inline"
                                             alwaysVisible
                                         >
-                                            <IconButton
-                                                size="small"
-                                                data-desktop-item="topbar-settings"
-                                                data-desktop-topbar-action="settings"
-                                                onClick={(): void => openSettings("settings")}
-                                                aria-label="settings"
+                                            <HintTooltip
                                                 title="Settings"
+                                                shortcut={DESKTOP_SHORTCUTS.settings}
                                             >
-                                                <SettingsIcon />
-                                            </IconButton>
+                                                <IconButton
+                                                    size="small"
+                                                    data-desktop-item="topbar-settings"
+                                                    data-desktop-topbar-action="settings"
+                                                    onClick={(): void => openSettings("settings")}
+                                                    aria-label="settings"
+                                                >
+                                                    <SettingsIcon />
+                                                </IconButton>
+                                            </HintTooltip>
                                         </DesktopContextShortcut>
                                     </Suspense>
                                 </Stack>
@@ -5153,7 +5165,7 @@ export function App({
                                     const draft = draftLibrary.entries.find((entry) => entry.id === draftRoute.id);
                                     if (draft) flushSync(() => setDraftAction({ draft, action: "menu" }));
                                 }}><MoreVert /></IconButton>}
-                                {!draftRoute.active && <IconButton
+                                {!draftRoute.active && <HintTooltip title="Code"><IconButton
                                     data-mobile-open-code="true"
                                     onPointerDown={(event): void => {
                                         if (event.pointerType === "touch") {
@@ -5183,7 +5195,6 @@ export function App({
                                     onPointerCancel={openCodeTap.onPointerCancel}
                                     onClick={openCodeTap.onClick}
                                     aria-label="Open code"
-                                    title="Code"
                                     sx={{
                                         // iOS WebKit latches the synthetic hover
                                         // generated by a finger tap. Keep the
@@ -5198,7 +5209,7 @@ export function App({
                                     }}
                                 >
                                     <CodeIcon />
-                                </IconButton>}
+                                </IconButton></HintTooltip>}
                             </>
                         )}
                     </Toolbar>
@@ -6325,12 +6336,13 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                             <Stack spacing={0.75}>
                                     <Stack direction="row" spacing={1} alignItems="center">
                                         <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>Projects</Typography>
-                                        <Chip
-                                            size="small"
-                                            variant="outlined"
-                                            label={`${projectWorkspaces.length} project${projectWorkspaces.length === 1 ? "" : "s"}`}
-                                            title={projectWorkspaces.map((workspace) => workspace.display_name).join(", ")}
-                                        />
+                                        <HintTooltip title={projectWorkspaces.map((workspace) => workspace.display_name).join(", ")}>
+                                            <Chip
+                                                size="small"
+                                                variant="outlined"
+                                                label={`${projectWorkspaces.length} project${projectWorkspaces.length === 1 ? "" : "s"}`}
+                                            />
+                                        </HintTooltip>
                                     </Stack>
                                     <Stack direction="row" spacing={1} alignItems="center">
                                         <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>Integrations</Typography>
@@ -6439,24 +6451,26 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                             <Typography variant="body2" fontWeight={650}>
                                                                 {machineComponentName(component)}
                                                             </Typography>
-                                                            <Typography
-                                                                variant="caption"
-                                                                color="text.secondary"
-                                                                title={updateTitle}
-                                                                sx={{ display: "block", overflowWrap: "anywhere" }}
-                                                            >
-                                                                {release.version}
-                                                                {component.generation ? ` · generation ${component.generation}` : ""}
-                                                            </Typography>
+                                                            <HintTooltip title={updateTitle}>
+                                                                <Typography
+                                                                    variant="caption"
+                                                                    color="text.secondary"
+                                                                    sx={{ display: "block", overflowWrap: "anywhere" }}
+                                                                >
+                                                                    {release.version}
+                                                                    {component.generation ? ` · generation ${component.generation}` : ""}
+                                                                </Typography>
+                                                            </HintTooltip>
                                                         </Box>
                                                         {convergenceState && (
-                                                            <Chip
-                                                                size="small"
-                                                                variant="outlined"
-                                                                color={convergenceState.tone}
-                                                                label={convergenceState.status}
-                                                                title={convergenceState.detail}
-                                                            />
+                                                            <HintTooltip title={convergenceState.detail}>
+                                                                <Chip
+                                                                    size="small"
+                                                                    variant="outlined"
+                                                                    color={convergenceState.tone}
+                                                                    label={convergenceState.status}
+                                                                />
+                                                            </HintTooltip>
                                                         )}
                                                         {componentPending && !converging && (
                                                             <Button
@@ -6475,23 +6489,25 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                         )}
                                                         {!componentPending && !npmInstallable && !convergenceState &&
                                                             supersession && (
-                                                            <Chip
-                                                                size="small"
-                                                                variant="outlined"
-                                                                color={supersession.tone}
-                                                                label={supersession.status}
-                                                                title={supersession.detail}
-                                                            />
+                                                            <HintTooltip title={supersession.detail}>
+                                                                <Chip
+                                                                    size="small"
+                                                                    variant="outlined"
+                                                                    color={supersession.tone}
+                                                                    label={supersession.status}
+                                                                />
+                                                            </HintTooltip>
                                                         )}
                                                         {!componentPending && !npmInstallable && !convergenceState &&
                                                             !supersession && (
-                                                            <Chip
-                                                                size="small"
-                                                                variant="outlined"
-                                                                color={release.tone}
-                                                                label={release.status}
-                                                                title={updateTitle}
-                                                            />
+                                                            <HintTooltip title={updateTitle}>
+                                                                <Chip
+                                                                    size="small"
+                                                                    variant="outlined"
+                                                                    color={release.tone}
+                                                                    label={release.status}
+                                                                />
+                                                            </HintTooltip>
                                                         )}
                                                         {componentErrors[npmUpdateKey] && (
                                                             <Alert severity="error" sx={{ width: "100%" }}>

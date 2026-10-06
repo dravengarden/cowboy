@@ -30,6 +30,7 @@ import {
   type WorkspaceEntry,
   workspaceTree,
 } from "./workspaceHierarchy";
+import { HintTooltip } from "./HintTooltip";
 
 export function WorkspacePicker(
   {
@@ -178,19 +179,20 @@ export function WorkspacePicker(
             endAdornment: (
               <InputAdornment position="end">
                 {clearable && value && (
-                  <IconButton
-                    aria-label={`Clear ${label}`}
-                    title="Clear selection"
-                    size="small"
-                    sx={{ minWidth: 44, minHeight: 44 }}
-                    onKeyDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      choose("");
-                    }}
-                  >
-                    <Close fontSize="small" />
-                  </IconButton>
+                  <HintTooltip title="Clear selection">
+                    <IconButton
+                      aria-label={`Clear ${label}`}
+                      size="small"
+                      sx={{ minWidth: 44, minHeight: 44 }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        choose("");
+                      }}
+                    >
+                      <Close fontSize="small" />
+                    </IconButton>
+                  </HintTooltip>
                 )}
                 <ExpandMore />
               </InputAdornment>

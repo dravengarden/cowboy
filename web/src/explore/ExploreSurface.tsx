@@ -66,10 +66,8 @@ import { Transcript } from "../Transcript";
 import { useReliableTouchTap } from "../useReliableTouchTap";
 import {
   beginExplorePageLoading,
-  captureTranscriptViewportAnchor,
   setExplorePage,
   setExploreAtTail,
-  setTranscriptProjection,
   navigateExplorePage,
   resolveExplorePageStart,
   resolveExploreTail,
@@ -78,7 +76,6 @@ import {
   reconcileExplorePageIdentities,
   revealSubmittedExplorePage,
   type ExploreSessionState,
-  type TranscriptProjection,
   useExploreSessionState,
 } from "./exploreStore";
 import {
@@ -104,6 +101,7 @@ import {
   questionPageNeedsRestore,
   shouldAdoptLoadedPage,
 } from "./retainedPage";
+import { HintTooltip } from "../HintTooltip";
 
 const EMPTY_TIMELINE: Envelope[] = [];
 const EMPTY_PENDING_QUESTIONS: QueuedMessage[] = [];
@@ -183,22 +181,23 @@ function PageTurnFooter({
           >
             {previous ? "Previous" : "Next"}
           </Typography>
-          <Typography
-            component="span"
-            variant="caption"
-            color="text.secondary"
-            title={question ?? "Untitled page"}
-            sx={{
-              display: "-webkit-box",
-              overflow: "hidden",
-              overflowWrap: "anywhere",
-              WebkitBoxOrient: "vertical",
-              WebkitLineClamp: desktop ? 1 : 2,
-              lineHeight: 1.25,
-            }}
-          >
-            {question ?? "Untitled page"}
-          </Typography>
+          <HintTooltip title={question ?? "Untitled page"}>
+            <Typography
+              component="span"
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                display: "-webkit-box",
+                overflow: "hidden",
+                overflowWrap: "anywhere",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: desktop ? 1 : 2,
+                lineHeight: 1.25,
+              }}
+            >
+              {question ?? "Untitled page"}
+            </Typography>
+          </HintTooltip>
         </Box>
         {desktop && (
           <Box
@@ -1188,218 +1187,6 @@ function PageList({
         </List>
       </Box>
     </Stack>
-  );
-}
-
-export function DesktopReadingQuestionDirectory({
-  sessionId,
-  projection,
-  width,
-  onClose,
-}: {
-  sessionId: string;
-  projection: TranscriptProjection;
-  width: number;
-  onClose: () => void;
-}): React.JSX.Element {
-  const timeline = useStoreSelector((snapshot) =>
-    snapshot.timelines.get(sessionId) ?? EMPTY_TIMELINE
-  );
-  const { pages: basePages, state: { pageId, pageParents } } = usePageProjection(sessionId, timeline);
-  const loadedPages = useMemo(
-    () => groupQuestionPages(basePages, pageParents),
-    [basePages, pageParents],
-  );
-  const pageIndex = useQuestionPageIndex(
-    sessionId,
-    loadedPages.findLast((page) => !isOptimisticQuestionPage(page.id))?.id,
-  );
-  const indexedTotal = pageIndex.data?.total ?? 0;
-  const directoryLoadedPages = useMemo(
-    () =>
-      indexedTotal > 0
-        ? loadedPages.filter((page) => page.questionCount > 0)
-        : loadedPages,
-    [indexedTotal, loadedPages],
-  );
-  const indexedOrLoadedTotal = Math.max(
-    directoryLoadedPages.length,
-    indexedTotal,
-  );
-  const directoryPages = useMemo(
-    () =>
-      mergeQuestionPageDirectory(
-        pageIndex.data?.pages ?? [],
-        directoryLoadedPages,
-        indexedOrLoadedTotal,
-      ),
-    [directoryLoadedPages, indexedOrLoadedTotal, pageIndex.data?.pages],
-  );
-  const total = Math.max(
-    indexedOrLoadedTotal,
-    directoryPages.at(-1)?.ordinal ?? 0,
-  );
-  const directoryPageIds = useMemo(
-    () => new Set(directoryPages.map((page) => page.id)),
-    [directoryPages],
-  );
-  const loadedPageIds = useMemo(
-    () => new Set(loadedPages.map((page) => page.id)),
-    [loadedPages],
-  );
-  const loadedPagesRef = useRef(loadedPages);
-  loadedPagesRef.current = loadedPages;
-  const directoryPagesRef = useRef(directoryPages);
-  directoryPagesRef.current = directoryPages;
-  const [historyCurrentId, setHistoryCurrentId] = useState<string | null>(null);
-  const [loadingPageId, setLoadingPageId] = useState<string | null>(null);
-  const selectionRequestRef = useRef(0);
-
-  useEffect(() => {
-    selectionRequestRef.current += 1;
-    setLoadingPageId(null);
-  }, [projection, sessionId]);
-
-  useEffect(() => {
-    if (projection !== "history") return undefined;
-    const scrollerSelector =
-      `[data-transcript-session="${CSS.escape(sessionId)}"]`;
-    let frame = 0;
-    const syncCurrentQuestion = (): void => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const anchor = captureTranscriptViewportAnchor(sessionId);
-        const anchorSeq = Number(anchor);
-        const indexedCurrent = Number.isSafeInteger(anchorSeq)
-          ? [...directoryPagesRef.current].reverse().find((page) => {
-            const pageSeq = Number(page.id);
-            return Number.isSafeInteger(pageSeq) && pageSeq <= anchorSeq;
-          })
-          : undefined;
-        const loadedCurrent = pageContainingItemKey(
-          loadedPagesRef.current,
-          anchor,
-        );
-        const nextId = indexedCurrent?.id ?? loadedCurrent?.id ??
-          loadedPagesRef.current.at(-1)?.id ?? null;
-        setHistoryCurrentId((previous) => previous === nextId ? previous : nextId);
-      });
-    };
-    const onScroll = (event: Event): void => {
-      if (
-        event.target instanceof Element &&
-        event.target.matches(scrollerSelector)
-      ) syncCurrentQuestion();
-    };
-    syncCurrentQuestion();
-    globalThis.addEventListener("scroll", onScroll, true);
-    return () => {
-      cancelAnimationFrame(frame);
-      globalThis.removeEventListener("scroll", onScroll, true);
-    };
-  }, [projection, sessionId]);
-
-  const currentCandidate = projection === "explore"
-    ? pageId ?? loadedPages.at(-1)?.id ?? null
-    : historyCurrentId ?? loadedPages.at(-1)?.id ?? null;
-  const currentId = currentCandidate && directoryPageIds.has(currentCandidate)
-    ? currentCandidate
-    : directoryPages.at(-1)?.id ?? null;
-
-  const selectPage = useCallback((id: string): void => {
-    if (loadingPageId !== null) return;
-    const commit = (): void => {
-      setSticky(sessionId, false);
-      if (projection === "explore") {
-        navigateExplorePage(sessionId, id);
-      } else {
-        setHistoryCurrentId(id);
-        setTranscriptProjection(sessionId, "history", id);
-      }
-    };
-    const available = projection === "history"
-      ? loadedPageIds.has(id)
-      : isQuestionPageLoaded(sessionId, id);
-    if (available) {
-      selectionRequestRef.current += 1;
-      commit();
-      return;
-    }
-    const request = ++selectionRequestRef.current;
-    setLoadingPageId(id);
-    void loadQuestionPage(sessionId, id).then((loaded) => {
-      if (selectionRequestRef.current !== request) return;
-      setLoadingPageId(null);
-      if (loaded) commit();
-    });
-  }, [loadedPageIds, loadingPageId, projection, sessionId]);
-
-  return (
-    <Box
-      component="aside"
-      aria-label="Page index"
-      data-reading-question-sidebar
-      data-desktop-region="conversation.questions"
-      sx={{
-        width,
-        flexShrink: 0,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.5),
-      }}
-    >
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ minHeight: 52, px: 1.5, borderBottom: 1, borderColor: "divider" }}
-      >
-        <ListAltOutlined color="primary" sx={{ fontSize: "1.1rem" }} />
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 750, lineHeight: 1.2 }}>
-            Pages
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Latest first · {projection === "explore" ? "Page" : "History"}
-          </Typography>
-        </Box>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ fontVariantNumeric: "tabular-nums" }}
-        >
-          {pageIndex.loading && pageIndex.data === null
-            ? "…"
-            : `${String(total)}${pageIndex.data?.exact === false ? "+" : ""}`}
-        </Typography>
-      </Stack>
-      <Box component="nav" aria-label="Page index" sx={{ flex: 1, minHeight: 0 }}>
-        <PageList
-          active
-          dense
-          descending
-          vimNavigation
-          searchable={false}
-          pages={directoryPages}
-          currentId={currentId}
-          firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
-          hasEarlier={pageIndex.data?.nextBeforeSeq !== null}
-          loadingEarlier={pageIndex.loadingEarlier}
-          loadingPageId={loadingPageId}
-          onReachStart={(): void => void pageIndex.loadEarlier()}
-          onVimDismiss={onClose}
-          onSelect={selectPage}
-        />
-      </Box>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ px: 1.5, py: 0.875, borderTop: 1, borderColor: "divider" }}
-      >
-        J/K move · L/Enter open · H close
-      </Typography>
-    </Box>
   );
 }
 

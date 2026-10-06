@@ -455,6 +455,10 @@ execution-claude-turn-conformance CLI VERSION SHA256 RECEIPT:
 execution-claude-task-stop-conformance KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA RECEIPT:
     unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; exec setpriv --inh-caps=-all --ambient-caps=-all python3 tools/claude_native_task_stop_probe.py "$@"' conformance --keeper "{{KEEPER}}" --claude "{{CLAUDE}}" --claude-sha256 "{{CLAUDE_SHA}}" --executor "{{EXECUTOR}}" --executor-sha256 "{{EXECUTOR_SHA}}" --receipt "{{RECEIPT}}"
 
+# Research child tool/context inheritance with native Claude and a resident keeper.
+execution-claude-agent-research KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA RECEIPT *ARGS:
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; exec setpriv --inh-caps=-all --ambient-caps=-all python3 tools/claude_native_agent_probe.py "$@"' research --keeper "{{KEEPER}}" --claude "{{CLAUDE}}" --claude-sha256 "{{CLAUDE_SHA}}" --executor "{{EXECUTOR}}" --executor-sha256 "{{EXECUTOR_SHA}}" --receipt "{{RECEIPT}}" {{ARGS}}
+
 # Includes two real 35-second observations of executor process retention/expiry.
 execution-lifetime-conformance CLI VERSION SHA256 RECEIPT:
     deno check tools/execution_environment_lifetime_probe.ts
@@ -543,9 +547,9 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
-    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs
+    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs
     deno fmt --check plugins/claude-code/runtime
-    deno fmt --check tools/claude-remote-routing.test.mjs
+    deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs
     deno check plugins/claude-code/runtime/build.ts
 
 # Cross-language package/linker conformance. This is also the Agent Plugin

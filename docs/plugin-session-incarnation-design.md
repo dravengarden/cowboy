@@ -141,6 +141,10 @@ for it.
    **Implemented and active on Hawk**, see the [writer contract](plugin-session-incarnation-writer.md)
    and [release](releases/incarnation-writer-2026-10-06.md).
 4. Protocol carriage, Controller scope and refusal vectors, then Web diagnostics.
+   **Carriage and Controller scope implemented and tested on a local branch, held off
+   main** (it changes the runtime wire, so host-only Machine releases would refuse to
+   build until the worker pin advances); see
+   [the carriage record](plugin-session-incarnation-carriage.md). Web diagnostics not started.
 
 Each step is its own release and acceptance; none belongs in an ordinary
 Controller, Web or resident fix.

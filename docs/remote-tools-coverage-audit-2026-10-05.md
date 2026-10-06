@@ -104,7 +104,7 @@ to introduce more restrictions.
 | Project hooks | Claude launch suppresses settings sources; Codex remote hook placement not established by current receipt | Execute target-owned hooks at target, preserve native lifecycle/decisions and trusted configuration; separate runtime-owned hooks |
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
 | Permission modes | Claude bound launch selects `bypassPermissions`; remote tools must not be presented as supporting every native permission mode | Design explicit mapping for approval, deny, modified input and concurrent approval cancellation; test denial before any target effect |
-| Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance; Claude Agent/Task paths remain restricted | Separately test grandchildren, live-child resume, cancellation, background, teammate and worktree paths |
+| Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance. Claude 3.5.0 admits native background subagents: child calls carry `agentId`, launch/notification/client locators use `cowboy-agent://`, outcomes are durable across resume, TaskStop/interrupt cancel the child's target commands (packaged worker acceptance) | Partial output stream, permission modes, grandchildren, teammates, worktree/remote isolation, custom agents and native-runtime crash with a live agent remain unaccepted; those inputs are refused |
 | Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
@@ -113,7 +113,7 @@ to introduce more restrictions.
 | Atomic mutations | Stale stamp refusal has evidence; it does not alone establish compare-and-write atomicity | Inspect target implementation and inject mutation between check and write; use target-side atomic primitives where promised |
 | Output limits | Large streams/backpressure and terminal events recorded | Test split UTF-8, binary/NUL, truncation markers, slow/absent reader, disk full and retained output expiration |
 | Lost replies | Lost start and outages recorded without replay | Distinguish rejected, accepted, unknown and completed effects; never resend an unknown mutation under a new identity |
-| Cancel and timeout | Foreground cancellation and retained job cancellation recorded | Test cancel/start races, whole process trees, detached children, late completion, keeper death and provider timeout semantics |
+| Cancel and timeout | Foreground cancellation and retained job cancellation recorded; 3.5.0 adds per-call and per-agent cancellation and forwards interrupt to native before target cancellation | Test cancel/start races, whole process trees, detached children, late completion, keeper death and provider timeout semantics |
 | Resume/compaction | Rebinding and Claude target context recorded | Test resume with live children, queued completion, changed plugin version, stale approvals and artifact locators |
 | Reconnect and restarts | Keeper reattachment recorded | Inject Controller, worker, keeper and native-runtime failures independently; fence old generations and late replies |
 | Deletion and shutdown | Idempotent close and no recreation recorded | Verify pending callbacks cannot resurrect sessions, issue new model turns or affect another session |
@@ -437,6 +437,84 @@ rename/unlink, nonregular files, cross-platform path behavior and arbitrary
 external writers remain separate audit cases. No previously supported feature
 was disabled, and the full local/remote parity audit remains open.
 
+### Unknown file-write outcome follow-up
+
+The subsequent 2026-10-06 audit separates two failure boundaries. If the worker
+loses a target completion while the keeper still retains it, transport recovery
+must observe or retry the same operation identity without reapplying the write.
+If the facade itself loses its connection and cannot receive a result, it must
+report uncertainty and must not grant a new read stamp or replay during cold
+load. File-content equality alone cannot prove an earlier operation's outcome.
+
+The source matrix covers Write, Edit and NotebookEdit with both an applied
+effect and a request that never applies. It verifies an uncertain result,
+unchanged persisted read authority, no cold-load mutation, and rejection of
+blind repeat mutations when the original effect changed target bytes. A fresh
+Read reports the actual target bytes; the notebook insertion remains one cell.
+These six cases use a mock transport and do not establish power-loss durability
+or atomicity against another writer.
+
+The packaged native fixture now discards a real successful fs/writeFile
+completion, after independently replacing the just-written target contents.
+It retains the original operation ID and requires the later native Read to
+observe the independent writer's bytes. A replay would overwrite those bytes
+and fail the check. A positive assertion also requires the lost-completion
+injection to have occurred, so an unexercised fault cannot silently pass.
+The fixture changes neither production Provider code nor its private pins.
+
+The retained signed 3.4.12 adapter passes 35 packaged Claude scenarios plus six
+transport checks (41 total) in 114.54 seconds. The source gate passes 76 tests,
+including the six new fault cases and their parent test. This is additional
+acceptance of the existing artifact, not a new Plugin release. Independent OVH
+inventory still reports that exact 3.4.12 generation active. The
+[write-outcome receipt](experiments/claude-write-outcome-audit-2026-10-06.json)
+binds the tested artifact, test-source hashes and observed installation.
+
+Permanent loss of the keeper's operation history and facade reconnection to
+an unresolved mutation still require explicit observation rather than invented
+success or automatic resubmission. This work does not provide OS-level
+compare-and-write, external-writer isolation, native notification parity or
+complete permission/subagent coverage.
+
+### Durable explicit cancellation follow-up
+
+The next 2026-10-06 audit reproduced a cancellation recovery gap: foreground
+interrupts already persisted stop intent, but TaskStop and private utility
+timeouts sent termination directly. Losing that request or its reply left no
+durable instruction for a cold runtime to finish stopping the target process.
+
+Plugin 3.4.12 routes those entrypoints through the existing cancellation
+reconciler. Intent is saved before transport IO, remains pending until target
+closure is observed, and is retried for the original process identity after
+cold load. Reconciliation does not advance the output cursor or replay the
+command. A closed output observation also retires the intent; an open output
+commit preserves concurrent cancellation. Other tasks retain their identities.
+
+The source gate passes 69 tests, including lost TaskStop response/cold resume,
+private utility timeout/transport loss, pending cancellation and concurrent
+output collection. The unfixed TaskStop regression fails because the persisted
+intent is missing. These fault tests use mock transport; packaged native
+acceptance and production activation are recorded separately. The CLI, SDK,
+tool inventory, schemas, permissions and native pins are unchanged. Official
+[tool](https://code.claude.com/docs/en/tools-reference) and
+[Mods](https://code.claude.com/docs/en/plugins/mods/events) references were
+checked again on 2026-10-06.
+
+The [3.4.12 release receipt](experiments/claude-durable-taskstop-release-2026-10-06.json)
+records the full quality gate and native review, 40 packaged execution checks
+accepted in 84.30 seconds, old/new worker coexistence, Linux/macOS probes,
+three actual Catalog reader roles and five public artifact digest checks.
+OVH operation `ovh-claude-code-3-4-12-converge` completed with an applied receipt;
+independent inventory confirmed 3.4.12 active, 3.4.11 retained for rollback,
+and current authentication/materialization. No production inference was sent.
+The exact lost-TaskStop-response fault is covered by source mock transport;
+the native suite covers actual cancellation, cold resume and its existing
+transport-loss scenarios, not that exact combined fault.
+
+This does not recover an executor that permanently lost its process ledger,
+establish native background notification parity, or resolve unknown file-write
+results. Full remote/local parity remains under audit.
+
 ### Aliased concurrent mutations follow-up
 
 The next 2026-10-06 audit reproduced silent lost edits within one facade:
@@ -524,8 +602,159 @@ Codex already selects the execution environment at thread start and every turn.
 Determine whether native child creation inherits this selection; prove it with
 distinct runtime/target markers. If it does not, use the narrowest native child
 creation extension. Claude's Mod `agent.spawn` is a candidate for binding and
-context propagation, but child tool callbacks and implicit IO must be tested.
+context propagation. The pinned child callback research below establishes an
+explicit Read route; implicit IO still needs separate acceptance.
 Never assume a parent interceptor automatically covers descendants.
+
+#### Claude native Agent research (2026-10-06)
+
+The offline `execution-claude-agent-research` recipe uses Claude 2.1.287,
+executor 0.159.3, a resident keeper and a disposable copy of the shipping Mod.
+It enables Agent only in that disposable fixture. Native child `Read` reaches
+`tool.call` with an `agentId`, reads target bytes through the keeper, and retains
+target instructions and cwd. Runtime workspace bytes and instructions do not
+reach the child. Native asynchronous `system/task_notification` delivers the
+child result. Scripted API routing identifies the child by its prompt rather
+than assuming parent/child request order. Completion matches the native task ID
+in both already consumed frames and subsequent frames: a fast child can finish
+before the parent result. Readiness uses `/cost` without an API request. These
+are native runtime tests with zero real model requests.
+
+The baseline also exposes runtime-home task-output paths in model context and
+completion frames. Adding `--project-task-output` projects the native Agent
+result's `outputFile` and exact corresponding text to `cowboy-agent://<agentId>`.
+This removes that path from model context while preserving target Read and native
+completion. It does **not** implement handle reads or project outgoing completion
+frames: their `output_file` still names the runtime-home file.
+
+Before production enablement, retain an exact native task-to-handle registration
+scoped to session/binding/generation, project client completion frames using that
+registration, and route handle reads to the owning task. Preserve child `agentId`
+at the production bridge boundary and partition cancellation by child ownership;
+the current bridge drops it. Validate permission modes, cancellation races,
+resume, descendants, worktrees and implicit IO. Do not replace arbitrary path
+substrings in user content or infer ownership from a task ID alone.
+
+Run `just execution-claude-agent-research KEEPER CLAUDE CLAUDE_SHA EXECUTOR
+EXECUTOR_SHA NEW_RECEIPT` inside the pinned shell, once without and once with
+`--project-task-output`. The recipe isolates network and PID namespaces. Its
+Unix socket must use `/tmp/cowboy-claude-mod-*`; inherited Nix temporary roots do
+not satisfy the shipping bridge validator. Disabling all nonessential Claude
+traffic also blocks Mod Unix HTTP, so this fixture uses individual telemetry
+switches instead. Those setup failures are not evidence of native incompatibility.
+
+Evidence: [baseline and projection receipts](experiments/claude-native-agent-research-2026-10-06.json).
+This is same-host shared-filesystem research with a fixture Read bridge and
+full-access permissions, not acceptance of enrolled worker transport, cross-host
+execution, autonomous model continuation, or production Agent support. No
+production runtime or capability admission is changed by this experiment.
+
+#### Native Agent output follow-up (2026-10-06)
+
+Extending the same fixture past completion exposes another boundary. A
+session-local map can translate an exact owner-registered handle back to native
+Read and recover the child's answer, but that file is a JSONL transcript. Its
+rows retain runtime `cwd` and original environment attachments even when the
+child's actual API requests received target context. Reading it into the parent
+reintroduces runtime context. Locator projection alone is therefore insufficient.
+
+Two alternatives were exercised on the pinned binary. `TaskOutput` is absent
+from the available native tools in this lane: a scripted invocation reports
+`No such tool available: TaskOutput`, even with the name in `--tools`. A public
+type declaration is not proof of runtime admission. A native `turn.complete`
+observer does supply the child's final answer and `agentId`. The research Mod
+can return that answer through an owner-registered Read handle without loading
+the raw transcript. This preserves native completion delivery and adds no model
+requests for collection. The guard requires an answered, non-aborted turn.
+
+Use `--project-task-output --read-task-output` for the raw-file control, add
+`--native-task-output` for the unavailable-tool observation, or add
+`--completion-output` for final-answer collection. These are mutually exclusive
+output alternatives. The output probe waits for its own observed tool request
+and response; an earlier background result can otherwise satisfy the next
+`prompt()` wait and produce an empty success.
+
+The successful final-answer read still does not project native notification
+paths. A subsequent parent request includes the runtime-home output locator from
+the native completion notification; the initial tool-result projection only
+covered earlier requests. Output content and notification delivery need separate
+projections. The fixture's in-memory registration is not a durable production
+task registry. Partial output, error/refusal/cancellation outcomes, reload/resume,
+foreign-owner rejection and cross-host operation still require acceptance.
+Do not present a final-answer-only handle as a complete native output stream.
+
+Evidence: [five output-path observations](experiments/claude-native-agent-output-research-2026-10-06.json).
+Production Agent admission remains unchanged. No raw-transcript parser or new
+production restriction was introduced.
+
+#### Native agent admission (Plugin 3.5.0)
+
+Plugin 3.5.0 replaces the research splice with a production path in the shipping
+Mod, bridge and facade; CLI 2.1.287, ACP 0.84.0 and executor 0.159.3 are unchanged.
+A native-local baseline was measured first with native Bash and an observer-only
+Mod: interrupt (active or idle parent) and TaskStop both stop background agents
+without a further model request, and `TaskOutput` is absent from the inventory
+while `SendMessage` is present. See the
+[lifecycle research receipt](experiments/claude-native-agent-lifecycle-2026-10-06.json).
+
+| Surface | Native local | Remote 3.5.0 |
+| --- | --- | --- |
+| Launch | Async agent; result names a runtime-home JSONL `output_file` and tells the model not to read it | Same native launch; that exact registered locator becomes `cowboy-agent://<agentId>` in the result, in idle (`prompt`) and mid-turn (`delivery`/`queued_command`) notifications, and in client `task_notification` frames |
+| Child tools | Run locally | Every child call carries `agentId` through the bridge and runs on target; target guidance and cwd reach the child |
+| Output read | Raw transcript file | Read on the handle returns the recorded final answer (or stopped/failed/running status); partial output is explicitly unavailable |
+| Continue | `SendMessage` to the agent | Same, limited to this session's registered agents and without cross-session idle subscriptions |
+| Stop | TaskStop; child tools aborted | Native TaskStop, then the bridge cancels every target call that agent still holds; an aborted child `turn.complete` does the same |
+| Interrupt | Stops turn and background agents | Forwarded to native first; target foreground processes are cancelled on its acknowledgement (or after 5 s) so a held child call cannot hand an exit status to a still-running agent |
+| Resume | Earlier agents end with the process; a stale notification may settle with zero turns | Outcomes persist in the session state; a running agent from an earlier process reads as ended; readiness tolerates only a zero-turn, zero-API notification result |
+
+Refused with a reason instead of silently running elsewhere: `isolation`
+(`worktree` creates a runtime-side worktree, `remote` another environment),
+`run_in_background:false`, agent types outside general-purpose/claude/Explore/
+Plan, and `SendMessage` to non-registered recipients or with
+`notify_when_idle`. These are untested surfaces, not native impossibilities.
+
+Two runtime defects were found and fixed while accepting this. First, the
+pinned runtime processes no other native work while a Mod hook's `$.http.fetch`
+is pending: with the previous 20 s idle hold a text-only parent turn waited 25 s
+behind a held child call, and TaskStop took 18.5 s in packaged acceptance. The
+bridge hold is now 1 s; ready results still return immediately. The same parent
+turn then takes 0.1 s and TaskStop 0.42 s. This also affects 3.4.x sessions
+with any long facade command, not only agents. Second, cancelling target
+processes before forwarding an interrupt let a held child call return exit 137
+to a still-running agent, which issued another model request.
+
+Four native Codex review rounds found further cancellation and state defects,
+each fixed with a deterministic regression: a continued agent is durably
+`running` until its next outcome (and a stale expiry flag no longer hides a new
+answer); cancellation is rechecked after start persistence, before a queued
+mutation begins and after directory creation, so an abandoned call submits no
+command or write; a background start whose result native discarded is still
+cancelled; and agent answers yield to the whole state file's cold-load bound.
+The fifth round reported no defect. Native writes already in flight complete.
+
+Packaged worker acceptance on the exact candidate passes 51 checks (45 Claude,
+6 transport), including the nine `native_agent_*`/interrupt checks and
+`parent_turns_and_taskstop_progress_during_child_command`. A negative control
+that restores only the 20 s hold fails that check. Earlier candidate runs also
+observed the unprojected queued notification, the uncancelled child after
+TaskStop and the post-interrupt child request before their fixes.
+
+The [3.5.0 release receipt](experiments/claude-native-agents-release-2026-10-06.json)
+binds source `3d38ed74`, artifact
+`sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0`, the
+51-check acceptance of that exact package, 3.4.12/3.5.0 worker coexistence,
+Linux and actual macOS arm64 probes, three Controller reader roles and five
+public artifact digests. OVH operation `ovh-claude-code-3-5-0-converge`
+completed with an applied Machine receipt; re-read inventory reports 3.5.0
+active, 3.4.12 retained for rollback and current authentication and
+materialization. No live session was restarted and no production inference
+was sent.
+
+Not established: partial/streaming child output, grandchildren and teammates,
+permission modes other than the bound bypass mode, native-runtime or keeper
+crash with a live agent, cross-host latency and real-model continuation. A
+stopped agent's own background (`run_in_background`) jobs keep their retained
+handles; native behavior for that case was not measured.
 
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A

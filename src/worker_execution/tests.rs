@@ -243,6 +243,9 @@ async fn native_worker_execution() {
     let relay_service = service.clone();
     let outage = Arc::new(parking_lot::Mutex::new(None::<tokio::time::Instant>));
     let relay_outage = Arc::clone(&outage);
+    let write_operation = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let write_reply_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let relay_write_reply_lost = Arc::clone(&write_reply_lost);
     let image_read = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let relay_image_read = Arc::clone(&image_read);
     let codeact_calls = Arc::new(std::sync::atomic::AtomicU8::new(0));
@@ -271,11 +274,25 @@ async fn native_worker_execution() {
                 let outage = Arc::clone(&relay_outage);
                 let slow_events = Arc::clone(&relay_slow_events);
                 let event_gaps = Arc::clone(&relay_event_gaps);
+                let write_reply_lost = Arc::clone(&relay_write_reply_lost);
                 if let Command::Invoke { invocation, .. } = &request.command {
                     let params = invocation.params.to_string();
                     let filename = invocation.params["path"]
                         .as_str()
                         .and_then(|path| std::path::Path::new(path).file_name());
+                    if invocation.method == "fs/writeFile"
+                        && filename.is_some_and(|name| name == "lost-write-receipt.txt")
+                    {
+                        let mut retained = write_operation.lock();
+                        if let Some(id) = retained.as_ref() {
+                            assert_eq!(
+                                id, &invocation.operation_id,
+                                "lost write must retain its operation identity"
+                            );
+                        } else {
+                            *retained = Some(invocation.operation_id.clone());
+                        }
+                    }
                     if invocation.method == "fs/readFile"
                         && filename.is_some_and(|name| name == "pixel.png")
                     {
@@ -304,6 +321,15 @@ async fn native_worker_execution() {
                         }
                     }
                 }
+                let write_reply = match &request.command {
+                    Command::Invoke { invocation, .. } => {
+                        write_operation.lock().as_ref() == Some(&invocation.operation_id)
+                    }
+                    Command::Observe { operation_id, .. } => {
+                        write_operation.lock().as_ref() == Some(operation_id)
+                    }
+                    _ => false,
+                };
                 tasks.spawn(async move {
                     if matches!(request.command, Command::Events { .. }) && slow_events.load(std::sync::atomic::Ordering::Relaxed) {
                         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -325,6 +351,18 @@ async fn native_worker_execution() {
                             &[],
                         )
                         .await;
+                    if write_reply
+                        && matches!(&response, MachineResponse::Call { response: Response::Operation { outcome: Outcome::Completed { reply } } } if reply.get("error").is_none())
+                        && !write_reply_lost.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        let path = std::path::Path::new(&request.binding.workspace.cwd).join("lost-write-receipt.txt");
+                        assert_eq!(std::fs::read_to_string(&path).unwrap(), "native-write-before-loss\n");
+                        // An independent writer changes the target after the
+                        // original effect. Replaying that effect would erase
+                        // this marker. Drop only its real completed response.
+                        std::fs::write(path, "external-write-after-commit\n").unwrap();
+                        return;
+                    }
                     if trigger && outage.lock().is_none() {
                         *outage.lock() = Some(tokio::time::Instant::now() + Duration::from_secs(35));
                         // Lose the admitted start receipt. The worker must
@@ -382,6 +420,12 @@ async fn native_worker_execution() {
     ))
     .join(&binding.environment.incarnation);
     assert!(status.success(), "native worker execution failed");
+    if input["provider"] == "claude-code" {
+        assert!(
+            write_reply_lost.load(std::sync::atomic::Ordering::SeqCst),
+            "native write must cross the lost completion fixture"
+        );
+    }
     let gaps = event_gaps.load(std::sync::atomic::Ordering::Relaxed);
     if legacy {
         assert_eq!(

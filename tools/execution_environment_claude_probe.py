@@ -183,14 +183,16 @@ class WorkspaceFixture:
 
 class Claude:
     def __init__(self, binary, environment, runtime, fixture, *, aliases=True, resume=None,
-                 custom_system_prompt=False, extra_arguments=(), model="claude-sonnet-4-6", bound_native=False):
+                 custom_system_prompt=False, extra_arguments=(), model="claude-sonnet-4-6", bound_native=False,
+                 disallowed=None):
         self.fixture = fixture
         self.frames = queue.Queue(maxsize=1000)
         self.messages = []
         self.stderr = tempfile.TemporaryFile()
         arguments = [binary, "--print", "--input-format", "stream-json", "--output-format", "stream-json",
                      "--verbose", "--permission-mode", "bypassPermissions", "--tools", "",
-                     "--disallowedTools", "Agent,Task,Skill" if bound_native else ",".join(DISALLOWED), "--setting-sources", "",
+                     "--disallowedTools", disallowed if disallowed is not None
+                     else "Agent,Task,Skill" if bound_native else ",".join(DISALLOWED), "--setting-sources", "",
                      "--strict-mcp-config", "--model", model, *extra_arguments]
         if resume:
             arguments.extend(["--resume", resume])

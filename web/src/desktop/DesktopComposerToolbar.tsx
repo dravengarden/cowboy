@@ -40,6 +40,7 @@ import {
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopComposerCommandBindings } from "./commands/DesktopComposerShortcuts";
 import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
+import { HintTooltip } from "../HintTooltip";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
@@ -139,22 +140,11 @@ export function DesktopComposerToolbar(
     formatTier?: "primary" | "secondary";
     pressed?: boolean;
   }): ReactNode => (
-    <Tooltip
+    <HintTooltip
       key={id}
-      title={
-        <Box sx={{ display: "grid", gap: 0.5 }}>
-          <span>{disabled && reason ? `${title} · ${reason}` : title}</span>
-          {(key || shortcut) && (
-            <DesktopShortcut
-              shortcut={key ? desktopWorkspaceSequence(key) : shortcut!}
-              compact
-              availability={shortcutAvailability(
-                (id === "source" ? sourceScope : scoped) && !disabled,
-              )}
-            />
-          )}
-        </Box>
-      }
+      title={title}
+      shortcut={key ? desktopWorkspaceSequence(key) : shortcut}
+      detail={disabled ? reason : undefined}
     >
       <Box
         component="span"
@@ -206,7 +196,7 @@ export function DesktopComposerToolbar(
             )}
         </Button>
       </Box>
-    </Tooltip>
+    </HintTooltip>
   );
   return (
     <Box
@@ -327,10 +317,9 @@ export function DesktopComposerToolbar(
             onClick: () => format(id),
           });
         })}
-        <Tooltip
-          title={`More formatting · ${
-            desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.composerMore)
-          }`}
+        <HintTooltip
+          title="More formatting"
+          shortcut={desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.composerMore)}
         >
           <Button
             ref={moreRef}
@@ -362,7 +351,7 @@ export function DesktopComposerToolbar(
               {...(moreAnchor ? { availability: "active" as const } : {})}
             />
           </Button>
-        </Tooltip>
+        </HintTooltip>
         <EditorPluginToolbar kind="session" disabled={composing} />
         <Box sx={{ flex: 1 }} />
         {action({

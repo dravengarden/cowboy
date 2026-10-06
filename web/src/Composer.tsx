@@ -167,6 +167,7 @@ import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ShortcutKeycap } from "./ShortcutKeycap";
+import { HintTooltip } from "./HintTooltip";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import {
@@ -733,26 +734,24 @@ function ComposeBar(
   const desktopShortcut = (
     child: ReactNode,
     badge: string,
-    shortcut: string,
     enabled = true,
   ): ReactNode =>
     desktop
       ? (
         <Suspense fallback={child}>
-          <DesktopContextShortcut
-            badge={badge}
-            shortcut={shortcut}
-            enabled={enabled}
-          >
+          <DesktopContextShortcut badge={badge} enabled={enabled}>
             {child}
           </DesktopContextShortcut>
         </Suspense>
       )
       : child;
   // Leader slots (`␣/`, `␣F`, `␣A`, `␣Z`) for the row editor; the badge
-  // lights with the leader while this editor owns focus.
-  const leaderSlot = (child: ReactNode, key: string, title: string): ReactNode =>
-    desktopShortcut(child, desktopWorkspaceSequence(key), `␣ ${key} · ${title}`, !dead);
+  // lights with the leader while this editor owns focus, and the hover hint
+  // names the same path.
+  const leaderSlot = (child: ReactNode, key: string): ReactNode =>
+    desktopShortcut(child, desktopWorkspaceSequence(key), !dead);
+  const leaderHint = (key: string): string | undefined =>
+    desktop ? desktopWorkspaceSequence(key) : undefined;
   return (
     <Stack
       direction="column"
@@ -794,7 +793,10 @@ function ComposeBar(
           "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
         }}
       >
-        <Tooltip title="Slash command / skill">
+        <HintTooltip
+          title="Slash command / skill"
+          shortcut={leaderHint(DESKTOP_WORKSPACE_KEYS.composerSlash)}
+        >
           <span>
             {leaderSlot(
               <IconButton
@@ -811,11 +813,13 @@ function ComposeBar(
                 </Box>
               </IconButton>,
               DESKTOP_WORKSPACE_KEYS.composerSlash,
-              "Slash command",
             )}
           </span>
-        </Tooltip>
-        <Tooltip title="Reference a file (@)">
+        </HintTooltip>
+        <HintTooltip
+          title="Reference a file (@)"
+          shortcut={leaderHint(DESKTOP_WORKSPACE_KEYS.composerReference)}
+        >
           <span>
             {leaderSlot(
               <IconButton
@@ -827,12 +831,14 @@ function ComposeBar(
                 <AlternateEmail />
               </IconButton>,
               DESKTOP_WORKSPACE_KEYS.composerReference,
-              "Reference a file",
             )}
           </span>
-        </Tooltip>
+        </HintTooltip>
         {onAttach && (
-          <Tooltip title="Attach image or file">
+          <HintTooltip
+            title="Attach image or file"
+            shortcut={leaderHint(DESKTOP_WORKSPACE_KEYS.composerAttach)}
+          >
             <span>
               {leaderSlot(
                 <IconButton
@@ -844,10 +850,9 @@ function ComposeBar(
                   <AttachFile />
                 </IconButton>,
                 DESKTOP_WORKSPACE_KEYS.composerAttach,
-                "Attach",
               )}
             </span>
-          </Tooltip>
+          </HintTooltip>
         )}
         {hasConfig && onOpenConfig && (
           <Tooltip title="Options">
@@ -928,7 +933,12 @@ function ComposeBar(
                 </IconButton>
               </Tooltip>
             ))}
-        <Tooltip title={submitLabel}>
+        <HintTooltip
+          title={submitLabel}
+          shortcut={desktop
+            ? submitShortcut === "save" ? "Mod+S" : "Mod+Enter"
+            : undefined}
+        >
           <span>
             {desktopShortcut(
               <IconButton
@@ -941,11 +951,10 @@ function ComposeBar(
                 {submitIcon ?? <Send />}
               </IconButton>,
               submitShortcut === "save" ? `${MOD_LABEL}S` : `${MOD_LABEL}↵`,
-              `${MOD_LABEL}${submitShortcut === "save" ? "S" : "Enter"} · ${submitLabel}`,
               sendable,
             )}
           </span>
-        </Tooltip>
+        </HintTooltip>
         {onCollapse && (
           <Tooltip title="Exit fullscreen">
             <span>
@@ -960,7 +969,10 @@ function ComposeBar(
           </Tooltip>
         )}
         {onExpand && (
-          <Tooltip title="Expand editor">
+          <HintTooltip
+            title="Expand editor"
+            shortcut={leaderHint(DESKTOP_WORKSPACE_KEYS.editorExpand)}
+          >
             <span>
               {leaderSlot(
                 <IconButton
@@ -971,10 +983,9 @@ function ComposeBar(
                   <OpenInFull />
                 </IconButton>,
                 DESKTOP_WORKSPACE_KEYS.editorExpand,
-                "Expand editor",
               )}
             </span>
-          </Tooltip>
+          </HintTooltip>
         )}
       </Stack>
       {
@@ -4393,7 +4404,6 @@ export function PendingPanel({
             <Typography
               variant="caption"
               color="primary.main"
-              title="Reorder · J/K move · Esc done"
               sx={{
                 ml: 0.75,
                 minWidth: 0,
@@ -4415,21 +4425,31 @@ export function PendingPanel({
             toggle is redundant — same adaptive rule as the row actions. */
         }
         {count >= 2 && (!desktop || !visuallyCollapsed) && (
-          <IconButton
-            size="small"
-            disabled={editingId !== null}
-            aria-label={reordering ? "done reordering" : "reorder"}
-            title={reordering ? "Done" : "Reorder"}
-            color={reordering ? "primary" : "default"}
-            onClick={(): void =>
-              setReordering((r) => {
-                if (!r) haptic(); // light — entering reorder mode (grips now live)
-                return !r;
-              })}
-            sx={{ flexShrink: 0, [ROW_ACTIONS_INLINE]: { display: "none" } }}
-          >
-            <SwapVert fontSize="small" />
-          </IconButton>
+          <HintTooltip title={reordering ? "Done" : "Reorder"}>
+            {/* A disabled button emits no pointer events; the span keeps the hint. */}
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                flexShrink: 0,
+                [ROW_ACTIONS_INLINE]: { display: "none" },
+              }}
+            >
+              <IconButton
+                size="small"
+                disabled={editingId !== null}
+                aria-label={reordering ? "done reordering" : "reorder"}
+                color={reordering ? "primary" : "default"}
+                onClick={(): void =>
+                  setReordering((r) => {
+                    if (!r) haptic(); // light — entering reorder mode (grips now live)
+                    return !r;
+                  })}
+              >
+                <SwapVert fontSize="small" />
+              </IconButton>
+            </Box>
+          </HintTooltip>
         )}
         <IconButton
           size="small"
@@ -4643,25 +4663,30 @@ export function PendingPanel({
                     <Suspense fallback={null}>
                       <DesktopContextShortcut
                         badge="O"
-                        shortcut="O · reorder (J/K move, Esc done) · Shift+J/K moves directly"
                         itemScoped
                         placement="corner"
                       >
-                        <IconButton
-                          {...sortable.handleProps(m.id)}
-                          aria-label="Drag to reorder"
-                          sx={{
-                            width: "1.25rem",
-                            height: "2rem",
-                            p: 0,
-                            borderRadius: 1,
-                            color: "text.disabled",
-                            cursor: "grab",
-                            "& .MuiSvgIcon-root": { fontSize: "1rem" },
-                          }}
+                        <HintTooltip
+                          title="Drag to reorder"
+                          shortcut="O"
+                          detail="J/K move · Shift+J/K moves directly · Esc done"
                         >
-                          <DragIndicator />
-                        </IconButton>
+                          <IconButton
+                            {...sortable.handleProps(m.id)}
+                            aria-label="Drag to reorder"
+                            sx={{
+                              width: "1.25rem",
+                              height: "2rem",
+                              p: 0,
+                              borderRadius: 1,
+                              color: "text.disabled",
+                              cursor: "grab",
+                              "& .MuiSvgIcon-root": { fontSize: "1rem" },
+                            }}
+                          >
+                            <DragIndicator />
+                          </IconButton>
+                        </HintTooltip>
                       </DesktopContextShortcut>
                     </Suspense>
                   </Box>
@@ -5863,19 +5888,14 @@ function PendingRow({
         onClick: (): void => setConfirmRemove(true),
       },
     ];
-  const secondaryShortcut: Record<
-    string,
-    { badge: string; description: string }
-  > = {
-    edit: { badge: "L", description: "L / Enter · edit focused item" },
-    schedule: { badge: "T", description: "T · schedule focused item" },
-    move: { badge: "M", description: "M · move focused item" },
-    document: {
-      badge: "D",
-      description: "D · move focused item to independent Drafts",
-    },
-    return: { badge: "R", description: "R · return focused item to drafts" },
-    remove: { badge: "X", description: "X · remove focused item" },
+  // Row keys while the item owns focus (`L` also answers to Enter).
+  const secondaryShortcut: Record<string, { badge: string }> = {
+    edit: { badge: "L" },
+    schedule: { badge: "T" },
+    move: { badge: "M" },
+    document: { badge: "D" },
+    return: { badge: "R" },
+    remove: { badge: "X" },
   };
 
   // Primary action — always inline. Drafts always Send (send-or-queue); a queued
@@ -5950,7 +5970,6 @@ function PendingRow({
       <Suspense fallback={primaryControl}>
         <DesktopContextShortcut
           badge="S"
-          shortcut="S · send focused item"
           itemScoped
           enabled={primaryEnabled}
           placement="corner"
@@ -6051,7 +6070,11 @@ function PendingRow({
           sx={{ display: "none", [ROW_ACTIONS_INLINE]: { display: "flex" } }}
         >
           {secondary.map((a) => (
-            <Tooltip key={a.key} title={a.label}>
+            <HintTooltip
+              key={a.key}
+              title={a.label}
+              shortcut={desktop ? secondaryShortcut[a.key]?.badge : undefined}
+            >
               <Box component="span" sx={{ display: "inline-flex" }}>
                 {desktop
                   ? (
@@ -6069,8 +6092,6 @@ function PendingRow({
                     >
                       <DesktopContextShortcut
                         badge={secondaryShortcut[a.key]?.badge ?? ""}
-                        shortcut={secondaryShortcut[a.key]?.description ??
-                          a.label}
                         itemScoped
                         placement="corner"
                       >
@@ -6096,7 +6117,7 @@ function PendingRow({
                     </IconButton>
                   )}
               </Box>
-            </Tooltip>
+            </HintTooltip>
           ))}
         </Stack>
         {/* … and collapsed into a kebab on a narrow (phone) panel. */}

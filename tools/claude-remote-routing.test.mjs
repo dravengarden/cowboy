@@ -3,12 +3,128 @@ import test from "node:test";
 import { mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   DESCRIPTIONS,
   NATIVE_TOOLS,
   TASK_OUTPUT_PREFIX,
   WorkspaceTools,
 } from "../plugins/claude-code/runtime/tools.mjs";
+
+test("unknown file mutations preserve read authority and never replay on cold load", async (t) => {
+  const cases = [
+    {
+      name: "Write",
+      before: "before",
+      args: { file_path: "file", content: "after" },
+    },
+    {
+      name: "Edit",
+      before: "anchor",
+      args: {
+        file_path: "file",
+        old_string: "anchor",
+        new_string: "anchor appended",
+      },
+    },
+    {
+      name: "NotebookEdit",
+      before: JSON.stringify({ cells: [], metadata: {} }),
+      args: {
+        notebook_path: "file",
+        edit_mode: "insert",
+        cell_type: "markdown",
+        new_source: "one cell",
+      },
+    },
+  ];
+  for (const entry of cases) {
+    for (const applied of [false, true]) {
+      await t.test(`${entry.name}: effect ${applied ? "applied" : "not admitted"}`, async (t) => {
+        const directory = await mkdtemp(
+          join(tmpdir(), "cowboy-unknown-write-"),
+        );
+        t.after(() => rm(directory, { recursive: true, force: true }));
+        const state = join(directory, "state.json");
+        const binding = {
+          workspace: { cwd: "/target" },
+          environment: { id: "unknown-write" },
+        };
+        let bytes = Buffer.from(entry.before);
+        let submitted = 0;
+        let loseReply = true;
+        const connection = {
+          async call(method, params) {
+            if (this.closed) {
+              throw new Error("Execution unavailable; no replay");
+            }
+            const path = fileURLToPath(params.path);
+            if (method === "fs/createDirectory") return {};
+            assert.equal(path, "/target/file");
+            if (method === "fs/getMetadata") {
+              return { isFile: true, size: bytes.length };
+            }
+            if (method === "fs/readFile") {
+              return { dataBase64: bytes.toString("base64") };
+            }
+            assert.equal(method, "fs/writeFile");
+            submitted++;
+            if (applied || !loseReply) {
+              bytes = Buffer.from(params.dataBase64, "base64");
+            }
+            if (loseReply) {
+              this.closed = true;
+              throw new Error(
+                "Execution unavailable or result unknown; no replay",
+              );
+            }
+            return {};
+          },
+        };
+        const tools = new WorkspaceTools(connection, binding, state);
+        await tools.load();
+        assert.equal(
+          (await tools.nativeCall("Read", { file_path: "file" })).deny,
+          undefined,
+        );
+        const stamp = tools.state.reads["/target/file"];
+        assert.match(
+          (await tools.nativeCall(entry.name, entry.args)).deny,
+          /result unknown/,
+        );
+        const observed = Buffer.from(bytes);
+        assert.equal(submitted, 1);
+        assert.equal(
+          JSON.parse(await readFile(state)).reads["/target/file"],
+          stamp,
+        );
+        connection.closed = false;
+        loseReply = false;
+        const resumed = new WorkspaceTools(connection, binding, state);
+        await resumed.load();
+        assert.equal(submitted, 1);
+        assert.deepEqual(bytes, observed);
+        if (applied) {
+          assert.match(
+            (await resumed.nativeCall(entry.name, entry.args)).deny,
+            /Read it before editing/,
+          );
+          assert.equal(submitted, 1);
+          assert.deepEqual(bytes, observed);
+        }
+        assert.equal(
+          (await resumed.nativeCall("Read", { file_path: "file" })).deny,
+          undefined,
+        );
+        assert.equal(submitted, 1);
+        if (applied && entry.name === "NotebookEdit") {
+          assert.equal(JSON.parse(bytes).cells.length, 1);
+        }
+        if (!applied) assert.equal(bytes.toString(), entry.before);
+      });
+    }
+  }
+});
 
 test("lost start acknowledgement retains the original job for recovery without replay", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-lost-start-"));
@@ -86,6 +202,109 @@ test("lost start acknowledgement retains the original job for recovery without r
   ]);
 });
 
+test("TaskStop intent survives a lost terminate response and cold resume", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-taskstop-recovery-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const state = join(directory, "state.json");
+  const binding = {
+    workspace: { cwd: "/target" },
+    environment: { id: "taskstop-recovery" },
+  };
+  let live = true;
+  const calls = [];
+  const connection = {
+    async call(method, params) {
+      calls.push({ method, id: params.processId });
+      if (method === "process/terminate") {
+        this.closed = true;
+        throw new Error("Execution unavailable or result unknown; no replay");
+      }
+      throw new Error("Execution unavailable; no replay");
+    },
+  };
+  const tools = new WorkspaceTools(connection, binding, state);
+  await tools.load();
+  tools.state.jobs.background = { afterSeq: 7, exited: false };
+  tools.state.jobs.peer = { afterSeq: null, exited: false };
+  await tools.save();
+  const stop = await tools.nativeCall("TaskStop", { task_id: "background" });
+  assert.match(stop.deny, /unavailable/);
+  assert.equal(
+    JSON.parse(await readFile(state)).jobs.background.cancelRequested,
+    true,
+  );
+  assert.equal(live, true);
+  const recovered = {
+    async call(method, params) {
+      calls.push({ method, id: params.processId });
+      assert.equal(params.processId, "background");
+      if (method === "process/terminate") {
+        live = false;
+        return {};
+      }
+      assert.equal(method, "process/read");
+      assert.equal(params.afterSeq, 7);
+      return { chunks: [], closed: true, exited: true, exitCode: 143 };
+    },
+  };
+  const resumed = new WorkspaceTools(recovered, binding, state);
+  await resumed.load();
+  assert.equal(live, false);
+  assert.equal(resumed.state.jobs.background.cancelRequested, false);
+  assert.equal(resumed.state.jobs.background.afterSeq, 7);
+  assert.equal(resumed.state.jobs.peer.cancelRequested, undefined);
+  assert.equal(calls.some((call) => call.method === "process/start"), false);
+});
+
+test("timed out private utility retains cancellation across transport loss", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-utility-stop-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const state = join(directory, "state.json");
+  const binding = {
+    workspace: { cwd: "/target" },
+    environment: { id: "utility-stop-recovery" },
+  };
+  let started;
+  const calls = [];
+  const connection = {
+    async call(method, params) {
+      calls.push(method);
+      if (this.closed) throw new Error("Execution unavailable; no replay");
+      if (method === "process/start") {
+        started = params.processId;
+        return { processId: started };
+      }
+      if (method === "process/terminate") {
+        this.closed = true;
+        throw new Error("Execution unavailable or result unknown; no replay");
+      }
+      assert.equal(method, "process/read");
+      return { chunks: [], exited: false, closed: false, exitCode: null };
+    },
+  };
+  const tools = new WorkspaceTools(connection, binding, state);
+  await tools.load();
+  await assert.rejects(tools.command(["utility"], 0), /unavailable/);
+  assert.ok(started);
+  assert.equal(
+    JSON.parse(await readFile(state)).jobs[started].cancelRequested,
+    true,
+  );
+  const recovered = {
+    async call(method, params) {
+      calls.push(method);
+      assert.equal(params.processId, started);
+      if (method === "process/terminate") return {};
+      assert.equal(method, "process/read");
+      return { chunks: [], exited: true, closed: true, exitCode: 143 };
+    },
+  };
+  const resumed = new WorkspaceTools(recovered, binding, state);
+  await resumed.load();
+  assert.equal(resumed.state.jobs[started].cancelRequested, false);
+  assert.equal(calls.filter((method) => method === "process/start").length, 1);
+});
+
 test("TaskStop reports pending until the target confirms closure and retains its handle", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-pending-stop-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -96,6 +315,7 @@ test("TaskStop reports pending until the target confirms closure and retains its
   }, join(directory, "state.json"));
   await tools.load();
   tools.state.jobs.pending = { afterSeq: null, exited: false };
+  t.after(() => clearTimeout(tools.cancelTimer));
   let clock = 0;
   let closed = false;
   const methods = [];
@@ -122,13 +342,15 @@ test("TaskStop reports pending until the target confirms closure and retains its
     );
     assert.equal(stop.result.task_id, "pending");
     assert.equal(tools.state.jobs.pending.closed, false);
-    assert.equal(clock, 10000);
+    assert.equal(clock, 10001); // One non-consuming cancellation observation.
+    assert.equal(tools.state.jobs.pending.cancelRequested, true);
     closed = true;
     const output = await tools.nativeCall("Read", {
       file_path: `${TASK_OUTPUT_PREFIX}pending`,
     });
     assert.match(output.result.file.content, /Exit code: 143/);
     assert.equal(tools.state.jobs.pending.closed, true);
+    assert.equal(tools.state.jobs.pending.cancelRequested, false);
     assert.equal(
       methods.filter((method) => method === "process/terminate").length,
       1,
@@ -243,7 +465,7 @@ test("in-flight output commits and rollback preserve newer cancellation intent",
 });
 
 let fixtureId = 0;
-async function routingFixture({ memory = false } = {}) {
+async function routingFixture({ memory = false, agents = {} } = {}) {
   // Each loaded native Mod has private state. Give every fixture its own module.
   const { register } = await import(
     `../plugins/claude-code/runtime/context-mod.js?fixture=${++fixtureId}`
@@ -263,6 +485,7 @@ async function routingFixture({ memory = false } = {}) {
     environment: "target environment",
     instructions: "target instructions",
     git: "target git",
+    agents,
     memory,
   };
   const calls = [];
@@ -330,6 +553,7 @@ test("every remote tool crosses the authenticated bridge without native executio
         id: "original-call",
         tool,
         input: inputs[tool],
+        owner: "native-agent",
       });
       assert.equal(event.tool, tool);
     });
@@ -426,7 +650,6 @@ test("only questions, todos and enrolled exact memory tools pass through", async
     for (
       const tool of [
         "FutureNativeTool",
-        "Agent",
         "Skill",
         "mcp__foreign__read",
         "mcp__matrix__memory_get_extra",

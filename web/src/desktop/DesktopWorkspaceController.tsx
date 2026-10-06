@@ -28,11 +28,7 @@ import {
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
 export type WorkspaceMode = "normal" | "search" | "command";
-export type DesktopProductMode = "agent" | "reading" | "code";
-export type DesktopSplitterId =
-  | "sessions-prompt"
-  | "prompt-conversation"
-  | "questions-page";
+export type DesktopSplitterId = "sessions-prompt" | "prompt-conversation";
 
 interface DesktopWorkspaceContextValue {
   focusedPane: DesktopPane;
@@ -44,10 +40,6 @@ interface DesktopWorkspaceContextValue {
   cycleRegion: () => void;
   mode: WorkspaceMode;
   setMode: (mode: WorkspaceMode) => void;
-  productMode: DesktopProductMode;
-  setProductMode: (mode: DesktopProductMode) => void;
-  readingSidebarOpen: boolean;
-  setReadingSidebarOpen: (open: boolean) => void;
   selectedSplitter: DesktopSplitterId | null;
   setSelectedSplitter: (splitter: DesktopSplitterId | null) => void;
   collapsedPanes: DesktopCollapsedPanes;
@@ -148,8 +140,6 @@ export function DesktopWorkspaceProvider({
   const [focusedPane, setFocusedPane] = useState<DesktopPane>("prompt");
   const [focusedRegion, setFocusedRegion] = useState<string | null>("prompt.composer");
   const [mode, setMode] = useState<WorkspaceMode>("normal");
-  const [productMode, setProductMode] = useState<DesktopProductMode>("agent");
-  const [readingSidebarOpen, setReadingSidebarOpen] = useState(false);
   const [selectedSplitter, setSelectedSplitter] = useState<DesktopSplitterId | null>(null);
   const collapsedPanes = useDesktopCollapsedPanes();
   const focusedPaneRef = useRef(focusedPane);
@@ -267,8 +257,7 @@ export function DesktopWorkspaceProvider({
         const splitter = event.target.closest<HTMLElement>("[data-desktop-splitter]")
           ?.dataset.desktopSplitter;
         setSelectedSplitter(
-          splitter === "sessions-prompt" || splitter === "prompt-conversation" ||
-              splitter === "questions-page"
+          splitter === "sessions-prompt" || splitter === "prompt-conversation"
             ? splitter
             : null,
         );
@@ -333,7 +322,7 @@ export function DesktopWorkspaceProvider({
       if (!splitter || splitter.offsetParent === null) setSelectedSplitter(null);
     });
     return (): void => cancelAnimationFrame(frame);
-  }, [collapsedPanes, productMode, readingSidebarOpen, selectedSplitter]);
+  }, [collapsedPanes, selectedSplitter]);
 
   useEffect(() => {
     const syncMountedWorkspace = (): boolean => {
@@ -385,10 +374,6 @@ export function DesktopWorkspaceProvider({
     cycleRegion,
     mode,
     setMode,
-    productMode,
-    setProductMode,
-    readingSidebarOpen,
-    setReadingSidebarOpen,
     selectedSplitter,
     setSelectedSplitter,
     collapsedPanes,
@@ -404,8 +389,6 @@ export function DesktopWorkspaceProvider({
     focusedPane,
     focusedRegion,
     mode,
-    productMode,
-    readingSidebarOpen,
     selectedSplitter,
   ]);
 

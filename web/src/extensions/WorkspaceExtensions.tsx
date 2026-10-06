@@ -35,6 +35,7 @@ import {
   type WorkspaceExtension,
 } from "./api";
 import { ExtensionManager } from "./ExtensionManager";
+import { HintTooltip } from "../HintTooltip";
 
 type Result = Exclude<ExtensionResponse, { type: "unavailable" }>;
 function useRead(context: string, query: string | null, refresh: number) {
@@ -128,16 +129,17 @@ function ResourceDetail(
                 {detail.title}
               </Typography>
               {detail.url && (
-                <IconButton
-                  component="a"
-                  href={detail.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="Open original resource"
-                  title="Open original resource"
-                >
-                  <OpenInNew />
-                </IconButton>
+                <HintTooltip title="Open original resource">
+                  <IconButton
+                    component="a"
+                    href={detail.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Open original resource"
+                  >
+                    <OpenInNew />
+                  </IconButton>
+                </HintTooltip>
               )}
             </Stack>
             <Stack direction="row" spacing={1} alignItems="center">
@@ -532,13 +534,14 @@ export default function WorkspaceExtensions(
         >
           <Refresh />
         </IconButton>
-        <IconButton
-          aria-label="Manage extensions"
-          title="Manage extensions"
-          onClick={() => setManage(true)}
-        >
-          <SettingsOutlined />
-        </IconButton>
+        <HintTooltip title="Manage extensions">
+          <IconButton
+            aria-label="Manage extensions"
+            onClick={() => setManage(true)}
+          >
+            <SettingsOutlined />
+          </IconButton>
+        </HintTooltip>
       </Stack>
       {read.error
         ? <Alert severity="warning">{read.error}</Alert>

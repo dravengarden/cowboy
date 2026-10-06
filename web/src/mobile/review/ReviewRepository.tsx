@@ -39,6 +39,7 @@ import {
 } from "./reviewHistoryPaging";
 import { ReviewChanges } from "./ReviewChanges";
 import { useReviewRecovery } from "./useReviewRecovery";
+import { HintTooltip } from "../../HintTooltip";
 
 type RepositorySection = "changes" | "history" | "worktrees";
 
@@ -350,22 +351,23 @@ export function ReviewRepository({
             )}
           </Stack>
           {projectPath && (
-            <Typography
-              data-repository-project-path
-              variant="caption"
-              color="text.secondary"
-              title={projectPath}
-              sx={{
-                display: "-webkit-box",
-                overflow: "hidden",
-                overflowWrap: "anywhere",
-                WebkitBoxOrient: "vertical",
-                WebkitLineClamp: 2,
-                lineHeight: 1.35,
-              }}
-            >
-              {projectPath}
-            </Typography>
+            <HintTooltip title={projectPath}>
+              <Typography
+                data-repository-project-path
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  display: "-webkit-box",
+                  overflow: "hidden",
+                  overflowWrap: "anywhere",
+                  WebkitBoxOrient: "vertical",
+                  WebkitLineClamp: 2,
+                  lineHeight: 1.35,
+                }}
+              >
+                {projectPath}
+              </Typography>
+            </HintTooltip>
           )}
         </Stack>
         <SegmentedTabs

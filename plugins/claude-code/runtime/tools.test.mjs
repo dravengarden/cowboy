@@ -919,7 +919,10 @@ test(
         return {};
       }
       if (method === "process/read") {
-        cursors.push(params.afterSeq);
+        cursors.push({
+          afterSeq: params.afterSeq,
+          observation: params.maxBytes === 1,
+        });
         collecting.resolve();
         await terminated.promise;
         return {
@@ -949,7 +952,11 @@ test(
     assert.equal(stopped.isError, false);
     assert.equal(JSON.parse(finished.content[0].text).output, "done");
     assert.equal(JSON.parse(stopped.content[0].text).output, "");
-    assert.deepEqual(cursors, [null, 1]);
+    assert.deepEqual(
+      cursors.filter((read) => !read.observation).map((read) => read.afterSeq),
+      [null, 1],
+    );
+    assert.equal(cursors.filter((read) => read.observation).length, 1);
     assert.equal(tools.operations.size, 0);
   },
 );

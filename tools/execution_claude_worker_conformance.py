@@ -59,6 +59,267 @@ def read_background(requests):
     return tool("Read", {"file_path": "cowboy-task://" + background_id(requests)})
 
 
+def text_blocks(message):
+    content = message.get("content", [])
+    if isinstance(content, str):
+        return [content]
+    return [block.get("text", "") for block in content if block.get("type") == "text"]
+
+
+def strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from strings(item)
+
+
+def agent_phases(args, api, client, native, session, context_checked, checks):
+    """Native background agents through the packaged Mod and real keeper.
+
+    Parent and child requests interleave in a native-chosen order, so one
+    stateful router answers by conversation content instead of position.
+    """
+    issued = {}
+    observations = {}
+    state = {"agents": {}, "noted": set(), "read": {}, "finals": 0, "handled": set()}
+    loops = {name: f"printf {name}_started >> {name}.txt; while :; do sleep 1; printf tick >> {name}.txt; done"
+             for name in ["child-b", "child-c", "peer"]}
+
+    def issue(kind, name, arguments):
+        call = tool(name, arguments)
+        issued[call[0]["id"]] = kind
+        return call
+
+    def router(requests):
+        request = requests[-1]
+        messages = request.get("messages", [])
+        users = [message for message in messages if message.get("role") == "user"]
+        prompt = " ".join(text for message in users for text in text_blocks(message))
+        results = [block for message in messages if isinstance(message.get("content"), list)
+                   for block in message["content"] if block.get("type") == "tool_result"]
+        for marker in ["AGENT_CHILD_A", "AGENT_CHILD_B", "AGENT_CHILD_C"]:
+            if marker not in prompt:
+                continue
+            if marker != "AGENT_CHILD_A":
+                require(not results, f"{marker} continued after cancellation")
+                return issue(marker, "Bash", {"command": loops["child-" + marker[-1].lower()], "timeout": 600000})
+            again = "AGENT_CHILD_A_CONTINUE" in prompt
+            if len(results) == (1 if again else 0):
+                return issue(marker, "Bash", {"command": f"pwd; printf {'again' if again else 'child_once'} >> child-a.txt"})
+            return [{"type": "text", "text": "A_AGAIN" if again else "A_DONE"}]
+        last = messages[-1]
+        latest = " ".join(text_blocks(last))
+        # Earlier fixture phases can leave their interrupted tool result in the
+        # same user message as a new phase prompt; answer only this router's calls.
+        last_results = [block for block in last.get("content", []) if isinstance(last.get("content"), list)
+                        and block.get("type") == "tool_result" and block.get("tool_use_id") in issued]
+        # Native delivers a notification as its own prompt when idle, or
+        # inside a tool result/queued attachment during an active turn.
+        notifications = [notification for notification in
+                         re.findall(r"<task-notification>[\s\S]*?</task-notification>", "\n".join(strings(last)))
+                         if notification not in state["handled"]]
+        for block in last_results:
+            kind = issued[block["tool_use_id"]]
+            encoded = json.dumps(block)
+            if kind == "agent":
+                state["agents"][len(state["agents"])] = re.search(r"cowboy-agent://([a-zA-Z0-9_-]+)", encoded)[1]
+                state["launch"] = encoded
+            elif kind == "peer":
+                state["peer"] = re.search(r"cowboy-task://([a-f0-9-]{36})", encoded)[1]
+            elif isinstance(kind, tuple):
+                state["read"][kind[1]] = encoded
+                state["noted"].add(kind[1])
+            else:
+                state.setdefault("results", {})[kind] = encoded
+        reads = []
+        for notification in notifications:
+            state["handled"].add(notification)
+            agent = re.search(r"<task-id>([^<]+)</task-id>", notification)[1]
+            if "<status>completed</status>" in notification:
+                reads.extend(issue(("read", agent), "Read", {"file_path": "cowboy-agent://" + agent}))
+            else:
+                state["noted"].add(agent)
+        if reads:
+            return reads
+        if last_results:
+            state["finals"] += 1
+            return [{"type": "text", "text": "PARENT_DONE"}]
+        if "AGENT_PHASE_A" in latest:
+            return issue("agent", "Agent", {"description": "Target child A", "prompt": "AGENT_CHILD_A run the command."})
+        if "CONTINUE_A" in latest:
+            return issue("send", "SendMessage", {"to": state["agents"][0], "summary": "Run again",
+                                                 "message": "AGENT_CHILD_A_CONTINUE run the command again."})
+        if "AGENT_PHASE_B" in latest:
+            return (issue("agent", "Agent", {"description": "Target child B", "prompt": "AGENT_CHILD_B loop."})
+                    + issue("peer", "Bash", {"command": loops["peer"], "run_in_background": True}))
+        if "PING_PARENT" in latest:
+            state["finals"] += 1
+            return [{"type": "text", "text": "PONG"}]
+        if "STOP_CHILD_B" in latest:
+            return issue("stop-agent", "TaskStop", {"task_id": state["agents"][1]})
+        if "STOP_PEER" in latest:
+            return issue("stop-peer", "TaskStop", {"task_id": state["peer"]})
+        if "AGENT_PHASE_C" in latest:
+            return issue("agent", "Agent", {"description": "Target child C", "prompt": "AGENT_CHILD_C loop."})
+        if "READ_AGENTS" in latest:
+            return [block for index in range(3)
+                    for block in issue(("read", state["agents"][index]), "Read",
+                                       {"file_path": "cowboy-agent://" + state["agents"][index]})]
+        # A phase prompt can share its message with a queued notification;
+        # answer the prompt above, and a notification alone here.
+        if notifications:
+            state["finals"] += 1
+            return [{"type": "text", "text": "NOTED"}]
+        raise ProbeFailure("unexpected agent phase request: " + latest[:200])
+
+    api.steps.extend([router] * 80)
+    home = str(args.runtime.parent / "claude-home")
+
+    def run(text, done, timeout=90):
+        # Each main-thread turn ends with one router text answer and one result
+        # frame. Waiting for both keeps late notification turns in this phase.
+        start = len(client.messages)
+        finals = state["finals"]
+        client.send({"type": "user", "message": {"role": "user", "content": text},
+                     "parent_tool_use_id": None, "session_id": ""})
+        deadline = time.monotonic() + timeout
+        try:
+            while not (done() and sum(frame.get("type") == "result" for frame in client.messages[start:])
+                       >= max(1, state["finals"] - finals)):
+                client.until(lambda frame: frame.get("type") == "result",
+                             timeout=max(0.1, deadline - time.monotonic()))
+        except ProbeFailure:
+            print("agent phase diagnostic:", text, api.failure, json.dumps(
+                {key: value for key, value in state.items() if key != "notifications"}, default=sorted)[:3000])
+            print("agent phase frames:", json.dumps([{key: frame.get(key) for key in
+                                                      ["type", "subtype", "task_id", "status", "result", "is_error"]}
+                                                     for frame in client.messages[start:]])[:4000])
+            if api.requests:
+                print("agent phase last request:", json.dumps(api.requests[-1].get("messages", [])[-2:])[:3000])
+            raise
+        require(api.failure is None, api.failure or "scripted API failed")
+        return client.messages[start:]
+
+    def growing(path, expected):
+        before = path.read_text()
+        time.sleep(1.5)
+        require((path.read_text() != before) == expected,
+                f"{path.name} {'stopped' if expected else 'kept running'} unexpectedly")
+
+    def stops(path, limit=30):
+        # Observe actual target quiescence, not the stop acknowledgement.
+        started = time.monotonic()
+        while True:
+            before = path.read_text()
+            time.sleep(1.5)
+            if path.read_text() == before:
+                return round(time.monotonic() - started - 1.5, 2)
+            require(time.monotonic() - started < limit, f"{path.name} kept running after its agent stopped")
+
+    def wait_file(path):
+        deadline = time.monotonic() + 30
+        while not path.exists():
+            require(time.monotonic() < deadline, f"{path.name} did not start")
+            time.sleep(0.05)
+
+    frames = run("AGENT_PHASE_A", lambda: len(state["agents"]) == 1 and state["agents"][0] in state["noted"])
+    agent_a = state["agents"][0]
+    require((args.target / "child-a.txt").read_text() == "child_once", "child command did not run once on target")
+    require(not (args.runtime / "child-a.txt").exists(), "child command escaped to runtime")
+    require(home not in state["launch"] and "cowboy-agent://" + agent_a in state["launch"],
+            "native Agent launch exposed its runtime output file")
+    require("A_DONE" in state["read"][agent_a], "handle Read did not return the recorded final answer")
+    completion = [frame for frame in frames if frame.get("subtype") == "task_notification"
+                  and frame.get("task_id") == agent_a]
+    require(len(completion) == 1 and completion[0]["status"] == "completed" and
+            completion[0]["output_file"] == "cowboy-agent://" + agent_a,
+            "client completion frame kept the runtime output locator")
+    # Each turn's system/init describes the runtime process itself (cwd, local
+    # messaging socket) to the runtime-side ACP client; it is not agent output.
+    agent_frames = [frame for frame in frames if frame.get("subtype") != "init"]
+    for frame in agent_frames:
+        encoded = json.dumps(frame)
+        if home in encoded:
+            position = encoded.index(home)
+            print("runtime home frame diagnostic:", frame.get("type"), frame.get("subtype"),
+                  encoded[max(0, position - 400):position + 200])
+    require(home not in json.dumps(agent_frames), "agent phase client frames exposed the runtime home")
+    context_checked(api.requests)
+    checks.extend(["native_agent_child_tools_route_to_target", "native_agent_launch_and_notification_use_handle",
+                   "native_agent_handle_reads_recorded_final_answer", "native_agent_client_frames_use_handle"])
+
+    state["noted"].discard(agent_a)
+    run("CONTINUE_A", lambda: agent_a in state["noted"])
+    require((args.target / "child-a.txt").read_text() == "child_onceagain", "continued child did not run once")
+    require("A_AGAIN" in state["read"][agent_a], "continued agent answer was not recorded")
+    context_checked(api.requests)
+    checks.append("native_agent_send_message_continues_on_target")
+
+    run("AGENT_PHASE_B", lambda: len(state["agents"]) == 2 and "peer" in state)
+    agent_b = state["agents"][1]
+    wait_file(args.target / "child-b.txt")
+    wait_file(args.target / "peer.txt")
+    growing(args.target / "child-b.txt", True)
+    # A held child call must not stall the parent: Mods fetches block other
+    # native work while pending, so the bridge keeps each observation short.
+    ping_sent = time.monotonic()
+    run("PING_PARENT", lambda: True)
+    observations["parent_turn_during_child_command_seconds"] = round(time.monotonic() - ping_sent, 2)
+    require(observations["parent_turn_during_child_command_seconds"] < 5,
+            "parent turn stalled behind a running child command")
+    stop_sent = time.monotonic()
+    run("STOP_CHILD_B", lambda: agent_b in state["noted"])
+    stop_turn = round(time.monotonic() - stop_sent, 2)
+    require("local_agent" in state["results"]["stop-agent"], "native TaskStop did not stop the agent task")
+    observations["taskstop_turn_seconds"] = stop_turn
+    require(stop_turn < 8, "native TaskStop stalled behind a running child command")
+    observations["taskstop_target_quiescent_after_turn_seconds"] = stops(args.target / "child-b.txt")
+    growing(args.target / "peer.txt", True)
+    run("STOP_PEER", lambda: "stop-peer" in state.get("results", {}))
+    require("Command stopped." in state["results"]["stop-peer"], "peer job did not stop")
+    growing(args.target / "peer.txt", False)
+    context_checked(api.requests)
+    checks.extend(["native_agent_taskstop_cancels_child_target_command", "native_agent_stop_preserves_peer_job",
+                   "parent_turns_and_taskstop_progress_during_child_command"])
+
+    run("AGENT_PHASE_C", lambda: len(state["agents"]) == 3)
+    # The child's request may follow the parent's result; count after its
+    # target command is observed running.
+    wait_file(args.target / "child-c.txt")
+    growing(args.target / "child-c.txt", True)
+    requests = len(api.requests)
+    client.send({"type": "control_request", "request_id": "interrupt-agents", "request": {"subtype": "interrupt"}})
+    client.until(lambda frame: frame.get("type") == "control_response" and
+                 frame["response"].get("request_id") == "interrupt-agents")
+    observations["interrupt_target_quiescent_seconds"] = stops(args.target / "child-c.txt")
+    if len(api.requests) != requests:
+        print("post-interrupt requests:", json.dumps([request.get("messages", [])[-1:]
+                                                      for request in api.requests[requests:]])[:3000])
+    require(len(api.requests) == requests, "interrupt cleanup started a model turn")
+    checks.append("native_interrupt_stops_idle_background_agent_target_command")
+
+    client.close()
+    client = native(session)
+    try:
+        client.ready()
+    except ProbeFailure:
+        client.stderr.seek(0)
+        print("resumed agent session stderr:", client.stderr.read().decode()[-3000:])
+        raise
+    state["read"].clear()
+    run("READ_AGENTS", lambda: len(state["read"]) == 3)
+    require("A_AGAIN" in state["read"][agent_a], "resumed handle lost the final answer")
+    for agent in [agent_b, state["agents"][2]]:
+        require("was stopped" in state["read"][agent], "resumed handle did not report the stopped agent")
+    context_checked(api.requests)
+    checks.append("native_agent_outcomes_survive_cold_resume")
+    return client, observations
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -125,7 +386,10 @@ def main():
     if memory.enabled:
         api.steps.insert(0, tool("mcp__matrix__" + memory.tool, memory.arguments))
     def native(resume=None):
-        return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume, bound_native=True)
+        # The packaged ACP adapter disallows only AskUserQuestion without form
+        # elicitation; the bound launcher owns every other tool restriction.
+        return Claude(str(wrapper), environment, args.runtime, fixture, resume=resume, bound_native=True,
+                      disallowed="AskUserQuestion")
     def context_checked(requests):
         for request in [*api.token_requests, *api.title_requests]:
             require(str(args.runtime) not in json.dumps(request) and
@@ -210,6 +474,20 @@ def main():
         time.sleep(1.2)
         require((args.target / "retained.txt").read_text() == retained, "resumed process handle did not stop target job")
         checks.extend(["cold_native_resume_preserves_context_reads_and_effects", "background_process_handle_survives_native_resume"])
+        # The Rust relay discards the real completed write reply and changes
+        # the target independently. A replay would erase that later change.
+        api.steps.extend([[], tool("Write", {"file_path": "lost-write-receipt.txt", "content": "native-write-before-loss\n"}),
+                          tool("Read", {"file_path": "lost-write-receipt.txt"})])
+        client.prompt(timeout=90)
+        write_results = list(outputs(api.requests[-1]))[-2:]
+        require(len(write_results) == 2 and not any(block.get("is_error") for block in write_results),
+                "retained write result did not reach native Claude")
+        require("external-write-after-commit" in json.dumps(write_results[-1]),
+                "native Read did not observe the independent post-write change")
+        require((args.target / "lost-write-receipt.txt").read_text() == "external-write-after-commit\n",
+                "lost write completion replayed over a later target mutation")
+        require(not (args.runtime / "lost-write-receipt.txt").exists(), "write escaped to runtime")
+        checks.append("lost_file_write_completion_preserves_later_external_change")
         api.steps.extend([[], [{"type": "text", "text": "<summary>Continue the target fixture. The target project instructions remain authoritative.</summary>"}],
                           tool("Read", {"file_path": "fixture.txt"})])
         client.prompt(text="/compact", timeout=90)
@@ -359,6 +637,7 @@ def main():
         require((args.target / "foreground.txt").read_text() == foreground, "foreground descendants survived interruption")
         context_checked(api.requests)
         checks.append("native_interrupt_stops_foreground_target_process")
+        client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
         title_requests = len(api.title_requests)
@@ -438,8 +717,10 @@ def main():
         checks.extend(["broken_module_refused_before_model_request", "bare_mode_refused_without_changing_authentication"])
         shutil.copyfile(launcher.parent / "context-mod.js", broken / "app/context-mod.js")
         source = (launcher.parent / "tools.mjs").read_text()
+        dispatch = "async dispatch(name, args, call) {"
+        require(source.count(dispatch) == 1, "fault injection point changed; update the negative candidates")
         for label, injected in [("malformed_result", 'return { result: {} };'), ("bridge_error", "throw new Error('fixture lost result');")]:
-            (broken / "app/tools.mjs").write_text(source.replace("async nativeCall(name, args) {", "async nativeCall(name, args) {\n" + injected))
+            (broken / "app/tools.mjs").write_text(source.replace(dispatch, dispatch + "\n" + injected))
             api.steps.extend([[], tool("Bash", {"command": "printf forbidden_local_effect > forbidden-local.txt"})])
             failed = Claude(str(broken / "bin/cowboy-configured-cli"), environment, args.runtime, fixture, bound_native=True)
             try:
@@ -459,8 +740,11 @@ def main():
             "packaged_launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
             "scripted_api_requests": native_requests + len(api.requests),
             "native_title_requests": title_requests + len(api.title_requests),
+            "agent_observations": agent_observations,
             "production_credentials": False, "production_activation": False,
-            "not_checked": ["real_subscription_inference", "cross_host_latency", "native_subagents_and_project_hooks"],
+            "not_checked": ["real_subscription_inference", "cross_host_latency", "project_hooks",
+                            "agent_permission_modes", "grandchild_agents", "teammates_and_agent_worktrees",
+                            "agent_partial_output_stream", "native_runtime_crash_with_live_agent"],
         }
         args.receipt.write_text(json.dumps(receipt, indent=2) + "\n")
         print(f"accepted {len(checks)} packaged Claude worker checks")

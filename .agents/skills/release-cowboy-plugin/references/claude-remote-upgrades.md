@@ -54,9 +54,19 @@ The maintained routing list is `NATIVE_TOOLS` in
 here. Today the target tools are Bash, Read, Write, Edit, Glob, Grep,
 NotebookEdit and TaskStop. `context-mod.js` permits native TodoWrite and
 AskUserQuestion and, only for enrolled sessions, the exact Matrix memory tools
-listed in that module. Unknown tools are denied. Native agents, project
-hooks/skills, implicit file attachments, plan files and PDF extraction remain
-unsupported by this lane; adopting any of them is a separate capability change.
+listed in that module. Native `Agent` runs background subagents whose own tool
+calls carry `agentId` through the same routing; `SendMessage` and `TaskStop`
+reach native only for this session's registered agents. Unknown tools are
+denied. Project hooks/skills, custom agents, agent isolation, implicit file
+attachments, plan files and PDF extraction remain unsupported by this lane;
+adopting any of them is a separate capability change.
+
+Agent support depends on observed Mods behavior, so re-verify it for every CLI
+candidate: the idle and queued (`delivery`/`queued_command`) notification
+shapes, `turn.complete` agent outcomes, `next.signal` on abandoned held calls,
+and that a pending Mods fetch blocks other native work (the bridge keeps each
+observation to about one second). The packaged runner's `native_agent_*` and
+`parent_turns_and_taskstop_progress_during_child_command` checks cover these.
 
 Check shared CLI/SDK/ACP consumers through the parent upgrade workflow. Standard
 Claude and Claude DeepSeek have different remote/authentication contracts.

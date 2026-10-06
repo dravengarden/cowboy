@@ -18,6 +18,7 @@ import {
   previewCodeForRendering,
   shouldUseLightweightCode,
 } from "../codeRendering";
+import { HintTooltip } from "../HintTooltip";
 
 // Reusable presentational primitives for tool cards. They compose the existing
 // lazy `Markdown` (which wraps react-syntax-highlighter) for all syntax
@@ -574,17 +575,18 @@ export function DiffView({
 export function FileChip({ path }: { path: string }): React.JSX.Element {
   const name = path.split("/").pop() || path;
   return (
-    <Chip
-      size="small"
-      label={name}
-      title={path}
-      sx={{
-        height: 20,
-        fontSize: "0.6875rem",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        "& .MuiChip-label": { px: 0.75 },
-      }}
-    />
+    <HintTooltip title={path}>
+      <Chip
+        size="small"
+        label={name}
+        sx={{
+          height: 20,
+          fontSize: "0.6875rem",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          "& .MuiChip-label": { px: 0.75 },
+        }}
+      />
+    </HintTooltip>
   );
 }
 

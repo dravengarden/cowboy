@@ -74,6 +74,22 @@ function compactStroke(stroke: string): string {
   return keys.join(keys.every((key) => key.length === 1) ? "" : "+");
 }
 
+/** The keycap labels of a shortcut as text: a leader path is one cap
+ *  (`␣WR`), every other stroke is compacted (`⌘S`, `Esc`). */
+export function desktopShortcutCaps(shortcut: string): string[] {
+  const strokes = shortcut.split(" → ").filter((stroke) => stroke.length > 0);
+  if (strokes.length >= 2 && strokes[0] === DESKTOP_WORKSPACE_PREFIX) {
+    return [
+      desktopLeaderLabel(
+        strokes.slice(1)
+          .map((stroke) => stroke === "Tab" ? DESKTOP_LEADER_TAB : stroke)
+          .join(""),
+      ),
+    ];
+  }
+  return strokes.map(compactStroke);
+}
+
 export function DesktopShortcut(
   { shortcut, quiet = false, compact = false, availability = "available" }: {
     shortcut: string;

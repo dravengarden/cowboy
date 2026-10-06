@@ -1,0 +1,617 @@
+{
+  "schema": "cowboy.claude-native-agent-output-research/v1",
+  "date": "2026-10-06",
+  "base_commit": "49b41ad0bdfcd22952bbeef20e43948e38eb5eb5",
+  "claude_version": "2.1.287",
+  "executor_version": "0.159.3",
+  "runtime_source_changed": false,
+  "production_capability_enabled": false,
+  "cases": {
+    "baseline": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "c57f814b23ab9249470c0ec28c143911e05c75c8b2ba7d607f991e0ab2337156",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "durable_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": false,
+      "native_registered_task_read": false,
+      "native_task_output_tool": false,
+      "native_task_output_unavailable": false,
+      "native_completion_answer_read": false,
+      "task_output_contains_runtime_cwd": false,
+      "task_output_contains_runtime_home": false,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": false,
+      "runtime_home_path_leaked": true,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 4,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "ae1745f21467f1096"
+        },
+        {
+          "tool": "Read",
+          "agentId": "ae1745f21467f1096"
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    },
+    "projection": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "c57f814b23ab9249470c0ec28c143911e05c75c8b2ba7d607f991e0ab2337156",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "durable_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": true,
+      "native_registered_task_read": false,
+      "native_task_output_tool": false,
+      "native_task_output_unavailable": false,
+      "native_completion_answer_read": false,
+      "task_output_contains_runtime_cwd": false,
+      "task_output_contains_runtime_home": false,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": false,
+      "runtime_home_path_leaked": false,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 4,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "a461c2a057515fe22"
+        },
+        {
+          "tool": "Read",
+          "agentId": "a461c2a057515fe22"
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    },
+    "raw": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "c57f814b23ab9249470c0ec28c143911e05c75c8b2ba7d607f991e0ab2337156",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "durable_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": true,
+      "native_registered_task_read": true,
+      "native_task_output_tool": false,
+      "native_task_output_unavailable": false,
+      "native_completion_answer_read": false,
+      "task_output_contains_runtime_cwd": true,
+      "task_output_contains_runtime_home": false,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": true,
+      "runtime_home_path_leaked": true,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 7,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "a549fd59dd79cf2eb"
+        },
+        {
+          "tool": "Read",
+          "agentId": "a549fd59dd79cf2eb"
+        },
+        {
+          "kind": "task-read",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "type",
+            "file"
+          ]
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    },
+    "native": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "c57f814b23ab9249470c0ec28c143911e05c75c8b2ba7d607f991e0ab2337156",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "durable_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": true,
+      "native_registered_task_read": false,
+      "native_task_output_tool": true,
+      "native_task_output_unavailable": true,
+      "native_completion_answer_read": false,
+      "task_output_contains_runtime_cwd": false,
+      "task_output_contains_runtime_home": false,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": false,
+      "runtime_home_path_leaked": true,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 7,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "a74124eb571647e26"
+        },
+        {
+          "tool": "Read",
+          "agentId": "a74124eb571647e26"
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    },
+    "completion": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "c57f814b23ab9249470c0ec28c143911e05c75c8b2ba7d607f991e0ab2337156",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "durable_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": true,
+      "native_registered_task_read": true,
+      "native_task_output_tool": false,
+      "native_task_output_unavailable": false,
+      "native_completion_answer_read": true,
+      "task_output_contains_runtime_cwd": false,
+      "task_output_contains_runtime_home": false,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": false,
+      "runtime_home_path_leaked": true,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 7,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "a63ab45b9be3cde84"
+        },
+        {
+          "tool": "Read",
+          "agentId": "a63ab45b9be3cde84"
+        },
+        {
+          "kind": "task-read",
+          "keys": [
+            "result"
+          ],
+          "resultKeys": [
+            "type",
+            "file"
+          ]
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    }
+  },
+  "findings": [
+    "raw task JSONL Read reintroduces runtime cwd and original environment attachments",
+    "TaskOutput is unavailable in this pinned native lane",
+    "native turn.complete final answer can back an owner-registered Read without exposing runtime cwd",
+    "native completion notification still introduces runtime-home locator on a subsequent model request"
+  ],
+  "remaining_gaps": [
+    "partial output, failures and cancellation outcomes",
+    "durable ownership and cold resume",
+    "native notification projection to model and client",
+    "permission and foreign-owner negative tests",
+    "enrolled cross-host transport"
+  ],
+  "documentation_checked": [
+    "https://code.claude.com/docs/en/plugins/mods/reference",
+    "https://code.claude.com/docs/en/plugins/mods/api"
+  ],
+  "validation": {
+    "five_native_observations": "passed; native TaskOutput case asserts explicit unavailability, not support",
+    "full_quality_gate": "passed: nix develop -c env RUST_TEST_THREADS=4 just check-compact (exit 0)",
+    "docs_index": "pre-existing data-transfer-toolkit INDEX front matter failure; changed audit page indexed; no new Markdown",
+    "diff_review": "complete research-only diff reviewed; task/tool identity correlation, guarded Mod replacement, final-answer-only boundary and unchanged production admission verified"
+  }
+}

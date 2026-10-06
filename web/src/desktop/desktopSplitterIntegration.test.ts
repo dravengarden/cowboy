@@ -16,10 +16,9 @@ const statusSource = await Deno.readTextFile(
 Deno.test("every Desktop vertical boundary exposes the shared splitter contract", () => {
   assert(appSource.includes('data-desktop-splitter="sessions-prompt"'));
   assert(workspaceSource.includes('data-desktop-splitter="prompt-conversation"'));
-  assert(workspaceSource.includes('data-desktop-splitter="questions-page"'));
   assertEquals(
     (appSource + workspaceSource).match(/<DesktopSplitterHint \/>/gu)?.length,
-    3,
+    2,
   );
 });
 
@@ -36,13 +35,6 @@ Deno.test("the workspace prefix enters an exclusive H/L Resize mode", () => {
   assert(commandsSource.includes("Resize mode is exclusive"));
   assert(statusSource.includes("DESKTOP_RESIZE_HINT"));
   assert(statusSource.includes('{ keys: "H/L", label: "Resize" }'));
-});
-
-Deno.test("Reading Questions width is adjustable and persisted", () => {
-  assert(workspaceSource.includes("readingQuestionsWidthStore.get"));
-  assert(workspaceSource.includes("startQuestionsResize"));
-  assert(workspaceSource.includes("readingQuestionsWidthStore.set(next)"));
-  assert(workspaceSource.includes("width={questionsWidth}"));
 });
 
 Deno.test("Prompt divider is governed by the Conversation floor, not a hidden percentage cap", () => {

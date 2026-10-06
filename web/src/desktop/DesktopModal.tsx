@@ -4,12 +4,12 @@ import {
   Divider,
   IconButton,
   Stack,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { Close } from "@mui/icons-material";
 import type { KeyboardEventHandler, ReactNode } from "react";
 import { isImeKeyEvent } from "../imeKey";
+import { HintTooltip } from "../HintTooltip";
 import {
   desktopModalBackdropSx,
   desktopModalPaperSx,
@@ -82,11 +82,11 @@ export function DesktopModal({
           {description && <Typography variant="caption" color="text.secondary">{description}</Typography>}
         </Box>
         <Box sx={{ flex: 1 }} />
-        <Tooltip title="Close · Esc">
+        <HintTooltip title="Close" shortcut="Escape">
           <IconButton aria-label={`Close ${title}`} onClick={onClose} size="small">
             <Close fontSize="small" />
           </IconButton>
-        </Tooltip>
+        </HintTooltip>
       </Stack>
       <Divider />
       <Box sx={{ minHeight: 0, overflow: "auto" }}>{children}</Box>

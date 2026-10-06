@@ -4,6 +4,7 @@ import { Box, CircularProgress, IconButton } from "@mui/material";
 import { lazy, Suspense, useState } from "react";
 import { Sheet } from "../Sheet";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
+import { HintTooltip } from "../HintTooltip";
 
 const WorkspaceExtensions = lazy(() => import("./WorkspaceExtensions"));
 
@@ -42,15 +43,16 @@ export function WorkspaceExtensionsButton(
     : null;
   return (
     <>
-      <IconButton
-        disabled={!context}
-        onClick={() => setOpen(true)}
-        aria-label="Open extensions"
-        title="Extensions"
-        data-desktop-item="topbar-extensions"
-      >
-        <ExtensionOutlined />
-      </IconButton>
+      <HintTooltip title="Extensions">
+        <IconButton
+          disabled={!context}
+          onClick={() => setOpen(true)}
+          aria-label="Open extensions"
+          data-desktop-item="topbar-extensions"
+        >
+          <ExtensionOutlined />
+        </IconButton>
+      </HintTooltip>
       {desktop
         ? (context && (
           <Suspense fallback={null}>

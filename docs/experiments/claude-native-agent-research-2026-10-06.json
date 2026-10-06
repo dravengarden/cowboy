@@ -1,0 +1,241 @@
+{
+  "schema": "cowboy.claude-native-agent-research-summary/v1",
+  "date": "2026-10-06",
+  "base_commit": "753de4df3ffd13c29a50ca4f058996b414ee2906",
+  "claude_version": "2.1.287",
+  "executor_version": "0.159.3",
+  "runtime_source_changed": false,
+  "production_capability_enabled": false,
+  "cases": {
+    "baseline": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "e423bba3e7d02183694676ac727a4a4e1c4bdb3fa45f99aca96f300307bb7a9f",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "projected_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": false,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": false,
+      "runtime_home_path_leaked": true,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 4,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "ab6e65c7c4aa3555b"
+        },
+        {
+          "tool": "Read",
+          "agentId": "ab6e65c7c4aa3555b"
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    },
+    "projection": {
+      "schema": "cowboy.claude-native-agent-research/v1",
+      "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "mod_sha256": "280da7947d4847d1aafa3e416f77c8fdb3b751bbf7cc9ddcf6c0c088ae086989",
+      "probe_sha256": "e423bba3e7d02183694676ac727a4a4e1c4bdb3fa45f99aca96f300307bb7a9f",
+      "keeper_sha256": "0e08827af274ca0326def6e33b3b0e4a6642233ae3d944384869e4b7a13a64b9",
+      "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "topology": "same-host native Claude and independent resident keeper, shared filesystem",
+      "production_credentials": false,
+      "real_model_requests": 0,
+      "not_checked": [
+        "enrolled_worker_transport",
+        "cross_host",
+        "projected_handle_reads",
+        "background_agent_cancellation_and_resume",
+        "cancellation",
+        "cold_resume",
+        "permissions",
+        "grandchildren",
+        "worktrees",
+        "implicit_project_discovery"
+      ],
+      "child_tool_intercepted": true,
+      "child_agent_id_present": true,
+      "model_task_locator_projection": true,
+      "target_read_calls": 1,
+      "native_child_completion_notification": true,
+      "child_requests_have_target_guidance": true,
+      "child_requests_have_target_directory": true,
+      "runtime_path_leaked": false,
+      "runtime_home_path_leaked": false,
+      "runtime_file_leaked": false,
+      "runtime_guidance_leaked": false,
+      "scripted_api_requests": 4,
+      "tool_events": [
+        {
+          "tool": "Agent",
+          "agentId": null
+        },
+        {
+          "kind": "agent-result",
+          "keys": [
+            "ref",
+            "result",
+            "text",
+            "isReadOnly"
+          ],
+          "resultKeys": [
+            "isAsync",
+            "status",
+            "agentId",
+            "description",
+            "resolvedModel",
+            "prompt",
+            "outputFile",
+            "canReadOutputFile"
+          ],
+          "textType": "string",
+          "agentId": "a5cb6a620b069f7bf"
+        },
+        {
+          "tool": "Read",
+          "agentId": "a5cb6a620b069f7bf"
+        }
+      ],
+      "native_completion_exposes_runtime_path": false,
+      "native_completion_exposes_runtime_home": true,
+      "native_completion_fields": [
+        "output_file",
+        "session_id",
+        "status",
+        "subtype",
+        "summary",
+        "task_id",
+        "tool_use_id",
+        "type",
+        "usage",
+        "uuid"
+      ],
+      "child_request_context_keys": [
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ],
+        [
+          "model",
+          "messages",
+          "system",
+          "tools",
+          "metadata",
+          "max_tokens",
+          "thinking",
+          "context_management",
+          "output_config",
+          "stream"
+        ]
+      ]
+    }
+  },
+  "remaining_gaps": [
+    "registered task handle reads and client completion projection",
+    "child-scoped cancellation and persisted ownership",
+    "permissions and implicit IO",
+    "resume, grandchildren and worktrees",
+    "enrolled transport and cross-host acceptance"
+  ],
+  "documentation_checked": [
+    "https://code.claude.com/docs/en/plugins/mods/events",
+    "https://code.claude.com/docs/en/plugins/mods/reference"
+  ],
+  "validation": {
+    "native_baseline": "passed",
+    "native_projection": "passed",
+    "full_quality_gate": "passed: nix develop -c env RUST_TEST_THREADS=4 just check-compact (exit 0)",
+    "docs_index": "global check fails at pre-existing data-transfer-toolkit INDEX front matter; existing audit page remains indexed; no new Markdown",
+    "diff_review": "complete active-task diff reviewed; research-only source, isolated fixture, exact source hashes and explicit untested boundaries; no production runtime changes"
+  }
+}
