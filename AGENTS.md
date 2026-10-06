@@ -65,6 +65,13 @@ require the exact successful build receipt and published SideStore version.
   credential copying, live database edits or installation-pointer writes.
 
 ## Architecture gotchas
+- **Configuration**: the Service and each Device own one TOML file through the
+  unified framework in `src/config.rs`; see `docs/configuration.md`. Decide
+  every new setting with its "Where a setting belongs" rule (wiring/secret →
+  CLI/env, UI-edited runtime state → database, everything else → config file,
+  scoped to the enforcing process). Never add a behavioural environment
+  variable or a separate JSON policy file; validate edits with
+  `cowboy config check` before applying or rolling out.
 - The normative Provider-platform contract is `docs/requirements.md`. The
   canonical dependency-audit and release workflow is the repository-owned
   `.agents/skills/release-cowboy-plugin/`; keep it versioned with Cowboy and

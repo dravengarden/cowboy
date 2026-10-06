@@ -114,6 +114,7 @@ regex = "1"
 # Helix / Zed use). See src/files.rs.
 ignore = "0.4"
 nucleo-matcher = "0.3"
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 
 # The long-lived control plane handles bursty restore/transcript allocations.
 # jemalloc returns those pages to the OS more predictably than glibc malloc;

@@ -116,6 +116,8 @@
           ./src/lib.rs
           ./src/main.rs
           ./src/cli.rs
+          ./src/config.rs
+          ./src/config
           ./src/logs.rs
           ./src/logs
           ./src/composition

@@ -43,6 +43,8 @@ pub mod code_review;
 mod component_proof;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod composition;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod config;
 #[cfg(feature = "full")]
 mod core;
 #[cfg(feature = "full")]

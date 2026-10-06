@@ -19,6 +19,7 @@ primary phone/desktop product path.
 - [`editor-plugins.md`](editor-plugins.md) — Installable sandboxed editor plugins (manifest, API, lifecycle, isolation) and Desktop editing parity with Obsidian 1.13.7
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
+- [`configuration.md`](configuration.md) — Unified Service/Device configuration files, `cowboy config` CLI, reload classes, rolling-update pre-flight, and how to decide config file vs database vs wiring
 - [`execution-environments.md`](execution-environments.md) — Native remote execution decision: separate runtime placement from target files/processes; core, Provider and infrastructure ownership; staged acceptance
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, and ownership contract
 - [`secure-connectivity-design.md`](secure-connectivity-design.md) — Option 1 security/reliability priorities and deferred Option 2 roadmap with unresolved PWA bootstrap questions

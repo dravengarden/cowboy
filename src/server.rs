@@ -242,6 +242,8 @@ fn resumed_provider_authentication_response(
 
 struct AppState {
     service_id: String,
+    /// The Service configuration file, with live fields following edits.
+    service_config: crate::config::Handle,
     hub: Hub,
     supervisor: Arc<Supervisor>,
     /// Kept for read-only storage metrics (`/api/metrics`). `None` in-memory.
@@ -1076,6 +1078,16 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         args.product_auth_enabled,
         "Device authentication is mandatory; authentication cannot be disabled"
     );
+    // An invalid Service configuration refuses startup before any state is
+    // touched, so a rolling update keeps the previous instance serving.
+    let service_config_path = crate::config::Scope::Service.path_in(&args.data_dir);
+    let service_config = crate::config::Handle::new(crate::config::load(
+        crate::config::Scope::Service,
+        &service_config_path,
+    )?);
+    // Lives for the whole process; it only reads the file and swaps values.
+    let _service_config_watch =
+        service_config.watch(crate::config::Scope::Service, service_config_path);
     plugin_catalog.initialize()?;
     let plugin_dir =
         crate::plugin_dir::PluginDir::open(&args.data_dir).context("opening plugin directory")?;
@@ -1727,6 +1739,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         args.data_dir.clone(),
         AppState {
             service_id,
+            service_config,
             hub,
             supervisor,
             store,
@@ -2854,10 +2867,9 @@ async fn run_purge_sweeper(store: Store) {
 }
 
 /// First retention pass after start, once Machines have reconnected and every
-/// restored session's pinned generation is known; then every six hours.
+/// restored session's pinned generation is known; then every
+/// `plugins.generation_retention_interval` (re-read live before each wait).
 const GENERATION_RETENTION_DELAY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-const GENERATION_RETENTION_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(6 * 60 * 60);
 
 /// Generations each `(Machine, Provider)` must keep: every one pinned by a
 /// session that is not deleted, including exited and hibernated sessions,
@@ -2883,9 +2895,17 @@ fn referenced_generations(
 /// generations itself and refuses while an installation is unreconciled.
 async fn run_generation_retention(state: Arc<AppState>) {
     tokio::time::sleep(GENERATION_RETENTION_DELAY).await;
-    let mut tick = tokio::time::interval(GENERATION_RETENTION_INTERVAL);
+    let mut first = true;
     loop {
-        tick.tick().await;
+        if !first {
+            tokio::time::sleep(
+                state
+                    .service_config
+                    .get(&crate::config::schema::PLUGIN_GENERATION_RETENTION_INTERVAL),
+            )
+            .await;
+        }
+        first = false;
         let Ok(machines) = state.machine_snapshots.load().await else {
             continue;
         };

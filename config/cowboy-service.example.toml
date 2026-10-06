@@ -1,0 +1,10 @@
+# Cowboy service configuration (`cowboy-service.toml`).
+# Every setting is optional; the values below are the defaults.
+# Validate edits with `cowboy config check --scope service`; see docs/configuration.md.
+schema = 1
+
+[plugins]
+# How often the Controller asks every connected Device to retire Plugin
+# generations that no open, hibernated or unpurged session pins.
+# duration string such as "6h", from 10m to 7d; applies live.
+# generation_retention_interval = "6h"
