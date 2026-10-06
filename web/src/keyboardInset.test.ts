@@ -4,6 +4,7 @@ import {
   inferKeyboardOpen,
   iosPwaKeyboardAccessoryPx,
   isAppleTouchDevice,
+  isStrayDocumentScroll,
   isUnreliableVisualViewport,
   keyboardCoverOverlap,
   fixedLayoutHeight,
@@ -197,4 +198,14 @@ Deno.test("New session is a cover sheet on the mobile navbar so Title clears the
     html.includes('[aria-hidden="true"][style*="opacity: 0"]'),
     false,
   );
+});
+
+Deno.test("native document scroll strays from its locked rest offset", () => {
+  // Physical iPhone native shell, Create cover (2026-10-06): WebKit's focus
+  // reveal left the document at scrollY = -228.
+  assertEquals(isStrayDocumentScroll(0, -228), true);
+  assertEquals(isStrayDocumentScroll(0, 12), true);
+  assertEquals(isStrayDocumentScroll(3, 0), true);
+  assertEquals(isStrayDocumentScroll(0, 0), false);
+  assertEquals(isStrayDocumentScroll(0.2, -0.4), false);
 });
