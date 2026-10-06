@@ -92,6 +92,12 @@ pub struct WorkerSnapshot {
     /// observe them. Restores the level after a Controller reconnect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_tasks: Option<u32>,
+    /// The Machine-minted durable Session lineage (see `incarnations`). Only a
+    /// Machine whose incarnation writer was admitted stamps it, on every
+    /// snapshot it sends; a worker never sets it and an older Machine omits it.
+    /// It is storage identity for comparison, never authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incarnation: Option<String>,
 }
 
 /// Cowboy-owned `sessionUpdate` carrying the native background-task level.
@@ -691,6 +697,7 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            incarnation: None,
         }
     }
 
@@ -724,6 +731,32 @@ mod tests {
             agent_session_id: "thread-cleared".to_owned(),
         });
         assert_eq!(resumed.resumable_agent_session_id(), None);
+    }
+
+    #[test]
+    fn the_lineage_is_additive_on_the_wire_in_both_directions() {
+        let mut snapshot = native_snapshot(None, None);
+        // An older Machine omits it and a Machine without a writer sends none.
+        let absent = serde_json::to_value(&snapshot).unwrap();
+        assert!(absent.get("incarnation").is_none());
+        assert_eq!(
+            serde_json::from_value::<WorkerSnapshot>(absent)
+                .unwrap()
+                .incarnation,
+            None
+        );
+        snapshot.incarnation = Some("0123456789abcdef0123456789abcdef".to_owned());
+        let present = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(present["incarnation"], "0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            serde_json::from_value::<WorkerSnapshot>(present.clone()).unwrap(),
+            snapshot
+        );
+        // A Controller that predates the field decodes a stamped snapshot by
+        // ignoring it: the snapshot type does not deny unknown fields.
+        let mut legacy = present;
+        legacy["unknown_future_field"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<WorkerSnapshot>(legacy).is_ok());
     }
 
     #[test]

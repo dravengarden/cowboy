@@ -659,6 +659,11 @@ struct Session {
     meta: SessionMeta,
     // A Controller-local observation lifetime, not the native worker lifetime.
     code_incarnation: code_scope::CodeIncarnation,
+    /// The durable Session lineage the owning Machine last reported. `None`
+    /// means that Machine reports none (no admitted writer, an older release, a
+    /// local runtime), in which case only the process-local observation lifetime
+    /// above fences this Session. Learned from snapshots, never constructed here.
+    machine_lineage: Option<String>,
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
@@ -2183,6 +2188,7 @@ impl Hub {
                     Session {
                         meta,
                         code_incarnation: code_scope::CodeIncarnation::default(),
+                        machine_lineage: None,
                         log,
                         log_bytes,
                         event_count,
@@ -2702,6 +2708,7 @@ impl Hub {
                 Session {
                     meta: meta.clone(),
                     code_incarnation: code_scope::CodeIncarnation::default(),
+                    machine_lineage: None,
                     log: Vec::new(),
                     log_bytes: 0,
                     event_count: 0,
@@ -6233,6 +6240,7 @@ mod runtime_reconciliation_tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            incarnation: None,
         }
     }
 

@@ -476,6 +476,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_changed_machine_lineage_does_not_reuse_cached_pages() {
+        let hub = crate::core::Hub::new();
+        let control = crate::machine_control::MachineControl::default();
+        let scope = || {
+            CodeReadScope::Session(
+                control
+                    .session_read_scope("service-test", hub.session_code_scope("session").unwrap())
+                    .unwrap(),
+            )
+        };
+        hub.create_local_session(
+            "session".into(),
+            "codex".into(),
+            "/work".into(),
+            "title".into(),
+            crate::core::SessionOrigin::default(),
+            false,
+        );
+        hub.set_machine_lineage("session", Some("a".repeat(32).as_str()));
+        let original = scope();
+        let mut snapshot_key = key("a.rs");
+        snapshot_key.owner = original.clone();
+        let cache = DiffSnapshotCache::new(24, 1024, 4, Duration::from_secs(60));
+        let first = cache
+            .first_page(snapshot_key, || async { Ok(document("a.rs", 20)) })
+            .await
+            .unwrap();
+        let cursor = first.next_cursor.as_deref().unwrap();
+        // Replaying the same lineage keeps the continuation usable.
+        hub.set_machine_lineage("session", Some("a".repeat(32).as_str()));
+        assert!(cache.next_page(&scope(), cursor).await.is_ok());
+        // A reset's lineage, and the old one returning, do not.
+        hub.set_machine_lineage("session", Some("b".repeat(32).as_str()));
+        hub.set_machine_lineage("session", Some("a".repeat(32).as_str()));
+        let revived = scope();
+        assert_ne!(original, revived);
+        assert!(cache.next_page(&revived, cursor).await.is_err());
+    }
+
+    #[tokio::test]
     async fn session_retarget_and_recreation_do_not_reuse_cached_pages() {
         let hub = crate::core::Hub::new();
         let control = crate::machine_control::MachineControl::default();

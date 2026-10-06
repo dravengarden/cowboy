@@ -169,3 +169,36 @@ fn execution_environment_unknown_or_wrong_runtime_never_resolves_as_local() {
     drop(sessions);
     assert!(hub.session_code_scope("remote-session").is_none());
 }
+
+#[test]
+fn a_changed_machine_lineage_retires_observations_but_repeats_do_not() {
+    let hub = Hub::new();
+    create(&hub, "session");
+    let process_local = hub.session_code_scope("session").unwrap();
+    // The first lineage a Machine reports changes the scope once.
+    assert!(hub.set_machine_lineage("session", Some("a".repeat(32).as_str())));
+    assert!(!hub.code_scope_is_current(&process_local));
+    let first = hub.session_code_scope("session").unwrap();
+    assert!(first.string_bytes() > process_local.string_bytes());
+    // Every later snapshot of the same lineage keeps it current.
+    assert!(!hub.set_machine_lineage("session", Some("a".repeat(32).as_str())));
+    assert!(hub.code_scope_is_current(&first));
+    // A reset (new lineage) retires it; the old value can never come back.
+    assert!(hub.set_machine_lineage("session", Some("b".repeat(32).as_str())));
+    assert!(!hub.code_scope_is_current(&first));
+    let second = hub.session_code_scope("session").unwrap();
+    assert!(hub.set_machine_lineage("session", Some("a".repeat(32).as_str())));
+    assert!(!hub.code_scope_is_current(&second));
+    assert!(!hub.code_scope_is_current(&first));
+    // A Machine that stops reporting one is a change too, never silently kept.
+    let third = hub.session_code_scope("session").unwrap();
+    assert!(hub.set_machine_lineage("session", None));
+    assert!(!hub.code_scope_is_current(&third));
+    // An unknown Session records nothing.
+    assert!(!hub.set_machine_lineage("unknown", Some("c".repeat(32).as_str())));
+    // Lineage never substitutes for the other identity parts.
+    let other = Hub::new();
+    create(&other, "session");
+    other.set_machine_lineage("session", Some("a".repeat(32).as_str()));
+    assert!(!other.code_scope_is_current(&first));
+}

@@ -410,7 +410,7 @@ async fn invalid_outcomes_keep_exclusion_and_never_rearm_apply() {
 
 #[tokio::test]
 async fn session_aba_and_connection_replacement_cannot_authorize_an_old_apply() {
-    for change in ["session", "cwd", "connection"] {
+    for change in ["session", "cwd", "lineage", "connection"] {
         let mut fixture = fixture(20);
         let resource = opened(&fixture, 1);
         let prepared = prepared(&mut fixture, &resource).await;
@@ -431,6 +431,14 @@ async fn session_aba_and_connection_replacement_cannot_authorize_an_old_apply() 
                     .hub
                     .update_session_cwd("session", "/original/worktree".into())
                     .unwrap();
+            }
+            "lineage" => {
+                // The owning Machine reports a reset's new lineage, and even its
+                // earlier value coming back cannot revive the old authorization.
+                let hub = &fixture.context.hub;
+                hub.set_machine_lineage("session", Some("a".repeat(32).as_str()));
+                hub.set_machine_lineage("session", Some("b".repeat(32).as_str()));
+                hub.set_machine_lineage("session", Some("a".repeat(32).as_str()));
             }
             _ => {
                 fixture.context.machine_control.install(

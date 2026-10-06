@@ -999,6 +999,7 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            incarnation: None,
         }
     }
 

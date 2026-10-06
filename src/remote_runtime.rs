@@ -1591,6 +1591,9 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
         return false;
     }
     shared.optimistic_revivals.lock().remove(&worker.session_id);
+    shared
+        .hub
+        .set_machine_lineage(&worker.session_id, worker.incarnation.as_deref());
     shared.hub.reconcile_provider_release(worker);
     if matches!(worker.state, WorkerState::Crashed | WorkerState::Exited) {
         fail_config_startup(
@@ -2665,6 +2668,7 @@ mod tests {
             drain_requested: false,
             exit_detail: None,
             background_tasks: None,
+            incarnation: None,
         }
     }
 
@@ -3427,6 +3431,50 @@ mod tests {
         assert!(!runtime.pending_for_test().iter().any(|command| {
             matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
         }));
+    }
+
+    #[tokio::test]
+    async fn machine_snapshots_carry_the_lineage_into_the_observation_scope() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let deliver = |lineage: Option<&str>| {
+            let mut worker = snapshot("s");
+            worker.incarnation = lineage.map(str::to_owned);
+            let shared = Arc::clone(&runtime.shared);
+            async move {
+                handle_frame(
+                    &shared,
+                    Frame::Snapshot {
+                        worker: Box::new(worker),
+                    },
+                    &mut tokio::io::sink(),
+                )
+                .await
+                .expect("snapshot");
+            }
+        };
+        let before = hub.session_code_scope("s").unwrap();
+        deliver(Some("a".repeat(32).as_str())).await;
+        assert!(!hub.code_scope_is_current(&before));
+        let first = hub.session_code_scope("s").unwrap();
+        // Replaying the same lineage (every later snapshot) keeps observations.
+        deliver(Some("a".repeat(32).as_str())).await;
+        assert!(hub.code_scope_is_current(&first));
+        // A reset's new lineage retires them.
+        deliver(Some("b".repeat(32).as_str())).await;
+        assert!(!hub.code_scope_is_current(&first));
+        // So does a Machine that no longer reports one.
+        let second = hub.session_code_scope("s").unwrap();
+        deliver(None).await;
+        assert!(!hub.code_scope_is_current(&second));
     }
 
     #[test]
