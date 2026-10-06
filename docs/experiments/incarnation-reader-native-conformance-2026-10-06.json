@@ -1,0 +1,260 @@
+{
+  "schema": 1,
+  "accepted": true,
+  "oldWriter": {
+    "release": "/nix/store/nmr8a6krhys5zapax0709p48i2kkggpp-cowboy-machine-writer-host-release",
+    "source": {
+      "component": "cowboy",
+      "dirty": false,
+      "lane": "machine",
+      "repository": "git@github.com:dravengarden/cowboy.git",
+      "revision": "48d3054db95ca4a70acc978e2d4bcfea2d0a49b2",
+      "schema": 1,
+      "sessionDeletionJournal": {
+        "readerSchema": 1,
+        "writerSchema": 1
+      },
+      "sessionIncarnations": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "workerGeneration": "worker-135348a781e7df96dae8"
+    },
+    "native": "/nix/store/429xv7sqjxkxyh7595dcbp86vfa44pa8-cowboy-machine-writer-0.1.0/bin/.cowboy-machine-wrapped",
+    "sha256": "5c02664c8f88e438ede53142efac8623d7cd7c2b767ee83e7e34439d1448e282"
+  },
+  "newWriter": {
+    "release": "/nix/store/b7mjqjz04cnl08sd5a89zsk5xcf3ryz8-cowboy-machine-writer-host-release",
+    "source": {
+      "component": "cowboy",
+      "dirty": false,
+      "lane": "machine",
+      "repository": "git@github.com:dravengarden/cowboy.git",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "schema": 1,
+      "sessionDeletionJournal": {
+        "readerSchema": 1,
+        "writerSchema": 1
+      },
+      "sessionIncarnations": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "workerGeneration": "worker-135348a781e7df96dae8"
+    },
+    "native": "/nix/store/6iyqbsyxvln6ihcvvl66npbvvscyiipc-cowboy-machine-writer-0.1.0/bin/.cowboy-machine-wrapped",
+    "sha256": "e3573bdc4d50af34d7a9b97f36ed0b76ab817e8de58b67065f4d9fa1cd2574e0"
+  },
+  "readerOnlyFallback": {
+    "release": "/nix/store/k45135rr0w6czpj9xv6a371x501l1ymz-cowboy-machine-release",
+    "source": {
+      "component": "cowboy",
+      "dirty": false,
+      "lane": "machine",
+      "repository": "git@github.com:dravengarden/cowboy.git",
+      "revision": "48d3054db95ca4a70acc978e2d4bcfea2d0a49b2",
+      "schema": 1,
+      "sessionDeletionJournal": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "sessionIncarnations": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "workerGeneration": "worker-135348a781e7df96dae8"
+    },
+    "native": "/nix/store/wl3gzm89ygs8m61pqm491x43nvgqfbzs-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+    "sha256": "1ae9ec341c62fe8ef16c0e26690c0f976837f7c5e6be36b1028289348b70becf"
+  },
+  "defaultReader": {
+    "release": "/nix/store/ig4c7x10pm4mnim543aknns05a0n5gg3-cowboy-machine-release",
+    "source": {
+      "component": "cowboy",
+      "dirty": false,
+      "lane": "machine",
+      "repository": "git@github.com:dravengarden/cowboy.git",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "schema": 1,
+      "sessionDeletionJournal": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "sessionIncarnations": {
+        "readerSchema": 1,
+        "writerSchema": 0
+      },
+      "workerGeneration": "worker-135348a781e7df96dae8"
+    },
+    "native": "/nix/store/wl3gzm89ygs8m61pqm491x43nvgqfbzs-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+    "sha256": "1ae9ec341c62fe8ef16c0e26690c0f976837f7c5e6be36b1028289348b70becf"
+  },
+  "observations": [
+    {
+      "case": "default-build-runtime-env-cannot-enable-writer",
+      "writerEnabled": false
+    },
+    {
+      "case": "default-reader-refuses-invalid-incarnation-record",
+      "beforeBind": true
+    },
+    {
+      "case": "ack-dedup-sigkill-old-new-old-reader-fallback",
+      "revision": "48d3054db95ca4a70acc978e2d4bcfea2d0a49b2",
+      "recordSha256": "f7ee09d4503e674c28a4f7e18857609072956d5d47cd6092809ac88d1cdece40"
+    },
+    {
+      "case": "lock-replacement",
+      "revision": "48d3054db95ca4a70acc978e2d4bcfea2d0a49b2",
+      "negativeAck": true
+    },
+    {
+      "case": "storage-failure",
+      "revision": "48d3054db95ca4a70acc978e2d4bcfea2d0a49b2",
+      "negativeAck": true,
+      "survivingWorkerUntouched": true,
+      "furtherAdmissionFenced": true
+    },
+    {
+      "case": "incarnation-record-corrupt",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "beforeBind": true
+    },
+    {
+      "case": "incarnation-record-foreign-owner",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "beforeBind": true
+    },
+    {
+      "case": "incarnation-record-shared-lineage",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "beforeBind": true
+    },
+    {
+      "case": "incarnation-record-valid-reopen",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01"
+    },
+    {
+      "case": "ack-dedup-sigkill-old-new-old-reader-fallback",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "recordSha256": "f7ee09d4503e674c28a4f7e18857609072956d5d47cd6092809ac88d1cdece40"
+    },
+    {
+      "case": "lock-replacement",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "negativeAck": true
+    },
+    {
+      "case": "storage-failure",
+      "revision": "a0394f6727707dc78fc1494c1a8791cd3afb1c01",
+      "negativeAck": true,
+      "survivingWorkerUntouched": true,
+      "furtherAdmissionFenced": true
+    },
+    {
+      "case": "authority-absent",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-corrupt",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-duplicate",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-unknown",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-trailing",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-foreign-machine",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-foreign-dataset",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-reader",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-release",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-revision",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-directory",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-symlink",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-fifo",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-oversized",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-mutable",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-wrong-uid",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-profile-owner",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-profile-parent",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-untrusted-link",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-other-writer",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "authority-reader-selected",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "selected-native-mismatch",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "source-unknown",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "source-duplicate",
+      "beforeJournalOpen": true
+    },
+    {
+      "case": "source-oversized",
+      "beforeJournalOpen": true
+    }
+  ],
+  "privateRootMountPidNetworkNamespaces": true,
+  "hostProductionActivation": false,
+  "productionCheckpointHooks": false,
+  "powerLossAcceptance": false,
+  "scope": "exact production writer release binaries with synthetic root selection/floor and private broker IPC; startup authority, ACK/SIGKILL/reopen, failure and reader-only fallback"
+}

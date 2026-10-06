@@ -9,7 +9,13 @@ account, device, native-generation and policy exits below remain open.
 Production at this reading: Machine writer release `9c79b9c3` (transaction
 `1791179356912329897-9c79b9c379ec`, worker generation `worker-748825b4…`,
 retained worker source `b97c2724…`); Controller and Web were moved by independent
-tasks. Source on main but **not active** because host-only Machine releases are blocked
+tasks. **Update 2026-10-06:** another task completed the worker-pool maintenance (Machine
+`48d3054d`, `worker-135348a7…`, pin `8909c1c8`) and the items below are now active;
+the conformance on built artifacts passed (37 groups, see the
+[reader contract](plugin-session-incarnation-reader.md)). The incarnation floor is
+still unanchored. The paragraph below is the 2026-10-05 reading.
+
+Source on main but **not active** because host-only Machine releases are blocked
 (main carries the independent wire change `22de6bbf`, so the retained worker pin
 must advance first, which drains every live Hawk worker): the
 [incarnation reader](plugin-session-incarnation-reader.md), bounded in-process
