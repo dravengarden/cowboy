@@ -405,6 +405,12 @@ pub struct SessionMeta {
     /// daemon restart); `serde(default)` covers old clients + the restore path.
     #[serde(default)]
     pub paused: bool,
+    /// True while an accepted deletion waits for the session's execution
+    /// environment to confirm it stopped. Clients treat it as the deletion
+    /// acknowledgement; the row disappears on confirmation or returns with a
+    /// Crashed detail when the stop stays unconfirmed. Transient.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closing: bool,
     /// True for a machine-driven system session: visible and watchable in the
     /// UI but view-only. The composer is hidden and user turns are rejected;
     /// only the backend wake endpoint drives it. Persisted for compatibility.
@@ -2700,6 +2706,7 @@ impl Hub {
             origin,
             agent_session_id: None,
             paused: false,
+            closing: false,
             system,
             context_used: 0,
             context_size: 0,
@@ -2871,6 +2878,24 @@ impl Hub {
             Self::commit_setting_locked(settings, key.clone(), value.clone())
         });
         self.publish_setting(key, value, snapshot);
+    }
+
+    /// Publish whether an accepted deletion is still waiting for its execution
+    /// environment. Broadcast-only; deletion itself is [`Self::delete_session`].
+    pub fn set_closing(&self, session_id: &str, closing: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.closing != closing => {
+                    s.meta.closing = closing;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
     }
 
     /// Manually PAUSE / RESUME the queue drain (the user's ⏸ toggle). Pausing
@@ -6208,6 +6233,7 @@ mod runtime_reconciliation_tests {
                 origin: SessionOrigin::Web,
                 agent_session_id: Some("agent-1".to_owned()),
                 paused: false,
+                closing: false,
                 system: false,
                 context_used: 0,
                 context_size: 0,
@@ -7306,6 +7332,19 @@ mod core_tests {
         assert!(hub.delete_session("gone"));
         assert!(!hub.inner.sync.lock().contains_key("mobile-review:gone"));
         assert!(!hub.inner.sync.lock().contains_key("queue:gone"));
+    }
+
+    // A pending environment stop is visible on the wire only while it lasts.
+    #[test]
+    fn closing_flag_is_listed_only_while_set() {
+        let hub = hub_with_session("closing");
+        let listed =
+            |hub: &Hub| serde_json::to_value(&hub.session_list()[0]).expect("serialize session");
+        assert!(listed(&hub).get("closing").is_none());
+        hub.set_closing("closing", true);
+        assert_eq!(listed(&hub)["closing"], true);
+        hub.set_closing("closing", false);
+        assert!(listed(&hub).get("closing").is_none());
     }
 
     #[test]

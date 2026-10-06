@@ -26,3 +26,9 @@ Deno.test("a deleting session row is busy, disabled, and shows delayed progress"
   assert(appSource.includes('pointerEvents: "none"'));
   assert(appSource.includes("aria-busy={deleting || undefined}"));
 });
+
+Deno.test("a pending environment stop acknowledges deletion and keeps the row busy", () => {
+  assert(storeSource.includes("session.id === sessionId && !session.closing"));
+  assert(storeSource.includes("reportRetainedClosures(msg.sessions)"));
+  assert(appSource.includes("deletingSessionIds.has(s.id) || s.closing === true"));
+});
