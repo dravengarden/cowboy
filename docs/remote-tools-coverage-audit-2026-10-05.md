@@ -649,6 +649,44 @@ full-access permissions, not acceptance of enrolled worker transport, cross-host
 execution, autonomous model continuation, or production Agent support. No
 production runtime or capability admission is changed by this experiment.
 
+#### Native Agent output follow-up (2026-10-06)
+
+Extending the same fixture past completion exposes another boundary. A
+session-local map can translate an exact owner-registered handle back to native
+Read and recover the child's answer, but that file is a JSONL transcript. Its
+rows retain runtime `cwd` and original environment attachments even when the
+child's actual API requests received target context. Reading it into the parent
+reintroduces runtime context. Locator projection alone is therefore insufficient.
+
+Two alternatives were exercised on the pinned binary. `TaskOutput` is absent
+from the available native tools in this lane: a scripted invocation reports
+`No such tool available: TaskOutput`, even with the name in `--tools`. A public
+type declaration is not proof of runtime admission. A native `turn.complete`
+observer does supply the child's final answer and `agentId`. The research Mod
+can return that answer through an owner-registered Read handle without loading
+the raw transcript. This preserves native completion delivery and adds no model
+requests for collection. The guard requires an answered, non-aborted turn.
+
+Use `--project-task-output --read-task-output` for the raw-file control, add
+`--native-task-output` for the unavailable-tool observation, or add
+`--completion-output` for final-answer collection. These are mutually exclusive
+output alternatives. The output probe waits for its own observed tool request
+and response; an earlier background result can otherwise satisfy the next
+`prompt()` wait and produce an empty success.
+
+The successful final-answer read still does not project native notification
+paths. A subsequent parent request includes the runtime-home output locator from
+the native completion notification; the initial tool-result projection only
+covered earlier requests. Output content and notification delivery need separate
+projections. The fixture's in-memory registration is not a durable production
+task registry. Partial output, error/refusal/cancellation outcomes, reload/resume,
+foreign-owner rejection and cross-host operation still require acceptance.
+Do not present a final-answer-only handle as a complete native output stream.
+
+Evidence: [five output-path observations](experiments/claude-native-agent-output-research-2026-10-06.json).
+Production Agent admission remains unchanged. No raw-transcript parser or new
+production restriction was introduced.
+
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A
 multi-tool code block is not a transaction: post-tool rejection cannot undo

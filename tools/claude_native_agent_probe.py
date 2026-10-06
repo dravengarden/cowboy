@@ -89,6 +89,8 @@ def probe(args, source):
         (plugin / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "cowboy-agent-research", "version": "1.0.0"}))
         (plugin / "hooks/hooks.json").write_text(json.dumps({"modules": ["./register.js"]}))
         module = source.read_text()
+        if args.read_task_output:
+            module = "const researchTasks = new Map();\n" + module
         needle = '["TodoWrite", "AskUserQuestion"].includes(event.tool)'
         require(module.count(needle) == 1, "shipping passthrough changed; reassess experiment")
         module = module.replace(needle, '["TodoWrite", "AskUserQuestion", "Agent"].includes(event.tool)')
@@ -127,6 +129,49 @@ def probe(args, source):
         text: result.text.replaceAll(task.outputFile, handle) };
     }
     ''' + native_passthrough)
+        if args.read_task_output:
+            module = module.replace('const handle = "cowboy-agent://" + task.agentId;', '''const handle = "cowboy-agent://" + task.agentId;
+      researchTasks.set(handle, { path: task.outputFile, owner: event.agentId ?? null });''')
+            module = module.replace(hook, hook + '''
+    if (event.tool === "Read" && event.file_path?.startsWith("cowboy-agent://")) {
+      const task = researchTasks.get(event.file_path);
+      if (!task || task.owner !== (event.agentId ?? null)) return { deny: "Unknown task owner" };
+      const result = await next({ ...event, file_path: task.path });
+      await $.http.fetch("http://cowboy-execution/observe", {
+        socketPath: context.socketPath, method: "POST",
+        headers: { Authorization: "Bearer " + context.bridgeToken },
+        body: JSON.stringify({ kind: "task-read", keys: Object.keys(result),
+          resultKeys: Object.keys(result.result ?? {}) }),
+      });
+      return result;
+    }
+''')
+        if args.native_task_output:
+            require(module.count('next({ ...event, file_path: task.path })') == 1, "missing native Read boundary")
+            module = module.replace('event.tool === "Read" && event.file_path?.startsWith("cowboy-agent://")',
+                                    'event.tool === "TaskOutput"')
+            module = module.replace('researchTasks.get(event.file_path)',
+                                    'researchTasks.get("cowboy-agent://" + event.task_id)')
+            module = module.replace('next({ ...event, file_path: task.path })', 'next(event)')
+        if args.completion_output:
+            require(module.count('const result = await next({ ...event, file_path: task.path });') == 1,
+                    "missing native Read result boundary")
+            module = "const researchAnswers = new Map();\n" + module
+            module = module.replace('export function register(on) {', '''export function register(on) {
+  on("turn.complete", async ($, event, next) => {
+    if (event.agentId) researchAnswers.set(event.agentId, {
+      answer: event.answer, isAborted: event.isAborted, turnId: event.turnId, reason: event.reason,
+    });
+    return next(event);
+  });''')
+            module = module.replace('const result = await next({ ...event, file_path: task.path });', '''const answer = researchAnswers.get(event.file_path.slice("cowboy-agent://".length));
+      if (!answer || answer.isAborted || answer.reason !== "answer" || typeof answer.answer !== "string") {
+        return { deny: "Completed task answer unavailable" };
+      }
+      const result = { result: { type: "text", file: {
+        filePath: event.file_path, content: answer.answer, startLine: 1,
+        numLines: answer.answer.split("\\n").length, totalLines: answer.answer.split("\\n").length,
+      } } };''')
         (plugin / "hooks/register.js").write_text(module)
         context = root / "context.json"
         context.write_text(json.dumps({"schema": 1, "nonce": secrets.token_hex(16),
@@ -135,11 +180,15 @@ def probe(args, source):
             "instructions": "TARGET_GUIDANCE_MUST_REACH_CHILD", "git": "Target fixture",
             "descriptions": {"Read": "Read a file from the bound target project."}}))
         child_prompt = "CHILD_PROBE Read fixture.txt and return its content."
+        read_requested = False
+        output_call_id = None
+        task_output_result = None
         def is_child(request):
             return any(child_prompt in block.get("text", "")
                        for message in request.get("messages", []) if message.get("role") == "user"
                        for block in message.get("content", []) if isinstance(block, dict) and block.get("type") == "text")
         def response(requests):
+            nonlocal read_requested, output_call_id, task_output_result
             request = requests[-1]
             results = [block for message in request.get("messages", []) if isinstance(message.get("content"), list)
                        for block in message["content"] if block.get("type") == "tool_result"]
@@ -148,6 +197,21 @@ def probe(args, source):
                     return [{"type": "text", "text": "CHILD_FINISHED"}]
                 require(not results, "child Read failed; inspect native result")
                 return tool("Read", {"file_path": "fixture.txt"})
+            if args.read_task_output and "READ_COMPLETED_TASK" in json.dumps(request):
+                if not read_requested:
+                    read_requested = True
+                    tasks = [e for e in server.events if e.get("kind") == "agent-result"]
+                    require(len(tasks) == 1, "missing task registration")
+                    if args.native_task_output:
+                        call = tool("TaskOutput", {"task_id": tasks[0]["agentId"], "block": False, "timeout": 1000})
+                    else:
+                        call = tool("Read", {"file_path": "cowboy-agent://" + tasks[0]["agentId"]})
+                    output_call_id = call[0]["id"]
+                    return call
+                matches = [block for block in results if block.get("tool_use_id") == output_call_id]
+                require(len(matches) == 1, "matching task output tool result missing")
+                task_output_result = matches[0]
+                return [{"type": "text", "text": "TASK_READ_FINISHED"}]
             if results:
                 return [{"type": "text", "text": "PARENT_WAITING"}]
             return tool("Agent", {"subagent_type": "general-purpose", "description": "Probe target read", "prompt": child_prompt})
@@ -159,11 +223,11 @@ def probe(args, source):
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DISABLE_AUTOUPDATER": "1",
             "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"})
         original_spawn = subprocess.Popen
-        def spawn(argv, *args, **kwargs):
+        def spawn(argv, *spawn_args, **kwargs):
             argv = list(argv)
-            argv[argv.index("--tools") + 1] = "Agent,Read"
+            argv[argv.index("--tools") + 1] = "Agent,Read,TaskOutput" if args.native_task_output else "Agent,Read"
             argv[argv.index("--disallowedTools") + 1] = "Skill"
-            return original_spawn(argv, *args, **kwargs)
+            return original_spawn(argv, *spawn_args, **kwargs)
         client = None
         try:
             with patch.object(subprocess, "Popen", spawn):
@@ -183,6 +247,21 @@ def probe(args, source):
             if completion is None:
                 completion = client.until(completed, timeout=30)
             require(completion.get("status") == "completed", "native child did not complete")
+            if args.read_task_output:
+                client.prompt(text="READ_COMPLETED_TASK", timeout=40)
+                def read_finished(frame):
+                    return frame.get("type") == "assistant" and "TASK_READ_FINISHED" in json.dumps(frame)
+                if not any(read_finished(frame) for frame in client.messages):
+                    client.until(read_finished, timeout=40)
+                require(read_requested, "task output was not requested")
+                if args.native_task_output:
+                    require(task_output_result.get("is_error") is True and
+                            "No such tool available: TaskOutput" in json.dumps(task_output_result),
+                            "native TaskOutput availability changed; reassess research")
+                else:
+                    require(any(e.get("kind") == "task-read" for e in server.events),
+                            "registered task Read did not run")
+                    require("CHILD_FINISHED" in json.dumps(task_output_result), "native task Read lost child output")
             require(api.failure is None, api.failure or "scripted API failed")
             children = [request for request in api.requests if is_child(request)]
             require(len(children) == 2, "native child did not execute exactly two requests")
@@ -194,14 +273,21 @@ def probe(args, source):
             encoded = json.dumps(api.requests)
             require(all("TARGET_GUIDANCE_MUST_REACH_CHILD" in json.dumps(x) and str(target) in json.dumps(x)
                         for x in children), "child lost target context")
-            require(str(runtime) not in encoded and "RUNTIME_FILE_MUST_NOT_REACH_CHILD" not in encoded
+            require(((args.read_task_output and not args.completion_output) or str(runtime) not in encoded) and "RUNTIME_FILE_MUST_NOT_REACH_CHILD" not in encoded
                     and "RUNTIME_GUIDANCE_MUST_NOT_REACH_CHILD" not in encoded,
                     "runtime workspace leaked into model context")
             if args.project_task_output:
-                require(str(root / "home") not in encoded, "Agent locator projection left a runtime path in model context")
+                if not args.read_task_output:
+                    require(str(root / "home") not in encoded, "Agent locator projection left a runtime path in model context")
                 require("cowboy-agent://" in encoded, "native Agent result did not retain the projected handle")
             return {"child_tool_intercepted": True, "child_agent_id_present": True,
                 "model_task_locator_projection": args.project_task_output,
+                "native_registered_task_read": args.read_task_output and not args.native_task_output and read_requested,
+                "native_task_output_tool": args.native_task_output,
+                "native_task_output_unavailable": args.native_task_output and task_output_result.get("is_error") is True,
+                "native_completion_answer_read": args.completion_output,
+                "task_output_contains_runtime_cwd": str(runtime) in json.dumps(task_output_result),
+                "task_output_contains_runtime_home": str(root / "home") in json.dumps(task_output_result),
                 "target_read_calls": len(server.calls), "native_child_completion_notification": True,
                 "child_requests_have_target_guidance": all("TARGET_GUIDANCE_MUST_REACH_CHILD" in json.dumps(x) for x in children),
                 "child_requests_have_target_directory": all(str(target) in json.dumps(x) for x in children),
@@ -214,6 +300,10 @@ def probe(args, source):
                 "native_completion_exposes_runtime_home": str(root / "home") in json.dumps(completion),
                 "native_completion_fields": sorted(completion),
                 "child_request_context_keys": [list(x) for x in children]}
+        except Exception as error:
+            if api.failure:
+                raise RuntimeError("scripted API failed: " + api.failure) from error
+            raise
         finally:
             if client: client.close()
             api.close()
@@ -229,8 +319,18 @@ def main():
     parser.add_argument("--executor-sha256", required=True)
     parser.add_argument("--project-task-output", action="store_true",
                         help="Research only: project the native Agent tool's output locator, without enabling handle reads")
+    parser.add_argument("--read-task-output", action="store_true",
+                        help="Research exact owner-registered handle translation through native Read")
+    parser.add_argument("--native-task-output", action="store_true",
+                        help="Use owner-registered native TaskOutput instead of reading the raw task file")
+    parser.add_argument("--completion-output", action="store_true",
+                        help="Read only the final answer observed from native turn.complete, not the raw transcript")
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
+    require(not args.read_task_output or args.project_task_output, "task Read requires locator projection")
+    require(not args.native_task_output or args.read_task_output, "native TaskOutput requires output research")
+    require(not args.completion_output or (args.read_task_output and not args.native_task_output),
+            "completion output requires Read and excludes TaskOutput")
     require([name for _, name in socket.if_nameindex()] == ["lo"], "loopback namespace required")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "new absolute receipt required")
     require(args.claude.is_absolute() and hashlib.sha256(args.claude.read_bytes()).hexdigest() == args.claude_sha256,
@@ -246,7 +346,7 @@ def main():
         "executor_sha256": args.executor_sha256,
         "topology": "same-host native Claude and independent resident keeper, shared filesystem",
         "production_credentials": False, "real_model_requests": 0,
-        "not_checked": ["enrolled_worker_transport", "cross_host", "projected_handle_reads", "background_agent_cancellation_and_resume", "cancellation", "cold_resume", "permissions", "grandchildren", "worktrees", "implicit_project_discovery"]}
+        "not_checked": ["enrolled_worker_transport", "cross_host", "durable_handle_reads", "background_agent_cancellation_and_resume", "cancellation", "cold_resume", "permissions", "grandchildren", "worktrees", "implicit_project_discovery"]}
     result.update(probe(args, source))
     with args.receipt.open("x") as output:
         json.dump(result, output, indent=2); output.write("\n")
