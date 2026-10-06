@@ -422,6 +422,15 @@ transport checks in 84.58 seconds, including the four new file scenarios.
 This is isolated scripted-native evidence, not a production release receipt
 or an authenticated cross-host model test.
 
+The [3.4.10 release receipt](experiments/claude-file-semantics-release-2026-10-06.json)
+records a second 38-check acceptance of the clean committed final package,
+3.4.9/3.4.10 worker coexistence, Linux/macOS probes, three Catalog reader roles,
+five public artifact digest checks, and the full quality gate before and after
+main integration. OVH's `ovh-claude-code-3-4-10-converge` completed with HTTP 204
+and an applied Machine receipt. Independent inventory confirmed 3.4.10 active,
+3.4.9 retained for rollback, and current authentication/materialization. This
+installation check sent no production inference prompt.
+
 This is not atomic compare-and-write against unrelated target processes. Lexical
 path normalization does not unify symlink or hard-link aliases; concurrent
 rename/unlink, nonregular files, cross-platform path behavior and arbitrary
