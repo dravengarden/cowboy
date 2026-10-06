@@ -8,7 +8,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { basename, dirname, posix } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { READ_RANGE } from "./read-range.mjs";
 
 const MAX_FILE = 4 * 1024 * 1024;
@@ -78,9 +78,13 @@ function bounded(value, fallback, min, max) {
   return value;
 }
 function decode(bytes) {
-  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-    bytes,
-  );
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
+  } catch {
+    throw new Error("File is not valid UTF-8; use a target binary utility");
+  }
 }
 
 // Persist only an unfinished UTF-8 suffix, not a decoder's private internals.
@@ -259,6 +263,13 @@ export class WorkspaceTools {
 
   path(value) {
     checkedString(value, "file path", 16384);
+    if (value === "~" || value.startsWith("~/")) {
+      const home = this.connection.info?.userHomeDir;
+      if (!home) throw new Error("Target home is unavailable");
+      const path = fileURLToPath(home);
+      if (!posix.isAbsolute(path)) throw new Error("Invalid target home");
+      return posix.resolve(path, value.slice(2));
+    }
     if (!value || value.startsWith("~")) {
       throw new Error("Use a relative or absolute target path");
     }
@@ -910,6 +921,15 @@ export class WorkspaceTools {
     if (Buffer.byteLength(content) > MAX_FILE) {
       throw new Error("Result exceeds file limit");
     }
+    let originalFile = null;
+    if (bytes && bytes.length <= MAX_OUTPUT) {
+      try {
+        originalFile = decode(bytes);
+      } catch {
+        // Binary originals cannot have a text diff. Prepare presentation
+        // before mutation; an image-to-text Write must not fail after success.
+      }
+    }
     // The target executor owns bytes and write errors. This is read-before-write
     // protection, not an atomic lock against unrelated host processes.
     await this.connection.call("fs/createDirectory", {
@@ -920,11 +940,7 @@ export class WorkspaceTools {
       path: pathToFileURL(path).href,
       dataBase64: Buffer.from(content).toString("base64"),
     });
-    this.remember(path, hash(content));
-    await this.save();
-    const originalFile = bytes && bytes.length <= MAX_OUTPUT
-      ? decode(bytes)
-      : null;
+    await this.rememberRead(path, hash(content));
     const native = name === "write"
       ? {
         type: bytes ? "update" : "create",

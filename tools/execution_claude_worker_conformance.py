@@ -234,6 +234,48 @@ def main():
         require("中" in stream_result and "stream-marker" in stream_result and "\ufffd" not in stream_result,
                 "split target UTF-8 was corrupted across stdout/stderr")
         checks.append("native_bash_preserves_utf8_split_across_streams")
+        # Native validation must accept replacing a binary original, and target
+        # path expansion must use the executor's home rather than Claude's.
+        (args.target / "replace-image.png").write_bytes(pixel)
+        (args.target / "bad-utf8.bin").write_bytes(b"\xff\xfe\0")
+        linked = args.target / "link-source.txt"
+        linked.write_text("linked before\n")
+        linked.chmod(0o751)
+        (args.target / "file-link.txt").symlink_to(linked)
+        (args.target / "home-relative.txt").write_text("target home before\n")
+        def target_home_path(_requests):
+            home = (args.target / "observed-home.txt").read_text()
+            require(Path(home).is_absolute(), "target HOME is not absolute")
+            relative = os.path.relpath(args.target / "home-relative.txt", home)
+            require((args.runtime.parent / "claude-home" / relative).resolve() !=
+                    (args.target / "home-relative.txt").resolve(), "home fixture cannot distinguish runtime and target")
+            return tool("Read", {"file_path": "~/" + relative})
+        image_write = tool("Write", {"file_path": "replace-image.png", "content": "image replaced with text\n"})
+        binary_read = tool("Read", {"file_path": "bad-utf8.bin"})
+        api.steps.extend([[],
+            tool("Read", {"file_path": "replace-image.png"}), image_write,
+            binary_read,
+            tool("Read", {"file_path": "file-link.txt"}),
+            tool("Edit", {"file_path": "file-link.txt", "old_string": "linked before", "new_string": "linked after"}),
+            tool("Bash", {"command": "printf '%s' \"$HOME\" > observed-home.txt"}), target_home_path,
+            tool("Edit", {"file_path": str(args.target / "home-relative.txt"),
+                          "old_string": "target home before", "new_string": "target home after"})])
+        client.prompt(timeout=90)
+        result_blocks = list(outputs(api.requests[-1]))
+        image_result = next(block for block in result_blocks if block.get("tool_use_id") == image_write[0]["id"])
+        require(not image_result.get("is_error"), "successful image replacement was reported as a failed Write")
+        binary_result = next(block for block in result_blocks if block.get("tool_use_id") == binary_read[0]["id"])
+        require(binary_result.get("is_error") and "not valid UTF-8" in json.dumps(binary_result),
+                "binary Read did not report its actual decoding failure")
+        require((args.target / "replace-image.png").read_text() == "image replaced with text\n",
+                "image Write did not reach target")
+        require((args.target / "file-link.txt").is_symlink() and linked.read_text() == "linked after\n"
+                and linked.stat().st_mode & 0o777 == 0o751, "target symlink or executable mode was lost")
+        require((args.target / "home-relative.txt").read_text() == "target home after\n",
+                "tilde Read did not authorize the same absolute target file")
+        context_checked(api.requests)
+        checks.extend(["native_image_to_text_write_reports_success", "target_symlink_write_preserves_link_and_mode",
+                       "tilde_read_uses_target_home_and_shares_absolute_path_stamp", "invalid_utf8_read_reports_decode_failure"])
         # Each search reads a FIFO. Its writer supplies content only after BOTH
         # readers have opened their pipes: sequential native/facade dispatch
         # cannot pass. This exercises native read-only scheduling and the target route.

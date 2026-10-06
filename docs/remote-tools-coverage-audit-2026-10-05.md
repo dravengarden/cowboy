@@ -397,6 +397,37 @@ placement and credential requirements, so a Bash-only success cannot accept
 blanket shell forwarding. Native task completion/output, cancellation, runtime
 bookkeeping and execution placement need separate cross-host evidence.
 
+### File tools follow-up
+
+The 2026-10-06 follow-up prepares Plugin 3.4.10 with unchanged Claude 2.1.287,
+ACP 0.84.0 and executor 0.159.3 pins. The official
+[tool reference](https://code.claude.com/docs/en/tools-reference) and
+[Mods events](https://code.claude.com/docs/en/plugins/mods/events) were checked
+again on that date. No tool inventory, native schema, permission mode or
+allowlist changes are introduced; this patch changes the existing file facade.
+
+| Surface | Previous behavior | Candidate behavior and evidence |
+| --- | --- | --- |
+| Image-to-text Write | Target bytes changed successfully, then decoding the binary original for a text diff threw and reported failure | Prepare optional text diff before mutation; binary originals use no text diff. Regression failed before the fix. |
+| Post-write state failure | A failed atomic state replacement left an updated in-memory read stamp, allowing a subsequent edit despite failed persistence | Commit the stamp transactionally and restore the old stamp on failure; real rename-failure test requires a fresh Read before another Edit. The original Write may already have taken effect and is never replayed automatically. |
+| Home-relative paths | Every leading tilde was rejected | Resolve `~` and `~/` using executor initialization's home URI, never runtime HOME; normalized absolute paths share the same read stamp. Missing home and named-user expansion remain rejected. |
+| Invalid UTF-8 Read | Decoder error code was mislabeled as a state-storage failure | Return a specific invalid UTF-8 error; unsuccessful reads still grant no mutation stamp. |
+
+The source gate passes 66 tests, formatting and types; native Codex review found
+no concrete regression. Packaged-native scenarios additionally require image
+replacement success, binary-read failure, target home expansion, and writing
+through a symlink without replacing the link or losing the target's executable
+mode. The candidate passed all 32 packaged Claude scenarios plus six execution
+transport checks in 84.58 seconds, including the four new file scenarios.
+This is isolated scripted-native evidence, not a production release receipt
+or an authenticated cross-host model test.
+
+This is not atomic compare-and-write against unrelated target processes. Lexical
+path normalization does not unify symlink or hard-link aliases; concurrent
+rename/unlink, nonregular files, cross-platform path behavior and arbitrary
+external writers remain separate audit cases. No previously supported feature
+was disabled, and the full local/remote parity audit remains open.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)

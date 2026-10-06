@@ -643,6 +643,95 @@ test("ambiguous edits and foreign task ids have no effects", async (t) => {
   assert.equal(files.get("/target with space/file").toString(), "two two");
 });
 
+test("tilde paths use executor home and share read stamps with absolute target paths", async (t) => {
+  const { tools, files, connection, calls } = await fixture(t);
+  connection.info = { userHomeDir: "file:///target%20home" };
+  files.set("/target home/file", Buffer.from("before"));
+  assert.equal(tools.path("~"), "/target home");
+  assert.equal(tools.path("./~literal"), "/target with space/~literal");
+  const read = await tools.nativeCall("Read", { file_path: "~/file" });
+  assert.equal(read.result.file.filePath, "/target home/file");
+  const edit = await tools.nativeCall("Edit", {
+    file_path: "/target home/file",
+    old_string: "before",
+    new_string: "after",
+  });
+  assert.equal(edit.deny, undefined);
+  assert.equal(files.get("/target home/file").toString(), "after");
+  assert.ok(
+    calls.every((call) =>
+      fileURLToPath(call.params.path).startsWith("/target home")
+    ),
+  );
+  connection.info = {};
+  assert.throws(() => tools.path("~/file"), /Target home is unavailable/);
+  assert.throws(
+    () => tools.path("~another/file"),
+    /relative or absolute target path/,
+  );
+});
+
+test("Write can replace a previously read image without a post-write decode failure", async (t) => {
+  const { tools, files, calls } = await fixture(t);
+  files.set(
+    "/target with space/pixel",
+    Buffer.from("89504e470d0a1a0a0001020304", "hex"),
+  );
+  assert.equal(
+    (await tools.nativeCall("Read", { file_path: "pixel" })).result.type,
+    "image",
+  );
+  const result = await tools.nativeCall("Write", {
+    file_path: "pixel",
+    content: "replacement\n",
+  });
+  assert.equal(result.deny, undefined);
+  assert.equal(result.result.originalFile, null);
+  assert.equal(result.result.type, "update");
+  assert.equal(
+    files.get("/target with space/pixel").toString(),
+    "replacement\n",
+  );
+  assert.equal(
+    calls.filter((call) => call.method === "fs/writeFile").length,
+    1,
+  );
+});
+
+test("failed post-write state commit requires a fresh Read before another edit", async (t) => {
+  const { tools, files, state } = await fixture(t);
+  files.set("/target with space/file", Buffer.from("before"));
+  await tools.nativeCall("Read", { file_path: "file" });
+  const stamp = tools.state.reads["/target with space/file"];
+  await rm(state);
+  await mkdir(state);
+  const result = await tools.nativeCall("Write", {
+    file_path: "file",
+    content: "after",
+  });
+  assert.match(result.deny, /could not be saved/);
+  assert.equal(files.get("/target with space/file").toString(), "after");
+  assert.equal(tools.state.reads["/target with space/file"], stamp);
+  await rm(state, { recursive: true });
+  await tools.save();
+  const edit = await tools.nativeCall("Edit", {
+    file_path: "file",
+    old_string: "after",
+    new_string: "lost",
+  });
+  assert.match(edit.deny, /Read it before editing/);
+  assert.equal(files.get("/target with space/file").toString(), "after");
+  await tools.nativeCall("Read", { file_path: "file" });
+  assert.equal(
+    (await tools.nativeCall("Edit", {
+      file_path: "file",
+      old_string: "after",
+      new_string: "confirmed",
+    })).deny,
+    undefined,
+  );
+});
+
 test("read images as binary content and preserve notebook metadata", async (t) => {
   const { tools, files } = await fixture(t);
   const image = Buffer.from("89504e470d0a1a0a0001020304", "hex");
@@ -697,6 +786,10 @@ test("concurrent state saves retain the latest read stamps", async (t) => {
 test("a failed read does not authorize overwriting an unread file", async (t) => {
   const { tools, files } = await fixture(t);
   files.set("/target with space/binary", Buffer.from([0xff, 0xfe, 0]));
+  assert.match(
+    (await tools.nativeCall("Read", { file_path: "binary" })).deny,
+    /not valid UTF-8/,
+  );
   assert.equal(
     (await tools.call("read", { file_path: "binary" })).isError,
     true,
