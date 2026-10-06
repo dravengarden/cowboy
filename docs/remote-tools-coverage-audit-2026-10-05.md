@@ -342,7 +342,7 @@ live. This is not the shell-prefix signal-forwarding issue above.
 
 The deterministic `lost start acknowledgement retains the original job for
 recovery without replay` regression injects admission before reply failure.
-The 3.4.9 candidate requires an explicit pending ID and a persisted cancellation
+The 3.4.9 fix requires an explicit pending ID and a persisted cancellation
 intent; reopening the state with a recovered transport automatically terminates
 that same ID. It requires exactly one start, one terminate, a closed output
 record and an unaffected independent peer. This is a facade simulation, not
@@ -365,7 +365,7 @@ That lower-level capability does not automatically repair the facade:
 internally, while the facade retains only the process identity. A transport
 failure can prevent the facade from observing whether admission has settled.
 
-The 3.4.9 candidate registers foreground identity before submission, persists
+The 3.4.9 fix registers foreground identity before submission, persists
 cancel intent before target IO, and waits independently for pending starts.
 Only an observed closed target clears the intent. Missing/unknown admission,
 lost replies and transport errors retain it for bounded-interval observations
@@ -379,6 +379,16 @@ This does not establish arbitrary process-tree, SIGKILL, cross-host filesystem
 or permission parity. Cancellation after total keeper/incarnation loss cannot
 claim that the old process stopped. Release/activation requires the exact
 packaged native acceptance in addition to these source tests.
+
+The [3.4.9 release receipt](experiments/claude-cancellation-release-2026-10-06.json)
+records 63 source tests, the full deterministic gate, native review, 28 exact
+packaged Claude checks plus six execution transport checks, 3.4.8/3.4.9 worker coexistence, macOS version probes,
+three Catalog reader roles and five public artifact digest checks. OVH's
+`ovh-claude-code-3-4-9-converge` operation completed with HTTP 204 and an applied
+Machine receipt; the re-read inventory reports 3.4.9 active and 3.4.8 retained
+for rollback. The production acceptance is installation/inventory evidence;
+the loss-of-start-reply regression remains a facade fault injection, not a
+production incident or a claim of complete local/remote parity.
 
 The official [shell-prefix contract](https://code.claude.com/docs/en/env-vars),
 checked 2026-10-06, also includes hook, status-line and stdio MCP shell commands;
