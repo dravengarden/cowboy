@@ -38,11 +38,20 @@ not deployed on Hawk and no idle-timeout policy exists or has been approved.
   while the session slept is a cache miss. That is the ordinary cost of idling, but
   hibernation cannot be said to cost zero tokens end to end, and no real-provider
   measurement was made (no credential was used).
-- **DeepSeek cache protection.** `hibernate_session` does not call
-  `revoke_cache_protection`, unlike delete, reset and provider roll. What the local
-  snapshot does while a session is hibernated, and whether it can spend tokens, was
-  not examined.
-- **Gemini, Grok and DeepSeek** resume paths were not measured.
+- **DeepSeek cache protection (found and fixed).** The provider gateway keeps a
+  replay snapshot per session and, while it exists, replays it with real model
+  requests (`request_purpose: cache_keepalive`, `adaptive-replay-v1`). Delete,
+  reset, provider roll and configuration change revoke it; `hibernate_session` did
+  not, so a hibernated DeepSeek session could keep paying for cache keep-alives.
+  Hibernation now revokes it (`session_hibernated`), covered by a test that fails
+  without the call and shows other providers are untouched. The gateway is in the
+  signed Plugin runtime, outside this repository, so its actual replay behavior for
+  a revoked or stopped session was not observed; this is a conservative fix from
+  the call graph, not a measured token saving. It is active on Hawk since the
+  [2026-10-06 release](releases/hibernation-cache-revoke-2026-10-06.md); no real
+  DeepSeek session has been hibernated to observe it.
+- **Gemini, Grok and DeepSeek** resume paths were not measured; the zero-request
+  wake assertions cover Codex (and Claude's existing check) only.
 - **Claude** and the fixtures use scripted APIs; this is not supported-device or
   production evidence.
 - **Policy.** Idle timeouts, thresholds and automatic hibernation are unapproved.
