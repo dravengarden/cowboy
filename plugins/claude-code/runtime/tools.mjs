@@ -481,7 +481,7 @@ export class WorkspaceTools {
       const beforeSave = this.state.jobs[processId];
       this.state.jobs[processId] = {
         ...job,
-        cancelRequested: beforeSave?.cancelRequested,
+        cancelRequested: job.closed ? false : beforeSave?.cancelRequested,
       };
       return () => {
         this.state.jobs[processId] = beforeSave;
@@ -515,7 +515,7 @@ export class WorkspaceTools {
     try {
       const result = await this.collect(id, timeout);
       if (!result.exited) {
-        await this.connection.call("process/terminate", { processId: id });
+        await this.cancelTasks([id]);
         await this.collect(id, 5000);
         throw new Error("Target utility exceeded its limit");
       }
@@ -666,7 +666,7 @@ export class WorkspaceTools {
         throw new Error("Task does not belong to this session");
       }
       if (name === "taskstop") {
-        await this.connection.call("process/terminate", { processId: id });
+        await this.cancelTasks([id]);
       }
       const timeout = name === "taskstop"
         ? 10000
@@ -1024,7 +1024,10 @@ export class WorkspaceTools {
   }
 
   async cancelForeground() {
-    const ids = [...this.foreground];
+    return await this.cancelTasks([...this.foreground]);
+  }
+
+  async cancelTasks(ids) {
     // Persist intent before touching the target. A lost start reply does not
     // prove non-admission, and must not remove the original cancellation ID.
     await this.save(() => {

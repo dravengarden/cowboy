@@ -437,6 +437,34 @@ rename/unlink, nonregular files, cross-platform path behavior and arbitrary
 external writers remain separate audit cases. No previously supported feature
 was disabled, and the full local/remote parity audit remains open.
 
+### Durable explicit cancellation follow-up
+
+The next 2026-10-06 audit reproduced a cancellation recovery gap: foreground
+interrupts already persisted stop intent, but TaskStop and private utility
+timeouts sent termination directly. Losing that request or its reply left no
+durable instruction for a cold runtime to finish stopping the target process.
+
+Plugin 3.4.12 routes those entrypoints through the existing cancellation
+reconciler. Intent is saved before transport IO, remains pending until target
+closure is observed, and is retried for the original process identity after
+cold load. Reconciliation does not advance the output cursor or replay the
+command. A closed output observation also retires the intent; an open output
+commit preserves concurrent cancellation. Other tasks retain their identities.
+
+The source gate passes 69 tests, including lost TaskStop response/cold resume,
+private utility timeout/transport loss, pending cancellation and concurrent
+output collection. The unfixed TaskStop regression fails because the persisted
+intent is missing. These fault tests use mock transport; packaged native
+acceptance and production activation are recorded separately. The CLI, SDK,
+tool inventory, schemas, permissions and native pins are unchanged. Official
+[tool](https://code.claude.com/docs/en/tools-reference) and
+[Mods](https://code.claude.com/docs/en/plugins/mods/events) references were
+checked again on 2026-10-06.
+
+This does not recover an executor that permanently lost its process ledger,
+establish native background notification parity, or resolve unknown file-write
+results. Full remote/local parity remains under audit.
+
 ### Aliased concurrent mutations follow-up
 
 The next 2026-10-06 audit reproduced silent lost edits within one facade:

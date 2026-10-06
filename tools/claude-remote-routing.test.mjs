@@ -86,6 +86,109 @@ test("lost start acknowledgement retains the original job for recovery without r
   ]);
 });
 
+test("TaskStop intent survives a lost terminate response and cold resume", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-taskstop-recovery-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const state = join(directory, "state.json");
+  const binding = {
+    workspace: { cwd: "/target" },
+    environment: { id: "taskstop-recovery" },
+  };
+  let live = true;
+  const calls = [];
+  const connection = {
+    async call(method, params) {
+      calls.push({ method, id: params.processId });
+      if (method === "process/terminate") {
+        this.closed = true;
+        throw new Error("Execution unavailable or result unknown; no replay");
+      }
+      throw new Error("Execution unavailable; no replay");
+    },
+  };
+  const tools = new WorkspaceTools(connection, binding, state);
+  await tools.load();
+  tools.state.jobs.background = { afterSeq: 7, exited: false };
+  tools.state.jobs.peer = { afterSeq: null, exited: false };
+  await tools.save();
+  const stop = await tools.nativeCall("TaskStop", { task_id: "background" });
+  assert.match(stop.deny, /unavailable/);
+  assert.equal(
+    JSON.parse(await readFile(state)).jobs.background.cancelRequested,
+    true,
+  );
+  assert.equal(live, true);
+  const recovered = {
+    async call(method, params) {
+      calls.push({ method, id: params.processId });
+      assert.equal(params.processId, "background");
+      if (method === "process/terminate") {
+        live = false;
+        return {};
+      }
+      assert.equal(method, "process/read");
+      assert.equal(params.afterSeq, 7);
+      return { chunks: [], closed: true, exited: true, exitCode: 143 };
+    },
+  };
+  const resumed = new WorkspaceTools(recovered, binding, state);
+  await resumed.load();
+  assert.equal(live, false);
+  assert.equal(resumed.state.jobs.background.cancelRequested, false);
+  assert.equal(resumed.state.jobs.background.afterSeq, 7);
+  assert.equal(resumed.state.jobs.peer.cancelRequested, undefined);
+  assert.equal(calls.some((call) => call.method === "process/start"), false);
+});
+
+test("timed out private utility retains cancellation across transport loss", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-utility-stop-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const state = join(directory, "state.json");
+  const binding = {
+    workspace: { cwd: "/target" },
+    environment: { id: "utility-stop-recovery" },
+  };
+  let started;
+  const calls = [];
+  const connection = {
+    async call(method, params) {
+      calls.push(method);
+      if (this.closed) throw new Error("Execution unavailable; no replay");
+      if (method === "process/start") {
+        started = params.processId;
+        return { processId: started };
+      }
+      if (method === "process/terminate") {
+        this.closed = true;
+        throw new Error("Execution unavailable or result unknown; no replay");
+      }
+      assert.equal(method, "process/read");
+      return { chunks: [], exited: false, closed: false, exitCode: null };
+    },
+  };
+  const tools = new WorkspaceTools(connection, binding, state);
+  await tools.load();
+  await assert.rejects(tools.command(["utility"], 0), /unavailable/);
+  assert.ok(started);
+  assert.equal(
+    JSON.parse(await readFile(state)).jobs[started].cancelRequested,
+    true,
+  );
+  const recovered = {
+    async call(method, params) {
+      calls.push(method);
+      assert.equal(params.processId, started);
+      if (method === "process/terminate") return {};
+      assert.equal(method, "process/read");
+      return { chunks: [], exited: true, closed: true, exitCode: 143 };
+    },
+  };
+  const resumed = new WorkspaceTools(recovered, binding, state);
+  await resumed.load();
+  assert.equal(resumed.state.jobs[started].cancelRequested, false);
+  assert.equal(calls.filter((method) => method === "process/start").length, 1);
+});
+
 test("TaskStop reports pending until the target confirms closure and retains its handle", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-pending-stop-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -96,6 +199,7 @@ test("TaskStop reports pending until the target confirms closure and retains its
   }, join(directory, "state.json"));
   await tools.load();
   tools.state.jobs.pending = { afterSeq: null, exited: false };
+  t.after(() => clearTimeout(tools.cancelTimer));
   let clock = 0;
   let closed = false;
   const methods = [];
@@ -122,13 +226,15 @@ test("TaskStop reports pending until the target confirms closure and retains its
     );
     assert.equal(stop.result.task_id, "pending");
     assert.equal(tools.state.jobs.pending.closed, false);
-    assert.equal(clock, 10000);
+    assert.equal(clock, 10001); // One non-consuming cancellation observation.
+    assert.equal(tools.state.jobs.pending.cancelRequested, true);
     closed = true;
     const output = await tools.nativeCall("Read", {
       file_path: `${TASK_OUTPUT_PREFIX}pending`,
     });
     assert.match(output.result.file.content, /Exit code: 143/);
     assert.equal(tools.state.jobs.pending.closed, true);
+    assert.equal(tools.state.jobs.pending.cancelRequested, false);
     assert.equal(
       methods.filter((method) => method === "process/terminate").length,
       1,
