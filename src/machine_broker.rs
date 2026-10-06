@@ -46,6 +46,10 @@ const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
 const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
 const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Longest a worker start waits for a live Provider installation that fences
+/// its Plugin; an upgrade normally resolves in about a minute.
+const PROVIDER_INSTALL_LAUNCH_WAIT: Duration = Duration::from_secs(300);
+const PROVIDER_INSTALL_LAUNCH_POLL: Duration = Duration::from_millis(250);
 
 fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
     let detail = format!("{error:#}");
@@ -2412,13 +2416,39 @@ impl Broker {
                 session.provider_generation_digest.clone(),
                 session.provider_auth_generation,
             );
-            Some(
-                tokio::task::spawn_blocking(move || {
-                    store.launch_context(&provider_id, &digest, auth_generation)
-                })
-                .await
-                .context("Provider launch verification task failed")??,
-            )
+            // An Operator install fences the Plugin until it resolves (about a
+            // minute for a Provider upgrade). A start in that window waits for
+            // the install rather than reporting a crashed Agent; a fence with
+            // no live installer still fails at once for reconciliation.
+            let install_deadline = Instant::now() + PROVIDER_INSTALL_LAUNCH_WAIT;
+            loop {
+                let launch = {
+                    let (store, provider_id, digest) =
+                        (Arc::clone(&store), provider_id.clone(), digest.clone());
+                    tokio::task::spawn_blocking(move || {
+                        store.launch_context(&provider_id, &digest, auth_generation)
+                    })
+                    .await
+                    .context("Provider launch verification task failed")?
+                };
+                match launch {
+                    Ok(launch) => break Some(launch),
+                    Err(error)
+                        if store.install_in_progress(&provider_id)
+                            && Instant::now() < install_deadline
+                            && !self.cancelled_sessions.lock().contains(&session.session_id) =>
+                    {
+                        tracing::info!(
+                            session = %session.session_id,
+                            provider = %provider_id,
+                            %error,
+                            "worker launch waiting for Provider installation"
+                        );
+                        tokio::time::sleep(PROVIDER_INSTALL_LAUNCH_POLL).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         };
         tracing::info!(
             session = %session.session_id,
