@@ -1,0 +1,453 @@
+{
+  "schema": "cowboy.claude-native-agents-release/v1",
+  "date": "2026-10-06",
+  "source_commit": "3d38ed7472cfb7d71e4bc0e7dda90cb22fa8b736",
+  "plugin": "claude-code",
+  "previous_version": "3.4.12",
+  "version": "3.5.0",
+  "artifact_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0",
+  "package_digest": "sha256:808d4dbb4d836deae25fbe4c4d51066b44427670d3918d97ace8060c5b9c62a1",
+  "host_bundle_digest": "sha256:58d2217c9374f0ec1adf99f3223c66d11350fe325419479fa87ff480e324fd73",
+  "publisher": "cowboy-first-party",
+  "contract_fingerprint": "sha256:796d080568c71ad12dee7f1e1055e0f9a921dbe2717767d6029d07161b0cb0bf",
+  "native_pins": {
+    "claude_cli": "2.1.287",
+    "claude_agent_acp": "0.84.0",
+    "executor": "0.159.3"
+  },
+  "changes": [
+    "admit native background Agent; child calls carry agentId to the target route",
+    "project exact registered agent output locators to cowboy-agent:// in launch results, idle/queued notifications and client frames",
+    "durable session-scoped agent outcomes; handle Read returns the recorded final answer or status",
+    "SendMessage/TaskStop native only for registered agents; isolation, foreground, custom and nested agents refused",
+    "per-call and per-agent cancellation, including queued mutations and discarded background starts",
+    "interrupt forwarded to native before target cancellation",
+    "bridge idle hold 20 s -> 1 s because a pending Mods fetch blocks other native work",
+    "resume readiness tolerates only a zero-turn zero-API task-notification result"
+  ],
+  "gates": {
+    "source_tests": 99,
+    "source_gate": "passed",
+    "check_compact": "passed on the committed tree",
+    "native_review": "five read-only Codex review rounds; rounds 1-4 found P2 continuation, expiry, cancellation-window and state-budget defects, each fixed with a regression; round 5 found no defect",
+    "negative_controls": [
+      "restoring only the 20 s bridge hold in a disposable copy of the candidate fails parent_turns_and_taskstop_progress_during_child_command",
+      "earlier candidates observed the uncancelled child after TaskStop, the post-interrupt child model request and the unprojected queued notification before their fixes"
+    ],
+    "docs_index": "no Markdown pages added; changed pages already indexed"
+  },
+  "official_docs": {
+    "checked": "2026-10-06",
+    "urls": [
+      "https://code.claude.com/docs/en/plugins/mods/reference",
+      "https://code.claude.com/docs/en/plugins/mods/events",
+      "https://code.claude.com/docs/en/plugins/mods/api"
+    ],
+    "consumed_contract": "CLI/SDK/ACP pins unchanged; docs describe v2.1.289, so next.signal, notification doors and turn.complete agent fields were verified on the pinned 2.1.287 binary instead",
+    "research": "docs/experiments/claude-native-agent-lifecycle-2026-10-06.json"
+  },
+  "native": {
+    "schema": "cowboy.claude-execution-worker-conformance/v1",
+    "accepted": true,
+    "checks": [
+      "machine_owned_worktree",
+      "machine_restart_reattaches_same_keeper_and_binding",
+      "native_control_cannot_replace_bound_execution",
+      "module_readiness_uses_no_model_request",
+      "native_tools_use_target_files_and_processes_without_mcp",
+      "runtime_context_and_guidance_are_replaced",
+      "unicode_quotes_crlf_bytes_preserved",
+      "stale_edit_is_refused",
+      "target_image_enters_model_context",
+      "background_cancel_settles",
+      "bounded_large_read_stays_in_target_tool_result",
+      "native_notebook_edit_preserves_metadata",
+      "native_read_observes_retained_task_output",
+      "lost_start_receipt_and_transport_outage_do_not_replay",
+      "cold_native_resume_preserves_context_reads_and_effects",
+      "background_process_handle_survives_native_resume",
+      "lost_file_write_completion_preserves_later_external_change",
+      "real_compaction_and_next_turn_preserve_target_context",
+      "cold_resume_after_compaction_has_no_runtime_file_locators",
+      "native_bash_preserves_utf8_split_across_streams",
+      "native_image_to_text_write_reports_success",
+      "target_symlink_write_preserves_link_and_mode",
+      "tilde_read_uses_target_home_and_shares_absolute_path_stamp",
+      "invalid_utf8_read_reports_decode_failure",
+      "native_symlink_alias_edit_rejects_stale_read",
+      "native_hardlink_alias_edit_rejects_stale_read",
+      "independent_native_searches_execute_concurrently",
+      "native_interrupt_stops_foreground_target_process",
+      "native_agent_child_tools_route_to_target",
+      "native_agent_launch_and_notification_use_handle",
+      "native_agent_handle_reads_recorded_final_answer",
+      "native_agent_client_frames_use_handle",
+      "native_agent_send_message_continues_on_target",
+      "native_agent_taskstop_cancels_child_target_command",
+      "native_agent_stop_preserves_peer_job",
+      "parent_turns_and_taskstop_progress_during_child_command",
+      "native_interrupt_stops_idle_background_agent_target_command",
+      "native_agent_outcomes_survive_cold_resume",
+      "packaged_acp_native_spawn_routes_target_tools",
+      "packaged_acp_cold_load_preserves_binding_history_and_effects",
+      "hot_effort_configuration_preserves_bound_execution",
+      "broken_module_refused_before_model_request",
+      "bare_mode_refused_without_changing_authentication",
+      "malformed_result_denies_without_native_fallback",
+      "bridge_error_denies_without_native_fallback",
+      "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+      "concurrent_large_input_and_output_do_not_deadlock",
+      "post_flood_commands_and_cancellation_keep_original_executor",
+      "target_image_bytes_cross_machine_transport",
+      "idempotent_close_stops_environment_and_preserves_worktree",
+      "closed_environment_cannot_be_recreated"
+    ],
+    "claude_version": "2.1.287",
+    "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+    "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "executor_version": "0.159.3",
+    "packaged_launcher_sha256": "f254702a7d68f8223097a1bf625d3a0fb2b0562e7ac5f5d7ec944fd7a5e16d24",
+    "scripted_api_requests": 87,
+    "native_title_requests": 1,
+    "agent_observations": {
+      "parent_turn_during_child_command_seconds": 0.1,
+      "taskstop_turn_seconds": 0.42,
+      "taskstop_target_quiescent_after_turn_seconds": 1.5,
+      "interrupt_target_quiescent_seconds": 0.0
+    },
+    "production_credentials": false,
+    "production_activation": false,
+    "not_checked": [
+      "real_subscription_inference",
+      "cross_host_latency",
+      "project_hooks",
+      "agent_permission_modes",
+      "grandchild_agents",
+      "teammates_and_agent_worktrees",
+      "agent_partial_output_stream",
+      "native_runtime_crash_with_live_agent"
+    ],
+    "cursor_expirations": 0
+  },
+  "coexistence": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.5.0",
+    "artifact_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0",
+    "platform": {
+      "os": "linux",
+      "architecture": "x86_64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:495bf39ca4614ee7a7ee73152c8147d1c7384b6963624164e39c9f4060398c9d",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false,
+    "previous": {
+      "plugin_version": "3.4.12",
+      "artifact_digest": "sha256:47141b95f17d21f435731170f66aa66c95e98a09f5df266737cae2946fd9cb81"
+    },
+    "worker": {
+      "executable_digest": "sha256:1c4150ac108dc2ebf9cfbf4a4c05718dff9f8711a581b935417ed1930ec1e97d",
+      "initialize_and_session_new": "passed",
+      "stop_and_descendant_drain": "passed",
+      "sidecar_count": 0,
+      "distinct_generation_coexistence": "passed"
+    }
+  },
+  "macos_probes": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.5.0",
+    "artifact_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0",
+    "platform": {
+      "os": "macos",
+      "architecture": "aarch64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:83d2ac078d891777edfc45353148f9ba6f1345f7cab5bddb8e85691ff75858c3",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false
+  },
+  "catalog_readers": {
+    "schema": "cowboy.catalog-publication-conformance/v1",
+    "accepted": true,
+    "source_revision": "3d38ed7472cfb7d71e4bc0e7dda90cb22fa8b736",
+    "candidate": {
+      "release": "/nix/store/0njxfxpbfdhfc0459b7g3wkbdm47w3h3-cowboy-controller-release",
+      "source_revision": "12dc2c0ea3932c0a70960a7d928106e6d518b51f",
+      "executable_sha256": "sha256:43cd9123d7a87cc9e6122ba8bbea74f7858c708e7fc34dac16b5dff263cf28a5"
+    },
+    "sdk_sha256": "sha256:4d6176d61bb4c57a8e655b5c038dba9fa38773bae481cd289cc530a80ac5f7d7",
+    "publications": [
+      {
+        "role": "active",
+        "reader": {
+          "release": "/nix/store/0njxfxpbfdhfc0459b7g3wkbdm47w3h3-cowboy-controller-release",
+          "source_revision": "12dc2c0ea3932c0a70960a7d928106e6d518b51f",
+          "executable_sha256": "sha256:43cd9123d7a87cc9e6122ba8bbea74f7858c708e7fc34dac16b5dff263cf28a5"
+        },
+        "release": {
+          "plugin_id": "claude-code",
+          "plugin_version": "3.5.0",
+          "artifact_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0"
+        },
+        "release_schema": 4,
+        "code_payload_schema": null,
+        "provider_sdk_version": "3.1.12",
+        "source_envelope_sha256": "sha256:e7d2f033dc5822f2bc983e45c327585cd68a926b15dd347db31e585c0ec08cdc",
+        "package_digest": "sha256:808d4dbb4d836deae25fbe4c4d51066b44427670d3918d97ace8060c5b9c62a1",
+        "host_bundle_digest": "sha256:58d2217c9374f0ec1adf99f3223c66d11350fe325419479fa87ff480e324fd73",
+        "bridge_cold_reads": [
+          {
+            "status": "visible"
+          },
+          {
+            "status": "visible"
+          }
+        ],
+        "candidate": {
+          "status": "visible"
+        },
+        "candidate_host_preflight": true,
+        "candidate_host_policy": "temporary_exact_pin",
+        "candidate_host_error": null,
+        "reader_compatible": true,
+        "production_signature_checked": false
+      },
+      {
+        "role": "next_transaction_recovery",
+        "reader": {
+          "release": "/nix/store/0njxfxpbfdhfc0459b7g3wkbdm47w3h3-cowboy-controller-release",
+          "source_revision": "12dc2c0ea3932c0a70960a7d928106e6d518b51f",
+          "executable_sha256": "sha256:43cd9123d7a87cc9e6122ba8bbea74f7858c708e7fc34dac16b5dff263cf28a5"
+        },
+        "release": {
+          "plugin_id": "claude-code",
+          "plugin_version": "3.5.0",
+          "artifact_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0"
+        },
+        "release_schema": 4,
+        "code_payload_schema": null,
+        "provider_sdk_version": "3.1.12",
+        "source_envelope_sha256": "sha256:e7d2f033dc5822f2bc983e45c327585cd68a926b15dd347db31e585c0ec08cdc",
+        "package_digest": "sha256:808d4dbb4d836deae25fbe4c4d51066b44427670d3918d97ace8060c5b9c62a1",
+        "host_bundle_digest": "sha256:58d2217c9374f0ec1adf99f3223c66d11350fe325419479fa87ff480e324fd73",
+        "bridge_cold_reads": [
+          {
+            "status": "visible"
+          },
+          {
+            "status": "visible"
+          }
+        ],
+        "candidate": {
+          "status": "visible"
+        },
+        "candidate_host_preflight": true,
+        "candidate_host_policy": "temporary_exact_pin",
+        "candidate_host_error": null,
+        "reader_compatible": true,
+        "production_signature_checked": false
+      },
+      {
+        "role": "cold",
+        "reader": {
+          "release": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+          "source_revision": "e2a48c8b142c23bd2c551a236479bf47c1d5d84c",
+          "executable_sha256": "sha256:286a81f70e95cbf2996f1735a3370f5c50c8cef09439d633ec0c25c5850166c5"
+        },
+        "release": {
+          "plugin_id": "claude-code",
+          "plugin_version": "3.5.0",
+          "artifact_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0"
+        },
+        "release_schema": 4,
+        "code_payload_schema": null,
+        "provider_sdk_version": "3.1.12",
+        "source_envelope_sha256": "sha256:e7d2f033dc5822f2bc983e45c327585cd68a926b15dd347db31e585c0ec08cdc",
+        "package_digest": "sha256:808d4dbb4d836deae25fbe4c4d51066b44427670d3918d97ace8060c5b9c62a1",
+        "host_bundle_digest": "sha256:58d2217c9374f0ec1adf99f3223c66d11350fe325419479fa87ff480e324fd73",
+        "bridge_cold_reads": [
+          {
+            "status": "visible"
+          },
+          {
+            "status": "visible"
+          }
+        ],
+        "candidate": {
+          "status": "visible"
+        },
+        "candidate_host_preflight": true,
+        "candidate_host_policy": "temporary_exact_pin",
+        "candidate_host_error": null,
+        "reader_compatible": true,
+        "production_signature_checked": false
+      }
+    ],
+    "production_mutated": false,
+    "production_credentials": false,
+    "not_checked": [
+      "production_signature",
+      "actual_role_provenance",
+      "complete_production_catalog_and_host_policy",
+      "historical_pre_host_migration",
+      "runtime_platform_drain_and_installation"
+    ]
+  },
+  "reader_provenance": {
+    "active_profile": "/nix/var/nix/profiles/columbus-components/cowboy-controller",
+    "active_and_next_transaction_recovery": "/nix/store/0njxfxpbfdhfc0459b7g3wkbdm47w3h3-cowboy-controller-release",
+    "cold_bootstrap": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+    "checked": "re-resolved immediately before publication"
+  },
+  "public_artifacts": {
+    "accepted": true,
+    "artifacts": [
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/808d4dbb4d836deae25fbe4c4d51066b44427670d3918d97ace8060c5b9c62a1/claude-code.cowboy-plugin",
+        "sha256": "sha256:808d4dbb4d836deae25fbe4c4d51066b44427670d3918d97ace8060c5b9c62a1",
+        "bytes": null,
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111/claude.tar.gz",
+        "sha256": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+        "bytes": null,
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/495bf39ca4614ee7a7ee73152c8147d1c7384b6963624164e39c9f4060398c9d/claude-agent-acp.tar.gz",
+        "sha256": "sha256:495bf39ca4614ee7a7ee73152c8147d1c7384b6963624164e39c9f4060398c9d",
+        "bytes": null,
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278/claude.tar.gz",
+        "sha256": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+        "bytes": null,
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/83d2ac078d891777edfc45353148f9ba6f1345f7cab5bddb8e85691ff75858c3/claude-agent-acp.tar.gz",
+        "sha256": "sha256:83d2ac078d891777edfc45353148f9ba6f1345f7cab5bddb8e85691ff75858c3",
+        "bytes": null,
+        "accepted": true
+      }
+    ]
+  },
+  "production": {
+    "machine": "ovh",
+    "converge": {
+      "schema": 1,
+      "applied": true,
+      "machines": [
+        {
+          "machine": "ovh",
+          "attempted": true,
+          "managed": true,
+          "planned": [
+            {
+              "kind": "upgrade",
+              "plugin": "claude-code",
+              "from": "3.4.12",
+              "to": "3.5.0",
+              "digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0",
+              "operation_id": "ovh-claude-code-3-5-0-converge"
+            }
+          ],
+          "applied": [
+            {
+              "kind": "upgrade",
+              "plugin": "claude-code",
+              "from": "3.4.12",
+              "to": "3.5.0",
+              "operation_id": "ovh-claude-code-3-5-0-converge",
+              "http_status": 204,
+              "detail": null
+            }
+          ],
+          "planned_removals": [],
+          "removed": [],
+          "skipped": [],
+          "remaining": []
+        }
+      ],
+      "unreachable": [],
+      "stopped_at": null
+    },
+    "inventory": {
+      "plugin_id": "claude-code",
+      "plugin_version": "3.5.0",
+      "plugin_kind": "agent_provider",
+      "generation_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0",
+      "installation_revision": "installation-24e7d4265a361ab47d39d7aaa3af0d187902238f3dc5fb0cc342d2eb90f4885a",
+      "contract_fingerprint": "sha256:796d080568c71ad12dee7f1e1055e0f9a921dbe2717767d6029d07161b0cb0bf",
+      "state": "active",
+      "rollback_generation_digest": "sha256:47141b95f17d21f435731170f66aa66c95e98a09f5df266737cae2946fd9cb81",
+      "active_session_leases": 0,
+      "auth_generation": 62,
+      "replica_state": "current",
+      "materialization_state": "current"
+    },
+    "operation": {
+      "evidence_schema": 2,
+      "machine_receipt": {
+        "state": "applied",
+        "revision": "installation-24e7d4265a361ab47d39d7aaa3af0d187902238f3dc5fb0cc342d2eb90f4885a"
+      },
+      "operation_id": "ovh-claude-code-3-5-0-converge",
+      "phase": "completed",
+      "problem": null,
+      "attention_from": null,
+      "plugin_kind": "agent_provider",
+      "plugin_version": "3.5.0",
+      "generation_digest": "sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0",
+      "created_at_ms": 1791276621381,
+      "updated_at_ms": 1791276710255
+    },
+    "signature_independently_verified": true,
+    "production_inference_sent": false,
+    "live_sessions_restarted": false
+  },
+  "not_proven": [
+    "cross_host_latency_and_real_model_continuation",
+    "agent_permission_modes_other_than_bypass",
+    "partial_or_streaming_child_output",
+    "grandchild_agents_and_teammates",
+    "worktree_or_remote_agent_isolation",
+    "native_runtime_or_keeper_crash_with_live_agent",
+    "stopped_agent_background_jobs_native_semantics",
+    "full_local_remote_parity"
+  ],
+  "negative_control_long_poll": {
+    "mutation": "mod-bridge.mjs waitMs 1000 -> 20000 in a disposable copy; all other bytes identical",
+    "result": "failed as required: parent turn stalled behind a running child command",
+    "log": "/home/draven/worktrees/cowboy/remote-native-parity-evidence-20261005/claude-agents-negative-longpoll.log",
+    "log_sha256": "sha256:9f457f9b61e244bea353ab6ce28f5e05ce0d616f453114f1bad56cf75415f894"
+  }
+}

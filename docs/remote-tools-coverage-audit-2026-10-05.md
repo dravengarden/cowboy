@@ -737,8 +737,18 @@ Packaged worker acceptance on the exact candidate passes 51 checks (45 Claude,
 `parent_turns_and_taskstop_progress_during_child_command`. A negative control
 that restores only the 20 s hold fails that check. Earlier candidate runs also
 observed the unprojected queued notification, the uncancelled child after
-TaskStop and the post-interrupt child request before their fixes. The release
-receipt binds the exact artifact and installation.
+TaskStop and the post-interrupt child request before their fixes.
+
+The [3.5.0 release receipt](experiments/claude-native-agents-release-2026-10-06.json)
+binds source `3d38ed74`, artifact
+`sha256:50019180ae347da5d40bd1cea739c9871406bf735877805a0be2a48bd9e37dd0`, the
+51-check acceptance of that exact package, 3.4.12/3.5.0 worker coexistence,
+Linux and actual macOS arm64 probes, three Controller reader roles and five
+public artifact digests. OVH operation `ovh-claude-code-3-5-0-converge`
+completed with an applied Machine receipt; re-read inventory reports 3.5.0
+active, 3.4.12 retained for rollback and current authentication and
+materialization. No live session was restarted and no production inference
+was sent.
 
 Not established: partial/streaming child output, grandchildren and teammates,
 permission modes other than the bound bypass mode, native-runtime or keeper
