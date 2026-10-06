@@ -2,7 +2,7 @@ import {
   type ProviderUsage,
   providerUsageErrorMessage,
   relativeUpdateTime,
-  shortResetTime,
+  resetCountdown,
   topBarUsageLimits,
 } from "./usageLimits";
 import { usageWidgetBalanceLabel, usageWidgetSpendLabel } from "./usageHostMap";
@@ -137,7 +137,7 @@ export function sessionProviderUsageRows(
       ...(limit.resetsAt === undefined ? [] : [{
         id: `${limit.id}-resets`,
         label: "Resets",
-        value: shortResetTime(limit.resetsAt),
+        value: resetCountdown(limit.resetsAt, now),
       }]),
     ]),
     updated,
