@@ -232,3 +232,60 @@ Deno.test("usage widget projects one available account", () => {
     undefined,
   );
 });
+
+Deno.test("usage widget shows every reported account window, shortest first", () => {
+  const widget = usageWidgetForAccount({
+    provider: "anthropic",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimitsByLimitId: {
+        "claude-seven_day": {
+          primary: { usedPercent: 31, windowDurationMins: 10080, resetsAt: 9 },
+        },
+        "claude-model-Fable": {
+          limitName: "Fable",
+          primary: { usedPercent: 0, windowDurationMins: 10080 },
+        },
+        "claude-five_hour": {
+          primary: { usedPercent: 33, windowDurationMins: 300, resetsAt: 5 },
+        },
+      },
+    },
+  });
+  assertEquals(widget, {
+    kind: "anthropic-weekly",
+    label: "Anthropic",
+    remaining: 69,
+    periodLabel: "Weekly",
+    resetsAt: 9,
+    windows: [
+      { remaining: 67, periodLabel: "5h", resetsAt: 5 },
+      { remaining: 69, periodLabel: "Weekly", resetsAt: 9 },
+    ],
+  });
+});
+
+Deno.test("usage widget keeps one column when the account reports one window", () => {
+  const widget = usageWidgetForAccount({
+    provider: "anthropic",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimitsByLimitId: {
+        "claude-seven_day": {
+          primary: { usedPercent: 31, windowDurationMins: 10080, resetsAt: 9 },
+        },
+      },
+    },
+  });
+  assertEquals(widget, {
+    kind: "anthropic-weekly",
+    label: "Anthropic",
+    remaining: 69,
+    periodLabel: "Weekly",
+    resetsAt: 9,
+  });
+});

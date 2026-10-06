@@ -11,15 +11,23 @@ import {
   record,
   topBarUsageLimits,
   usageCardProviders,
+  type UsageLimit,
   type UsageSnapshot,
 } from "./usageLimits";
 
-export type UsagePercentWidget = {
+export type UsageWidgetWindow = {
+  periodLabel: string;
+  remaining: number;
+  resetsAt?: number;
+};
+
+export type UsagePercentWidget = UsageWidgetWindow & {
   kind: string;
   label: string;
-  remaining: number;
-  periodLabel: string;
-  resetsAt?: number;
+  /** Every top-bar window the account reports, shortest first, when there is
+   *  more than the anchor. The anchor fields above stay the declared widget
+   *  window so a single-window account keeps its exact shape. */
+  windows?: UsageWidgetWindow[];
 };
 
 export type UsageBalanceWidget = {
@@ -101,6 +109,14 @@ function activitySpend24h(usage: ProviderUsage):
     : undefined;
 }
 
+function widgetWindow(limit: UsageLimit): UsageWidgetWindow {
+  return {
+    remaining: limit.remaining,
+    periodLabel: limit.label,
+    ...(limit.resetsAt === undefined ? {} : { resetsAt: limit.resetsAt }),
+  };
+}
+
 function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   const limits = topBarUsageLimits(usage);
   const wanted = usageWidgetWindow(usage.provider);
@@ -108,12 +124,21 @@ function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
     ? limits[0]
     : limits.find((candidate) => candidate.windowMinutes === wanted);
   if (!limit) return undefined;
+  // A short window (Anthropic 5h) blocks long before the weekly one does, so
+  // the strip shows every account window the provider actually reports. The
+  // rule is data-driven: an account that reports only its weekly bucket keeps
+  // one column, and one that starts reporting a 5h bucket gains it.
+  const windows = limits.length > 1
+    ? [...limits].sort((left, right) =>
+      (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) -
+      (right.windowMinutes ?? Number.MAX_SAFE_INTEGER)
+    ).map(widgetWindow)
+    : undefined;
   return {
     kind: usageWidgetKind(usage.provider),
     label: usageProductLabel(usage.provider),
-    remaining: limit.remaining,
-    periodLabel: limit.label,
-    ...(limit.resetsAt === undefined ? {} : { resetsAt: limit.resetsAt }),
+    ...widgetWindow(limit),
+    ...(windows === undefined ? {} : { windows }),
   };
 }
 

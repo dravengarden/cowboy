@@ -48,6 +48,15 @@ export function usageCountdown(
  *  the countdown replaces — same fact, and the absolute form still lives in the
  *  U panel, which shows both. */
 export const USAGE_SEGMENT_WIDTH_PX = 104;
+/** Each further window of the same account: `69%` over `Weekly · 2d15h`. It
+ *  carries no provider name, so it costs less than a whole segment. */
+export const USAGE_WINDOW_WIDTH_PX = 100;
+
+/** Budget for one percent segment showing `windows` account windows. */
+export function usagePercentSegmentWidth(windows: number): number {
+  return USAGE_SEGMENT_WIDTH_PX +
+    Math.max(0, windows - 1) * USAGE_WINDOW_WIDTH_PX;
+}
 /** The widest a balance account (DeepSeek) may grow: spend, partial-pricing,
  *  cache-miss and blocking-error counters. It hugs shorter content and
  *  truncates beyond this, so the budget is an upper bound, not a fixed cell. */
