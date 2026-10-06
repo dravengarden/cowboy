@@ -652,6 +652,38 @@ Remaining differences and their reasons:
   handles and give no completion notification. The text follows native's,
   without its promise of a notification. Notifications belong to matrix E.
 
+Four native review rounds found and fixed these defects:
+
+- output consumed before a timeout was lost
+- the persisted file could exceed what Read returns
+- `shopt` ran under zsh
+- a still-running command's directory file was left behind
+- `..name` directories were treated as outside the project
+- a directory reset was dropped after a persisted preview
+
+The fourth round reported none. Making the hook phase reliable required two
+harness fixes:
+
+- the hook checks read the result's own message, because the latest request
+  may be a background child's
+- the check for leftover hook files waits for in-flight child hooks
+
+The [3.8.0 release receipt](experiments/claude-shell-parity-release-2026-10-06.json)
+binds feature commit `dd1a2367`, release merge `7d0e35cd` and artifact
+`sha256:bf1da8c889c9900f1883e51fcac63d8ee35700a1513118cea4e0fc395f06c56a`.
+It records:
+
+- 69 accepted checks on the exact signed package, including Bash parity
+- 3.7.0/3.8.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles
+- five public artifact digests
+- Catalog `ready` on both platforms
+
+OVH operation `ovh-claude-code-3-8-0-converge` completed. Inventory reports
+3.8.0 active, 3.7.0 retained for rollback and no session leases. No live session
+was restarted.
+
 ### 2. Project configuration and implicit reads
 
 Build an explicit target project context interface for configuration, guidance,
