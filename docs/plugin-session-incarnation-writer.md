@@ -1,9 +1,10 @@
-# Session incarnation writer (schema 1) — source, not yet active
+# Session incarnation writer (schema 1)
+
+Active on Hawk since 2026-10-06 ([release](releases/incarnation-writer-2026-10-06.md)).
 
 Third step of the [durable incarnation design](plugin-session-incarnation-design.md),
-on top of the [reader](plugin-session-incarnation-reader.md). Nothing here is
-active on Hawk until a writer release is activated; no Controller consumes the
-value yet, so even then nothing observable depends on it.
+on top of the [reader](plugin-session-incarnation-reader.md). No Controller
+consumes the value yet, so nothing observable depends on it.
 
 ## Behaviour
 
@@ -69,8 +70,8 @@ three wiring points fails these tests.
 The native production conformance additionally runs the writer against exact
 immutable releases (mint on a real declaration, replay, reopen by new, reader-only
 and previous writers, delete ending the lineage, storage-failure refusal, and six
-incarnation-floor refusal vectors that leave no namespace behind). See the release
-record once one exists.
+incarnation-floor refusal vectors that leave no namespace behind). See the
+[release record](releases/incarnation-writer-2026-10-06.md).
 
 ## Limits
 

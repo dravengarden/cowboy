@@ -138,8 +138,8 @@ for it.
    must have it before any release declaring the dataset reaches Falcon.
 2. Machine reader and declaration with the writer disabled.
 3. Writer admission, mint/rotate/end rules and negative acknowledgements.
-   **Source implemented and tested**, see the [writer contract](plugin-session-incarnation-writer.md);
-   not activated.
+   **Implemented and active on Hawk**, see the [writer contract](plugin-session-incarnation-writer.md)
+   and [release](releases/incarnation-writer-2026-10-06.md).
 4. Protocol carriage, Controller scope and refusal vectors, then Web diagnostics.
 
 Each step is its own release and acceptance; none belongs in an ordinary
