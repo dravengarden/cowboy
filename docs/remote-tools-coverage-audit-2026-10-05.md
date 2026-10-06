@@ -461,6 +461,17 @@ tool inventory, schemas, permissions and native pins are unchanged. Official
 [Mods](https://code.claude.com/docs/en/plugins/mods/events) references were
 checked again on 2026-10-06.
 
+The [3.4.12 release receipt](experiments/claude-durable-taskstop-release-2026-10-06.json)
+records the full quality gate and native review, 40 packaged execution checks
+accepted in 84.30 seconds, old/new worker coexistence, Linux/macOS probes,
+three actual Catalog reader roles and five public artifact digest checks.
+OVH operation `ovh-claude-code-3-4-12-converge` completed with an applied receipt;
+independent inventory confirmed 3.4.12 active, 3.4.11 retained for rollback,
+and current authentication/materialization. No production inference was sent.
+The exact lost-TaskStop-response fault is covered by source mock transport;
+the native suite covers actual cancellation, cold resume and its existing
+transport-loss scenarios, not that exact combined fault.
+
 This does not recover an executor that permanently lost its process ledger,
 establish native background notification parity, or resolve unknown file-write
 results. Full remote/local parity remains under audit.
