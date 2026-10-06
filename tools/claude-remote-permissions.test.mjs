@@ -46,6 +46,7 @@ async function modFixture(check) {
           targetCwd: "/target",
           runtimeCwd: "/runtime",
           targetHome: "/home/target",
+          hooks: { commands: [], tool: {} },
           memory: false,
         }),
     },
@@ -422,6 +423,15 @@ test("bridge observes one host approval per call and withdraws it on cancel", as
       { ...body, id: "bad", owner: "../x" },
     ]
   ) assert.equal((await post(bridge, "/permission", invalid)).status, 400);
+  // A hook decision withdraws only the prompt; the call stays admissible.
+  const hooked = { ...body, id: "p2" };
+  assert.equal((await post(bridge, "/permission", hooked)).status, 202);
+  await post(bridge, "/withdraw", { id: "p2" });
+  assert.deepEqual(cancelled, ["p1", "p2"]);
+  assert.deepEqual(
+    (await post(bridge, "/tool", { id: "p2", tool: "Bash", input: {} })).body,
+    { result: {} },
+  );
 });
 
 test("bridge without an approval channel denies asks", async (t) => {

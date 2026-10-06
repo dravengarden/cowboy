@@ -2939,6 +2939,66 @@ async fn run_generation_retention(state: Arc<AppState>) {
 /// generations no recoverable session pins. The Machine keeps the active and
 /// rollback generations itself and refuses while an installation is
 /// unreconciled; the same request also prunes its unreferenced artifact cache.
+/// Ask one Machine to retire generations left by Plugins it no longer has
+/// installed, keeping those still pinned and any saga that may compensate.
+async fn retire_uninstalled_generations(
+    state: &AppState,
+    machine_id: &str,
+    referenced: &HashMap<(String, String), BTreeSet<String>>,
+    unfinished: &[(String, String)],
+) {
+    let request = crate::generation_retention::UninstalledRequest {
+        referenced: referenced
+            .iter()
+            .filter(|((machine, _), _)| machine == machine_id)
+            .map(|((_, plugin), digests)| (plugin.clone(), digests.clone()))
+            .collect(),
+        skip: unfinished
+            .iter()
+            .filter(|(machine, _)| machine == machine_id)
+            .map(|(_, plugin)| plugin.clone())
+            .collect(),
+    };
+    if !request.is_valid() {
+        tracing::warn!(machine = %machine_id, "skipping invalid uninstalled generation retention request");
+        return;
+    }
+    let Ok(payload) = serde_json::to_value(&request) else {
+        return;
+    };
+    match state
+        .machine_control
+        .adapter_request(
+            machine_id,
+            crate::generation_retention::UNINSTALLED_ADAPTER,
+            payload,
+        )
+        .await
+        .and_then(|value| {
+            serde_json::from_value::<Vec<crate::generation_retention::Outcome>>(value)
+                .map_err(|error| error.to_string())
+        }) {
+        Ok(outcomes) => {
+            for outcome in outcomes {
+                tracing::info!(
+                    machine = %machine_id,
+                    plugin = %outcome.plugin_id,
+                    retired = ?outcome.retired,
+                    freed_bytes = outcome.freed_bytes,
+                    "retired uninstalled Plugin generations"
+                );
+            }
+        }
+        // Machines released before this adapter refuse it; that is expected
+        // until they upgrade, so it is not a warning.
+        Err(error) => tracing::debug!(
+            machine = %machine_id,
+            %error,
+            "uninstalled Plugin generation retention unavailable"
+        ),
+    }
+}
+
 async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
     let Ok(machines) = state.machine_snapshots.load().await else {
         return;
@@ -2963,6 +3023,14 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
             return;
         }
     }
+    // An unreadable uninstall ledger only skips uninstalled-Plugin cleanup.
+    let unfinished_uninstalls = match store.unfinished_plugin_uninstalls().await {
+        Ok(pairs) => Some(pairs),
+        Err(error) => {
+            tracing::warn!(%error, "skipping uninstalled Plugin generation retention");
+            None
+        }
+    };
     for machine in machines {
         if only.is_some_and(|id| id != machine.id) {
             continue;
@@ -3020,6 +3088,9 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
                     "Plugin generation retention failed"
                 ),
             }
+        }
+        if let Some(unfinished) = &unfinished_uninstalls {
+            retire_uninstalled_generations(state, &machine.id, &referenced, unfinished).await;
         }
     }
 }
