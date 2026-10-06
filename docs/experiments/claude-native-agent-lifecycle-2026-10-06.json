@@ -1,0 +1,63 @@
+{
+  "schema": "cowboy.claude-native-agent-lifecycle-research/v1",
+  "date": "2026-10-06",
+  "claude_version": "2.1.287",
+  "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+  "topology": "same-host native Claude, scripted loopback API, disposable homes, loopback-only network and PID namespaces",
+  "production_credentials": false,
+  "real_model_requests": 0,
+  "scratch_root": "/home/draven/worktrees/cowboy/remote-native-parity-evidence-20261005/scratch-agent-observe",
+  "scratch_probes": {
+    "lifecycle_probe.py": "sha256:527f5d6ba298bb10177556d115e90dceadb3d2725733342e2f25494f1a7c66aa",
+    "lifecycle_obs_delay_probe.py": "sha256:0b2fdbedbe122463fed250d9f692f5bd7b302735aac8a10385fde1a9ec0d29cf",
+    "abort_probe.py": "sha256:6997c693c316caf43477414401ba39122f6c18fcdf0ff601f532073881cfac99",
+    "block_probe.py": "sha256:cdaad00c15b6d2c5e132c3a89ed2362c6c32d3e963210f19d196b5872fd0a975",
+    "short_poll_probe.py": "sha256:1ecaa7fb18cd93de2f3864fc2458a8d461e817bae3d32ef7caf95bc460618f85",
+    "observe_probe.py": "sha256:c2a40c605e7e0071d30c707d39956660040f474e9f17de9b8af19f449d195960"
+  },
+  "scratch_outputs": {
+    "life-interrupt-active.json": "sha256:9df5fb598fc7c356493fa2d1f7f92b28fcd4849e84577888722c25256b79bd18",
+    "life-interrupt-idle.json": "sha256:a0dd1a150b6922d4e633b3a1385978b0e94270bcb211ac35b540e64d9a08445e",
+    "life-taskstop.json": "sha256:5fba557258ef3679e5dac20e765971ba62fb0284a1f9060a0c9071ccd966b54b",
+    "life-obs-taskstop.json": "sha256:0099c2dab3f08c4a533256e22cdc56810b6e39225c9ba41346408811967953a4",
+    "life-obs-delay.json": "sha256:1e80ba95d61f4b00345a4c3e234b9474b84ee7735dde565ac68c71752336afa3",
+    "abort-plain.json": "sha256:09e1eeb5bd15b24cc371035f5cb063e2ce86a7ddca8d977eb30f3b4eef377dad",
+    "abort-signal.json": "sha256:b251630a1dd48aaa596cf0143996ceff645b951802960c287e187133d9d1c7e2",
+    "abort-timing.json": "sha256:d9a53b9f5fd178850ef8b99a6899588b8d0181b5e637c4e9e4ca0b19069eb795",
+    "block.json": "sha256:59d4764de237a7d9379962b4214fd2a041e451da90af3db8e7f8efd0bdcb522f",
+    "short-poll.json": "sha256:4f2ca9d965dcafc5a2e9481127bfbb7dc3a005d2c57458e09940fc0ec1f92657",
+    "obs-nocomplete.json": "sha256:829706b13ea55b37874014671e541f8d05e76ef770534714645fbad425310a9b"
+  },
+  "native_local_baseline": {
+    "method": "native Bash in the child, observer-only Mod, no Cowboy interception",
+    "interrupt_with_active_parent_turn": "parent and background child Bash aborted; child notification status stopped; no late child effect",
+    "interrupt_while_parent_idle": "background child still stopped with status stopped; no further model request",
+    "taskstop_on_agent": "TaskStop returns task_type local_agent; child Bash aborted; a stopped notification then drives one parent turn",
+    "next_signal_while_awaiting_native_next": "aborts for parent call on interrupt (remote-cancel) and child call on interrupt or TaskStop",
+    "tool_inventory": "TaskOutput absent from init tools even when listed in --tools; SendMessage present",
+    "agent_launch_text": "native result tells the model not to Read output_file (raw JSONL transcript); notification <result> carries the final answer"
+  },
+  "mod_contract_observations": [
+    "register(on) must contain only on(...) registrations; a const declaration there silently disables the module on this build",
+    "two unfiltered turn.complete handlers in one module silently disable it; filtered duplicates (session.append door, prompt.attachment type) load",
+    "an idle notification is session.append door prompt with origin task-notification; one arriving during a turn is a queued_command attachment: session.append door delivery plus prompt.attachment type queued_command",
+    "while a hook's $.http.fetch is pending, the runtime processes no other native work: a text-only parent turn waited 25 s for a held child fetch, and native TaskStop could not run",
+    "with the child's call split into 1 s fetches, parent turns start within 1 s and next.signal aborts the held child hook on TaskStop; $.http remains usable from the abort listener",
+    "a resumed session can settle a previous process's agent notification as a zero-turn result (num_turns 0, duration_api_ms 0) before any client command"
+  ],
+  "consequences_for_plugin_3_5_0": [
+    "bridge idle hold reduced from 20 s to 1 s",
+    "per-call cancellation from next.signal plus owner cancellation after native TaskStop or aborted turn.complete",
+    "interrupt forwarded to native before target cancellation",
+    "notification projection on prompt and delivery doors and queued_command renders",
+    "readiness tolerates only a zero-turn zero-API task-notification result"
+  ],
+  "not_checked": [
+    "cross_host",
+    "permission_modes_other_than_bypass",
+    "grandchild_agents",
+    "teammates",
+    "worktree_and_remote_isolation",
+    "native_runtime_crash_with_live_agent"
+  ]
+}

@@ -465,7 +465,7 @@ test("in-flight output commits and rollback preserve newer cancellation intent",
 });
 
 let fixtureId = 0;
-async function routingFixture({ memory = false } = {}) {
+async function routingFixture({ memory = false, agents = {} } = {}) {
   // Each loaded native Mod has private state. Give every fixture its own module.
   const { register } = await import(
     `../plugins/claude-code/runtime/context-mod.js?fixture=${++fixtureId}`
@@ -485,6 +485,7 @@ async function routingFixture({ memory = false } = {}) {
     environment: "target environment",
     instructions: "target instructions",
     git: "target git",
+    agents,
     memory,
   };
   const calls = [];
@@ -552,6 +553,7 @@ test("every remote tool crosses the authenticated bridge without native executio
         id: "original-call",
         tool,
         input: inputs[tool],
+        owner: "native-agent",
       });
       assert.equal(event.tool, tool);
     });
@@ -648,7 +650,6 @@ test("only questions, todos and enrolled exact memory tools pass through", async
     for (
       const tool of [
         "FutureNativeTool",
-        "Agent",
         "Skill",
         "mcp__foreign__read",
         "mcp__matrix__memory_get_extra",

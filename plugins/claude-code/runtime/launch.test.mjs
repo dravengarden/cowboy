@@ -31,7 +31,13 @@ test("bound launch preserves model and resume while replacing local execution su
   ]);
   assert.equal(
     args[args.indexOf("--tools") + 1],
-    [...NATIVE_TOOLS, "TodoWrite", "AskUserQuestion"].join(","),
+    [...NATIVE_TOOLS, "TodoWrite", "AskUserQuestion", "Agent", "SendMessage"]
+      .join(","),
+  );
+  const disallowed = args[args.indexOf("--disallowedTools") + 1].split(",");
+  assert.ok(!disallowed.includes("Agent") && !disallowed.includes("Task"));
+  assert.ok(
+    disallowed.includes("Skill") && disallowed.includes("ExitWorktree"),
   );
   assert.equal(args[args.indexOf("--setting-sources") + 1], "");
   assert.equal(args.filter((arg) => arg === "--plugin-dir").length, 1);

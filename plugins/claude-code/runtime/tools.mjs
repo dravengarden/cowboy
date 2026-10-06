@@ -43,6 +43,15 @@ export const NATIVE_TOOLS = [
   "TaskStop",
 ];
 export const TASK_OUTPUT_PREFIX = "cowboy-task://";
+export const AGENT_OUTPUT_PREFIX = "cowboy-agent://";
+// Registry keys index plain objects; exclude inherited property names.
+export const AGENT_ID =
+  /^(?!(?:__proto__|constructor|prototype)$)[a-zA-Z0-9_-]{1,128}$/;
+const MAX_AGENTS = 512;
+const MAX_STATE = 2 * 1024 * 1024;
+// Agent answers yield to reads and jobs; the whole file must stay loadable.
+const MAX_AGENT_STATE = 512 * 1024;
+const AGENT_STATE_BUDGET = MAX_STATE - 256 * 1024;
 export const DESCRIPTIONS = {
   Bash:
     "Run Bash in the current workspace. Starts in the project directory; use cd within a command when needed. Waits up to timeout milliseconds (default 120000, maximum 600000). A running command returns a task id and cowboy-task:// output handle: use Read on that handle to wait for output, or TaskStop to cancel.",
@@ -169,10 +178,15 @@ export class WorkspaceTools {
       binding: bindingKey(binding),
       reads: {},
       jobs: {},
+      agents: {},
     };
+    // Native background agents live only as long as this Claude process.
+    this.incarnation = randomUUID();
     this.foreground = new Set();
     this.startingForeground = new Map();
     this.operations = new Map();
+    this.calls = new Map();
+    this.completedCalls = new Map();
     this.saves = Promise.resolve();
   }
 
@@ -180,7 +194,7 @@ export class WorkspaceTools {
     try {
       const stat = await lstat(this.statePath);
       if (
-        !stat.isFile() || stat.size > 2 * 1024 * 1024 || (stat.mode & 0o077)
+        !stat.isFile() || stat.size > MAX_STATE || (stat.mode & 0o077)
       ) throw new Error("Invalid tool state");
       const state = JSON.parse(await readFile(this.statePath, "utf8"));
       if (
@@ -189,7 +203,8 @@ export class WorkspaceTools {
       ) {
         throw new Error("Tool state belongs to another execution environment");
       }
-      this.state = state;
+      // Earlier generations stored no agents; their absence means none.
+      this.state = { ...state, agents: state.agents ?? {} };
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
@@ -300,20 +315,24 @@ export class WorkspaceTools {
     });
   }
 
-  async rangeRead(path, args) {
+  async rangeRead(path, args, call) {
     const offset = bounded(args.offset, 1, 1, 10000000);
     const limit = bounded(args.limit, 2000, 1, 10000);
-    const result = await this.command([
-      this.rangePython,
-      "-I",
-      "-S",
-      "-B",
-      "-c",
-      READ_RANGE,
-      path,
-      String(offset),
-      String(limit),
-    ]);
+    const result = await this.command(
+      [
+        this.rangePython,
+        "-I",
+        "-S",
+        "-B",
+        "-c",
+        READ_RANGE,
+        path,
+        String(offset),
+        String(limit),
+      ],
+      10000,
+      call,
+    );
     if (result.exitCode !== 0 || result.output_limit) {
       throw new Error("Target range read failed; read it again.");
     }
@@ -382,14 +401,36 @@ export class WorkspaceTools {
     }
   }
 
-  async start(argv, processId = randomUUID()) {
+  async start(argv, processId = randomUUID(), call) {
     if (Object.keys(this.state.jobs).length >= 4096) {
       throw new Error("Session process limit reached");
     }
+    // A call abandoned by native Claude (interrupt or a stopped agent) must
+    // not start target work afterwards; its admitted processes are cancelled.
+    const owner = call?.id ? this.callEntry(call.id, call.owner) : undefined;
+    if (owner?.cancelled) {
+      throw new Error("Tool call was cancelled before its command started");
+    }
+    owner?.processes.add(processId);
     // Record an intended process before submission. A lost start result is
     // never retried; the retained id can still be observed or cancelled.
-    this.state.jobs[processId] = { afterSeq: null, exited: false };
+    this.state.jobs[processId] = {
+      afterSeq: null,
+      exited: false,
+      ...(call?.owner ? { owner: call.owner } : {}),
+    };
     await this.save();
+    if (owner?.cancelled) {
+      // Cancelled while persisting: never submitted, so no target process
+      // can exist under this identity and nothing remains to reconcile.
+      owner.processes.delete(processId);
+      await this.save(() => {
+        const job = this.state.jobs[processId];
+        delete this.state.jobs[processId];
+        return () => this.state.jobs[processId] = job;
+      });
+      throw new Error("Tool call was cancelled before its command started");
+    }
     const result = await this.connection.call("process/start", {
       processId,
       argv,
@@ -497,10 +538,10 @@ export class WorkspaceTools {
     };
   }
 
-  async startForeground(argv) {
+  async startForeground(argv, call) {
     const id = randomUUID();
     this.foreground.add(id);
-    const starting = this.start(argv, id);
+    const starting = this.start(argv, id, call);
     this.startingForeground.set(id, starting);
     try {
       return await starting;
@@ -510,8 +551,8 @@ export class WorkspaceTools {
     }
   }
 
-  async command(argv, timeout = 10000) {
-    const id = await this.startForeground(argv);
+  async command(argv, timeout = 10000, call) {
+    const id = await this.startForeground(argv, call);
     try {
       const result = await this.collect(id, timeout);
       if (!result.exited) {
@@ -597,7 +638,7 @@ export class WorkspaceTools {
         ? `Target Git status at session start:\n${git.output}`
         : "The target is not a Git repository.",
       instructions:
-        "Use Read, Edit, Write, Glob, Grep and NotebookEdit for files; Bash for commands; Read with a cowboy-task:// output handle and TaskStop for retained processes. After compaction, use Read for file contents you need again. Only these tools, questions and to-dos are available. Project hooks, skills, native agents and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
+        "Use Read, Edit, Write, Glob, Grep and NotebookEdit for files; Bash for commands; Read with a cowboy-task:// output handle and TaskStop for retained processes. Agent runs a background subagent with these same workspace tools; its completion notification delivers the result, Read on its cowboy-agent:// handle returns only the recorded final answer, SendMessage continues it and TaskStop stops it. After compaction, use Read for file contents you need again. Only these tools, questions and to-dos are available. Project hooks, skills, custom agents, worktree or remote agent isolation, and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
         instructions,
     };
   }
@@ -607,19 +648,24 @@ export class WorkspaceTools {
   // executor exposes no stable file identity for a narrower lock. Independent
   // reads, searches and commands remain concurrent. This session-local queue
   // is not an atomic lock against Bash or unrelated target processes.
-  call(name, args) {
+  call(name, args, call) {
     const operation = Promise.resolve().then(() => {
       if (["read", "write", "edit", "notebookedit"].includes(name)) {
         const path = this.path(args.file_path ?? args.notebook_path);
         return this.ordered(
           `file:${path}`,
           () =>
-            name === "read"
-              ? this.invoke(name, args)
-              : this.ordered("file-mutations", () => this.invoke(name, args)),
+            name === "read" ? this.invoke(name, args, call) : this.ordered(
+              "file-mutations",
+              () => {
+                // A call abandoned while queued must not change the target.
+                this.live(call);
+                return this.invoke(name, args, call);
+              },
+            ),
         );
       }
-      return this.invoke(name, args);
+      return this.invoke(name, args, call);
     });
     return operation.catch((error) => ({
       content: [{
@@ -634,14 +680,14 @@ export class WorkspaceTools {
     }));
   }
 
-  async invoke(name, args) {
+  async invoke(name, args, call) {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
       const timeout = bounded(args.timeout, 120000, 1, 600000);
       const argv = [this.shell, "-c", command];
       const id = await (args.run_in_background
-        ? this.start(argv)
-        : this.startForeground(argv));
+        ? this.start(argv, undefined, call)
+        : this.startForeground(argv, call));
       if (args.run_in_background) {
         return text(
           JSON.stringify({ task_id: id, running: true }),
@@ -715,7 +761,7 @@ export class WorkspaceTools {
       }
       argv.push("--", path);
       const started = Date.now();
-      const result = await this.command(argv);
+      const result = await this.command(argv, 10000, call);
       if (result.exitCode !== 0 && result.exitCode !== 1) {
         throw new Error(result.output.slice(0, 4096) || "Search failed");
       }
@@ -767,7 +813,7 @@ export class WorkspaceTools {
         metadata.isFile && metadata.size >= RANGE_FILE_THRESHOLD &&
         metadata.size <= MAX_FILE
       ) {
-        const range = await this.rangeRead(path, args);
+        const range = await this.rangeRead(path, args, call);
         if (range) return range;
       }
     }
@@ -940,10 +986,13 @@ export class WorkspaceTools {
     }
     // The target executor owns bytes and write errors. This is read-before-write
     // protection, not an atomic lock against unrelated host processes.
+    this.live(call);
     await this.connection.call("fs/createDirectory", {
       path: pathToFileURL(dirname(path)).href,
       recursive: true,
     });
+    // Cancellation can arrive while the directory request is outstanding.
+    this.live(call);
     await this.connection.call("fs/writeFile", {
       path: pathToFileURL(path).href,
       dataBase64: Buffer.from(content).toString("base64"),
@@ -987,9 +1036,234 @@ export class WorkspaceTools {
     };
   }
 
-  async nativeCall(name, args) {
+  // `call` names the native tool use and, for a subagent, its agentId. The
+  // identity lets an abandoned call cancel exactly the processes it started.
+  async nativeCall(name, args, call = {}) {
+    if (call.id) this.callEntry(call.id, call.owner);
+    try {
+      return await this.dispatch(name, args, call);
+    } finally {
+      if (call.id) {
+        // Native can still discard this result (an abandoned call). Keep its
+        // processes cancellable briefly so a background start is not orphaned.
+        const entry = this.calls.get(call.id);
+        this.calls.delete(call.id);
+        if (entry?.processes.size && !entry.cancelled) {
+          this.completedCalls.set(call.id, entry);
+          setTimeout(() => this.completedCalls.delete(call.id), 60000).unref();
+          while (this.completedCalls.size > 1024) {
+            this.completedCalls.delete(this.completedCalls.keys().next().value);
+          }
+        }
+      }
+    }
+  }
+
+  live(call) {
+    if (call?.id && this.calls.get(call.id)?.cancelled) {
+      throw new Error("Tool call was cancelled before it changed the target");
+    }
+  }
+
+  callEntry(id, owner) {
+    let entry = this.calls.get(id);
+    if (!entry) {
+      entry = { cancelled: false, processes: new Set() };
+      this.calls.set(id, entry);
+    }
+    entry.owner ??= owner;
+    return entry;
+  }
+
+  // Native Claude abandoned this call. Unlike an interrupt, this stops only
+  // its own processes; a background start whose handle was never delivered
+  // would otherwise be unobservable. Returns ids still awaiting confirmation.
+  async cancelCall(id) {
+    const entry = this.completedCalls.get(id) ?? this.callEntry(id);
+    this.completedCalls.delete(id);
+    entry.cancelled = true;
+    const ids = [...entry.processes];
+    return ids.length ? await this.cancelTasks(ids) : [];
+  }
+
+  // Native discarded a settled result. Only a recently completed call that
+  // started processes is still tracked; anything else needs no cancellation.
+  async cancelDiscarded(id) {
+    return this.completedCalls.has(id) ? await this.cancelCall(id) : [];
+  }
+
+  // A stopped native agent no longer awaits the calls it left in flight.
+  // Cancel them all, rather than relying on each held hook's abort signal.
+  async cancelOwner(agentId) {
+    const ids = [...this.calls].filter(([, entry]) => entry.owner === agentId)
+      .map(([id]) => id);
+    return (await Promise.all(ids.map((id) => this.cancelCall(id)))).flat();
+  }
+
+  async registerAgent({ agentId, toolUseId, owner, outputFile }) {
+    if (
+      !AGENT_ID.test(agentId) || !AGENT_ID.test(toolUseId) ||
+      (owner !== null && !AGENT_ID.test(owner)) ||
+      typeof outputFile !== "string" || !posix.isAbsolute(outputFile) ||
+      outputFile.length > 4096
+    ) throw new Error("Invalid native agent registration");
+    await this.save(() => {
+      const previous = this.state.agents[agentId];
+      const agents = { ...this.state.agents };
+      delete agents[agentId];
+      agents[agentId] = {
+        owner,
+        toolUseId,
+        outputFile,
+        incarnation: this.incarnation,
+        status: "running",
+        answer: null,
+        completions: previous?.completions ?? 0,
+      };
+      // Oldest registrations expire first; their handles then report unknown.
+      for (const id of Object.keys(agents)) {
+        if (Object.keys(agents).length <= MAX_AGENTS) break;
+        delete agents[id];
+      }
+      const before = this.state.agents;
+      this.state.agents = agents;
+      return () => this.state.agents = before;
+    });
+  }
+
+  // A subagent turn ended (native turn.complete). The same agent may be
+  // continued and complete again; the latest outcome replaces the previous.
+  async completeAgent({ agentId, answer, reason, isAborted }) {
+    if (
+      !Object.hasOwn(this.state.agents, agentId) ||
+      typeof answer !== "string" ||
+      typeof reason !== "string" || reason.length > 128 ||
+      typeof isAborted !== "boolean"
+    ) return false;
+    const bytes = Buffer.from(answer);
+    const bounded = bytes.length > MAX_OUTPUT
+      ? decodeOutput(bytes.subarray(0, MAX_OUTPUT)).text +
+        "\n[Answer truncated at 64 KiB.]"
+      : answer;
+    await this.save(() => {
+      const before = this.state.agents;
+      const agents = { ...before };
+      const { answerExpired: _expired, ...previous } = agents[agentId];
+      agents[agentId] = {
+        ...previous,
+        incarnation: this.incarnation,
+        status: isAborted
+          ? "stopped"
+          : reason === "answer"
+          ? "completed"
+          : "failed",
+        reason,
+        answer: bounded,
+        completions: previous.completions + 1,
+      };
+      // Keep registrations, but drop the oldest recorded answers (this one
+      // last) to bound the state file. Completion notifications delivered them.
+      const others = Buffer.byteLength(
+        JSON.stringify({ ...this.state, agents: {} }),
+      );
+      let size = Buffer.byteLength(JSON.stringify(agents));
+      for (
+        const id of [
+          ...Object.keys(agents).filter((id) => id !== agentId),
+          agentId,
+        ]
+      ) {
+        if (size <= MAX_AGENT_STATE && others + size <= AGENT_STATE_BUDGET) {
+          break;
+        }
+        if (agents[id].answer === null) continue;
+        size -= Buffer.byteLength(JSON.stringify(agents[id].answer));
+        agents[id] = { ...agents[id], answer: null, answerExpired: true };
+      }
+      this.state.agents = agents;
+      return () => this.state.agents = before;
+    });
+    if (isAborted) await this.cancelOwner(agentId);
+    return true;
+  }
+
+  // SendMessage continued the agent in this process. Its previous outcome is
+  // no longer current; an exit before the next completion must not revive it.
+  async resumeAgent(agentId) {
+    if (!Object.hasOwn(this.state.agents, agentId)) return false;
+    await this.save(() => {
+      const before = this.state.agents;
+      const { answerExpired: _expired, ...previous } = before[agentId];
+      this.state.agents = {
+        ...before,
+        [agentId]: {
+          ...previous,
+          incarnation: this.incarnation,
+          status: "running",
+          answer: null,
+        },
+      };
+      return () => this.state.agents = before;
+    });
+    return true;
+  }
+
+  // Runtime-local native output files, for exact locator projection only.
+  agentLocators() {
+    return Object.fromEntries(
+      Object.entries(this.state.agents).map((
+        [id, agent],
+      ) => [id, agent.outputFile]),
+    );
+  }
+
+  // The native output file is the child's raw JSONL transcript; it carries
+  // runtime paths and environment. Only the recorded final answer is read.
+  agentOutput(handle) {
+    const id = handle.slice(AGENT_OUTPUT_PREFIX.length);
+    const agent = AGENT_ID.test(id) && Object.hasOwn(this.state.agents, id)
+      ? this.state.agents[id]
+      : undefined;
+    if (!agent) {
+      return { deny: "Agent output does not belong to this session" };
+    }
+    let content;
+    if (agent.status === "running") {
+      content = agent.incarnation === this.incarnation
+        ? "The agent is still running. Its completion notification delivers its final answer; partial output is not available in this execution environment."
+        : "The Claude process that ran this agent ended before the agent reported completion. No final answer was recorded.";
+    } else if (agent.answerExpired) {
+      content =
+        `The agent ${agent.status}. Its answer was delivered in the completion notification and is no longer retained.`;
+    } else if (agent.status === "completed") content = agent.answer;
+    else {
+      content =
+        `The agent ${
+          agent.status === "stopped" ? "was stopped" : `ended (${agent.reason})`
+        } before completing.` +
+        (agent.answer ? `\nLast answer:\n${agent.answer}` : "");
+    }
+    const lines = content.split("\n").length;
+    return {
+      result: {
+        type: "text",
+        file: {
+          filePath: handle,
+          content,
+          numLines: lines,
+          startLine: 1,
+          totalLines: lines,
+        },
+      },
+    };
+  }
+
+  async dispatch(name, args, call) {
     if (!NATIVE_TOOLS.includes(name)) {
       return { deny: "Tool is not available in this execution environment" };
+    }
+    if (name === "Read" && args.file_path?.startsWith(AGENT_OUTPUT_PREFIX)) {
+      return this.agentOutput(args.file_path);
     }
     if (name === "Read" && args.file_path?.startsWith(TASK_OUTPUT_PREFIX)) {
       const id = args.file_path.slice(TASK_OUTPUT_PREFIX.length);
@@ -1012,7 +1286,7 @@ export class WorkspaceTools {
         },
       };
     }
-    const result = await this.call(name.toLowerCase(), args);
+    const result = await this.call(name.toLowerCase(), args, call);
     if (result.isError) return { deny: result.content[0].text };
     if (!result.native) {
       return {

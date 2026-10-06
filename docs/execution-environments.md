@@ -279,7 +279,10 @@ Actual native resume and compaction are part of the worker gate. Reserved `Read`
 aliases still trigger native runtime file rereads after compaction, so the
 facade uses `ReadFile`, `EditFile`, `WriteFile`, `GlobFiles`, `GrepFiles` and
 `EditNotebook`; ordinary operations remain one tool call. Native project hooks,
-skills, subagents, plan files and implicit file attachments are disabled.
+skills, plan files and implicit file attachments are disabled. Since Plugin
+3.5.0, native background subagents run with the same target-routed tools; worktree
+and remote isolation, custom agents, foreground agents and teammates stay refused
+(see the [agent admission follow-up](remote-tools-coverage-audit-2026-10-05.md#native-agent-admission-plugin-350)).
 Guidance is a literal bounded snapshot of ancestor `AGENTS.md`, `CLAUDE.md` and
 `.claude/CLAUDE.md`, with identical content deduplicated; automatic `@` imports,
 `.claude/rules` and nested-directory instruction discovery are not implemented.

@@ -2,19 +2,33 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { NATIVE_TOOLS } from "./tools.mjs";
+import { AGENT_ID, NATIVE_TOOLS } from "./tools.mjs";
 
 const MAX_FRAME = 16 * 1024 * 1024;
+const BODY_KEYS = {
+  "/tool": ["id,input,tool", "id,input,owner,tool"],
+  "/result": ["id"],
+  "/cancel": ["id"],
+  "/agent": ["agentId,outputFile,owner,toolUseId"],
+  "/agent-complete": ["agentId,answer,isAborted,reason"],
+  "/agent-stop": ["agentId"],
+  "/agent-resume": ["agentId"],
+};
 
 // Private per-process endpoint. The existing authenticated Cowboy execution
 // connection still owns remote operations, reconnect and effect deduplication.
-export async function startModBridge(tools, { waitMs = 20000 } = {}) {
+// Each observation holds a pending Mods fetch. Claude 2.1.287 processes no
+// other native work meanwhile (new turns, TaskStop, agent aborts), so keep the
+// idle hold short; a ready result is still answered immediately.
+export async function startModBridge(tools, { waitMs = 1000 } = {}) {
   const directory = await mkdtemp("/tmp/cowboy-claude-mod-");
   await chmod(directory, 0o700);
   const socketPath = join(directory, "bridge.sock");
   const token = randomBytes(32).toString("hex");
   const authorization = Buffer.from(`Bearer ${token}`);
   const admitted = new Map();
+  // Calls native Claude abandoned before their /tool request arrived.
+  const cancelled = new Set();
   let retainedBytes = 0;
   let outstanding = 0;
   let active = true;
@@ -45,7 +59,7 @@ export async function startModBridge(tools, { waitMs = 20000 } = {}) {
       }
       if (
         request.method !== "POST" ||
-        !["/ready", "/tool", "/result"].includes(request.url)
+        (request.url !== "/ready" && !BODY_KEYS[request.url])
       ) {
         answer(404, { deny: "Unknown execution operation" });
         return;
@@ -65,18 +79,70 @@ export async function startModBridge(tools, { waitMs = 20000 } = {}) {
         return;
       }
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      const polling = request.url === "/result";
       if (
-        !call ||
-        Object.keys(call).sort().join(",") !==
-          (polling ? "id" : "id,input,tool") ||
-        typeof call.id !== "string" ||
-        !/^[a-zA-Z0-9_-]{1,256}$/.test(call.id) ||
-        (!polling && (!NATIVE_TOOLS.includes(call.tool) ||
-          !call.input || typeof call.input !== "object" ||
-          Array.isArray(call.input)))
+        !call || typeof call !== "object" ||
+        !BODY_KEYS[request.url].includes(Object.keys(call).sort().join(","))
       ) {
         answer(400, { deny: "Invalid execution call" });
+        return;
+      }
+      if (request.url === "/agent-stop") {
+        // Native TaskStop succeeded for this agent; its held calls are moot.
+        if (typeof call.agentId !== "string" || !AGENT_ID.test(call.agentId)) {
+          answer(400, { deny: "Invalid execution call" });
+          return;
+        }
+        tools.cancelOwner(call.agentId).catch(() => {});
+        answer(200, { cancelled: true });
+        return;
+      }
+      if (
+        ["/agent", "/agent-complete", "/agent-resume"].includes(request.url)
+      ) {
+        // Native agent lifecycle observations; the registry validates fields.
+        const registered = request.url === "/agent"
+          ? await tools.registerAgent(call).then(() => true)
+          : request.url === "/agent-resume"
+          ? await tools.resumeAgent(call.agentId)
+          : await tools.completeAgent(call);
+        answer(200, { registered });
+        return;
+      }
+      const polling = request.url === "/result";
+      if (
+        typeof call.id !== "string" ||
+        !/^[a-zA-Z0-9_-]{1,256}$/.test(call.id) ||
+        (request.url === "/tool" && (!NATIVE_TOOLS.includes(call.tool) ||
+          !call.input || typeof call.input !== "object" ||
+          Array.isArray(call.input) ||
+          (call.owner !== undefined && !AGENT_ID.test(call.owner))))
+      ) {
+        answer(400, { deny: "Invalid execution call" });
+        return;
+      }
+      if (request.url === "/cancel") {
+        // Abandonment can race admission. An unadmitted identity is spent so
+        // a late /tool cannot start work native Claude no longer awaits.
+        const operation = admitted.get(call.id);
+        if (operation === undefined) {
+          if (cancelled.size >= 16384) {
+            cancelled.delete(cancelled.values().next().value);
+          }
+          cancelled.add(call.id);
+        } else if (operation && !operation.result) {
+          tools.cancelCall(call.id).catch(() => {});
+        } else {
+          // Settled, but native abandoned it before delivery.
+          tools.cancelDiscarded(call.id).catch(() => {});
+        }
+        answer(200, { cancelled: true });
+        return;
+      }
+      if (!polling && cancelled.delete(call.id)) {
+        admitted.set(call.id, null);
+        answer(200, {
+          deny: "Tool call was cancelled before the target received it",
+        });
         return;
       }
       // Admission and observation are separate: Mods HTTP has a fixed 30s
@@ -97,7 +163,10 @@ export async function startModBridge(tools, { waitMs = 20000 } = {}) {
         outstanding++;
         admitted.set(call.id, operation);
         operation.ready = Promise.resolve().then(() =>
-          tools.nativeCall(call.tool, call.input)
+          tools.nativeCall(call.tool, call.input, {
+            id: call.id,
+            ...(call.owner === undefined ? {} : { owner: call.owner }),
+          })
         ).catch(() => ({
           deny:
             "Execution result unavailable; inspect state before repeating a mutation",

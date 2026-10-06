@@ -89,6 +89,12 @@ def probe(args, source):
         (plugin / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "cowboy-agent-research", "version": "1.0.0"}))
         (plugin / "hooks/hooks.json").write_text(json.dumps({"modules": ["./register.js"]}))
         module = source.read_text()
+        # This research spliced Agent support into the 3.4.12 Mod. Plugin 3.5.0
+        # admits Agent natively (and owns turn.complete, which a second handler
+        # would make the pinned loader reject); its acceptance is
+        # execution-worker-conformance. Run this probe against the 3.4.12 Mod.
+        require('event.tool === "Agent"' not in module,
+                "shipping Mod already admits Agent; use execution-worker-conformance")
         if args.read_task_output:
             module = "const researchTasks = new Map();\n" + module
         needle = '["TodoWrite", "AskUserQuestion"].includes(event.tool)'
