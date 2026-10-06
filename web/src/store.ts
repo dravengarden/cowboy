@@ -917,17 +917,41 @@ function deleteSessionFailureMessage(error: unknown): string {
   return actionErrorMessage(error, "Could not delete this session. Try again.");
 }
 
+/** Deletions this terminal requested whose execution environment stop is still
+ * pending. Only the requesting terminal reports an unconfirmed stop. */
+const closingDeletes = new Set<string>();
+
+/** Toast for each requested deletion the Controller retained because its
+ * execution environment did not confirm the stop. */
+function reportRetainedClosures(sessions: readonly SessionMeta[]): void {
+  if (closingDeletes.size === 0) return;
+  const present = new Map(sessions.map((session) => [session.id, session]));
+  for (const sessionId of closingDeletes) {
+    const session = present.get(sessionId);
+    if (session?.closing) continue;
+    closingDeletes.delete(sessionId);
+    if (session) {
+      notify("Could not confirm this session's environment stopped. The session was kept; try deleting it again.");
+    }
+  }
+}
+
 /** Soft-delete one Cowboy session. The row stays in the list, disabled and
- * busy, until the authoritative `sessions` broadcast drops it. A lost
- * round-trip restores the row and toasts instead of hanging forever. */
+ * busy, until the authoritative `sessions` broadcast drops it or marks it
+ * `closing`; a closing row stays busy until its environment stop resolves. A
+ * lost round-trip restores the row and toasts instead of hanging forever. */
 export function deleteSession(sessionId: string): Promise<void> {
   if (state.deletingSessionIds.has(sessionId)) return Promise.resolve();
   markDeletingSession(sessionId, true);
   return sendWithAck(
     { type: "delete_session", session_id: sessionId },
-    (snapshot) => !snapshot.sessions.some((session) => session.id === sessionId),
+    (snapshot) => !snapshot.sessions.some((session) => session.id === sessionId && !session.closing),
     "Delete session",
-  ).catch((error: unknown) => {
+  ).then(() => {
+    if (state.sessions.some((session) => session.id === sessionId && session.closing)) {
+      closingDeletes.add(sessionId);
+    }
+  }).catch((error: unknown) => {
     notify(deleteSessionFailureMessage(error));
     throw error;
   }).finally(() => {
@@ -1535,6 +1559,7 @@ function handle(msg: Outbound): void {
         setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
       }
       commitSessions();
+      reportRetainedClosures(msg.sessions);
       replica.recordSessions(msg.sessions);
       // A session that just turned busy is the likeliest next switch.
       schedulePrefetch();

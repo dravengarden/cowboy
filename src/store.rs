@@ -1713,6 +1713,12 @@ impl Store {
         dispatch_storage!(self, deleted_session_generations())
     }
 
+    /// `(machine_id, plugin_id)` whose uninstall saga has not finished; its
+    /// compensation may still reactivate the removed generation.
+    pub async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
+        dispatch_storage!(self, unfinished_plugin_uninstalls())
+    }
+
     pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
         dispatch_storage!(self, upsert_runtime_incident(incident))
     }
@@ -6104,6 +6110,16 @@ impl PostgresStorage {
     ///
     /// # Errors
     /// If the DELETE fails.
+    pub async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, plugin_id FROM plugin_uninstall_operations \
+             WHERE phase NOT IN ('completed', 'compensated', 'aborted')",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list unfinished Plugin uninstalls")
+    }
+
     pub async fn deleted_session_generations(&self) -> Result<Vec<(String, String, String)>> {
         sqlx::query_as(
             "SELECT DISTINCT machine_id, provider, provider_generation_digest FROM sessions \
@@ -8788,6 +8804,7 @@ impl SessionRow {
             // Transient — the manual pause is in-memory only (not persisted), so a
             // restored session always comes back un-paused.
             paused: false,
+            closing: false,
             // Not persisted — a fresh usage_update re-seeds it right after revive.
             context_used: 0,
             context_size: 0,
@@ -8831,6 +8848,7 @@ mod storage_contract_tests {
             origin: SessionOrigin::Web,
             agent_session_id: None,
             paused: false,
+            closing: false,
             system: false,
             context_used: 0,
             context_size: 0,

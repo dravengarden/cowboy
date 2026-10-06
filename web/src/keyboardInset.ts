@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   inferKeyboardOpen,
+  isStrayDocumentScroll,
   isUnreliableVisualViewport,
   keyboardCoverOverlap,
   fixedLayoutHeight,
@@ -41,7 +42,7 @@ export function useKeyboardInset(): void {
     // the keyboard (observed on device). Native resize is the sole avoidance in the
     // shell; --kb-inset stays 0 so `bottom/pb: var(--kb-inset, 0px)` collapse to the
     // native-resized bottom. Browser surfaces continue to use visualViewport.
-    if (isNativeShell()) return undefined;
+    if (isNativeShell()) return pinNativeDocumentScroll();
     const vv = globalThis.visualViewport;
     if (!vv) return undefined;
     const root = globalThis.document.documentElement;
@@ -250,6 +251,54 @@ export function useKeyboardInset(): void {
       root.style.removeProperty("--vv-offset");
     };
   }, []);
+}
+
+// The native shell's document never scrolls (html/body overflow:hidden; the
+// WKWebView frame itself shrinks for the keyboard). WebKit's focus reveal can
+// still set the document scroll view's contentOffset programmatically while
+// that frame animates, which UIScrollView does not clamp: a physical iPhone
+// left the Create cover painted 228px down with scrollY = -228 and blank page
+// above it, the footer behind the keyboard (2026-10-06). Return the document
+// to its rest offset whenever it strays; inner scrollers are unaffected
+// because their scroll events do not reach window.
+function pinNativeDocumentScroll(): () => void {
+  const vv = globalThis.visualViewport;
+  const doc = globalThis.document;
+  let raf = 0;
+  let timers: number[] = [];
+  const pin = (): void => {
+    raf = 0;
+    if (isStrayDocumentScroll(globalThis.scrollX, globalThis.scrollY)) {
+      globalThis.scrollTo(0, 0);
+    }
+  };
+  const pinNow = (): void => {
+    if (raf === 0) raf = globalThis.requestAnimationFrame(pin);
+  };
+  // The reveal can land after the keyboard animation without a further
+  // scroll event reaching the page, so also re-check once it settles.
+  const schedule = (): void => {
+    pinNow();
+    for (const t of timers) globalThis.clearTimeout(t);
+    timers = [120, 300, 550, 900].map((d) => globalThis.setTimeout(pin, d));
+  };
+  globalThis.addEventListener("scroll", pinNow);
+  globalThis.addEventListener("resize", schedule);
+  vv?.addEventListener("resize", schedule);
+  vv?.addEventListener("scroll", pinNow);
+  doc.addEventListener("focusin", schedule);
+  doc.addEventListener("focusout", schedule);
+  pinNow();
+  return () => {
+    globalThis.removeEventListener("scroll", pinNow);
+    globalThis.removeEventListener("resize", schedule);
+    vv?.removeEventListener("resize", schedule);
+    vv?.removeEventListener("scroll", pinNow);
+    doc.removeEventListener("focusin", schedule);
+    doc.removeEventListener("focusout", schedule);
+    for (const t of timers) globalThis.clearTimeout(t);
+    if (raf !== 0) globalThis.cancelAnimationFrame(raf);
+  };
 }
 
 function hasEditableFocus(doc: Document): boolean {

@@ -199,6 +199,12 @@ enum OperatorCommand {
     Catalog,
     /// List enrolled Machines and their inventories.
     Machines,
+    /// Read one connected Machine's content-free durable-state counts: terminal
+    /// deletions, Session lineages and pending cleanup, with each writer flag.
+    DurableState {
+        #[arg(long)]
+        machine: String,
+    },
     /// Read Machine runtime policies and the preferred AI Machine.
     ProjectPolicies,
     /// Adopt current bootstrap projects into Cowboy without changing their roots.
@@ -424,6 +430,12 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
         OperatorCommand::Status => (reqwest::Method::GET, vec!["status".into()], None, None),
         OperatorCommand::Catalog => (reqwest::Method::GET, vec!["plugins".into()], None, None),
         OperatorCommand::Machines => (reqwest::Method::GET, vec!["machines".into()], None, None),
+        OperatorCommand::DurableState { machine } => (
+            reqwest::Method::GET,
+            vec!["machines".into(), machine, "durable-state".into()],
+            None,
+            None,
+        ),
         OperatorCommand::ProjectPolicies => (
             reqwest::Method::GET,
             vec!["project-policies".into()],

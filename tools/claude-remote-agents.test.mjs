@@ -199,7 +199,7 @@ test("an abandoned call cancels only the processes it started", async (t) => {
   assert.deepEqual(await tools.cancelCall("toolu_child"), []);
   assert.equal(connection.live.has(childId), false);
   assert.ok(connection.live.has(parentId) && connection.live.has("peer"));
-  assert.match((await child).result.stdout, /Exit code: 143/);
+  assert.match((await child).deny, /^Exit code 143/);
   assert.equal(tools.calls.has("toolu_child"), false);
   connection.live.delete(parentId);
   await parent;
@@ -561,6 +561,7 @@ async function modFixture() {
           targetCwd: "/target",
           runtimeCwd: "/runtime",
           targetHome: "/home/target",
+          hooks: { commands: [], tool: {} },
           memory: false,
         }),
     },

@@ -754,7 +754,8 @@ maps every exit and orders the durable-incarnation work.
 Linux cleanup defers root marker removal until its streamed content walk
 succeeds, retaining eligibility across partial content I/O failures. Successful
 retry is covered by a real-filesystem failure fixture. Marker finalization is
-not transactional, and this does not add a durable cleanup journal or I/O deadline.
+not transactional, and this does not add a durable cleanup journal. A later per-pass
+wall-clock budget (source only until released) bounds long walks but not a hung system call.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |

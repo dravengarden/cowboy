@@ -173,7 +173,13 @@ async fn child() {
     args.socket = root.join("runtime.sock");
     args.worktree_root = root.join("worktrees");
     let socket = args.socket.clone();
-    let server = tokio::spawn(run_broker(args, Some(journal), None, None));
+    let server = tokio::spawn(run_broker(
+        args,
+        Some(journal),
+        None,
+        None,
+        DurableStateView::default(),
+    ));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if UnixStream::connect(&socket).await.is_ok() {

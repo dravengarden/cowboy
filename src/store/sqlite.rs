@@ -1575,6 +1575,7 @@ impl SqliteSessionRow {
             agent_session_id: self.agent_session_id,
             system: self.system,
             paused: false,
+            closing: false,
             context_used: 0,
             context_size: 0,
             usage: None,
@@ -5247,6 +5248,16 @@ impl SqliteStorage {
         .await
         .with_context(|| format!("soft-delete SQLite session {session_id}"))?;
         Ok(())
+    }
+
+    pub(super) async fn unfinished_plugin_uninstalls(&self) -> Result<Vec<(String, String)>> {
+        sqlx::query_as(
+            "SELECT DISTINCT machine_id, plugin_id FROM plugin_uninstall_operations \
+             WHERE phase NOT IN ('completed', 'compensated', 'aborted')",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("list unfinished SQLite Plugin uninstalls")
     }
 
     pub(super) async fn deleted_session_generations(

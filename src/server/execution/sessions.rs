@@ -497,6 +497,9 @@ pub(in crate::server) fn delete(state: &AppState, session_id: &str) -> Result<()
         return Ok(());
     }
     state.supervisor.delete_session(session_id);
+    // The Machine stop can outlive any client acknowledgement deadline, for
+    // example while its broker connection is reconnecting.
+    state.hub.set_closing(session_id, true);
     let request = Request {
         service_id: state.service_id.clone(),
         machine_id: machine.clone(),
@@ -518,6 +521,8 @@ pub(in crate::server) fn delete(state: &AppState, session_id: &str) -> Result<()
             hub.set_status(&session_id, Status::Crashed, Some("Remote environment stop is unconfirmed. The session and worktree are retained; retry deletion when the environment is reachable.".into()));
         }
         closures.lock().remove(&session_id);
+        // Release the closure first so a retry prompted by this edge is accepted.
+        hub.set_closing(&session_id, false);
     });
     Ok(())
 }

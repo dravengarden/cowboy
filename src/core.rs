@@ -405,6 +405,12 @@ pub struct SessionMeta {
     /// daemon restart); `serde(default)` covers old clients + the restore path.
     #[serde(default)]
     pub paused: bool,
+    /// True while an accepted deletion waits for the session's execution
+    /// environment to confirm it stopped. Clients treat it as the deletion
+    /// acknowledgement; the row disappears on confirmation or returns with a
+    /// Crashed detail when the stop stays unconfirmed. Transient.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closing: bool,
     /// True for a machine-driven system session: visible and watchable in the
     /// UI but view-only. The composer is hidden and user turns are rejected;
     /// only the backend wake endpoint drives it. Persisted for compatibility.
@@ -673,6 +679,10 @@ struct Session {
     event_count: u64,
     reached_start: bool,
     next_seq: u64,
+    /// When this Controller last appended an event to the session. Monotonic
+    /// and process-local: a restart treats every session as just active, so
+    /// idle-based policies wait a full idle period before acting.
+    last_activity: std::time::Instant,
     /// Last seen agent-advertised config options (raw ACP
     /// `configOptions` array — see acp.rs intercept). `None` until the agent
     /// fires its first `config_option_update` notification. Re-sent to every
@@ -2194,6 +2204,7 @@ impl Hub {
                         event_count,
                         reached_start,
                         next_seq,
+                        last_activity: std::time::Instant::now(),
                         config_options,
                         config_preferences,
                         queue,
@@ -2422,6 +2433,16 @@ impl Hub {
     pub fn session_is_system(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).is_some_and(|s| s.meta.system)
+    }
+
+    /// How long ago this Controller last appended an event to the session.
+    #[must_use]
+    pub fn session_idle_for(&self, session_id: &str) -> Option<std::time::Duration> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|session| session.last_activity.elapsed())
     }
 
     #[must_use]
@@ -2691,6 +2712,7 @@ impl Hub {
             origin,
             agent_session_id: None,
             paused: false,
+            closing: false,
             system,
             context_used: 0,
             context_size: 0,
@@ -2714,6 +2736,7 @@ impl Hub {
                     event_count: 0,
                     reached_start: true,
                     next_seq: 0,
+                    last_activity: std::time::Instant::now(),
                     config_options: None,
                     config_preferences: config_preferences.clone(),
                     queue: Vec::new(),
@@ -2862,6 +2885,24 @@ impl Hub {
             Self::commit_setting_locked(settings, key.clone(), value.clone())
         });
         self.publish_setting(key, value, snapshot);
+    }
+
+    /// Publish whether an accepted deletion is still waiting for its execution
+    /// environment. Broadcast-only; deletion itself is [`Self::delete_session`].
+    pub fn set_closing(&self, session_id: &str, closing: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.closing != closing => {
+                    s.meta.closing = closing;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
     }
 
     /// Manually PAUSE / RESUME the queue drain (the user's ⏸ toggle). Pausing
@@ -3655,6 +3696,63 @@ impl Hub {
         Ok(true)
     }
 
+    /// Move a dormant (exited, workerless) session's binding to another
+    /// installed Provider generation without starting anything. The next open
+    /// launches that generation with the same native resume as an explicit
+    /// reload. Refuses unless the session is still exactly `expected` and
+    /// still exited, so a racing open or prompt always wins.
+    pub fn repin_dormant_provider(
+        &self,
+        expected: &SessionMeta,
+        version: &str,
+        digest: &str,
+        behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    ) -> Result<(), String> {
+        let meta = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(&expected.id)
+                .ok_or_else(|| "session no longer exists".to_owned())?;
+            if session.in_flight || session.meta.status != Status::Exited {
+                return Err("session is no longer dormant".to_owned());
+            }
+            if session.meta.provider != expected.provider
+                || session.meta.provider_version != expected.provider_version
+                || session.meta.provider_generation_digest != expected.provider_generation_digest
+                || session.meta.provider_auth_generation != expected.provider_auth_generation
+                || session.meta.agent_session_id != expected.agent_session_id
+                || session.meta.machine_id != expected.machine_id
+                || session.meta.cwd != expected.cwd
+                || session.meta.execution_binding != expected.execution_binding
+            {
+                return Err("session changed while preparing to re-pin; try again".to_owned());
+            }
+            if !current_context_has_user_message(session) || session.meta.agent_session_id.is_none()
+            {
+                return Err(
+                    "a saved native session is required to change Provider version".to_owned(),
+                );
+            }
+            if session.meta.execution_binding.is_some() {
+                let mut candidate = session.meta.clone();
+                candidate.provider_version = version.to_owned();
+                candidate.provider_generation_digest = digest.to_owned();
+                candidate.provider_behavior = Some(behavior.clone());
+                candidate.require_runtime_launch()?;
+            }
+            session.meta.provider_version = version.to_owned();
+            session.meta.provider_generation_digest = digest.to_owned();
+            session.meta.provider_behavior = Some(behavior.clone());
+            session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
+            session.meta.clone()
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::ReloadProvider(Box::new(meta)));
+        }
+        self.broadcast_sessions();
+        Ok(())
+    }
+
     /// Reserve an idle session for an explicit Provider reload. The lock also
     /// fences prompt submission: a racing prompt either wins and rejects the
     /// reload, or stays queued until the replacement runtime is ready.
@@ -4030,6 +4128,7 @@ impl Hub {
             }
             let seq = s.next_seq;
             s.next_seq += 1;
+            s.last_activity = std::time::Instant::now();
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
                 seq,
@@ -6198,6 +6297,7 @@ mod runtime_reconciliation_tests {
                 origin: SessionOrigin::Web,
                 agent_session_id: Some("agent-1".to_owned()),
                 paused: false,
+                closing: false,
                 system: false,
                 context_used: 0,
                 context_size: 0,
@@ -7297,6 +7397,19 @@ mod core_tests {
         assert!(hub.delete_session("gone"));
         assert!(!hub.inner.sync.lock().contains_key("mobile-review:gone"));
         assert!(!hub.inner.sync.lock().contains_key("queue:gone"));
+    }
+
+    // A pending environment stop is visible on the wire only while it lasts.
+    #[test]
+    fn closing_flag_is_listed_only_while_set() {
+        let hub = hub_with_session("closing");
+        let listed =
+            |hub: &Hub| serde_json::to_value(&hub.session_list()[0]).expect("serialize session");
+        assert!(listed(&hub).get("closing").is_none());
+        hub.set_closing("closing", true);
+        assert_eq!(listed(&hub)["closing"], true);
+        hub.set_closing("closing", false);
+        assert!(listed(&hub).get("closing").is_none());
     }
 
     #[test]
@@ -8556,6 +8669,41 @@ mod core_tests {
             hub.session_info(&before.id).unwrap().meta.provider_version,
             "replacement"
         );
+    }
+
+    #[test]
+    fn dormant_repin_changes_only_the_binding_and_only_while_exited() {
+        let (hub, running) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        // A live session is not dormant.
+        assert!(
+            hub.repin_dormant_provider(&running, "new", "new-digest", &behavior)
+                .unwrap_err()
+                .contains("dormant")
+        );
+        hub.set_status(&running.id, Status::Exited, None);
+        let before = hub.session_info(&running.id).unwrap().meta;
+        let mut stale = before.clone();
+        stale.provider_generation_digest = "other".to_owned();
+        assert!(
+            hub.repin_dormant_provider(&stale, "new", "new-digest", &behavior)
+                .unwrap_err()
+                .contains("changed")
+        );
+        hub.repin_dormant_provider(&before, "new", "new-digest", &behavior)
+            .expect("re-pin");
+        let after = hub.session_info(&before.id).unwrap().meta;
+        assert_eq!(after.provider_version, "new");
+        assert_eq!(after.provider_generation_digest, "new-digest");
+        assert_eq!(after.provider_behavior, Some(behavior));
+        assert_eq!(after.status, Status::Exited, "nothing is started");
+        assert_eq!(after.agent_session_id, before.agent_session_id);
+        assert_eq!(
+            after.provider_auth_generation,
+            before.provider_auth_generation
+        );
+        assert_eq!(after.cwd, before.cwd);
+        assert_eq!(after.machine_id, before.machine_id);
     }
 
     #[test]

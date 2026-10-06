@@ -122,6 +122,10 @@ as a deprecated override for one release.
 | --- | --- | --- | --- |
 | Service | `plugins.generation_retention_interval` | `"6h"` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
+| Service | `plugins.repin_dormant_sessions` | `false` | live |
+| Service | `plugins.repin_dormant_after` | `"7d"` | live |
+| Service | `sessions.reclaim_on_capacity` | `false` | live |
+| Service | `sessions.reclaim_min_idle` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
 | Device | `capacity.draining` | `false` | restart |
 | Device | `disk.low_watermark` | `"15GiB"` | live |
@@ -129,6 +133,46 @@ as a deprecated override for one release.
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
 convenience.
+
+## Dormant session re-pinning
+
+Generation retention keeps every Provider generation a recoverable session
+pins, so one forgotten session can hold an old release indefinitely. Every
+scheduled retention pass records which sessions are dormant (exited, no worker,
+nothing in flight, not a system session) in one persisted setting, so dormancy
+is measured across Controller restarts; opening a session clears it.
+
+Off by default. With `plugins.repin_dormant_sessions = true`, a session dormant
+for `plugins.repin_dormant_after` is moved to its Device's installed release
+through exactly the gate of an explicit Reload: the Device is connected, a
+native session is saved, and the authentication and native session contracts
+are unchanged. Nothing is started; the binding change is persisted, and the
+next open resumes the native session on the new release. The same retention
+pass can then retire the old generation. A session that fails the gate keeps
+its generation.
+
+## Session reclaim on capacity
+
+Off by default. With `sessions.reclaim_on_capacity = true`, a new session that
+targets a full Device first hibernates that Device's longest-idle eligible
+session, waits up to 20 seconds for its slot, then proceeds; otherwise the
+request is refused exactly as before. A session is eligible only when it holds
+a slot, is idle (no turn, queued prompt or background task), is not a system
+session, does not have Provider cache protection enabled, and has had no event
+for `sessions.reclaim_min_idle`.
+
+Opening a hibernated session always revives it, even on a full Device, because
+the Machine treats capacity as advisory. With reclaim enabled, the Service then
+hibernates the longest-idle eligible session other than the one just opened
+whenever the Device holds more workers than its capacity. This never delays or
+refuses the open.
+
+Hibernation sends no model request and the conversation resumes when the
+session is opened (`docs/hibernation-token-audit-2026-10-06.md`). Keeping the
+idle threshold at or above the longest Provider prompt-cache lifetime means a
+reclaimed session's cache had already expired, so reclaiming it adds no token
+cost. Idle time is measured by the running Controller; after a restart every
+session counts as freshly active.
 
 ## Disk retention
 

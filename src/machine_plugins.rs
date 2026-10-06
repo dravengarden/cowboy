@@ -869,7 +869,35 @@ impl MachinePluginStore {
             plugin_id: plugin_id.to_owned(),
             ..crate::generation_retention::Outcome::default()
         };
-        for entry in fs::read_dir(&generations)
+        self.retire_unkept(&generations, &keep, &mut retention)?;
+        // Same lock as installation, so no install can be reading the cache.
+        if let (Some(config), Some(state)) = (self.device_config.get(), self.root.parent()) {
+            let unreferenced_after =
+                config.get(&crate::config::schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
+            match artifact_cache::retire_unreferenced(state, &self.root, unreferenced_after) {
+                Ok(retired) if retired.files > 0 => tracing::info!(
+                    files = retired.files,
+                    freed_bytes = retired.bytes,
+                    "retired unreferenced runtime artifact cache entries"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "artifact cache retention failed"),
+            }
+        }
+        retention.retained.sort();
+        retention.retired.sort();
+        Ok(retention)
+    }
+
+    /// Tombstone and remove every generation under `generations` not in
+    /// `keep`, finishing tombstones an interrupted pass left behind.
+    fn retire_unkept(
+        &self,
+        generations: &Path,
+        keep: &BTreeSet<String>,
+        retention: &mut crate::generation_retention::Outcome,
+    ) -> Result<()> {
+        for entry in fs::read_dir(generations)
             .with_context(|| format!("reading {}", generations.display()))?
         {
             let entry = entry?;
@@ -898,30 +926,74 @@ impl MachinePluginStore {
                 .with_context(|| format!("removing {}", tombstone.display()))?;
         }
         if !retention.retired.is_empty() {
-            fs::File::open(&generations)?.sync_all()?;
+            fs::File::open(generations)?.sync_all()?;
             // Proof keys are "<content root>\n<artifact set>".
             self.runtime_proofs.lock().retain(|key, _| {
                 key.split_once('\n')
                     .is_none_or(|(content, _)| Path::new(content).exists())
             });
         }
-        // Same lock as installation, so no install can be reading the cache.
-        if let (Some(config), Some(state)) = (self.device_config.get(), self.root.parent()) {
-            let unreferenced_after =
-                config.get(&crate::config::schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
-            match artifact_cache::retire_unreferenced(state, &self.root, unreferenced_after) {
-                Ok(retired) if retired.files > 0 => tracing::info!(
-                    files = retired.files,
-                    freed_bytes = retired.bytes,
-                    "retired unreferenced runtime artifact cache entries"
-                ),
-                Ok(_) => {}
-                Err(error) => tracing::warn!(%error, "artifact cache retention failed"),
+        Ok(())
+    }
+
+    /// Retire generations of Agent Provider Plugins that are no longer
+    /// installed: their active link is gone, so only sessions still pinning a
+    /// generation (`referenced`, including soft-deleted sessions until purge)
+    /// keep it. `skip` names Plugins whose uninstall saga may still compensate
+    /// by reactivating the removed generation; they are left untouched.
+    pub async fn retire_uninstalled_generations(
+        &self,
+        referenced: &BTreeMap<String, BTreeSet<String>>,
+        skip: &BTreeSet<String>,
+    ) -> Result<Vec<crate::generation_retention::Outcome>> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let mut outcomes = Vec::new();
+        if !self.root.exists() {
+            return Ok(outcomes);
+        }
+        for entry in fs::read_dir(&self.root).context("reading Provider store")? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let plugin_id = entry.file_name().to_string_lossy().into_owned();
+            let root = entry.path();
+            let generations = root.join("generations");
+            if skip.contains(&plugin_id)
+                || validate_plugin_id(&plugin_id).is_err()
+                || root.join("active").symlink_metadata().is_ok()
+                || !generations.is_dir()
+                // Code runtimes own leases independent of sessions.
+                || root.join(".code-runtime-owned-v2").exists()
+                || !uninstalled_agent_generations(&generations)
+                || self.operations.ensure_unfenced(&plugin_id).is_err()
+            {
+                continue;
+            }
+            let keep: BTreeSet<String> = referenced
+                .get(&plugin_id)
+                .into_iter()
+                .flatten()
+                .map(|digest| digest.trim_start_matches("sha256:").to_owned())
+                .collect();
+            let mut retention = crate::generation_retention::Outcome {
+                plugin_id: plugin_id.clone(),
+                ..crate::generation_retention::Outcome::default()
+            };
+            self.retire_unkept(&generations, &keep, &mut retention)?;
+            // A rollback link has nothing to roll back to once uninstalled.
+            if read_link_name(&root.join("rollback"))
+                .is_some_and(|name| !generations.join(&name).exists())
+            {
+                fs::remove_file(root.join("rollback"))?;
+            }
+            if !retention.retired.is_empty() {
+                retention.retained.sort();
+                retention.retired.sort();
+                outcomes.push(retention);
             }
         }
-        retention.retained.sort();
-        retention.retired.sort();
-        Ok(retention)
+        Ok(outcomes)
     }
 
     pub fn inventory(&self) -> Result<Vec<PluginInventory>> {
@@ -4794,6 +4866,30 @@ fn read_link_name(path: &Path) -> Option<String> {
 
 const RETIRED_GENERATION_PREFIX: &str = ".retired-";
 
+/// Whether an uninstalled Plugin's generations are recorded Agent Provider
+/// installations. Unknown or other kinds are never retired by inference.
+fn uninstalled_agent_generations(generations: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(generations) else {
+        return false;
+    };
+    let mut recorded = false;
+    for entry in entries.flatten() {
+        let path = entry.path().join("content/plugin-inventory.json");
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        match serde_json::from_slice::<PluginInventory>(&bytes) {
+            Ok(inventory)
+                if inventory.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider =>
+            {
+                recorded = true;
+            }
+            _ => return false,
+        }
+    }
+    recorded
+}
+
 /// Generations are named by their lowercase SHA-256 digest.
 fn is_generation_name(name: &str) -> bool {
     name.len() == 64
@@ -7210,6 +7306,73 @@ mod tests {
         for kept in ["a", "b", "c"] {
             assert!(generations.join(kept.repeat(64)).is_dir());
         }
+    }
+
+    #[tokio::test]
+    async fn uninstalled_retention_keeps_pinned_and_compensable_generations_only() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let plugin = store.plugin_root("claude-code");
+        let generations = plugin.join("generations");
+        // Still installed: the uninstalled sweep leaves it alone.
+        let none = BTreeMap::new();
+        let untouched = store
+            .retire_uninstalled_generations(&none, &BTreeSet::new())
+            .await
+            .unwrap();
+        assert!(untouched.is_empty());
+        assert_eq!(fs::read_dir(&generations).unwrap().count(), 4);
+
+        // Uninstalled while its saga may still compensate: skipped.
+        fs::remove_file(plugin.join("active")).unwrap();
+        let skip = BTreeSet::from(["claude-code".to_owned()]);
+        assert!(
+            store
+                .retire_uninstalled_generations(&none, &skip)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read_dir(&generations).unwrap().count(), 4);
+
+        // Saga finished: only the generation a soft-deleted session pins stays.
+        let referenced = BTreeMap::from([(
+            "claude-code".to_owned(),
+            BTreeSet::from([format!("sha256:{}", "c".repeat(64))]),
+        )]);
+        let outcomes = store
+            .retire_uninstalled_generations(&referenced, &BTreeSet::new())
+            .await
+            .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].retired,
+            ["a", "b", "d"]
+                .map(|name| format!("sha256:{}", name.repeat(64)))
+                .to_vec()
+        );
+        assert_eq!(
+            outcomes[0].retained,
+            vec![format!("sha256:{}", "c".repeat(64))]
+        );
+        assert!(generations.join("c".repeat(64)).is_dir());
+        assert_eq!(fs::read_dir(&generations).unwrap().count(), 1);
+        // The rollback link pointed at a retired generation and is removed.
+        assert!(plugin.join("rollback").symlink_metadata().is_err());
+    }
+
+    #[tokio::test]
+    async fn uninstalled_retention_never_infers_a_code_runtime() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::CodeIntelligence);
+        let plugin = store.plugin_root("claude-code");
+        fs::remove_file(plugin.join("active")).unwrap();
+        assert!(
+            store
+                .retire_uninstalled_generations(&BTreeMap::new(), &BTreeSet::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read_dir(plugin.join("generations")).unwrap().count(), 4);
     }
 
     #[tokio::test]

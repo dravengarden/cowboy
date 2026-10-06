@@ -10,8 +10,10 @@
 //! Machine connections use one-time enrollment plus an OpenSSH Ed25519
 //! challenge before WebSocket protocol negotiation.
 
+mod dormant_pins;
 mod secure_transport;
 mod session_provider_updates;
+mod session_reclaim;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
@@ -2908,6 +2910,9 @@ async fn run_generation_retention(state: Arc<AppState>) {
             .get(&crate::config::schema::PLUGIN_GENERATION_RETENTION_INTERVAL);
         if last_pass.is_none_or(|at| at.elapsed() >= interval) {
             last_pass = Some(tokio::time::Instant::now());
+            // Re-pin long-dormant sessions first so this pass can retire the
+            // generations they no longer hold.
+            dormant_pins::repin(&state).await;
             generation_retention_pass(&state, None).await;
         } else {
             let cooldown = state
@@ -2938,6 +2943,66 @@ async fn run_generation_retention(state: Arc<AppState>) {
 /// generations no recoverable session pins. The Machine keeps the active and
 /// rollback generations itself and refuses while an installation is
 /// unreconciled; the same request also prunes its unreferenced artifact cache.
+/// Ask one Machine to retire generations left by Plugins it no longer has
+/// installed, keeping those still pinned and any saga that may compensate.
+async fn retire_uninstalled_generations(
+    state: &AppState,
+    machine_id: &str,
+    referenced: &HashMap<(String, String), BTreeSet<String>>,
+    unfinished: &[(String, String)],
+) {
+    let request = crate::generation_retention::UninstalledRequest {
+        referenced: referenced
+            .iter()
+            .filter(|((machine, _), _)| machine == machine_id)
+            .map(|((_, plugin), digests)| (plugin.clone(), digests.clone()))
+            .collect(),
+        skip: unfinished
+            .iter()
+            .filter(|(machine, _)| machine == machine_id)
+            .map(|(_, plugin)| plugin.clone())
+            .collect(),
+    };
+    if !request.is_valid() {
+        tracing::warn!(machine = %machine_id, "skipping invalid uninstalled generation retention request");
+        return;
+    }
+    let Ok(payload) = serde_json::to_value(&request) else {
+        return;
+    };
+    match state
+        .machine_control
+        .adapter_request(
+            machine_id,
+            crate::generation_retention::UNINSTALLED_ADAPTER,
+            payload,
+        )
+        .await
+        .and_then(|value| {
+            serde_json::from_value::<Vec<crate::generation_retention::Outcome>>(value)
+                .map_err(|error| error.to_string())
+        }) {
+        Ok(outcomes) => {
+            for outcome in outcomes {
+                tracing::info!(
+                    machine = %machine_id,
+                    plugin = %outcome.plugin_id,
+                    retired = ?outcome.retired,
+                    freed_bytes = outcome.freed_bytes,
+                    "retired uninstalled Plugin generations"
+                );
+            }
+        }
+        // Machines released before this adapter refuse it; that is expected
+        // until they upgrade, so it is not a warning.
+        Err(error) => tracing::debug!(
+            machine = %machine_id,
+            %error,
+            "uninstalled Plugin generation retention unavailable"
+        ),
+    }
+}
+
 async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
     let Ok(machines) = state.machine_snapshots.load().await else {
         return;
@@ -2962,6 +3027,14 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
             return;
         }
     }
+    // An unreadable uninstall ledger only skips uninstalled-Plugin cleanup.
+    let unfinished_uninstalls = match store.unfinished_plugin_uninstalls().await {
+        Ok(pairs) => Some(pairs),
+        Err(error) => {
+            tracing::warn!(%error, "skipping uninstalled Plugin generation retention");
+            None
+        }
+    };
     for machine in machines {
         if only.is_some_and(|id| id != machine.id) {
             continue;
@@ -3019,6 +3092,9 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
                     "Plugin generation retention failed"
                 ),
             }
+        }
+        if let Some(unfinished) = &unfinished_uninstalls {
+            retire_uninstalled_generations(state, &machine.id, &referenced, unfinished).await;
         }
     }
 }
@@ -4961,6 +5037,14 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if matches!(path, "/api/sessions" | "/api/execution-sessions") && method == Method::POST {
         return RouteAuth::ProductOperator;
+    }
+    // Content-free durable-state counts of one Machine, for operators and AI
+    // diagnosis. It exposes no Session, lineage or path.
+    if matches!(*method, Method::GET | Method::HEAD)
+        && path.starts_with("/api/machines/")
+        && path.ends_with("/durable-state")
+    {
+        return RouteAuth::ProductOrAdminOperator;
     }
     if matches!(path, "/api/project-policies" | "/api/project-placements")
         || (path.starts_with("/api/machines/")
@@ -10094,6 +10178,10 @@ async fn serve_axum(
             "/api/machines/{id}/deployment-health",
             get(api_machine_deployment_health),
         )
+        .route(
+            "/api/machines/{id}/durable-state",
+            get(api_machine_durable_state),
+        )
         // Protocol-v4/web compatibility adapter. Delete after every supported
         // client consumes protocol-v5 Plugin inventory from `/plugins`.
         .route(
@@ -11751,6 +11839,42 @@ fn machine_workspace_ids_sha256(inventory: &serde_json::Value) -> Option<String>
         .collect::<Option<Vec<_>>>()?;
     ids.sort_unstable();
     Some(crate::admin::hex_sha256(&serde_json::to_vec(&ids).ok()?))
+}
+
+/// Content-free counts and writer flags of one connected Machine's durable state
+/// (terminal deletions, Session lineages, pending cleanup). Each dataset is read
+/// separately, so it is not an atomic snapshot. The Machine's reply is validated
+/// against a closed schema and never proxied as free-form JSON; a Machine that
+/// predates the report answers with an error, which is surfaced as such.
+async fn api_machine_durable_state(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    if !state.runtime_router.connected(&machine_id) {
+        return (StatusCode::NOT_FOUND, "Machine is not connected").into_response();
+    }
+    let reply = match state
+        .machine_control
+        .adapter_request(&machine_id, "durable-state", serde_json::json!({}))
+        .await
+    {
+        Ok(reply) => reply,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Machine did not report durable state: {error}"),
+            )
+                .into_response();
+        }
+    };
+    match crate::durable_state::DurableState::from_reply(reply) {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            format!("Machine reported invalid durable state: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn api_machine_deployment_health(
@@ -15662,7 +15786,15 @@ async fn api_new_session(
                     && holds_worker_slot(&state.runtime_router, session)
             })
             .count();
-        if capacity.draining || active_sessions >= capacity.max_sessions as usize {
+        // A draining Device never gets a slot back; a full one may, if the
+        // Service is configured to hibernate its longest-idle session.
+        let reclaimed = !capacity.draining
+            && active_sessions >= capacity.max_sessions as usize
+            && state
+                .service_config
+                .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+            && session_reclaim::reclaim_slot(&state, &req.machine_id).await;
+        if !reclaimed && (capacity.draining || active_sessions >= capacity.max_sessions as usize) {
             return (
                 StatusCode::CONFLICT,
                 format!("machine {:?} is draining or at capacity", req.machine_id),
@@ -19658,7 +19790,7 @@ fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
 }
 
 fn handle_command(
-    state: &AppState,
+    state: &Arc<AppState>,
     principal: &ProductPrincipal,
     text: &str,
     held: &mut HashMap<String, (String, u64)>,
@@ -20004,7 +20136,15 @@ fn handle_command(
                 // toast is broadcast (which would otherwise read as a hard
                 // failure).
                 match state.supervisor.ensure_alive(&session_id) {
-                    Ok(_) => Ok(()),
+                    Ok(revived) => {
+                        if revived {
+                            tokio::spawn(session_reclaim::rebalance_after_wake(
+                                Arc::clone(state),
+                                session_id.clone(),
+                            ));
+                        }
+                        Ok(())
+                    }
                     Err(e) => {
                         tracing::warn!(
                             session_id = %session_id,
@@ -22597,6 +22737,12 @@ mod product_auth_api_tests {
         assert_eq!(
             classify_route(&Method::GET, "/api/machines/m-123/deployment-health"),
             RouteAuth::Public
+        );
+        // Durable-state counts are operational diagnostics: never public, and
+        // reachable by the product UI and by the Operator CLI.
+        assert_eq!(
+            classify_route(&Method::GET, "/api/machines/m-123/durable-state"),
+            RouteAuth::ProductOrAdminOperator
         );
         for path in [
             "/api/metrics",

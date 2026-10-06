@@ -948,9 +948,10 @@ test(
     );
     const stop = tools.call("taskstop", { task_id: task });
     const [finished, stopped] = await Promise.all([bash, stop]);
-    assert.equal(finished.isError, false);
+    // As natively, the killed foreground command is a non-zero exit error.
+    assert.equal(finished.isError, true);
     assert.equal(stopped.isError, false);
-    assert.equal(JSON.parse(finished.content[0].text).output, "done");
+    assert.equal(finished.content[0].text, "Exit code 143\ndone");
     assert.equal(JSON.parse(stopped.content[0].text).output, "");
     assert.deepEqual(
       cursors.filter((read) => !read.observation).map((read) => read.afterSeq),

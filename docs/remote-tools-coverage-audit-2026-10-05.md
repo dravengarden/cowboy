@@ -854,6 +854,135 @@ would silently skip a project's PreToolUse guards and PostToolUse formatters,
 so no partial loading was shipped. Evidence:
 [project hooks research](experiments/claude-project-hooks-research-2026-10-06.json).
 
+#### Project hooks (Plugin 3.7.0)
+
+3.7.0 loads the target project's hooks: `.claude/settings.json` and
+`settings.local.json`, read from the target when the session starts. Two paths
+run them, and both execute every command on the target:
+
+- Native runs lifecycle hooks and hooks on its own tools (Agent, TodoWrite,
+  AskUserQuestion). The settings reach native with `--settings`, and
+  `CLAUDE_CODE_SHELL_PREFIX` hands each command to `hook-proxy.mjs`, which runs
+  only registered commands on the target. Stdin, the streams, the exit code,
+  the timeout and cancellation are forwarded. Exec-form hooks bypass the prefix
+  natively, so they are given to native as an equivalent quoted shell form and
+  run on the target as argv.
+- The facade answers target tools before native's tool hooks, so `context-mod.js`
+  runs PreToolUse, PostToolUse, PostToolUseFailure and PermissionRequest for
+  them. It reproduces native's input fields, matching, parallel execution and
+  folding, and the messages the model sees.
+
+Behavior was taken from offline native baselines on 2.1.287 rather than from
+documentation; see the
+[hook baselines](experiments/claude-project-hooks-baselines-2026-10-06.json):
+
+- Exit 2 and `deny` in PreToolUse refuse the call before any effect. `ask`
+  prompts even in bypass mode. `continue:false` still runs the tool, then ends
+  the turn; this also applies when the call fails.
+- PostToolUse feedback follows the result. PreToolUse context also follows a
+  failed call.
+- PostToolUseFailure runs for target errors, and its `continue:false` does not
+  end the turn.
+- A non-zero Bash exit is a tool error (`Exit code N` followed by the output),
+  so failure hooks run instead of PostToolUse. This changes the result shape
+  for failed commands: 3.6.0 reported them as successes with a trailing
+  `Exit code: N`.
+- PermissionRequest hooks race a pending host prompt. A hook decision withdraws
+  the prompt (`control_cancel_request`) and allows the call (with amended input
+  if given), denies it, or denies it and ends the turn. Hooks also race each
+  other: the first decision wins, and a deny wins over an allow that arrives at
+  the same time. The adapter sees decisions at its next bridge poll, so
+  "the same time" is a window of up to about one second rather than native's
+  single tick. Exit 2 or no decision leaves the prompt to the host.
+- Async hooks run in the background. Their context reaches the next request.
+- A subagent's hooks carry `agent_id` and `agent_type`, and, as natively, the
+  main session's `transcript_path`. A transcript is copied to the target only
+  from native's projects directory and is removed afterwards.
+- `CLAUDE_ENV_FILE` is a private target file that facade Bash sources first.
+- An unparsable settings file is skipped, as native skips it.
+
+The adapter refuses a call rather than skip a project guard or reviewer. A
+matching tool hook it cannot reproduce makes the call fail before any effect:
+`prompt`, `http`, `agent` or `mcp` types, an `if` condition, or `asyncRewake`.
+A PreToolUse hook that cannot run on the target denies the call, as does a
+settings read error other than a missing file. A PermissionRequest hook that
+cannot run decides nothing, so the host still asks. Hook temporary files live
+under a private `~/.cache/cowboy/hook-input` directory (mode 0700) and are
+removed on every path. An abandoned call cancels its hooks.
+
+Native review ran 15 rounds, and the last reported no findings. Fixed findings
+include:
+
+- fail-closed handling of unsupported hook types
+- hook cancellation
+- transcript copies
+- async delivery
+- base input fields
+- timeouts
+- private temporary files
+- the live permission mode
+- PostToolUseFailure
+- failed Bash dispatch
+- PreToolUse stop and context on failure
+- PermissionRequest decision order
+
+Three findings were declined because native baselines contradict them:
+
+- a PreToolUse `continue:false` stopping before execution
+- a subagent getting its own transcript path
+- aborting the session on an unparsable settings file
+
+The baselines taken for those findings also exposed PermissionRequest hooks and
+`agent_type` as missing; both are now implemented.
+
+Gaps:
+
+- Settings are a session-start snapshot. Native watches its settings files;
+  this lane does not watch the target's files.
+- `PermissionDenied` (fired by the auto-mode classifier, which this lane does
+  not use) and `updatedPermissions` (which cannot persist rules, as in 3.6.0)
+  have no effect.
+- For events native raises itself (for example PostToolBatch or PreCompact),
+  the proxy rewrites `cwd` to the target and copies the transcript. Other
+  runtime-local paths those inputs may contain are not translated, and each
+  event's fields were not measured individually.
+- Facade Bash still reports a successful command with a trailing `Exit code: 0`,
+  where native prints only the output, or `(Bash completed with no output)`.
+  This belongs to matrix A.
+
+Packaged acceptance adds hook checks for:
+
+- lifecycle and native-tool hooks running on the target
+- SessionStart `CLAUDE_ENV_FILE` reaching target Bash
+- a facade PreToolUse block before the effect
+- PostToolUse context and async context
+- PostToolUseFailure for Read and Bash
+- non-zero Bash as a tool error
+- a PermissionRequest hook answering a pending prompt
+- a subagent's hook input naming its agent
+- private, cleaned hook inputs, with no hook running on the runtime
+
+Two negative controls fail: a candidate without the shell prefix, and one
+without the facade adapter.
+
+The [3.7.0 release receipt](experiments/claude-project-hooks-release-2026-10-06.json)
+binds feature commit `758aaeb9`, release merge `0d811d54` and artifact
+`sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426`.
+It records:
+
+- 68 accepted checks on the exact signed package
+- 3.6.0/3.7.0 coexistence with the current Machine worker
+- Linux and actual macOS probes
+- three Controller reader roles, re-resolved because the active Controller had
+  changed
+- five public artifact digests
+- Catalog `ready` on both platforms
+
+OVH operation `ovh-claude-code-3-7-0-converge` completed. Inventory reports
+3.7.0 active, 3.6.0 retained for rollback and no session leases. The converge
+was bounded to claude-code; other pending upgrades (grok, zed) were left alone.
+No live session was restarted.
+
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A
 multi-tool code block is not a transaction: post-tool rejection cannot undo

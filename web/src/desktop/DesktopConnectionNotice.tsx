@@ -9,7 +9,7 @@ import { connectionNotice } from "./connectionNotice";
 import { ConnectionNoticeStrip } from "./ConnectionNoticeStrip";
 
 /**
- * Strip above the Desktop composer while the Cowboy server cannot be used.
+ * Prompt header chip while the Cowboy server cannot be used.
  * It waits out the presentation debounce so a reconnect blip never flashes,
  * says whether the device or the server is the problem, and confirms the
  * recovery briefly before it leaves.

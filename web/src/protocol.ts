@@ -149,6 +149,10 @@ export interface SessionMeta {
    *  isn't interrupted. Released by the user to resume. Transient, never
    *  persisted (resets to false on a daemon restart). */
   paused?: boolean;
+  /** An accepted deletion is waiting for the session's execution environment to
+   *  confirm it stopped. The row disappears on confirmation, or returns without
+   *  this flag (status Crashed) when the stop stays unconfirmed. Transient. */
+  closing?: boolean;
   /** Context-window usage the agent reports over ACP `usage_update`:
    *  `context_used` tokens of a `context_size`-token window (drives the composer's
    *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */

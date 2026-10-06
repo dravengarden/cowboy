@@ -180,3 +180,8 @@ export function publishedKeyboardInset(
 ): number {
   return coverOverlap + accessoryOverlap;
 }
+
+/** True when the locked document has moved away from its only rest offset. */
+export function isStrayDocumentScroll(x: number, y: number): boolean {
+  return Math.round(x) !== 0 || Math.round(y) !== 0;
+}

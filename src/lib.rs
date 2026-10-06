@@ -60,6 +60,8 @@ mod deepseek_context;
 #[cfg(feature = "full")]
 mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+mod durable_state;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod execution_environment;
 #[cfg(feature = "machine-host")]
 pub mod execution_host;

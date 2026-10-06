@@ -9,6 +9,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -165,7 +166,83 @@ export class PermissionBroker {
   }
 }
 
-export function nativeArguments(args, plugin, memoryConfig) {
+// Target project hooks for native Claude, as the project wrote them: native
+// keeps matching, ordering, timeouts, output parsing and its own messages.
+// Their command hooks run on the target through the shell prefix. Tool hooks
+// for target tools also reach the Mod adapter, because a tool the facade
+// answers never reaches native's own PreToolUse/PostToolUse.
+export function shellQuote(value) {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+export function projectHookSettings(hooks) {
+  const commands = [];
+  const tool = {};
+  const settings = {};
+  for (const [event, groups] of Object.entries(hooks)) {
+    settings[event] = groups.filter((group) =>
+      group && typeof group === "object" && Array.isArray(group.hooks)
+    ).map((group) => ({
+      ...group,
+      hooks: group.hooks.map((hook) => {
+        // Native never fires these for target tools the facade answers.
+        const toolEvent = [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PermissionRequest",
+        ].includes(event);
+        const command = hook?.type === "command" &&
+          typeof hook.command === "string";
+        // The adapter cannot reproduce these around a target tool; it refuses
+        // a matching call instead of skipping the project's review.
+        const unsupported = !command
+          ? `${String(hook?.type ?? "unknown")} hook`
+          : hook.if !== undefined
+          ? "hook with an if condition"
+          : hook.asyncRewake === true
+          ? "asyncRewake hook"
+          : undefined;
+        if (toolEvent && unsupported) {
+          (tool[event] ??= []).push({ matcher: group.matcher, unsupported });
+        }
+        if (!command) return hook;
+        // Exec form bypasses the shell prefix natively; hand native an
+        // equivalent shell-form string the prefix routes, run as argv.
+        const argv = Array.isArray(hook.args) &&
+            hook.args.every((value) => typeof value === "string")
+          ? [hook.command, ...hook.args]
+          : undefined;
+        const shellCommand = argv
+          ? argv.map(shellQuote).join(" ")
+          : hook.command;
+        // Native enforces each hook's own timeout by ending the proxy; this
+        // is the target's backstop (natively, 600 s; async hooks unbounded).
+        const timeout = Number.isSafeInteger(hook.timeout) &&
+            hook.timeout > 0 && hook.timeout <= 3600
+          ? hook.timeout
+          : hook.async === true
+          ? 3600
+          : 600;
+        const index = commands.push({
+          command: shellCommand,
+          timeout,
+          ...(argv ? { argv } : {}),
+          ...(hook.async === true ? { async: true } : {}),
+        }) - 1;
+        if (toolEvent && !unsupported) {
+          (tool[event] ??= []).push({ matcher: group.matcher, index });
+        }
+        if (!argv) return hook;
+        const { args: _args, ...shellForm } = hook;
+        return { ...shellForm, command: shellCommand };
+      }),
+    }));
+  }
+  return { settings: { hooks: settings }, commands, tool };
+}
+
+export function nativeArguments(args, plugin, memoryConfig, hookSettings) {
   const values = new Set([
     "--model",
     "--fallback-model",
@@ -294,6 +371,7 @@ export function nativeArguments(args, plugin, memoryConfig) {
     ...(memoryConfig
       ? ["--mcp-config", memoryConfig, "--allowedTools", MATRIX_TOOLS.join(",")]
       : []),
+    ...(hookSettings ? ["--settings", hookSettings] : []),
     ...forwarded,
   ];
 }
@@ -701,11 +779,19 @@ async function native(args) {
     const context = await tools.context();
     // The exact native argv below sets the starting mode before any tool runs.
     const broker = new PermissionBroker("default");
-    modBridge = await startModBridge(tools, { permissions: broker });
+    modBridge = await startModBridge(tools, {
+      permissions: broker,
+      transcriptRoot: join(
+        process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+        "projects",
+      ),
+    });
     context.socketPath = modBridge.socketPath;
     context.bridgeToken = modBridge.token;
     context.descriptions = DESCRIPTIONS;
     context.agents = tools.agentLocators();
+    context.hooks = { commands: [], tool: {} };
+    const projectHooks = await tools.projectHooks();
     // Native evaluates permission paths against its own working directory.
     context.targetCwd = posix.resolve(descriptor.binding.workspace.cwd);
     context.runtimeCwd = process.cwd();
@@ -726,12 +812,38 @@ async function native(args) {
       new URL("./context-mod.js", import.meta.url),
       join(plugin, "hooks", "register.js"),
     );
+    const memoryConfig = memory ? join(stage, "matrix-mcp.json") : undefined;
+    let hookSettings;
+    let hookPrefix;
+    if (Object.keys(projectHooks).length) {
+      const proxy = join(stage, "hook-proxy.mjs");
+      await copyFile(new URL("./hook-proxy.mjs", import.meta.url), proxy);
+      const quote = shellQuote;
+      // Native passes each hook command as one argument. The proxy runs
+      // registered project commands on the target, anything else locally.
+      hookPrefix = join(stage, "hook-prefix.sh");
+      await writeFile(
+        hookPrefix,
+        `#!/bin/sh\nif [ "$#" -eq 1 ]; then exec ${quote(process.execPath)} ${
+          quote(proxy)
+        } "$1"; fi\nexec "$@"\n`,
+        { mode: 0o700, flag: "wx" },
+      );
+      const hooks = projectHookSettings(projectHooks);
+      // SessionStart hooks may persist exports for later Bash commands.
+      tools.hookEnvironment = true;
+      context.hooks = { commands: hooks.commands, tool: hooks.tool };
+      hookSettings = join(stage, "project-hooks.json");
+      await writeFile(hookSettings, JSON.stringify(hooks.settings), {
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
     const contextPath = join(stage, "context.json");
     await writeFile(contextPath, JSON.stringify(context), {
       mode: 0o600,
       flag: "wx",
     });
-    const memoryConfig = memory ? join(stage, "matrix-mcp.json") : undefined;
     if (memory) {
       await writeFile(
         memoryConfig,
@@ -742,6 +854,7 @@ async function native(args) {
     const environment = {
       ...process.env,
       COWBOY_CLAUDE_CONTEXT: contextPath,
+      ...(hookPrefix ? { CLAUDE_CODE_SHELL_PREFIX: hookPrefix } : {}),
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
       // Native tool bodies never run for project operations. Keep implicit
       // attachments and local checkpoints disabled; Mods projects target context.
@@ -759,7 +872,12 @@ async function native(args) {
     delete environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
-    const nativeArgv = nativeArguments(args, plugin, memoryConfig);
+    const nativeArgv = nativeArguments(
+      args,
+      plugin,
+      memoryConfig,
+      hookSettings,
+    );
     broker.mode = startingPermissionMode(nativeArgv);
     child = spawn(executable, nativeArgv, {
       env: environment,

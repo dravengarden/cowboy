@@ -1,0 +1,437 @@
+{
+  "schema": "cowboy.claude-project-hooks-release/v1",
+  "date": "2026-10-06",
+  "source_commit": "758aaeb9",
+  "release_commit": "0d811d54dc01bb7ad5b7c00b1e08e0496116698a",
+  "plugin": "claude-code",
+  "previous_version": "3.6.0",
+  "version": "3.7.0",
+  "artifact_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426",
+  "package_digest": "sha256:ad1ffeb40c766da70399021a6665bc7067927b02d13a05ed235fc5cc0bed7d96",
+  "linux_adapter_digest": "sha256:d18abe2eb408aa37bda24482fe07944f6b4ab2620947cd09de07fff078cd0c80",
+  "macos_adapter_digest": "sha256:bddcc8a2f028e4528c63bf99a665c755db7e385ad63e45f35c21bfa0a997acd5",
+  "publisher": "cowboy-first-party",
+  "contract_fingerprint": "sha256:8c38d81cc4a19f486615323ffae4f22473388a5e7f93f5f585b4c175997ffabc",
+  "native_pins": {
+    "claude_cli": "2.1.287",
+    "claude_agent_acp": "0.84.0",
+    "executor": "0.159.3"
+  },
+  "changes": [
+    "load the target project's .claude/settings.json and settings.local.json hooks at session start (snapshot)",
+    "native runs lifecycle and native-tool hooks; CLAUDE_CODE_SHELL_PREFIX routes registered commands to hook-proxy.mjs, which runs them on the target; exec form is converted to a quoted shell form run as argv",
+    "context-mod reproduces PreToolUse, PostToolUse, PostToolUseFailure and PermissionRequest for facade-routed target tools, including async hooks, base input fields, agent_id/agent_type, transcript copies and CLAUDE_ENV_FILE",
+    "a non-zero foreground Bash exit is a tool error 'Exit code N' + output, as natively (3.6.0 reported success with a trailing 'Exit code: N')",
+    "PermissionRequest hooks race a pending host prompt; a decision withdraws it through the new bridge /withdraw endpoint",
+    "tool hooks the adapter cannot reproduce (prompt/http/agent/mcp types, if, asyncRewake) refuse matching calls before any effect"
+  ],
+  "gates": {
+    "source_tests": 151,
+    "check_compact": "passed on 758aaeb9's tree and on the release merge 0d811d54 (one rerun: an unrelated machine_plugins::telemetry timing test timed out under load and passed 3/3 in isolation and in the full rerun)",
+    "native_review": "15 read-only Codex review rounds; the last reported none; three findings declined on native-baseline evidence",
+    "negative_controls": [
+      {
+        "result": "a candidate without the shell prefix fails: target SessionStart hook did not run on the target",
+        "log": "/home/draven/worktrees/cowboy/remote-native-parity-evidence-20261005/claude-hooks-negative-noprefix.log",
+        "log_sha256": "sha256:36768f200a9384528ee063b8500061f77a0fd84f4dfc53a075ef2d7a000325f8"
+      },
+      {
+        "result": "a candidate without the facade adapter fails: target PreToolUse hook did not block before the effect",
+        "log": "/home/draven/worktrees/cowboy/remote-native-parity-evidence-20261005/claude-hooks-negative-noadapter.log",
+        "log_sha256": "sha256:f6278f75f79f8cf7c12b0865d51701f34049ecb4c916b4091984522388fef963"
+      }
+    ],
+    "docs_index": "no Markdown pages added"
+  },
+  "native_baselines": "docs/experiments/claude-project-hooks-baselines-2026-10-06.json",
+  "native": {
+    "schema": "cowboy.claude-execution-worker-conformance/v1",
+    "accepted": true,
+    "checks": [
+      "machine_owned_worktree",
+      "machine_restart_reattaches_same_keeper_and_binding",
+      "native_control_cannot_replace_bound_execution",
+      "module_readiness_uses_no_model_request",
+      "native_tools_use_target_files_and_processes_without_mcp",
+      "runtime_context_and_guidance_are_replaced",
+      "unicode_quotes_crlf_bytes_preserved",
+      "stale_edit_is_refused",
+      "target_image_enters_model_context",
+      "background_cancel_settles",
+      "bounded_large_read_stays_in_target_tool_result",
+      "native_notebook_edit_preserves_metadata",
+      "native_read_observes_retained_task_output",
+      "lost_start_receipt_and_transport_outage_do_not_replay",
+      "cold_native_resume_preserves_context_reads_and_effects",
+      "background_process_handle_survives_native_resume",
+      "lost_file_write_completion_preserves_later_external_change",
+      "real_compaction_and_next_turn_preserve_target_context",
+      "cold_resume_after_compaction_has_no_runtime_file_locators",
+      "native_bash_preserves_utf8_split_across_streams",
+      "native_image_to_text_write_reports_success",
+      "target_symlink_write_preserves_link_and_mode",
+      "tilde_read_uses_target_home_and_shares_absolute_path_stamp",
+      "invalid_utf8_read_reports_decode_failure",
+      "native_symlink_alias_edit_rejects_stale_read",
+      "native_hardlink_alias_edit_rejects_stale_read",
+      "independent_native_searches_execute_concurrently",
+      "native_interrupt_stops_foreground_target_process",
+      "native_agent_child_tools_route_to_target",
+      "native_agent_launch_and_notification_use_handle",
+      "native_agent_handle_reads_recorded_final_answer",
+      "native_agent_client_frames_use_handle",
+      "native_agent_send_message_continues_on_target",
+      "native_agent_taskstop_cancels_child_target_command",
+      "native_agent_stop_preserves_peer_job",
+      "parent_turns_and_taskstop_progress_during_child_command",
+      "native_interrupt_stops_idle_background_agent_target_command",
+      "native_agent_outcomes_survive_cold_resume",
+      "native_permission_ask_denial_has_no_target_effect",
+      "native_permission_approval_runs_amended_input",
+      "native_permission_allow_runs_without_prompt",
+      "accept_edits_maps_target_workspace_paths",
+      "accept_edits_asks_for_runtime_path_collisions_and_escaping_symlinks",
+      "dont_ask_denies_without_prompt_or_effect",
+      "write_onto_symlink_is_refused_in_every_mode",
+      "bypass_permissions_runs_without_prompt",
+      "project_lifecycle_hooks_run_on_target",
+      "native_tool_hooks_run_on_target",
+      "session_start_env_file_reaches_target_bash",
+      "facade_tool_failure_hooks_run_on_target",
+      "nonzero_bash_exit_is_native_tool_error",
+      "permission_request_hook_answers_pending_prompt",
+      "subagent_tool_hooks_name_the_agent",
+      "facade_pre_tool_hook_blocks_before_target_effect",
+      "facade_post_tool_hook_context_reaches_model",
+      "packaged_acp_native_spawn_routes_target_tools",
+      "packaged_acp_cold_load_preserves_binding_history_and_effects",
+      "hot_effort_configuration_preserves_bound_execution",
+      "broken_module_refused_before_model_request",
+      "bare_mode_refused_without_changing_authentication",
+      "malformed_result_denies_without_native_fallback",
+      "bridge_error_denies_without_native_fallback",
+      "slow_consumer_preserves_9_mib_stdout_stderr_and_terminal_events",
+      "concurrent_large_input_and_output_do_not_deadlock",
+      "post_flood_commands_and_cancellation_keep_original_executor",
+      "target_image_bytes_cross_machine_transport",
+      "idempotent_close_stops_environment_and_preserves_worktree",
+      "closed_environment_cannot_be_recreated"
+    ],
+    "claude_version": "2.1.287",
+    "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+    "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "executor_version": "0.159.3",
+    "packaged_launcher_sha256": "a3680fc851c6659131309d4a83709b04f65bc2179cace56accf80f1353261f46",
+    "scripted_api_requests": 124,
+    "native_title_requests": 1,
+    "agent_observations": {
+      "parent_turn_during_child_command_seconds": 0.1,
+      "taskstop_turn_seconds": 0.41,
+      "taskstop_target_quiescent_after_turn_seconds": 1.5,
+      "interrupt_target_quiescent_seconds": 0.0
+    },
+    "production_credentials": false,
+    "production_activation": false,
+    "not_checked": [
+      "real_subscription_inference",
+      "cross_host_latency",
+      "project_hooks",
+      "agent_permission_modes",
+      "grandchild_agents",
+      "teammates_and_agent_worktrees",
+      "agent_partial_output_stream",
+      "native_runtime_crash_with_live_agent"
+    ],
+    "cursor_expirations": 0
+  },
+  "native_receipt_sha256": "sha256:fe3abf323e26d3a436b3fab0f7599f05e5febb9d0cb15fcc3062cf68957837d9",
+  "coexistence": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.7.0",
+    "artifact_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426",
+    "platform": {
+      "os": "linux",
+      "architecture": "x86_64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:d18abe2eb408aa37bda24482fe07944f6b4ab2620947cd09de07fff078cd0c80",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false,
+    "previous": {
+      "plugin_version": "3.6.0",
+      "artifact_digest": "sha256:a3a9012fdb45c1f22268718789cbd71567729eca152d924791fee49dab1f2975"
+    },
+    "worker": {
+      "executable_digest": "sha256:6c7c05f2f0aaa5af42b5c3d71cf4da5c2e42b8905e851db49c20d9cef5778c3b",
+      "initialize_and_session_new": "passed",
+      "stop_and_descendant_drain": "passed",
+      "sidecar_count": 0,
+      "distinct_generation_coexistence": "passed"
+    }
+  },
+  "macos_probes": {
+    "schema_version": 1,
+    "plugin_id": "claude-code",
+    "plugin_version": "3.7.0",
+    "artifact_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426",
+    "platform": {
+      "os": "macos",
+      "architecture": "aarch64"
+    },
+    "probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "artifact_digest": "sha256:81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "artifact_digest": "sha256:bddcc8a2f028e4528c63bf99a665c755db7e385ad63e45f35c21bfa0a997acd5",
+        "status": "passed"
+      }
+    ],
+    "uses_service_credentials": false,
+    "sends_prompt": false
+  },
+  "catalog_readers": {
+    "schema": "cowboy.catalog-publication-conformance/v1",
+    "accepted": true,
+    "source_revision": "0d811d54dc01bb7ad5b7c00b1e08e0496116698a",
+    "candidate": {
+      "release": "/nix/store/v2mm72k5q2rr8kbjj2aqk4v31xx77dja-cowboy-controller-release",
+      "source_revision": "143ab5878e3c5731df171b12345d094eb5443311",
+      "executable_sha256": "sha256:5f1a20d0775594ca6a221ef7fc9af239cad240e5668d787c4b5ed57b7c6b63c3"
+    },
+    "sdk_sha256": "sha256:4d6176d61bb4c57a8e655b5c038dba9fa38773bae481cd289cc530a80ac5f7d7",
+    "publications": [
+      {
+        "role": "active",
+        "reader": {
+          "release": "/nix/store/v2mm72k5q2rr8kbjj2aqk4v31xx77dja-cowboy-controller-release",
+          "source_revision": "143ab5878e3c5731df171b12345d094eb5443311",
+          "executable_sha256": "sha256:5f1a20d0775594ca6a221ef7fc9af239cad240e5668d787c4b5ed57b7c6b63c3"
+        },
+        "release": {
+          "plugin_id": "claude-code",
+          "plugin_version": "3.7.0",
+          "artifact_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426"
+        },
+        "release_schema": 4,
+        "code_payload_schema": null,
+        "provider_sdk_version": "3.1.12",
+        "source_envelope_sha256": "sha256:34601d11192f0275f5796bd368941390978c0757eb6326cfb1260af67c52fc82",
+        "package_digest": "sha256:ad1ffeb40c766da70399021a6665bc7067927b02d13a05ed235fc5cc0bed7d96",
+        "host_bundle_digest": "sha256:748d98cceb31db273da48c0c774ce5d72064fdc455465d3c8d6e8115f9b0ed79",
+        "bridge_cold_reads": [
+          {
+            "status": "visible"
+          },
+          {
+            "status": "visible"
+          }
+        ],
+        "candidate": {
+          "status": "visible"
+        },
+        "candidate_host_preflight": true,
+        "candidate_host_policy": "temporary_exact_pin",
+        "candidate_host_error": null,
+        "reader_compatible": true,
+        "production_signature_checked": false
+      },
+      {
+        "role": "next_transaction_recovery",
+        "reader": {
+          "release": "/nix/store/v2mm72k5q2rr8kbjj2aqk4v31xx77dja-cowboy-controller-release",
+          "source_revision": "143ab5878e3c5731df171b12345d094eb5443311",
+          "executable_sha256": "sha256:5f1a20d0775594ca6a221ef7fc9af239cad240e5668d787c4b5ed57b7c6b63c3"
+        },
+        "release": {
+          "plugin_id": "claude-code",
+          "plugin_version": "3.7.0",
+          "artifact_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426"
+        },
+        "release_schema": 4,
+        "code_payload_schema": null,
+        "provider_sdk_version": "3.1.12",
+        "source_envelope_sha256": "sha256:34601d11192f0275f5796bd368941390978c0757eb6326cfb1260af67c52fc82",
+        "package_digest": "sha256:ad1ffeb40c766da70399021a6665bc7067927b02d13a05ed235fc5cc0bed7d96",
+        "host_bundle_digest": "sha256:748d98cceb31db273da48c0c774ce5d72064fdc455465d3c8d6e8115f9b0ed79",
+        "bridge_cold_reads": [
+          {
+            "status": "visible"
+          },
+          {
+            "status": "visible"
+          }
+        ],
+        "candidate": {
+          "status": "visible"
+        },
+        "candidate_host_preflight": true,
+        "candidate_host_policy": "temporary_exact_pin",
+        "candidate_host_error": null,
+        "reader_compatible": true,
+        "production_signature_checked": false
+      },
+      {
+        "role": "cold",
+        "reader": {
+          "release": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+          "source_revision": "e2a48c8b142c23bd2c551a236479bf47c1d5d84c",
+          "executable_sha256": "sha256:286a81f70e95cbf2996f1735a3370f5c50c8cef09439d633ec0c25c5850166c5"
+        },
+        "release": {
+          "plugin_id": "claude-code",
+          "plugin_version": "3.7.0",
+          "artifact_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426"
+        },
+        "release_schema": 4,
+        "code_payload_schema": null,
+        "provider_sdk_version": "3.1.12",
+        "source_envelope_sha256": "sha256:34601d11192f0275f5796bd368941390978c0757eb6326cfb1260af67c52fc82",
+        "package_digest": "sha256:ad1ffeb40c766da70399021a6665bc7067927b02d13a05ed235fc5cc0bed7d96",
+        "host_bundle_digest": "sha256:748d98cceb31db273da48c0c774ce5d72064fdc455465d3c8d6e8115f9b0ed79",
+        "bridge_cold_reads": [
+          {
+            "status": "visible"
+          },
+          {
+            "status": "visible"
+          }
+        ],
+        "candidate": {
+          "status": "visible"
+        },
+        "candidate_host_preflight": true,
+        "candidate_host_policy": "temporary_exact_pin",
+        "candidate_host_error": null,
+        "reader_compatible": true,
+        "production_signature_checked": false
+      }
+    ],
+    "production_mutated": false,
+    "production_credentials": false,
+    "not_checked": [
+      "production_signature",
+      "actual_role_provenance",
+      "complete_production_catalog_and_host_policy",
+      "historical_pre_host_migration",
+      "runtime_platform_drain_and_installation"
+    ]
+  },
+  "reader_provenance": {
+    "active_and_next_transaction_recovery": "/nix/store/v2mm72k5q2rr8kbjj2aqk4v31xx77dja-cowboy-controller-release",
+    "cold_bootstrap": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release",
+    "checked": "re-resolved immediately before the reader gate; the active Controller had changed since 3.6.0, the cold bootstrap had not"
+  },
+  "public_artifacts": {
+    "accepted": true,
+    "artifacts": [
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111/claude.tar.gz",
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/81f45ee02e22cf26a79ca4134f5b0b6f680fb9b5155694cd37088756ae6d9278/claude.tar.gz",
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/ad1ffeb40c766da70399021a6665bc7067927b02d13a05ed235fc5cc0bed7d96/claude-code.cowboy-plugin",
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/bddcc8a2f028e4528c63bf99a665c755db7e385ad63e45f35c21bfa0a997acd5/claude-agent-acp.tar.gz",
+        "accepted": true
+      },
+      {
+        "url": "https://cowboy.stormbird.xyz/plugin-artifacts/d18abe2eb408aa37bda24482fe07944f6b4ab2620947cd09de07fff078cd0c80/claude-agent-acp.tar.gz",
+        "accepted": true
+      }
+    ]
+  },
+  "catalog_observation": {
+    "release_state": "ready",
+    "platforms": [
+      "linux-x86_64",
+      "macos-aarch64"
+    ],
+    "refresh": "cowboy operator refresh-catalog succeeded"
+  },
+  "production": {
+    "machine": "ovh",
+    "converge": {
+      "schema": 1,
+      "applied": true,
+      "machines": [
+        {
+          "machine": "ovh",
+          "attempted": true,
+          "managed": true,
+          "planned": [
+            {
+              "kind": "upgrade",
+              "plugin": "claude-code",
+              "from": "3.6.0",
+              "to": "3.7.0",
+              "digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426",
+              "operation_id": "ovh-claude-code-3-7-0-converge"
+            }
+          ],
+          "applied": [
+            {
+              "kind": "upgrade",
+              "plugin": "claude-code",
+              "from": "3.6.0",
+              "to": "3.7.0",
+              "operation_id": "ovh-claude-code-3-7-0-converge",
+              "http_status": 204,
+              "detail": null
+            }
+          ],
+          "planned_removals": [],
+          "removed": [],
+          "skipped": [],
+          "remaining": []
+        }
+      ],
+      "unreachable": [],
+      "stopped_at": null
+    },
+    "inventory_after": {
+      "plugin_id": "claude-code",
+      "plugin_version": "3.7.0",
+      "plugin_kind": "agent_provider",
+      "generation_digest": "sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426",
+      "installation_revision": "installation-b8db1a2047f271c58e9c592b4f5bb4e2c2307d78b0ce640dcf44d68ec25aafa9",
+      "contract_fingerprint": "sha256:8c38d81cc4a19f486615323ffae4f22473388a5e7f93f5f585b4c175997ffabc",
+      "state": "active",
+      "rollback_generation_digest": "sha256:a3a9012fdb45c1f22268718789cbd71567729eca152d924791fee49dab1f2975",
+      "active_session_leases": 0,
+      "auth_generation": 62,
+      "replica_state": "current",
+      "materialization_state": "current"
+    },
+    "other_planned_upgrades_not_applied": [
+      "grok 3.1.26->3.1.30",
+      "zed 1.20.0->1.20.2"
+    ],
+    "live_sessions_restarted": false
+  },
+  "native_not_checked_note": "The packaged runner's static not_checked list still named project_hooks when this receipt was taken; the hook checks in native.checks cover them. The runner now lists project_hook_settings_reload instead."
+}

@@ -16,6 +16,14 @@ pub const PLUGIN_GENERATION_RETENTION_INTERVAL: Key<Duration> =
     Key::new(Scope::Service, "plugins.generation_retention_interval");
 pub const PLUGIN_URGENT_RETENTION_COOLDOWN: Key<Duration> =
     Key::new(Scope::Service, "plugins.urgent_retention_cooldown");
+pub const PLUGIN_REPIN_DORMANT_SESSIONS: Key<bool> =
+    Key::new(Scope::Service, "plugins.repin_dormant_sessions");
+pub const PLUGIN_REPIN_DORMANT_AFTER: Key<Duration> =
+    Key::new(Scope::Service, "plugins.repin_dormant_after");
+pub const SESSIONS_RECLAIM_ON_CAPACITY: Key<bool> =
+    Key::new(Scope::Service, "sessions.reclaim_on_capacity");
+pub const SESSIONS_RECLAIM_MIN_IDLE: Key<Duration> =
+    Key::new(Scope::Service, "sessions.reclaim_min_idle");
 
 pub static SERVICE_FIELDS: &[Field] = &[
     Field {
@@ -37,6 +45,40 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(1)),
         reload: Reload::Live,
         doc: "Minimum time between extra retention passes for one Device whose\navailable disk is below its declared `disk.low_watermark`.",
+    },
+    Field {
+        key: "plugins.repin_dormant_sessions",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Move sessions that have been exited without a worker for\n`plugins.repin_dormant_after` to their Device's installed Provider release,\nwhen its native session contract is unchanged, so their old generation can be\nretired. They resume on the new release when opened, like an explicit Reload.",
+    },
+    Field {
+        key: "plugins.repin_dormant_after",
+        kind: Kind::Duration {
+            min: Duration::from_hours(1),
+            max: Duration::from_hours(365 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(7 * 24)),
+        reload: Reload::Live,
+        doc: "How long a session must stay dormant before it is re-pinned. Measured\nacross Controller restarts from the first retention pass that saw it dormant.",
+    },
+    Field {
+        key: "sessions.reclaim_on_capacity",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "When a new session targets a Device whose session slots are full, hibernate\nthe longest-idle eligible session on it first instead of refusing.\nHibernation sends no model request and the session resumes when opened.",
+    },
+    Field {
+        key: "sessions.reclaim_min_idle",
+        kind: Kind::Duration {
+            min: Duration::from_mins(5),
+            max: Duration::from_hours(7 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(1)),
+        reload: Reload::Live,
+        doc: "A session is eligible for reclaim only after this long without any event.\nKeep it at or above the longest Provider prompt-cache lifetime so a\nreclaimed session's cache has already expired and resuming costs nothing\nextra.",
     },
 ];
 
