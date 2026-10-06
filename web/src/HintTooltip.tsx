@@ -1,5 +1,5 @@
 import { alpha, Box, Tooltip, type TooltipProps } from "@mui/material";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
 
 /**
@@ -9,21 +9,47 @@ import { desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
  *
  * `title` is the action, `shortcut` a registration string from
  * `DESKTOP_SHORTCUTS` (drawn as keycaps), `detail` a secondary line.
+ *
+ * `suppressed` hides the hint while a gesture owns the control (a splitter
+ * drag). Never toggle `disableHoverListener` for that: MUI then drops the
+ * mouseleave handler of an already open tooltip, which stays open until the
+ * pointer happens to hover that control again. MUI only reports onOpen and
+ * onClose across a change of the `open` it was given, so a suppressed hint
+ * forgets its hover and shows again on the next one.
  */
 export function HintTooltip({
   title,
   shortcut,
   detail,
+  suppressed,
   children,
   ...props
 }: Omit<TooltipProps, "title"> & {
   title: ReactNode;
   shortcut?: string | undefined;
   detail?: ReactNode | undefined;
+  suppressed?: boolean | undefined;
 }): React.JSX.Element {
+  const [hovered, setHovered] = useState(false);
+  useEffect(() => {
+    if (suppressed) setHovered(false);
+  }, [suppressed]);
+  const controlled = suppressed === undefined ? {} : {
+    open: hovered && !suppressed,
+    onOpen: (event: React.SyntheticEvent): void => {
+      if (suppressed) return;
+      setHovered(true);
+      props.onOpen?.(event);
+    },
+    onClose: (event: Event | React.SyntheticEvent): void => {
+      setHovered(false);
+      props.onClose?.(event);
+    },
+  };
   return (
     <Tooltip
       {...props}
+      {...controlled}
       title={title === "" || title == null
         ? ""
         : <HintContent title={title} shortcut={shortcut} detail={detail} />}

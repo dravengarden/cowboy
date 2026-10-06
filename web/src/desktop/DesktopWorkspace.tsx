@@ -267,7 +267,7 @@ export function DesktopWorkspace({
           detail="Drag past the edge to collapse"
           followCursor
           placement="right"
-          disableHoverListener={resizing ||
+          suppressed={resizing ||
             workspace.selectedSplitter === "prompt-conversation"}
         >
           <Box
