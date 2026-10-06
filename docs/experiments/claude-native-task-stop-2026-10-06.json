@@ -1,0 +1,79 @@
+{
+  "schema": "cowboy.claude-native-task-stop-research/v1",
+  "accepted": true,
+  "cases": [
+    {
+      "mode": "local",
+      "task_stop_acknowledged": true,
+      "shell_alive": false,
+      "child_alive": false,
+      "post_stop_effect": false,
+      "alive_at_native_stop_ack": {
+        "shell-pid": false,
+        "child-pid": false
+      },
+      "observation_seconds": 0.005307028070092201,
+      "scripted_api_requests": 3,
+      "keeper_and_original_peer_survive": null
+    },
+    {
+      "mode": "transient-prefix",
+      "task_stop_acknowledged": true,
+      "shell_alive": false,
+      "child_alive": false,
+      "post_stop_effect": false,
+      "alive_at_native_stop_ack": {
+        "shell-pid": false,
+        "child-pid": false
+      },
+      "observation_seconds": 0.0038483060197904706,
+      "scripted_api_requests": 3,
+      "keeper_and_original_peer_survive": null
+    },
+    {
+      "mode": "keeper-unforwarded",
+      "task_stop_acknowledged": true,
+      "shell_alive": true,
+      "child_alive": true,
+      "post_stop_effect": true,
+      "alive_at_native_stop_ack": {
+        "shell-pid": true,
+        "child-pid": true
+      },
+      "observation_seconds": 6.034423255012371,
+      "scripted_api_requests": 3,
+      "keeper_and_original_peer_survive": true
+    },
+    {
+      "mode": "keeper-forward",
+      "task_stop_acknowledged": true,
+      "shell_alive": false,
+      "child_alive": false,
+      "post_stop_effect": false,
+      "alive_at_native_stop_ack": {
+        "shell-pid": true,
+        "child-pid": true
+      },
+      "observation_seconds": 1.0107431550277397,
+      "scripted_api_requests": 3,
+      "keeper_and_original_peer_survive": true
+    }
+  ],
+  "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+  "executor_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "keeper_sha256": "c325332ffd4b753b693b80b606093ee73b4cd3d6bd7ebc3d6b29041bbd2e47d4",
+  "probe_sha256": "933da481a8d3a1ac16c937011679ea95b4a952d00bd95eb109fd5b5cf037df03",
+  "real_model_requests": 0,
+  "production_changes": false,
+  "topology": "same-host, shared filesystem, persistent keeper in an independent process group",
+  "not_checked": [
+    "pending-start cancellation",
+    "SIGKILL",
+    "disconnect/reconnect",
+    "cold resume",
+    "foreground interrupt",
+    "cross-host paths",
+    "permissions",
+    "hooks/MCP shell classification"
+  ]
+}

@@ -283,6 +283,61 @@ unshare --user --map-current-user --keep-caps --net bash -euc '
 Use the same isolation wrapper with `remote_native_hooks_probe.py`, whose
 arguments are `--native-cli`, `--sha256` and `--receipt`.
 
+### Claude native TaskStop with a resident keeper
+
+The 2026-10-06 follow-up uses the same pinned Claude 2.1.287 and executor
+0.159.3, but compares four process topologies. A scripted native Bash starts
+a shell and descendant; the next scripted call uses the actual native task ID
+with `TaskStop`. Admission and successful stop acknowledgement are observed
+before checking PID/start-time identities and a delayed filesystem effect.
+
+| Topology | TaskStop acknowledgement | Observed target processes and effect |
+| --- | --- | --- |
+| Native local Bash | Success | Both tracked processes stopped; no late effect |
+| Prefix with a transient executor in its process group | Success | Both stopped; no late effect |
+| Prefix with an independent persistent keeper, no cancellation forwarding | Success | Both still alive after six seconds; late effect occurred |
+| Same persistent keeper, explicit signal-to-process/terminate forwarding | Success | Both stopped; no late effect; keeper and independent peer job survived |
+
+This explains why the earlier transient-executor probe cannot establish
+production cancellation parity: killing a local wrapper does not by itself
+cancel a separately owned target job. The prototype explicitly forwards the
+wrapper's signal to the original admitted process ID. Its paired unforwarded
+case is a negative control, not an accepted product cancellation policy.
+The forwarded case also exposes an acknowledgement gap: both target processes
+were still alive when native TaskStop reported success, and stopped about one
+second later in this run. Eventual signal delivery is not local-equivalent
+completion acknowledgement. A production integration must retain a reliable
+native-task/target-process identity and observe target termination before
+reporting completed cancellation, or explicitly report that cancellation is
+pending. Matching arbitrary command text is not a safe identity mechanism.
+The existing shipping `WorkspaceTools` facade already sends explicit target
+termination and returns a pending message while its output record is not
+closed. A new deterministic regression holds that target open through the
+collection deadline, verifies the pending message and retained task handle,
+then observes exit through Read without starting or terminating another job.
+The shell-prefix research failure is not evidence that this facade uses the
+same incorrect local-wrapper cancellation path.
+The [exact research receipt](experiments/claude-native-task-stop-2026-10-06.json)
+binds the probe and keeper hashes. Re-run with
+`just execution-claude-task-stop-conformance KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA RECEIPT`
+inside the pinned dev shell; the recipe creates disposable PID/network namespaces.
+No real model requests or production sessions participate.
+
+The signal handler is intentionally installed after start acknowledgement.
+Pending-start cancellation, forced SIGKILL, foreground interrupt, reconnect,
+cold resume, remote paths and permission equivalence remain unproven. A
+production implementation must reconcile cancellation with the original start
+operation even if its acknowledgement is lost, and distinguish explicit cancel
+from a connection failure. Do not enable this experimental prefix globally or
+replace the existing shipped remote tool facade on these results alone.
+
+The official [shell-prefix contract](https://code.claude.com/docs/en/env-vars),
+checked 2026-10-06, also includes hook, status-line and stdio MCP shell commands;
+the Bash argument contains the full native shell setup. These have different
+placement and credential requirements, so a Bash-only success cannot accept
+blanket shell forwarding. Native task completion/output, cancellation, runtime
+bookkeeping and execution placement need separate cross-host evidence.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
