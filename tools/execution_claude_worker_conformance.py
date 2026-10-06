@@ -1060,7 +1060,7 @@ def main():
             "native_title_requests": title_requests + len(api.title_requests),
             "agent_observations": agent_observations,
             "production_credentials": False, "production_activation": False,
-            "not_checked": ["real_subscription_inference", "cross_host_latency", "project_hooks",
+            "not_checked": ["real_subscription_inference", "cross_host_latency", "project_hook_settings_reload",
                             "agent_permission_modes", "grandchild_agents", "teammates_and_agent_worktrees",
                             "agent_partial_output_stream", "native_runtime_crash_with_live_agent"],
         }

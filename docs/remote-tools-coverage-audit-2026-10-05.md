@@ -950,6 +950,39 @@ Gaps:
   where native prints only the output, or `(Bash completed with no output)`.
   This belongs to matrix A.
 
+Packaged acceptance adds hook checks for:
+
+- lifecycle and native-tool hooks running on the target
+- SessionStart `CLAUDE_ENV_FILE` reaching target Bash
+- a facade PreToolUse block before the effect
+- PostToolUse context and async context
+- PostToolUseFailure for Read and Bash
+- non-zero Bash as a tool error
+- a PermissionRequest hook answering a pending prompt
+- a subagent's hook input naming its agent
+- private, cleaned hook inputs, with no hook running on the runtime
+
+Two negative controls fail: a candidate without the shell prefix, and one
+without the facade adapter.
+
+The [3.7.0 release receipt](experiments/claude-project-hooks-release-2026-10-06.json)
+binds feature commit `758aaeb9`, release merge `0d811d54` and artifact
+`sha256:beae86098c8e4614db0f87e0b00ae61f9af27bf3eb287d63319907097d3f6426`.
+It records:
+
+- 68 accepted checks on the exact signed package
+- 3.6.0/3.7.0 coexistence with the current Machine worker
+- Linux and actual macOS probes
+- three Controller reader roles, re-resolved because the active Controller had
+  changed
+- five public artifact digests
+- Catalog `ready` on both platforms
+
+OVH operation `ovh-claude-code-3-7-0-converge` completed. Inventory reports
+3.7.0 active, 3.6.0 retained for rollback and no session leases. The converge
+was bounded to claude-code; other pending upgrades (grok, zed) were left alone.
+No live session was restarted.
+
 Keep native tool orchestration as native. Matrix CodeAct is a separately scoped
 MCP capability, not a replacement for a general native tools runtime. A
 multi-tool code block is not a transaction: post-tool rejection cannot undo
