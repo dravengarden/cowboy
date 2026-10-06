@@ -9,7 +9,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   bindingKey,
@@ -60,6 +60,109 @@ export function targetTaskFrame(frame, agents) {
   return agent && frame.output_file === agent.outputFile
     ? { ...frame, output_file: "cowboy-agent://" + frame.task_id }
     : frame;
+}
+
+// The permission mode the native process starts with: the last forwarded
+// value, else native's own default. Cowboy selects one per session.
+export function startingPermissionMode(argv) {
+  const index = argv.lastIndexOf("--permission-mode");
+  return index < 0 ? "default" : argv[index + 1];
+}
+
+// The native shape of an approval request (SDKControlPermissionRequest). The
+// facade asks only after native rules and mode answered "ask". Suggestions
+// stay empty: a persistent rule could not reach native's own rule store.
+export function permissionRequest({ id, tool, input, reason, owner }) {
+  const description = tool === "Bash"
+    ? input.command
+    : input.file_path ?? input.notebook_path ?? input.path ?? input.pattern;
+  return {
+    subtype: "can_use_tool",
+    tool_name: tool,
+    display_name: tool,
+    input,
+    permission_suggestions: [],
+    tool_use_id: id,
+    ...(owner === undefined ? {} : { agent_id: owner }),
+    ...(reason ? { decision_reason: reason } : {}),
+    ...(typeof description === "string" ? { description } : {}),
+  };
+}
+
+export function permissionResult(response) {
+  const result = response?.subtype === "success" ? response.response : null;
+  if (result?.behavior === "allow" || result?.behavior === "deny") {
+    return result;
+  }
+  return {
+    behavior: "deny",
+    message: typeof response?.error === "string"
+      ? response.error
+      : "Approval failed; the tool did not run",
+  };
+}
+
+// Host approvals for target tools. The host answers on the same stdio channel
+// as native's own requests, so responses are matched by private request ids.
+export class PermissionBroker {
+  constructor(mode) {
+    this.mode = mode;
+    this.pending = new Map();
+  }
+
+  request(call) {
+    // dontAsk: native denies whatever would otherwise prompt.
+    if (this.mode === "dontAsk" || !this.send) {
+      return Promise.resolve({
+        behavior: "deny",
+        message:
+          `Permission to use ${call.tool} was denied: this session does not ask for approval.`,
+      });
+    }
+    const requestId = "cowboy-permission-" + randomUUID();
+    return new Promise((resolve) => {
+      this.pending.set(requestId, { id: call.id, resolve });
+      this.send({
+        type: "control_request",
+        request_id: requestId,
+        request: permissionRequest(call),
+      }).catch(() =>
+        this.settle(requestId, {
+          behavior: "deny",
+          message: "Approval could not be requested; the tool did not run",
+        })
+      );
+    });
+  }
+
+  respond(frame) {
+    const requestId = frame.response?.request_id;
+    if (frame.type !== "control_response" || !this.pending.has(requestId)) {
+      return false;
+    }
+    this.settle(requestId, permissionResult(frame.response));
+    return true;
+  }
+
+  cancel(id) {
+    for (const [requestId, entry] of this.pending) {
+      if (entry.id !== id) continue;
+      this.send({ type: "control_cancel_request", request_id: requestId })
+        .catch(() => {});
+      this.settle(requestId, {
+        behavior: "deny",
+        message: "Tool call was cancelled",
+      });
+    }
+  }
+
+  settle(requestId, result) {
+    const entry = this.pending.get(requestId);
+    if (!entry) return;
+    this.pending.delete(requestId);
+    this.onResult?.(result);
+    entry.resolve(result);
+  }
 }
 
 export function nativeArguments(args, plugin, memoryConfig) {
@@ -179,8 +282,6 @@ export function nativeArguments(args, plugin, memoryConfig) {
     "--output-format",
     "stream-json",
     "--verbose",
-    "--permission-mode",
-    "bypassPermissions",
     "--tools",
     [...NATIVE_TOOLS, ...NATIVE_PASSTHROUGH].join(","),
     "--disallowedTools",
@@ -267,7 +368,7 @@ export function allowedControl(request) {
   ]).has(request.subtype);
 }
 
-async function bridge(child, tools, context, memory) {
+async function bridge(child, tools, context, memory, broker) {
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => {
     resolveReady = resolve;
@@ -277,7 +378,52 @@ async function bridge(child, tools, context, memory) {
   let initial;
   let initialReply;
   const pendingInterrupts = new Map();
+  // Requests this launcher sends native itself; their replies stay private.
+  const internal = new Map();
+  const modeRequests = new Map();
   let stage = "initialize";
+  // Native aborts the turn and background agents before it answers an
+  // interrupt. Cancelling target processes first lets a held child call
+  // return their exit status to a still-running agent, which then continues.
+  const interruptCancel = () => {
+    let cancelling;
+    const cancel = () =>
+      cancelling ??= tools.cancelForeground().then(
+        (pending) =>
+          pending.length
+            ? "Target cancellation is pending; retained task handles: " +
+              pending.map((id) => `cowboy-task://${id}`).join(", ")
+            : undefined,
+        () =>
+          "Target cancellation could not be saved; inspect target tasks before retrying commands",
+      );
+    // An unresponsive native process must not keep target work alive.
+    setTimeout(cancel, 5000).unref();
+    return cancel;
+  };
+  broker.send = (frame) => send(process.stdout, frame);
+  broker.onResult = (result) => {
+    const mode = result.behavior === "allow"
+      ? result.updatedPermissions?.find((update) =>
+        update.type === "setMode" && update.destination === "session" &&
+        update.mode !== "plan"
+      )?.mode
+      : undefined;
+    const request = mode
+      ? { subtype: "set_permission_mode", mode }
+      : result.behavior === "deny" && result.interrupt === true
+      ? { subtype: "interrupt" }
+      : undefined;
+    if (!request) return;
+    const id = "cowboy-internal-" + randomUUID();
+    if (mode) internal.set(id, () => broker.mode = mode);
+    else {
+      const cancel = interruptCancel();
+      internal.set(id, () => cancel());
+    }
+    send(child.stdin, { type: "control_request", request_id: id, request })
+      .catch(() => {});
+  };
   const checkId = randomUUID();
   const privateCommand = "cowboy-execution-ready-" + context.nonce;
   const timeout = setTimeout(
@@ -307,6 +453,7 @@ async function bridge(child, tools, context, memory) {
         continue;
       }
       await ready;
+      if (broker.respond(frame)) continue;
       if (frame.type === "control_request") {
         const subtype = frame.request.subtype;
         if (
@@ -335,23 +482,10 @@ async function bridge(child, tools, context, memory) {
           continue;
         }
         if (subtype === "interrupt") {
-          // Native aborts the turn and background agents before it answers.
-          // Cancelling target processes first lets a held child call return
-          // their exit status to a still-running agent, which then continues.
-          let cancelling;
-          const cancel = () =>
-            cancelling ??= tools.cancelForeground().then(
-              (pending) =>
-                pending.length
-                  ? "Target cancellation is pending; retained task handles: " +
-                    pending.map((id) => `cowboy-task://${id}`).join(", ")
-                  : undefined,
-              () =>
-                "Target cancellation could not be saved; inspect target tasks before retrying commands",
-            );
-          pendingInterrupts.set(frame.request_id, cancel);
-          // An unresponsive native process must not keep target work alive.
-          setTimeout(cancel, 5000).unref();
+          pendingInterrupts.set(frame.request_id, interruptCancel());
+        }
+        if (subtype === "set_permission_mode") {
+          modeRequests.set(frame.request_id, frame.request.mode);
         }
       }
       // These local commands can change native tools/settings or launch local
@@ -447,6 +581,26 @@ async function bridge(child, tools, context, memory) {
         continue;
       }
       if (stage === "ready") {
+        const responseId = frame.type === "control_response"
+          ? frame.response.request_id
+          : undefined;
+        if (internal.has(responseId)) {
+          const settle = internal.get(responseId);
+          internal.delete(responseId);
+          if (frame.response.subtype === "success") settle();
+          continue;
+        }
+        if (modeRequests.has(responseId)) {
+          if (frame.response.subtype === "success") {
+            broker.mode = modeRequests.get(responseId);
+          }
+          modeRequests.delete(responseId);
+        }
+        // Each turn's init reports native's current permission mode.
+        if (
+          frame.type === "system" && frame.subtype === "init" &&
+          typeof frame.permissionMode === "string"
+        ) broker.mode = frame.permissionMode;
         if (
           frame.type === "control_response" &&
           pendingInterrupts.has(frame.response.request_id)
@@ -545,11 +699,17 @@ async function native(args) {
       };
     }
     const context = await tools.context();
-    modBridge = await startModBridge(tools);
+    // The exact native argv below sets the starting mode before any tool runs.
+    const broker = new PermissionBroker("default");
+    modBridge = await startModBridge(tools, { permissions: broker });
     context.socketPath = modBridge.socketPath;
     context.bridgeToken = modBridge.token;
     context.descriptions = DESCRIPTIONS;
     context.agents = tools.agentLocators();
+    // Native evaluates permission paths against its own working directory.
+    context.targetCwd = posix.resolve(descriptor.binding.workspace.cwd);
+    context.runtimeCwd = process.cwd();
+    context.targetHome = tools.home() ?? null;
     context.memory = Boolean(memory);
     const plugin = join(stage, "plugin");
     await mkdir(join(plugin, ".claude-plugin"), { recursive: true });
@@ -599,7 +759,9 @@ async function native(args) {
     delete environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
-    child = spawn(executable, nativeArguments(args, plugin, memoryConfig), {
+    const nativeArgv = nativeArguments(args, plugin, memoryConfig);
+    broker.mode = startingPermissionMode(nativeArgv);
+    child = spawn(executable, nativeArgv, {
       env: environment,
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -610,7 +772,7 @@ async function native(args) {
       child.once("error", reject);
       child.once("exit", (code) => resolve(code ?? 1));
     });
-    bridge(child, tools, context, memory).catch((error) => {
+    bridge(child, tools, context, memory, broker).catch((error) => {
       process.stderr.write(
         (error.cowboyDiagnostic ??
           "Cowboy Claude execution initialization or transport failed; local fallback is disabled") +

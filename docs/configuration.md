@@ -121,8 +121,29 @@ as a deprecated override for one release.
 | Scope | Key | Default | Reload |
 | --- | --- | --- | --- |
 | Service | `plugins.generation_retention_interval` | `"6h"` | live |
+| Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
 | Device | `capacity.draining` | `false` | restart |
+| Device | `disk.low_watermark` | `"15GiB"` | live |
+| Device | `retention.artifact_cache_unreferenced_after` | `"7d"` | live |
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
 convenience.
+
+## Disk retention
+
+Disk growth from Plugin releases is retired automatically:
+
+- Every `plugins.generation_retention_interval` the Service asks each Device
+  to retire Plugin generations no recoverable session pins. In the same
+  request, under the installation lock, the Device removes artifact-cache
+  blobs that no retained generation references and that were not written
+  within its `retention.artifact_cache_unreferenced_after`.
+- Each Device reports its `disk.low_watermark` with its host resources. When
+  its available disk falls below that watermark the Service runs an extra
+  pass for that Device at once, then waits `plugins.urgent_retention_cooldown`
+  before another. A Device without the setting (older release) or with
+  `"0B"` never triggers one.
+
+The budget is the Device's; the decision is the Service's, because only the
+Service knows which generations sessions still pin.

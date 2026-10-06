@@ -320,6 +320,140 @@ def agent_phases(args, api, client, native, session, context_checked, checks):
     return client, observations
 
 
+def permission_phases(args, api, client, context_checked, checks):
+    """Native rules and mode gate target tools; asks reach the SDK host.
+
+    The fixture is the host: it switches modes and answers approvals. Every
+    case checks actual target bytes, not only the tool result prose.
+    """
+    issued = {}
+    asked = []
+    answers = []
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        if isinstance(last.get("content"), list) and any(
+                block.get("type") == "tool_result" and block.get("tool_use_id") in issued
+                for block in last["content"]):
+            return [{"type": "text", "text": "PERM_DONE"}]
+        latest = " ".join(text_blocks(last))
+        for marker, call in steps.items():
+            if marker in latest:
+                calls = call() if callable(call) else call
+                for block in calls:
+                    issued[block["id"]] = marker
+                return calls
+        raise ProbeFailure("unexpected permission phase request: " + latest[:200])
+
+    def answer(request):
+        asked.append(request)
+        return answers.pop(0)
+
+    outside = args.target.parent / "perm-outside.txt"
+    absolute = args.target / "perm-absolute.txt"
+    (args.target / "perm-keep.txt").write_text("keep\n")
+    steps = {
+        "PERM_DENY": tool("Bash", {"command": "rm -f perm-keep.txt"}),
+        "PERM_AMEND": tool("Write", {"file_path": "perm-amend.txt", "content": "original\n"}),
+        "PERM_READ": tool("Read", {"file_path": "perm-keep.txt"}),
+        "PERM_ACCEPT_EDITS": lambda: (tool("Edit", {"file_path": "perm-keep.txt", "old_string": "keep",
+                                                    "new_string": "edited"})
+                                      + tool("Write", {"file_path": str(absolute), "content": "absolute\n"})),
+        "PERM_OUTSIDE": tool("Write", {"file_path": str(outside), "content": "outside\n"}),
+        "PERM_COLLISION": tool("Write", {"file_path": str(args.runtime / "perm-collision.txt"), "content": "x\n"}),
+        "PERM_SYMLINK": tool("Write", {"file_path": "perm-dir-link/escaped.txt", "content": "through link\n"}),
+        "PERM_WRITE_LINK": tool("Write", {"file_path": "perm-link.txt", "content": "onto link\n"}),
+        "PERM_DONT_ASK": tool("Bash", {"command": "rm -f perm-keep.txt"}),
+        "PERM_BYPASS": tool("Bash", {"command": "rm -f perm-amend.txt"}),
+    }
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 40)
+    client.permission = answer
+
+    def mode(value):
+        request_id = "fixture-mode-" + value
+        client.send({"type": "control_request", "request_id": request_id,
+                     "request": {"subtype": "set_permission_mode", "mode": value}})
+        reply = client.until(lambda frame: frame.get("type") == "control_response" and
+                             frame["response"].get("request_id") == request_id)
+        require(reply["response"]["subtype"] == "success", "native rejected the permission mode")
+
+    def result_of(marker):
+        blocks = [block for block in outputs(api.requests[-1]) if issued.get(block.get("tool_use_id")) == marker]
+        require(blocks, "permission phase result missing")
+        return blocks
+
+    mode("default")
+    answers.append({"behavior": "deny", "message": "fixture host denied"})
+    client.prompt(text="PERM_DENY", timeout=60)
+    require(len(asked) == 1 and asked[0]["tool_name"] == "Bash" and
+            asked[0]["input"] == {"command": "rm -f perm-keep.txt"} and
+            asked[0]["tool_use_id"] in issued and asked[0]["permission_suggestions"] == [],
+            "default mode did not ask the host in native shape")
+    require("fixture host denied" in json.dumps(result_of("PERM_DENY")) and
+            (args.target / "perm-keep.txt").read_text() == "keep\n", "denied command reached the target")
+    answers.append({"behavior": "allow", "updatedInput": {"file_path": "perm-amend.txt", "content": "amended\n"}})
+    client.prompt(text="PERM_AMEND", timeout=60)
+    require(len(asked) == 2 and (args.target / "perm-amend.txt").read_text() == "amended\n",
+            "approved write did not run the host's amended input")
+    client.prompt(text="PERM_READ", timeout=60)
+    require(len(asked) == 2, "a read-only call inside the workspace asked for approval")
+    checks.extend(["native_permission_ask_denial_has_no_target_effect", "native_permission_approval_runs_amended_input",
+                   "native_permission_allow_runs_without_prompt"])
+    mode("acceptEdits")
+    client.prompt(text="PERM_ACCEPT_EDITS", timeout=60)
+    require(len(asked) == 2 and (args.target / "perm-keep.txt").read_text() == "edited\n" and
+            absolute.read_text() == "absolute\n", "acceptEdits asked for edits inside the target workspace")
+    answers.append({"behavior": "allow"})
+    client.prompt(text="PERM_OUTSIDE", timeout=60)
+    require(len(asked) == 3 and outside.read_text() == "outside\n", "an outside-workspace write did not ask")
+    # A target path under the runtime's own workspace is still outside the
+    # target workspace; a symlink inside it can lead a write outside.
+    context_checked(api.requests)
+    checked = len(api.requests)
+    link_destination = args.target.parent / "perm-link-destination.txt"
+    link_destination.write_text("destination\n")
+    (args.target / "perm-link.txt").symlink_to(link_destination)
+    outside_directory = args.target.parent / "perm-outside-directory"
+    outside_directory.mkdir()
+    (args.target / "perm-dir-link").symlink_to(outside_directory, target_is_directory=True)
+    for marker in ["PERM_COLLISION", "PERM_SYMLINK"]:
+        answers.append({"behavior": "deny", "message": "fixture host denied"})
+        client.prompt(text=marker, timeout=60)
+    require(len(asked) == 5 and not (args.runtime / "perm-collision.txt").exists() and
+            not (outside_directory / "escaped.txt").exists(),
+            "acceptEdits auto-approved a write outside the target workspace")
+    checks.extend(["accept_edits_maps_target_workspace_paths", "accept_edits_asks_for_runtime_path_collisions_and_escaping_symlinks"])
+    mode("dontAsk")
+    client.prompt(text="PERM_DONT_ASK", timeout=60)
+    require(len(asked) == 5 and (args.target / "perm-keep.txt").exists() and
+            any(block.get("is_error") for block in result_of("PERM_DONT_ASK")),
+            "dontAsk ran or prompted for a call that needs approval")
+    checks.append("dont_ask_denies_without_prompt_or_effect")
+    mode("bypassPermissions")
+    client.prompt(text="PERM_BYPASS", timeout=60)
+    require(len(asked) == 5 and not (args.target / "perm-amend.txt").exists(),
+            "bypassPermissions did not run without approval")
+    # Natively, Write onto a symbolic link is refused in every mode.
+    client.prompt(text="PERM_WRITE_LINK", timeout=60)
+    require(len(asked) == 5 and (args.target / "perm-link.txt").is_symlink() and
+            link_destination.read_text() == "destination\n" and
+            "symbolic link" in json.dumps(result_of("PERM_WRITE_LINK")),
+            "Write replaced or followed a symbolic link")
+    checks.append("write_onto_symlink_is_refused_in_every_mode")
+    require(not (args.runtime / "perm-amend.txt").exists() and not (args.runtime / "perm-keep.txt").exists(),
+            "permission phase touched the runtime workspace")
+    # The collision case's own scripted input names a runtime path; nothing
+    # else may add runtime context to later requests.
+    collision = str(args.runtime / "perm-collision.txt")
+    for request in api.requests[checked:]:
+        encoded = json.dumps(request)
+        require(encoded.count(str(args.runtime)) == encoded.count(collision) and
+                str(args.runtime.parent / "claude-home") not in encoded, "runtime context reached model")
+    checks.append("bypass_permissions_runs_without_prompt")
+    client.permission = None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -638,6 +772,7 @@ def main():
         context_checked(api.requests)
         checks.append("native_interrupt_stops_foreground_target_process")
         client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
+        permission_phases(args, api, client, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
         title_requests = len(api.title_requests)

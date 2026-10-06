@@ -1,0 +1,35 @@
+{
+  "schema": "cowboy.claude-project-hooks-research/v1",
+  "date": "2026-10-06",
+  "claude_version": "2.1.287",
+  "claude_sha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+  "topology": "same-host native Claude, scripted loopback API, disposable homes, loopback-only namespaces",
+  "real_model_requests": 0,
+  "production_credentials": false,
+  "scratch_root": "/home/draven/worktrees/cowboy/remote-native-parity-evidence-20261005/scratch-hooks",
+  "artifacts": {
+    "hooks_probe.py": "sha256:3343cfc188ac3ef77f44e2b2e56f9d745b9c443a67db85b5d87dbb8a5f687d9d",
+    "proxy_probe.py": "sha256:20a548815a1acfcb7f1363951412f5ab10df77e646487f205edf2fe183cf490c",
+    "proxy_probe2.py": "sha256:5cda026179ee260968642f9c3bd475eda19313025fc82e64a25bc454c06110b7",
+    "hooks-plain.json": "sha256:481c120571a9efd7dd8a86156e45c4ae36503607a510a65a1da6ab695eebd1f1",
+    "hooks-prefix.json": "sha256:6b0db702acb22b04b06f8f9a854983489d88e0fcb0745faf7c229de035af8641",
+    "proxy-1.json": "sha256:56a16fb707a93fd5bdd036ab206ea1412f569b5865316e91b72286f511478e45",
+    "proxy-2.json": "sha256:91ddc965247c7f71553d4f1cf5aa46159ebe74eff9652775a360b10fc8968047",
+    "proxy-3.json": "sha256:96c41d44a4ca9a5908ef3e9e5417c94ddfecca42ac99e44d4b243708af213873",
+    "proxy-4.json": "sha256:e620d21ce0df406a834fb732b52a30f7bf0886e577fc48d2980ed5396295bf04",
+    "proxy2-1.json": "sha256:f11ba92c4292c6691f3a6721e91e07071e9fe011bcbda70e7dd218705336b090",
+    "proxy2-2.json": "sha256:fb796de5f146672f0731fc8db16ffca818a1856f0bd50d3780b2701d92e888ea",
+    "proxy2-3.json": "sha256:619638e455537f66bf85e89da4ab6ae207d6d56e2e30019d538e2b2f4c7809ed"
+  },
+  "observations": [
+    "settings hooks supplied with --settings run in the bound -p lane: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse and Stop",
+    "for a tool.call answered by a Mod (the facade), settings PreToolUse/PostToolUse do not run; they ran only for the native Bash call",
+    "CLAUDE_CODE_SHELL_PREFIX receives each hook command as one argument, stdin piped, cwd and CLAUDE_PROJECT_DIR set to the runtime directory",
+    "hook stdin carries the runtime cwd and runtime transcript_path",
+    "generated types: the classic chain is [managed settings hooks, Mod hooks, other settings hooks as core]",
+    "$.tool.call of a Mod-registered proxy reaches settings PreToolUse (exact and regex matchers on the proxy name) and returns a hook deny to the caller, but only when no Mod answers the proxy; a Mod answering the proxy body suppresses the settings hooks",
+    "a proxy hidden with --disallowedTools is not callable through $.tool.call; isDeferred without ToolSearch still lists it to the model"
+  ],
+  "conclusion": "On this build native PreToolUse/PostToolUse cannot wrap facade-routed target tools: the hooks run only when the tool.call chain reaches core, and core has no target body. Lifecycle hooks can run natively; tool hooks need either native tool bodies redirected to the target (feasible for Bash through the shell prefix, not for the file tools) or an adapter that reproduces the hook contract.",
+  "production_change": "none; project hooks remain unloaded in the remote lane"
+}

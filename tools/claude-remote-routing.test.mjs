@@ -464,6 +464,9 @@ test("in-flight output commits and rollback preserve newer cancellation intent",
   }
 });
 
+// Write first asks whether its target path is a symbolic link.
+const notLink = { ok: true, status: 200, text: '{"symlink":false}' };
+
 let fixtureId = 0;
 async function routingFixture({ memory = false, agents = {} } = {}) {
   // Each loaded native Mod has private state. Give every fixture its own module.
@@ -486,6 +489,9 @@ async function routingFixture({ memory = false, agents = {} } = {}) {
     instructions: "target instructions",
     git: "target git",
     agents,
+    targetCwd: "/target",
+    runtimeCwd: "/runtime",
+    targetHome: "/home/target",
     memory,
   };
   const calls = [];
@@ -494,6 +500,7 @@ async function routingFixture({ memory = false, agents = {} } = {}) {
     env: { get: () => "/fixture/context.json" },
     fs: { read: () => JSON.stringify(context) },
     command: { register: () => {} },
+    tool: { check: async () => ({ decision: "allow" }) },
     http: {
       fetch: async (url, options) => {
         calls.push({ url, options });
@@ -530,6 +537,7 @@ test("every remote tool crosses the authenticated bridge without native executio
         await routingFixture();
       const response = { result: { fixture: tool } };
       api.http.fetch = async (url, options) => {
+        if (url.endsWith("/link")) return notLink;
         calls.push({ url, options });
         return { ok: true, status: 200, text: JSON.stringify(response) };
       };
@@ -563,6 +571,7 @@ test("every remote tool crosses the authenticated bridge without native executio
 test("pending mutations observe the same identity without another tool submission", async () => {
   const { hook, api, calls, native, next } = await routingFixture();
   api.http.fetch = async (url, options) => {
+    if (url.endsWith("/link")) return notLink;
     calls.push({ url, options });
     const pending = calls.length < 3;
     return {

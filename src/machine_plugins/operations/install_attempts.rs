@@ -24,6 +24,10 @@ struct Record {
 
 struct State {
     receipts: BTreeMap<String, InstallReceipt>,
+    /// Attempts this process admitted and still drives, by Plugin. A fenced
+    /// receipt without a live continuation needs reconciliation; one with a
+    /// live continuation is an install in progress that will resolve itself.
+    live: BTreeMap<String, std::sync::Weak<()>>,
     present: bool,
     poisoned: bool,
 }
@@ -40,6 +44,7 @@ pub(in crate::machine_plugins) struct Attempts {
 pub(in crate::machine_plugins) struct PendingAttempt {
     receipt: InstallReceipt,
     owner: std::sync::Arc<()>,
+    _live: std::sync::Arc<()>,
 }
 
 impl PendingAttempt {
@@ -116,6 +121,7 @@ impl Attempts {
             before_write: parking_lot::Mutex::new(None),
             state: parking_lot::Mutex::new(State {
                 receipts,
+                live: BTreeMap::new(),
                 present,
                 poisoned: false,
             }),
@@ -208,6 +214,18 @@ impl Attempts {
         Ok(())
     }
 
+    /// True while this process is still driving a fenced attempt for
+    /// `plugin`, so the fence clears without reconciliation once it resolves.
+    pub(in crate::machine_plugins) fn installing(&self, plugin: &str) -> bool {
+        let state = self.state.lock();
+        !state.poisoned
+            && Self::fenced(&state, plugin)
+            && state
+                .live
+                .get(plugin)
+                .is_some_and(|live| live.strong_count() > 0)
+    }
+
     fn fenced(state: &State, plugin: &str) -> bool {
         state
             .receipts
@@ -234,9 +252,14 @@ impl Attempts {
             },
         };
         self.persist(&mut state, &key, &receipt)?;
+        let live = std::sync::Arc::new(());
+        state
+            .live
+            .insert(step.plugin_id.clone(), std::sync::Arc::downgrade(&live));
         Ok(PendingAttempt {
             receipt,
             owner: std::sync::Arc::clone(&self.owner),
+            _live: live,
         })
     }
 

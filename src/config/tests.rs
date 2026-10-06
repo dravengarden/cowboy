@@ -26,16 +26,34 @@ fn every_typed_key_matches_a_declared_field_of_its_kind() {
         let _ = Config::defaults(key.scope).get(key);
     }
     assert_key(&schema::PLUGIN_GENERATION_RETENTION_INTERVAL);
+    assert_key(&schema::PLUGIN_URGENT_RETENTION_COOLDOWN);
     assert_key(&schema::DEVICE_MAX_SESSIONS);
     assert_key(&schema::DEVICE_DRAINING);
+    assert_key(&schema::DEVICE_DISK_LOW_WATERMARK);
+    assert_key(&schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
 }
 
 #[test]
 fn declarations_are_unique_documented_and_defaults_are_in_range() {
     for scope in [Scope::Service, Scope::Device] {
         let mut seen = std::collections::BTreeSet::new();
+        let mut closed_sections = std::collections::BTreeSet::new();
+        let mut section = "";
         for field in scope.fields() {
             assert!(seen.insert(field.key), "duplicate key {}", field.key);
+            // The template emits one table header per run of a section.
+            let current = field.key.rsplit_once('.').map_or("", |(table, _)| table);
+            if current != section {
+                assert!(
+                    closed_sections.insert(section),
+                    "fields of [{section}] must be adjacent"
+                );
+                assert!(
+                    !closed_sections.contains(current),
+                    "fields of [{current}] must be adjacent"
+                );
+                section = current;
+            }
             assert!(
                 field.key.contains('.'),
                 "{} must live in a section",

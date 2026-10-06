@@ -41,6 +41,56 @@ fn lookup_does_not_adopt_and_duplicate_identity_never_reopens_execution() {
 }
 
 #[test]
+fn only_a_live_continuation_reports_an_install_in_progress() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(DIRECTORY);
+    let journal = Attempts::open(path.clone()).unwrap();
+    let step = fixture();
+    assert!(!journal.installing("victoria"));
+    let mut pending = journal.begin(&step).unwrap();
+    // Launch admission may wait: the fence holds, but its installer is live.
+    assert!(journal.ensure_unfenced("victoria").is_err());
+    assert!(journal.installing("victoria"));
+    assert!(!journal.installing("unrelated"));
+    journal
+        .advance(
+            &mut pending,
+            InstallOutcome::Pending {
+                phase: InstallPhase::Staging,
+            },
+        )
+        .unwrap();
+    assert!(journal.installing("victoria"));
+    // An installer that stops driving its attempt leaves reconciliation work,
+    // never an indefinite wait.
+    drop(pending);
+    assert!(journal.ensure_unfenced("victoria").is_err());
+    assert!(!journal.installing("victoria"));
+    drop(journal);
+    let reopened = Attempts::open(path).unwrap();
+    assert!(reopened.ensure_unfenced("victoria").is_err());
+    assert!(!reopened.installing("victoria"));
+}
+
+#[test]
+fn a_resolved_attempt_is_no_longer_in_progress() {
+    let root = tempfile::tempdir().unwrap();
+    let journal = Attempts::open(root.path().join(DIRECTORY)).unwrap();
+    let step = fixture();
+    let mut pending = journal.begin(&step).unwrap();
+    journal
+        .advance(
+            &mut pending,
+            InstallOutcome::Rejected {
+                reason: InstallRejection::Expired,
+            },
+        )
+        .unwrap();
+    assert!(journal.ensure_unfenced("victoria").is_ok());
+    assert!(!journal.installing("victoria"));
+}
+
+#[test]
 fn every_pending_phase_reopens_as_fenced_evidence_without_completion_authority() {
     for phase in [
         InstallPhase::Prepared,

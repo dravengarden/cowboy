@@ -13,6 +13,9 @@ const BODY_KEYS = {
   "/agent-complete": ["agentId,answer,isAborted,reason"],
   "/agent-stop": ["agentId"],
   "/agent-resume": ["agentId"],
+  "/permission": ["id,input,reason,tool", "id,input,owner,reason,tool"],
+  "/resolve": ["path"],
+  "/link": ["path"],
 };
 
 // Private per-process endpoint. The existing authenticated Cowboy execution
@@ -20,7 +23,10 @@ const BODY_KEYS = {
 // Each observation holds a pending Mods fetch. Claude 2.1.287 processes no
 // other native work meanwhile (new turns, TaskStop, agent aborts), so keep the
 // idle hold short; a ready result is still answered immediately.
-export async function startModBridge(tools, { waitMs = 1000 } = {}) {
+export async function startModBridge(
+  tools,
+  { waitMs = 1000, permissions } = {},
+) {
   const directory = await mkdtemp("/tmp/cowboy-claude-mod-");
   await chmod(directory, 0o700);
   const socketPath = join(directory, "bridge.sock");
@@ -29,6 +35,8 @@ export async function startModBridge(tools, { waitMs = 1000 } = {}) {
   const admitted = new Map();
   // Calls native Claude abandoned before their /tool request arrived.
   const cancelled = new Set();
+  // Host approvals in progress; one request per native tool use.
+  const approvals = new Map();
   let retainedBytes = 0;
   let outstanding = 0;
   let active = true;
@@ -86,6 +94,23 @@ export async function startModBridge(tools, { waitMs = 1000 } = {}) {
         answer(400, { deny: "Invalid execution call" });
         return;
       }
+      if (request.url === "/link") {
+        // Whether the target path itself is a symbolic link; null if unknown.
+        const symlink = typeof call.path === "string" &&
+            call.path.startsWith("/")
+          ? await tools.isSymlink(call.path).catch(() => null)
+          : null;
+        answer(200, { symlink });
+        return;
+      }
+      if (request.url === "/resolve") {
+        // Target symlink resolution for workspace-scoped permission decisions.
+        const path = typeof call.path === "string" && call.path.startsWith("/")
+          ? await tools.realpath(call.path).catch(() => null)
+          : null;
+        answer(200, { path });
+        return;
+      }
       if (request.url === "/agent-stop") {
         // Native TaskStop succeeded for this agent; its held calls are moot.
         if (typeof call.agentId !== "string" || !AGENT_ID.test(call.agentId)) {
@@ -120,7 +145,69 @@ export async function startModBridge(tools, { waitMs = 1000 } = {}) {
         answer(400, { deny: "Invalid execution call" });
         return;
       }
+      if (request.url === "/permission") {
+        if (
+          !NATIVE_TOOLS.includes(call.tool) || !call.input ||
+          typeof call.input !== "object" || Array.isArray(call.input) ||
+          (call.reason !== null && typeof call.reason !== "string") ||
+          (call.owner !== undefined && !AGENT_ID.test(call.owner))
+        ) {
+          answer(400, { deny: "Invalid execution call" });
+          return;
+        }
+        if (cancelled.has(call.id) || admitted.has(call.id) || !permissions) {
+          answer(200, {
+            behavior: "deny",
+            message: "Approval is unavailable for this tool call",
+          });
+          return;
+        }
+        let approval = approvals.get(call.id);
+        if (!approval) {
+          if (approvals.size >= 256) {
+            answer(409, { deny: "Too many pending approvals" });
+            return;
+          }
+          approval = {};
+          approval.ready = Promise.resolve().then(() =>
+            permissions.request(call)
+          ).catch(() => ({
+            behavior: "deny",
+            message: "Approval failed; the tool did not run",
+          })).then((result) => {
+            approval.result = result;
+            // An abandoned caller never collects it.
+            setTimeout(() => {
+              if (approvals.get(call.id) === approval) {
+                approvals.delete(call.id);
+              }
+            }, 60000).unref();
+          });
+          approvals.set(call.id, approval);
+        }
+        let timer;
+        try {
+          await Promise.race([
+            approval.ready,
+            new Promise((resolve) => timer = setTimeout(resolve, waitMs)),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (response.destroyed) return;
+        if (!approval.result) {
+          answer(202, { pending: call.id });
+          return;
+        }
+        approvals.delete(call.id);
+        answer(200, approval.result);
+        return;
+      }
       if (request.url === "/cancel") {
+        // A pending approval is withdrawn from the host as well.
+        if (approvals.get(call.id) && !approvals.get(call.id).result) {
+          permissions.cancel(call.id);
+        }
         // Abandonment can race admission. An unadmitted identity is spent so
         // a late /tool cannot start work native Claude no longer awaits.
         const operation = admitted.get(call.id);
