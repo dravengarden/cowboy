@@ -104,6 +104,7 @@ import {
   questionPageNeedsRestore,
   shouldAdoptLoadedPage,
 } from "./retainedPage";
+import { HintTooltip } from "../HintTooltip";
 
 const EMPTY_TIMELINE: Envelope[] = [];
 const EMPTY_PENDING_QUESTIONS: QueuedMessage[] = [];
@@ -183,22 +184,23 @@ function PageTurnFooter({
           >
             {previous ? "Previous" : "Next"}
           </Typography>
-          <Typography
-            component="span"
-            variant="caption"
-            color="text.secondary"
-            title={question ?? "Untitled page"}
-            sx={{
-              display: "-webkit-box",
-              overflow: "hidden",
-              overflowWrap: "anywhere",
-              WebkitBoxOrient: "vertical",
-              WebkitLineClamp: desktop ? 1 : 2,
-              lineHeight: 1.25,
-            }}
-          >
-            {question ?? "Untitled page"}
-          </Typography>
+          <HintTooltip title={question ?? "Untitled page"}>
+            <Typography
+              component="span"
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                display: "-webkit-box",
+                overflow: "hidden",
+                overflowWrap: "anywhere",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: desktop ? 1 : 2,
+                lineHeight: 1.25,
+              }}
+            >
+              {question ?? "Untitled page"}
+            </Typography>
+          </HintTooltip>
         </Box>
         {desktop && (
           <Box

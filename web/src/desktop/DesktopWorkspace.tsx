@@ -11,6 +11,7 @@ import { DesktopConversationControls } from "./DesktopConversationControls";
 import { DesktopReadingModeControl } from "./DesktopReadingModeControl";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 import { ShortcutKeycap } from "../ShortcutKeycap";
+import { HintTooltip } from "../HintTooltip";
 import type { TranscriptProjection } from "../explore/exploreStore";
 import { DesktopReadingQuestionDirectory } from "../explore/ExploreSurface";
 import { DesktopProjectionToggle } from "../explore/ProjectionToggle";
@@ -363,49 +364,57 @@ export function DesktopWorkspace({
             />
           )}
           {workspace.readingSidebarOpen && (
-            <Box
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize page index"
-              title={`Resize layout · ${DESKTOP_SHORTCUTS.resize}`}
-              aria-valuemin={READING_QUESTIONS_MIN}
-              aria-valuemax={READING_QUESTIONS_MAX}
-              aria-valuenow={Math.round(questionsWidth)}
-              data-desktop-splitter="questions-page"
-              data-desktop-splitter-selected={
-                workspace.selectedSplitter === "questions-page" ? "true" : undefined
-              }
-              tabIndex={-1}
-              onPointerDown={startQuestionsResize}
-              sx={{
-                flex: "0 0 auto",
-                alignSelf: "stretch",
-                width: "1px",
-                bgcolor: questionsResizing ||
-                    workspace.selectedSplitter === "questions-page"
-                  ? "primary.main"
-                  : "divider",
-                transition: "background-color 120ms",
-                position: "relative",
-                cursor: "col-resize",
-                touchAction: "none",
-                zIndex: 3,
-                "&::after": {
-                  content: '""',
-                  position: "absolute",
-                  top: 0,
-                  bottom: 0,
-                  left: "-11px",
-                  right: "-11px",
-                },
-                "&:hover": { bgcolor: "primary.main" },
-                "&:focus": { outline: "none" },
-              }}
+            <HintTooltip
+              title="Resize layout"
+              shortcut={DESKTOP_SHORTCUTS.resize}
+              followCursor
+              placement="right"
+              disableHoverListener={questionsResizing ||
+                workspace.selectedSplitter === "questions-page"}
             >
-              {workspace.selectedSplitter === "questions-page" && (
-                <DesktopSplitterHint />
-              )}
-            </Box>
+              <Box
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize page index"
+                aria-valuemin={READING_QUESTIONS_MIN}
+                aria-valuemax={READING_QUESTIONS_MAX}
+                aria-valuenow={Math.round(questionsWidth)}
+                data-desktop-splitter="questions-page"
+                data-desktop-splitter-selected={
+                  workspace.selectedSplitter === "questions-page" ? "true" : undefined
+                }
+                tabIndex={-1}
+                onPointerDown={startQuestionsResize}
+                sx={{
+                  flex: "0 0 auto",
+                  alignSelf: "stretch",
+                  width: "1px",
+                  bgcolor: questionsResizing ||
+                      workspace.selectedSplitter === "questions-page"
+                    ? "primary.main"
+                    : "divider",
+                  transition: "background-color 120ms",
+                  position: "relative",
+                  cursor: "col-resize",
+                  touchAction: "none",
+                  zIndex: 3,
+                  "&::after": {
+                    content: '""',
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    left: "-11px",
+                    right: "-11px",
+                  },
+                  "&:hover": { bgcolor: "primary.main" },
+                  "&:focus": { outline: "none" },
+                }}
+              >
+                {workspace.selectedSplitter === "questions-page" && (
+                  <DesktopSplitterHint />
+                )}
+              </Box>
+            </HintTooltip>
           )}
           <Box
             data-desktop-region="conversation.transcript"
@@ -494,48 +503,57 @@ export function DesktopWorkspace({
       </Box>
 
       {!promptCollapsed && !conversationCollapsed && (
-        <Box
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize composer column"
-          title={`Resize layout · ${DESKTOP_SHORTCUTS.resize} · drag past the edge to collapse`}
-          aria-valuemin={COMPOSER_COL_MIN}
-          aria-valuemax={COMPOSER_COL_MAX}
-          aria-valuenow={Math.round(promptWidth)}
-          data-desktop-splitter="prompt-conversation"
-          data-desktop-splitter-selected={
-            workspace.selectedSplitter === "prompt-conversation" ? "true" : undefined
-          }
-          tabIndex={-1}
-          onPointerDown={onResizeStart}
-          sx={{
-            flex: "0 0 auto",
-            alignSelf: "stretch",
-            width: "1px",
-            bgcolor: resizing || workspace.selectedSplitter === "prompt-conversation"
-              ? "primary.main"
-              : "divider",
-            transition: "background-color 120ms",
-            position: "relative",
-            cursor: "col-resize",
-            touchAction: "none",
-            zIndex: 3,
-            "&::after": {
-              content: '""',
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              left: "-11px",
-              right: "-11px",
-            },
-            "&:hover": { bgcolor: "primary.main" },
-            "&:focus": { outline: "none" },
-          }}
+        <HintTooltip
+          title="Resize layout"
+          shortcut={DESKTOP_SHORTCUTS.resize}
+          detail="Drag past the edge to collapse"
+          followCursor
+          placement="right"
+          disableHoverListener={resizing ||
+            workspace.selectedSplitter === "prompt-conversation"}
         >
-          {workspace.selectedSplitter === "prompt-conversation" && (
-            <DesktopSplitterHint />
-          )}
-        </Box>
+          <Box
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize composer column"
+            aria-valuemin={COMPOSER_COL_MIN}
+            aria-valuemax={COMPOSER_COL_MAX}
+            aria-valuenow={Math.round(promptWidth)}
+            data-desktop-splitter="prompt-conversation"
+            data-desktop-splitter-selected={
+              workspace.selectedSplitter === "prompt-conversation" ? "true" : undefined
+            }
+            tabIndex={-1}
+            onPointerDown={onResizeStart}
+            sx={{
+              flex: "0 0 auto",
+              alignSelf: "stretch",
+              width: "1px",
+              bgcolor: resizing || workspace.selectedSplitter === "prompt-conversation"
+                ? "primary.main"
+                : "divider",
+              transition: "background-color 120ms",
+              position: "relative",
+              cursor: "col-resize",
+              touchAction: "none",
+              zIndex: 3,
+              "&::after": {
+                content: '""',
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: "-11px",
+                right: "-11px",
+              },
+              "&:hover": { bgcolor: "primary.main" },
+              "&:focus": { outline: "none" },
+            }}
+          >
+            {workspace.selectedSplitter === "prompt-conversation" && (
+              <DesktopSplitterHint />
+            )}
+          </Box>
+        </HintTooltip>
       )}
 
       <Box

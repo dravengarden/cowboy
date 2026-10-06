@@ -52,6 +52,7 @@ import { Sheet } from "./Sheet";
 import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useDialogFocus, useDialogInputFocus } from "./useDialogInputFocus";
+import { HintTooltip } from "./HintTooltip";
 
 /** Attribute of the mount point App renders beside the Rename shell. */
 export const SESSION_FOLDER_SHEET_HOST = "data-session-folder-sheets";
@@ -425,17 +426,18 @@ export function FolderPickerShell({
                 <ListItemIcon sx={{ minWidth: 36 }}>
                   {isCurrent ? <CheckIcon /> : <FolderOutlined />}
                 </ListItemIcon>
-                <ListItemText
-                  primary={isCurrent ? `${folder.name} · Current` : folder.name}
-                  secondary={folder.parent
-                    ? sessionFolderLocation(value, folder.parent)
-                    : folder.project ?? undefined}
-                  title={sessionFolderLocation(value, folder.id)}
-                  slotProps={{
-                    primary: { noWrap: true },
-                    secondary: { noWrap: true, variant: "caption" },
-                  }}
-                />
+                <HintTooltip title={sessionFolderLocation(value, folder.id)}>
+                  <ListItemText
+                    primary={isCurrent ? `${folder.name} · Current` : folder.name}
+                    secondary={folder.parent
+                      ? sessionFolderLocation(value, folder.parent)
+                      : folder.project ?? undefined}
+                    slotProps={{
+                      primary: { noWrap: true },
+                      secondary: { noWrap: true, variant: "caption" },
+                    }}
+                  />
+                </HintTooltip>
               </ListItemButton>
             );
           })}

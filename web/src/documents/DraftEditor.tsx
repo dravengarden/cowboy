@@ -52,7 +52,11 @@ import { isImeKeyEvent } from "../imeKey";
 import { getVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
-import { DESKTOP_DOCUMENT_KEYS } from "../desktop/commands/workspaceShortcuts";
+import {
+  DESKTOP_DOCUMENT_KEYS,
+  desktopWorkspaceSequence,
+} from "../desktop/commands/workspaceShortcuts";
+import { HintTooltip } from "../HintTooltip";
 import {
   enterInputNormal,
   inputVimField,
@@ -1016,16 +1020,21 @@ function DraftEditingSession(
               </Box>
             )}
             {desktop && (
-              <Box
-                component="span"
-                data-draft-title-shortcut
-                title="Go to the title: Space T (Cmd/Alt+K T from a text field), or k / ↑ on the first line"
-                sx={{ display: "inline-flex", flexShrink: 0 }}
+              <HintTooltip
+                title="Go to the title"
+                shortcut={desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.title)}
+                detail="Or k / ↑ on the first line"
               >
-                <LeaderKeycap
-                  leaderKey={DESKTOP_DOCUMENT_KEYS.title}
-                />
-              </Box>
+                <Box
+                  component="span"
+                  data-draft-title-shortcut
+                  sx={{ display: "inline-flex", flexShrink: 0 }}
+                >
+                  <LeaderKeycap
+                    leaderKey={DESKTOP_DOCUMENT_KEYS.title}
+                  />
+                </Box>
+              </HintTooltip>
             )}
             {
               /* Desktop shows these actions once, in the bottom document bar

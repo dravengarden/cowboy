@@ -19,6 +19,7 @@ import {
   sessionAlertState,
   sessionCountdownLabel,
 } from "./sessionSchedule";
+import { HintTooltip } from "../HintTooltip";
 
 const FINAL_WARNING_MS = 30 * 60 * 1_000;
 
@@ -131,39 +132,40 @@ export function ProductSessionGuard({
     : null;
 
   const reminder = (
-    <Button
-      data-product-session-alert-button
-      data-session-alert-tone={urgent ? "urgent" : "warning"}
-      data-desktop-item={!mobile ? "topbar-reauth" : undefined}
-      data-desktop-topbar-action={!mobile ? "reauth" : undefined}
-      aria-label={`${title}. Open verification`}
-      title={title}
-      variant="outlined"
-      color={urgent ? "error" : "warning"}
-      size="small"
-      onClick={() => setDialogOpen(true)}
-      startIcon={alert.kind === "passkey"
-        ? <FingerprintRounded fontSize="small" />
-        : <LoginRounded fontSize="small" />}
-      sx={{
-        pointerEvents: "auto",
-        ...(mobile ? { "&&": { minHeight: 44 } } : {}),
-        maxWidth: mobile ? "min(17rem, calc(100vw - 24px))" : undefined,
-        px: mobile ? 1.5 : 0.75,
-        borderRadius: mobile ? 999 : undefined,
-        bgcolor: "background.paper",
-        boxShadow: mobile ? 8 : "none",
-        backdropFilter: mobile ? "blur(18px) saturate(75%)" : "none",
-        WebkitBackdropFilter: mobile ? "blur(18px) saturate(75%)" : "none",
-        textTransform: "none",
-        whiteSpace: "nowrap",
-        "&:hover": { bgcolor: "background.paper" },
-      }}
-    >
-      <Typography variant="caption" fontWeight={800} noWrap>
-        {actionLabel} · {label}
-      </Typography>
-    </Button>
+    <HintTooltip title={title}>
+      <Button
+        data-product-session-alert-button
+        data-session-alert-tone={urgent ? "urgent" : "warning"}
+        data-desktop-item={!mobile ? "topbar-reauth" : undefined}
+        data-desktop-topbar-action={!mobile ? "reauth" : undefined}
+        aria-label={`${title}. Open verification`}
+        variant="outlined"
+        color={urgent ? "error" : "warning"}
+        size="small"
+        onClick={() => setDialogOpen(true)}
+        startIcon={alert.kind === "passkey"
+          ? <FingerprintRounded fontSize="small" />
+          : <LoginRounded fontSize="small" />}
+        sx={{
+          pointerEvents: "auto",
+          ...(mobile ? { "&&": { minHeight: 44 } } : {}),
+          maxWidth: mobile ? "min(17rem, calc(100vw - 24px))" : undefined,
+          px: mobile ? 1.5 : 0.75,
+          borderRadius: mobile ? 999 : undefined,
+          bgcolor: "background.paper",
+          boxShadow: mobile ? 8 : "none",
+          backdropFilter: mobile ? "blur(18px) saturate(75%)" : "none",
+          WebkitBackdropFilter: mobile ? "blur(18px) saturate(75%)" : "none",
+          textTransform: "none",
+          whiteSpace: "nowrap",
+          "&:hover": { bgcolor: "background.paper" },
+        }}
+      >
+        <Typography variant="caption" fontWeight={800} noWrap>
+          {actionLabel} · {label}
+        </Typography>
+      </Button>
+    </HintTooltip>
   );
   const reminderSurface = sheetOpen ? null : mobile
     ? (

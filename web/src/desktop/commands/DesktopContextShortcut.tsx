@@ -15,7 +15,6 @@ import { DESKTOP_WORKSPACE_PREFIX } from "./workspaceShortcuts";
  */
 export function DesktopContextShortcut({
   badge,
-  shortcut,
   showBadge = true,
   alwaysVisible = false,
   itemScoped = false,
@@ -25,7 +24,6 @@ export function DesktopContextShortcut({
   children,
 }: {
   badge: string;
-  shortcut: string;
   showBadge?: boolean;
   /** Keep global shortcuts visible even when their region does not own focus. */
   alwaysVisible?: boolean;
@@ -78,7 +76,6 @@ export function DesktopContextShortcut({
     <Box
       component="span"
       ref={ownerRef}
-      title={shortcut}
       sx={{
         position: "relative",
         display: "inline-flex",

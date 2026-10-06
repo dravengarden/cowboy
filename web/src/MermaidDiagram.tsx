@@ -5,6 +5,7 @@ import type { MermaidConfig } from "mermaid";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { type GalleryMedia, ImageLightbox } from "@cowboy/app-shell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { HintTooltip } from "./HintTooltip";
 
 // The surface a dark diagram is read against: the in-page plate below and the
 // lightbox's plate for a self-themed figure resolve to the same near-black
@@ -182,81 +183,82 @@ export function MermaidDiagram({
   }
   return (
     <>
-      <Box
-        data-review-mermaid-preview
-        role="button"
-        tabIndex={0}
-        aria-label="Open Mermaid diagram preview"
-        title="Open diagram preview"
-        {...openTap}
-        onKeyDown={(event): void => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          setPreviewOpen(true);
-        }}
-        sx={{
-          position: "relative",
-          width: "100%",
-          maxWidth: 880,
-          mx: "auto",
-          cursor: "zoom-in",
-          borderRadius: 1,
-          outline: 0,
-          "&:focus-visible": {
-            outline: 2,
-            outlineColor: "primary.main",
-            outlineOffset: 2,
-          },
-          // The whole figure is the tap target, so the corner glyph is only a
-          // hint. It sits over diagram content, so keep it barely there and
-          // only resolve it once a pointer is on the figure.
-          "&:hover [data-mermaid-expand-hint], &:focus-visible [data-mermaid-expand-hint]":
-            { opacity: 0.85 },
-        }}
-      >
+      <HintTooltip title="Open diagram preview" followCursor>
         <Box
-          sx={{
-            px: 2,
-            py: 2,
-            overflow: "auto",
-            // In dark mode the diagram sits on its own recessed card. Without
-            // it the tuned node fills still read against whatever surface the
-            // transcript happens to use, and a wide diagram's edges trail off
-            // into the page with no figure boundary.
-            ...(isDark
-              ? {
-                borderRadius: 1,
-                bgcolor: DARK_SURFACE,
-                border: 1,
-                borderColor: "rgba(255, 255, 255, 0.09)",
-              }
-              : {}),
-            "& svg": { maxWidth: "100%", height: "auto" },
+          data-review-mermaid-preview
+          role="button"
+          tabIndex={0}
+          aria-label="Open Mermaid diagram preview"
+          {...openTap}
+          onKeyDown={(event): void => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            setPreviewOpen(true);
           }}
-          // mermaid.render() returns sanitized SVG when securityLevel is strict.
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-        <Box
-          aria-hidden
-          data-mermaid-expand-hint
           sx={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            display: "grid",
-            placeItems: "center",
-            width: 32,
-            height: 32,
-            borderRadius: 1.5,
-            color: "text.secondary",
-            opacity: 0.2,
-            transition: "opacity 120ms ease",
-            pointerEvents: "none",
+            position: "relative",
+            width: "100%",
+            maxWidth: 880,
+            mx: "auto",
+            cursor: "zoom-in",
+            borderRadius: 1,
+            outline: 0,
+            "&:focus-visible": {
+              outline: 2,
+              outlineColor: "primary.main",
+              outlineOffset: 2,
+            },
+            // The whole figure is the tap target, so the corner glyph is only a
+            // hint. It sits over diagram content, so keep it barely there and
+            // only resolve it once a pointer is on the figure.
+            "&:hover [data-mermaid-expand-hint], &:focus-visible [data-mermaid-expand-hint]":
+              { opacity: 0.85 },
           }}
         >
-          <OpenInFullRounded sx={{ fontSize: desktopSize(18) }} />
+          <Box
+            sx={{
+              px: 2,
+              py: 2,
+              overflow: "auto",
+              // In dark mode the diagram sits on its own recessed card. Without
+              // it the tuned node fills still read against whatever surface the
+              // transcript happens to use, and a wide diagram's edges trail off
+              // into the page with no figure boundary.
+              ...(isDark
+                ? {
+                  borderRadius: 1,
+                  bgcolor: DARK_SURFACE,
+                  border: 1,
+                  borderColor: "rgba(255, 255, 255, 0.09)",
+                }
+                : {}),
+              "& svg": { maxWidth: "100%", height: "auto" },
+            }}
+            // mermaid.render() returns sanitized SVG when securityLevel is strict.
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+          <Box
+            aria-hidden
+            data-mermaid-expand-hint
+            sx={{
+              position: "absolute",
+              top: 8,
+              right: 8,
+              display: "grid",
+              placeItems: "center",
+              width: 32,
+              height: 32,
+              borderRadius: 1.5,
+              color: "text.secondary",
+              opacity: 0.2,
+              transition: "opacity 120ms ease",
+              pointerEvents: "none",
+            }}
+          >
+            <OpenInFullRounded sx={{ fontSize: desktopSize(18) }} />
+          </Box>
         </Box>
-      </Box>
+      </HintTooltip>
       <ImageLightbox
         images={previewImages}
         index={previewOpen ? 0 : null}

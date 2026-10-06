@@ -147,6 +147,7 @@ import {
   usageRemainingTone,
   type UsageTone,
 } from "./topBarDensity";
+import { HintTooltip } from "../HintTooltip";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
@@ -1111,16 +1112,17 @@ function RecommendedPresetControls({
                   alignItems="center"
                   sx={{ minWidth: 0 }}
                 >
-                  <Typography
-                    variant="caption"
-                    fontWeight={750}
-                    color={selected ? "primary.main" : "text.primary"}
-                    noWrap
-                    title={preset.name}
-                    sx={{ minWidth: 0 }}
-                  >
-                    {preset.name}
-                  </Typography>
+                  <HintTooltip title={preset.name}>
+                    <Typography
+                      variant="caption"
+                      fontWeight={750}
+                      color={selected ? "primary.main" : "text.primary"}
+                      noWrap
+                      sx={{ minWidth: 0 }}
+                    >
+                      {preset.name}
+                    </Typography>
+                  </HintTooltip>
                   {preset.isDefault && (
                     <Typography
                       variant="caption"
@@ -1135,15 +1137,16 @@ function RecommendedPresetControls({
                     </Typography>
                   )}
                 </Stack>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  noWrap
-                  title={preset.detail}
-                  sx={{ display: "block", fontSize: "0.625rem" }}
-                >
-                  {preset.detail}
-                </Typography>
+                <HintTooltip title={preset.detail}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ display: "block", fontSize: "0.625rem" }}
+                  >
+                    {preset.detail}
+                  </Typography>
+                </HintTooltip>
               </Box>
               <Kbd
                 keys={String(index + 1)}

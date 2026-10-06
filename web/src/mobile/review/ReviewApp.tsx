@@ -160,6 +160,7 @@ import {
   toggleReviewTabPin,
 } from "./reviewTabs";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
+import { HintTooltip } from "../../HintTooltip";
 
 const SYMBOL_NAVIGATION_KINDS = [
   "definition",
@@ -1466,19 +1467,20 @@ export function DocumentView({
             >
               Current symbol
             </Typography>
-            <Typography
-              noWrap
-              title={selectedCandidate?.label}
-              sx={{
-                mt: 0.25,
-                color: "primary.main",
-                fontFamily: "var(--cowboy-font-mono)",
-                fontSize: "0.875rem",
-                fontWeight: 700,
-              }}
-            >
-              {selectedCandidate?.label}
-            </Typography>
+            <HintTooltip title={selectedCandidate?.label}>
+              <Typography
+                noWrap
+                sx={{
+                  mt: 0.25,
+                  color: "primary.main",
+                  fontFamily: "var(--cowboy-font-mono)",
+                  fontSize: "0.875rem",
+                  fontWeight: 700,
+                }}
+              >
+                {selectedCandidate?.label}
+              </Typography>
+            </HintTooltip>
           </Box>
           <Typography
             variant="caption"
@@ -1509,42 +1511,45 @@ export function DocumentView({
             {inspectCandidates.map((candidate) => {
               const selected = candidate === selectedCandidate;
               return (
-                <ButtonBase
+                <HintTooltip
                   key={`${candidate.row}:${candidate.column}:${candidate.label}`}
-                  data-mobile-symbol-choice
-                  data-selected={selected ? "true" : undefined}
-                  aria-pressed={selected}
                   title={candidate.label}
-                  onClick={selected ? undefined : () => {
-                    navigationHaptic();
-                    inspectPoint(candidate, inspectCandidates, false);
-                  }}
-                  sx={(theme) => ({
-                    minWidth: 0,
-                    minHeight: 44,
-                    px: 1.25,
-                    justifyContent: "flex-start",
-                    border: 1,
-                    borderColor: selected ? "primary.main" : "divider",
-                    borderRadius: 1.5,
-                    color: selected ? "primary.main" : "text.primary",
-                    bgcolor: selected
-                      ? alpha(theme.palette.primary.main, 0.12)
-                      : "background.paper",
-                  })}
                 >
-                  <Typography
-                    noWrap
-                    sx={{
-                      minWidth: 0,
-                      fontFamily: "var(--cowboy-font-mono)",
-                      fontSize: "0.8125rem",
-                      fontWeight: selected ? 700 : 550,
+                  <ButtonBase
+                    data-mobile-symbol-choice
+                    data-selected={selected ? "true" : undefined}
+                    aria-pressed={selected}
+                    onClick={selected ? undefined : () => {
+                      navigationHaptic();
+                      inspectPoint(candidate, inspectCandidates, false);
                     }}
+                    sx={(theme) => ({
+                      minWidth: 0,
+                      minHeight: 44,
+                      px: 1.25,
+                      justifyContent: "flex-start",
+                      border: 1,
+                      borderColor: selected ? "primary.main" : "divider",
+                      borderRadius: 1.5,
+                      color: selected ? "primary.main" : "text.primary",
+                      bgcolor: selected
+                        ? alpha(theme.palette.primary.main, 0.12)
+                        : "background.paper",
+                    })}
                   >
-                    {candidate.label}
-                  </Typography>
-                </ButtonBase>
+                    <Typography
+                      noWrap
+                      sx={{
+                        minWidth: 0,
+                        fontFamily: "var(--cowboy-font-mono)",
+                        fontSize: "0.8125rem",
+                        fontWeight: selected ? 700 : 550,
+                      }}
+                    >
+                      {candidate.label}
+                    </Typography>
+                  </ButtonBase>
+                </HintTooltip>
               );
             })}
           </Box>
@@ -3252,14 +3257,13 @@ export function ReviewApp({
             </IconButton>
           )}
           {!projectCodeContext && workspace?.sessionId &&
-            typeof syncedReview.remote_selected === "boolean" && <IconButton
+            typeof syncedReview.remote_selected === "boolean" && <HintTooltip title={syncedReview.remote_review ? `Remote PR #${syncedReview.remote_review.number}` : "Remote PR"}><IconButton
             aria-label={syncedReview.remote_review ? `Review remote PR #${syncedReview.remote_review.number}` : "Associate remote PR"}
-            title={syncedReview.remote_review ? `Remote PR #${syncedReview.remote_review.number}` : "Remote PR"}
             onClick={() => {
               setCloseRequest((value) => value + 1);
               mutateMobileReview(workspace.sessionId, "selectRemoteReview", { selected: true });
             }}
-          ><CloudOutlined /></IconButton>}
+          ><CloudOutlined /></IconButton></HintTooltip>}
           <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={projectCodeContext?.machineId ?? currentSession?.machine_id} />
           <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
         </Stack>
@@ -3493,18 +3497,19 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-              <IconButton
-                data-mobile-open-agent="true"
-                aria-label="Open Agent"
-                title="Agent"
-                onClick={() => {
-                  navigationHaptic();
-                  openMobileProduct("agent");
-                }}
-                sx={{ width: 44, height: 44, color: "text.secondary" }}
-              >
-                <ChatBubbleOutline />
-              </IconButton>
+              <HintTooltip title="Agent">
+                <IconButton
+                  data-mobile-open-agent="true"
+                  aria-label="Open Agent"
+                  onClick={() => {
+                    navigationHaptic();
+                    openMobileProduct("agent");
+                  }}
+                  sx={{ width: 44, height: 44, color: "text.secondary" }}
+                >
+                  <ChatBubbleOutline />
+                </IconButton>
+              </HintTooltip>
               {target.kind === "source" &&
                   isMarkdownReviewPath(target.path) && markdownPreview
                 ? (
