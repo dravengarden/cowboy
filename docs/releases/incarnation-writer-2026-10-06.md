@@ -44,6 +44,22 @@ unchanged; health, version, SPA, service worker and Machine deployment-health
 returned 200. The receipt's `published=false` reflects that the commit was pushed
 afterwards; main contains it.
 
+## Later observation: persistence across another activation
+
+Another task activated Machine `551474a3` (worker pin `5b3547a6`, generation
+`worker-d62183a8…`) at `2026-10-06T11:12:07Z`. Its startup read the namespace back
+as `Session incarnation namespace ready incarnations=6 writer_enabled=true`, with
+the deletion journal at `deleted_sessions=7` (it was 5 at this release). Afterwards
+the record holds 6 lineages, all `adopted`, epoch 1, 6 distinct values, one for each
+of the 6 live workers and none for anything else, and no launch was refused for an
+unconfirmed lineage. So the lineages created here survived a Machine restart and a
+worker-generation change, and the drop from 8 to 6 is consistent with the two
+Sessions deleted since (records ended after the journal commit). The earlier
+values were not saved, so equality of each value across the restart is inferred from
+the unchanged `adopted`/epoch-1 origin of every survivor, not compared directly. No
+reset has been observed in production yet. That activation was another task's, not
+this release's.
+
 ## Limits
 
 Nothing reads the lineage: no Controller carriage, stale-observation refusal or
