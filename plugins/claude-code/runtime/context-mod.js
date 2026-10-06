@@ -14,6 +14,13 @@ const hookBase = {};
 // Native agent id -> its agent type, from SubagentStart.
 const subagentTypes = new Map();
 
+function recordEffort(_$, event, next) {
+  if (event?.effort && typeof event.effort === "object") {
+    hookBase.effort = event.effort;
+  }
+  return next(event);
+}
+
 export function recordHookBase(event) {
   for (const key of ["session_id", "transcript_path", "prompt_id"]) {
     if (typeof event?.[key] === "string") hookBase[key] = event[key];
@@ -450,6 +457,27 @@ async function deliverAsync($, event, call, run) {
   });
 }
 
+// The session id and effort native puts in a Bash command's environment.
+async function shellSession($) {
+  let sessionId = hookBase.session_id;
+  if (typeof sessionId !== "string") {
+    try {
+      sessionId = await $.session.id();
+    } catch {
+      sessionId = undefined;
+    }
+  }
+  const effort = hookBase.effort?.level;
+  return {
+    ...(typeof sessionId === "string" && /^[a-zA-Z0-9-]{1,128}$/.test(sessionId)
+      ? { sessionId }
+      : {}),
+    ...(typeof effort === "string" && /^[a-z]{1,16}$/.test(effort)
+      ? { effort }
+      : {}),
+  };
+}
+
 // Project PermissionRequest hooks for a prompt the host has not answered.
 // Natively they race the prompt and each other: the first decision withdraws
 // it, and of decisions arriving together a deny wins (measured on 2.1.287).
@@ -830,6 +858,7 @@ export function register(on) {
         tool: event.tool,
         input,
         ...(event.agentId === undefined ? {} : { owner: event.agentId }),
+        ...(event.tool === "Bash" ? { shell: await shellSession($) } : {}),
       };
       for (;;) {
         const response = await bridgePost($, path, body);
@@ -947,6 +976,10 @@ export function register(on) {
     recordHookBase(event);
     return next(event);
   });
+  // Native reports the turn's effort only in tool-context hook input, first
+  // after a tool batch; Bash and tool hooks carry it from then on.
+  on("classic.PostToolBatch", recordEffort);
+  on("classic.Stop", recordEffort);
   // A subagent's tool hooks name its type, as natively.
   on("classic.SubagentStart", (_$, event, next) => {
     if (

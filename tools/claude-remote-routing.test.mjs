@@ -563,6 +563,8 @@ test("every remote tool crosses the authenticated bridge without native executio
         tool,
         input: inputs[tool],
         owner: "native-agent",
+        // Bash carries the session values native sets in its environment.
+        ...(tool === "Bash" ? { shell: {} } : {}),
       });
       assert.equal(event.tool, tool);
     });

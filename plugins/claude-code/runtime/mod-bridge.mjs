@@ -5,8 +5,22 @@ import { join } from "node:path";
 import { AGENT_ID, NATIVE_TOOLS } from "./tools.mjs";
 
 const MAX_FRAME = 16 * 1024 * 1024;
+
+// The session values native puts in a Bash command's environment.
+function shellSession(value) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).every((key) => ["sessionId", "effort"].includes(key)) &&
+    (value.sessionId === undefined ||
+      /^[a-zA-Z0-9-]{1,128}$/.test(value.sessionId)) &&
+    (value.effort === undefined || /^[a-z]{1,16}$/.test(value.effort));
+}
 const BODY_KEYS = {
-  "/tool": ["id,input,tool", "id,input,owner,tool"],
+  "/tool": [
+    "id,input,tool",
+    "id,input,owner,tool",
+    "id,input,shell,tool",
+    "id,input,owner,shell,tool",
+  ],
   "/result": ["id"],
   "/cancel": ["id"],
   "/withdraw": ["id"],
@@ -171,7 +185,8 @@ export async function startModBridge(
         (request.url === "/tool" && (!NATIVE_TOOLS.includes(call.tool) ||
           !call.input || typeof call.input !== "object" ||
           Array.isArray(call.input) ||
-          (call.owner !== undefined && !AGENT_ID.test(call.owner)))) ||
+          (call.owner !== undefined && !AGENT_ID.test(call.owner)) ||
+          (call.shell !== undefined && !shellSession(call.shell)))) ||
         (request.url === "/hook" && (typeof call.command !== "string" ||
           !call.input || typeof call.input !== "object" ||
           Array.isArray(call.input) || !Number.isSafeInteger(call.timeout) ||
@@ -300,6 +315,7 @@ export async function startModBridge(
         const owned = {
           id: call.id,
           ...(call.owner === undefined ? {} : { owner: call.owner }),
+          ...(call.shell === undefined ? {} : { shell: call.shell }),
         };
         // A target hook command shares admission, observation and
         // cancellation with tools; the session's mode completes its input.

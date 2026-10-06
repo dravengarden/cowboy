@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   lstat,
   open,
@@ -13,6 +14,12 @@ import { READ_RANGE } from "./read-range.mjs";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
+// Native shows at most this many characters of Bash output inline.
+const INLINE_OUTPUT = 30000;
+// A foreground command's output is persisted up to this bound (what Read can
+// return); collection stops early enough that one more read stays within it.
+const MAX_PERSISTED = MAX_FILE;
+const COLLECT_LIMIT = MAX_PERSISTED - 1024 * 1024;
 const MAX_READ_STATE = 512 * 1024;
 const RANGE_FILE_THRESHOLD = 128 * 1024;
 const text = (value, native) => ({
@@ -72,6 +79,101 @@ export const DESCRIPTIONS = {
 
 function shellLiteral(value) {
   return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+// Native 2.1.287's shell snapshot steps, run by the target user's login
+// shell. Its embedded find/grep/rg and pkill shadows are omitted: they wrap
+// the native executable, which is not on the target, and fall back to the
+// system commands natively too when it is absent.
+const SNAPSHOT_START = `SNAPSHOT_FILE=$1
+(umask 077 && mkdir -p -- "\${SNAPSHOT_FILE%/*}") || exit 1
+if [ -f "$RC_FILE" ]; then . "$RC_FILE" < /dev/null; fi
+echo "# Snapshot file" >| "$SNAPSHOT_FILE"
+echo "# Unset all aliases to avoid conflicts with functions" >> "$SNAPSHOT_FILE"
+echo "unalias -a 2>/dev/null || true" >> "$SNAPSHOT_FILE"
+`;
+const SNAPSHOT_END = `echo "# Aliases" >> "$SNAPSHOT_FILE"
+alias | sed 's/^alias //g' | sed 's/^/alias -- /' | head -n 1000 >> "$SNAPSHOT_FILE"
+printf "export PATH='%s'\\n" "$(printf '%s' "$PATH" | sed "s/'/'\\\\\\\\''/g")" >> "$SNAPSHOT_FILE"
+test -f "$SNAPSHOT_FILE"
+`;
+const BASH_SNAPSHOT = `RC_FILE=~/.bashrc
+${SNAPSHOT_START}echo "# Shopt" >> "$SNAPSHOT_FILE"
+shopt -p | head -n 1000 >> "$SNAPSHOT_FILE"
+echo "# Functions" >> "$SNAPSHOT_FILE"
+declare -f > /dev/null 2>&1
+declare -F | cut -d' ' -f3 | grep -vE '^_[^_]' | while read func; do
+  printf 'eval %q > /dev/null 2>&1\\n' "$(declare -f "$func")" >> "$SNAPSHOT_FILE"
+done
+echo "# Shell Options" >> "$SNAPSHOT_FILE"
+set -o | grep "on" | while read name state; do echo "set -o $name"; done | head -n 1000 >> "$SNAPSHOT_FILE"
+echo "shopt -s expand_aliases" >> "$SNAPSHOT_FILE"
+${SNAPSHOT_END}`;
+const ZSH_SNAPSHOT = `RC_FILE=\${ZDOTDIR:-$HOME}/.zshrc
+${SNAPSHOT_START}echo "# Functions" >> "$SNAPSHOT_FILE"
+typeset -f > /dev/null 2>&1
+typeset +f | grep -vE '^_[^_]' | while read func; do
+  typeset -f "$func" >> "$SNAPSHOT_FILE"
+done
+echo "# Shell Options" >> "$SNAPSHOT_FILE"
+setopt | sed 's/^/setopt /' | head -n 1000 >> "$SNAPSHOT_FILE"
+${SNAPSHOT_END}`;
+
+// The packaged native version names the agent as native's AI_AGENT does.
+const NATIVE_VERSION = (() => {
+  try {
+    return JSON.parse(
+      readFileSync(new URL("../claude-execution.json", import.meta.url)),
+    ).native_version;
+  } catch {
+    return undefined;
+  }
+})();
+
+// Variables native Claude Code sets for its Bash commands (2.1.287). Its
+// CLAUDE_PID names a runtime process, meaningless on the target, so it is
+// not set; native's own pkill guard that reads it is omitted with it.
+export function shellEnvironment(shell, session = {}) {
+  return {
+    CLAUDECODE: "1",
+    CLAUDE_CODE_CHILD_SESSION: "1",
+    CLAUDE_CODE_SESSION_ATTENDED: "0",
+    CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli",
+    COREPACK_ENABLE_AUTO_PIN: "0",
+    GIT_EDITOR: "true",
+    ...(shell?.endsWith("/bash") ? { SHELL: shell } : {}),
+    ...(typeof NATIVE_VERSION === "string"
+      ? { AI_AGENT: `claude-code_${NATIVE_VERSION.replaceAll(".", "-")}_agent` }
+      : {}),
+    ...(session.sessionId ? { CLAUDE_CODE_SESSION_ID: session.sessionId } : {}),
+    ...(session.effort ? { CLAUDE_EFFORT: session.effort } : {}),
+  };
+}
+
+// A failed command as native reports it: the exit code, then the merged
+// output capped at 30,000 characters, the message kept to its first and last
+// 5,000 characters.
+export function shellFailure(result) {
+  let output = result.output.trim();
+  if (output.length > INLINE_OUTPUT) output = output.slice(0, INLINE_OUTPUT);
+  const message = `Exit code ${result.exitCode}${output ? "\n" + output : ""}`;
+  if (message.length <= 10000) return message;
+  return `${message.slice(0, 5000)}\n\n... [${
+    message.length - 10000
+  } characters truncated] ...\n\n${message.slice(-5000)}`;
+}
+
+// Native's preview of an output too large to show inline.
+export function persistedOutput(path, output) {
+  const bytes = Buffer.byteLength(output);
+  let preview = output.slice(0, 2000);
+  const newline = preview.lastIndexOf("\n");
+  if (newline > 1000) preview = preview.slice(0, newline + 1);
+  return `<persisted-output>\nOutput too large (${
+    (bytes / 1024).toFixed(1)
+  }KB). Full output saved to: ${path}\n\nPreview (first 2KB):\n${preview}${
+    preview.endsWith("\n") ? "" : "\n"
+  }...\n</persisted-output>`;
 }
 
 function checkedString(value, name, max = MAX_FILE) {
@@ -405,7 +507,10 @@ export class WorkspaceTools {
           limits[chunk.stream] += bytes.length;
           streams[chunk.stream].push(bytes);
         }
-      } while (!result.closed && Date.now() < deadline);
+        // A closed process can hold more output than one read returns.
+      } while (
+        result.closed ? result.chunks.length > 0 : Date.now() < deadline
+      );
       if (!result.closed) {
         settled = true;
         await this.cancelTasks([id]);
@@ -722,7 +827,10 @@ export class WorkspaceTools {
       job.exited = result.exited;
       job.closed = result.closed;
       job.exitCode = result.exitCode;
-      if (result.closed) {
+      // A closed process can still hold output beyond one read: drain it,
+      // past the deadline too, until a read returns nothing.
+      const drained = result.closed && result.chunks.length === 0;
+      if (drained) {
         for (const stream of ["stdout", "stderr"]) {
           chunks.push(
             Buffer.from(pending[stream] ?? "", "base64").toString("utf8"),
@@ -730,8 +838,8 @@ export class WorkspaceTools {
           delete pending[stream];
         }
       }
-      if (result.closed || size >= MAX_OUTPUT) break;
-    } while (Date.now() < deadline);
+      if (drained || size >= MAX_OUTPUT) break;
+    } while (Date.now() < deadline || job.closed);
     await this.save(() => {
       const beforeSave = this.state.jobs[processId];
       this.state.jobs[processId] = {
@@ -742,6 +850,7 @@ export class WorkspaceTools {
         this.state.jobs[processId] = beforeSave;
       };
     });
+    if (job.closed && size < MAX_OUTPUT) await this.releaseCwdFile(processId);
     return {
       output: chunks.join(""),
       exited: job.exited,
@@ -790,7 +899,7 @@ export class WorkspaceTools {
       this.command([
         "bash",
         "-c",
-        'printf "%s\\n" "$BASH"; uname -srm; command -v python3 || true',
+        'printf "%s\\n" "$BASH"; uname -srm; printf "%s\\n" "${SHELL:-}"; command -v python3 || true',
       ]),
       this.command([
         "git",
@@ -804,8 +913,13 @@ export class WorkspaceTools {
     if (platform.exitCode !== 0 || !platform.output.startsWith("/")) {
       throw new Error("Target Bash is unavailable");
     }
-    this.shell = platform.output.split("\n")[0];
-    const python = platform.output.split("\n")[2]?.trim();
+    // As natively, commands use the user's shell when it is bash or zsh.
+    const [bash, , userShell] = platform.output.split("\n");
+    this.shell = /^\/\S*\/(bash|zsh)$/.test(userShell?.trim() ?? "")
+      ? userShell.trim()
+      : bash;
+    this.startSnapshot();
+    const python = platform.output.split("\n")[3]?.trim();
     this.rangePython = python?.startsWith("/") ? python : undefined;
     const paths = [];
     let directory = this.cwd;
@@ -851,7 +965,7 @@ export class WorkspaceTools {
         ? `Target Git status at session start:\n${git.output}`
         : "The target is not a Git repository.",
       instructions:
-        "Use Read, Edit, Write, Glob, Grep and NotebookEdit for files; Bash for commands; Read with a cowboy-task:// output handle and TaskStop for retained processes. Agent runs a background subagent with these same workspace tools; its completion notification delivers the result, Read on its cowboy-agent:// handle returns only the recorded final answer, SendMessage continues it and TaskStop stops it. After compaction, use Read for file contents you need again. Only these tools, questions and to-dos are available. Project hooks, skills, custom agents, worktree or remote agent isolation, and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
+        "Use Read, Edit, Write, Glob, Grep and NotebookEdit for files; Bash for commands; Read with a cowboy-task:// output handle and TaskStop for retained processes. Agent runs a background subagent with these same workspace tools; its completion notification delivers the result, Read on its cowboy-agent:// handle returns only the recorded final answer, SendMessage continues it and TaskStop stops it. After compaction, use Read for file contents you need again. Only these tools, questions and to-dos are available. Skills, custom agents, worktree or remote agent isolation, and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
         instructions,
     };
   }
@@ -897,51 +1011,109 @@ export class WorkspaceTools {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
       const timeout = bounded(args.timeout, 120000, 1, 600000);
-      // As natively, Bash first loads what project hooks wrote to
-      // CLAUDE_ENV_FILE; only sessions with project hooks have one.
+      const background = args.run_in_background === true;
+      // A foreground command reports its final directory, as native's
+      // `pwd -P >| file` does; a background one never moves the session.
+      // The name is unguessable, as native's own; the shell creates its
+      // directory without a separate target command.
+      const cwdFile = background ? undefined : posix.join(
+        this.home() ?? "/",
+        ".cache",
+        "cowboy",
+        "shell",
+        `cwd-${randomUUID()}`,
+      );
       const argv = [
         this.shell,
         "-c",
-        this.hookEnvironment
-          ? `if [ -f ${shellLiteral(this.envFile())} ]; then . ${
-            shellLiteral(this.envFile())
-          }; fi\n${command}`
-          : command,
+        this.shellCommand(command, cwdFile, await this.shellSnapshot),
       ];
-      const id = await (args.run_in_background
-        ? this.start(argv, undefined, call)
-        : this.startForeground(argv, call));
-      if (args.run_in_background) {
+      const environment = shellEnvironment(this.shell, call?.shell);
+      const id = await (background
+        ? this.start(argv, undefined, call, environment)
+        : this.startForeground(argv, call, environment));
+      if (background) {
         return text(
           JSON.stringify({ task_id: id, running: true }),
-          this.bashResult({
-            output: "",
-            task_id: id,
-            exited: false,
-            closed: false,
-          }),
+          {
+            stdout:
+              `Command running in background with ID: ${id}. Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. To check interim output, use Read on that path.`,
+            stderr: "",
+            interrupted: false,
+          },
         );
       }
       try {
-        const result = await this.collect(id, timeout);
+        // Collect the whole output (bounded) so a large result can be
+        // persisted as natively, instead of stopping at one read's limit.
+        const deadline = Date.now() + timeout;
+        let result = await this.collect(id, timeout);
+        let output = result.output;
+        while (
+          result.output_limit && Buffer.byteLength(output) < COLLECT_LIMIT &&
+          (result.closed || Date.now() < deadline)
+        ) {
+          result = await this.collect(id, Math.max(1, deadline - Date.now()));
+          output += result.output;
+        }
+        const complete = { ...result, output };
+        if (!result.closed && Buffer.byteLength(output) >= COLLECT_LIMIT) {
+          // Still writing past the bound: keep what was read in a file.
+          return text(JSON.stringify(complete), {
+            stdout: `${await this.persistOutput(id, output, result)}
+Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its further output; TaskStop stops it.`,
+            stderr: "",
+            interrupted: false,
+          });
+        }
+        if (!result.closed) {
+          // As native's output file does, the handle reads from the start.
+          await this.save(() => {
+            const job = this.state.jobs[id];
+            this.state.jobs[id] = { ...job, afterSeq: null, utf8Pending: {} };
+            return () =>
+              this.state.jobs[id] = job;
+          });
+          return text(JSON.stringify(complete), {
+            stdout: `Command did not complete within its ${
+              Math.ceil(timeout / 1000)
+            }s timeout and is still running (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. To check interim output, use Read on that path; TaskStop stops it.`,
+            stderr: "",
+            interrupted: false,
+          });
+        }
         // Natively a non-zero exit is a tool error, so project
         // PostToolUseFailure hooks run instead of PostToolUse.
-        if (result.closed && result.exitCode !== 0) {
+        if (result.exitCode !== 0) {
           return {
-            content: [{
-              type: "text",
-              text: `Exit code ${result.exitCode}\n${result.output}`
-                .replace(/\n$/, "") +
-                (result.output_limit
-                  ? `\n[Output limit reached; read ${TASK_OUTPUT_PREFIX}${result.task_id} for more.]`
-                  : ""),
-            }],
+            content: [{ type: "text", text: shellFailure(complete) }],
             isError: true,
           };
         }
-        return text(JSON.stringify(result), this.bashResult(result));
+        const reset = await this.settleShellDirectory(cwdFile);
+        const shown = [output.trim(), reset].filter(Boolean).join("\n");
+        return text(JSON.stringify(complete), {
+          // Natively a reset still follows a persisted output's preview.
+          stdout: shown.length > INLINE_OUTPUT
+            ? [await this.persistOutput(id, output, result), reset]
+              .filter(Boolean).join("\n")
+            : shown,
+          stderr: "",
+          interrupted: false,
+        });
       } finally {
         this.foreground.delete(id);
+        if (cwdFile) {
+          const job = this.state.jobs[id];
+          if (job && !job.closed) {
+            // Still running: its wrapper may write the file at the end, so
+            // the task removes it once it is observed closed.
+            await this.save(() => {
+              this.state.jobs[id] = { ...this.state.jobs[id], cwdFile };
+              return () => this.state.jobs[id] = job;
+            }).catch(() => {});
+          } else await this.removeTarget(cwdFile);
+        }
       }
     }
     if (name === "taskoutput" || name === "taskstop") {
@@ -1258,6 +1430,134 @@ export class WorkspaceTools {
     return text(`Updated ${path}`, native);
   }
 
+  // Native snapshots the user's login shell once at startup (rc file,
+  // options, functions, aliases, PATH) and sources it before every command.
+  // This is the target user's equivalent, from the same generator steps.
+  startSnapshot() {
+    this.shellSnapshot = (async () => {
+      const file = posix.join(
+        this.home() ?? "/",
+        ".cache",
+        "cowboy",
+        "shell",
+        `snapshot-${this.state.binding.slice(0, 24)}.sh`,
+      );
+      const result = await this.command(
+        [
+          this.shell,
+          "-l",
+          "-c",
+          this.shell.endsWith("/zsh") ? ZSH_SNAPSHOT : BASH_SNAPSHOT,
+          this.shell,
+          file,
+        ],
+        10000,
+      ).catch(() => undefined);
+      // Without one, commands still run, as native's do.
+      return result?.exitCode === 0 ? file : undefined;
+    })();
+  }
+
+  // Native's command shape: `eval` in an `&&` list (so `set -e` cannot end
+  // the wrapper early), stdin from /dev/null, extglob off, one merged output
+  // stream, and the final directory recorded only on success.
+  shellCommand(command, cwdFile, snapshot) {
+    const lines = [];
+    if (snapshot) {
+      lines.push(`. ${shellLiteral(snapshot)} 2>/dev/null || true`);
+    }
+    // Native turns extglob off in bash; zsh has no shopt (and an ERR_EXIT
+    // option from the snapshot would end the wrapper on its failure).
+    if (!this.shell?.endsWith("/zsh")) {
+      lines.push("{ shopt -u extglob; } 2>/dev/null");
+    }
+    const cwd = this.state.shellCwd;
+    if (cwd && cwd !== this.cwd) {
+      lines.push(
+        `cd -- ${shellLiteral(cwd)} 2>/dev/null || cd -- ${
+          shellLiteral(this.cwd)
+        }`,
+      );
+    }
+    // As natively, Bash first loads what project hooks wrote to
+    // CLAUDE_ENV_FILE; only sessions with project hooks have one.
+    if (this.hookEnvironment) {
+      const file = shellLiteral(this.envFile());
+      lines.push(`if [ -f ${file} ]; then . ${file}; fi`);
+    }
+    if (cwdFile) {
+      lines.push(
+        `(umask 077 && mkdir -p -- ${
+          shellLiteral(posix.dirname(cwdFile))
+        }) 2>/dev/null`,
+      );
+    }
+    lines.push("exec 2>&1");
+    lines.push(
+      `eval ${shellLiteral(command)} < /dev/null` +
+        (cwdFile ? ` && pwd -P >| ${shellLiteral(cwdFile)}` : ""),
+    );
+    return lines.join("\n");
+  }
+
+  // The directory a successful command ended in persists for later commands
+  // when it is inside the project; elsewhere native resets it and says so.
+  async settleShellDirectory(cwdFile) {
+    const bytes = await this.bytes(cwdFile, true).catch(() => undefined);
+    const next = bytes?.toString("utf8").trim();
+    if (!next?.startsWith("/")) return "";
+    this.projectPhysical ??= this.command([
+      this.shell,
+      "-c",
+      'cd -- "$1" && pwd -P',
+      this.shell,
+      this.cwd,
+    ]).then((result) => result.output.trim());
+    const project = await this.projectPhysical.catch(() => this.cwd);
+    const relative = posix.relative(project, next);
+    const inside = relative === "" ||
+      (relative !== ".." && !relative.startsWith("../") &&
+        !posix.isAbsolute(relative));
+    const cwd = inside ? next : this.cwd;
+    if (this.state.shellCwd !== cwd) {
+      await this.save(() => {
+        const previous = this.state.shellCwd;
+        this.state.shellCwd = cwd;
+        return () => this.state.shellCwd = previous;
+      });
+    }
+    return inside ? "" : `Shell cwd was reset to ${this.cwd}`;
+  }
+
+  // A large output is kept whole in a private target file the model can Read,
+  // as native keeps it in its tool-results directory.
+  async persistOutput(id, output, result) {
+    const directory = posix.join(
+      this.home() ?? "/",
+      ".cache",
+      "cowboy",
+      "tool-results",
+      this.state.binding.slice(0, 24),
+    );
+    await this.privateDirectory(directory);
+    const path = posix.join(directory, `${id}.txt`);
+    let bytes = Buffer.from(output);
+    const cut = bytes.length > MAX_PERSISTED;
+    if (cut) {
+      bytes = Buffer.from(decodeOutput(bytes.subarray(0, MAX_PERSISTED)).text);
+    }
+    await this.connection.call("fs/writeFile", {
+      path: pathToFileURL(path).href,
+      dataBase64: bytes.toString("base64"),
+    });
+    return persistedOutput(path, output) +
+      (cut
+        ? "\n[The saved output stops at 4 MiB.]"
+        : result.closed && result.output_limit
+        ? `\n[Output limit reached; read ${TASK_OUTPUT_PREFIX}${id} for more.]`
+        : "");
+  }
+
   bashResult(result) {
     const progress = result.closed
       ? `Exit code: ${result.exitCode}`
@@ -1563,6 +1863,27 @@ export class WorkspaceTools {
     return ids.filter((id) => this.state.jobs[id]?.cancelRequested);
   }
 
+  async removeTarget(path) {
+    await this.connection.call("fs/remove", {
+      path: pathToFileURL(path).href,
+      force: true,
+    }).catch(() => {});
+  }
+
+  // A command that outlived its Bash call leaves its directory file behind.
+  async releaseCwdFile(id) {
+    const file = this.state.jobs[id]?.cwdFile;
+    if (!file) return;
+    await this.removeTarget(file);
+    await this.save(() => {
+      const previous = this.state.jobs[id];
+      if (!previous) return;
+      const { cwdFile: _file, ...job } = previous;
+      this.state.jobs[id] = job;
+      return () => this.state.jobs[id] = previous;
+    }).catch(() => {});
+  }
+
   async reconcileCancellation(id) {
     if (!this.state.jobs[id]?.cancelRequested || this.connection.closed) return;
     try {
@@ -1585,6 +1906,7 @@ export class WorkspaceTools {
         return () => this.state.jobs[id] = previous;
       });
       this.foreground.delete(id);
+      await this.releaseCwdFile(id);
     } catch {
       // Missing/unknown before admission settles is not cancellation proof.
       // Keep the intent for another observation or a cold runtime resume.

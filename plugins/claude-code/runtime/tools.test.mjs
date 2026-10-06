@@ -477,12 +477,13 @@ test("native Read task handles retain output cursors across cold resume", async 
   assert.equal(first.result.file.content, "done\nExit code: 0");
   const second = await resumed.nativeCall("Read", { file_path: path });
   assert.equal(second.result.file.content, "Exit code: 0");
-  assert.deepEqual(cursors, [null, 1]);
+  // A closed process is drained until a read returns nothing.
+  assert.deepEqual(cursors, [null, 1, 1]);
   const unknown = await resumed.nativeCall("Read", {
     file_path: TASK_OUTPUT_PREFIX + "foreign",
   });
   assert.match(unknown.deny, /does not belong/);
-  assert.equal(cursors.length, 2);
+  assert.equal(cursors.length, 3);
 });
 
 test("task output keeps split UTF-8 separate per stream across cold resume", async (t) => {
@@ -497,25 +498,35 @@ test("task output keeps split UTF-8 separate per stream across cold resume", asy
     stream,
     chunk: bytes.toString("base64"),
   });
-  const responses = [{
-    chunks: [
-      chunk("stdout", stdout.subarray(0, 2)),
-      chunk(
-        "stderr",
-        Buffer.concat([Buffer.alloc(65534, 120), stderr.subarray(0, 2)]),
-      ),
-    ],
-    closed: false,
-    exited: false,
-  }, {
-    chunks: [
-      chunk("stdout", stdout.subarray(2)),
-      chunk("stderr", stderr.subarray(2)),
-    ],
-    closed: true,
-    exited: true,
-    exitCode: 0,
-  }, { chunks: [], closed: true, exited: true, exitCode: 0 }];
+  const responses = [
+    {
+      chunks: [
+        chunk("stdout", stdout.subarray(0, 2)),
+        chunk(
+          "stderr",
+          Buffer.concat([Buffer.alloc(65534, 120), stderr.subarray(0, 2)]),
+        ),
+      ],
+      closed: false,
+      exited: false,
+    },
+    {
+      chunks: [
+        chunk("stdout", stdout.subarray(2)),
+        chunk("stderr", stderr.subarray(2)),
+      ],
+      closed: true,
+      exited: true,
+      exitCode: 0,
+    },
+    { chunks: [], closed: true, exited: true, exitCode: 0 },
+    {
+      chunks: [],
+      closed: true,
+      exited: true,
+      exitCode: 0,
+    },
+  ];
   connection.call = async (method) => {
     assert.equal(method, "process/read");
     return responses.shift();
@@ -532,8 +543,8 @@ test("task output keeps split UTF-8 separate per stream across cold resume", asy
 test("interleaved output and terminal incomplete UTF-8 do not corrupt other streams", async (t) => {
   const { tools, connection } = await fixture(t);
   tools.state.jobs.job = { afterSeq: null, exited: false };
-  connection.call = async () => ({
-    chunks: [
+  connection.call = async (_method, params) => ({
+    chunks: params.afterSeq !== null ? [] : [
       {
         seq: 1,
         stream: "stdout",
@@ -582,7 +593,7 @@ test("failed output state commit preserves the cursor for retry", async (t) => {
   assert.deepEqual(tools.state.jobs.job, { afterSeq: null, exited: false });
   await rm(state, { recursive: true });
   assert.equal((await tools.collect("job", 1000)).output, "retained");
-  assert.deepEqual(cursors, [null, null]);
+  assert.deepEqual(cursors, [null, 1, null, 1]);
 });
 
 test("byte-split output preserves BOMs and native invalid UTF-8 replacement", async (t) => {
@@ -595,12 +606,14 @@ test("byte-split output preserves BOMs and native invalid UTF-8 replacement", as
     ]
   ) {
     tools.state.jobs.job = { afterSeq: null, exited: false };
-    connection.call = async () => ({
-      chunks: Array.from(bytes, (byte, index) => ({
-        seq: index + 1,
-        stream: "stdout",
-        chunk: Buffer.from([byte]).toString("base64"),
-      })),
+    connection.call = async (_method, params) => ({
+      chunks: params.afterSeq !== null
+        ? []
+        : Array.from(bytes, (byte, index) => ({
+          seq: index + 1,
+          stream: "stdout",
+          chunk: Buffer.from([byte]).toString("base64"),
+        })),
       exited: true,
       closed: true,
       exitCode: 0,
@@ -955,9 +968,33 @@ test(
     assert.equal(JSON.parse(stopped.content[0].text).output, "");
     assert.deepEqual(
       cursors.filter((read) => !read.observation).map((read) => read.afterSeq),
-      [null, 1],
+      // The Bash drains its closed process; TaskStop then reads the end.
+      [null, 1, 1],
     );
     assert.equal(cursors.filter((read) => read.observation).length, 1);
     assert.equal(tools.operations.size, 0);
   },
 );
+
+test("a closed process is drained across reads, not cut at the first", async (t) => {
+  const { tools, connection } = await fixture(t);
+  tools.state.jobs.job = { afterSeq: null, exited: false };
+  // The executor reports closed while output beyond one read remains.
+  const pages = ["first ", "second ", "third"];
+  connection.call = async (_method, params) => {
+    const next = params.afterSeq ?? 0;
+    return {
+      chunks: next < pages.length
+        ? [{
+          seq: next + 1,
+          stream: "stdout",
+          chunk: Buffer.from(pages[next]).toString("base64"),
+        }]
+        : [],
+      exited: true,
+      closed: true,
+      exitCode: 0,
+    };
+  };
+  assert.equal((await tools.collect("job", 1)).output, "first second third");
+});

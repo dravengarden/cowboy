@@ -25,6 +25,7 @@ from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFix
 from execution_environment_probe import Executor, ProbeFailure, require
 from plugin_runtime_conformance import closed_environment
 from matrix_execution_fixture import MatrixFixture
+from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 
 
 def tool(name, arguments):
@@ -454,6 +455,53 @@ def permission_phases(args, api, client, context_checked, checks):
     client.permission = None
 
 
+def shell_phases(args, api, client, shell_results, checks):
+    """Shared Bash cases in one turn; results are compared with native-local ones."""
+    (args.target / "sub").mkdir(exist_ok=True)
+    steps = [tool("Bash", arguments) for _, arguments in SHELL_CASES]
+    ids = {call[0]["id"]: index for index, call in enumerate(steps)}
+
+    def router(requests):
+        # Keyed on the conversation, so a background child's request cannot
+        # take a step.
+        last = requests[-1]["messages"][-1]
+        done = [ids[block["tool_use_id"]] for block in (last.get("content") if isinstance(last.get("content"), list) else [])
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in ids]
+        if done:
+            following = max(done) + 1
+            return steps[following] if following < len(steps) else [{"type": "text", "text": "SHELL_DONE"}]
+        if "Run the shell parity fixture." in " ".join(text_blocks(last)):
+            return steps[0]
+        raise ProbeFailure("unexpected shell phase request")
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(steps) + 20))
+    client.prompt(text="Run the shell parity fixture.", timeout=120)
+    for request in reversed(api.requests):
+        for block in outputs(request):
+            if block.get("tool_use_id") in ids and SHELL_CASES[ids[block["tool_use_id"]]][0] not in shell_results:
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = "".join(item.get("text", "") for item in content)
+                shell_results[SHELL_CASES[ids[block["tool_use_id"]]][0]] = {
+                    "is_error": block.get("is_error", False),
+                    "content": shell_normalize(content, args.target) if isinstance(content, str) else content,
+                }
+    require(len(shell_results) == len(SHELL_CASES), "shell parity results missing")
+    # Native-local results for the same cases. A Mods-answered error is
+    # wrapped in <tool_use_error> tags; it is the one accepted difference.
+    native = json.loads((Path(__file__).parent / "claude_shell_native_baseline.json").read_text())["results"]
+    differences = {}
+    for name, expected in native.items():
+        actual = dict(shell_results.get(name, {}))
+        if actual.get("is_error") and isinstance(actual.get("content"), str):
+            actual["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", actual["content"], flags=re.S)
+        if actual != expected:
+            differences[name] = {"native": expected, "remote": shell_results.get(name)}
+    require(not differences, "Bash results differ from native-local: " + json.dumps(differences)[:3000])
+    checks.append("bash_results_match_native_local")
+
+
 def hook_phases(args, api, client, native, session, context_checked, checks):
     """Target project hooks: lifecycle and native-tool hooks run by native
     through the proxy, facade tool hooks by the adapter, all on the target."""
@@ -535,6 +583,18 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                 return json.dumps(blocks) + json.dumps(request["messages"][-1])
         raise ProbeFailure("hook phase result missing")
 
+    def message_of(name):
+        # The user message carrying the result and its reminders, from any
+        # request (the latest may be a background child's own conversation).
+        for request in reversed(api.requests):
+            for message in request.get("messages", []):
+                content = message.get("content")
+                if isinstance(content, list) and any(
+                        block.get("type") == "tool_result" and issued.get(block.get("tool_use_id")) == name
+                        for block in content):
+                    return json.dumps(message)
+        raise ProbeFailure("hook phase result missing")
+
     client.close()
     del api.steps[len(api.requests):]
     api.steps.extend([router] * 20)
@@ -580,8 +640,12 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
             "PreToolUse:Bash hook error: [if grep -q FORBIDDEN" in result_of("HOOK_BLOCK") and
             "blocked-by-target-hook" in result_of("HOOK_BLOCK"), "target PreToolUse hook did not block before the effect")
     require((args.target / "hooked.txt").read_text() == "hooked\n" and
-            "PostToolUse:Write hook additional context: TARGET_POST_CONTEXT" in json.dumps(api.requests[-1]),
-            "target PostToolUse context did not reach the model")
+            # The last request may be a background child's, without this history.
+            "PostToolUse:Write hook additional context: TARGET_POST_CONTEXT" in message_of("HOOK_WRITE"),
+            "target PostToolUse context did not reach the model: " + result_of("HOOK_WRITE")[:600] +
+            " events: " + (events.read_text() if events.exists() else "none") +
+            " hook notes: " + json.dumps(sorted({m for m in re.findall(r"[^\\\"]{0,80}hook[^\\\"]{0,160}",
+                                                                   json.dumps(api.requests[phase_start:]))}))[:3000])
     deadline = time.monotonic() + 10
     while "Stop" not in (events.read_text() if events.exists() else "") and time.monotonic() < deadline:
         time.sleep(0.1)
@@ -607,7 +671,13 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                  "PermissionRequest", "Stop", "StopTranscript"]:
         require(name in recorded, f"target {name} hook did not run on the target")
     # The fixture executor shares this host's HOME; only new entries count.
-    leftovers = set(hook_inputs.iterdir() if hook_inputs.exists() else []) - inputs_before
+    # A background child's hook may still be running: its copies must go when it ends.
+    deadline = time.monotonic() + 15
+    while True:
+        leftovers = set(hook_inputs.iterdir() if hook_inputs.exists() else []) - inputs_before
+        if not leftovers or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
     require(not leftovers, f"hook input or transcript copies were left on the target: {sorted(leftovers)[:3]}")
     require(hook_inputs.stat().st_mode & 0o777 == 0o700, "target hook input directory is not private")
     require((args.target / "hook-project-dir.txt").read_text() == str(args.target),
@@ -825,9 +895,11 @@ def main():
             "os.write(2,b\"stream-marker\"); time.sleep(0.2); os.write(1,bytes([184,173]))'"})])
         client.prompt(timeout=90)
         stream_result = json.dumps(list(outputs(api.requests[-1]))[-1], ensure_ascii=False)
-        require("中" in stream_result and "stream-marker" in stream_result and "\ufffd" not in stream_result,
-                "split target UTF-8 was corrupted across stdout/stderr")
-        checks.append("native_bash_preserves_utf8_split_across_streams")
+        # Native merges both streams into one in write order, so a character
+        # split around a stderr write decodes as native-local does (measured).
+        require("\ufffdstream-marker\ufffd\ufffd" in stream_result,
+                "Bash streams were not merged in write order: " + stream_result[:300])
+        checks.append("native_bash_merges_streams_in_write_order")
         # Native validation must accept replacing a binary original, and target
         # path expansion must use the executor's home rather than Claude's.
         (args.target / "replace-image.png").write_bytes(pixel)
@@ -955,6 +1027,8 @@ def main():
         checks.append("native_interrupt_stops_foreground_target_process")
         client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
         permission_phases(args, api, client, context_checked, checks)
+        shell_results = {}
+        shell_phases(args, api, client, shell_results, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
@@ -1059,6 +1133,7 @@ def main():
             "scripted_api_requests": native_requests + len(api.requests),
             "native_title_requests": title_requests + len(api.title_requests),
             "agent_observations": agent_observations,
+            "shell_results": shell_results,
             "production_credentials": False, "production_activation": False,
             "not_checked": ["real_subscription_inference", "cross_host_latency", "project_hook_settings_reload",
                             "agent_permission_modes", "grandchild_agents", "teammates_and_agent_worktrees",

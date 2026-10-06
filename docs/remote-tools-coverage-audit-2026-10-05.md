@@ -100,7 +100,8 @@ to introduce more restrictions.
 | Native Bash lifecycle | Facade retains processes but does not establish native background task registration | Explore shell prefix bridge preserving original Bash tool and native task registry |
 | Background completion | Native activity UI support exists; facade handles are a separate system | Validate completion after prompt return, native autonomous continuation, output retrieval, task count and cancellation |
 | PTY and stdin | Claude facade explicitly uses `tty:false`, `pipeStdin:false` | Native-parity baseline first: do not invent PTY support where provider lacks it; test Codex PTY, resize, EOF and incremental input |
-| Shell environment | Claude starts a new shell with fixed binding cwd and target environment | Test `cd`, exports, login startup, shell snapshots, quoting, signals, pipe status and shell availability; preserve documented native persistence semantics |
+| Shell environment | Claude 3.8.0 runs native's command shape on the target: user bash/zsh, a login-shell snapshot (rc, functions, options, aliases, PATH), `cd` persistence with native's reset, native's environment variables; 36 Bash cases match native-local results in packaged acceptance | Error results keep Mods' `<tool_use_error>` wrapper; `CLAUDE_EFFORT` starts after the first tool batch; no embedded find/grep/rg shadows or `CLAUDE_PID` |
+| Project hooks (Claude) | 3.7.0 runs target project hooks: native lifecycle/native-tool hooks through the shell prefix, facade tool hooks (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest) through the adapter | Settings are a session-start snapshot; non-command facade tool hooks refuse matching calls |
 | Project hooks | Claude launch suppresses settings sources; Codex remote hook placement not established by current receipt | Execute target-owned hooks at target, preserve native lifecycle/decisions and trusted configuration; separate runtime-owned hooks |
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
 | Permission modes | Claude 3.6.0 drops the forced bypass: native `$.tool.check` decides each target call under the session's mode and rules, asks reach the SDK host in native `can_use_tool` shape, denial precedes any target effect, amended input runs, dontAsk denies, and abandoned asks are withdrawn (packaged acceptance) | No "always allow" rule persistence, auto-mode classifier or command-string path mapping; plan mode stays refused |
@@ -580,6 +581,76 @@ invocations from hooks, status commands and MCP separately: blanket forwarding
 would place runtime-owned services and credentials on the wrong machine.
 If this boundary cannot reliably separate ownership, investigate a supported
 upstream execution backend before falling back to a narrower adapter.
+
+#### Bash results and shell state (Plugin 3.8.0)
+
+A differential check found that the facade's Bash differed from native-local
+Bash in most model-visible results. The check runs the same 35 Bash calls in one
+turn on native-local 2.1.287 and on the packaged remote lane, then compares the
+normalized results. Native baselines also captured native's own command line,
+environment and shell snapshot. The differences found were:
+
+- a trailing `Exit code: 0` on every result
+- no output trimming and no `(Bash completed with no output)`
+- stdout and stderr not interleaved in write order
+- `set -e` aborting commands that natively run on
+- no `cd` persistence
+- a large output silently cut at the first executor read, because a process
+  reports closed while output remains to be read
+- none of native's command environment or user shell snapshot
+
+3.8.0 reproduces native's command shape on the target:
+
+- **Command wrapper.** It sources a snapshot, turns extglob off, merges the two
+  streams, and runs `eval '<command>' < /dev/null && pwd -P >| <cwd file>`.
+- **Shell.** Commands use the user's shell when it is bash or zsh, as natively.
+- **Snapshot.** At session start, the target user's login shell runs native's
+  generator steps: rc file, shopt, functions, set -o options, aliases and
+  PATH.
+- **Directory.** The final directory persists inside the project. Outside it,
+  the directory resets with native's `Shell cwd was reset to …` line.
+  Background commands never move it.
+- **Environment.** Native's variables are set: `CLAUDECODE`,
+  `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`,
+  `CLAUDE_CODE_ENTRYPOINT`, `COREPACK_ENABLE_AUTO_PIN`, `GIT_EDITOR`, `SHELL`,
+  `AI_AGENT`, plus the session's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_EFFORT`.
+- **Results.**
+  - Output is trimmed, and an empty result reads as native's placeholder.
+  - Failures read `Exit code N` plus output, capped at 30,000 characters and
+    kept to the first and last 5,000.
+  - An output over 30,000 characters is written whole (up to 4 MiB) to a
+    private target file. The model sees native's `<persisted-output>` preview
+    with that target path.
+- **Draining.** Output collection drains a closed process until a read returns
+  nothing.
+
+Packaged acceptance now requires every case to match the committed native
+baseline (`tools/claude_shell_native_baseline.json`). One stated exception
+remains, described below. A former check expected a character split around a
+stderr write to survive. Native interleaves the bytes and decodes them as
+replacement characters (measured), so the check now requires native's result.
+
+Remaining differences and their reasons:
+
+- **Error wrapper.** A Mods-answered error is wrapped in `<tool_use_error>`
+  tags. Mods offers no error result without the wrapper: its `isError`
+  variant is set by core only.
+- **Effort timing.** `CLAUDE_EFFORT` and the hooks' `effort` field appear
+  only after native first reports them. Native reports effort only in
+  tool-context hook input (PostToolBatch, Stop). A `turn.step` hook would
+  carry it from the first request, but the pinned build refused to load the
+  module with one.
+- **`CLAUDE_PID`.** It is not set: it names a runtime process.
+- **find, grep, rg and pkill.** Native shadows these with its embedded
+  executable, and with a guard that reads `CLAUDE_PID`. The target has no
+  such executable, so the system commands run. Native does the same when its
+  executable is absent.
+- **Other rc-file exports.** Native's snapshot keeps only PATH from the user's
+  environment, and so does 3.8.0. Other exported variables come from the
+  executor's environment, as native's come from its own process.
+- **Time-limited and background commands.** They keep `cowboy-task://`
+  handles and give no completion notification. The text follows native's,
+  without its promise of a notification. Notifications belong to matrix E.
 
 ### 2. Project configuration and implicit reads
 

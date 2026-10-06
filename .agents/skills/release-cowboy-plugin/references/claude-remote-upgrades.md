@@ -73,7 +73,11 @@ prefix gets shell-form hooks as one argument with placeholders unsubstituted;
 exec-form hooks bypass it; `classic.*` events (including `SubagentStart`)
 carry the base hook input; facade calls never reach settings tool hooks;
 PermissionRequest hooks race the host prompt; and a non-zero Bash exit is a
-tool error. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
+tool error. Bash parity is checked against
+`tools/claude_shell_native_baseline.json`: re-run the native-local probe for a
+candidate CLI (the shared cases are in `tools/claude_shell_cases.py`) and
+re-capture native's command line, environment and snapshot generator, since
+the facade reproduces them. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
 `nonzero_bash_exit_is_native_tool_error`) cover these; the native baselines
 are in the project hooks receipt.
 
