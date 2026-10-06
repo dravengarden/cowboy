@@ -5,7 +5,7 @@
 //! an unknown adapter instead of needing a protocol bump.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Machine adapter that retires unreferenced generations of one Plugin.
 pub const ADAPTER: &str = "plugin-generation-retention";
@@ -33,6 +33,34 @@ impl Request {
                             .bytes()
                             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
                 })
+            })
+    }
+}
+
+/// Machine adapter that retires generations left by uninstalled Plugins.
+pub const UNINSTALLED_ADAPTER: &str = "plugin-generation-retention-uninstalled";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UninstalledRequest {
+    /// Generations pinned per Plugin by sessions that can still launch,
+    /// including soft-deleted sessions until they are purged.
+    pub referenced: BTreeMap<String, BTreeSet<String>>,
+    /// Plugins whose uninstall may still compensate by reactivation.
+    pub skip: BTreeSet<String>,
+}
+
+impl UninstalledRequest {
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.skip.len() <= MAX_REFERENCED
+            && self.referenced.values().map(BTreeSet::len).sum::<usize>() <= MAX_REFERENCED
+            && self.referenced.iter().all(|(plugin_id, referenced)| {
+                Request {
+                    plugin_id: plugin_id.clone(),
+                    referenced: referenced.clone(),
+                }
+                .is_valid()
             })
     }
 }

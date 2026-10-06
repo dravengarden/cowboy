@@ -431,6 +431,18 @@ impl Supervisor {
             );
             return Ok(false);
         }
+        // A split-runtime session holds a durable preparation intent until its
+        // execution environment is accepted. Preparation recovery owns that
+        // first launch; the intent can never decode as a runnable binding.
+        if self.hub.session_list().into_iter().any(|meta| {
+            meta.id == session_id
+                && meta
+                    .execution_binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.preparation().is_some())
+        }) {
+            return Ok(false);
+        }
         if self.prepare_session_inner(session_id)? {
             return Ok(true);
         }
@@ -1217,6 +1229,55 @@ mod tests {
             !supervisor
                 .ensure_alive("s")
                 .expect("open preparing session")
+        );
+        assert!(runtime.pending_for_test().is_empty());
+    }
+
+    #[tokio::test]
+    async fn opening_split_runtime_session_waits_for_execution_preparation() {
+        let root = TestDir::new();
+        let hub = Hub::new();
+        let intent = crate::execution_environment::PreparationV1 {
+            schema: 1,
+            phase: "preparing".into(),
+            runtime: crate::execution_environment::RuntimeLocation {
+                machine_id: "hawk".into(),
+                cwd: "/runtime/s".into(),
+            },
+            machine_id: "ovh".into(),
+            workspace_id: "columbus".into(),
+            source_path: "/sources/columbus".into(),
+            executor_digest: format!("sha256:{}", "ab".repeat(32)),
+        };
+        let binding = crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::to_value(&intent).unwrap(),
+        );
+        hub.create_session(SessionRegistration {
+            id: "s".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: Some("columbus".to_owned()),
+            workspace_name: Some("columbus".to_owned()),
+            workspace_source_path: Some("/sources/columbus".to_owned()),
+            execution_binding: Some(binding),
+            cwd: "/runtime/s".to_owned(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = remote_supervisor(hub, runtime.clone(), root.0.clone());
+
+        assert!(
+            !supervisor
+                .ensure_alive("s")
+                .expect("open session awaiting its execution environment")
         );
         assert!(runtime.pending_for_test().is_empty());
     }

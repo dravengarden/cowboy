@@ -122,6 +122,8 @@ as a deprecated override for one release.
 | --- | --- | --- | --- |
 | Service | `plugins.generation_retention_interval` | `"6h"` | live |
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
+| Service | `plugins.repin_dormant_sessions` | `false` | live |
+| Service | `plugins.repin_dormant_after` | `"7d"` | live |
 | Service | `sessions.reclaim_on_capacity` | `false` | live |
 | Service | `sessions.reclaim_min_idle` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
@@ -131,6 +133,23 @@ as a deprecated override for one release.
 
 `cowboy config explain --scope <scope>` is authoritative; this table is a
 convenience.
+
+## Dormant session re-pinning
+
+Generation retention keeps every Provider generation a recoverable session
+pins, so one forgotten session can hold an old release indefinitely. Every
+scheduled retention pass records which sessions are dormant (exited, no worker,
+nothing in flight, not a system session) in one persisted setting, so dormancy
+is measured across Controller restarts; opening a session clears it.
+
+Off by default. With `plugins.repin_dormant_sessions = true`, a session dormant
+for `plugins.repin_dormant_after` is moved to its Device's installed release
+through exactly the gate of an explicit Reload: the Device is connected, a
+native session is saved, and the authentication and native session contracts
+are unchanged. Nothing is started; the binding change is persisted, and the
+next open resumes the native session on the new release. The same retention
+pass can then retire the old generation. A session that fails the gate keeps
+its generation.
 
 ## Session reclaim on capacity
 

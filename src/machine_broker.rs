@@ -699,6 +699,53 @@ impl Broker {
         });
     }
 
+    /// Permanent deletion must not depend on the worker honouring Stop. A
+    /// systemd worker whose ACP loop never completes otherwise stays alive and
+    /// attached until its next broker reconnect is rejected, possibly hours
+    /// later. Direct workers have the equivalent PID watchdog above.
+    fn arm_deleted_worker_unit_stop(self: &Arc<Self>, session_id: &str) {
+        if self.args.spawn_mode != SpawnMode::SystemdUser {
+            return;
+        }
+        let broker = Arc::clone(self);
+        let session_id = session_id.to_owned();
+        tokio::spawn(async move {
+            tokio::time::sleep(
+                DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT
+                    + DIRECT_WORKER_TERM_TIMEOUT
+                    + DIRECT_WORKER_KILL_TIMEOUT,
+            )
+            .await;
+            if !broker.cancelled_sessions.lock().contains(&session_id) {
+                return;
+            }
+            let unit = worker_unit_name(&broker.args.socket, &session_id);
+            let active = Command::new("systemctl")
+                .args(["--user", "is-active", "--quiet", &unit])
+                .status();
+            match tokio::time::timeout(Duration::from_secs(10), active).await {
+                Ok(Ok(status)) if status.success() => {}
+                _ => return,
+            }
+            tracing::warn!(session = %session_id, "deleted session worker ignored Stop; stopping its unit");
+            let stop = Command::new("systemctl")
+                .args(["--user", "stop", &unit])
+                .status();
+            match tokio::time::timeout(Duration::from_secs(10), stop).await {
+                Ok(Ok(status)) if status.success() => {}
+                Ok(Ok(status)) => {
+                    tracing::warn!(session = %session_id, %status, "stopping deleted worker unit failed")
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(session = %session_id, %error, "stopping deleted worker unit failed")
+                }
+                Err(_) => {
+                    tracing::warn!(session = %session_id, "stopping deleted worker unit timed out")
+                }
+            }
+        });
+    }
+
     /// New prompts wait behind a generation handoff. Cancellation and
     /// permission replies still route to the old worker because they are part
     /// of the in-flight turn that must reach its safe boundary.
@@ -3609,6 +3656,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 // Deletion must still arm the process-group watchdog.
                 broker.arm_direct_worker_stop(&session_id);
             }
+            broker.arm_deleted_worker_unit_stop(&session_id);
             broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
         }
         CoreCommand::SetDesiredGeneration {

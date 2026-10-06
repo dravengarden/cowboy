@@ -3689,6 +3689,63 @@ impl Hub {
         Ok(true)
     }
 
+    /// Move a dormant (exited, workerless) session's binding to another
+    /// installed Provider generation without starting anything. The next open
+    /// launches that generation with the same native resume as an explicit
+    /// reload. Refuses unless the session is still exactly `expected` and
+    /// still exited, so a racing open or prompt always wins.
+    pub fn repin_dormant_provider(
+        &self,
+        expected: &SessionMeta,
+        version: &str,
+        digest: &str,
+        behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    ) -> Result<(), String> {
+        let meta = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(&expected.id)
+                .ok_or_else(|| "session no longer exists".to_owned())?;
+            if session.in_flight || session.meta.status != Status::Exited {
+                return Err("session is no longer dormant".to_owned());
+            }
+            if session.meta.provider != expected.provider
+                || session.meta.provider_version != expected.provider_version
+                || session.meta.provider_generation_digest != expected.provider_generation_digest
+                || session.meta.provider_auth_generation != expected.provider_auth_generation
+                || session.meta.agent_session_id != expected.agent_session_id
+                || session.meta.machine_id != expected.machine_id
+                || session.meta.cwd != expected.cwd
+                || session.meta.execution_binding != expected.execution_binding
+            {
+                return Err("session changed while preparing to re-pin; try again".to_owned());
+            }
+            if !current_context_has_user_message(session) || session.meta.agent_session_id.is_none()
+            {
+                return Err(
+                    "a saved native session is required to change Provider version".to_owned(),
+                );
+            }
+            if session.meta.execution_binding.is_some() {
+                let mut candidate = session.meta.clone();
+                candidate.provider_version = version.to_owned();
+                candidate.provider_generation_digest = digest.to_owned();
+                candidate.provider_behavior = Some(behavior.clone());
+                candidate.require_runtime_launch()?;
+            }
+            session.meta.provider_version = version.to_owned();
+            session.meta.provider_generation_digest = digest.to_owned();
+            session.meta.provider_behavior = Some(behavior.clone());
+            session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
+            session.meta.clone()
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::ReloadProvider(Box::new(meta)));
+        }
+        self.broadcast_sessions();
+        Ok(())
+    }
+
     /// Reserve an idle session for an explicit Provider reload. The lock also
     /// fences prompt submission: a racing prompt either wins and rejects the
     /// reload, or stays queued until the replacement runtime is ready.
@@ -8604,6 +8661,41 @@ mod core_tests {
             hub.session_info(&before.id).unwrap().meta.provider_version,
             "replacement"
         );
+    }
+
+    #[test]
+    fn dormant_repin_changes_only_the_binding_and_only_while_exited() {
+        let (hub, running) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        // A live session is not dormant.
+        assert!(
+            hub.repin_dormant_provider(&running, "new", "new-digest", &behavior)
+                .unwrap_err()
+                .contains("dormant")
+        );
+        hub.set_status(&running.id, Status::Exited, None);
+        let before = hub.session_info(&running.id).unwrap().meta;
+        let mut stale = before.clone();
+        stale.provider_generation_digest = "other".to_owned();
+        assert!(
+            hub.repin_dormant_provider(&stale, "new", "new-digest", &behavior)
+                .unwrap_err()
+                .contains("changed")
+        );
+        hub.repin_dormant_provider(&before, "new", "new-digest", &behavior)
+            .expect("re-pin");
+        let after = hub.session_info(&before.id).unwrap().meta;
+        assert_eq!(after.provider_version, "new");
+        assert_eq!(after.provider_generation_digest, "new-digest");
+        assert_eq!(after.provider_behavior, Some(behavior));
+        assert_eq!(after.status, Status::Exited, "nothing is started");
+        assert_eq!(after.agent_session_id, before.agent_session_id);
+        assert_eq!(
+            after.provider_auth_generation,
+            before.provider_auth_generation
+        );
+        assert_eq!(after.cwd, before.cwd);
+        assert_eq!(after.machine_id, before.machine_id);
     }
 
     #[test]

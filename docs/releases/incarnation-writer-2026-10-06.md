@@ -60,6 +60,19 @@ the unchanged `adopted`/epoch-1 origin of every survivor, not compared directly.
 reset has been observed in production yet. That activation was another task's, not
 this release's.
 
+## Later observation: a minted lineage and four restarts
+
+At the end of 2026-10-06, after three further resident activations by this and other
+tasks (`551474a3`, `933acdd1`, `5d4d0c88`), `cowboy operator durable-state` and the
+files agree: 7 lineages for 7 live workers, all distinct and epoch 1; 6 are `adopted`, the
+set created at this release, so they have outlasted four Machine restarts, and 1 is
+`minted`, the first observed in production, for a Session first declared after this
+release. No lineage exists for any of the 7 durably deleted IDs, none is orphaned, and no
+launch was ever refused for an unconfirmed lineage (zero such journal lines). Still not
+observed in production: a reset rotating a lineage, and a deletion ending one on a live
+Session. Equality of the six original values across the restarts remains inferred, not
+compared, because the first values were not saved.
+
 ## Limits
 
 Nothing reads the lineage: no Controller carriage, stale-observation refusal or
