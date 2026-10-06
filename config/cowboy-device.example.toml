@@ -1,0 +1,14 @@
+# Cowboy device configuration (`cowboy-device.toml`).
+# Every setting is optional; the values below are the defaults.
+# Validate edits with `cowboy config check --scope device`; see docs/configuration.md.
+schema = 1
+
+[capacity]
+# Maximum detached ACP sessions this Device accepts.
+# An explicit --max-sessions / COWBOY_MACHINE_MAX_SESSIONS still takes precedence.
+# integer from 1 to 1024; needs a restart.
+# max_sessions = 8
+# Keep existing sessions alive while refusing new placement.
+# An explicit --draining / COWBOY_MACHINE_DRAINING still takes precedence.
+# boolean (true or false); needs a restart.
+# draining = false

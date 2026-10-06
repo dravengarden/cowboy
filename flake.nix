@@ -86,6 +86,9 @@
           ./Cargo.lock
           ./build.rs
           ./src
+          # Generated configuration templates; a unit test proves they match
+          # the schema in src/config/schema.rs.
+          ./config
           ./migrations
           ./web/src/protocol.ts
           ./contracts/code-buffer-client.fixture.json
@@ -116,6 +119,8 @@
           ./src/lib.rs
           ./src/main.rs
           ./src/cli.rs
+          ./src/config.rs
+          ./src/config
           ./src/logs.rs
           ./src/logs
           ./src/composition
@@ -330,7 +335,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-WCAGYsBytKeg+mYO8W4pd6fi/663ZlKmAiUgRns2Dqs=";
+        hash = "sha256-mYJXQox61ERPCHrvAy7s0/AAvHSWioAiRXt8QQzZalI=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';

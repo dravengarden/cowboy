@@ -333,12 +333,19 @@ pub struct Args {
     /// Unix socket of the Cowboy-managed filesystem/Git adapter payload.
     #[arg(long, env = "COWBOY_MACHINE_CODE_ADAPTER_SOCKET")]
     code_adapter_socket: Option<PathBuf>,
-    /// Maximum detached ACP sessions accepted by this Machine.
-    #[arg(long, env = "COWBOY_MACHINE_MAX_SESSIONS", default_value_t = 8)]
-    max_sessions: u32,
-    /// Keep existing sessions alive while refusing new placement.
-    #[arg(long, env = "COWBOY_MACHINE_DRAINING", default_value_t = false)]
-    draining: bool,
+    /// Maximum detached ACP sessions accepted by this Machine. Overrides the
+    /// Device configuration's `capacity.max_sessions` (default 8).
+    #[arg(long, env = "COWBOY_MACHINE_MAX_SESSIONS")]
+    max_sessions: Option<u32>,
+    /// Keep existing sessions alive while refusing new placement. Overrides
+    /// the Device configuration's `capacity.draining` (default false).
+    #[arg(
+        long,
+        env = "COWBOY_MACHINE_DRAINING",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    draining: Option<bool>,
     /// Mark this authenticated Machine as colocated with the controller for
     /// display and scheduling preference only. Runtime traffic still uses the
     /// normal Machine WebSocket protocol.
@@ -432,6 +439,15 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&preflight)?);
         return Ok(());
     }
+    // An invalid Device configuration refuses startup before any state is
+    // created, so a rolling update keeps the previous instance running.
+    let device_config_path = crate::config::Scope::Device.path_in(&args.state_dir);
+    let device_config = crate::config::Handle::new(crate::config::load(
+        crate::config::Scope::Device,
+        &device_config_path,
+    )?);
+    let _device_config_watch =
+        device_config.watch(crate::config::Scope::Device, device_config_path);
     let runtime_socket = args.socket.clone();
     let bootstrap_acp_generation = if args.desired_generation.is_empty() {
         env!("CARGO_PKG_VERSION").to_owned()
@@ -599,9 +615,18 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         code_adapter_socket: code_adapter_socket.clone(),
         worktree_roots: worktree_roots.clone(),
         state_dir: args.state_dir.clone(),
+        // Explicit command-line or environment values win over the file.
         capacity: MachineCapacity {
-            max_sessions: args.max_sessions.max(1),
-            draining: args.draining,
+            max_sessions: args
+                .max_sessions
+                .unwrap_or_else(|| {
+                    u32::try_from(device_config.get(&crate::config::schema::DEVICE_MAX_SESSIONS))
+                        .unwrap_or(u32::MAX)
+                })
+                .max(1),
+            draining: args
+                .draining
+                .unwrap_or_else(|| device_config.get(&crate::config::schema::DEVICE_DRAINING)),
         },
         local: args.local,
         provider_usage: provider_usage.clone(),

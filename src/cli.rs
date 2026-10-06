@@ -26,6 +26,9 @@ pub struct Cli {
 enum Command {
     /// Query, aggregate and analyze `OTel` evidence where it is stored.
     Logs(Box<crate::logs::cli::LogsArgs>),
+    /// Inspect, validate and safely change the Service or Device configuration
+    /// file. See docs/configuration.md.
+    Config(crate::config::cli::ConfigArgs),
     /// Run the cowboy daemon (HTTP + WebSocket). The long-running systemd
     /// service that owns the Hub + supervisor; every surface (Web UI, phone,
     /// native shell) connects to it as a client.
@@ -475,6 +478,7 @@ impl Cli {
         let _ = rustls::crypto::ring::default_provider().install_default();
         match self.command {
             Command::Logs(args) => args.run().await,
+            Command::Config(args) => args.run(),
             #[cfg(feature = "full")]
             Command::Serve(args) => crate::server::serve(*args).await,
             #[cfg(feature = "full")]
