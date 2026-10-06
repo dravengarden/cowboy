@@ -19,6 +19,13 @@ const CARGO_CACHE_TAG_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806
 const MAX_CARGO_CACHE_TAG_BYTES: u64 = 8192;
 const MAX_CLEANUP_DIRECTORIES: usize = 100_000;
 const MAX_CLEANUP_TARGETS: usize = 128;
+/// Wall-clock budget of one cleanup pass's read-only scan. The scan keeps no
+/// progress between passes, so a short budget could stop a very large tree from
+/// ever being scanned; this only bounds how long one pass can hold its caller.
+const CLEANUP_SCAN_BUDGET: Duration = Duration::from_secs(300);
+/// Wall-clock budget of one pass's removal phase. Progress persists in the retry
+/// plan and in the directory itself, so an expired pass is retried and continues.
+const CLEANUP_REMOVAL_BUDGET: Duration = Duration::from_secs(30);
 #[cfg(target_os = "linux")]
 const MAX_CLEANUP_CONTENT_DEPTH: usize = 64;
 #[cfg(target_os = "linux")]
@@ -495,7 +502,25 @@ pub struct CleanupWorkspace {
     cwd: PathBuf,
     directory: Arc<File>,
     cleanup_plan: Arc<parking_lot::Mutex<Option<CleanupPlan>>>,
+    /// Deadline of the phase the current pass is in; `None` outside a pass.
+    pass_deadline: Arc<parking_lot::Mutex<Option<std::time::Instant>>>,
+    removal_budget: Duration,
+    scan_budget: Duration,
 }
+
+/// A cleanup pass used up its time budget at a point where stopping is safe. This
+/// is an ordinary retryable failure, not a change of the observed root or target:
+/// nothing was rolled back, and a retry continues from what is already removed.
+#[derive(Debug)]
+pub struct CleanupDeadlineExceeded;
+
+impl std::fmt::Display for CleanupDeadlineExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("cleanup pass used its time budget; retrying with its progress kept")
+    }
+}
+
+impl std::error::Error for CleanupDeadlineExceeded {}
 
 #[derive(Debug)]
 pub struct CleanupRootChanged;
@@ -509,6 +534,26 @@ impl std::fmt::Display for CleanupRootChanged {
 impl std::error::Error for CleanupRootChanged {}
 
 impl CleanupWorkspace {
+    fn start_phase(&self, budget: Duration) {
+        *self.pass_deadline.lock() = Some(std::time::Instant::now() + budget);
+    }
+
+    fn end_pass(&self) {
+        *self.pass_deadline.lock() = None;
+    }
+
+    /// Checked only between bounded steps (a directory, a content entry, a target),
+    /// never inside marker finalization. A syscall that never returns is not
+    /// interrupted by this: it bounds long walks, not a hung filesystem.
+    fn check_budget(&self) -> Result<()> {
+        match *self.pass_deadline.lock() {
+            Some(deadline) if std::time::Instant::now() >= deadline => {
+                Err(CleanupDeadlineExceeded.into())
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn access_root(&self, logical_root: &Path) -> PathBuf {
         directory_access_root(&self.directory, logical_root)
     }
@@ -635,6 +680,9 @@ pub fn capture_cleanup_workspace(
         cwd,
         directory: Arc::new(directory),
         cleanup_plan: Arc::new(parking_lot::Mutex::new(None)),
+        pass_deadline: Arc::new(parking_lot::Mutex::new(None)),
+        removal_budget: CLEANUP_REMOVAL_BUDGET,
+        scan_budget: CLEANUP_SCAN_BUDGET,
     };
     workspace.verify()?;
     Ok(workspace)
@@ -764,34 +812,40 @@ fn cleanup_build_artifacts_sync_with_hook(
 ) -> Result<Vec<PathBuf>> {
     // Serialize cloned callers; a failed scan admits no plan or cleanup effects.
     let mut retained_plan = workspace.cleanup_plan.lock();
-    workspace.verify()?;
-    let session_root = validated_cleanup_root(
-        &workspace.worktree_root,
-        &workspace.session_id,
-        &workspace.cwd,
-    )?;
-    workspace.verify()?;
+    let outcome = (|| {
+        workspace.verify()?;
+        let session_root = validated_cleanup_root(
+            &workspace.worktree_root,
+            &workspace.session_id,
+            &workspace.cwd,
+        )?;
+        workspace.verify()?;
 
-    let access_root = workspace.access_root(&session_root);
-    if retained_plan.is_none() {
-        *retained_plan = Some(CleanupPlan::new(scan_cleanup_targets(
+        let access_root = workspace.access_root(&session_root);
+        if retained_plan.is_none() {
+            workspace.start_phase(workspace.scan_budget);
+            *retained_plan = Some(CleanupPlan::new(scan_cleanup_targets(
+                workspace,
+                &access_root,
+            )?));
+        }
+        workspace.start_phase(workspace.removal_budget);
+        let result = remove_cleanup_plan(
             workspace,
+            &session_root,
             &access_root,
-        )?));
-    }
-    let result = remove_cleanup_plan(
-        workspace,
-        &session_root,
-        &access_root,
-        retained_plan.as_mut().expect("cleanup plan initialized"),
-        before_child_remove,
-    );
-    if result.is_ok() {
-        // Explicit later invocations can observe newly rebuilt targets; the
-        // deletion broker drops this workspace after successful completion.
-        *retained_plan = None;
-    }
-    result
+            retained_plan.as_mut().expect("cleanup plan initialized"),
+            before_child_remove,
+        );
+        if result.is_ok() {
+            // Explicit later invocations can observe newly rebuilt targets; the
+            // deletion broker drops this workspace after successful completion.
+            *retained_plan = None;
+        }
+        result
+    })();
+    workspace.end_pass();
+    outcome
 }
 
 fn scan_cleanup_targets(
@@ -803,6 +857,7 @@ fn scan_cleanup_targets(
     let mut visited = 0_usize;
     while let Some(directory) = pending.pop() {
         workspace.verify()?;
+        workspace.check_budget()?;
         visited = visited.saturating_add(1);
         if visited > MAX_CLEANUP_DIRECTORIES {
             bail!("session worktree cleanup exceeded {MAX_CLEANUP_DIRECTORIES} directories");
@@ -927,6 +982,7 @@ fn remove_cleanup_plan(
     #[cfg(target_os = "linux")]
     let mut content_entries = 0;
     while let Some(target) = plan.targets.get(plan.completed.len()) {
+        workspace.check_budget()?;
         target.verify(workspace)?;
         #[cfg(target_os = "linux")]
         let needs_markers = plan.finalization.is_none();
@@ -1174,6 +1230,7 @@ fn clear_cleanup_directory(
         if *entries > MAX_CLEANUP_CONTENT_ENTRIES {
             bail!("Cargo cleanup exceeded {MAX_CLEANUP_CONTENT_ENTRIES} content entries");
         }
+        workspace.check_budget()?;
         verify_cleanup_content_directory(workspace, target, directory, relative)?;
         let name = entry.file_name();
         if relative.as_os_str().is_empty()
@@ -2209,6 +2266,145 @@ mod tests {
                 assert!(target.join("debug/deps/libtest.rlib").is_file(), "{case}");
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn many_file_target(session: &Path, files: usize) -> PathBuf {
+        let target = session.join("target");
+        write_cargo_target(&target);
+        for index in 0..files {
+            std::fs::write(target.join(format!("debug/deps/f{index}")), "generated").unwrap();
+        }
+        target
+    }
+
+    #[cfg(target_os = "linux")]
+    fn remaining_files(target: &Path) -> usize {
+        std::fs::read_dir(target.join("debug/deps"))
+            .unwrap()
+            .count()
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_expired_removal_budget_stops_safely_keeps_progress_and_a_retry_finishes() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-budget");
+        let target = many_file_target(&session, 200);
+        let total = remaining_files(&target);
+        let mut workspace = capture_cleanup_workspace(&managed, "sess-budget", &session).unwrap();
+        workspace.removal_budget = Duration::from_secs(600);
+
+        // The budget runs out part-way through, deterministically: on the tenth
+        // removal the pass's deadline becomes "now", with no dependence on load.
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = cleanup_build_artifacts_sync_with_hook(&workspace, &|_| {
+            if calls.fetch_add(1, Ordering::SeqCst) + 1 == 10 {
+                *workspace.pass_deadline.lock() = Some(std::time::Instant::now());
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(
+            error.downcast_ref::<CleanupDeadlineExceeded>().is_some(),
+            "{error:#}"
+        );
+        // It is an ordinary retryable failure, never a root or target change.
+        assert!(error.downcast_ref::<CleanupRootChanged>().is_none());
+        assert!(error.downcast_ref::<CleanupTargetChanged>().is_none());
+        let remaining = remaining_files(&target);
+        assert!(remaining > 0 && remaining < total, "remaining {remaining}");
+        // Markers are only finalized after the content walk succeeds, so the
+        // target is still eligible, and the retry plan and handles are retained.
+        assert!(target.join(".rustc_info.json").is_file());
+        assert!(target.join("CACHEDIR.TAG").is_file());
+        assert!(workspace.cleanup_plan.lock().is_some());
+        assert!(workspace.pass_deadline.lock().is_none());
+
+        // A fresh budget continues from what is already gone and completes.
+        workspace.removal_budget = Duration::from_secs(60);
+        let removed = cleanup_build_artifacts_sync(&workspace).unwrap();
+        assert_eq!(removed, vec![target.clone()]);
+        assert!(target.is_dir());
+        assert_only_directories(&target);
+        assert!(!target.join(".rustc_info.json").exists());
+        assert!(workspace.cleanup_plan.lock().is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_expired_scan_budget_fails_before_any_effect_and_keeps_no_plan() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-scan-budget");
+        let target = many_file_target(&session, 20);
+        let before = remaining_files(&target);
+        let mut workspace =
+            capture_cleanup_workspace(&managed, "sess-scan-budget", &session).unwrap();
+        workspace.scan_budget = Duration::ZERO;
+        let error = cleanup_build_artifacts_sync(&workspace).unwrap_err();
+        assert!(error.downcast_ref::<CleanupDeadlineExceeded>().is_some());
+        assert_eq!(remaining_files(&target), before);
+        assert!(target.join("CACHEDIR.TAG").is_file());
+        assert!(workspace.cleanup_plan.lock().is_none());
+        assert!(workspace.pass_deadline.lock().is_none());
+        // The scan keeps no progress, so the next pass starts over and succeeds.
+        workspace.scan_budget = Duration::from_secs(60);
+        assert_eq!(
+            cleanup_build_artifacts_sync(&workspace).unwrap(),
+            vec![target.clone()]
+        );
+        assert_only_directories(&target);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_spent_removal_budget_removes_nothing_and_the_plan_keeps_the_scan() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-target-budget");
+        let target = many_file_target(&session, 10);
+        let total = remaining_files(&target);
+        let mut workspace =
+            capture_cleanup_workspace(&managed, "sess-target-budget", &session).unwrap();
+        workspace.removal_budget = Duration::ZERO;
+        let invoked = std::sync::atomic::AtomicBool::new(false);
+        let error = cleanup_build_artifacts_sync_with_hook(&workspace, &|_| {
+            invoked.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.downcast_ref::<CleanupDeadlineExceeded>().is_some());
+        // Nothing was touched, but the completed scan is kept for the retry. The
+        // first content entry stops it; the check before each target is a
+        // defensive duplicate, since every target has at least its two markers.
+        assert!(!invoked.load(Ordering::SeqCst));
+        assert_eq!(remaining_files(&target), total);
+        assert!(workspace.cleanup_plan.lock().is_some());
+        workspace.removal_budget = Duration::from_secs(60);
+        assert_eq!(
+            cleanup_build_artifacts_sync(&workspace).unwrap(),
+            vec![target.clone()]
+        );
+        assert_only_directories(&target);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_default_budgets_leave_ordinary_cleanup_untouched() {
+        let temp = TestDir::new();
+        let managed = temp.0.join("managed");
+        let session = managed.join("sess-default-budget");
+        let target = many_file_target(&session, 50);
+        let workspace =
+            capture_cleanup_workspace(&managed, "sess-default-budget", &session).unwrap();
+        assert_eq!(workspace.scan_budget, CLEANUP_SCAN_BUDGET);
+        assert_eq!(workspace.removal_budget, CLEANUP_REMOVAL_BUDGET);
+        assert_eq!(
+            cleanup_build_artifacts_sync(&workspace).unwrap(),
+            vec![target]
+        );
     }
 
     #[test]
