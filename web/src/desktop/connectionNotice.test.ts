@@ -32,6 +32,7 @@ Deno.test("an unanswered server names the thing to check and when it retries", (
       "The network is up but the server is not answering. Check the VPN or the server.",
     meta:
       "Retrying in 5 s · last synced 2 min ago · 2 messages will send automatically",
+    countdown: "Retrying in 5 s",
     canRetry: true,
   });
 });
@@ -78,6 +79,7 @@ Deno.test("recovery flashes a quiet confirmation without actions", () => {
     title: "Reconnected",
     hint: null,
     meta: null,
+    countdown: null,
     canRetry: false,
   });
 });

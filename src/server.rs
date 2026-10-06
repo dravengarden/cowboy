@@ -19715,7 +19715,7 @@ fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
 }
 
 fn handle_command(
-    state: &AppState,
+    state: &Arc<AppState>,
     principal: &ProductPrincipal,
     text: &str,
     held: &mut HashMap<String, (String, u64)>,
@@ -20061,7 +20061,15 @@ fn handle_command(
                 // toast is broadcast (which would otherwise read as a hard
                 // failure).
                 match state.supervisor.ensure_alive(&session_id) {
-                    Ok(_) => Ok(()),
+                    Ok(revived) => {
+                        if revived {
+                            tokio::spawn(session_reclaim::rebalance_after_wake(
+                                Arc::clone(state),
+                                session_id.clone(),
+                            ));
+                        }
+                        Ok(())
+                    }
                     Err(e) => {
                         tracing::warn!(
                             session_id = %session_id,

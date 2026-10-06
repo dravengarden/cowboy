@@ -1,4 +1,4 @@
-// The Desktop connection notice: what the strip above the composer says while
+// The Desktop connection notice: what the Prompt header chip says while
 // the Cowboy server cannot be used (docs/offline-first-sync.md §Desktop). The
 // status line segment stays the always-present indicator; this strip is where
 // the eyes are when writing and sending, so a lasting outage is visible there.
@@ -17,6 +17,8 @@ export interface ConnectionNotice {
   readonly hint: string | null;
   /** Retry countdown, last sync age and queued count, already joined. */
   readonly meta: string | null;
+  /** The retry countdown alone, for the one-line header chip. */
+  readonly countdown: string | null;
   readonly canRetry: boolean;
 }
 
@@ -59,6 +61,7 @@ export function connectionNotice(
       title: "Reconnected",
       hint: null,
       meta: null,
+      countdown: null,
       canRetry: false,
     };
   }
@@ -74,11 +77,10 @@ export function connectionNotice(
     ? "Offline"
     : syncStatusLabel(status, now) ?? "Reconnecting…";
   const meta: string[] = [];
-  if (status.retryAt !== undefined && status.retryAt > now + 1_000) {
-    meta.push(
-      `Retrying in ${String(Math.ceil((status.retryAt - now) / 1000))} s`,
-    );
-  }
+  const countdown = status.retryAt !== undefined && status.retryAt > now + 1_000
+    ? `Retrying in ${String(Math.ceil((status.retryAt - now) / 1000))} s`
+    : null;
+  if (countdown !== null) meta.push(countdown);
   const synced = relativeAge(status.lastLiveAt, now);
   if (synced !== null) meta.push(`last synced ${synced}`);
   const pending = status.outbox.pending;
@@ -95,6 +97,7 @@ export function connectionNotice(
     title,
     hint: hintFor(status.phase),
     meta: joined.charAt(0).toUpperCase() + joined.slice(1),
+    countdown,
     canRetry: true,
   };
 }

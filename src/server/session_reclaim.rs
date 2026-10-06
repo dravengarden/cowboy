@@ -49,6 +49,93 @@ pub(super) fn choose(candidates: &[Candidate], min_idle: Duration) -> Option<&st
         .map(|candidate| candidate.id.as_str())
 }
 
+/// After an open has revived `opened`, the session to hibernate so the Device
+/// returns to its capacity: only when the Device now holds more workers than
+/// `max_sessions`, and never the session that was just opened.
+pub(super) fn choose_after_wake<'a>(
+    candidates: &'a [Candidate],
+    opened: &str,
+    max_sessions: usize,
+    min_idle: Duration,
+) -> Option<&'a str> {
+    let active = candidates
+        .iter()
+        .filter(|candidate| candidate.holds_slot)
+        .count();
+    if active <= max_sessions {
+        return None;
+    }
+    let others = candidates
+        .iter()
+        .filter(|candidate| candidate.id != opened)
+        .cloned()
+        .collect::<Vec<_>>();
+    let chosen = choose(&others, min_idle)?.to_owned();
+    candidates
+        .iter()
+        .find(|candidate| candidate.id == chosen)
+        .map(|candidate| candidate.id.as_str())
+}
+
+/// Opening a hibernated session revives it even on a full Device, because the
+/// Machine treats capacity as advisory. With `sessions.reclaim_on_capacity`,
+/// hibernate one other eligible idle session afterwards so the slot count
+/// returns to the limit. Best effort: it never delays or refuses the open.
+pub(super) async fn rebalance_after_wake(state: Arc<AppState>, opened: String) {
+    if !state
+        .service_config
+        .get(&crate::config::schema::SESSIONS_RECLAIM_ON_CAPACITY)
+    {
+        return;
+    }
+    let Some(machine_id) = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|session| session.id == opened)
+        .map(|session| session.machine_id)
+    else {
+        return;
+    };
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    let Ok(machines) = store.list_machines().await else {
+        return;
+    };
+    let Some(machine) = machines
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)
+    else {
+        return;
+    };
+    let capacity: crate::machine_protocol::MachineCapacity = machine
+        .inventory
+        .get("capacity")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    let min_idle = state
+        .service_config
+        .get(&crate::config::schema::SESSIONS_RECLAIM_MIN_IDLE);
+    let candidates = candidates(&state, &machine_id);
+    let Some(chosen) = choose_after_wake(
+        &candidates,
+        &opened,
+        capacity.max_sessions as usize,
+        min_idle,
+    )
+    .map(str::to_owned) else {
+        return;
+    };
+    match state.supervisor.hibernate_session(&chosen) {
+        Ok(()) => tracing::info!(machine = %machine_id, opened = %opened, session = %chosen,
+            "hibernating the longest-idle session to return a woken Device to capacity"),
+        Err(error) => tracing::warn!(machine = %machine_id, session = %chosen, %error,
+            "could not hibernate a session after a wake exceeded capacity"),
+    }
+}
+
 fn candidates(state: &AppState, machine_id: &str) -> Vec<Candidate> {
     state
         .hub
@@ -140,6 +227,28 @@ mod tests {
         assert_eq!(choose(&sessions, hour), Some("old"));
         assert_eq!(choose(&[idle("recent", 59)], hour), None);
         assert_eq!(choose(&[], hour), None);
+    }
+
+    #[test]
+    fn a_wake_reclaims_only_when_over_capacity_and_never_the_opened_session() {
+        let hour = Duration::from_hours(1);
+        let opened = Candidate {
+            status: Status::Starting,
+            ..idle("opened", 900)
+        };
+        let sessions = [opened, idle("old", 300), idle("older", 600)];
+        // Three workers against a limit of three: nothing to do.
+        assert_eq!(choose_after_wake(&sessions, "opened", 3, hour), None);
+        // Over the limit: the longest-idle other session, never the one opened.
+        assert_eq!(
+            choose_after_wake(&sessions, "opened", 2, hour),
+            Some("older")
+        );
+        let only_opened = [Candidate {
+            status: Status::Running,
+            ..idle("opened", 900)
+        }];
+        assert_eq!(choose_after_wake(&only_opened, "opened", 0, hour), None);
     }
 
     #[test]
