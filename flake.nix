@@ -125,6 +125,7 @@
           ./src/execution_environment.rs
           ./src/execution_protocol.rs
           ./src/execution_host.rs
+          ./src/execution_target_environment.rs
           ./src/execution_host
           ./src/bin/cowboy-execution-host.rs
           ./src/code_buffer_read.rs
