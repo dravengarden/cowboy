@@ -99,15 +99,34 @@ walk, not a guarantee that concurrent writers have left the directory empty.
 This is ordered process-local finalization, not a transaction or crash-resume
 journal. Progress does not survive resident restart. Marker removals and the
 final identity comparison/name unlink are not atomic; concurrent contents and
-same-node marker mutations are not frozen. General I/O deadlines remain outside
-this guarantee. Non-Linux ordering and pathname fallback remain unchanged.
+same-node marker mutations are not frozen. A hung filesystem call is outside this
+guarantee (see the pass budget below). Non-Linux ordering and pathname fallback
+remain unchanged.
 
 Removal admits at most 64 descendant levels and one million content entries
 across all candidate targets in one pass. It retains the target and descendant
 directory structure: no final directory-name unlink follows an identity check.
 Actual fixtures verify retained descendant inodes, removal of file links without
 touching their referents, replacement after the leaf check, and the 64/65-level
-boundary. Bounds can refuse after partial effects and do not impose I/O deadlines.
+boundary. Bounds can refuse after partial effects.
+
+### Pass time budget
+
+One cleanup pass has a wall-clock budget: 5 minutes for the read-only scan and 30
+seconds for the removal phase. Time is checked only between bounded steps: before
+each scanned directory, before each content entry, and before each target.
+It is never checked inside marker finalization, so the two-marker progress record
+cannot be cut between its steps. An expired pass fails with
+`CleanupDeadlineExceeded`, which is an ordinary retryable failure and not a
+`CleanupRootChanged`/`CleanupTargetChanged`: nothing is rolled back, the retry
+plan and handles are kept, files already removed stay removed, and the broker
+retries with its normal backoff, releasing the handles after eight consecutive
+failures of a nominated Session. The scan keeps no progress between passes, which
+is why its budget is generous: a short one could stop a very large tree from ever
+being scanned. The budget bounds how long a pass holds the Session's lifecycle gate
+and a blocking thread over a long walk. It does not interrupt a system call that
+never returns (a dead network mount, say), and non-Linux pathname fallback checks
+only the scan and the gaps between targets. Bounds count entries; this bounds time.
 
 Cleanup clears eligible files and retains directory structure on Linux. Non-Linux
 Unix retains only the target itself and its previous recursive pathname fallback.
@@ -136,7 +155,7 @@ still not atomic: a
 replacement nondirectory in the original held parent can be unlinked. A rename
 after verification may permit effects on the held original object before refusal;
 there is no claim of an atomic tree snapshot or a freeze on mounts/renames.
-General I/O deadlines and continuous launch-time ownership remain separate gaps.
+A hung system call and continuous launch-time ownership remain separate gaps.
 Non-Linux Unix targets retain pathname content access with identity checks and
 do not claim Linux descriptor anchoring. A refusal may follow removal of some
 original contents; prior effects are not rolled back.

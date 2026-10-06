@@ -6982,6 +6982,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_expired_cleanup_budget_is_retried_not_retired_as_a_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let managed = temp.path().join("worktrees");
+        let workspace = managed.join("sess-slow");
+        write_continuation_target(&workspace);
+        let broker = continuation_broker(temp.path(), true);
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-slow".to_owned());
+        broker.deleted_session_workspaces.lock().insert(
+            "sess-slow".to_owned(),
+            DeletedWorkspace {
+                workspace: crate::session_workspace::capture_cleanup_workspace(
+                    &managed,
+                    "sess-slow",
+                    &workspace,
+                )
+                .unwrap()
+                .with_removal_budget(Duration::ZERO),
+                command_id: "delete".into(),
+            },
+        );
+        let task = broker.cleanup_deleted_session("sess-slow", "delete");
+        // Long enough for the first failing pass, short of its one-second backoff.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        // The workspace stays registered and the task keeps retrying: a spent
+        // budget is neither a root nor a target change, so cleanup is not retired.
+        assert!(!task.is_finished());
+        assert!(
+            broker
+                .deleted_session_workspaces
+                .lock()
+                .contains_key("sess-slow")
+        );
+        assert!(workspace.join("target/debug/artifact").is_file());
+        assert!(workspace.join("target/CACHEDIR.TAG").is_file());
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn replaced_root_retires_the_continuation_without_touching_either_tree() {
         let temp = tempfile::tempdir().unwrap();
         let managed = temp.path().join("worktrees");

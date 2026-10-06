@@ -102,8 +102,10 @@ are not reconstructed.
   bounds how long one failing Session holds handles; there is still no global
   cap across Sessions, and a persistently failing nominated Session is retried
   only at restarts.
-- No general filesystem I/O deadline is added. Resume merely bounds how long one
-  Session delays the start of the next.
+- Each cleanup pass now has a wall-clock budget (see the
+  [pass time budget](plugin-session-cleanup-targets.md#pass-time-budget)); a hung system
+  call is still not interrupted. Resume separately bounds how long one Session
+  delays the start of the next.
 - A worktree that was deleted and recreated while a resident was down is
   preserved, not adopted. A worktree that is never deleted keeps its artifacts.
 - There is no cross-Machine or portable writer admission, power-loss proof or

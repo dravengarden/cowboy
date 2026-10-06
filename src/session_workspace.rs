@@ -534,6 +534,13 @@ impl std::fmt::Display for CleanupRootChanged {
 impl std::error::Error for CleanupRootChanged {}
 
 impl CleanupWorkspace {
+    /// Test seam for a pass whose removal budget is already spent.
+    #[cfg(test)]
+    pub(crate) fn with_removal_budget(mut self, budget: Duration) -> Self {
+        self.removal_budget = budget;
+        self
+    }
+
     fn start_phase(&self, budget: Duration) {
         *self.pass_deadline.lock() = Some(std::time::Instant::now() + budget);
     }
