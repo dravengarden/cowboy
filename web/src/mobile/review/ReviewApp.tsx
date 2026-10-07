@@ -1947,6 +1947,7 @@ export function DocumentView({
               <Markdown
                 text={displayText}
                 touchWrap={settings.markdownSoftWrap}
+                frontmatter
                 onLinkClick={onMarkdownLink}
               />
             </Box>

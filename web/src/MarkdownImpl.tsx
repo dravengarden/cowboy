@@ -31,9 +31,6 @@ import {
 import { Box, IconButton, Link, useMediaQuery, useTheme } from "@mui/material";
 import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkFrontmatter from "remark-frontmatter";
-import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { ProtectedImageLightbox as ImageLightbox } from "./ProtectedImageLightbox";
@@ -59,7 +56,7 @@ import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
 import { fencedCodeIsOpen } from "./markdownFence";
 import { normalizeMarkdownMath } from "./markdownMath";
 import { bindMarkdownTableFit, markdownTableFitSx } from "./markdownTableFit";
-import remarkLineBreakTags from "./markdownLineBreaks";
+import { markdownRemarkPlugins } from "./markdownPlugins";
 
 // Extend Prism's Bash grammar inside the already-lazy Markdown bundle. Tool
 // cards only import SHELL_SYNTAX_LANGUAGE, so this semantic enhancement never
@@ -645,6 +642,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
   centerCopy = false,
   touchWrap = false,
   streaming = false,
+  frontmatter = false,
   onLinkClick,
 }: {
   /** Raw markdown source. */
@@ -656,6 +654,9 @@ const MarkdownImpl = memo(function MarkdownImpl({
   invert?: boolean;
   centerCopy?: boolean;
   touchWrap?: boolean;
+  /** Parse leading YAML front matter (Markdown files only). Chat prose keeps
+   *  it off: a reply shaped `---\n\ntext\n\n---` would otherwise vanish. */
+  frontmatter?: boolean;
   /** Claim a link before it is opened as a web address. Return true when the
    *  host navigated instead; the anchor's default and the external opener are
    *  both suppressed. Omit for ordinary prose (the transcript). */
@@ -914,7 +915,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
         }}
       >
         <ReactMarkdown
-          remarkPlugins={[remarkFrontmatter, remarkGfm, remarkMath, remarkLineBreakTags]}
+          remarkPlugins={markdownRemarkPlugins(frontmatter)}
           rehypePlugins={[rehypeKatex]}
           components={components}
         >

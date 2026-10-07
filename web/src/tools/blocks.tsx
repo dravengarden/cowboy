@@ -759,7 +759,7 @@ export function OutputBlocks({
         // should still use the document renderer in Formatted mode.
         rendered.push(
           lang === "markdown"
-            ? <Collapsible key={i} maxHeight={300}><Markdown text={text} /></Collapsible>
+            ? <Collapsible key={i} maxHeight={300}><Markdown text={text} frontmatter /></Collapsible>
             : <PreBlock key={i} text={text} maxHeight={420} />,
         );
       }
@@ -781,6 +781,7 @@ export function OutputBlocks({
               : source
               ? "```" + lang + "\n" + text + "\n```"
               : withFenceLang(text, lang)}
+            frontmatter={markdownDocument}
           />
         </Collapsible>,
       );
