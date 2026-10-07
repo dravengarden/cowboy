@@ -723,6 +723,15 @@ Gaps:
 - Without `pdfinfo` on the target the page count is unknown and the PDF is
   sent whole, as natively when `pdfinfo` is missing.
 
+The [3.13.0 release receipt](experiments/claude-pdf-reads-release-2026-10-07.json)
+binds commit `c76059fe` (release commit `3d73db7f`) and artifact
+`sha256:9f83a86e1b837f4cb6eddf3b0f22d001b749d653ed4a7c5e3e7b5a3e1993d832`.
+It records 80 accepted checks on the exact signed package, 3.12.0/3.13.0
+coexistence, Linux and actual macOS probes, three Controller reader roles,
+five public artifact digests and Catalog `ready`. OVH operation
+`ovh-claude-code-3-13-0-converge` completed: 3.13.0 active, 3.12.0 retained
+for rollback, no session leases, no live session restarted.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
