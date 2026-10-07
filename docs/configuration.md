@@ -124,6 +124,8 @@ as a deprecated override for one release.
 | Service | `plugins.urgent_retention_cooldown` | `"1h"` | live |
 | Service | `plugins.repin_dormant_sessions` | `false` | live |
 | Service | `plugins.repin_dormant_after` | `"7d"` | live |
+| Service | `plugins.auto_update_idle_sessions` | `false` | live |
+| Service | `plugins.auto_update_idle_after` | `"1h"` | live |
 | Service | `sessions.reclaim_on_capacity` | `false` | live |
 | Service | `sessions.reclaim_min_idle` | `"1h"` | live |
 | Device | `capacity.max_sessions` | `8` | restart |
@@ -150,6 +152,21 @@ are unchanged. Nothing is started; the binding change is persisted, and the
 next open resumes the native session on the new release. The same retention
 pass can then retire the old generation. A session that fails the gate keeps
 its generation.
+
+## Idle session Provider updates
+
+Re-pinning covers sessions without a worker. A session that keeps an idle
+worker still holds its generation, so with frequent releases the retained
+generations grow with the number of long-lived sessions. Off by default; with
+`plugins.auto_update_idle_sessions = true`, every running, idle, non-system
+session with no event for `plugins.auto_update_idle_after` moves to its
+Device's newer installed release. It uses the existing per-session automatic
+update path: the explicit Reload gate (connected Device, saved native session,
+unchanged authentication and native contract), a recheck of the exact binding
+and idle state under the Hub lock, native resume, and never a downgrade or
+pre-release. A session that opted in individually still updates as soon as it
+is idle. Together with re-pinning, a generation is retained only while a
+recently active session uses it.
 
 ## Session reclaim on capacity
 

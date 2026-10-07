@@ -20,6 +20,10 @@ pub const PLUGIN_REPIN_DORMANT_SESSIONS: Key<bool> =
     Key::new(Scope::Service, "plugins.repin_dormant_sessions");
 pub const PLUGIN_REPIN_DORMANT_AFTER: Key<Duration> =
     Key::new(Scope::Service, "plugins.repin_dormant_after");
+pub const PLUGIN_AUTO_UPDATE_IDLE_SESSIONS: Key<bool> =
+    Key::new(Scope::Service, "plugins.auto_update_idle_sessions");
+pub const PLUGIN_AUTO_UPDATE_IDLE_AFTER: Key<Duration> =
+    Key::new(Scope::Service, "plugins.auto_update_idle_after");
 pub const SESSIONS_RECLAIM_ON_CAPACITY: Key<bool> =
     Key::new(Scope::Service, "sessions.reclaim_on_capacity");
 pub const SESSIONS_RECLAIM_MIN_IDLE: Key<Duration> =
@@ -62,6 +66,23 @@ pub static SERVICE_FIELDS: &[Field] = &[
         default: Value::Duration(Duration::from_hours(7 * 24)),
         reload: Reload::Live,
         doc: "How long a session must stay dormant before it is re-pinned. Measured\nacross Controller restarts from the first retention pass that saw it dormant.",
+    },
+    Field {
+        key: "plugins.auto_update_idle_sessions",
+        kind: Kind::Bool,
+        default: Value::Bool(false),
+        reload: Reload::Live,
+        doc: "Move every running, idle, non-system session to its Device's newer\ninstalled Provider release once it has had no event for\n`plugins.auto_update_idle_after`, through the same gate and native resume as\nan explicit Reload. Sessions that opted in individually update as before.",
+    },
+    Field {
+        key: "plugins.auto_update_idle_after",
+        kind: Kind::Duration {
+            min: Duration::from_mins(5),
+            max: Duration::from_hours(7 * 24),
+        },
+        default: Value::Duration(Duration::from_hours(1)),
+        reload: Reload::Live,
+        doc: "Idle time before the fleet policy updates a session. Keep it at or above the\nlongest Provider prompt-cache lifetime so the next prompt costs nothing extra.",
     },
     Field {
         key: "sessions.reclaim_on_capacity",

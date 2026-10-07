@@ -35,7 +35,10 @@ fn unchanged_effective_roles_survive_unrelated_settings_and_other_users() {
     let hub = Hub::new();
     set(&hub, AdminRole::Operator);
     let original = hub.observe_product_permissions("user").unwrap();
-    hub.set_setting("unrelated".into(), json!("changed"));
+    hub.set_setting(
+        crate::core::settings_keys::SESSION_DORMANT_SINCE.into(),
+        json!({}),
+    );
     hub.set_setting(
         PERMISSIONS_SETTING.into(),
         json!({"default_role":"viewer","grants":[

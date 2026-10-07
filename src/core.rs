@@ -33,6 +33,7 @@ pub(crate) use product_permissions::ProductPermissionObservation;
 mod persistence_queue;
 pub(crate) use persistence_queue::NORMAL_BYTES as STORE_BATCH_MAX_BYTES;
 pub use persistence_queue::{PersistenceHealth, StoreReceiver, StoreSink};
+pub mod settings_keys;
 
 /// How many recent events a fresh client gets over WS (the live tail). Older
 /// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
@@ -2862,7 +2863,16 @@ impl Hub {
         value: serde_json::Value,
         _snapshot: HashMap<String, serde_json::Value>,
     ) {
-        if let Some(tx) = self.inner.store_tx.as_ref() {
+        // The store rejects unregistered keys deterministically; enqueueing
+        // one would only exhaust retries and mark persistence degraded.
+        let persisted = settings_keys::is_persisted_setting_key(&key);
+        debug_assert!(
+            persisted,
+            "Hub setting {key:?} is not registered in core::settings_keys"
+        );
+        if !persisted {
+            tracing::error!(key, "refusing to persist an unregistered Hub setting");
+        } else if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::PutSetting { key, value });
         }
         // Settings is a compatibility tombstone. Never expose internal auth or
