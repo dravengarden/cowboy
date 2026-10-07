@@ -1826,6 +1826,9 @@ impl Broker {
         }
         if self.launching.lock().contains(&session_id) {
             self.resetting_sessions.lock().remove(&session_id);
+            // Keep fencing the stale launch, but restore the declaration so a
+            // later reset can still replace it instead of finding no metadata.
+            self.sessions.lock().insert(session_id.clone(), session);
             self.command_rejected(
                 &session_id,
                 command_id,
@@ -3412,7 +3415,11 @@ async fn handle_core(
     let command_broker = Arc::clone(&broker);
     let command_task = tokio::spawn(async move {
         while let Some(command) = command_rx.recv().await {
-            handle_core_command(&command_broker, command).await;
+            // Reset, hibernation and deletion fence a session before their last
+            // step. Aborting this loop on disconnect drops queued commands, but
+            // the one in progress runs to completion in its own task.
+            let broker = Arc::clone(&command_broker);
+            let _ = tokio::spawn(async move { handle_core_command(&broker, command).await }).await;
         }
     });
 
@@ -4136,6 +4143,128 @@ mod tests {
             .expect("core reader shutdown timeout")
             .expect("core reader task")
             .expect("core reader result");
+    }
+
+    fn reset_fixture(session_id: &str, ready_timeout: Duration) -> Arc<Broker> {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: ready_timeout,
+        }));
+        broker.sessions.lock().insert(
+            session_id.to_owned(),
+            StartSession {
+                session_id: session_id.to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/tmp".to_owned(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+                execution_binding: None,
+            },
+        );
+        // An old launch is still in flight, so the reset has to wait for it.
+        broker.launching.lock().insert(session_id.to_owned());
+        broker
+    }
+
+    /// A controller disconnect used to abort the reset after it fenced the
+    /// session and dropped its metadata, wedging it until Machine restarted:
+    /// every later launch read "session was deleted" and every later reset
+    /// "reset session metadata was not declared".
+    #[tokio::test]
+    async fn controller_disconnect_cannot_strand_a_reset_halfway() {
+        let session_id = "sess-disconnect-reset";
+        let broker = reset_fixture(session_id, Duration::from_secs(5));
+        let (controller_tx, _controller_rx) = mpsc::unbounded_channel();
+        let lease = broker.install_controller(controller_tx);
+        let (mut controller, broker_stream) = UnixStream::pair().expect("core socket pair");
+        let (mut broker_reader, _broker_writer) = broker_stream.into_split();
+        let core_broker = Arc::clone(&broker);
+        let core_task =
+            tokio::spawn(async move { handle_core(core_broker, lease, &mut broker_reader).await });
+        write_frame(
+            &mut controller,
+            &Frame::CoreCommand {
+                command: CoreCommand::StopSession {
+                    session_id: session_id.to_owned(),
+                    command_id: "reset-disconnect".to_owned(),
+                },
+            },
+        )
+        .await
+        .expect("send reset");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !broker.resetting_sessions.lock().contains_key(session_id) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "reset never started"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        drop(controller);
+        tokio::time::timeout(Duration::from_secs(1), core_task)
+            .await
+            .expect("core reader shutdown timeout")
+            .expect("core reader task")
+            .expect("core reader result");
+
+        // The old launch stops after the controller went away.
+        broker.launching.lock().remove(session_id);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while broker.resetting_sessions.lock().contains_key(session_id) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "reset never finished"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!broker.cancelled_sessions.lock().contains(session_id));
+        assert!(broker.sessions.lock().contains_key(session_id));
+    }
+
+    #[tokio::test]
+    async fn a_reset_refused_for_a_stuck_launch_keeps_the_session_resettable() {
+        let session_id = "sess-stuck-launch";
+        let broker = reset_fixture(session_id, Duration::from_millis(100));
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: session_id.to_owned(),
+                command_id: "reset-stuck".to_owned(),
+            },
+        )
+        .await;
+        // The stale launch stays fenced, but the declaration survives so the
+        // next reset can still replace it.
+        assert!(broker.cancelled_sessions.lock().contains(session_id));
+        assert!(broker.sessions.lock().contains_key(session_id));
+
+        broker.launching.lock().remove(session_id);
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: session_id.to_owned(),
+                command_id: "reset-retry".to_owned(),
+            },
+        )
+        .await;
+        assert!(!broker.cancelled_sessions.lock().contains(session_id));
+        assert!(broker.sessions.lock().contains_key(session_id));
     }
 
     #[test]

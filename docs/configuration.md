@@ -165,8 +165,10 @@ update path: the explicit Reload gate (connected Device, saved native session,
 unchanged authentication and native contract), a recheck of the exact binding
 and idle state under the Hub lock, native resume, and never a downgrade or
 pre-release. A session that opted in individually still updates as soon as it
-is idle. Together with re-pinning, a generation is retained only while a
-recently active session uses it.
+is idle. Updates are paced: each 30-second pass starts at most one per Device,
+and none while another session on that Device is still starting, so a whole
+idle fleet never relaunches at once. Together with re-pinning, a generation is
+retained only while a recently active session uses it.
 
 ## Session reclaim on capacity
 
