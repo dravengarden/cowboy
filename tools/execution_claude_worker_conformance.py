@@ -26,6 +26,7 @@ from execution_environment_probe import Executor, ProbeFailure, require
 from plugin_runtime_conformance import closed_environment
 from matrix_execution_fixture import MatrixFixture
 from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
+from claude_file_cases import CASES as FILE_CASES, effects as file_effects, normalize as file_normalize, setup as file_setup
 
 
 def tool(name, arguments):
@@ -585,6 +586,72 @@ def context_phases(args, api, client, checks):
             "TARGET_NESTED_AGENTS" not in messages.get(0, "") and "TARGET_NESTED_CLAUDE_MD" not in messages.get(1, ""),
             "nested instructions differ from native's: " + messages.get(0, "")[:2000])
     checks.append("read_attaches_nested_instructions_once_as_native")
+
+
+def file_phases(args, api, client, checks):
+    """File tool results and on-disk effects compared with native-local ones."""
+    inodes = file_setup(args.target)
+    steps = [tool(name, arguments) for _, (name, arguments) in FILE_CASES]
+    ids = {call[0]["id"]: index for index, call in enumerate(steps)}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        done = [ids[block["tool_use_id"]] for block in (last.get("content") if isinstance(last.get("content"), list) else [])
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in ids]
+        if done:
+            following = max(done) + 1
+            return steps[following] if following < len(steps) else [{"type": "text", "text": "FILES_DONE"}]
+        if "Run the file parity fixture." in " ".join(text_blocks(last)):
+            return steps[0]
+        raise ProbeFailure("unexpected file phase request")
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(steps) + 20))
+    client.prompt(text="Run the file parity fixture.", timeout=120)
+    results = {}
+    for request in reversed(api.requests):
+        for block in outputs(request):
+            case = FILE_CASES[ids[block["tool_use_id"]]][0] if block.get("tool_use_id") in ids else None
+            if case and case not in results:
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = "".join(item.get("text", "") for item in content)
+                results[case] = {"is_error": block.get("is_error", False),
+                                 "content": file_normalize(content, args.target) if isinstance(content, str) else content}
+    native = json.loads((Path(__file__).parent / "claude_file_native_baseline.json").read_text())
+    remote = {"results": results, "effects": file_effects(args.target, inodes)}
+    # Stated differences, each documented in the audit: files are rewritten in
+    # place (native replaces them, so its inode, hard link and read-only
+    # outcomes differ), and a Mods-answered Read keeps the tab of an empty last
+    # line that native trims.
+    in_place = {"result:edit_readonly", "effect:readonly.txt", "effect:linked-alias.txt"}
+    for side in (native["effects"], remote["effects"]):
+        for effect in side.values():
+            if effect:
+                effect.pop("same_inode", None)
+                effect.pop("nlink", None)
+    for name, result in results.items():
+        if name.startswith("read_") and isinstance(result.get("content"), str):
+            result["content"] = re.sub(r"\n(\d+)\t$", r"\n\1", result["content"])
+    differences = {}
+    for name, expected in native["results"].items():
+        if "result:" + name in in_place:
+            continue
+        actual = dict(results.get(name, {}))
+        if actual.get("is_error") and isinstance(actual.get("content"), str):
+            actual["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", actual["content"], flags=re.S)
+            expected = dict(expected)
+            expected["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", expected["content"], flags=re.S)
+        if actual != expected:
+            differences["result:" + name] = {"native": expected, "remote": results.get(name)}
+    for name, expected in native["effects"].items():
+        if "effect:" + name in in_place:
+            continue
+        if remote["effects"].get(name) != expected:
+            differences["effect:" + name] = {"native": expected, "remote": remote["effects"].get(name)}
+    print("file parity diagnostic:", json.dumps(differences, ensure_ascii=False)[:20000])
+    require(not differences, "file tools differ from native-local: " + ", ".join(sorted(differences)))
+    checks.append("file_tools_match_native_local")
 
 
 def notification_phases(args, api, client, checks):
@@ -1162,8 +1229,10 @@ def main():
         image_result = next(block for block in result_blocks if block.get("tool_use_id") == image_write[0]["id"])
         require(not image_result.get("is_error"), "successful image replacement was reported as a failed Write")
         binary_result = next(block for block in result_blocks if block.get("tool_use_id") == binary_read[0]["id"])
-        require(binary_result.get("is_error") and "not valid UTF-8" in json.dumps(binary_result),
-                "binary Read did not report its actual decoding failure")
+        # Natively a file that is not valid UTF-8 still reads, its bytes
+        # decoded with replacement characters (measured on 2.1.287).
+        require(not binary_result.get("is_error") and "\\ufffd" in json.dumps(binary_result),
+                "binary Read did not decode as native does: " + json.dumps(binary_result)[:300])
         require((args.target / "replace-image.png").read_text() == "image replaced with text\n",
                 "image Write did not reach target")
         require((args.target / "file-link.txt").is_symlink() and linked.read_text() == "linked after\n"
@@ -1172,7 +1241,7 @@ def main():
                 "tilde Read did not authorize the same absolute target file")
         context_checked(api.requests)
         checks.extend(["native_image_to_text_write_reports_success", "target_symlink_write_preserves_link_and_mode",
-                       "tilde_read_uses_target_home_and_shares_absolute_path_stamp", "invalid_utf8_read_reports_decode_failure"])
+                       "tilde_read_uses_target_home_and_shares_absolute_path_stamp", "invalid_utf8_read_decodes_as_native"])
         for kind in ["symlink", "hardlink"]:
             source = args.target / f"race-{kind}-source.txt"
             alias = args.target / f"race-{kind}-alias.txt"
@@ -1190,7 +1259,7 @@ def main():
             first_result = next(block for block in blocks if block.get("tool_use_id") == first[0]["id"])
             second_result = next(block for block in blocks if block.get("tool_use_id") == second[0]["id"])
             require(not first_result.get("is_error") and second_result.get("is_error")
-                    and "changed" in json.dumps(second_result), "aliased edits silently overwrote each other")
+                    and "modified since read" in json.dumps(second_result), "aliased edits silently overwrote each other")
             require(source.read_text() == "first\n" and alias.read_text() == "first\n"
                     and source.stat().st_ino == alias.stat().st_ino, "aliased edit changed file identity or lost content")
             checks.append(f"native_{kind}_alias_edit_rejects_stale_read")
@@ -1262,6 +1331,7 @@ def main():
         shell_phases(args, api, client, shell_results, checks)
         notification_phases(args, api, client, checks)
         context_phases(args, api, client, checks)
+        file_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)

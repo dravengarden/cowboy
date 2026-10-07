@@ -1,0 +1,188 @@
+{
+ "claude_version": "2.1.287",
+ "source": "tools/claude_file_native_probe.py on native-local Read/Write/Edit",
+ "results": {
+  "read_exec": {
+   "is_error": false,
+   "content": "1\t#!/bin/sh\n2\techo old\n3"
+  },
+  "edit_exec": {
+   "is_error": false,
+   "content": "The file exec.sh has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_private": {
+   "is_error": false,
+   "content": "1\tsecret old\n2"
+  },
+  "write_private": {
+   "is_error": false,
+   "content": "The file private.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_linked": {
+   "is_error": false,
+   "content": "1\tshared old\n2"
+  },
+  "edit_linked": {
+   "is_error": false,
+   "content": "The file linked.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_crlf": {
+   "is_error": false,
+   "content": "1\talpha old\n2\tbeta\n3"
+  },
+  "edit_crlf": {
+   "is_error": false,
+   "content": "The file crlf.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_bom": {
+   "is_error": false,
+   "content": "1\tbom old\n2"
+  },
+  "edit_bom": {
+   "is_error": false,
+   "content": "The file bom.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_utf16": {
+   "is_error": false,
+   "content": "1\t��l\u0000i\u0000n\u0000e\u0000 \u0000o\u0000n\u0000e\u0000\r\u0000\n2\t\u0000l\u0000i\u0000n\u0000e\u0000 \u0000t\u0000w\u0000o\u0000\r\u0000\n3\t\u0000"
+  },
+  "edit_utf16": {
+   "is_error": false,
+   "content": "The file utf16.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_latin1": {
+   "is_error": false,
+   "content": "1\tcaf� old\n2"
+  },
+  "edit_latin1": {
+   "is_error": false,
+   "content": "The file latin1.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_readonly": {
+   "is_error": false,
+   "content": "1\tlocked old\n2"
+  },
+  "edit_readonly": {
+   "is_error": false,
+   "content": "The file readonly.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "read_nonl": {
+   "is_error": false,
+   "content": "1\tno newline old"
+  },
+  "edit_nonl": {
+   "is_error": false,
+   "content": "The file nonl.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "write_unread": {
+   "is_error": false,
+   "content": "The file unread.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "write_new_nested": {
+   "is_error": false,
+   "content": "File created successfully at: new/deeper/file.txt (file state is current in your context — no need to Read it back)"
+  },
+  "write_directory": {
+   "is_error": true,
+   "content": "<tool_use_error>adir is a directory, not a file. To create a file inside it, include the file name in file_path.</tool_use_error>"
+  },
+  "read_empty": {
+   "is_error": false,
+   "content": ""
+  },
+  "edit_empty": {
+   "is_error": false,
+   "content": "The file empty.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  },
+  "edit_missing": {
+   "is_error": false,
+   "content": "The file missing.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+  }
+ },
+ "effects": {
+  "exec.sh": {
+   "mode": "0o755",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "23212f62696e2f73680a6563686f206e65770a"
+  },
+  "private.txt": {
+   "mode": "0o600",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "736563726574206e65770a"
+  },
+  "linked.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "736861726564206e65770a"
+  },
+  "linked-alias.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": null,
+   "bytes": "736861726564206f6c640a"
+  },
+  "crlf.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "616c706861206e65770d0a61646465640d0a626574610d0a"
+  },
+  "bom.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "efbbbf626f6d206e65770a"
+  },
+  "utf16.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "fffe6c0069006e006500200075006e006f000d000a006c0069006e0065002000740077006f000d000a00"
+  },
+  "latin1.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "636166efbfbd206e65770a"
+  },
+  "readonly.txt": {
+   "mode": "0o444",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "6c6f636b6564206e65770a"
+  },
+  "nonl.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "6e6f206e65776c696e65206e6577"
+  },
+  "unread.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": null,
+   "bytes": "6f7665727772697474656e0a"
+  },
+  "empty.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": false,
+   "bytes": "66696c6c65640a"
+  },
+  "missing.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": null,
+   "bytes": "6d61646520627920656469740a"
+  },
+  "new/deeper/file.txt": {
+   "mode": "0o644",
+   "nlink": 1,
+   "same_inode": null,
+   "bytes": "637265617465640a"
+  }
+ }
+}

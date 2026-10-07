@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { TASK_OUTPUT_PREFIX, WorkspaceTools } from "./tools.mjs";
+import {
+  TASK_OUTPUT_PREFIX,
+  textBytes,
+  textFile,
+  WorkspaceTools,
+} from "./tools.mjs";
 import { READ_RANGE } from "./read-range.mjs";
 
 test("range reads keep whole-file conflict stamps without transferring the file", async (t) => {
@@ -65,7 +70,7 @@ test("range reads keep whole-file conflict stamps without transferring the file"
     file_path: "file",
     content: "lost",
   });
-  assert.match(refused.deny, /changed/);
+  assert.match(refused.deny, /modified since read/);
   assert.equal(
     files.get("/target with space/file").toString(),
     original + "external",
@@ -103,8 +108,12 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
   );
   assert.match(run(join(directory, "missing")).error, /failed/);
   assert.match(run(directory).error, /failed/);
+  // Invalid UTF-8 reads with replacement characters, as natively.
   await writeFile(target, Buffer.from([255]));
-  assert.match(run(target).error, /failed/);
+  assert.equal(
+    Buffer.from(run(target).dataBase64, "base64").toString(),
+    "\ufffd",
+  );
   const changed = READ_RANGE.replace(
     "current = os.stat(path)",
     "os.truncate(path, 0)\n        current = os.stat(path)",
@@ -155,7 +164,7 @@ test("small files retain two native RPCs without a utility startup", async (t) =
   ]);
 });
 
-test("an undelivered Read cannot grant edit authority after state storage fails", async (t) => {
+test("an undelivered Read leaves the file unread, which natively may be written", async (t) => {
   const { tools, files } = await fixture(t);
   files.set("/target with space/file", Buffer.from("before"));
   const save = tools.save.bind(tools);
@@ -170,17 +179,17 @@ test("an undelivered Read cannot grant edit authority after state storage fails"
   );
   assert.deepEqual(tools.state.reads, {});
   tools.save = save;
-  assert.match(
+  assert.equal(
     (await tools.nativeCall("Write", {
       file_path: "file",
-      content: "lost",
+      content: "written",
     })).deny,
-    /not been read/,
+    undefined,
   );
-  assert.equal(files.get("/target with space/file").toString(), "before");
+  assert.equal(files.get("/target with space/file").toString(), "written");
 });
 
-test("bounded read stamps expire to reread rather than granting stale write access", async (t) => {
+test("bounded read stamps expire, leaving the file unread as natively", async (t) => {
   const { tools, files } = await fixture(t);
   const digest = "a".repeat(64);
   tools.remember("/target with space/old", digest);
@@ -190,14 +199,14 @@ test("bounded read stamps expire to reread rather than granting stale write acce
   assert.ok(Buffer.byteLength(JSON.stringify(tools.state.reads)) <= 512 * 1024);
   assert.equal(tools.state.reads["/target with space/old"], undefined);
   files.set("/target with space/old", Buffer.from("original"));
-  assert.match(
+  assert.equal(
     (await tools.nativeCall("Write", {
       file_path: "old",
-      content: "lost",
+      content: "written",
     })).deny,
-    /not been read/,
+    undefined,
   );
-  assert.equal(files.get("/target with space/old").toString(), "original");
+  assert.equal(files.get("/target with space/old").toString(), "written");
 });
 
 test("failed atomic state replacement removes only its owned temporary file", async (t) => {
@@ -364,32 +373,26 @@ test("interrupt includes foreground starts whose acknowledgement is still pendin
 test("a changed file is refused until read again, including after cold resume", async (t) => {
   const { tools, files, connection, binding, state } = await fixture(t);
   files.set("/target with space/file", Buffer.from("before\n"));
-  assert.equal(
-    (await tools.call("edit", {
-      file_path: "file",
-      old_string: "before",
-      new_string: "after",
-    })).isError,
-    true,
-  );
   await tools.call("read", { file_path: "file" });
+  files.set("/target with space/file", Buffer.from("external\n"));
   const resumed = new WorkspaceTools(connection, binding, state);
   await resumed.load();
+  const refused = await resumed.call("write", {
+    file_path: "file",
+    content: "lost",
+  });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /modified since read/);
+  assert.equal(files.get("/target with space/file").toString(), "external\n");
+  await resumed.call("read", { file_path: "file" });
   assert.equal(
     (await resumed.call("edit", {
       file_path: "file",
-      old_string: "before",
+      old_string: "external",
       new_string: "after",
     })).isError,
     false,
   );
-  files.set("/target with space/file", Buffer.from("external\n"));
-  assert.equal(
-    (await resumed.call("write", { file_path: "file", content: "lost" }))
-      .isError,
-    true,
-  );
-  assert.equal(files.get("/target with space/file").toString(), "external\n");
   const foreign = new WorkspaceTools(connection, {
     ...binding,
     environment: { id: "foreign" },
@@ -425,7 +428,8 @@ test("native file results expose target paths and exact diffs, including EOF cha
   const { tools, files } = await fixture(t);
   files.set("/target with space/file", Buffer.from("before"));
   const read = await tools.nativeCall("Read", { file_path: "file" });
-  assert.equal(read.result.file.filePath, "/target with space/file");
+  // As natively, results name the file as the call did.
+  assert.equal(read.result.file.filePath, "file");
   assert.equal(read.result.file.content, "before");
   const edit = await tools.nativeCall("Edit", {
     file_path: "file",
@@ -444,7 +448,7 @@ test("native file results expose target paths and exact diffs, including EOF cha
     file_path: "file",
     content: "lost",
   });
-  assert.match(refused.deny, /changed/);
+  assert.match(refused.deny, /modified since read/);
   assert.equal(files.get("/target with space/file").toString(), "external");
 });
 
@@ -663,7 +667,7 @@ test("tilde paths use executor home and share read stamps with absolute target p
   assert.equal(tools.path("~"), "/target home");
   assert.equal(tools.path("./~literal"), "/target with space/~literal");
   const read = await tools.nativeCall("Read", { file_path: "~/file" });
-  assert.equal(read.result.file.filePath, "/target home/file");
+  assert.equal(read.result.file.filePath, "~/file");
   const edit = await tools.nativeCall("Edit", {
     file_path: "/target home/file",
     old_string: "before",
@@ -732,7 +736,7 @@ test("failed post-write state commit requires a fresh Read before another edit",
     old_string: "after",
     new_string: "lost",
   });
-  assert.match(edit.deny, /Read it before editing/);
+  assert.match(edit.deny, /modified since read/);
   assert.equal(files.get("/target with space/file").toString(), "after");
   await tools.nativeCall("Read", { file_path: "file" });
   assert.equal(
@@ -796,26 +800,22 @@ test("concurrent state saves retain the latest read stamps", async (t) => {
   });
 });
 
-test("a failed read does not authorize overwriting an unread file", async (t) => {
+test("a NotebookEdit still requires a Read, as natively", async (t) => {
   const { tools, files } = await fixture(t);
-  files.set("/target with space/binary", Buffer.from([0xff, 0xfe, 0]));
-  assert.match(
-    (await tools.nativeCall("Read", { file_path: "binary" })).deny,
-    /not valid UTF-8/,
-  );
+  const notebook = JSON.stringify({
+    cells: [{ id: "a", cell_type: "code", source: [] }],
+  });
+  files.set("/target with space/book.ipynb", Buffer.from(notebook));
+  const refused = await tools.nativeCall("NotebookEdit", {
+    notebook_path: "book.ipynb",
+    cell_id: "a",
+    new_source: "x",
+  });
   assert.equal(
-    (await tools.call("read", { file_path: "binary" })).isError,
-    true,
+    refused.deny,
+    "File has not been read yet. Read it first before writing to it.",
   );
-  assert.equal(
-    (await tools.call("write", { file_path: "binary", content: "lost" }))
-      .isError,
-    true,
-  );
-  assert.deepEqual(
-    files.get("/target with space/binary"),
-    Buffer.from([0xff, 0xfe, 0]),
-  );
+  assert.equal(files.get("/target with space/book.ipynb").toString(), notebook);
 });
 
 function deferred() {
@@ -870,7 +870,7 @@ test("aliased file mutations cannot both validate the same stale bytes", {
   release.resolve();
   const results = await Promise.all([first, second]);
   assert.equal(results[0].deny, undefined);
-  assert.match(results[1].deny ?? "", /changed/);
+  assert.match(results[1].deny ?? "", /modified since read/);
   assert.equal(writes, 1);
   assert.equal(files.get("/target with space/source").toString(), "first");
 });
@@ -1030,4 +1030,220 @@ test("a stop during an output read survives the read's cursor update", async (t)
   await collecting;
   assert.equal(tools.state.jobs.job.stopped, true);
   assert.deepEqual(await tools.waitTask("job", null, 1), { stopped: true });
+});
+
+test("text files keep their encoding and line endings, as natively", () => {
+  const utf16 = Buffer.concat([
+    Buffer.from([0xff, 0xfe]),
+    Buffer.from("a\r\nb\r\n", "utf16le"),
+  ]);
+  const file = textFile(utf16);
+  assert.deepEqual(file, {
+    text: "a\nb\n",
+    crlf: true,
+    utf16: true,
+    bom: false,
+  });
+  assert.deepEqual(
+    textBytes("a\nc\n", file),
+    Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from("a\r\nc\r\n", "utf16le"),
+    ]),
+  );
+  const bom = textFile(Buffer.from("\ufeffx\n"));
+  assert.equal(bom.text, "x\n");
+  assert.equal(bom.bom, true);
+  assert.deepEqual(textBytes("y\n", bom), Buffer.from("\ufeffy\n"));
+  assert.equal(textFile(Buffer.from([0x63, 0xe9, 0x0a])).text, "c\ufffd\n");
+});
+
+test("edits follow native's rules for empty strings, unread files and directories", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set("/target with space/unread", Buffer.from("old\r\nkeep\r\n"));
+  const unread = await tools.nativeCall("Edit", {
+    file_path: "unread",
+    old_string: "old\nkeep",
+    new_string: "new\nkept",
+  });
+  assert.equal(unread.result.contentNotInModelContext, true);
+  assert.equal(unread.result.filePath, "unread");
+  assert.equal(
+    files.get("/target with space/unread").toString(),
+    "new\r\nkept\r\n",
+  );
+  files.set("/target with space/full", Buffer.from("text\n"));
+  assert.equal(
+    (await tools.nativeCall("Edit", {
+      file_path: "full",
+      old_string: "",
+      new_string: "x",
+    })).deny,
+    "Cannot create new file - file already exists.",
+  );
+  await tools.nativeCall("Edit", {
+    file_path: "created",
+    old_string: "",
+    new_string: "made\n",
+  });
+  assert.equal(files.get("/target with space/created").toString(), "made\n");
+  const original = tools.connection.call.bind(tools.connection);
+  tools.connection.call = async (method, params) =>
+    method === "fs/getMetadata" && params.path.endsWith("/adir")
+      ? { isFile: false, isDirectory: true, size: 0 }
+      : original(method, params);
+  assert.equal(
+    (await tools.nativeCall("Write", { file_path: "adir", content: "x" })).deny,
+    "adir is a directory, not a file. To create a file inside it, include the file name in file_path.",
+  );
+});
+
+test("edit strings are taken as given, as natively", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set("/target with space/crlf", Buffer.from("old\r\nrest\r\n"));
+  assert.equal(
+    (await tools.nativeCall("Edit", {
+      file_path: "crlf",
+      old_string: "old\r\nrest",
+      new_string: "new",
+    })).deny,
+    "String to replace not found in file.\nString: old\r\nrest",
+  );
+  files.set("/target with space/lf", Buffer.from("lf old\nend\n"));
+  await tools.nativeCall("Edit", {
+    file_path: "lf",
+    old_string: "lf old",
+    new_string: "lf new\r\nadded",
+  });
+  assert.equal(
+    files.get("/target with space/lf").toString(),
+    "lf new\r\nadded\nend\n",
+  );
+});
+
+test("a lost write to an unread file is not applied twice on retry", async (t) => {
+  const { tools, files, connection } = await fixture(t);
+  files.set("/target with space/once", Buffer.from("anchor\n"));
+  const original = connection.call.bind(connection);
+  connection.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === "fs/writeFile") {
+      connection.call = original;
+      throw Object.assign(new Error("lost"), { remote: { message: "lost" } });
+    }
+    return result;
+  };
+  const edit = () =>
+    tools.nativeCall("Edit", {
+      file_path: "once",
+      old_string: "anchor",
+      new_string: "anchor appended",
+    });
+  assert.match((await edit()).deny, /result is unknown/);
+  assert.match((await edit()).deny, /modified since read/);
+  assert.equal(
+    files.get("/target with space/once").toString(),
+    "anchor appended\n",
+  );
+});
+
+test("a range Read of a CRLF file shows LF text that a later Edit matches", async (t) => {
+  const { tools, files } = await fixture(t);
+  const original = "x".repeat(127) + "\r\n";
+  files.set(
+    "/target with space/big",
+    Buffer.from(original.repeat(1200) + "target line\r\nnext\r\n"),
+  );
+  tools.rangePython = "python3";
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-range-crlf-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = join(directory, "source");
+  tools.command = async (argv) => {
+    const script = argv.indexOf("-c") + 1;
+    await writeFile(target, files.get("/target with space/big"));
+    return {
+      exitCode: 0,
+      closed: true,
+      output: execFileSync(argv[0], [
+        ...argv.slice(1, script + 1),
+        target,
+        ...argv.slice(script + 2),
+      ], { encoding: "utf8" }),
+    };
+  };
+  const read = await tools.nativeCall("Read", {
+    file_path: "big",
+    offset: 1201,
+    limit: 2,
+  });
+  assert.equal(read.result.file.content, "target line\nnext");
+  assert.equal(read.result.file.filePath, "big");
+  const edit = await tools.nativeCall("Edit", {
+    file_path: "big",
+    old_string: read.result.file.content,
+    new_string: "changed line\nnext",
+  });
+  assert.equal(edit.deny, undefined);
+  assert.ok(
+    files.get("/target with space/big").toString().endsWith(
+      "changed line\r\nnext\r\n",
+    ),
+  );
+});
+
+test("a lost write creating a file is not repeated over later changes", async (t) => {
+  const { tools, files, connection } = await fixture(t);
+  const original = connection.call.bind(connection);
+  connection.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === "fs/writeFile") {
+      connection.call = original;
+      throw Object.assign(new Error("lost"), { remote: { message: "lost" } });
+    }
+    return result;
+  };
+  const write = () =>
+    tools.nativeCall("Write", { file_path: "fresh", content: "first\n" });
+  assert.match((await write()).deny, /result is unknown/);
+  files.set("/target with space/fresh", Buffer.from("changed elsewhere\n"));
+  assert.match((await write()).deny, /modified since read/);
+  assert.equal(
+    files.get("/target with space/fresh").toString(),
+    "changed elsewhere\n",
+  );
+});
+
+test("a range Read shows invalid UTF-8 as a whole-file Read does", async (t) => {
+  const { tools, files } = await fixture(t);
+  files.set(
+    "/target with space/latin",
+    Buffer.concat([
+      Buffer.from("caf"),
+      Buffer.from([0xe9]),
+      Buffer.from("\n".repeat(140000)),
+    ]),
+  );
+  tools.rangePython = "python3";
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-range-latin-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = join(directory, "source");
+  tools.command = async (argv) => {
+    const script = argv.indexOf("-c") + 1;
+    await writeFile(target, files.get("/target with space/latin"));
+    return {
+      exitCode: 0,
+      closed: true,
+      output: execFileSync(argv[0], [
+        ...argv.slice(1, script + 1),
+        target,
+        ...argv.slice(script + 2),
+      ], { encoding: "utf8" }),
+    };
+  };
+  const read = await tools.nativeCall("Read", {
+    file_path: "latin",
+    offset: 1,
+    limit: 1,
+  });
+  assert.equal(read.result.file.content, "caf�");
 });
