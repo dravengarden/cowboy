@@ -157,7 +157,10 @@ function processConnection() {
       calls.push({ method, id: params.processId });
       if (method === "process/start") {
         live.add(params.processId);
-        started.get(params.argv[2])?.resolve(params.processId);
+        // Bash runs its command inside native's `eval` wrapper.
+        const command = /^eval '([^']*)'/m.exec(params.argv[2])?.[1] ??
+          params.argv[2];
+        started.get(command)?.resolve(params.processId);
         return { processId: params.processId };
       }
       if (method === "process/terminate") {
@@ -230,7 +233,7 @@ test("a discarded background result still cancels its started process", async (t
     run_in_background: true,
   }, { id: "toolu_discarded" });
   const id = await started.promise;
-  assert.match(result.result.stdout, /still running/);
+  assert.match(result.result.stdout, /running in background with ID/);
   assert.equal(tools.calls.has("toolu_discarded"), false);
   await tools.cancelDiscarded("toolu_discarded");
   assert.equal(connection.live.has(id), false);
@@ -555,7 +558,7 @@ async function modFixture() {
           socketPath: "/tmp/cowboy-claude-mod-fixture/bridge.sock",
           descriptions: DESCRIPTIONS,
           environment: "target environment",
-          instructions: "target instructions",
+          instructionFiles: [],
           git: "target git",
           agents: { resumed: "/runtime/resumed.output" },
           targetCwd: "/target",

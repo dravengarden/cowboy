@@ -98,9 +98,10 @@ to introduce more restrictions.
 | Native CodeAct | Native nested shell, patch, image, parallel/error results, yield/wait and cold resume now have pinned scripted evidence | Keep these in default native acceptance; separately test child agents and runtime failure while a cell is pending |
 | Claude tool dispatch | `context-mod.js` replaces native tool bodies with a facade | Restore native ownership where a lower-level boundary exists; retain independently tested file adapters |
 | Native Bash lifecycle | Facade retains processes but does not establish native background task registration | Explore shell prefix bridge preserving original Bash tool and native task registry |
-| Background completion | Native activity UI support exists; facade handles are a separate system | Validate completion after prompt return, native autonomous continuation, output retrieval, task count and cancellation |
+| Background completion | Claude 3.9.0: a native background task (runtime waiter) stands for each target command left running, so native delivers its completion into a running turn or as an idle turn of its own; TaskStop sends nothing; notifications are rewritten to the target handle (packaged acceptance) | No 30-minute auto-stop for timed-out commands; subagent background commands are not notified |
 | PTY and stdin | Claude facade explicitly uses `tty:false`, `pipeStdin:false` | Native-parity baseline first: do not invent PTY support where provider lacks it; test Codex PTY, resize, EOF and incremental input |
-| Shell environment | Claude starts a new shell with fixed binding cwd and target environment | Test `cd`, exports, login startup, shell snapshots, quoting, signals, pipe status and shell availability; preserve documented native persistence semantics |
+| Shell environment | Claude 3.8.0 runs native's command shape on the target: user bash/zsh, a login-shell snapshot (rc, functions, options, aliases, PATH), `cd` persistence with native's reset, native's environment variables; 36 Bash cases match native-local results in packaged acceptance | Error results keep Mods' `<tool_use_error>` wrapper; `CLAUDE_EFFORT` starts after the first tool batch; no embedded find/grep/rg shadows or `CLAUDE_PID` |
+| Project hooks (Claude) | 3.7.0 runs target project hooks: native lifecycle/native-tool hooks through the shell prefix, facade tool hooks (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest) through the adapter | Settings are a session-start snapshot; non-command facade tool hooks refuse matching calls |
 | Project hooks | Claude launch suppresses settings sources; Codex remote hook placement not established by current receipt | Execute target-owned hooks at target, preserve native lifecycle/decisions and trusted configuration; separate runtime-owned hooks |
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
 | Permission modes | Claude 3.6.0 drops the forced bypass: native `$.tool.check` decides each target call under the session's mode and rules, asks reach the SDK host in native `can_use_tool` shape, denial precedes any target effect, amended input runs, dontAsk denies, and abandoned asks are withdrawn (packaged acceptance) | No "always allow" rule persistence, auto-mode classifier or command-string path mapping; plan mode stays refused |
@@ -581,6 +582,197 @@ would place runtime-owned services and credentials on the wrong machine.
 If this boundary cannot reliably separate ownership, investigate a supported
 upstream execution backend before falling back to a narrower adapter.
 
+#### Bash results and shell state (Plugin 3.8.0)
+
+A differential check found that the facade's Bash differed from native-local
+Bash in most model-visible results. The check runs the same 35 Bash calls in one
+turn on native-local 2.1.287 and on the packaged remote lane, then compares the
+normalized results. Native baselines also captured native's own command line,
+environment and shell snapshot. The differences found were:
+
+- a trailing `Exit code: 0` on every result
+- no output trimming and no `(Bash completed with no output)`
+- stdout and stderr not interleaved in write order
+- `set -e` aborting commands that natively run on
+- no `cd` persistence
+- a large output silently cut at the first executor read, because a process
+  reports closed while output remains to be read
+- none of native's command environment or user shell snapshot
+
+3.8.0 reproduces native's command shape on the target:
+
+- **Command wrapper.** It sources a snapshot, turns extglob off, merges the two
+  streams, and runs `eval '<command>' < /dev/null && pwd -P >| <cwd file>`.
+- **Shell.** Commands use the user's shell when it is bash or zsh, as natively.
+- **Snapshot.** At session start, the target user's login shell runs native's
+  generator steps: rc file, shopt, functions, set -o options, aliases and
+  PATH.
+- **Directory.** The final directory persists inside the project. Outside it,
+  the directory resets with native's `Shell cwd was reset to …` line.
+  Background commands never move it.
+- **Environment.** Native's variables are set: `CLAUDECODE`,
+  `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`,
+  `CLAUDE_CODE_ENTRYPOINT`, `COREPACK_ENABLE_AUTO_PIN`, `GIT_EDITOR`, `SHELL`,
+  `AI_AGENT`, plus the session's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_EFFORT`.
+- **Results.**
+  - Output is trimmed, and an empty result reads as native's placeholder.
+  - Failures read `Exit code N` plus output, capped at 30,000 characters and
+    kept to the first and last 5,000.
+  - An output over 30,000 characters is written whole (up to 4 MiB) to a
+    private target file. The model sees native's `<persisted-output>` preview
+    with that target path.
+- **Draining.** Output collection drains a closed process until a read returns
+  nothing.
+
+Packaged acceptance now requires every case to match the committed native
+baseline (`tools/claude_shell_native_baseline.json`). One stated exception
+remains, described below. A former check expected a character split around a
+stderr write to survive. Native interleaves the bytes and decodes them as
+replacement characters (measured), so the check now requires native's result.
+
+Remaining differences and their reasons:
+
+- **Error wrapper.** A Mods-answered error is wrapped in `<tool_use_error>`
+  tags. Mods offers no error result without the wrapper: its `isError`
+  variant is set by core only.
+- **Effort timing.** `CLAUDE_EFFORT` and the hooks' `effort` field appear
+  only after native first reports them. Native reports effort only in
+  tool-context hook input (PostToolBatch, Stop). A `turn.step` hook would
+  carry it from the first request, but the pinned build refused to load the
+  module with one.
+- **`CLAUDE_PID`.** It is not set: it names a runtime process.
+- **find, grep, rg and pkill.** Native shadows these with its embedded
+  executable, and with a guard that reads `CLAUDE_PID`. The target has no
+  such executable, so the system commands run. Native does the same when its
+  executable is absent.
+- **Other rc-file exports.** Native's snapshot keeps only PATH from the user's
+  environment, and so does 3.8.0. Other exported variables come from the
+  executor's environment, as native's come from its own process.
+- **Time-limited and background commands.** They keep `cowboy-task://`
+  handles. 3.8.0 gave no completion notification; 3.9.0 adds them (below).
+
+Four native review rounds found and fixed these defects:
+
+- output consumed before a timeout was lost
+- the persisted file could exceed what Read returns
+- `shopt` ran under zsh
+- a still-running command's directory file was left behind
+- `..name` directories were treated as outside the project
+- a directory reset was dropped after a persisted preview
+
+The fourth round reported none. Making the hook phase reliable required two
+harness fixes:
+
+- the hook checks read the result's own message, because the latest request
+  may be a background child's
+- the check for leftover hook files waits for in-flight child hooks
+
+The [3.8.0 release receipt](experiments/claude-shell-parity-release-2026-10-06.json)
+binds feature commit `dd1a2367`, release merge `7d0e35cd` and artifact
+`sha256:bf1da8c889c9900f1883e51fcac63d8ee35700a1513118cea4e0fc395f06c56a`.
+It records:
+
+- 69 accepted checks on the exact signed package, including Bash parity
+- 3.7.0/3.8.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles
+- five public artifact digests
+- Catalog `ready` on both platforms
+
+OVH operation `ovh-claude-code-3-8-0-converge` completed. Inventory reports
+3.8.0 active, 3.7.0 retained for rollback and no session leases. No live session
+was restarted.
+
+#### Background completion notifications (Plugin 3.9.0)
+
+Natively, a background or timed-out command becomes a native background task.
+Native-local baselines on 2.1.287 show:
+
+- When it ends during a turn, its `<task-notification>` (completed or failed,
+  with the exit code) is delivered into that turn, appended to a tool result.
+- When it ends while the session is idle, native starts a turn of its own
+  with the notification, framed as "SYSTEM NOTIFICATION - NOT USER INPUT".
+- A TaskStop'd command sends nothing.
+- A command that hits its timeout is moved to the background and notified
+  later, unless it starts with `sleep`. Such a command is killed with
+  `Exit code 143` / `Command timed out after <duration>`.
+
+Mods cannot inject such a notification. `$.session.receive` is absent at
+runtime on the pinned build. `$.prompt.submit` waits for idle and frames the
+text as a plugin prompt "in the user's place", which is the opposite of
+native's framing. A Mod can, however, start a native background Bash with
+`$.tool.call`, and native then notifies for it exactly as for its own.
+
+3.9.0 therefore pairs each target command left running with a native
+background task:
+
+- **Waiter.** The task runs `task-wait.mjs` on the runtime. It long-polls the
+  bridge (`/task-wait`), which observes the target process without consuming
+  the output its handle reads, and exits with the command's status. A
+  stopped command never reads as finished: the waiter stays until native
+  stops it.
+- **Native ownership.** Native owns the task, so delivery timing, idle turns
+  and the framing are native's own.
+- **Notification rewrite.** The Mod maps the notification to the target
+  command: the job id, the model's tool use id, `cowboy-task://` as the output
+  file and the original command line. This applies wherever native renders it
+  (prompt row, delivery and queued-command attachment).
+- **Stopping.** TaskStop on the command also stops its native task, so
+  nothing is sent.
+- **Permissions and hooks.** A `tool.check` hook keeps the waiter from asking
+  the user a second time in prompting modes. The hook proxy keeps it away
+  from project hooks.
+- **Results.** Background and moved results now read exactly as native's
+  ("You will be notified when it completes."). Without a native task (a
+  subagent's command, or a failed start), that sentence is removed instead
+  of promising a notification.
+- **Timeouts.** A timed-out command starting with `sleep` is killed with
+  native's text.
+
+Packaged acceptance adds five checks, all on the target:
+
+- an idle completion starts a native notification turn with native framing,
+  the target handle, the model's tool use id, the command line and no runtime
+  path
+- a completion during a turn is delivered into that turn
+- a stopped command sends nothing
+- a timed-out command moves to the background and is notified
+- in default mode the user is asked once, for the command, not again for its
+  notification task
+
+Gaps:
+
+- Native stops an auto-backgrounded command after 30 minutes and says so; the
+  waiter does not, and the result omits that sentence.
+- Subagents' background commands give no notification.
+- Native's other background moves are not reproduced: a message arriving
+  during a foreground command, or a user's Ctrl+B.
+- Native's duration format for timeouts of whole minutes was not measured
+  (`Xm Ys` is assumed).
+- Like native background tasks, the notification does not survive the
+  session process. The target command does, and its handle stays readable.
+
+Two native review rounds were run. The first found a stop overwritten by a
+concurrent output read, which could have produced a notification for a
+stopped command. The fix keeps the stop and comes with a regression test that
+fails without it. The second round reported none.
+
+The [3.9.0 release receipt](experiments/claude-background-notifications-release-2026-10-07.json)
+binds commit `812c8683` and artifact
+`sha256:4fdef6086dbb6485cac7946edf85072727e876994b3cb5e302e6cdd560449be6`.
+It records:
+
+- 74 accepted checks on the exact signed package
+- 3.8.0/3.9.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles
+- five public artifact digests
+- Catalog `ready`
+
+OVH operation `ovh-claude-code-3-9-0-converge` completed. Inventory reports
+3.9.0 active, 3.8.0 retained for rollback and no session leases. No live session
+was restarted.
+
 ### 2. Project configuration and implicit reads
 
 Build an explicit target project context interface for configuration, guidance,
@@ -595,6 +787,106 @@ matchers, timeouts and outputs remain provider-owned. Runtime authentication,
 history and service clients remain on the runtime. HTTP hooks need an explicit
 network/credential placement decision. Prompt/agent hooks retain their native
 model evaluation, inheriting target binding for any nested tools.
+
+#### Target instructions and session context (Plugin 3.10.0)
+
+Native-local baselines on 2.1.287 decide what a session starts with. The
+recorded instruction files are:
+
+- the user's `~/.claude/CLAUDE.md`
+- for each directory from the root down to the working directory: its
+  `CLAUDE.md` (with `@` imports right after it), `.claude/CLAUDE.md`,
+  unconditional `.claude/rules/*.md` and `CLAUDE.local.md`
+
+Each file is rendered as `Contents of <path> (<tier>):` under native's
+"Codebase and user instructions" framing. Further findings:
+
+- `AGENTS.md` is never read, with or without a `CLAUDE.md`.
+- A Read below the working directory attaches the `CLAUDE.md` of each
+  directory in between and the rules whose `paths` match, once each.
+- A Write, a Read outside the project and a repeated Read attach nothing.
+- The environment block and the Git status block (current branch, main
+  branch, Git user, `git status --short` cut at 2,000 characters, five recent
+  commits) have fixed native forms.
+
+Before 3.10.0, the facade loaded `AGENTS.md`, `CLAUDE.md` and
+`.claude/CLAUDE.md` from the ancestors as raw text behind its own preamble. It
+had no imports, no `CLAUDE.local.md`, no rules, no user file and no nested
+files. Its environment line used its own format, and no Git status reached the
+model, because the launcher disabled native's Git context.
+
+3.10.0 reproduces native discovery on the target:
+
+- **Discovery.** `instructions.mjs` finds the files and hands them to
+  native's own renderer through `prompt.context`'s `instructionFiles`; runtime
+  files never count.
+- **Nested files.** The target equivalents follow a facade Read once per
+  conversation (main and each agent), with their own imports.
+- **Environment.** The environment block has native's form, with target
+  facts.
+- **Git.** Native's Git context is enabled again: its `gitStatus` section
+  reads the target repository, and outside one it is dropped. The git commit
+  and PR instructions return to the system prompt as natively.
+- **Label.** The `tool.call hook additional context:` label that Mods put
+  before this module's context is removed. Nested files and PostToolUse
+  feedback therefore read as native's (3.7.0 showed the label).
+
+**Behavior change.** Remote sessions no longer read `AGENTS.md`, as a local
+Claude Code session does not. A project that relies on `AGENTS.md` for Claude
+should reference it from `CLAUDE.md` (`@AGENTS.md`), as it would locally.
+
+Packaged acceptance checks:
+
+- the order and framing of the target files, including the parent
+  directory's, an import, `.claude/CLAUDE.md`, a rule and `CLAUDE.local.md`
+- that neither a scoped rule nor `AGENTS.md` loads
+- the environment and Git blocks
+- a Read bringing the nested `CLAUDE.md` and the matching scoped rule once,
+  without the label
+
+Gaps:
+
+- Each nested file natively gets its own `<system-reminder>`. Here they share
+  one, separated by a blank line.
+- The target's Git section goes into native's session context, and is added
+  when native had no Git section of its own. If native emits no session
+  context at all, the section is absent; the acceptance runtime directory had
+  one.
+- HTML comment stripping and import edge cases (depth beyond five,
+  non-text files) follow a reading of native behavior rather than
+  measurement.
+- Files are a session-start snapshot, as natively.
+
+Ten native review rounds were run, and the last reported none. Fixed findings:
+
+- deduplication per conversation, serialized for parallel Reads
+- brace and class globs, and quoted, multi-line and commented `paths` lists
+- imports of nested files and of rules
+- symlinked rule directories and files
+- a user's scoped rules matched relative to the project, and collected once
+- read and listing failures stopping the session instead of silently
+  dropping instructions
+- a failed nested load reported to the model instead of looking like no
+  instructions
+- a Git status that cannot be read reported as unavailable, not clean
+- the target's Git section added when native had none
+
+The [3.10.0 release receipt](experiments/claude-target-instructions-release-2026-10-07.json)
+binds feature commit `f3ca57a8`, release merge `e2323171` and artifact
+`sha256:f102b54e23792271f439d5b44a0201160fed67e5adcc97ed9a2d38041b97c888`.
+It records:
+
+- 77 accepted checks on the exact signed package
+- 3.9.0/3.10.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles, re-resolved because the active Controller had
+  changed
+- five public artifact digests
+- Catalog `ready`
+
+OVH operation `ovh-claude-code-3-10-0-converge` completed. Inventory reports
+3.10.0 active, 3.9.0 retained for rollback and no session leases. No live session
+was restarted.
 
 ### 3. Native agents and orchestration
 

@@ -40,7 +40,7 @@ async function modFixture(check) {
           socketPath: "/tmp/cowboy-claude-mod-fixture/bridge.sock",
           descriptions: DESCRIPTIONS,
           environment: "target environment",
-          instructions: "target instructions",
+          instructionFiles: [],
           git: "target git",
           agents: {},
           targetCwd: "/target",

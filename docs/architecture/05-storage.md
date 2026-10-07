@@ -118,8 +118,17 @@ variants: `insert_session`, batched event UPSERT, `update_status`, `update_title
 `update_agent_session_id`, `delete_session`, `update_pending`,
 `update_session_order`, and Mobile review state. `purge_deleted()` hard-deletes
 soft-deleted rows. The legacy `auto_resume`, confirm-verdict, and judge-run
-columns and settings table remain deliberately ignored so rollback can still
-read the consolidated schema.
+columns remain deliberately ignored so rollback can still read the
+consolidated schema.
+
+The `settings` table stores only the Hub settings registered in
+`src/core/settings_keys.rs` (admin/auth policy, the dormancy clock, and
+per-session Provider auto-update opt-ins); both backends refuse other keys on
+write and skip them on load, so retired product settings stay ignored. The Hub
+never enqueues an unregistered key, because the deterministic rejection would
+exhaust the writer's retries and mark persistence degraded. A new key must be
+added to the registry and its `examples()`, which the backend round-trip tests
+exercise.
 
 ## NUL-byte stripping
 

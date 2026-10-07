@@ -465,7 +465,7 @@ async function modFixture(hooks, runs, base) {
           socketPath: "/tmp/cowboy-claude-mod-fixture/bridge.sock",
           descriptions: DESCRIPTIONS,
           environment: "e",
-          instructions: "i",
+          instructionFiles: [],
           git: "g",
           agents: {},
           targetCwd: "/target",
@@ -920,6 +920,7 @@ test("the native hook proxy runs its command on the target", async (t) => {
       socketPath: bridge.socketPath,
       bridgeToken: bridge.token,
       targetCwd: "/target",
+      taskWait: "'/node' '/stage/task-wait.mjs'",
       hooks: {
         commands: [{ command: "notify.sh", timeout: 9 }, {
           command: "slow.sh",
@@ -961,6 +962,20 @@ test("the native hook proxy runs its command on the target", async (t) => {
     cwd: "/target",
     permission_mode: "acceptEdits",
   });
+  // The waiter standing for a target command never reaches project hooks.
+  const waiter = io({
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "'/node' '/stage/task-wait.mjs' job-1" },
+  });
+  assert.equal(
+    await runProxy("notify.sh", {
+      ...waiter,
+      signal: new AbortController().signal,
+    }),
+    0,
+  );
+  assert.equal(runs.length, 1);
   // Native's hook timeout terminates the proxy; the target run is cancelled.
   const controller = new AbortController();
   const second = io({ hook_event_name: "Stop" });

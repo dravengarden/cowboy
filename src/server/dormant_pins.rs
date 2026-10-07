@@ -17,7 +17,7 @@ use std::time::Duration;
 use super::*;
 
 /// One persisted setting: session id -> first epoch ms it was seen dormant.
-const DORMANT_SINCE: &str = "session_dormant_since";
+const DORMANT_SINCE: &str = crate::core::settings_keys::SESSION_DORMANT_SINCE;
 
 /// Keep the first-seen time of sessions still dormant, start the clock for
 /// newly dormant ones, and forget every other session.
@@ -37,14 +37,23 @@ fn due(since_ms: i64, now_ms: i64, after: Duration) -> bool {
         .is_ok_and(|elapsed| elapsed >= u64::try_from(after.as_millis()).unwrap_or(u64::MAX))
 }
 
-fn load(state: &AppState) -> BTreeMap<String, i64> {
-    state
-        .hub
-        .settings_snapshot()
+fn load(hub: &Hub) -> BTreeMap<String, i64> {
+    hub.settings_snapshot()
         .get(DORMANT_SINCE)
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
+}
+
+/// Advance and persist the dormancy clock. Runs on every pass, whether or not
+/// re-pinning is enabled, so the first-seen time survives Controller restarts.
+fn record_dormancy(hub: &Hub, dormant: &BTreeSet<String>, now_ms: i64) -> BTreeMap<String, i64> {
+    let previous = load(hub);
+    let next = next_dormancy(&previous, dormant, now_ms);
+    if next != previous {
+        hub.set_setting(DORMANT_SINCE.to_owned(), serde_json::json!(next));
+    }
+    next
 }
 
 /// Run before a retention pass. Records dormancy every time; re-pins only when
@@ -61,14 +70,8 @@ pub(super) async fn repin(state: &Arc<AppState>) {
         })
         .map(|session| session.id.clone())
         .collect();
-    let previous = load(state);
     let now = now_ms();
-    let next = next_dormancy(&previous, &dormant, now);
-    if next != previous {
-        state
-            .hub
-            .set_setting(DORMANT_SINCE.to_owned(), serde_json::json!(next));
-    }
+    let next = record_dormancy(&state.hub, &dormant, now);
     if !state
         .service_config
         .get(&crate::config::schema::PLUGIN_REPIN_DORMANT_SESSIONS)
@@ -144,6 +147,54 @@ mod tests {
             second,
             BTreeMap::from([("a".into(), 100), ("c".into(), 500)])
         );
+    }
+
+    /// `repin` runs this recording step before it reads
+    /// `plugins.repin_dormant_sessions`, so it is also the default-off path.
+    async fn dormancy_survives_restart_contract(url: &str, root: &std::path::Path) {
+        let store = Store::connect(url, root.join("artifacts")).await.unwrap();
+        store.migrate().await.unwrap();
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, rx) = StoreSink::channel(16, health.clone());
+        let hub = Hub::with_store(Some(sink));
+        record_dormancy(&hub, &ids(&["a", "b"]), 100);
+        drop(hub);
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            run_store_writer(store, rx, health.clone(), shutdown),
+        )
+        .await
+        .expect("the dormancy write must drain");
+        assert_eq!(health.failed_batches(), 0, "{:?}", health.last_error());
+        assert!(health.is_healthy());
+
+        let reopened = Store::connect(url, root.join("artifacts")).await.unwrap();
+        reopened.migrate().await.unwrap();
+        let restored = Hub::new();
+        restored.load_settings(reopened.load_settings().await.unwrap());
+        assert_eq!(
+            record_dormancy(&restored, &ids(&["a"]), 500),
+            BTreeMap::from([("a".into(), 100)]),
+            "a restart must not reset the dormancy clock"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_dormancy_clock_persists_and_survives_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", root.path().join("fixture.sqlite").display());
+        dormancy_survives_restart_contract(&url, root.path()).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+    async fn postgres_dormancy_clock_persists_and_survives_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+        dormancy_survives_restart_contract(&url, root.path()).await;
     }
 
     #[test]

@@ -1,8 +1,13 @@
 //! Opt-in, idle-only adoption of the Machine's installed Provider release.
+use std::collections::HashSet;
+
 use super::*;
 
 fn key(session: &str) -> String {
-    format!("session_provider_auto_update:{session}")
+    format!(
+        "{}{session}",
+        crate::core::settings_keys::SESSION_PROVIDER_AUTO_UPDATE_PREFIX
+    )
 }
 
 pub(super) fn enabled(hub: &Hub, session: &str) -> bool {
@@ -42,6 +47,52 @@ fn newer(current: &str, target: &str) -> bool {
     }
 }
 
+/// A session adopts the installed release when it opted in itself, or when
+/// `plugins.auto_update_idle_sessions` is on and it has had no event for
+/// `plugins.auto_update_idle_after`. System sessions only update on opt-in.
+fn wants_update(
+    opted_in: bool,
+    fleet_policy: bool,
+    system: bool,
+    idle_for: Option<std::time::Duration>,
+    idle_after: std::time::Duration,
+) -> bool {
+    opted_in || (fleet_policy && !system && idle_for.is_some_and(|idle| idle >= idle_after))
+}
+
+fn eligible(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    wants_update(
+        enabled(&state.hub, &meta.id),
+        state
+            .service_config
+            .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_SESSIONS),
+        meta.system,
+        state.hub.session_idle_for(&meta.id),
+        state
+            .service_config
+            .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_AFTER),
+    )
+}
+
+/// Machines that may start one automatic update in this pass: none of their
+/// sessions is still starting. Updating a whole idle fleet at once relaunches
+/// every worker together and can overrun the Machine's command queue.
+fn machines_ready_for_update<'a>(
+    sessions: impl IntoIterator<Item = (&'a str, Status)>,
+) -> HashSet<String> {
+    let mut ready = HashSet::new();
+    let mut starting = HashSet::new();
+    for (machine, status) in sessions {
+        if status == Status::Starting {
+            starting.insert(machine);
+        } else {
+            ready.insert(machine.to_owned());
+        }
+    }
+    ready.retain(|machine| !starting.contains(machine.as_str()));
+    ready
+}
+
 pub(super) async fn run(state: Arc<AppState>) {
     let mut shutdown = state.shutdown.clone();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -51,9 +102,18 @@ pub(super) async fn run(state: Arc<AppState>) {
             _ = shutdown.changed() => break,
             _ = tick.tick() => {},
         }
-        for meta in state.hub.session_list() {
+        let sessions = state.hub.session_list();
+        let mut ready = machines_ready_for_update(
+            sessions
+                .iter()
+                .map(|meta| (meta.machine_id.as_str(), meta.status)),
+        );
+        for meta in sessions {
             // Do not revive stopped/crashed sessions, or retry a failed native resume.
-            if meta.status != Status::Running || !enabled(&state.hub, &meta.id) {
+            if meta.status != Status::Running
+                || !ready.contains(&meta.machine_id)
+                || !eligible(&state, &meta)
+            {
                 continue;
             }
             let Ok(_fence) = ProviderReloadFence::acquire(
@@ -66,7 +126,7 @@ pub(super) async fn run(state: Arc<AppState>) {
                 continue;
             };
             if !newer(&meta.provider_version, &target.version)
-                || !enabled(&state.hub, &meta.id)
+                || !eligible(&state, &meta)
                 || *shutdown.borrow()
             {
                 continue;
@@ -75,6 +135,7 @@ pub(super) async fn run(state: Arc<AppState>) {
             // the Hub lock, preserves native identity, and fences racing prompts.
             match apply_session_provider_reload(&state, &meta, &target) {
                 Ok(()) => {
+                    ready.remove(&meta.machine_id);
                     tracing::info!(session = %meta.id, version = %target.version, "automatic Provider update started")
                 }
                 Err(error) => {
@@ -88,6 +149,18 @@ pub(super) async fn run(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_machine_updates_one_session_at_a_time() {
+        let ready = machines_ready_for_update([
+            ("ovh", Status::Running),
+            ("ovh", Status::Starting),
+            ("hawk", Status::Running),
+            ("hawk", Status::Exited),
+            ("falcon", Status::Starting),
+        ]);
+        assert_eq!(ready, HashSet::from(["hawk".to_owned()]));
+    }
 
     #[test]
     fn policy_is_opt_in_session_scoped_and_restored() {
@@ -108,6 +181,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn fleet_policy_updates_only_long_idle_non_system_sessions() {
+        let hour = std::time::Duration::from_hours(1);
+        let idle = |minutes| Some(std::time::Duration::from_mins(minutes));
+        // Opt-in alone keeps its previous meaning, regardless of idleness.
+        assert!(wants_update(true, false, false, idle(0), hour));
+        assert!(wants_update(true, false, true, None, hour));
+        // Fleet policy needs the full idle period.
+        assert!(!wants_update(false, true, false, idle(59), hour));
+        assert!(wants_update(false, true, false, idle(60), hour));
+        assert!(!wants_update(false, true, false, None, hour));
+        // System sessions and a disabled policy never update without opt-in.
+        assert!(!wants_update(false, true, true, idle(600), hour));
+        assert!(!wants_update(false, false, false, idle(600), hour));
     }
 
     #[test]

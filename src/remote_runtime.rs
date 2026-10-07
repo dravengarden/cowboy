@@ -958,6 +958,11 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         .collect();
     commands.sort_by_key(|(_, command)| command_priority(command));
     for (key, command) in commands {
+        // Already carried by this connection. `queue` and a rejected ack clear
+        // the key to request a resend; a reconnect clears every key.
+        if shared.sent.lock().contains(&key) {
+            continue;
+        }
         if command
             .session_id()
             .is_some_and(|id| !shared.hub.accepts_runtime_projection(id))
@@ -2968,6 +2973,48 @@ mod tests {
             commands.push(command);
         }
         commands
+    }
+
+    /// Every `queue` wakes the writer. Re-sending every unacknowledged command
+    /// on each wake made a burst of resets quadratic and saturated the
+    /// Machine's bounded core command queue.
+    #[tokio::test]
+    async fn each_wake_writes_only_commands_not_already_on_the_wire() {
+        let ids: Vec<String> = (0..12).map(|index| format!("s{index}")).collect();
+        let hub = Hub::new();
+        for id in &ids {
+            hub.create_local_session(
+                id.clone(),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                "test".to_owned(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+        }
+        let runtime = RemoteRuntime::for_test(hub, ids.iter().map(|id| snapshot(id)).collect());
+        let mut written = 0;
+        for id in &ids {
+            runtime.reset(snapshot(id).launch.unwrap());
+            let wire = pending_wire_commands(&runtime).await;
+            // EnsureSession, the reset Stop and its replayed options; nothing
+            // that an earlier wake already carried.
+            assert!(
+                wire.iter()
+                    .all(|command| command.session_id() == Some(id.as_str())),
+                "{wire:?}"
+            );
+            assert!(
+                wire.iter()
+                    .any(|command| matches!(command, CoreCommand::StopSession { .. }))
+            );
+            written += wire.len();
+        }
+        assert_eq!(written, runtime.pending_for_test().len());
+        assert!(pending_wire_commands(&runtime).await.is_empty());
+        // A reconnect forgets what the previous connection carried.
+        runtime.shared.sent.lock().clear();
+        assert_eq!(pending_wire_commands(&runtime).await.len(), written);
     }
 
     #[tokio::test]

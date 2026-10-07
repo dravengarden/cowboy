@@ -486,7 +486,7 @@ async function routingFixture({ memory = false, agents = {} } = {}) {
     socketPath: "/tmp/cowboy-claude-mod-fixture/bridge.sock",
     descriptions: DESCRIPTIONS,
     environment: "target environment",
-    instructions: "target instructions",
+    instructionFiles: [],
     git: "target git",
     agents,
     targetCwd: "/target",
@@ -563,6 +563,8 @@ test("every remote tool crosses the authenticated bridge without native executio
         tool,
         input: inputs[tool],
         owner: "native-agent",
+        // Bash carries the session values native sets in its environment.
+        ...(tool === "Bash" ? { shell: {} } : {}),
       });
       assert.equal(event.tool, tool);
     });

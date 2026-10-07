@@ -73,7 +73,21 @@ prefix gets shell-form hooks as one argument with placeholders unsubstituted;
 exec-form hooks bypass it; `classic.*` events (including `SubagentStart`)
 carry the base hook input; facade calls never reach settings tool hooks;
 PermissionRequest hooks race the host prompt; and a non-zero Bash exit is a
-tool error. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
+tool error. Bash parity is checked against
+`tools/claude_shell_native_baseline.json`: re-run the native-local probe for a
+candidate CLI (the shared cases are in `tools/claude_shell_cases.py`) and
+re-capture native's command line, environment and snapshot generator, since
+the facade reproduces them. Completion notifications for target commands rely
+on a plugin's `$.tool.call` of a native background Bash being notified like
+the model's own, on the `<task-notification>` element shape the Mod rewrites,
+and on `$.session.receive` staying unavailable (re-measure: if a later CLI
+offers a native notification injection, prefer it over the waiter task);
+the `*notification*` checks cover these. Session context relies on native's
+instruction discovery (no AGENTS.md; CLAUDE.md, rules, imports, nested files),
+on `prompt.context` rendering `instructionFiles`, on the `session_context`
+attachment's `# gitStatus` section and on the `tool.call hook additional
+context:` label this module removes; re-measure them per CLI (the
+`*instruction*` and `*git*` checks). The packaged hook checks (`*_hook_*`/`*_hooks_*`,
 `nonzero_bash_exit_is_native_tool_error`) cover these; the native baselines
 are in the project hooks receipt.
 

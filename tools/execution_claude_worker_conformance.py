@@ -25,6 +25,7 @@ from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFix
 from execution_environment_probe import Executor, ProbeFailure, require
 from plugin_runtime_conformance import closed_environment
 from matrix_execution_fixture import MatrixFixture
+from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 
 
 def tool(name, arguments):
@@ -454,6 +455,283 @@ def permission_phases(args, api, client, context_checked, checks):
     client.permission = None
 
 
+def shell_phases(args, api, client, shell_results, checks):
+    """Shared Bash cases in one turn; results are compared with native-local ones."""
+    (args.target / "sub").mkdir(exist_ok=True)
+    steps = [tool("Bash", arguments) for _, arguments in SHELL_CASES]
+    ids = {call[0]["id"]: index for index, call in enumerate(steps)}
+
+    def router(requests):
+        # Keyed on the conversation, so a background child's request cannot
+        # take a step.
+        last = requests[-1]["messages"][-1]
+        done = [ids[block["tool_use_id"]] for block in (last.get("content") if isinstance(last.get("content"), list) else [])
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in ids]
+        if done:
+            following = max(done) + 1
+            return steps[following] if following < len(steps) else [{"type": "text", "text": "SHELL_DONE"}]
+        if "Run the shell parity fixture." in " ".join(text_blocks(last)):
+            return steps[0]
+        raise ProbeFailure("unexpected shell phase request")
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(steps) + 20))
+    client.prompt(text="Run the shell parity fixture.", timeout=120)
+    for request in reversed(api.requests):
+        for block in outputs(request):
+            if block.get("tool_use_id") in ids and SHELL_CASES[ids[block["tool_use_id"]]][0] not in shell_results:
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = "".join(item.get("text", "") for item in content)
+                shell_results[SHELL_CASES[ids[block["tool_use_id"]]][0]] = {
+                    "is_error": block.get("is_error", False),
+                    "content": shell_normalize(content, args.target) if isinstance(content, str) else content,
+                }
+    require(len(shell_results) == len(SHELL_CASES), "shell parity results missing")
+    # Native-local results for the same cases. A Mods-answered error is
+    # wrapped in <tool_use_error> tags; it is the one accepted difference.
+    native = json.loads((Path(__file__).parent / "claude_shell_native_baseline.json").read_text())["results"]
+    differences = {}
+    for name, expected in native.items():
+        actual = dict(shell_results.get(name, {}))
+        if actual.get("is_error") and isinstance(actual.get("content"), str):
+            actual["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", actual["content"], flags=re.S)
+        if actual != expected:
+            differences[name] = {"native": expected, "remote": shell_results.get(name)}
+    require(not differences, "Bash results differ from native-local: " + json.dumps(differences)[:3000])
+    checks.append("bash_results_match_native_local")
+
+
+CONTEXT_FILES = {
+    "CLAUDE.md": "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL\n@docs/imported.md\n",
+    "docs/imported.md": "TARGET_IMPORTED_BY_AT\n",
+    "CLAUDE.local.md": "TARGET_CLAUDE_LOCAL_MD\n",
+    ".claude/CLAUDE.md": "TARGET_DOT_CLAUDE_MD\n",
+    ".claude/rules/always.md": "TARGET_RULE_ALWAYS\n",
+    ".claude/rules/scoped.md": "---\npaths:\n  - \"ctx-sub/**\"\n---\nTARGET_RULE_SCOPED\n",
+    "ctx-sub/CLAUDE.md": "TARGET_NESTED_CLAUDE_MD\n",
+    "ctx-sub/AGENTS.md": "TARGET_NESTED_AGENTS_MUST_NOT_REACH_MODEL\n",
+    "ctx-sub/file.txt": "nested file\n",
+}
+
+
+def write_context_fixture(target):
+    for name, text in CONTEXT_FILES.items():
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (target.parent / "CLAUDE.md").write_text("TARGET_PARENT_CLAUDE_MD\n")
+
+
+def context_phases(args, api, client, checks):
+    """Target instruction files, environment and Git context in native's form."""
+    first = api.requests[0]["messages"][0]
+    text = "\n".join(block.get("text", "") for block in first["content"] if isinstance(block, dict))
+    target = str(args.target)
+    expected = [
+        f"Contents of {args.target.parent}/CLAUDE.md (project instructions, checked into the codebase):\n\nTARGET_PARENT_CLAUDE_MD",
+        f"Contents of {target}/CLAUDE.md (project instructions, checked into the codebase):\n\nTARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL",
+        f"Contents of {target}/docs/imported.md (project instructions, checked into the codebase):\n\nTARGET_IMPORTED_BY_AT",
+        f"Contents of {target}/.claude/CLAUDE.md (project instructions, checked into the codebase):\n\nTARGET_DOT_CLAUDE_MD",
+        f"Contents of {target}/.claude/rules/always.md (project instructions, checked into the codebase):\n\nTARGET_RULE_ALWAYS",
+        f"Contents of {target}/CLAUDE.local.md (user's private project instructions, not checked in):\n\nTARGET_CLAUDE_LOCAL_MD",
+    ]
+    positions = [text.find(item) for item in expected]
+    require("Codebase and user instructions are shown below." in text and all(position >= 0 for position in positions)
+            and positions == sorted(positions) and "TARGET_RULE_SCOPED" not in text and
+            "TARGET_GUIDANCE_MUST_REACH_MODEL" not in text and "TARGET_NESTED" not in text,
+            "target instructions differ from native's: " + text[:4000])
+    checks.append("target_instruction_files_render_as_native")
+    require(f"# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {target}\n"
+            " - Is a git repository: true\n - Platform: linux\n - Shell: " in text and " - OS Version: Linux " in text,
+            "environment block differs from native's: " + text[:2000])
+    require("# gitStatus\nThis is the git status at the start of the conversation." in text and
+            "\n\nCurrent branch: " in text and "\n\nMain branch (you will usually use this for PRs): " in text and
+            "\n\nStatus:\n" in text and "\n\nRecent commits:\n" in text,
+            "git status block differs from native's: " + text[max(0, text.find("Codebase and user")):][-3000:])
+    checks.append("target_environment_and_git_blocks_render_as_native")
+
+    issued = {}
+    steps = {"CONTEXT_NESTED": [tool("Read", {"file_path": "ctx-sub/file.txt"}),
+                                tool("Read", {"file_path": "ctx-sub/file.txt"})]}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        blocks = last.get("content") if isinstance(last.get("content"), list) else []
+        done = [issued[block["tool_use_id"]] for block in blocks
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in issued]
+        index = done[-1] + 1 if done else 0
+        if not done and "CONTEXT_NESTED" not in " ".join(text_blocks(last)):
+            raise ProbeFailure("unexpected context phase request")
+        if index < len(steps["CONTEXT_NESTED"]):
+            call = steps["CONTEXT_NESTED"][index]
+            issued[call[0]["id"]] = index
+            return call
+        return [{"type": "text", "text": "CONTEXT_DONE"}]
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 10)
+    client.prompt(text="CONTEXT_NESTED", timeout=60)
+    messages = {}
+    for request in api.requests:
+        for message in request.get("messages", []):
+            content = message.get("content")
+            for block in content if isinstance(content, list) else []:
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in issued:
+                    messages[issued[block["tool_use_id"]]] = json.dumps(message, ensure_ascii=False)
+    print("nested context diagnostic:", messages.get(0, "")[:1500])
+    require(f"<system-reminder>\\nContents of {target}/ctx-sub/CLAUDE.md:\\n\\nTARGET_NESTED_CLAUDE_MD" in messages.get(0, "") and
+            f"Contents of {target}/.claude/rules/scoped.md:\\n\\nTARGET_RULE_SCOPED" in messages.get(0, "") and
+            "TARGET_NESTED_AGENTS" not in messages.get(0, "") and "TARGET_NESTED_CLAUDE_MD" not in messages.get(1, ""),
+            "nested instructions differ from native's: " + messages.get(0, "")[:2000])
+    checks.append("read_attaches_nested_instructions_once_as_native")
+
+
+def notification_phases(args, api, client, checks):
+    """Target commands left running notify the model as native background tasks do."""
+    handle = re.compile(r"cowboy-task://([A-Za-z0-9-]+)")
+    issued = {}
+    asked = []
+
+    def job_of(requests):
+        found = handle.search(json.dumps(requests[-1]["messages"][-1]))
+        require(found, "background result named no handle")
+        return found[1]
+
+    plans = {
+        "NOTIFY_IDLE": [tool("Bash", {"command": "echo bg-out; sleep 2; exit 3", "run_in_background": True})],
+        "NOTIFY_BUSY": [tool("Bash", {"command": "sleep 1; echo busy-out", "run_in_background": True}),
+                        tool("Bash", {"command": "sleep 5; echo fg"})],
+        "NOTIFY_STOP": [tool("Bash", {"command": "sleep 30", "run_in_background": True}),
+                        lambda requests: tool("TaskStop", {"task_id": job_of(requests)})],
+        "NOTIFY_TIMEOUT": [tool("Bash", {"command": "echo t1; sleep 3; echo t2", "timeout": 1000})],
+        "NOTIFY_ASK": [tool("Bash", {"command": "touch notify-asked.txt; sleep 1", "run_in_background": True})],
+    }
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        blocks = last.get("content") if isinstance(last.get("content"), list) else []
+        done = [issued[block["tool_use_id"]] for block in blocks
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in issued]
+        if done:
+            marker, index = done[-1]
+        else:
+            latest = " ".join(text_blocks(last))
+            marker = next((name for name in plans if name in latest), None)
+            if marker is None:
+                require("<task-notification>" in json.dumps(last), "unexpected notification phase request")
+                return [{"type": "text", "text": "NOTED"}]
+            index = -1
+        if index + 1 < len(plans[marker]):
+            step = plans[marker][index + 1]
+            call = step(requests) if callable(step) else step
+            issued[call[0]["id"]] = (marker, index + 1)
+            return call
+        return [{"type": "text", "text": marker + "_DONE"}]
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 60)
+
+    def pump_until(condition, seconds, message):
+        deadline = time.monotonic() + seconds
+        while not condition():
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, message)
+            try:
+                client.until(lambda frame: frame.get("type") == "result", timeout=min(remaining, 2))
+            except ProbeFailure:
+                pass
+
+    def notifications(job, since=0):
+        found = []
+        for request in api.requests[since:]:
+            for message in request.get("messages", []):
+                encoded = json.dumps(message, ensure_ascii=False)
+                if f"<task-id>{job}</task-id>" in encoded:
+                    found.append(encoded)
+        return found
+
+    def job_for(marker):
+        for request in api.requests:
+            for block in outputs(request):
+                if issued.get(block.get("tool_use_id"), (None, None))[0] == marker:
+                    found = handle.search(json.dumps(block))
+                    if found:
+                        return found[1], block
+        raise ProbeFailure("notification phase result missing")
+
+    def original_id(marker):
+        return next(identity for identity, (name, index) in issued.items() if name == marker and index == 0)
+
+    runtime_markers = [str(args.runtime), "task-wait.mjs"]
+
+    # Idle: the command ends after the turn; native starts a turn for it.
+    client.prompt(text="NOTIFY_IDLE", timeout=60)
+    job, block = job_for("NOTIFY_IDLE")
+    require("You will be notified when it completes." in json.dumps(block), "background result made no promise")
+    start = len(api.requests)
+    pump_until(lambda: notifications(job, start), 30, "idle completion did not start a turn")
+    note = notifications(job, start)[-1]
+    require("NOT USER INPUT" in note and f"<tool-use-id>{original_id('NOTIFY_IDLE')}</tool-use-id>" in note and
+            f"<output-file>cowboy-task://{job}</output-file>" in note and "<status>failed</status>" in note and
+            'Background command \\"echo bg-out; sleep 2; exit 3\\" failed with exit code 3' in note and
+            not any(marker in note for marker in runtime_markers),
+            "idle notification differs from native's: " + note[:1500])
+    checks.append("background_completion_starts_a_native_notification_turn")
+
+    # Busy: the notification is delivered into the running turn, no extra turn.
+    client.prompt(text="NOTIFY_BUSY", timeout=60)
+    busy, _ = job_for("NOTIFY_BUSY")
+    delivered = notifications(busy)
+    require(delivered and "<status>completed</status>" in delivered[0] and
+            'Background command \\"sleep 1; echo busy-out\\" completed (exit code 0)' in delivered[0],
+            "busy completion was not delivered into the running turn")
+    checks.append("background_completion_is_delivered_into_a_running_turn")
+
+    # Stopped: natively nothing is sent.
+    client.prompt(text="NOTIFY_STOP", timeout=60)
+    stopped, _ = job_for("NOTIFY_STOP")
+    start = len(api.requests)
+    time.sleep(4)
+    pump_until(lambda: True, 1, "")
+    require(not notifications(stopped, start), "a stopped background command sent a notification")
+    checks.append("stopped_background_command_sends_no_notification")
+
+    # Timeout: moved to the background as natively, then notified.
+    client.prompt(text="NOTIFY_TIMEOUT", timeout=60)
+    moved, block = job_for("NOTIFY_TIMEOUT")
+    require("did not complete within its 1s timeout and was moved to the background" in json.dumps(block),
+            "timed-out command was not moved to the background")
+    start = len(api.requests)
+    pump_until(lambda: notifications(moved, start), 30, "timed-out command sent no completion notification")
+    require("completed (exit code 0)" in notifications(moved, start)[-1], "timeout notification status differs")
+    checks.append("timed_out_command_moves_to_background_and_notifies")
+
+    # The native task behind it never asks the user a second time.
+    def answer(request):
+        asked.append(request)
+        return {"behavior": "allow", "updatedInput": request["input"]}
+    client.permission = answer
+    request_id = "fixture-notify-mode-default"
+    client.send({"type": "control_request", "request_id": request_id,
+                 "request": {"subtype": "set_permission_mode", "mode": "default"}})
+    client.until(lambda frame: frame.get("type") == "control_response" and
+                 frame["response"].get("request_id") == request_id)
+    client.prompt(text="NOTIFY_ASK", timeout=60)
+    asked_job, _ = job_for("NOTIFY_ASK")
+    start = len(api.requests)
+    pump_until(lambda: notifications(asked_job, start), 30, "background command in default mode sent no notification")
+    require(len(asked) == 1 and asked[0]["input"].get("command") == "touch notify-asked.txt; sleep 1",
+            f"the notification task asked the user: {[item.get('input') for item in asked]}")
+    request_id = "fixture-notify-mode-bypass"
+    client.send({"type": "control_request", "request_id": request_id,
+                 "request": {"subtype": "set_permission_mode", "mode": "bypassPermissions"}})
+    client.until(lambda frame: frame.get("type") == "control_response" and
+                 frame["response"].get("request_id") == request_id)
+    client.permission = None
+    checks.append("notification_task_needs_no_second_approval")
+
+
 def hook_phases(args, api, client, native, session, context_checked, checks):
     """Target project hooks: lifecycle and native-tool hooks run by native
     through the proxy, facade tool hooks by the adapter, all on the target."""
@@ -535,6 +813,18 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                 return json.dumps(blocks) + json.dumps(request["messages"][-1])
         raise ProbeFailure("hook phase result missing")
 
+    def message_of(name):
+        # The user message carrying the result and its reminders, from any
+        # request (the latest may be a background child's own conversation).
+        for request in reversed(api.requests):
+            for message in request.get("messages", []):
+                content = message.get("content")
+                if isinstance(content, list) and any(
+                        block.get("type") == "tool_result" and issued.get(block.get("tool_use_id")) == name
+                        for block in content):
+                    return json.dumps(message)
+        raise ProbeFailure("hook phase result missing")
+
     client.close()
     del api.steps[len(api.requests):]
     api.steps.extend([router] * 20)
@@ -580,8 +870,12 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
             "PreToolUse:Bash hook error: [if grep -q FORBIDDEN" in result_of("HOOK_BLOCK") and
             "blocked-by-target-hook" in result_of("HOOK_BLOCK"), "target PreToolUse hook did not block before the effect")
     require((args.target / "hooked.txt").read_text() == "hooked\n" and
-            "PostToolUse:Write hook additional context: TARGET_POST_CONTEXT" in json.dumps(api.requests[-1]),
-            "target PostToolUse context did not reach the model")
+            # The last request may be a background child's, without this history.
+            "PostToolUse:Write hook additional context: TARGET_POST_CONTEXT" in message_of("HOOK_WRITE"),
+            "target PostToolUse context did not reach the model: " + result_of("HOOK_WRITE")[:600] +
+            " events: " + (events.read_text() if events.exists() else "none") +
+            " hook notes: " + json.dumps(sorted({m for m in re.findall(r"[^\\\"]{0,80}hook[^\\\"]{0,160}",
+                                                                   json.dumps(api.requests[phase_start:]))}))[:3000])
     deadline = time.monotonic() + 10
     while "Stop" not in (events.read_text() if events.exists() else "") and time.monotonic() < deadline:
         time.sleep(0.1)
@@ -607,7 +901,13 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                  "PermissionRequest", "Stop", "StopTranscript"]:
         require(name in recorded, f"target {name} hook did not run on the target")
     # The fixture executor shares this host's HOME; only new entries count.
-    leftovers = set(hook_inputs.iterdir() if hook_inputs.exists() else []) - inputs_before
+    # A background child's hook may still be running: its copies must go when it ends.
+    deadline = time.monotonic() + 15
+    while True:
+        leftovers = set(hook_inputs.iterdir() if hook_inputs.exists() else []) - inputs_before
+        if not leftovers or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
     require(not leftovers, f"hook input or transcript copies were left on the target: {sorted(leftovers)[:3]}")
     require(hook_inputs.stat().st_mode & 0o777 == 0o700, "target hook input directory is not private")
     require((args.target / "hook-project-dir.txt").read_text() == str(args.target),
@@ -651,7 +951,7 @@ def main():
     require(wrapper.is_file(), "packaged Claude execution launcher missing")
     checks = ["machine_owned_worktree", "machine_restart_reattaches_same_keeper_and_binding"]
     (args.runtime / "CLAUDE.md").write_text("RUNTIME_CLAUDE_GUIDANCE_MUST_NOT_REACH_MODEL")
-    (args.target / "CLAUDE.md").write_text("TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL")
+    write_context_fixture(args.target)
     def png_chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
     pixel = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) +
@@ -727,8 +1027,9 @@ def main():
                     "RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in encoded, "runtime context reached model")
             if "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" not in encoded:
                 print("target guidance diagnostic:", index, json.dumps({"system": request.get("system"), "tools": sorted(names), "messages": request.get("messages", [])[:1]})[:3500])
+            # Native Claude Code does not read AGENTS.md; CLAUDE.md is the guidance.
             require(str(args.target) in encoded and "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" in encoded and
-                    "TARGET_GUIDANCE_MUST_REACH_MODEL" in encoded, "target guidance missing")
+                    "TARGET_GUIDANCE_MUST_REACH_MODEL" not in encoded, "target guidance missing or AGENTS.md read")
         require(not fixture.calls, "test client unexpectedly supplied target tools")
         require(api.failure is None, api.failure or "scripted API failed")
     client = None
@@ -825,9 +1126,11 @@ def main():
             "os.write(2,b\"stream-marker\"); time.sleep(0.2); os.write(1,bytes([184,173]))'"})])
         client.prompt(timeout=90)
         stream_result = json.dumps(list(outputs(api.requests[-1]))[-1], ensure_ascii=False)
-        require("中" in stream_result and "stream-marker" in stream_result and "\ufffd" not in stream_result,
-                "split target UTF-8 was corrupted across stdout/stderr")
-        checks.append("native_bash_preserves_utf8_split_across_streams")
+        # Native merges both streams into one in write order, so a character
+        # split around a stderr write decodes as native-local does (measured).
+        require("\ufffdstream-marker\ufffd\ufffd" in stream_result,
+                "Bash streams were not merged in write order: " + stream_result[:300])
+        checks.append("native_bash_merges_streams_in_write_order")
         # Native validation must accept replacing a binary original, and target
         # path expansion must use the executor's home rather than Claude's.
         (args.target / "replace-image.png").write_bytes(pixel)
@@ -955,6 +1258,10 @@ def main():
         checks.append("native_interrupt_stops_foreground_target_process")
         client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
         permission_phases(args, api, client, context_checked, checks)
+        shell_results = {}
+        shell_phases(args, api, client, shell_results, checks)
+        notification_phases(args, api, client, checks)
+        context_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
@@ -1011,7 +1318,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
@@ -1059,6 +1366,7 @@ def main():
             "scripted_api_requests": native_requests + len(api.requests),
             "native_title_requests": title_requests + len(api.title_requests),
             "agent_observations": agent_observations,
+            "shell_results": shell_results,
             "production_credentials": False, "production_activation": False,
             "not_checked": ["real_subscription_inference", "cross_host_latency", "project_hook_settings_reload",
                             "agent_permission_modes", "grandchild_agents", "teammates_and_agent_worktrees",

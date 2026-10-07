@@ -14,6 +14,13 @@ const hookBase = {};
 // Native agent id -> its agent type, from SubagentStart.
 const subagentTypes = new Map();
 
+function recordEffort(_$, event, next) {
+  if (event?.effort && typeof event.effort === "object") {
+    hookBase.effort = event.effort;
+  }
+  return next(event);
+}
+
 export function recordHookBase(event) {
   for (const key of ["session_id", "transcript_path", "prompt_id"]) {
     if (typeof event?.[key] === "string") hookBase[key] = event[key];
@@ -38,10 +45,41 @@ export function targetAgentResult(result, outputFile, handle) {
   };
 }
 
+// Native background task id -> the target command it stands for.
+const shellTasks = new Map();
+// Target job id -> its native background task, and the calls in flight that
+// start or stop one (they pass to native untouched).
+const jobMirrors = new Map();
+const mirrorCalls = new Set();
+
+// A notification for a native task standing for a target command reads as
+// one for that command: its id, tool use, output handle and command line.
+export function targetShellNotification(notification, tasks) {
+  const id = /<task-id>([^<]*)<\/task-id>/.exec(notification)?.[1];
+  const task = tasks.get(id);
+  if (!task) return notification;
+  return notification
+    .replace(`<task-id>${id}</task-id>`, `<task-id>${task.jobId}</task-id>`)
+    .replace(
+      /<tool-use-id>[^<]*<\/tool-use-id>/,
+      `<tool-use-id>${task.toolUseId}</tool-use-id>`,
+    )
+    .replace(
+      /<output-file>[^<]*<\/output-file>/,
+      `<output-file>cowboy-task://${task.jobId}</output-file>`,
+    )
+    .replace(
+      /<summary>Background command "[\s\S]*?" (completed|failed)/,
+      (_match, outcome) =>
+        `<summary>Background command "${task.command}" ${outcome}`,
+    );
+}
+
 export function targetTaskNotificationText(text, outputs) {
   return text.replace(
     /<task-notification>[\s\S]*?<\/task-notification>/g,
-    (notification) => {
+    (found) => {
+      const notification = targetShellNotification(found, shellTasks);
       const id = /<task-id>([^<]*)<\/task-id>/.exec(notification)?.[1];
       const file = outputs.get(id);
       return file === undefined ? notification : notification.replace(
@@ -450,6 +488,83 @@ async function deliverAsync($, event, call, run) {
   });
 }
 
+const NOTIFIED = "You will be notified when it completes. ";
+
+// Natively a command left running notifies the model when it ends, into a
+// running turn or as a turn of its own. A native background task running the
+// runtime-local waiter stands for the target command, so native delivers that
+// notification; without one, the result drops its promise.
+async function notifyOnEnd($, event, task, result) {
+  let nativeId;
+  if (
+    event.agentId === undefined && typeof context.taskWait === "string" &&
+    /^[a-zA-Z0-9-]{1,128}$/.test(task.id) && typeof task.command === "string"
+  ) {
+    const command = `${context.taskWait} ${task.id}`;
+    mirrorCalls.add(command);
+    try {
+      const started = await $.tool.call({
+        tool: "Bash",
+        command,
+        run_in_background: true,
+      });
+      nativeId = started?.result?.backgroundTaskId;
+    } catch {
+      nativeId = undefined;
+    } finally {
+      mirrorCalls.delete(command);
+    }
+  }
+  if (typeof nativeId !== "string" || shellTasks.size >= 4096) {
+    return { ...result, stdout: result.stdout.replace(NOTIFIED, "") };
+  }
+  shellTasks.set(nativeId, {
+    jobId: task.id,
+    toolUseId: event.tool_use_id,
+    command: task.command,
+  });
+  jobMirrors.set(task.id, nativeId);
+  return result;
+}
+
+// Natively a stopped background command sends no notification: stop the
+// native task standing for it too.
+async function stopMirror($, jobId) {
+  const nativeId = jobMirrors.get(jobId);
+  if (nativeId === undefined) return;
+  jobMirrors.delete(jobId);
+  mirrorCalls.add(nativeId);
+  try {
+    await $.tool.call({ tool: "TaskStop", task_id: nativeId });
+  } catch {
+    // The task may already have ended; its notification then still reads as
+    // the command's.
+  } finally {
+    mirrorCalls.delete(nativeId);
+  }
+}
+
+// The session id and effort native puts in a Bash command's environment.
+async function shellSession($) {
+  let sessionId = hookBase.session_id;
+  if (typeof sessionId !== "string") {
+    try {
+      sessionId = await $.session.id();
+    } catch {
+      sessionId = undefined;
+    }
+  }
+  const effort = hookBase.effort?.level;
+  return {
+    ...(typeof sessionId === "string" && /^[a-zA-Z0-9-]{1,128}$/.test(sessionId)
+      ? { sessionId }
+      : {}),
+    ...(typeof effort === "string" && /^[a-z]{1,16}$/.test(effort)
+      ? { effort }
+      : {}),
+  };
+}
+
 // Project PermissionRequest hooks for a prompt the host has not answered.
 // Natively they race the prompt and each other: the first decision withdraws
 // it, and of decisions arriving together a deny wins (measured on 2.1.287).
@@ -636,16 +751,52 @@ function environment() {
   return { text: context?.environment ?? unavailable };
 }
 
+export function unlabeledContext(text) {
+  const label = "tool.call hook additional context: ";
+  return typeof text === "string" && text.startsWith(label)
+    ? text.slice(label.length)
+    : text;
+}
+
+// Replaces native's `# gitStatus` section (the runtime's) with the target's,
+// or drops it outside a repository; null when nothing else remains.
+export function targetSessionContext(text, git) {
+  const header = "# gitStatus\n";
+  const trailer = "\n\nClaude Code attached this context automatically";
+  const start = text.indexOf(header);
+  if (start < 0) {
+    // Native had no Git context (its runtime directory is no repository):
+    // the target's still goes where native puts it.
+    const at = text.indexOf(trailer);
+    return git === null || at < 0
+      ? text
+      : `${text.slice(0, at)}\n${header}${git}${text.slice(at)}`;
+  }
+  let end = text.indexOf("\n# ", start + header.length);
+  if (end < 0) end = text.indexOf(trailer, start);
+  if (end < 0) end = text.length;
+  const rest = text.slice(0, start) + (git === null ? "" : header + git) +
+    text.slice(end);
+  return /^# /m.test(rest) ? rest : null;
+}
+
+// Native renders the target's instruction files in its own framing; none of
+// the runtime's are kept.
 function instructions(_$, event) {
+  if (!context) {
+    return {
+      blocks: [{ name: "claudeMd", text: unavailable }],
+      instructionFiles: [],
+    };
+  }
+  const claudeMd = event.blocks.find((block) => block.name === "claudeMd") ??
+    { name: "claudeMd", text: "" };
   return {
     blocks: [
+      claudeMd,
       ...event.blocks.filter((block) => block.name === "currentDate"),
-      {
-        name: "claudeMd",
-        text: context?.instructions ?? unavailable,
-      },
     ],
-    instructionFiles: [],
+    instructionFiles: context.instructionFiles,
   };
 }
 
@@ -718,10 +869,28 @@ export function register(on) {
     return description ? { description } : next(event);
   }).catch(() => ({ description: unavailable }));
 
+  // The native task standing for a target command is part of a call the
+  // session already decided; it is never put to the user again.
+  on("tool.check", (_$, event, next) =>
+    mirrorCalls.has(
+        event.tool === "Bash"
+          ? event.input?.command
+          : event.tool === "TaskStop"
+          ? event.input?.task_id
+          : undefined,
+      )
+      ? { decision: "allow" }
+      : next(event));
   on("tool.call", async ($, event, next) => {
     if (["TodoWrite", "AskUserQuestion"].includes(event.tool)) {
       return next(event);
     }
+    // This module's own native background task for a target command, or its
+    // TaskStop: native runs the runtime-local waiter itself.
+    if (
+      event.agentId === undefined &&
+      mirrorCalls.has(event.tool === "Bash" ? event.command : event.task_id)
+    ) return next(event);
     if (
       context?.memory &&
       [
@@ -830,6 +999,7 @@ export function register(on) {
         tool: event.tool,
         input,
         ...(event.agentId === undefined ? {} : { owner: event.agentId }),
+        ...(event.tool === "Bash" ? { shell: await shellSession($) } : {}),
       };
       for (;;) {
         const response = await bridgePost($, path, body);
@@ -843,7 +1013,7 @@ export function register(on) {
               "Execution result unavailable. Inspect state before repeating a mutation.",
           };
         }
-        const result = JSON.parse(response.text);
+        let result = JSON.parse(response.text);
         if (response.status !== 202) {
           if (result.result === undefined) {
             if (typeof result.deny !== "string") return result;
@@ -867,6 +1037,19 @@ export function register(on) {
               ? { deny: [result.deny, ...notes].join("\n\n") }
               : result;
           }
+          const { task, instructions: nested, ...answered } = result;
+          if (task) {
+            answered.result = await notifyOnEnd(
+              $,
+              event,
+              task,
+              answered.result,
+            );
+          }
+          if (event.tool === "TaskStop") {
+            await stopMirror($, input.task_id ?? input.shell_id);
+          }
+          result = answered;
           const post = await toolHooks(
             $,
             "PostToolUse",
@@ -875,7 +1058,20 @@ export function register(on) {
             run,
             result.result,
           );
-          const reminders = [...pre.context, ...post.context];
+          // Nested instruction files follow the result, as natively.
+          const reminders = [
+            ...pre.context,
+            ...(Array.isArray(nested)
+              ? nested.map((file) =>
+                `Contents of ${file.path}:\n\n${file.content}`
+              )
+              : nested?.unavailable
+              ? [
+                "The project's instruction files (CLAUDE.md and rules) for this file's directories could not be loaded from the target. Read them before relying on this file.",
+              ]
+              : []),
+            ...post.context,
+          ];
           // Natively the tool still ran; continue:false then ends the turn.
           const stop = pre.stop ?? post.stop;
           if (stop !== undefined) $.turn.abort().catch(() => {});
@@ -898,9 +1094,18 @@ export function register(on) {
   on("prompt.attachment", { type: "environment" }, environment).catch(
     environment,
   );
-  on("prompt.attachment", { type: "session_context" }, () => ({
-    text: context?.git ?? unavailable,
-  })).catch(() => ({ text: unavailable }));
+  // This module's tool.call context stands for native's own reminders (hook
+  // output, nested instruction files): it reads without the chain's label.
+  on(
+    "prompt.attachment",
+    { origin: { kind: "plugin" } },
+    (_$, event, next) => next({ ...event, text: unlabeledContext(event.text) }),
+  );
+  // Native's session context describes the runtime checkout; its Git status
+  // becomes the target's, in native's own framing.
+  on("prompt.attachment", { type: "session_context" }, (_$, event) => ({
+    text: targetSessionContext(event.text, context ? context.git : null),
+  })).catch(() => ({ text: null }));
   on("prompt.context", instructions).catch(instructions);
   on("prompt.section", { name: "env_info" }, environment).catch(environment);
   on(
@@ -947,6 +1152,10 @@ export function register(on) {
     recordHookBase(event);
     return next(event);
   });
+  // Native reports the turn's effort only in tool-context hook input, first
+  // after a tool batch; Bash and tool hooks carry it from then on.
+  on("classic.PostToolBatch", recordEffort);
+  on("classic.Stop", recordEffort);
   // A subagent's tool hooks name its type, as natively.
   on("classic.SubagentStart", (_$, event, next) => {
     if (
@@ -993,8 +1202,16 @@ export function register(on) {
       !(loaded.targetHome === null ||
         (typeof loaded.targetHome === "string" &&
           loaded.targetHome.startsWith("/"))) ||
-      ![loaded.environment, loaded.instructions, loaded.git].every((value) =>
-        typeof value === "string" && value.length <= 262144
+      typeof loaded.environment !== "string" ||
+      loaded.environment.length > 262144 ||
+      !(loaded.git === null ||
+        (typeof loaded.git === "string" && loaded.git.length <= 262144)) ||
+      !Array.isArray(loaded.instructionFiles) ||
+      !loaded.instructionFiles.every((file) =>
+        typeof file?.path === "string" && file.path.startsWith("/") &&
+        ["user", "project", "local"].includes(file.kind) &&
+        typeof file.content === "string" &&
+        (file.parent === undefined || typeof file.parent === "string")
       )
     ) throw new Error("Invalid bound execution context");
     context = Object.freeze(loaded);

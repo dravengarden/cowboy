@@ -5673,17 +5673,17 @@ impl PostgresStorage {
             sqlx::query_as("SELECT key, value FROM settings")
                 .fetch_all(&self.pool)
                 .await
-                .context("SELECT auth settings")?;
+                .context("SELECT Hub settings")?;
         Ok(rows
             .into_iter()
-            .filter(|(key, _)| crate::admin::is_admin_setting_key(key))
+            .filter(|(key, _)| crate::core::settings_keys::is_persisted_setting_key(key))
             .collect())
     }
 
     pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         anyhow::ensure!(
-            crate::admin::is_admin_setting_key(key),
-            "unsupported internal auth setting"
+            crate::core::settings_keys::is_persisted_setting_key(key),
+            "unsupported Hub setting"
         );
         let mut value = value.clone();
         strip_nul(&mut value);
@@ -5695,7 +5695,7 @@ impl PostgresStorage {
         .bind(&value)
         .execute(&self.pool)
         .await
-        .with_context(|| format!("UPSERT auth setting {key}"))?;
+        .with_context(|| format!("UPSERT Hub setting {key}"))?;
         Ok(())
     }
 
@@ -9007,6 +9007,60 @@ mod storage_contract_tests {
             .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
         let root = tempfile::tempdir().unwrap();
         execution_binding_restore_contract(&url, root.path()).await;
+    }
+
+    /// Every key a Hub caller may set must come back on load; an unregistered
+    /// key would otherwise fail the store writer in production.
+    async fn hub_settings_round_trip_contract(url: &str, root: &std::path::Path) {
+        let store = Store::connect(url, root.join("artifacts")).await.unwrap();
+        store.migrate().await.unwrap();
+        let keys = crate::core::settings_keys::examples();
+        for (index, key) in keys.iter().enumerate() {
+            store
+                .put_setting(key, &serde_json::json!({"index": index}))
+                .await
+                .unwrap_or_else(|error| panic!("{key}: {error:#}"));
+        }
+        assert!(
+            store
+                .put_setting("session.autoResume.default", &serde_json::json!(true))
+                .await
+                .is_err()
+        );
+        let reopened = Store::connect(url, root.join("artifacts")).await.unwrap();
+        let loaded: HashMap<String, serde_json::Value> = reopened
+            .load_settings()
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(loaded.len(), keys.len(), "{loaded:?}");
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                loaded.get(key),
+                Some(&serde_json::json!({"index": index})),
+                "{key}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_every_hub_setting_key_round_trips() {
+        let root = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}",
+            root.path().join("settings.sqlite3").display()
+        );
+        hub_settings_round_trip_contract(&url, root.path()).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+    async fn postgres_every_hub_setting_key_round_trips() {
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+        let root = tempfile::tempdir().unwrap();
+        hub_settings_round_trip_contract(&url, root.path()).await;
     }
 
     #[test]
