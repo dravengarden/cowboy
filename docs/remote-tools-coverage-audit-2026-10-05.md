@@ -650,7 +650,7 @@ binds feature commit `fb6e2ff7` and artifact
 `sha256:994a0575c7025a1c6b042b33ca7afea20ab39c9a0a3287509e4a83d61834b1a3`.
 It records:
 
-- 72 packaged checks, including file parity, on the exact signed package
+- 78 accepted checks, including file parity, on the exact signed package
 - 3.10.0/3.11.0 coexistence
 - Linux and actual macOS probes
 - three Controller reader roles
