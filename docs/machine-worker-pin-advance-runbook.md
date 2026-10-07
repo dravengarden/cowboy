@@ -7,6 +7,16 @@ reasoned, not observed.
 
 ## What it does
 
+**Observed on 2026-10-07, correcting the paragraph below:** activating a Machine
+release with a new worker generation restarted only the Machine. All 7 live workers
+and 22 keepers kept their PIDs and sessions, and no drain or "rollout started" line
+appeared. The broker's desired generation starts empty after a restart, so
+`set_desired_generation` just adopts the value; a rollout needs a desired-generation
+change inside a live broker. Existing workers keep their old generation and are
+recycled when their session revives ("recycling stale worker before session revive"),
+and new launches use the new generation. The drain description below was reasoned,
+not observed, and did not happen.
+
 The Controller takes a Machine's desired worker generation from its Active
 `AcpRuntime` component and sends it on every connection (`SetDesiredGeneration`).
 The Machine then marks every worker whose generation differs for `Drain`: idle

@@ -15,7 +15,10 @@ incarnation design are done and step 4, carriage to the Controller with stale
 observation refusal, is implemented and tested but held on a local branch because
 its wire change would block host-only Machine releases until the worker pin
 advances ([record](plugin-session-incarnation-carriage.md)). Nothing consumes the
-lineage in production yet.
+lineage in production yet. **Update 2026-10-07:** the carriage and the pin advance to
+it are on `main` (`f469cf04`) and active on Hawk's Machine and Controller
+([release](releases/worker-pin-incarnation-carriage-2026-10-07.md)); no live worker
+was drained, and connected Code still fails at a stage that predates this work.
 
 **Update 2026-10-06:** another task completed the worker-pool maintenance (Machine
 `48d3054d`, `worker-135348a7…`, pin `8909c1c8`) and the items below are now active;
