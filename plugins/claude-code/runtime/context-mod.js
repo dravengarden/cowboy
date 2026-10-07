@@ -800,6 +800,45 @@ function instructions(_$, event) {
   };
 }
 
+// Native's own Read of the private local copy of a target file (an image):
+// its result, or its refusal naming the target file instead of the copy.
+export async function nativeLocalRead($, event, next, answer) {
+  const { localRead, localTarget, ...rest } = answer;
+  let local;
+  try {
+    local = await next({ ...event, file_path: localRead });
+  } catch (error) {
+    local = { deny: String(error?.message ?? error).replace(/^Error: /, "") };
+  } finally {
+    try {
+      await bridgePost($, "/local-release", { path: localRead });
+    } catch {
+      // The launcher removes leftover copies when it next starts.
+    }
+  }
+  const named = JSON.parse(
+    // A callback: the target path's own `$` sequences stay literal.
+    JSON.stringify(local ?? {}).replaceAll(
+      JSON.stringify(localRead).slice(1, -1),
+      () => JSON.stringify(localTarget).slice(1, -1),
+    ),
+  );
+  // A native failure comes back as its message, in the error's form.
+  if (named.isError === true || typeof named.deny === "string") {
+    const message = typeof named.deny === "string"
+      ? named.deny
+      : typeof named.result === "string"
+      ? named.result
+      : "Target image could not be read";
+    return { deny: message.replace(/^Error: /, "") };
+  }
+  if (named.result === undefined) {
+    return { deny: "Target image could not be read" };
+  }
+  // Whatever else native returns with it (its size note) stays.
+  return { ...rest, ...named };
+}
+
 export function targetImageResult(event) {
   if (
     event.origin?.kind !== "tool" ||
@@ -1014,6 +1053,9 @@ export function register(on) {
           };
         }
         let result = JSON.parse(response.text);
+        if (response.status !== 202 && typeof result.localRead === "string") {
+          result = await nativeLocalRead($, event, next, result);
+        }
         if (response.status !== 202) {
           if (result.result === undefined) {
             if (typeof result.deny !== "string") return result;

@@ -5,6 +5,7 @@ import {
   readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
@@ -694,10 +695,10 @@ test("Write can replace a previously read image without a post-write decode fail
     "/target with space/pixel",
     Buffer.from("89504e470d0a1a0a0001020304", "hex"),
   );
-  assert.equal(
-    (await tools.nativeCall("Read", { file_path: "pixel" })).result.type,
-    "image",
-  );
+  // Native's own Read reads the local copy; this Read records the stamp.
+  const read = await tools.nativeCall("Read", { file_path: "pixel" });
+  assert.equal(read.result.type, "local_read");
+  await tools.releaseLocal(read.localRead);
   const result = await tools.nativeCall("Write", {
     file_path: "pixel",
     content: "replacement\n",
@@ -753,9 +754,15 @@ test("read images as binary content and preserve notebook metadata", async (t) =
   const { tools, files } = await fixture(t);
   const image = Buffer.from("89504e470d0a1a0a0001020304", "hex");
   files.set("/target with space/pixel", image);
+  // Native's own Read reads a private local copy of the target bytes.
   const read = await tools.call("read", { file_path: "pixel" });
-  assert.equal(read.content[0].type, "image");
-  assert.deepEqual(Buffer.from(read.content[0].data, "base64"), image);
+  assert.equal(read.localTarget, "/target with space/pixel");
+  assert.deepEqual(await readFile(read.localRead), image);
+  assert.equal((await stat(read.localRead)).mode & 0o777, 0o600);
+  await tools.releaseLocal(read.localRead);
+  await assert.rejects(stat(read.localRead));
+  // Only files in the local directory are released.
+  await tools.releaseLocal("/target with space/book.ipynb");
   files.set(
     "/target with space/book.ipynb",
     Buffer.from(

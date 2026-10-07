@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { targetCompactionResult, targetImageResult } from "./context-mod.js";
+import {
+  nativeLocalRead,
+  targetCompactionResult,
+  targetImageResult,
+} from "./context-mod.js";
 
 test("target image result retains media and target path without the native cache locator", () => {
   const image = { type: "image", source: { type: "base64", data: "fixture" } };
@@ -64,4 +68,49 @@ test("native compaction keeps its summary without suggesting a runtime transcrip
   );
   const user = { ...event, door: "prompt" };
   assert.equal(targetCompactionResult(user), user);
+});
+
+test("native's own Read of a local copy names the target file", async () => {
+  const copy = "/runtime/state/local-reads/abc.png";
+  const answer = {
+    localRead: copy,
+    localTarget: "/target/a.png",
+    instructions: [],
+  };
+  const event = { tool: "Read", file_path: "a.png", tool_use_id: "t" };
+  const read = [];
+  const next = (value) => {
+    read.push(value.file_path);
+    return Promise.resolve({
+      result: { type: "image", file: { base64: "AA==", type: "image/png" } },
+      newMessages: [{ note: true }],
+    });
+  };
+  assert.deepEqual(await nativeLocalRead({}, event, next, answer), {
+    instructions: [],
+    result: { type: "image", file: { base64: "AA==", type: "image/png" } },
+    newMessages: [{ note: true }],
+  });
+  assert.deepEqual(read, [copy]);
+  const failing = () =>
+    Promise.resolve({
+      result: `Error: Image file is empty: ${copy}`,
+      isError: true,
+    });
+  assert.deepEqual(await nativeLocalRead({}, event, failing, answer), {
+    deny: "Image file is empty: /target/a.png",
+  });
+  for (const target of ["/target/price$&.png", "/target/price$'.png"]) {
+    assert.deepEqual(
+      await nativeLocalRead({}, event, failing, {
+        ...answer,
+        localTarget: target,
+      }),
+      { deny: `Image file is empty: ${target}` },
+    );
+  }
+  const throwing = () => Promise.reject(new Error(`bad ${copy}`));
+  assert.deepEqual(await nativeLocalRead({}, event, throwing, answer), {
+    deny: "bad /target/a.png",
+  });
 });

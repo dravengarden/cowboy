@@ -33,6 +33,7 @@ const BODY_KEYS = {
   "/resolve": ["path"],
   "/hook": null,
   "/link": ["path"],
+  "/local-release": ["path"],
 };
 
 // Private per-process endpoint. The existing authenticated Cowboy execution
@@ -147,6 +148,14 @@ export async function startModBridge(
           ? await tools.isSymlink(call.path).catch(() => null)
           : null;
         answer(200, { symlink });
+        return;
+      }
+      if (request.url === "/local-release") {
+        // Native's Read has finished with a local copy of a target file.
+        if (typeof call.path === "string") {
+          await tools.releaseLocal(call.path).catch(() => {});
+        }
+        answer(200, { released: true });
         return;
       }
       if (request.url === "/resolve") {

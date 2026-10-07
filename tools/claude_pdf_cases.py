@@ -1,12 +1,16 @@
-"""PDF and file-type Read cases whose results must match native Claude Code.
+"""PDF, image and file-type Read cases whose results must match native Claude Code.
 
 Shared by the native-local baseline probe and the packaged remote acceptance.
 Both sides need poppler's pdfinfo and pdftoppm where the file is read (the dev
 shell provides them). `normalize` replaces the project root and reduces
 base64 payloads to their length and digest.
 """
+import base64
 import hashlib
+import random
 import re
+import struct
+import zlib
 
 
 def pdf(pages):
@@ -33,7 +37,36 @@ def pdf(pages):
     return bytes(output)
 
 
+def png(width, height, row):
+    """A PNG whose pixel rows come from `row(y)` (RGB bytes)."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    raw = b"".join(b"\0" + row(y) for y in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
+
+
+SMALL_JPEG = base64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAQABADAREAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAAAAcI/8QAGBAAAgMAAAAAAAAAAAAAAAAAABUBUmL/xAAWAQEBAQAAAAAAAAAAAAAAAAAACAT/xAAWEQADAAAAAAAAAAAAAAAAAAAAFmL/2gAMAwEAAhEDEQA/AMsPYsZkuS+G6g9iwS5DdRPHui80uSLG6g90EuQ3Uf/Z")
+SMALL_GIF = base64.b64decode("R0lGODlhCgAKAPAAAAAA/wAAACH5BAAAAAAALAAAAAAKAAoAAAIIhI+py+0PYysAOw==")
+SMALL_WEBP = base64.b64decode("UklGRhwAAABXRUJQVlA4TA8AAAAvCUACAAdQwIj+ByKi/wEA")
+
+
 def setup(directory):
+    small = png(2, 2, lambda y: b"\xff\0\0" * 2)
+    (directory / "img-small.png").write_bytes(small)
+    # Larger than native shows: resized, with a note mapping coordinates.
+    (directory / "img-large.png").write_bytes(
+        png(3000, 2000, lambda y: bytes(value for x in range(3000) for value in (x % 256, y % 256, 128))))
+    # Noise beyond native's byte budget, and beyond one execution message.
+    noise = random.Random(7)
+    (directory / "img-heavy.png").write_bytes(png(1600, 1600, lambda y: noise.randbytes(4800)))
+    (directory / "img-small.jpg").write_bytes(SMALL_JPEG)
+    (directory / "img-small.gif").write_bytes(SMALL_GIF)
+    (directory / "img-small.webp").write_bytes(SMALL_WEBP)
+    (directory / "img-text.png").write_text("text\n")
+    (directory / "img-empty.png").write_bytes(b"")
+    (directory / "img-noext").write_bytes(small)
+    (directory / "img-named.txt").write_bytes(small)
     (directory / "pdf-one.pdf").write_bytes(pdf(1))
     (directory / "pdf-ten.pdf").write_bytes(pdf(10))
     (directory / "pdf-many.pdf").write_bytes(pdf(25))
@@ -68,6 +101,17 @@ CASES = [
     ("binary_extension_missing", {"file_path": "pdf-missing.exe"}),
     ("missing_text", {"file_path": "pdf-missing.txt"}),
     ("missing_pdf", {"file_path": "pdf-missing.pdf"}),
+    ("image_small_png", {"file_path": "img-small.png"}),
+    ("image_large_png", {"file_path": "img-large.png"}),
+    ("image_heavy_png", {"file_path": "img-heavy.png"}),
+    ("image_jpeg", {"file_path": "img-small.jpg"}),
+    ("image_gif", {"file_path": "img-small.gif"}),
+    ("image_webp", {"file_path": "img-small.webp"}),
+    ("image_text_content", {"file_path": "img-text.png"}),
+    ("image_empty", {"file_path": "img-empty.png"}),
+    ("image_missing", {"file_path": "img-missing.png"}),
+    ("image_no_extension", {"file_path": "img-noext"}),
+    ("image_bytes_text_name", {"file_path": "img-named.txt"}),
 ]
 
 
@@ -79,6 +123,13 @@ def summarize(value):
     if isinstance(value, list):
         return [summarize(item) for item in value]
     return value
+
+
+def notes(message):
+    """Text native adds beside a tool result (an image's size note)."""
+    content = message.get("content")
+    return [block["text"] for block in content if block.get("type") == "text"
+            and not block["text"].startswith("<system-reminder>")] if isinstance(content, list) else []
 
 
 def normalize(content, project):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native-local PDF Read results for the shared cases.
+"""Native-local PDF, image and file-type Read results for the shared cases.
 
 Runs pinned native Claude with its own Read against a scripted loopback API;
 refresh tools/claude_pdf_native_baseline.json from it for a candidate CLI. Run
@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 from unittest.mock import patch
 
-from claude_pdf_cases import CASES, normalize, setup
+from claude_pdf_cases import CASES, normalize, notes, setup
 from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFixture, tool
 from plugin_runtime_conformance import closed_environment
 
@@ -59,6 +59,7 @@ def run(claude):
                         results[ids[block["tool_use_id"]]] = {
                             "is_error": block.get("is_error", False),
                             "content": normalize(block.get("content"), runtime),
+                            "notes": notes(message),
                         }
             return {"results": results}
         finally:

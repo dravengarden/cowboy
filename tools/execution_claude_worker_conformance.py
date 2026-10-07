@@ -27,7 +27,7 @@ from plugin_runtime_conformance import closed_environment
 from matrix_execution_fixture import MatrixFixture
 from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 from claude_file_cases import CASES as FILE_CASES, effects as file_effects, normalize as file_normalize, setup as file_setup
-from claude_pdf_cases import CASES as PDF_CASES, normalize as pdf_normalize, setup as pdf_setup
+from claude_pdf_cases import CASES as PDF_CASES, normalize as pdf_normalize, notes as pdf_notes, setup as pdf_setup
 from claude_lifecycle_cases import (CASES as LIFECYCLE_CASES, STOP as LIFECYCLE_STOP, alive as lifecycle_alive,
                                     left_running_notified as lifecycle_notified, normalize as lifecycle_normalize,
                                     stop_all as lifecycle_stop_all, task_id as lifecycle_task_id)
@@ -717,7 +717,7 @@ def lifecycle_phases(args, api, client, checks):
 
 
 def pdf_phases(args, api, client, checks):
-    """PDF and file-type Read results compared with native-local ones."""
+    """PDF, image and file-type Read results compared with native-local ones."""
     pdf_setup(args.target)
     steps = [tool("Read", arguments) for _, arguments in PDF_CASES]
     ids = {call[0]["id"]: index for index, call in enumerate(steps)}
@@ -741,8 +741,11 @@ def pdf_phases(args, api, client, checks):
         for block in outputs(request):
             case = PDF_CASES[ids[block["tool_use_id"]]][0] if block.get("tool_use_id") in ids else None
             if case and case not in results:
+                message = next(message for message in request["messages"][::-1]
+                               if isinstance(message.get("content"), list) and block in message["content"])
                 results[case] = {"is_error": block.get("is_error", False),
-                                 "content": pdf_normalize(block.get("content"), args.target)}
+                                 "content": pdf_normalize(block.get("content"), args.target),
+                                 "notes": pdf_notes(message)}
     native = json.loads((Path(__file__).parent / "claude_pdf_native_baseline.json").read_text())["results"]
 
     # Stated differences: a Mods-answered error is wrapped in <tool_use_error>,

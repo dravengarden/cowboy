@@ -15,7 +15,8 @@
       "data": "<784 base64 sha256:e77b386dc95af1e1>"
      }
     }
-   ]
+   ],
+   "notes": []
   },
   "whole_ten": {
    "is_error": false,
@@ -32,11 +33,13 @@
       "data": "<4032 base64 sha256:20f4e7466dd0361c>"
      }
     }
-   ]
+   ],
+   "notes": []
   },
   "whole_many": {
    "is_error": true,
-   "content": "This PDF has 25 pages, which is too many to read at once. Use the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Maximum 20 pages per request."
+   "content": "This PDF has 25 pages, which is too many to read at once. Use the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Maximum 20 pages per request.",
+   "notes": []
   },
   "whole_upper_extension": {
    "is_error": false,
@@ -53,15 +56,18 @@
       "data": "<784 base64 sha256:e77b386dc95af1e1>"
      }
     }
-   ]
+   ],
+   "notes": []
   },
   "whole_empty": {
    "is_error": true,
-   "content": "PDF file is empty: <project>/pdf-empty.pdf"
+   "content": "PDF file is empty: <project>/pdf-empty.pdf",
+   "notes": []
   },
   "whole_fake": {
    "is_error": true,
-   "content": "File is not a valid PDF (missing %PDF- header): <project>/pdf-fake.pdf"
+   "content": "File is not a valid PDF (missing %PDF- header): <project>/pdf-fake.pdf",
+   "notes": []
   },
   "pages_one": {
    "is_error": false,
@@ -78,7 +84,8 @@
       "media_type": "image/jpeg"
      }
     }
-   ]
+   ],
+   "notes": []
   },
   "pages_range": {
    "is_error": false,
@@ -103,11 +110,13 @@
       "media_type": "image/jpeg"
      }
     }
-   ]
+   ],
+   "notes": []
   },
   "pages_past_end": {
    "is_error": true,
-   "content": "Requested page 30 is outside the document (PDF has 25 pages). Use a range within 1-25, maximum 20 pages per request (e.g. pages: \"1-20\")."
+   "content": "Requested page 30 is outside the document (PDF has 25 pages). Use a range within 1-25, maximum 20 pages per request (e.g. pages: \"1-20\").",
+   "notes": []
   },
   "pages_range_past_end": {
    "is_error": false,
@@ -124,51 +133,183 @@
       "media_type": "image/jpeg"
      }
     }
-   ]
+   ],
+   "notes": []
   },
   "pages_invalid": {
    "is_error": true,
-   "content": "<tool_use_error>Invalid pages parameter: \"abc\". Use formats like \"1-5\", \"3\", or \"10-20\". Pages are 1-indexed.</tool_use_error>"
+   "content": "<tool_use_error>Invalid pages parameter: \"abc\". Use formats like \"1-5\", \"3\", or \"10-20\". Pages are 1-indexed.</tool_use_error>",
+   "notes": []
   },
   "pages_too_many": {
    "is_error": true,
-   "content": "<tool_use_error>Page range \"1-25\" exceeds maximum of 20 pages per request. Please use a smaller range.</tool_use_error>"
+   "content": "<tool_use_error>Page range \"1-25\" exceeds maximum of 20 pages per request. Please use a smaller range.</tool_use_error>",
+   "notes": []
   },
   "pages_open_range": {
    "is_error": true,
-   "content": "<tool_use_error>Page range \"24-\" exceeds maximum of 20 pages per request. Please use a smaller range.</tool_use_error>"
+   "content": "<tool_use_error>Page range \"24-\" exceeds maximum of 20 pages per request. Please use a smaller range.</tool_use_error>",
+   "notes": []
   },
   "pages_fake": {
    "is_error": true,
-   "content": "PDF file is corrupted or invalid."
+   "content": "PDF file is corrupted or invalid.",
+   "notes": []
   },
   "pages_on_text": {
    "is_error": false,
-   "content": "1\thello\n2"
+   "content": "1\thello\n2",
+   "notes": []
   },
   "pdf_bytes_binary_extension": {
    "is_error": true,
-   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .bin file. Please use appropriate tools for binary file analysis.</tool_use_error>"
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .bin file. Please use appropriate tools for binary file analysis.</tool_use_error>",
+   "notes": []
   },
   "pdf_bytes_no_extension": {
    "is_error": false,
-   "content": "1\t%PDF-1.4\n2\t1 0 obj\n3\t<< /Type /Catalog /Pages 2 0 R >>\n4\tendobj\n5\t2 0 obj\n6\t<< /Type /Pages /Kids [4 0 R] /Count 1 >>\n7\tendobj\n8\t3 0 obj\n9\t<< /Length 44 >>\n10\tstream\n11\tBT /F1 24 Tf 72 720 Td (Page 1 marker) Tj ET\n12\tendstream\n13\tendobj\n14\t4 0 obj\n15\t<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 3 0 R /Resources << /Font << /F1 5 0 R >> >> >>\n16\tendobj\n17\t5 0 obj\n18\t<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n19\tendobj\n20\txref\n21\t0 6\n22\t0000000000 65535 f \n23\t0000000009 00000 n \n24\t0000000058 00000 n \n25\t0000000115 00000 n \n26\t0000000209 00000 n \n27\t0000000335 00000 n \n28\ttrailer\n29\t<< /Size 6 /Root 1 0 R >>\n30\tstartxref\n31\t405\n32\t%%EOF\n33"
+   "content": "1\t%PDF-1.4\n2\t1 0 obj\n3\t<< /Type /Catalog /Pages 2 0 R >>\n4\tendobj\n5\t2 0 obj\n6\t<< /Type /Pages /Kids [4 0 R] /Count 1 >>\n7\tendobj\n8\t3 0 obj\n9\t<< /Length 44 >>\n10\tstream\n11\tBT /F1 24 Tf 72 720 Td (Page 1 marker) Tj ET\n12\tendstream\n13\tendobj\n14\t4 0 obj\n15\t<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 3 0 R /Resources << /Font << /F1 5 0 R >> >> >>\n16\tendobj\n17\t5 0 obj\n18\t<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n19\tendobj\n20\txref\n21\t0 6\n22\t0000000000 65535 f \n23\t0000000009 00000 n \n24\t0000000058 00000 n \n25\t0000000115 00000 n \n26\t0000000209 00000 n \n27\t0000000335 00000 n \n28\ttrailer\n29\t<< /Size 6 /Root 1 0 R >>\n30\tstartxref\n31\t405\n32\t%%EOF\n33",
+   "notes": []
   },
   "binary_extension_text": {
    "is_error": true,
-   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .zip file. Please use appropriate tools for binary file analysis.</tool_use_error>"
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .zip file. Please use appropriate tools for binary file analysis.</tool_use_error>",
+   "notes": []
   },
   "binary_extension_missing": {
    "is_error": true,
-   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .exe file. Please use appropriate tools for binary file analysis.</tool_use_error>"
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .exe file. Please use appropriate tools for binary file analysis.</tool_use_error>",
+   "notes": []
   },
   "missing_text": {
    "is_error": true,
-   "content": "File does not exist. Note: your current working directory is <project>."
+   "content": "File does not exist. Note: your current working directory is <project>.",
+   "notes": []
   },
   "missing_pdf": {
    "is_error": true,
-   "content": "File does not exist. Note: your current working directory is <project>."
+   "content": "File does not exist. Note: your current working directory is <project>.",
+   "notes": []
+  },
+  "image_small_png": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<100 base64 sha256:9fd1619324582dba>",
+      "media_type": "image/png"
+     }
+    }
+   ],
+   "notes": []
+  },
+  "image_large_png": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<17636 base64 sha256:ad5938d90ed0db22>",
+      "media_type": "image/png"
+     }
+    }
+   ],
+   "notes": [
+    "[Image: original 3000x2000, displayed at 2000x1333. Multiply coordinates by 1.50 to map to original image.]"
+   ]
+  },
+  "image_heavy_png": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<625616 base64 sha256:1521c9be6e38b618>",
+      "media_type": "image/jpeg"
+     }
+    }
+   ],
+   "notes": []
+  },
+  "image_jpeg": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<428 base64 sha256:f5f2486d93653400>",
+      "media_type": "image/jpeg"
+     }
+    }
+   ],
+   "notes": []
+  },
+  "image_gif": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<68 base64 sha256:e9cb364a9af9a03c>",
+      "media_type": "image/gif"
+     }
+    }
+   ],
+   "notes": []
+  },
+  "image_webp": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<48 base64 sha256:8cc5480f7f22a0d4>",
+      "media_type": "image/webp"
+     }
+    }
+   ],
+   "notes": []
+  },
+  "image_text_content": {
+   "is_error": true,
+   "content": "File has an image extension but its content is not a valid PNG/JPEG/GIF/WebP. Detected: unrecognized bytes (hex: 74 65 78 74 0a). This usually means a download saved an error/login page instead of the image. Use `file \"<project>/img-text.png\"` to confirm, or read it as text with Bash (e.g. `head -c 500`).",
+   "notes": []
+  },
+  "image_empty": {
+   "is_error": true,
+   "content": "Image file is empty: <project>/img-empty.png",
+   "notes": []
+  },
+  "image_missing": {
+   "is_error": true,
+   "content": "File does not exist. Note: your current working directory is <project>.",
+   "notes": []
+  },
+  "image_no_extension": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<100 base64 sha256:9fd1619324582dba>",
+      "media_type": "image/png"
+     }
+    }
+   ],
+   "notes": []
+  },
+  "image_bytes_text_name": {
+   "is_error": false,
+   "content": "1\t�PNG\n2\t\u001a\n3\t\u0000\u0000\u0000\rIHDR\u0000\u0000\u0000\u0002\u0000\u0000\u0000\u0002\b\u0002\u0000\u0000\u0000�Ԛs\u0000\u0000\u0000\u0010IDATx\u0001c���\u0000D \fD\u0000\u001f�\u0003�FA�\u0000\u0000\u0000\u0000IEND�B`�",
+   "notes": []
   }
  }
 }

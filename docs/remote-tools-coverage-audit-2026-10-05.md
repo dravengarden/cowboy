@@ -109,7 +109,7 @@ to introduce more restrictions.
 | Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
-| Images, notebooks, PDFs | Images/notebooks have evidence; Claude 3.13.0: PDF Reads (whole document, `pages` rendered as images with the target's poppler), binary-extension refusal and missing-file messages match native-local results (21 cases) | Images are not resized or recompressed as natively (no dimension metadata); whole PDFs above 10 MB and page images above 10 MB in all are refused; output artifacts and user-upload placement untested |
+| Images, notebooks, PDFs | Claude 3.13.0/3.14.0: PDF Reads (whole document, `pages` rendered with the target's poppler), images (native's own Read of a private local copy: same checks, resizing, recompression and size note), binary-extension refusal and missing-file messages match native-local results (32 cases) | Whole PDFs above 10 MB and page images above 10 MB in all are refused; images above 64 MB; output artifacts and user-upload placement untested |
 | File semantics | Claude 3.11.0: 24 Read/Write/Edit cases match native-local results and on-disk bytes and modes (encodings, BOM, CRLF, empty old_string, unread edits, directories) | Files are rewritten in place (native replaces them: inode, hard links, read-only files differ) |
 | Atomic mutations | Stale stamp refusal has evidence; it does not alone establish compare-and-write atomicity | Inspect target implementation and inject mutation between check and write; use target-side atomic primitives where promised |
 | Output limits | Large streams/backpressure and terminal events recorded | Test split UTF-8, binary/NUL, truncation markers, slow/absent reader, disk full and retained output expiration |
@@ -731,6 +731,48 @@ coexistence, Linux and actual macOS probes, three Controller reader roles,
 five public artifact digests and Catalog `ready`. OVH operation
 `ovh-claude-code-3-13-0-converge` completed: 3.13.0 active, 3.12.0 retained
 for rollback, no session leases, no live session restarted.
+
+### Images through native Read (Plugin 3.14.0)
+
+Native-local baselines (11 image cases added to `tools/claude_pdf_cases.py`;
+baseline `tools/claude_pdf_native_baseline.json`) show native re-encodes
+every image it reads (even a 2x2 PNG). An image larger than 2000 pixels on a
+side is resized and followed by a note ("[Image: original 3000x2000,
+displayed at 2000x1333. Multiply coordinates by 1.50 to map to original
+image.]"); one above its byte budget becomes a JPEG of about 500 KB.
+Invalid contents ("File has an image extension but its content is not a
+valid PNG/JPEG/GIF/WebP…") and empty files have messages of their own. Only
+`.png`, `.jpg`, `.jpeg`, `.gif` and `.webp` names, or a file without an
+extension, are read as images; PNG bytes named `.txt` read as text.
+
+The facade used to send the target bytes as they were: no resizing, no note,
+and a large image (over 4 MB, or over what the API accepts) failed. Native's
+encoder is not available to a plugin, so 3.14.0 lets native do the work:
+
+- The target bytes (in 4 MB parts above the execution connection's message
+  limit, up to 64 MB) are written to a private runtime file (0600 in a 0700
+  directory beside the plugin state) with the file's extension.
+- The context Mod calls native's own Read (`next`) on that file. Native's
+  image result carries no path. Its size note comes back with the result and
+  is kept. Its refusals name the target file instead of the copy. The copy is
+  removed afterwards (and any leftover when the launcher starts).
+- The target Read records its read stamp as before; project hooks, nested
+  instruction files and permission decisions still see the target path.
+
+Packaged acceptance compares the 11 image cases (byte digests and notes)
+inside `pdf_and_file_type_reads_match_native_local`. Every image matches
+native byte for byte, including the resized PNG, the 7.7 MB noise PNG
+recompressed to JPEG and the size note. Candidate acceptance first showed the
+size note dropped (native returns it beside the result; it is now kept) and
+native's refusals arriving in an error form; two native review rounds fixed
+`$` sequences in a target path being read as replacement patterns, and the
+second reported none.
+
+Gaps:
+
+- Images above 64 MB are refused; native has no such limit of its own.
+- Native's Read of the copy also records the copy in its read state; the copy
+  is gone afterwards and nothing edits it.
 
 ### 1. Preserve native Bash through an execution bridge
 

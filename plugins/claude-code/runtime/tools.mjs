@@ -2,13 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   lstat,
+  mkdir,
   open,
   readdir,
   readFile,
   rename,
+  rm,
   unlink,
+  writeFile,
 } from "node:fs/promises";
-import { basename, dirname, posix } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { READ_RANGE } from "./read-range.mjs";
 import { instructionFiles, nestedInstructions } from "./instructions.mjs";
@@ -333,6 +336,8 @@ const BINARY_EXTENSIONS = new Set(
 
 // Native's PDF limits and `pages` grammar ("3", "1-5", "10-").
 const PDF_PAGES = 20;
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+const IMAGE_MAX_BYTES = 64 * 1024 * 1024;
 const PDF_WHOLE_PAGES = 10;
 const PDF_WHOLE_BYTES = 20 * 1024 * 1024;
 const PDF_RENDER_BYTES = 100 * 1024 * 1024;
@@ -503,6 +508,8 @@ export class WorkspaceTools {
       if (error.code !== "ENOENT") throw error;
     }
     await this.cleanupTemporaryStates();
+    // Local copies belong to the process that made them.
+    await rm(this.localDirectory(), { recursive: true, force: true });
     await this.reconcileCancellations();
   }
 
@@ -936,6 +943,101 @@ export class WorkspaceTools {
         force: true,
       }).catch(() => {});
     }
+  }
+
+  // Native reads images itself: it checks them, resizes and recompresses
+  // them for the model and describes the change. The target bytes are put in
+  // a private runtime file that native's own Read then reads (the context
+  // Mod calls it); native's image result carries no path.
+  async readImage(path) {
+    const metadata = await this.connection.call("fs/getMetadata", {
+      path: pathToFileURL(path).href,
+    }).catch((error) => {
+      throw missing(error) ? this.missingFile() : error;
+    });
+    if (!metadata.isFile) {
+      throw new Error(`EISDIR: illegal operation on a directory, read`);
+    }
+    if (metadata.size > IMAGE_MAX_BYTES) {
+      throw new Error(
+        `Image file exceeds the ${
+          fileSize(IMAGE_MAX_BYTES)
+        } this machine returns to the calling session: ${path}`,
+      );
+    }
+    const bytes = await this.largeBytes(path, metadata.size);
+    await this.rememberRead(path, hash(bytes));
+    return await this.localRead(
+      bytes,
+      posix.extname(path).toLowerCase(),
+      path,
+    );
+  }
+
+  // A file of any size up to the image limit, in parts below the execution
+  // connection's message limit.
+  async largeBytes(path, size) {
+    if (size <= MAX_FILE) return await this.bytes(path);
+    const parent = posix.join(this.home() ?? "/", ".cache", "cowboy", "parts");
+    await this.privateDirectory(parent);
+    const directory = posix.join(parent, `parts-${randomUUID()}`);
+    try {
+      const split = await this.command([
+        this.shell,
+        "-c",
+        'mkdir -- "$1" && exec split -b 4194304 -- "$2" "$1/part-"',
+        this.shell,
+        directory,
+        path,
+      ], 60000);
+      if (split.exitCode !== 0) {
+        throw new Error("Target file could not be read");
+      }
+      const listing = await this.connection.call("fs/readDirectory", {
+        path: pathToFileURL(directory).href,
+      });
+      const parts = [];
+      for (
+        const name of (listing.entries ?? []).map((entry) => entry.fileName)
+          .sort()
+      ) {
+        const part = await this.connection.call("fs/readFile", {
+          path: pathToFileURL(posix.join(directory, name)).href,
+        });
+        parts.push(Buffer.from(part.dataBase64, "base64"));
+      }
+      return Buffer.concat(parts);
+    } finally {
+      await this.connection.call("fs/remove", {
+        path: pathToFileURL(directory).href,
+        recursive: true,
+        force: true,
+      }).catch(() => {});
+    }
+  }
+
+  localDirectory() {
+    return join(dirname(this.statePath), "local-reads");
+  }
+
+  async localRead(bytes, extension, target) {
+    const directory = this.localDirectory();
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const file = join(directory, `${randomUUID()}${extension}`);
+    await writeFile(file, bytes, { mode: 0o600, flag: "wx" });
+    return {
+      content: [{ type: "text", text: "Read by native Read" }],
+      isError: false,
+      native: { type: "local_read" },
+      localRead: file,
+      localTarget: target,
+    };
+  }
+
+  // Native's Read of a local copy has finished with it.
+  async releaseLocal(file) {
+    if (dirname(file) !== this.localDirectory()) return;
+    await rm(file, { force: true });
   }
 
   // Native's Read of a file that does not exist ("Did you mean" suggestions
@@ -1804,6 +1906,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         );
       }
     }
+    if (
+      name === "read" &&
+      IMAGE_EXTENSIONS.includes(posix.extname(path).toLowerCase())
+    ) return await this.readImage(path);
     if (name === "read" && posix.extname(path).toLowerCase() === ".pdf") {
       const pdf = await this.readPdf(path, args.pages, call);
       if (pdf) return pdf;
@@ -1859,23 +1965,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         bytes.subarray(0, 4).toString() === "RIFF" &&
         bytes.subarray(8, 12).toString() === "WEBP"
       ) mimeType = "image/webp";
-      if (mimeType) {
-        return await remember({
-          content: [{
-            type: "image",
-            mimeType,
-            data: bytes.toString("base64"),
-          }, { type: "text", text: `Image source in workspace: ${path}` }],
-          isError: false,
-          native: {
-            type: "image",
-            file: {
-              base64: bytes.toString("base64"),
-              type: mimeType,
-              originalSize: bytes.length,
-            },
-          },
-        });
+      // Natively only an extensionless file is sniffed for an image.
+      if (mimeType && posix.extname(path) === "") {
+        return await remember(await this.localRead(bytes, "", path));
       }
       // As natively, `pages` means nothing for a file not named .pdf.
       const offset = bounded(args.offset, 1, 1, 10000000) - 1;
@@ -2493,6 +2585,12 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     // A command left running is named, so its completion can be notified.
     if (result.task) return { result: result.native, task: result.task };
+    const answer = {
+      result: result.native,
+      ...(result.localRead
+        ? { localRead: result.localRead, localTarget: result.localTarget }
+        : {}),
+    };
     // As natively, a Read below the working directory brings the instruction
     // files of the directories in between, once each.
     if (name === "Read") {
@@ -2502,11 +2600,11 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       );
       // A failed load is said, not shown as the absence of instructions.
       if (nested === null) {
-        return { result: result.native, instructions: { unavailable: true } };
+        return { ...answer, instructions: { unavailable: true } };
       }
-      if (nested.length) return { result: result.native, instructions: nested };
+      if (nested.length) return { ...answer, instructions: nested };
     }
-    return { result: result.native };
+    return answer;
   }
 
   async cancelForeground() {
