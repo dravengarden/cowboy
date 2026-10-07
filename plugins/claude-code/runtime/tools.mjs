@@ -11,6 +11,7 @@ import {
 import { basename, dirname, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { READ_RANGE } from "./read-range.mjs";
+import { instructionFiles, nestedInstructions } from "./instructions.mjs";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
@@ -911,20 +912,10 @@ export class WorkspaceTools {
   }
 
   async context() {
-    const [platform, git] = await Promise.all([
-      this.command([
-        "bash",
-        "-c",
-        'printf "%s\\n" "$BASH"; uname -srm; printf "%s\\n" "${SHELL:-}"; command -v python3 || true',
-      ]),
-      this.command([
-        "git",
-        "--no-optional-locks",
-        "status",
-        "--short",
-        "--branch",
-        "--untracked-files=no",
-      ]),
+    const platform = await this.command([
+      "bash",
+      "-c",
+      'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}"; command -v python3 || true',
     ]);
     if (platform.exitCode !== 0 || !platform.output.startsWith("/")) {
       throw new Error("Target Bash is unavailable");
@@ -937,53 +928,148 @@ export class WorkspaceTools {
     this.startSnapshot();
     const python = platform.output.split("\n")[3]?.trim();
     this.rangePython = python?.startsWith("/") ? python : undefined;
-    const paths = [];
-    let directory = this.cwd;
-    for (;;) {
-      paths.unshift(directory);
-      if (directory === "/") break;
-      directory = dirname(directory);
-    }
-    const guidance = [];
-    const seen = new Set();
-    const files = paths.flatMap((path) =>
-      ["AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md"].map((name) =>
-        posix.join(path, name)
-      )
-    );
-    for (let index = 0; index < files.length; index += 8) {
-      const batch = await Promise.all(
-        files.slice(index, index + 8).map(async (file) => {
-          const bytes = await this.bytes(file, true);
-          return bytes ? { file, bytes } : null;
-        }),
-      );
-      for (const entry of batch) {
-        if (!entry || seen.has(hash(entry.bytes))) continue;
-        seen.add(hash(entry.bytes));
-        guidance.push(
-          `Instructions from ${entry.file}:\n${decode(entry.bytes)}`,
-        );
-      }
-    }
-    const instructions = guidance.join("\n\n");
-    if (Buffer.byteLength(instructions) > MAX_OUTPUT) {
-      throw new Error("Target instructions exceed limit");
-    }
+    const instructions = await this.instructions();
+    const shellName = basename(userShell?.trim() || "");
+    const git = await this.gitStatus();
     return {
       schema: 1,
       nonce: randomUUID().replaceAll("-", ""),
+      // Native's environment block, with the target's facts.
       environment:
-        `Primary working directory: ${this.cwd}\nPlatform: ${this.connection.info.platformOs}\nShell: ${this.shell}\nOS Version: ${
-          platform.output.split("\n")[1].trim()
-        }\nIs directory a git repo: ${git.exitCode === 0}`,
-      git: git.exitCode === 0
-        ? `Target Git status at session start:\n${git.output}`
-        : "The target is not a Git repository.",
-      instructions:
-        "Use Read, Edit, Write, Glob, Grep and NotebookEdit for files; Bash for commands; Read with a cowboy-task:// output handle and TaskStop for retained processes. Agent runs a background subagent with these same workspace tools; its completion notification delivers the result, Read on its cowboy-agent:// handle returns only the recorded final answer, SendMessage continues it and TaskStop stops it. After compaction, use Read for file contents you need again. Only these tools, questions and to-dos are available. Skills, custom agents, worktree or remote agent isolation, and plan files are unavailable. Ancestor instructions below are literal snapshots; read referenced instructions and relevant nested guidance explicitly.\n\n" +
-        instructions,
+        `# Environment\nYou have been invoked in the following environment: \n - Primary working directory: ${this.cwd}\n - Is a git repository: ${
+          git !== undefined
+        }\n - Platform: linux\n - Shell: ${
+          ["bash", "zsh"].includes(shellName) ? shellName : "unknown"
+        }\n - OS Version: ${platform.output.split("\n")[1].trim()}`,
+      git: git ?? null,
+      instructionFiles: instructions,
     };
+  }
+
+  // The target's instruction files, as native discovers them locally.
+  async instructions() {
+    const home = this.home();
+    const directories = [];
+    for (let directory = this.cwd;; directory = posix.dirname(directory)) {
+      directories.unshift(directory);
+      if (directory === "/") break;
+    }
+    const roots = [...(home ? [home] : []), ...directories].map((directory) =>
+      posix.join(directory, ".claude", "rules")
+    );
+    // A listing that cannot run stops the session, as an unreadable
+    // instruction file does. Entries find cannot follow (broken links,
+    // unreadable directories) are skipped.
+    const listing = await this.command([
+      this.shell,
+      "-c",
+      'for d in "$@"; do if [ -d "$d" ]; then find -L "$d" -type f -name "*.md" 2>/dev/null; fi; done; exit 0',
+      this.shell,
+      ...roots,
+    ]);
+    if (listing.exitCode !== 0 || listing.output_limit) {
+      throw new Error("Target instruction rules could not be listed");
+    }
+    const ruleFiles = listing.output.split("\n")
+      .filter((line) => line.startsWith("/"))
+      .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+    const read = async (path) => {
+      // Only an absent file is skipped; a failed read stops the session
+      // rather than starting it without the project's instructions.
+      const bytes = await this.bytes(path, true);
+      if (!bytes) return undefined;
+      try {
+        return decode(bytes);
+      } catch {
+        return undefined;
+      }
+    };
+    const { files, conditional } = await instructionFiles({
+      cwd: this.cwd,
+      home,
+      read,
+      rules: async (directory) =>
+        ruleFiles.filter((path) => path.startsWith(directory + "/")),
+    });
+    if (
+      files.reduce(
+        (total, file) => total + Buffer.byteLength(file.content),
+        0,
+      ) >
+        MAX_FILE
+    ) throw new Error("Target instructions exceed limit");
+    // Each conversation (the main one, each agent) is shown a nested file
+    // once; what started the session counts for all of them.
+    const initial = files.map((file) => file.path);
+    this.nested = { read, conditional, home, initial, attached: new Map() };
+    return files;
+  }
+
+  // Native's gitStatus block from the target repository; undefined outside one.
+  async gitStatus() {
+    const git = (...args) =>
+      this.command(["git", "--no-optional-locks", ...args]).catch(() => ({
+        exitCode: 1,
+        output: "",
+      }));
+    const inside = await git("rev-parse", "--is-inside-work-tree");
+    if (inside.exitCode !== 0) return undefined;
+    const [branch, origin, master, main, user, status, log] = await Promise.all(
+      [
+        git("branch", "--show-current"),
+        git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
+        git("rev-parse", "--verify", "--quiet", "refs/heads/master"),
+        git("rev-parse", "--verify", "--quiet", "refs/heads/main"),
+        git("config", "user.name"),
+        git("status", "--short"),
+        git("log", "--oneline", "-n", "5"),
+      ],
+    );
+    const mainBranch = origin.exitCode === 0 && origin.output.trim()
+      ? origin.output.trim().replace(/^origin\//, "")
+      : master.exitCode === 0 && main.exitCode !== 0
+      ? "master"
+      : "main";
+    // A status that did not complete is not a clean tree.
+    let changes = status.exitCode === 0
+      ? status.output.trim()
+      : "(unavailable: git status did not complete)";
+    if (changes.length > 2000) {
+      changes = changes.slice(0, 2000) +
+        '\n... (truncated because it exceeds 2k characters. If you need more information, run "git status" using Bash)';
+    }
+    return [
+      "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.",
+      `Current branch: ${branch.output.trim()}`,
+      `Main branch (you will usually use this for PRs): ${mainBranch}`,
+      ...(user.exitCode === 0 && user.output.trim()
+        ? [`Git user: ${user.output.trim()}`]
+        : []),
+      `Status:\n${changes || "(clean)"}`,
+      `Recent commits:\n${log.exitCode === 0 ? log.output.trim() : ""}`,
+    ].join("\n\n");
+  }
+
+  // Instruction files a Read of `path` attaches natively, once per
+  // conversation.
+  async nestedFor(path, owner = null) {
+    if (!this.nested) return [];
+    const { attached } = this.nested;
+    if (!attached.has(owner)) {
+      if (attached.size >= 1024) attached.delete(attached.keys().next().value);
+      attached.set(owner, new Set(this.nested.initial));
+    }
+    // One conversation's Reads (parallel ones included) decide in turn, so
+    // each file is shown to it once.
+    return await this.ordered(`nested:${owner}`, () =>
+      nestedInstructions({
+        cwd: this.cwd,
+        path,
+        read: this.nested.read,
+        conditional: this.nested.conditional,
+        attached: attached.get(owner),
+        home: this.nested.home,
+      })).catch(() => null);
   }
 
   // Preserve read/edit order for the same lexical path. Serialize mutations
@@ -1870,6 +1956,19 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     // A command left running is named, so its completion can be notified.
     if (result.task) return { result: result.native, task: result.task };
+    // As natively, a Read below the working directory brings the instruction
+    // files of the directories in between, once each.
+    if (name === "Read") {
+      const nested = await this.nestedFor(
+        this.path(args.file_path),
+        call?.owner ?? null,
+      );
+      // A failed load is said, not shown as the absence of instructions.
+      if (nested === null) {
+        return { result: result.native, instructions: { unavailable: true } };
+      }
+      if (nested.length) return { result: result.native, instructions: nested };
+    }
     return { result: result.native };
   }
 

@@ -502,6 +502,91 @@ def shell_phases(args, api, client, shell_results, checks):
     checks.append("bash_results_match_native_local")
 
 
+CONTEXT_FILES = {
+    "CLAUDE.md": "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL\n@docs/imported.md\n",
+    "docs/imported.md": "TARGET_IMPORTED_BY_AT\n",
+    "CLAUDE.local.md": "TARGET_CLAUDE_LOCAL_MD\n",
+    ".claude/CLAUDE.md": "TARGET_DOT_CLAUDE_MD\n",
+    ".claude/rules/always.md": "TARGET_RULE_ALWAYS\n",
+    ".claude/rules/scoped.md": "---\npaths:\n  - \"ctx-sub/**\"\n---\nTARGET_RULE_SCOPED\n",
+    "ctx-sub/CLAUDE.md": "TARGET_NESTED_CLAUDE_MD\n",
+    "ctx-sub/AGENTS.md": "TARGET_NESTED_AGENTS_MUST_NOT_REACH_MODEL\n",
+    "ctx-sub/file.txt": "nested file\n",
+}
+
+
+def write_context_fixture(target):
+    for name, text in CONTEXT_FILES.items():
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (target.parent / "CLAUDE.md").write_text("TARGET_PARENT_CLAUDE_MD\n")
+
+
+def context_phases(args, api, client, checks):
+    """Target instruction files, environment and Git context in native's form."""
+    first = api.requests[0]["messages"][0]
+    text = "\n".join(block.get("text", "") for block in first["content"] if isinstance(block, dict))
+    target = str(args.target)
+    expected = [
+        f"Contents of {args.target.parent}/CLAUDE.md (project instructions, checked into the codebase):\n\nTARGET_PARENT_CLAUDE_MD",
+        f"Contents of {target}/CLAUDE.md (project instructions, checked into the codebase):\n\nTARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL",
+        f"Contents of {target}/docs/imported.md (project instructions, checked into the codebase):\n\nTARGET_IMPORTED_BY_AT",
+        f"Contents of {target}/.claude/CLAUDE.md (project instructions, checked into the codebase):\n\nTARGET_DOT_CLAUDE_MD",
+        f"Contents of {target}/.claude/rules/always.md (project instructions, checked into the codebase):\n\nTARGET_RULE_ALWAYS",
+        f"Contents of {target}/CLAUDE.local.md (user's private project instructions, not checked in):\n\nTARGET_CLAUDE_LOCAL_MD",
+    ]
+    positions = [text.find(item) for item in expected]
+    require("Codebase and user instructions are shown below." in text and all(position >= 0 for position in positions)
+            and positions == sorted(positions) and "TARGET_RULE_SCOPED" not in text and
+            "TARGET_GUIDANCE_MUST_REACH_MODEL" not in text and "TARGET_NESTED" not in text,
+            "target instructions differ from native's: " + text[:4000])
+    checks.append("target_instruction_files_render_as_native")
+    require(f"# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {target}\n"
+            " - Is a git repository: true\n - Platform: linux\n - Shell: " in text and " - OS Version: Linux " in text,
+            "environment block differs from native's: " + text[:2000])
+    require("# gitStatus\nThis is the git status at the start of the conversation." in text and
+            "\n\nCurrent branch: " in text and "\n\nMain branch (you will usually use this for PRs): " in text and
+            "\n\nStatus:\n" in text and "\n\nRecent commits:\n" in text,
+            "git status block differs from native's: " + text[max(0, text.find("Codebase and user")):][-3000:])
+    checks.append("target_environment_and_git_blocks_render_as_native")
+
+    issued = {}
+    steps = {"CONTEXT_NESTED": [tool("Read", {"file_path": "ctx-sub/file.txt"}),
+                                tool("Read", {"file_path": "ctx-sub/file.txt"})]}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        blocks = last.get("content") if isinstance(last.get("content"), list) else []
+        done = [issued[block["tool_use_id"]] for block in blocks
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in issued]
+        index = done[-1] + 1 if done else 0
+        if not done and "CONTEXT_NESTED" not in " ".join(text_blocks(last)):
+            raise ProbeFailure("unexpected context phase request")
+        if index < len(steps["CONTEXT_NESTED"]):
+            call = steps["CONTEXT_NESTED"][index]
+            issued[call[0]["id"]] = index
+            return call
+        return [{"type": "text", "text": "CONTEXT_DONE"}]
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 10)
+    client.prompt(text="CONTEXT_NESTED", timeout=60)
+    messages = {}
+    for request in api.requests:
+        for message in request.get("messages", []):
+            content = message.get("content")
+            for block in content if isinstance(content, list) else []:
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in issued:
+                    messages[issued[block["tool_use_id"]]] = json.dumps(message, ensure_ascii=False)
+    print("nested context diagnostic:", messages.get(0, "")[:1500])
+    require(f"<system-reminder>\\nContents of {target}/ctx-sub/CLAUDE.md:\\n\\nTARGET_NESTED_CLAUDE_MD" in messages.get(0, "") and
+            f"Contents of {target}/.claude/rules/scoped.md:\\n\\nTARGET_RULE_SCOPED" in messages.get(0, "") and
+            "TARGET_NESTED_AGENTS" not in messages.get(0, "") and "TARGET_NESTED_CLAUDE_MD" not in messages.get(1, ""),
+            "nested instructions differ from native's: " + messages.get(0, "")[:2000])
+    checks.append("read_attaches_nested_instructions_once_as_native")
+
+
 def notification_phases(args, api, client, checks):
     """Target commands left running notify the model as native background tasks do."""
     handle = re.compile(r"cowboy-task://([A-Za-z0-9-]+)")
@@ -866,7 +951,7 @@ def main():
     require(wrapper.is_file(), "packaged Claude execution launcher missing")
     checks = ["machine_owned_worktree", "machine_restart_reattaches_same_keeper_and_binding"]
     (args.runtime / "CLAUDE.md").write_text("RUNTIME_CLAUDE_GUIDANCE_MUST_NOT_REACH_MODEL")
-    (args.target / "CLAUDE.md").write_text("TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL")
+    write_context_fixture(args.target)
     def png_chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
     pixel = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) +
@@ -942,8 +1027,9 @@ def main():
                     "RUNTIME_GUIDANCE_MUST_NOT_REACH_MODEL" not in encoded, "runtime context reached model")
             if "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" not in encoded:
                 print("target guidance diagnostic:", index, json.dumps({"system": request.get("system"), "tools": sorted(names), "messages": request.get("messages", [])[:1]})[:3500])
+            # Native Claude Code does not read AGENTS.md; CLAUDE.md is the guidance.
             require(str(args.target) in encoded and "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" in encoded and
-                    "TARGET_GUIDANCE_MUST_REACH_MODEL" in encoded, "target guidance missing")
+                    "TARGET_GUIDANCE_MUST_REACH_MODEL" not in encoded, "target guidance missing or AGENTS.md read")
         require(not fixture.calls, "test client unexpectedly supplied target tools")
         require(api.failure is None, api.failure or "scripted API failed")
     client = None
@@ -1175,6 +1261,7 @@ def main():
         shell_results = {}
         shell_phases(args, api, client, shell_results, checks)
         notification_phases(args, api, client, checks)
+        context_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
@@ -1231,7 +1318,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:

@@ -788,6 +788,89 @@ history and service clients remain on the runtime. HTTP hooks need an explicit
 network/credential placement decision. Prompt/agent hooks retain their native
 model evaluation, inheriting target binding for any nested tools.
 
+#### Target instructions and session context (Plugin 3.10.0)
+
+Native-local baselines on 2.1.287 decide what a session starts with. The
+recorded instruction files are:
+
+- the user's `~/.claude/CLAUDE.md`
+- for each directory from the root down to the working directory: its
+  `CLAUDE.md` (with `@` imports right after it), `.claude/CLAUDE.md`,
+  unconditional `.claude/rules/*.md` and `CLAUDE.local.md`
+
+Each file is rendered as `Contents of <path> (<tier>):` under native's
+"Codebase and user instructions" framing. Further findings:
+
+- `AGENTS.md` is never read, with or without a `CLAUDE.md`.
+- A Read below the working directory attaches the `CLAUDE.md` of each
+  directory in between and the rules whose `paths` match, once each.
+- A Write, a Read outside the project and a repeated Read attach nothing.
+- The environment block and the Git status block (current branch, main
+  branch, Git user, `git status --short` cut at 2,000 characters, five recent
+  commits) have fixed native forms.
+
+Before 3.10.0, the facade loaded `AGENTS.md`, `CLAUDE.md` and
+`.claude/CLAUDE.md` from the ancestors as raw text behind its own preamble. It
+had no imports, no `CLAUDE.local.md`, no rules, no user file and no nested
+files. Its environment line used its own format, and no Git status reached the
+model, because the launcher disabled native's Git context.
+
+3.10.0 reproduces native discovery on the target:
+
+- **Discovery.** `instructions.mjs` finds the files and hands them to
+  native's own renderer through `prompt.context`'s `instructionFiles`; runtime
+  files never count.
+- **Nested files.** The target equivalents follow a facade Read once per
+  conversation (main and each agent), with their own imports.
+- **Environment.** The environment block has native's form, with target
+  facts.
+- **Git.** Native's Git context is enabled again: its `gitStatus` section
+  reads the target repository, and outside one it is dropped. The git commit
+  and PR instructions return to the system prompt as natively.
+- **Label.** The `tool.call hook additional context:` label that Mods put
+  before this module's context is removed. Nested files and PostToolUse
+  feedback therefore read as native's (3.7.0 showed the label).
+
+**Behavior change.** Remote sessions no longer read `AGENTS.md`, as a local
+Claude Code session does not. A project that relies on `AGENTS.md` for Claude
+should reference it from `CLAUDE.md` (`@AGENTS.md`), as it would locally.
+
+Packaged acceptance checks:
+
+- the order and framing of the target files, including the parent
+  directory's, an import, `.claude/CLAUDE.md`, a rule and `CLAUDE.local.md`
+- that neither a scoped rule nor `AGENTS.md` loads
+- the environment and Git blocks
+- a Read bringing the nested `CLAUDE.md` and the matching scoped rule once,
+  without the label
+
+Gaps:
+
+- Each nested file natively gets its own `<system-reminder>`. Here they share
+  one, separated by a blank line.
+- The target's Git section goes into native's session context, and is added
+  when native had no Git section of its own. If native emits no session
+  context at all, the section is absent; the acceptance runtime directory had
+  one.
+- HTML comment stripping and import edge cases (depth beyond five,
+  non-text files) follow a reading of native behavior rather than
+  measurement.
+- Files are a session-start snapshot, as natively.
+
+Ten native review rounds were run, and the last reported none. Fixed findings:
+
+- deduplication per conversation, serialized for parallel Reads
+- brace and class globs, and quoted, multi-line and commented `paths` lists
+- imports of nested files and of rules
+- symlinked rule directories and files
+- a user's scoped rules matched relative to the project, and collected once
+- read and listing failures stopping the session instead of silently
+  dropping instructions
+- a failed nested load reported to the model instead of looking like no
+  instructions
+- a Git status that cannot be read reported as unavailable, not clean
+- the target's Git section added when native had none
+
 ### 3. Native agents and orchestration
 
 Codex already selects the execution environment at thread start and every turn.

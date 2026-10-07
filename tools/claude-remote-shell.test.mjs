@@ -78,7 +78,13 @@ function localConnection(home) {
         };
       }
       if (method === "fs/getMetadata") {
-        const info = await stat(path);
+        // The executor reports an absent file as a remote error.
+        const info = await stat(path).catch((error) => {
+          if (error.code !== "ENOENT") throw error;
+          throw Object.assign(new Error("absent"), {
+            remote: { message: "No such file or directory" },
+          });
+        });
         return { isFile: info.isFile(), size: info.size };
       }
       if (method === "fs/readFile") {
@@ -389,4 +395,101 @@ test("a native task's notification reads as the target command's", async () => {
   const other =
     "<task-notification>\n<task-id>else</task-id>\n</task-notification>";
   assert.equal(targetShellNotification(other, tasks), other);
+});
+
+test("each conversation is shown a nested instruction file once", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  await writeFile(join(project, "sub", "CLAUDE.md"), "NESTED\n");
+  await writeFile(join(project, "sub", "a.txt"), "a\n");
+  tools.nested = {
+    read: async (path) => {
+      try {
+        return await readFile(path, "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+    conditional: [],
+    home: undefined,
+    initial: [],
+    attached: new Map(),
+  };
+  const read = (owner) =>
+    tools.dispatch("Read", { file_path: "sub/a.txt" }, owner ? { owner } : {});
+  assert.equal((await read("agent1")).instructions[0].content, "NESTED\n");
+  assert.equal((await read("agent1")).instructions, undefined);
+  assert.equal((await read()).instructions[0].content, "NESTED\n");
+  // Concurrent Reads of one conversation show it once between them, even
+  // when their reads interleave.
+  const slow = tools.nested.read;
+  tools.nested.read = async (path) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return slow(path);
+  };
+  const shown = await Promise.all([
+    tools.nestedFor(join(project, "sub", "a.txt"), "agent2"),
+    tools.nestedFor(join(project, "sub", "b.txt"), "agent2"),
+  ]);
+  assert.equal(shown.flat().length, 1);
+});
+
+test("instruction rules follow symbolic links and their imports", async (t) => {
+  const { tools, project, home } = await shellFixture(t);
+  tools.shell = "/bin/sh";
+  const shared = join(home, "shared-rules");
+  await mkdir(join(shared, "nested"), { recursive: true });
+  await writeFile(
+    join(shared, "nested", "linked-dir.md"),
+    "LINKED_DIR_RULE\n@sibling.txt\n",
+  );
+  await writeFile(join(shared, "nested", "sibling.txt"), "RULE_IMPORT\n");
+  await writeFile(join(shared, "file.md"), "LINKED_FILE_RULE\n");
+  await mkdir(join(project, ".claude", "rules"), { recursive: true });
+  const { symlink } = await import("node:fs/promises");
+  await symlink(
+    join(shared, "nested"),
+    join(project, ".claude", "rules", "team"),
+  );
+  await symlink(
+    join(shared, "file.md"),
+    join(project, ".claude", "rules", "one.md"),
+  );
+  const files = await tools.instructions();
+  assert.deepEqual(files.map((file) => file.content), [
+    "LINKED_FILE_RULE\n",
+    "LINKED_DIR_RULE\n@sibling.txt\n",
+    "RULE_IMPORT\n",
+  ]);
+});
+
+test("a Git status that fails is not reported as clean", async (t) => {
+  const { tools } = await shellFixture(t);
+  const original = tools.command.bind(tools);
+  tools.command = async (argv, ...rest) =>
+    argv.includes("status")
+      ? Promise.reject(new Error("Target utility exceeded its limit"))
+      : argv[0] === "git" && argv.includes("--is-inside-work-tree")
+      ? { exitCode: 0, output: "true\n" }
+      : original(argv, ...rest);
+  const git = await tools.gitStatus();
+  assert.match(
+    git,
+    /\n\nStatus:\n\(unavailable: git status did not complete\)\n\n/,
+  );
+});
+
+test("a nested instruction load that fails is reported", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  await writeFile(join(project, "sub", "a.txt"), "a\n");
+  tools.nested = {
+    read: async () => {
+      throw new Error("transport");
+    },
+    conditional: [],
+    home: undefined,
+    initial: [],
+    attached: new Map(),
+  };
+  const result = await tools.dispatch("Read", { file_path: "sub/a.txt" });
+  assert.deepEqual(result.instructions, { unavailable: true });
 });

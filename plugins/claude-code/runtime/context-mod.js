@@ -751,16 +751,52 @@ function environment() {
   return { text: context?.environment ?? unavailable };
 }
 
+export function unlabeledContext(text) {
+  const label = "tool.call hook additional context: ";
+  return typeof text === "string" && text.startsWith(label)
+    ? text.slice(label.length)
+    : text;
+}
+
+// Replaces native's `# gitStatus` section (the runtime's) with the target's,
+// or drops it outside a repository; null when nothing else remains.
+export function targetSessionContext(text, git) {
+  const header = "# gitStatus\n";
+  const trailer = "\n\nClaude Code attached this context automatically";
+  const start = text.indexOf(header);
+  if (start < 0) {
+    // Native had no Git context (its runtime directory is no repository):
+    // the target's still goes where native puts it.
+    const at = text.indexOf(trailer);
+    return git === null || at < 0
+      ? text
+      : `${text.slice(0, at)}\n${header}${git}${text.slice(at)}`;
+  }
+  let end = text.indexOf("\n# ", start + header.length);
+  if (end < 0) end = text.indexOf(trailer, start);
+  if (end < 0) end = text.length;
+  const rest = text.slice(0, start) + (git === null ? "" : header + git) +
+    text.slice(end);
+  return /^# /m.test(rest) ? rest : null;
+}
+
+// Native renders the target's instruction files in its own framing; none of
+// the runtime's are kept.
 function instructions(_$, event) {
+  if (!context) {
+    return {
+      blocks: [{ name: "claudeMd", text: unavailable }],
+      instructionFiles: [],
+    };
+  }
+  const claudeMd = event.blocks.find((block) => block.name === "claudeMd") ??
+    { name: "claudeMd", text: "" };
   return {
     blocks: [
+      claudeMd,
       ...event.blocks.filter((block) => block.name === "currentDate"),
-      {
-        name: "claudeMd",
-        text: context?.instructions ?? unavailable,
-      },
     ],
-    instructionFiles: [],
+    instructionFiles: context.instructionFiles,
   };
 }
 
@@ -1001,7 +1037,7 @@ export function register(on) {
               ? { deny: [result.deny, ...notes].join("\n\n") }
               : result;
           }
-          const { task, ...answered } = result;
+          const { task, instructions: nested, ...answered } = result;
           if (task) {
             answered.result = await notifyOnEnd(
               $,
@@ -1022,7 +1058,20 @@ export function register(on) {
             run,
             result.result,
           );
-          const reminders = [...pre.context, ...post.context];
+          // Nested instruction files follow the result, as natively.
+          const reminders = [
+            ...pre.context,
+            ...(Array.isArray(nested)
+              ? nested.map((file) =>
+                `Contents of ${file.path}:\n\n${file.content}`
+              )
+              : nested?.unavailable
+              ? [
+                "The project's instruction files (CLAUDE.md and rules) for this file's directories could not be loaded from the target. Read them before relying on this file.",
+              ]
+              : []),
+            ...post.context,
+          ];
           // Natively the tool still ran; continue:false then ends the turn.
           const stop = pre.stop ?? post.stop;
           if (stop !== undefined) $.turn.abort().catch(() => {});
@@ -1045,9 +1094,18 @@ export function register(on) {
   on("prompt.attachment", { type: "environment" }, environment).catch(
     environment,
   );
-  on("prompt.attachment", { type: "session_context" }, () => ({
-    text: context?.git ?? unavailable,
-  })).catch(() => ({ text: unavailable }));
+  // This module's tool.call context stands for native's own reminders (hook
+  // output, nested instruction files): it reads without the chain's label.
+  on(
+    "prompt.attachment",
+    { origin: { kind: "plugin" } },
+    (_$, event, next) => next({ ...event, text: unlabeledContext(event.text) }),
+  );
+  // Native's session context describes the runtime checkout; its Git status
+  // becomes the target's, in native's own framing.
+  on("prompt.attachment", { type: "session_context" }, (_$, event) => ({
+    text: targetSessionContext(event.text, context ? context.git : null),
+  })).catch(() => ({ text: null }));
   on("prompt.context", instructions).catch(instructions);
   on("prompt.section", { name: "env_info" }, environment).catch(environment);
   on(
@@ -1144,8 +1202,16 @@ export function register(on) {
       !(loaded.targetHome === null ||
         (typeof loaded.targetHome === "string" &&
           loaded.targetHome.startsWith("/"))) ||
-      ![loaded.environment, loaded.instructions, loaded.git].every((value) =>
-        typeof value === "string" && value.length <= 262144
+      typeof loaded.environment !== "string" ||
+      loaded.environment.length > 262144 ||
+      !(loaded.git === null ||
+        (typeof loaded.git === "string" && loaded.git.length <= 262144)) ||
+      !Array.isArray(loaded.instructionFiles) ||
+      !loaded.instructionFiles.every((file) =>
+        typeof file?.path === "string" && file.path.startsWith("/") &&
+        ["user", "project", "local"].includes(file.kind) &&
+        typeof file.content === "string" &&
+        (file.parent === undefined || typeof file.parent === "string")
       )
     ) throw new Error("Invalid bound execution context");
     context = Object.freeze(loaded);

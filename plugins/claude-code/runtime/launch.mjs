@@ -866,7 +866,6 @@ async function native(args) {
       // Native tool bodies never run for project operations. Keep implicit
       // attachments and local checkpoints disabled; Mods projects target context.
       CLAUDE_CODE_DISABLE_ATTACHMENTS: "1",
-      CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
       DISABLE_TELEMETRY: "1",
       DISABLE_ERROR_REPORTING: "1",
       DISABLE_AUTOUPDATER: "1",

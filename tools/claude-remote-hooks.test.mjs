@@ -465,7 +465,7 @@ async function modFixture(hooks, runs, base) {
           socketPath: "/tmp/cowboy-claude-mod-fixture/bridge.sock",
           descriptions: DESCRIPTIONS,
           environment: "e",
-          instructions: "i",
+          instructionFiles: [],
           git: "g",
           agents: {},
           targetCwd: "/target",
