@@ -4830,17 +4830,17 @@ impl SqliteStorage {
             sqlx::query_as("SELECT key, value FROM settings")
                 .fetch_all(&self.pool)
                 .await
-                .context("SELECT SQLite auth settings")?;
+                .context("SELECT SQLite Hub settings")?;
         Ok(rows
             .into_iter()
-            .filter(|(key, _)| crate::admin::is_admin_setting_key(key))
+            .filter(|(key, _)| crate::core::settings_keys::is_persisted_setting_key(key))
             .collect())
     }
 
     pub(super) async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         anyhow::ensure!(
-            crate::admin::is_admin_setting_key(key),
-            "unsupported internal auth setting"
+            crate::core::settings_keys::is_persisted_setting_key(key),
+            "unsupported Hub setting"
         );
         let mut value = value.clone();
         strip_nul(&mut value);
@@ -4854,7 +4854,7 @@ impl SqliteStorage {
         .bind(now_ms())
         .execute(&self.pool)
         .await
-        .with_context(|| format!("UPSERT SQLite auth setting {key}"))?;
+        .with_context(|| format!("UPSERT SQLite Hub setting {key}"))?;
         Ok(())
     }
 

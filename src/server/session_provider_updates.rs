@@ -2,7 +2,10 @@
 use super::*;
 
 fn key(session: &str) -> String {
-    format!("session_provider_auto_update:{session}")
+    format!(
+        "{}{session}",
+        crate::core::settings_keys::SESSION_PROVIDER_AUTO_UPDATE_PREFIX
+    )
 }
 
 pub(super) fn enabled(hub: &Hub, session: &str) -> bool {
