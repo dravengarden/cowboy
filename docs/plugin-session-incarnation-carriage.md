@@ -70,6 +70,17 @@ because `runtime_wire.rs` differs from the retained bundle, as expected. That he
 not re-gated; the gate result above is for `eeb37e5e`. The carriage still needs a pin
 that includes it.
 
+## Landed
+
+On 2026-10-07 the carriage (`abf08c88`, merged into `main` as `4039df61`) and the pin
+advance to it (`f469cf04`) were pushed after a fresh full gate (all six steps exit 0,
+2636 tests passed, 0 failed). The Machine (writer host release, generation
+`worker-95d6504d…`) and then the Controller were activated on Hawk; see
+[the release record](releases/worker-pin-incarnation-carriage-2026-10-07.md). The
+Machine now stamps the lineage and the Controller consumes it. The value is
+process-local on the Controller and not exposed by any diagnostic, so no production
+observation of it has been made.
+
 ## Limits
 
 No production observation of a lineage change retiring a real observation exists. Local
