@@ -10,6 +10,37 @@ impl MachineControl {
         machine_id: &str,
         request: Request,
     ) -> Result<Response, String> {
+        // Creation requests have target-owned identities and observe an
+        // existing preparation after reconnect. Keep that identity; never
+        // retry an arbitrary execution effect or mint another session here.
+        let recoverable = matches!(
+            request.action,
+            Action::Inventory | Action::PrepareRuntime { .. } | Action::Prepare { .. }
+        );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let connection = self.operation_connection(machine_id).ok();
+            let result = self
+                .execution_request_once(machine_id, request.clone())
+                .await;
+            if result.is_ok()
+                || !recoverable
+                || tokio::time::Instant::now() >= deadline
+                || connection
+                    .as_ref()
+                    .is_some_and(|connection| self.is_current(connection))
+            {
+                return result;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn execution_request_once(
+        &self,
+        machine_id: &str,
+        request: Request,
+    ) -> Result<Response, String> {
         let timeout = if matches!(request.action, Action::Prepare { .. }) {
             super::WORKSPACE_ADAPTER_TIMEOUT + std::time::Duration::from_secs(30)
         } else {
@@ -84,7 +115,7 @@ mod tests {
         let caller = Arc::clone(&control);
         let pending = tokio::spawn(async move {
             caller
-                .execution_request("target", request("service-test", "target"))
+                .execution_request_once("target", request("service-test", "target"))
                 .await
         });
         let MachineCommand::Execution { request_id, .. } = commands.recv().await.unwrap() else {
@@ -128,7 +159,7 @@ mod tests {
         let caller = Arc::clone(&control);
         let pending = tokio::spawn(async move {
             caller
-                .execution_request("target", request("service-test", "target"))
+                .execution_request_once("target", request("service-test", "target"))
                 .await
         });
         let MachineCommand::Execution { request_id, .. } = commands.recv().await.unwrap() else {
@@ -145,5 +176,59 @@ mod tests {
         );
         assert!(pending.await.unwrap().is_err());
         assert!(new_commands.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn creation_recovers_the_same_preparation_after_connection_replacement() {
+        let control = Arc::new(MachineControl::default());
+        let (tx, mut old_commands) = mpsc::unbounded_channel();
+        control.install("target".into(), "old".into(), false, 23, tx);
+        let caller = Arc::clone(&control);
+        let original = Request {
+            service_id: "service-test".into(),
+            machine_id: "target".into(),
+            action: Action::PrepareRuntime {
+                session_id: "original-session".into(),
+            },
+        };
+        let intended = original.clone();
+        let pending =
+            tokio::spawn(async move { caller.execution_request("target", original).await });
+        let MachineCommand::Execution {
+            request_id: old_id,
+            request: first,
+        } = old_commands.recv().await.unwrap()
+        else {
+            panic!("execution")
+        };
+        assert_eq!(*first, intended);
+        let (tx, mut new_commands) = mpsc::unbounded_channel();
+        let fresh = control.install("target".into(), "new".into(), false, 23, tx);
+        let MachineCommand::Execution {
+            request_id,
+            request: second,
+        } = tokio::time::timeout(std::time::Duration::from_secs(2), new_commands.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("execution")
+        };
+        assert_ne!(old_id, request_id);
+        assert_eq!(*second, intended);
+        let response = Response::RuntimePrepared {
+            runtime: crate::execution_environment::RuntimeLocation {
+                machine_id: "target".into(),
+                cwd: "/original-entry".into(),
+            },
+        };
+        control.record_remote(
+            &fresh,
+            MachineEvent::ExecutionResponse {
+                request_id,
+                response: Box::new(response.clone()),
+            },
+        );
+        assert_eq!(pending.await.unwrap().unwrap(), response);
     }
 }

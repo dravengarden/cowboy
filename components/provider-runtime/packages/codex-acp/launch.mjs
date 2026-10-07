@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -83,8 +84,63 @@ async function sendFrame(stream, message) {
   }
 }
 
-async function bridgeExecution(child, descriptor) {
-  const registrationId = "cowboy-execution-" + randomUUID();
+export async function bridgeExecution(child, descriptor, {
+  input = process.stdin,
+  output = process.stdout,
+  recoveryTimeoutMs = 180000,
+  retryDelayMs = 1000,
+} = {}) {
+  const privatePrefix = "cowboy-execution-" + randomUUID() + "-";
+  const pending = new Map();
+  let sequence = 0;
+  let ended = false;
+  let rejectFailure;
+  const failure = new Promise((_, reject) => {
+    rejectFailure = reject;
+  });
+  async function request(method, params, timeoutMs = 20000) {
+    const id = privatePrefix + sequence++;
+    const reply = new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+    });
+    reply.catch(() => {});
+    const timer = setTimeout(() => {
+      pending.get(id)?.reject(
+        new Error("Execution readiness request timed out"),
+      );
+    }, Math.min(recoveryTimeoutMs, timeoutMs));
+    try {
+      await sendFrame(child.stdin, { id, method, params });
+      return await reply;
+    } finally {
+      clearTimeout(timer);
+      pending.delete(id);
+    }
+  }
+  async function ready() {
+    const deadline = Date.now() + recoveryTimeoutMs;
+    do {
+      if (ended) throw new Error("Native execution connection ended");
+      try {
+        // Registration is lazy. info uses native recovery, whereas status is
+        // observation-only and cannot repair a failed initialize handshake.
+        const info = await request(
+          "environment/info",
+          { environmentId: descriptor.binding.environment.id },
+          Math.max(1, Math.min(20000, deadline - Date.now())),
+        );
+        if (typeof info?.shell?.path === "string") return;
+      } catch {
+        // Only an effect-free readiness query is retried. User turns are sent
+        // once, after the original bound environment is usable again.
+      }
+      if (Date.now() >= deadline) break;
+      await delay(Math.min(retryDelayMs, deadline - Date.now()));
+    } while (Date.now() < deadline);
+    throw new Error(
+      "Bound execution environment is unavailable; retry when its Machine reconnects",
+    );
+  }
   let resolveRegistration, rejectRegistration;
   const registered = new Promise((resolve, reject) => {
     resolveRegistration = resolve;
@@ -93,38 +149,46 @@ async function bridgeExecution(child, descriptor) {
   // A child failure before initialized must not leave an unhandled rejection.
   registered.catch(() => {});
   let initializeId;
-  let initializeReply;
   let receivedInitialized = false;
-  const output = (async () => {
+  let initialization;
+  const receive = (async () => {
     for await (const message of frames(child.stdout)) {
-      if (message.id === registrationId) {
+      if (
+        typeof message.id === "string" && message.id.startsWith(privatePrefix)
+      ) {
+        const waiter = pending.get(message.id);
         if (message.error) {
-          throw new Error("Bound execution environment refused");
-        }
-        await sendFrame(process.stdout, initializeReply);
-        resolveRegistration();
+          waiter?.reject(new Error("Execution readiness refused"));
+        } else waiter?.resolve(message.result);
       } else if (initializeId !== undefined && message.id === initializeId) {
         if (message.error) throw new Error("Native initialization refused");
-        initializeReply = message;
         // Some ACP adapters omit the optional native initialized notification.
         // This bridge owns initialization and registers before exposing success.
         await sendFrame(child.stdin, { method: "initialized", params: {} });
-        await sendFrame(child.stdin, {
-          id: registrationId,
-          method: "environment/add",
-          params: {
+        initialization = (async () => {
+          await request("environment/add", {
             environmentId: descriptor.binding.environment.id,
             execServerUrl: descriptor.endpoint,
             authBearerToken: descriptor.bearer_token,
             connectTimeoutMs: 180000,
-          },
+          });
+          await ready();
+          await sendFrame(output, message);
+          resolveRegistration();
+        })();
+        initialization.catch((error) => {
+          rejectRegistration(error);
+          rejectFailure(error);
         });
-      } else await sendFrame(process.stdout, message);
+      } else await sendFrame(output, message);
     }
-    rejectRegistration(new Error("Native execution connection ended"));
+    const error = new Error("Native execution connection ended");
+    ended = true;
+    rejectRegistration(error);
+    for (const waiter of pending.values()) waiter.reject(error);
   })();
-  const input = (async () => {
-    for await (const message of frames(process.stdin)) {
+  const transmit = (async () => {
+    for await (const message of frames(input)) {
       if (message.method === "initialize") {
         if (initializeId !== undefined || message.id === undefined) {
           throw new Error("Duplicate or invalid native initialization");
@@ -143,7 +207,7 @@ async function bridgeExecution(child, descriptor) {
         message.method.startsWith("environment/")
       ) {
         if (message.id !== undefined) {
-          await sendFrame(process.stdout, {
+          await sendFrame(output, {
             id: message.id,
             error: {
               code: -32600,
@@ -162,12 +226,31 @@ async function bridgeExecution(child, descriptor) {
           throw new Error("Execution endpoint has not been registered");
         }
         await registered;
+        try {
+          await ready();
+        } catch (error) {
+          if (message.id !== undefined) {
+            await sendFrame(output, {
+              id: message.id,
+              error: { code: -32000, message: error.message },
+            });
+          }
+          continue;
+        }
       }
       await sendFrame(child.stdin, bindExecutionRequest(message, descriptor));
     }
     child.stdin.end();
   })();
-  await Promise.all([input, output]);
+  try {
+    await Promise.race([Promise.all([transmit, receive]), failure]);
+    await initialization;
+  } finally {
+    ended = true;
+    for (const waiter of pending.values()) {
+      waiter.reject(new Error("Execution bridge ended"));
+    }
+  }
 }
 
 export function splitConfigurationArguments(args) {

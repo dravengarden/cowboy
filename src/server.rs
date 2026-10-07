@@ -13942,19 +13942,14 @@ impl MachineHeartbeatWatchdog {
 }
 
 async fn write_machine_messages<S>(
-    mut sink: S,
-    mut messages: mpsc::UnboundedReceiver<Message>,
+    sink: S,
+    messages: mpsc::UnboundedReceiver<Message>,
+    chunked: bool,
 ) -> anyhow::Result<()>
 where
     S: SinkExt<Message> + Unpin,
 {
-    while let Some(message) = messages.recv().await {
-        tokio::time::timeout(WEBSOCKET_FRAME_SEND_TIMEOUT, sink.send(message))
-            .await
-            .map_err(|_| anyhow::anyhow!("Machine WebSocket frame send timed out"))?
-            .map_err(|_| anyhow::anyhow!("Machine WebSocket send failed"))?;
-    }
-    Ok(())
+    crate::machine_transport::write(sink, messages, chunked).await
 }
 
 fn queue_machine_message(tx: &mpsc::UnboundedSender<Message>, message: Message) -> Result<(), ()> {
@@ -14091,7 +14086,7 @@ mod machine_runtime_bridge_tests {
             std::future::pending::<Result<(), std::io::Error>>().await
         });
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let writer = tokio::spawn(write_machine_messages(Box::pin(sink), rx));
+        let writer = tokio::spawn(write_machine_messages(Box::pin(sink), rx, false));
 
         queue_machine_json(&tx, &MachineFrame::Heartbeat { sent_at_ms: 0 })
             .expect("queue frame that stalls in the Machine WebSocket sink");
@@ -14119,8 +14114,19 @@ mod machine_runtime_bridge_tests {
 async fn machine_ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_machine_ws(socket, state))
+    let chunked = headers
+        .get(crate::machine_transport::HEADER)
+        .is_some_and(|value| value == crate::machine_transport::CHUNKED);
+    let mut response = ws.on_upgrade(move |socket| handle_machine_ws(socket, state, chunked));
+    if chunked {
+        response.headers_mut().insert(
+            crate::machine_transport::HEADER,
+            axum::http::HeaderValue::from_static(crate::machine_transport::CHUNKED),
+        );
+    }
+    response
 }
 
 fn random_machine_token() -> anyhow::Result<String> {
@@ -14276,7 +14282,7 @@ mod provider_usage_source_tests {
     }
 }
 
-async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
+async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>, chunked: bool) {
     let Some(store) = state.store.as_ref().cloned() else {
         let _ = send_json(
             &mut socket,
@@ -14458,7 +14464,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         state.machine_snapshots.publish().await;
         return;
     }
-    tracing::info!(machine = %hello.machine_id, "Machine connected");
+    tracing::info!(machine = %hello.machine_id, chunked, "Machine connected");
     // Keep WebSocket writes out of the Machine read loop. A runtime replay or
     // command response may fill the socket while the Machine is still sending
     // heartbeats; the read side must continue to make progress independently.
@@ -14468,7 +14474,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let (socket_sink, mut socket_stream) = socket.split();
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
     let execution_calls = Arc::new(tokio::sync::Semaphore::new(64));
-    let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
+    let mut socket_writer = tokio::spawn(write_machine_messages(
+        socket_sink,
+        machine_write_rx,
+        chunked,
+    ));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
     // A declared connection mode is a request to be read on this host, not
     // evidence of running on it: the transport is the same TCP socket either
@@ -14618,6 +14628,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
     let mut heartbeat_watchdog = MachineHeartbeatWatchdog::default();
+    let mut decoder = crate::machine_transport::Decoder::default();
     loop {
         let message = tokio::select! {
             message = socket_stream.next() => Some(message),
@@ -14717,6 +14728,20 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         };
         let Ok(message) = message else {
             break;
+        };
+        let message = match message {
+            Message::Binary(bytes) => match decoder.chunk(chunked, &bytes) {
+                Ok(Some(text)) => Message::Text(text.into()),
+                Ok(None) => continue,
+                Err(_) => break,
+            },
+            Message::Text(text) => {
+                if decoder.text(&text).is_err() {
+                    break;
+                }
+                Message::Text(text)
+            }
+            other => other,
         };
         let Message::Text(text) = message else {
             match message {

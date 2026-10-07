@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PassThrough } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -14,9 +15,102 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import {
   bindExecutionRequest,
+  bridgeExecution,
   readExecutionDescriptor,
   splitConfigurationArguments,
 } from "./launch.mjs";
+
+test("lazy registration and failed handshakes recover before startup or a user turn", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const child = { stdin: new PassThrough(), stdout: new PassThrough() };
+  const sent = [];
+  const received = [];
+  let failures = 1;
+  let infoCalls = 0;
+  const frames = (stream, callback) => {
+    let buffered = "";
+    stream.on("data", (bytes) => {
+      buffered += bytes;
+      let newline;
+      while ((newline = buffered.indexOf("\n")) >= 0) {
+        const frame = JSON.parse(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+        callback(frame);
+      }
+    });
+  };
+  frames(output, (frame) => received.push(frame));
+  frames(child.stdin, (frame) => {
+    sent.push(frame);
+    if (frame.id === undefined) return;
+    let reply = { id: frame.id, result: {} };
+    if (frame.method === "environment/info") {
+      infoCalls++;
+      reply = failures-- > 0
+        ? { id: frame.id, error: { message: "initialize handshake timed out" } }
+        : {
+          id: frame.id,
+          result: { shell: { name: "bash", path: "/bin/bash" } },
+        };
+    }
+    child.stdout.write(JSON.stringify(reply) + "\n");
+  });
+  const running = bridgeExecution(child, descriptor(), {
+    input,
+    output,
+    retryDelayMs: 1,
+    recoveryTimeoutMs: 200,
+  });
+  const waitFor = async (condition) => {
+    for (let i = 0; i < 100 && !condition(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(condition());
+  };
+  input.write(
+    JSON.stringify({ id: 1, method: "initialize", params: {} }) + "\n",
+  );
+  await waitFor(() => received.some((frame) => frame.id === 1));
+  assert.equal(infoCalls, 2);
+  assert.equal(
+    sent.filter((frame) => frame.method === "environment/add").length,
+    1,
+  );
+  failures = 2;
+  input.write(
+    JSON.stringify({
+      id: 2,
+      method: "turn/start",
+      params: { input: [{ text: "one effect" }] },
+    }) + "\n",
+  );
+  await waitFor(() => received.some((frame) => frame.id === 2));
+  assert.equal(infoCalls, 5);
+  assert.equal(sent.filter((frame) => frame.method === "turn/start").length, 1);
+  assert.equal(
+    received.length,
+    2,
+    "private recovery responses must not escape",
+  );
+  failures = Infinity;
+  input.write(
+    JSON.stringify({ id: 3, method: "turn/start", params: {} }) + "\n",
+  );
+  await waitFor(() => received.some((frame) => frame.id === 3));
+  assert.equal(received.find((frame) => frame.id === 3).error.code, -32000);
+  assert.equal(sent.filter((frame) => frame.method === "turn/start").length, 1);
+  failures = 0;
+  input.write(
+    JSON.stringify({ id: 4, method: "turn/start", params: {} }) + "\n",
+  );
+  await waitFor(() => received.some((frame) => frame.id === 4));
+  assert.ok(received.find((frame) => frame.id === 4).result);
+  assert.equal(sent.filter((frame) => frame.method === "turn/start").length, 2);
+  input.end();
+  child.stdout.end();
+  await running;
+});
 
 test("the private CLI process receives the configured argv without a shell", () => {
   const echo = (process.env.PATH ?? "").split(delimiter)
