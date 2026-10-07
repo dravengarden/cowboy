@@ -23,7 +23,8 @@ try:
             or data[:4] == b'RIFF' and data[8:12] == b'WEBP'):
         emit({'fallback': True})
     else:
-        lines = data.decode('utf-8', errors='strict').split('\n')
+        # Invalid bytes are replaced, as a whole-file Read shows them.
+        lines = data.decode('utf-8', errors='replace').split('\n')
         selected = lines[offset-1:offset-1+limit]
         content = '\n'.join(selected).encode('utf-8')
         # Leave room under the existing 64 KiB retained process-output limit.

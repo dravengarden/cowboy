@@ -110,7 +110,7 @@ to introduce more restrictions.
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
 | Images, notebooks, PDFs | Images/notebooks have evidence; Claude describes PDF via target utility | Add native-parity PDF/pages, binary limits, image dimensions, output artifacts and user-upload placement tests |
-| File semantics | Stale edits, CRLF, Unicode, quoted paths, ranges tested | Add symlink races, rename/unlink races, case sensitivity, modes, hard links, nonregular files, encoding and concurrent writers |
+| File semantics | Claude 3.11.0: 24 Read/Write/Edit cases match native-local results and on-disk bytes and modes (encodings, BOM, CRLF, empty old_string, unread edits, directories) | Files are rewritten in place (native replaces them: inode, hard links, read-only files differ) |
 | Atomic mutations | Stale stamp refusal has evidence; it does not alone establish compare-and-write atomicity | Inspect target implementation and inject mutation between check and write; use target-side atomic primitives where promised |
 | Output limits | Large streams/backpressure and terminal events recorded | Test split UTF-8, binary/NUL, truncation markers, slow/absent reader, disk full and retained output expiration |
 | Lost replies | Lost start and outages recorded without replay | Distinguish rejected, accepted, unknown and completed effects; never resend an unknown mutation under a new identity |
@@ -559,6 +559,91 @@ This session-local queue does not synchronize other sessions or external
 processes. It does not supply OS-level compare-and-write, prevent symlink
 retargeting, or resolve an unknown target write after a lost acknowledgement.
 Those remain explicit gaps; no additional tool was disabled.
+
+### File tool semantics (Plugin 3.11.0)
+
+A differential check runs 24 Read, Write and Edit calls on prepared files
+natively on 2.1.287 (`tools/claude_file_native_probe.py`) and through the
+packaged remote lane, then compares results and on-disk effects. The native
+baseline is `tools/claude_file_native_baseline.json`. Native behavior:
+
+**Read**
+- Shows a file as UTF-8, with invalid bytes replaced; a UTF-16 file is shown
+  that way too.
+- Sets a UTF-8 byte order mark aside and shows CRLF as LF.
+
+**Edit**
+- Detects UTF-16LE by its byte order mark.
+- Matches the strings as given against the file's LF form, so a CR in
+  `old_string` does not match a CRLF file. It writes back in the file's own
+  encoding, BOM and line endings; an inserted `\n` becomes CRLF in a CRLF
+  file, and a CRLF in `new_string` stays as given in an LF file.
+- Failing edits use native's messages (`String to replace not found in file.`,
+  `Found N matches of the string to replace, …`).
+- Rewrites a Latin-1 file as UTF-8, with replacement characters (data loss,
+  natively).
+- With an empty `old_string`, creates a missing file or fills an empty one.
+  On a non-empty file it fails: `Cannot create new file - file already
+  exists.`
+
+**Read-before-write**
+- An unread file may be edited or written. Edit then marks its result
+  `contentNotInModelContext`.
+- A file read and then changed on disk is refused: `File has been modified
+  since read, …`. Only NotebookEdit still requires a Read.
+
+**Write**
+- Writes content as given and creates missing directories.
+- Writing to a directory fails: `<path> is a directory, not a file. …`
+
+**Results** name the file as the call did, not as an absolute path.
+
+**Replacement** — native replaces the file under its name: a new inode, its
+mode kept. A hard link therefore keeps the old content, and a read-only file
+in a writable directory can still be edited.
+
+Before 3.11.0 the facade differed in several ways:
+
+- It refused files that are not valid UTF-8, showed byte order marks and
+  required a Read before any mutation.
+- It inserted LF into CRLF files.
+- It could not edit UTF-16 files, or create or fill files with an empty
+  `old_string`.
+- It named files by absolute path and used its own messages.
+
+3.11.0 follows native on all of these, and the acceptance compares the file
+bytes and modes of every case.
+
+Two differences are stated rather than fixed:
+
+- **In-place rewrites.** Files are rewritten in place, so the inode stays, a
+  hard link sees the change, and editing a read-only file fails. The executor
+  offers no rename. A rename through a target process would have to join the
+  mutation journal: unknown outcomes, cancellation, and the no-replay rule.
+  That is a separate design.
+- **Trailing tab.** A Mods-answered Read keeps the tab after the number of an
+  empty last line, where native's own Read trims it.
+
+Large files read through the range helper (128 KiB and up) are shown the same
+way, so a range Read's text can be matched by a later Edit.
+
+Allowing unread mutations removed a protection the facade relied on. A file
+whose write outcome was lost, or whose state save failed, could have been
+changed again by a retry. Before writing an unread or new file, 3.11.0
+therefore records what the file held, or that it was absent. A retry then
+finds the file changed and is refused, instead of applying the change twice
+or overwriting a later change.
+
+Four native review rounds were run, and the last reported none. They found
+and fixed:
+
+- a CR doubled by normalizing edit strings; native takes them as given, as
+  measured
+- an unbounded `originalFile`
+- range-read boundaries (a BOM only at the file's start, a CR only before an
+  LF)
+- the range helper's strict decoding
+- lost-write retries, for unread and for new files
 
 ### 1. Preserve native Bash through an execution bridge
 

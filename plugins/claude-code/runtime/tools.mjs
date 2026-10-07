@@ -215,6 +215,40 @@ function decode(bytes) {
   }
 }
 
+// A text file as native's file tools read it (2.1.287, measured): UTF-16LE
+// when it starts with that byte order mark, otherwise UTF-8 with invalid
+// bytes replaced and a byte order mark set aside; CRLF read as LF.
+export function textFile(bytes) {
+  const utf16 = bytes[0] === 0xff && bytes[1] === 0xfe;
+  const bom = !utf16 && bytes[0] === 0xef && bytes[1] === 0xbb &&
+    bytes[2] === 0xbf;
+  const raw = utf16
+    ? bytes.subarray(2).toString("utf16le")
+    : new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+      bom ? bytes.subarray(3) : bytes,
+    );
+  return {
+    text: raw.replaceAll("\r\n", "\n"),
+    crlf: raw.includes("\r\n"),
+    utf16,
+    bom,
+  };
+}
+
+// Text written back in the file's own encoding and line endings.
+export function textBytes(text, { crlf, utf16, bom }) {
+  const content = crlf ? text.replaceAll("\n", "\r\n") : text;
+  return utf16
+    ? Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from(content, "utf16le"),
+    ])
+    : Buffer.concat([
+      Buffer.from(bom ? [0xef, 0xbb, 0xbf] : []),
+      Buffer.from(content),
+    ]);
+}
+
 // Persist only an unfinished UTF-8 suffix, not a decoder's private internals.
 // stdout and stderr may split characters independently, including at a tool
 // result boundary. Invalid complete bytes retain Node's replacement behavior.
@@ -400,6 +434,16 @@ export class WorkspaceTools {
     if (!home) return undefined;
     const path = fileURLToPath(home);
     return posix.isAbsolute(path) ? posix.resolve(path) : undefined;
+  }
+
+  async isDirectory(path) {
+    try {
+      return (await this.connection.call("fs/getMetadata", {
+        path: pathToFileURL(path).href,
+      })).isDirectory === true;
+    } catch {
+      return false;
+    }
   }
 
   async isSymlink(path) {
@@ -687,7 +731,14 @@ export class WorkspaceTools {
     if (bytes.toString("base64") !== data.dataBase64) {
       throw new Error("Invalid target range encoding");
     }
-    const content = decode(bytes);
+    // Shown as a whole-file Read is: lossy UTF-8, BOM aside, CRLF as LF.
+    // Shown as a whole-file Read is: a BOM only at the file's start, and a
+    // CR only where an LF follows (the range ends before its last LF, if the
+    // file goes on).
+    const continues = offset + data.numLines - 1 < data.totalLines;
+    const content = new TextDecoder("utf-8", { ignoreBOM: offset > 1 })
+      .decode(bytes)
+      .replace(continues ? /\r(?=\n|$)/g : /\r(?=\n)/g, "");
     const lines = data.numLines === 0 ? [] : content.split("\n");
     if (lines.length !== data.numLines) {
       throw new Error("Invalid target range lines");
@@ -703,7 +754,7 @@ export class WorkspaceTools {
     return text(rendered, {
       type: "text",
       file: {
-        filePath: path,
+        filePath: args.file_path,
         content,
         numLines: lines.length,
         startLine: offset,
@@ -1349,7 +1400,23 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         if (range) return range;
       }
     }
-    const bytes = await this.bytes(path, name === "write", metadata);
+    // Native results name the file as the call did.
+    const shown = args.file_path ?? args.notebook_path;
+    let bytes;
+    try {
+      bytes = await this.bytes(
+        path,
+        name === "write" || name === "edit",
+        metadata,
+      );
+    } catch (error) {
+      if (name === "write" && await this.isDirectory(path)) {
+        throw new Error(
+          `${shown} is a directory, not a file. To create a file inside it, include the file name in file_path.`,
+        );
+      }
+      throw error;
+    }
     if (name === "read") {
       const remember = async (result) => {
         await this.rememberRead(path, hash(bytes));
@@ -1393,7 +1460,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       }
       const offset = bounded(args.offset, 1, 1, 10000000) - 1;
       const limit = bounded(args.limit, 2000, 1, 10000);
-      const lines = decode(bytes).split("\n");
+      // As natively: shown as UTF-8 (invalid bytes replaced, even for a
+      // UTF-16 file Edit would detect), BOM aside and CRLF as LF.
+      const lines = new TextDecoder("utf-8").decode(bytes)
+        .replaceAll("\r\n", "\n").split("\n");
       const selected = lines.slice(offset, offset + limit);
       const result = selected.map((line, index) =>
         `${offset + index + 1}\t${line}`
@@ -1407,7 +1477,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         text(result, {
           type: "text",
           file: {
-            filePath: path,
+            filePath: shown,
             content: selected.join("\n"),
             numLines: selected.length,
             startLine: offset + 1,
@@ -1416,33 +1486,63 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         }),
       );
     }
-    if (bytes && this.state.reads[path] !== hash(bytes)) {
+    // Natively an unread file may be written or edited; one read since and
+    // changed on disk may not.
+    const known = this.state.reads[path];
+    // NotebookEdit still requires a Read first, as natively.
+    if (name === "notebookedit" && known === undefined) {
       throw new Error(
-        "File changed or has not been read. Read it before editing.",
+        "File has not been read yet. Read it first before writing to it.",
+      );
+    }
+    if (bytes && known !== undefined && known !== hash(bytes)) {
+      throw new Error(
+        "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
       );
     }
     let content;
     let notebookResult;
+    let written;
+    let originalText = null;
     if (name === "write") content = checkedString(args.content, "content");
     else if (name === "edit") {
-      const original = decode(bytes);
-      let old = checkedString(args.old_string, "old_string");
-      let replacement = checkedString(args.new_string, "new_string");
-      if (!old) throw new Error("old_string must not be empty");
-      if (
-        !original.includes(old) && original.includes("\r\n") &&
-        !old.includes("\r\n")
-      ) {
-        old = old.replaceAll("\n", "\r\n");
-        replacement = replacement.replace(/(?<!\r)\n/g, "\r\n");
+      // Matched against the file's LF form, the strings as given (a CR in
+      // old_string does not match a CRLF file, natively).
+      const old = checkedString(args.old_string, "old_string");
+      const replacement = checkedString(args.new_string, "new_string");
+      if (!bytes) {
+        // Natively an empty old_string creates a missing file.
+        if (old) throw new Error(`File does not exist: ${shown}`);
+        content = replacement;
+        written = Buffer.from(content);
+      } else {
+        const file = textFile(bytes);
+        const original = file.text;
+        originalText = original;
+        if (!old) {
+          if (original) {
+            throw new Error("Cannot create new file - file already exists.");
+          }
+          content = replacement;
+        } else {
+          const count = original.split(old).length - 1;
+          if (!count) {
+            throw new Error(
+              `String to replace not found in file.\nString: ${old}`,
+            );
+          }
+          if (!args.replace_all && count !== 1) {
+            throw new Error(
+              `Found ${count} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${old}`,
+            );
+          }
+          content = args.replace_all
+            ? original.split(old).join(replacement)
+            : original.replace(old, () => replacement);
+        }
+        // Back in the file's own encoding and line endings, as natively.
+        written = textBytes(content, file);
       }
-      const count = original.split(old).length - 1;
-      if (!count || (!args.replace_all && count !== 1)) {
-        throw new Error("Edit must match exactly once, or set replace_all");
-      }
-      content = args.replace_all
-        ? original.split(old).join(replacement)
-        : original.replace(old, () => replacement);
     } else {
       const notebook = JSON.parse(decode(bytes));
       if (!Array.isArray(notebook.cells)) throw new Error("Invalid notebook");
@@ -1504,11 +1604,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       } else throw new Error("Invalid notebook edit mode");
       content = JSON.stringify(notebook, null, 1) + "\n";
     }
-    if (Buffer.byteLength(content) > MAX_FILE) {
+    written ??= Buffer.from(content);
+    if (written.length > MAX_FILE) {
       throw new Error("Result exceeds file limit");
     }
-    let originalFile = null;
-    if (bytes && bytes.length <= MAX_OUTPUT) {
+    let originalFile = originalText !== null &&
+        Buffer.byteLength(originalText) <= MAX_OUTPUT
+      ? originalText
+      : null;
+    if (originalText === null && bytes && bytes.length <= MAX_OUTPUT) {
       try {
         originalFile = decode(bytes);
       } catch {
@@ -1519,34 +1623,47 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     // The target executor owns bytes and write errors. This is read-before-write
     // protection, not an atomic lock against unrelated host processes.
     this.live(call);
+    // An unread file is stamped with what it held before the write: if the
+    // write's outcome is lost, a retry finds the file changed and is refused
+    // instead of applying the change twice.
+    // A file created here is stamped as absent, for the same reason.
+    if (known === undefined) {
+      await this.rememberRead(path, bytes ? hash(bytes) : "absent");
+    }
     await this.connection.call("fs/createDirectory", {
       path: pathToFileURL(dirname(path)).href,
       recursive: true,
     });
     // Cancellation can arrive while the directory request is outstanding.
     this.live(call);
+    // Rewritten in place: native replaces the file instead (a new inode, so
+    // a hard link keeps the old content); the executor offers no rename.
     await this.connection.call("fs/writeFile", {
       path: pathToFileURL(path).href,
-      dataBase64: Buffer.from(content).toString("base64"),
+      dataBase64: written.toString("base64"),
     });
-    await this.rememberRead(path, hash(content));
+    await this.rememberRead(path, hash(written));
     const native = name === "write"
       ? {
         type: bytes ? "update" : "create",
-        filePath: path,
+        filePath: shown,
         content,
         originalFile,
         structuredPatch: patch(originalFile, content),
       }
       : name === "edit"
       ? {
-        filePath: path,
+        filePath: shown,
         oldString: args.old_string,
         newString: args.new_string,
         originalFile,
         structuredPatch: patch(originalFile, content),
         userModified: false,
         replaceAll: args.replace_all === true,
+        // Natively an edit of an unread file says its content is not known.
+        ...(known === undefined && bytes
+          ? { contentNotInModelContext: true }
+          : {}),
       }
       : { ...notebookResult, updated_file: content };
     return text(`Updated ${path}`, native);

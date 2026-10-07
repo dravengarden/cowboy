@@ -107,7 +107,7 @@ test("unknown file mutations preserve read authority and never replay on cold lo
         if (applied) {
           assert.match(
             (await resumed.nativeCall(entry.name, entry.args)).deny,
-            /Read it before editing/,
+            /modified since read/,
           );
           assert.equal(submitted, 1);
           assert.deepEqual(bytes, observed);
