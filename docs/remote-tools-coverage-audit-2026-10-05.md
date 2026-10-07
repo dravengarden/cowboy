@@ -832,6 +832,15 @@ Still not offered, each with its reason:
 - Searches through Bash use the target's own `rg`, `grep` and `find`; native
   shadows them with its embedded ripgrep, which is not on the target.
 
+The [3.15.0 release receipt](experiments/claude-tool-set-release-2026-10-07.json)
+binds commit `5f93175e` and artifact
+`sha256:8d357aeb685c8e9feda83cdd9bcb22a4970763b40754089d9c92ca7f1aeb7143`:
+82 accepted checks on the exact signed package, 3.14.0/3.15.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles, five public
+artifact digests and Catalog `ready`. OVH operation
+`ovh-claude-code-3-15-0-converge` completed: 3.15.0 active, 3.14.0 retained
+for rollback, no session leases, no live session restarted.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
