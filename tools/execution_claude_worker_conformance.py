@@ -1157,8 +1157,6 @@ def main():
         tool("Read", {"file_path": "range-large.txt", "offset": 101, "limit": 10}),
         tool("Read", {"file_path": "book.ipynb"}),
         tool("NotebookEdit", {"notebook_path": "book.ipynb", "cell_id": "cell", "new_source": "print('target')\n"}),
-        tool("Glob", {"pattern": "*.txt"}),
-        tool("Grep", {"pattern": "target after", "output_mode": "content"}),
         tool("Bash", {"command": "printf background_started >> jobs.txt; while :; do sleep 1; printf tick >> jobs.txt; done", "run_in_background": True}),
         read_background,
         stop_background,
@@ -1190,8 +1188,11 @@ def main():
         for index, request in enumerate(requests):
             names = {definition["name"] for definition in request.get("tools", [])}
             require(not any(name.startswith("mcp__") and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget", "mcp__matrix__memory_read", "mcp__matrix__memory_execute", "mcp__matrix__memory_receipt"}) for name in names), "Unowned MCP tool definitions remain advertised")
-            require(not names or {"Read", "Edit", "Write", "Bash", "Glob", "Grep", "NotebookEdit", "TaskStop"} <= names,
-                    "native execution tools missing")
+            # Native's default set (2.1.287): no Glob, Grep or TodoWrite; the
+            # task list, web and review tools run where the session runs.
+            require(not names or ({"Read", "Edit", "Write", "Bash", "NotebookEdit"} <= names
+                                  and not names & {"Glob", "Grep", "TodoWrite"}),
+                    "native execution tools differ from native's default set: " + ",".join(sorted(names)))
             encoded = json.dumps(request)
             exposed = next((path for path in [str(args.runtime), str(args.runtime.parent / "claude-home")]
                             if path in encoded), None)
@@ -1223,6 +1224,11 @@ def main():
         result = client.prompt(timeout=150)
         session = result["session_id"]
         context_checked(api.requests)
+        main_tools = {definition["name"] for definition in api.requests[-1].get("tools", [])}
+        require({"TaskStop", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "WebFetch", "WebSearch",
+                 "Agent"} <= main_tools,
+                "native's runtime tools are not advertised: " + ",".join(sorted(main_tools)))
+        checks.append("native_default_tool_set_without_runtime_only_search_tools")
         require((args.target / "fixture.txt").read_bytes() == content.encode(), "target edit bytes changed")
         require((args.target / "once.txt").read_text() == "once", "command did not execute exactly once")
         require((args.target / quoted).read_text() == "external change\n", "stale edit overwrote external change")
@@ -1230,7 +1236,8 @@ def main():
         require(book["metadata"] == {"preserve": True} and book["cells"][0]["source"] == ["print('target')\n"],
                 "native notebook edit lost target metadata or content")
         errors = [block for block in outputs(api.requests[-1]) if block.get("is_error")]
-        require(len(errors) == 1, f"expected only the edit conflict; received {len(errors)} tool errors")
+        require(len(errors) == 1, f"expected only the edit conflict; received {len(errors)} tool errors: "
+                + json.dumps(errors)[:3000])
         require((args.runtime / "fixture.txt").read_text() == "runtime remains untouched\n" and
                 not (args.runtime / "once.txt").exists(), "runtime filesystem was modified")
         jobs = (args.target / "jobs.txt").read_text()
@@ -1250,6 +1257,18 @@ def main():
                        "bounded_large_read_stays_in_target_tool_result",
                        "native_notebook_edit_preserves_metadata", "native_read_observes_retained_task_output",
                        "lost_start_receipt_and_transport_outage_do_not_replay"])
+        # The task list runs natively where the session runs; WebFetch of the
+        # machine's own name would reach the runtime, not the target.
+        api.steps.extend([[], tool("TaskCreate", {"subject": "Parity task", "description": "Track parity"}),
+                          tool("WebFetch", {"url": "http://localhost:9/", "prompt": "Summarize"})])
+        client.prompt(timeout=90)
+        runtime_results = list(outputs(api.requests[-1]))[-2:]
+        require(len(runtime_results) == 2 and not runtime_results[0].get("is_error")
+                and runtime_results[1].get("is_error")
+                and "cannot reach the target's localhost" in json.dumps(runtime_results[1]),
+                "native runtime tools did not run as expected: " + json.dumps(runtime_results)[:800])
+        context_checked(api.requests)
+        checks.append("native_task_list_runs_and_target_loopback_fetch_is_refused")
         api.steps.extend([[], tool("Bash", {"command": "printf retained_started >> retained.txt; while :; do sleep 1; printf tick >> retained.txt; done", "run_in_background": True})])
         client.prompt(timeout=90)
         client.close(); client = None
@@ -1380,8 +1399,7 @@ def main():
         pipes = [args.target / f"parallel-{name}.fifo" for name in ["a", "b"]]
         for pipe in pipes:
             os.mkfifo(pipe)
-            parallel.extend(tool("Grep", {"path": str(pipe), "pattern": "parallel_read_complete",
-                                          "output_mode": "content"}))
+            parallel.extend(tool("Bash", {"command": f"grep parallel_read_complete {pipe}"}))
         overlap = []
         def feed_pipes():
             opened = {}

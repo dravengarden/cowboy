@@ -649,8 +649,14 @@ test("only questions, todos and enrolled exact memory tools pass through", async
       "receipt",
     ].map((name) => "mcp__matrix__memory_" + name);
     const allowed = [
-      "TodoWrite",
       "AskUserQuestion",
+      "TaskCreate",
+      "TaskGet",
+      "TaskList",
+      "TaskUpdate",
+      "WebFetch",
+      "WebSearch",
+      "ReportFindings",
       ...(memory ? memoryTools : []),
     ];
     for (const tool of allowed) {
@@ -677,4 +683,23 @@ test("only questions, todos and enrolled exact memory tools pass through", async
     assert.equal(native.length, allowed.length);
     assert.equal(calls.length, 0);
   }
+});
+
+test("WebFetch of the machine's own names is refused, other URLs run natively", async () => {
+  const { targetLoopback } = await import(
+    "../plugins/claude-code/runtime/context-mod.js"
+  );
+  for (
+    const url of [
+      "http://localhost:3000/",
+      "https://app.localhost/x",
+      "http://127.0.0.1:8080",
+      "http://127.1.2.3/",
+      "http://[::1]:5173/",
+      "http://0.0.0.0:9000/",
+    ]
+  ) assert.equal(targetLoopback(url), true, url);
+  for (
+    const url of ["https://example.com/", "http://10.0.0.5/", "not a url"]
+  ) assert.equal(targetLoopback(url), false, url);
 });

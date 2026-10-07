@@ -839,6 +839,30 @@ export async function nativeLocalRead($, event, next, answer) {
   return { ...rest, ...named };
 }
 
+// Native tools that run where the session runs (see launch.mjs).
+const RUNTIME_TOOLS = [
+  "AskUserQuestion",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskUpdate",
+  "WebFetch",
+  "WebSearch",
+  "ReportFindings",
+];
+
+// A URL naming the machine itself means the target's in a local session.
+export function targetLoopback(url) {
+  let host;
+  try {
+    host = new URL(String(url)).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  return host === "localhost" || host.endsWith(".localhost") ||
+    host === "::1" || host === "0.0.0.0" || /^127\.\d+\.\d+\.\d+$/.test(host);
+}
+
 export function targetImageResult(event) {
   if (
     event.origin?.kind !== "tool" ||
@@ -921,9 +945,13 @@ export function register(on) {
       ? { decision: "allow" }
       : next(event));
   on("tool.call", async ($, event, next) => {
-    if (["TodoWrite", "AskUserQuestion"].includes(event.tool)) {
-      return next(event);
+    if (event.tool === "WebFetch" && targetLoopback(event.url)) {
+      return {
+        deny:
+          "WebFetch runs where this session runs, not on the target machine, so it cannot reach the target's localhost. Fetch the URL on the target with Bash (for example curl) instead.",
+      };
     }
+    if (RUNTIME_TOOLS.includes(event.tool)) return next(event);
     // This module's own native background task for a target command, or its
     // TaskStop: native runs the runtime-local waiter itself.
     if (
