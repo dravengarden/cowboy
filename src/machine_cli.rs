@@ -1116,9 +1116,19 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         .map_err(|()| anyhow::anyhow!("invalid controller URL scheme"))?;
     endpoint.set_path("/api/machine/connect");
     endpoint.set_query(None);
-    let (mut socket, _) = tokio_tungstenite::connect_async(endpoint.as_str())
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let mut request = endpoint.as_str().into_client_request()?;
+    request.headers_mut().insert(
+        crate::machine_transport::HEADER,
+        crate::machine_transport::CHUNKED.parse()?,
+    );
+    let (mut socket, response) = tokio_tungstenite::connect_async(request)
         .await
         .context("connecting Machine WebSocket")?;
+    let chunked = response
+        .headers()
+        .get(crate::machine_transport::HEADER)
+        .is_some_and(|value| value == crate::machine_transport::CHUNKED);
     let challenge = receive_frame(&mut socket).await?;
     let MachineFrame::Challenge {
         challenge_id,
@@ -1240,12 +1250,16 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     // non-blocking and let the writer's per-frame timeout bound a stalled
     // connection; dropping the connection also drops this short-lived queue.
     let (controller_write_tx, controller_write_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut controller_writer =
-        tokio::spawn(write_controller_messages(socket_sink, controller_write_rx));
+    let mut controller_writer = tokio::spawn(write_controller_messages(
+        socket_sink,
+        controller_write_rx,
+        chunked,
+    ));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
+    let mut decoder = crate::machine_transport::Decoder::default();
     let result: anyhow::Result<()> = async {
         loop {
             tokio::select! {
@@ -1287,6 +1301,19 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                     queue_controller_frame(&controller_write_tx, &MachineFrame::Event { event })?;
                 }
                 message = socket_stream.next() => {
+                    let message = match message {
+                        Some(Ok(Message::Binary(bytes))) => {
+                            match decoder.chunk(chunked, &bytes)? {
+                                Some(text) => Some(Ok(Message::Text(text.into()))),
+                                None => continue,
+                            }
+                        }
+                        Some(Ok(Message::Text(text))) => {
+                            decoder.text(&text)?;
+                            Some(Ok(Message::Text(text)))
+                        }
+                        other => other,
+                    };
                     match message {
                         Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
                         Some(Ok(Message::Ping(value))) => {
@@ -3728,19 +3755,15 @@ fn queue_controller_frame(
 }
 
 async fn write_controller_messages<S>(
-    mut socket: S,
-    mut messages: tokio::sync::mpsc::UnboundedReceiver<Message>,
+    socket: S,
+    messages: tokio::sync::mpsc::UnboundedReceiver<Message>,
+    chunked: bool,
 ) -> anyhow::Result<()>
 where
     S: futures::Sink<Message> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
 {
-    while let Some(message) = messages.recv().await {
-        tokio::time::timeout(MACHINE_FRAME_SEND_TIMEOUT, socket.send(message))
-            .await
-            .context("Machine controller frame send timed out")??;
-    }
-    Ok(())
+    crate::machine_transport::write(socket, messages, chunked).await
 }
 
 async fn write_runtime_frames<W>(
@@ -4022,7 +4045,7 @@ mod tests {
             std::future::pending::<Result<(), std::io::Error>>().await
         });
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let writer = tokio::spawn(write_controller_messages(Box::pin(sink), rx));
+        let writer = tokio::spawn(write_controller_messages(Box::pin(sink), rx, false));
 
         queue_controller_frame(&tx, &MachineFrame::Heartbeat { sent_at_ms: 0 })
             .expect("queue frame that stalls in the WebSocket sink");

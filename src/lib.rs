@@ -100,6 +100,8 @@ pub mod machine_install;
 mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod machine_transport;
 #[cfg(feature = "full")]
 #[path = "provider/managed_config.rs"]
 mod managed_config;
