@@ -73,6 +73,7 @@ try {
       "hook-proxy.mjs",
       "task-wait.mjs",
       "instructions.mjs",
+      "skills.mjs",
       "memory.mjs",
     ];
     const digests: Record<string, string> = {};

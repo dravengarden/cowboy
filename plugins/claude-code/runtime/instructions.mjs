@@ -62,7 +62,7 @@ function flowClosed(text) {
 }
 
 // A YAML line without its trailing ` # comment` (outside quotes).
-function withoutComment(line) {
+export function withoutComment(line) {
   let quote = null;
   for (let index = 0; index < line.length; index++) {
     const char = line[index];

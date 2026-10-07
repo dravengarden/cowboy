@@ -40,7 +40,7 @@ test("bound launch preserves model and resume while replacing local execution su
   const disallowed = args[args.indexOf("--disallowedTools") + 1].split(",");
   assert.ok(!disallowed.includes("Agent") && !disallowed.includes("Task"));
   assert.ok(
-    disallowed.includes("Skill") && disallowed.includes("ExitWorktree"),
+    !disallowed.includes("Skill") && disallowed.includes("ExitWorktree"),
   );
   assert.equal(args[args.indexOf("--setting-sources") + 1], "");
   assert.equal(args.filter((arg) => arg === "--plugin-dir").length, 1);

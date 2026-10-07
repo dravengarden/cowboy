@@ -57,9 +57,9 @@ AskUserQuestion and, only for enrolled sessions, the exact Matrix memory tools
 listed in that module. Native `Agent` runs background subagents whose own tool
 calls carry `agentId` through the same routing; `SendMessage` and `TaskStop`
 reach native only for this session's registered agents. Unknown tools are
-denied. Project skills, custom agents, agent isolation, implicit file
-attachments, plan files and PDF extraction remain unsupported by this lane;
-adopting any of them is a separate capability change.
+denied. Custom agents, agent isolation, plan files and attachments that
+describe the runtime's files remain unsupported by this lane; adopting any of
+them is a separate capability change.
 
 Target project hooks (`.claude/settings.json` and `settings.local.json`, read
 from the target at session start) are passed to native with `--settings`.
@@ -85,7 +85,18 @@ tree kill exists because the snapshot generator leaves `set -o monitor` on;
 re-measure all three per CLI. PDF and file-type Reads are checked against
 `tools/claude_pdf_native_baseline.json` (probe `tools/claude_pdf_native_probe.py`,
 run in the dev shell for poppler): re-measure native's page limits, `pdftoppm`
-arguments, binary-extension list and messages per CLI. Completion notifications for target commands rely
+arguments, binary-extension list and messages per CLI. Target skills and
+commands are checked against `tools/claude_skill_native_baseline.json` (cases
+in `tools/claude_skill_cases.py`, probe `tools/claude_skill_native_probe.py`).
+They rely on measured native behavior to re-verify per CLI: plugin skills are
+named `<plugin>:<name>` and listed only with a description; the initialize
+`skills` allowlist filters them by full name; a Mods `tool.call` that changes
+a Skill result drops the skill's messages, so names are projected in
+`session.append` instead; `skill.prompt` sees the expanded text after native
+would have run `!` commands (the mirror marks them so native does not); stored
+attachments, the skill listing among them, render again on later requests;
+and the attachment types `context-mod.js` drops as runtime-located
+(`RUNTIME_ATTACHMENTS`) still cover native's producers. Completion notifications for target commands rely
 on a plugin's `$.tool.call` of a native background Bash being notified like
 the model's own, on the `<task-notification>` element shape the Mod rewrites,
 and on `$.session.receive` staying unavailable (re-measure: if a later CLI

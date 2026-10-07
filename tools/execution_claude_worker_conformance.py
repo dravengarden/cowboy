@@ -28,6 +28,8 @@ from matrix_execution_fixture import MatrixFixture
 from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 from claude_file_cases import CASES as FILE_CASES, effects as file_effects, normalize as file_normalize, setup as file_setup
 from claude_pdf_cases import CASES as PDF_CASES, normalize as pdf_normalize, notes as pdf_notes, setup as pdf_setup
+from claude_skill_cases import (CASES as SKILL_CASES, contents as skill_contents, listing as skill_listing,
+                                normalize as skill_normalize, setup as skill_setup)
 from claude_lifecycle_cases import (CASES as LIFECYCLE_CASES, STOP as LIFECYCLE_STOP, alive as lifecycle_alive,
                                     left_running_notified as lifecycle_notified, normalize as lifecycle_normalize,
                                     stop_all as lifecycle_stop_all, task_id as lifecycle_task_id)
@@ -763,6 +765,89 @@ def pdf_phases(args, api, client, checks):
     checks.append("pdf_and_file_type_reads_match_native_local")
 
 
+def skill_phases(args, api, client, checks):
+    """Target skills and commands: native's Skill results, listing and typed commands."""
+    user = Path(os.environ["HOME"]) / ".claude"
+    steps = [tool("Skill", arguments) for _, arguments in SKILL_CASES]
+    ids = {call[0]["id"]: index for index, call in enumerate(steps)}
+    extra = {"bundled": tool("Skill", {"skill": "simplify"}), "unavailable": tool("Skill", {"skill": "dataviz"})}
+    extra_ids = {call[0]["id"]: name for name, call in extra.items()}
+    order = [*steps, extra["bundled"], extra["unavailable"]]
+    position = {call[0]["id"]: index for index, call in enumerate(order)}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        done = [position[block["tool_use_id"]] for block in (last.get("content") if isinstance(last.get("content"), list) else [])
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in position]
+        if done:
+            following = max(done) + 1
+            return order[following] if following < len(order) else [{"type": "text", "text": "SKILL_DONE"}]
+        if "Run the skill parity fixture." in " ".join(text_blocks(last)):
+            return order[0]
+        raise ProbeFailure("unexpected skill phase request")
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(order) + 20))
+    client.prompt(text="Run the skill parity fixture.", timeout=300)
+    results, others = {}, {}
+    for request in reversed(api.requests):
+        for message in request["messages"]:
+            for block in message["content"] if isinstance(message.get("content"), list) else []:
+                if block.get("type") != "tool_result":
+                    continue
+                if block.get("tool_use_id") in ids:
+                    case = SKILL_CASES[ids[block["tool_use_id"]]][0]
+                    results.setdefault(case, {"is_error": block.get("is_error", False),
+                                              "content": skill_normalize(block.get("content"), args.target, user),
+                                              "follows": skill_contents(message, args.target, user)})
+                elif block.get("tool_use_id") in extra_ids:
+                    others.setdefault(extra_ids[block["tool_use_id"]], block)
+    native = json.loads((Path(__file__).parent / "claude_skill_native_baseline.json").read_text())
+
+    # Stated difference: a Mods-answered error is wrapped in <tool_use_error>.
+    def comparable(result):
+        result = dict(result)
+        if isinstance(result.get("content"), str):
+            result["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", result["content"], flags=re.S)
+        return result
+    differences = {name: {"native": expected, "remote": results.get(name)}
+                   for name, expected in native["results"].items()
+                   if comparable(results.get(name, {})) != comparable(expected)}
+    print("skill parity diagnostic:", json.dumps(differences, ensure_ascii=False)[:20000])
+    require(not differences, "Skill results differ from native-local: " + ", ".join(sorted(differences)))
+    checks.append("target_skill_results_match_native_local")
+    shown = next((block["text"] for block in api.requests[0]["messages"][0]["content"]
+                  if "The following skills are available" in block.get("text", "")), "")
+    print("skill listing diagnostic:", json.dumps(skill_listing(shown)))
+    require(skill_listing(shown) == native["listing"], "skill listing differs from native-local: " + shown[:3000])
+    require(not others["bundled"].get("is_error") and "Launching skill: simplify" in json.dumps(others["bundled"]) and
+            others["unavailable"].get("is_error") and "unavailable in this execution session" in json.dumps(others["unavailable"]),
+            "bundled skills are not offered as stated: " + json.dumps(others)[:2000])
+    checks.append("target_skill_listing_matches_native_local_with_stated_bundled_skills")
+
+    # A command the user types runs under its own name; @-mentions of this
+    # machine's files never reach the model.
+    del api.steps[len(api.requests):]
+    api.steps.extend([[{"type": "text", "text": "TYPED_DONE"}], [{"type": "text", "text": "MENTION_DONE"}]])
+    client.prompt(text="/grp:inner typed-arg", timeout=120)
+    typed = [skill_normalize(block["text"], args.target, user) for block in api.requests[-1]["messages"][-1]["content"]
+             if block.get("type") == "text" and not block["text"].startswith("<system-reminder>")]
+    print("typed command diagnostic:", json.dumps(typed, ensure_ascii=False))
+    require(typed == native["typed"], "typed command differs from native-local: " + json.dumps(typed)[:2000])
+    client.prompt(text="Compare @CLAUDE.md and @. please", timeout=120)
+    mentioned = json.dumps(api.requests[-1]["messages"][-1], ensure_ascii=False)
+    require("RUNTIME_CLAUDE_GUIDANCE" not in mentioned and "Called the Read tool" not in mentioned and
+            "Called the Bash tool" not in mentioned and str(args.runtime) not in mentioned,
+            "an @-mention attached a runtime file: " + mentioned[:2000])
+    encoded = json.dumps(api.requests, ensure_ascii=False)
+    exposed = next((name for name in ["cowboy-target", "target-skills", ".cowboy-claude-"] if name in encoded), None)
+    if exposed:
+        position = encoded.index(exposed)
+        print("private runtime diagnostic:", encoded[max(0, position - 300):position + 300])
+    require(exposed is None, "the private skill plugin or runtime stage reached the model")
+    checks.append("typed_target_command_and_runtime_mentions_as_native")
+
+
 def notification_phases(args, api, client, checks):
     """Target commands left running notify the model as native background tasks do."""
     handle = re.compile(r"cowboy-task://([A-Za-z0-9-]+)")
@@ -1128,6 +1213,8 @@ def main():
     checks = ["machine_owned_worktree", "machine_restart_reattaches_same_keeper_and_binding"]
     (args.runtime / "CLAUDE.md").write_text("RUNTIME_CLAUDE_GUIDANCE_MUST_NOT_REACH_MODEL")
     write_context_fixture(args.target)
+    # The target's home is the harness's fresh one (see the justfile).
+    skill_setup(args.target, Path(os.environ["HOME"]) / ".claude")
     def png_chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
     pixel = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) +
@@ -1461,6 +1548,7 @@ def main():
         context_phases(args, api, client, checks)
         file_phases(args, api, client, checks)
         pdf_phases(args, api, client, checks)
+        skill_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
@@ -1517,7 +1605,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:

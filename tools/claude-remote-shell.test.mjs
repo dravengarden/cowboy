@@ -107,7 +107,13 @@ function localConnection(home) {
         return { isFile: info.isFile(), size: info.size };
       }
       if (method === "fs/readFile") {
-        return { dataBase64: (await readFile(path)).toString("base64") };
+        // The executor reports a refused read as a remote error too.
+        const bytes = await readFile(path).catch((error) => {
+          throw Object.assign(new Error(error.message), {
+            remote: { message: error.message },
+          });
+        });
+        return { dataBase64: bytes.toString("base64") };
       }
       if (method === "fs/writeFile") {
         await writeFile(path, Buffer.from(params.dataBase64, "base64"));
@@ -997,5 +1003,36 @@ test("rendered pages too large for one message ask for fewer pages", async (t) =
     `The rendered pages of ${
       join(project, "doc.pdf")
     } are too large to return from this machine in one call (at most 10MB of page images). Use the pages parameter with fewer pages.`,
+  );
+});
+
+test("target skills and commands are found as native finds them", async (t) => {
+  const { tools, project, home } = await shellFixture(t);
+  const write = async (path, text) => {
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, text);
+  };
+  await write(join(home, ".claude/skills/shared/SKILL.md"), "USER\n");
+  await write(join(home, ".claude/commands/ucmd.md"), "U\n");
+  await write(join(project, ".claude/skills/shared/SKILL.md"), "PROJECT\n");
+  await write(join(project, ".claude/skills/.hidden/SKILL.md"), "H\n");
+  await write(join(project, ".claude/skills/deep/x/SKILL.md"), "D\n");
+  await write(join(project, ".claude/commands/grp/inner.md"), "G\n");
+  await write(join(project, ".claude/commands/a:b.md"), "C\n");
+  await write(join(project, "sub/.claude/skills/below/SKILL.md"), "B\n");
+  await write(join(project, ".claude/skills/locked/SKILL.md"), "L\n");
+  const { chmod } = await import("node:fs/promises");
+  await chmod(join(project, ".claude/skills/locked/SKILL.md"), 0);
+  const found = await tools.skillFiles();
+  assert.deepEqual(
+    found.map((file) =>
+      `${file.scope}:${file.kind}:${file.name}:${file.content}`
+    ),
+    [
+      "user:skill:shared:USER\n",
+      "project:skill:shared:PROJECT\n",
+      "user:command:ucmd:U\n",
+      "project:command:grp:inner:G\n",
+    ],
   );
 });

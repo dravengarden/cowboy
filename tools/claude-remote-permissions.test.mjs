@@ -47,6 +47,13 @@ async function modFixture(check) {
           runtimeCwd: "/runtime",
           targetHome: "/home/target",
           hooks: { commands: [], tool: {} },
+          skills: {
+            prefix: "cowboy-target:",
+            entries: [],
+            omitted: [],
+            bundled: [],
+            unavailable: {},
+          },
           memory: false,
         }),
     },

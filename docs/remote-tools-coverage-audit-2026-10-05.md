@@ -106,7 +106,7 @@ to introduce more restrictions.
 | Hook types | Command, HTTP, prompt/agent and MCP forms have different ownership and provider support | Inventory exact installed schemas; keep native model evaluators and approval semantics, bridge only external execution/IO |
 | Permission modes | Claude 3.6.0 drops the forced bypass: native `$.tool.check` decides each target call under the session's mode and rules, asks reach the SDK host in native `can_use_tool` shape, denial precedes any target effect, amended input runs, dontAsk denies, and abandoned asks are withdrawn (packaged acceptance) | No "always allow" rule persistence, auto-mode classifier or command-string path mapping; plan mode stays refused |
 | Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance. Claude 3.5.0 admits native background subagents: child calls carry `agentId`, launch/notification/client locators use `cowboy-agent://`, outcomes are durable across resume, TaskStop/interrupt cancel the child's target commands (packaged worker acceptance) | Partial output stream, permission modes, grandchildren, teammates, worktree/remote isolation, custom agents and native-runtime crash with a live agent remain unaccepted; those inputs are refused |
-| Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
+| Skills and project plugins | Claude 3.16.0: the target's user and project skills and commands load from the target at session start under their native names, listing, precedence, arguments, directories and `!` commands (run on the target); seven bundled skills that work through target tools are offered (29 cases match native-local results) | Target plugin (marketplace) skills, skills that may declare hooks or a non-bash shell, nested-directory skill discovery and six bundled skills with runtime files are not offered |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
 | Images, notebooks, PDFs | Claude 3.13.0/3.14.0: PDF Reads (whole document, `pages` rendered with the target's poppler), images (native's own Read of a private local copy: same checks, resizing, recompression and size note), binary-extension refusal and missing-file messages match native-local results (32 cases) | Whole PDFs above 10 MB and page images above 10 MB in all are refused; images above 64 MB; output artifacts and user-upload placement untested |
@@ -840,6 +840,98 @@ Linux and actual macOS probes, three Controller reader roles, five public
 artifact digests and Catalog `ready`. OVH operation
 `ovh-claude-code-3-15-0-converge` completed: 3.15.0 active, 3.14.0 retained
 for rollback, no session leases, no live session restarted.
+
+### Skills, commands and native reminders (Plugin 3.16.0)
+
+Native 2.1.287 in a local session (measured with a scripted API):
+
+- **Discovery.** User skills (`~/.claude/skills/<name>/SKILL.md`) and
+  commands (`~/.claude/commands/**/*.md`), then `.claude/skills` and
+  `.claude/commands` of each directory from the working directory up to the
+  repository root, never the home directory itself. A user skill shadows a
+  project skill of the same name, a skill a command. Nested commands are
+  named with colons (`grp:inner`). A frontmatter `name` is an alias.
+- **Listing.** A `skill_listing` reminder lists user skills, project skills,
+  then commands, then bundled skills. A skill without a description gets its
+  first line (heading marks removed, cut at 100 characters).
+- **Expansion.** `Base directory for this skill:`, `${CLAUDE_SKILL_DIR}`,
+  `${CLAUDE_PROJECT_DIR}`, arguments, re-invocation and "already loaded"
+  notes, `disable-model-invocation`, and `!` commands (inline and fenced)
+  run by Bash after a permission check. A failing command fails the Skill
+  call with `Shell command failed for pattern …`.
+
+Before 3.16.0 the remote lane disallowed Skill, sent an empty skills
+allowlist and disabled native attachments, so the model saw no skills and
+none of native's per-turn reminders.
+
+3.16.0:
+
+- **Target skills.** The launcher reads the target's skill and command files
+  at session start (`skills.mjs`, `WorkspaceTools.skillFiles`) and writes
+  them into a private plugin native loads. Their directory placeholders name
+  the target; `!` commands carry a per-session marker, so native does not run
+  them on the runtime. `context-mod.js` runs them on the target through the
+  Bash facade (same shell session, permission check, agent ownership and
+  cancellation; a command still running fails the skill and is cancelled).
+- **Native names.** Native names plugin skills `cowboy-target:<name>`. The
+  Skill tool, typed `/name` commands, the skill listing (order and
+  shadowing), the tool result, the expanded text, the typed command's tags,
+  the client's command list and `system/init` all use the native-local name
+  and target paths. A Mods result that changes a Skill result drops the
+  skill's messages, so names are projected as messages are appended.
+- **Bundled skills.** code-review, init, keybindings-help, run,
+  security-review, simplify and update-config are offered; their
+  instructions act through target-bound tools. claude-api, dataviz and
+  plugin-authoring (reference files on the runtime), fewer-permission-prompts
+  (runtime transcripts), loop (Cron) and workflow-authoring (Workflow) are
+  refused with that reason. A target skill shadows a bundled one, even one
+  this lane cannot offer.
+- **Native reminders.** Native attachments are enabled again. Types built
+  from this machine's files, editors or memory (`RUNTIME_ATTACHMENTS`: file
+  and directory @-mentions, read and edited-file reminders, nested memory,
+  dynamic skills, diagnostics, IDE selections, plan files, memories) are
+  dropped. The rest reach the model as natively: the skill listing, token and
+  budget reminders, task-list reminders, background-task status, async hook
+  responses, date changes and others. An @-mention of a file therefore
+  attaches nothing; the model reads the target file itself.
+
+Packaged acceptance compares 29 Skill results and the listing with
+`tools/claude_skill_native_baseline.json`
+(`target_skill_results_match_native_local`,
+`target_skill_listing_matches_native_local_with_stated_bundled_skills`), and
+checks a typed command, a runtime @-mention and that the private plugin never
+reaches the model (`typed_target_command_and_runtime_mentions_as_native`).
+The acceptance target now gets a fresh home directory, so its user files are
+fixtures rather than the build account's. Eleven native review rounds were
+run; the last reported none. Fixed findings:
+
+- frontmatter keys that could hide `hooks` (quoted, escaped, merged,
+  complex), unindented lists and uniformly indented keys
+- comments read as allowed-tools rules
+- mirror paths of skills whose names share a prefix
+- command file names whose colons would leave the plugin directory
+- skill commands not owned by their agent or cancelled with their call; two
+  calls of one skill now take turns
+- a typed command's expansion not cancellable
+- name projection limited to skill messages, so file contents keep the text
+- a skill command left running treated as complete
+- rule placeholders not resolved, a bundled skill used in place of a refused
+  target skill of the same name, path-like prompts treated as commands
+- an unreadable skill file stopping the session (natively it is skipped)
+
+Gaps:
+
+- Error results keep Mods' `<tool_use_error>` wrapper (stated in the
+  comparison).
+- Skills that may declare hooks or name a non-bash shell, target
+  marketplace plugins' skills and skills discovered under nested
+  directories during the session are not offered.
+- The target's `disableSkillShellExecution` setting is not read.
+- A skill's allowed-tools grant only single plain Bash commands to its `!`
+  commands; others follow the session's rules.
+- Skills are a session-start snapshot (natively, edits are picked up).
+- `update-config` edits the target's settings, which this lane reads only
+  for hooks at session start.
 
 ### 1. Preserve native Bash through an execution bridge
 

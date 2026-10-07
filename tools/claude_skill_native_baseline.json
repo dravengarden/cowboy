@@ -1,0 +1,198 @@
+{
+ "results": {
+  "basic": {
+   "is_error": false,
+   "content": "Launching skill: basic",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/basic\n\nBASIC dir=<ROOT>/.claude/skills/basic project=<ROOT> args=one two first=two\n"
+   ]
+  },
+  "basic_again": {
+   "is_error": false,
+   "content": "Launching skill: basic",
+   "follows": [
+    "(Re-invocation of /basic — the skill instructions were previously loaded; the arguments or dynamic output below are new.)\n",
+    "Base directory for this skill: <ROOT>/.claude/skills/basic\n\nBASIC dir=<ROOT>/.claude/skills/basic project=<ROOT> args= first=$1\n"
+   ]
+  },
+  "shell_ok": {
+   "is_error": false,
+   "content": "Launching skill: shell-ok",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-ok\n\nOut: hello\n"
+   ]
+  },
+  "shell_stderr": {
+   "is_error": false,
+   "content": "Launching skill: shell-stderr",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-stderr\n\nOut: to-err\n"
+   ]
+  },
+  "shell_both": {
+   "is_error": false,
+   "content": "Launching skill: shell-both",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-both\n\nOut: a\nb\n"
+   ]
+  },
+  "shell_fail": {
+   "is_error": true,
+   "content": "Shell command failed for pattern \"!`echo partial; exit 3`\": [stderr]\npartial",
+   "follows": []
+  },
+  "shell_fail_empty": {
+   "is_error": true,
+   "content": "Shell command failed for pattern \"!`exit 1`\":",
+   "follows": []
+  },
+  "shell_fenced": {
+   "is_error": false,
+   "content": "Launching skill: shell-fenced",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-fenced\n\nFenced:\none\ntwo\nEnd\n"
+   ]
+  },
+  "shell_args": {
+   "is_error": false,
+   "content": "Launching skill: shell-args",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-args\n\nOut: got X1 X2\n"
+   ]
+  },
+  "shell_two": {
+   "is_error": false,
+   "content": "Launching skill: shell-two",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-two\n\nA first B second\n"
+   ]
+  },
+  "shell_inert": {
+   "is_error": false,
+   "content": "Launching skill: shell-inert",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-inert\n\nInline `code` and a!`notrun` and [!`true`]\n"
+   ]
+  },
+  "shell_pwd": {
+   "is_error": false,
+   "content": "Launching skill: shell-pwd",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-pwd\n\nOut: <ROOT>\n"
+   ]
+  },
+  "shell_cd": {
+   "is_error": false,
+   "content": "Launching skill: shell-cd",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-cd\n\nOut: /\nShell cwd was reset to <ROOT>\n"
+   ]
+  },
+  "shell_file": {
+   "is_error": false,
+   "content": "Launching skill: shell-file",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/shell-file\n\nOut: skill data\n"
+   ]
+  },
+  "alias": {
+   "is_error": false,
+   "content": "Launching skill: renamed-alias",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/renamed-dir\n\nRENAMED\n"
+   ]
+  },
+  "alias_dir_name": {
+   "is_error": false,
+   "content": "Launching skill: renamed-dir",
+   "follows": [
+    "Skill /renamed-dir is already loaded above; instructions unchanged."
+   ]
+  },
+  "hidden": {
+   "is_error": true,
+   "content": "<tool_use_error>Skill hidden cannot be used with Skill tool due to disable-model-invocation. Ask the user to run /hidden themselves — it cannot be invoked via the Skill tool. Do not replicate this skill's workflow by other means — it is reserved for explicit user invocation.</tool_use_error>",
+   "follows": []
+  },
+  "no_frontmatter": {
+   "is_error": false,
+   "content": "Launching skill: no-frontmatter",
+   "follows": [
+    "Base directory for this skill: <ROOT>/.claude/skills/no-frontmatter\n\nFirst line describes it.\nNO FRONTMATTER\n"
+   ]
+  },
+  "unknown": {
+   "is_error": true,
+   "content": "<tool_use_error>Unknown skill: no-such-skill</tool_use_error>",
+   "follows": []
+  },
+  "command": {
+   "is_error": false,
+   "content": "Launching skill: pcmd",
+   "follows": [
+    "PROJECT CMD c1\n"
+   ]
+  },
+  "grouped_command": {
+   "is_error": false,
+   "content": "Launching skill: grp:inner",
+   "follows": [
+    "GROUPED g1\n"
+   ]
+  },
+  "slash_prefixed": {
+   "is_error": false,
+   "content": "Launching skill: shell-ok",
+   "follows": [
+    "Skill /shell-ok is already loaded above; instructions unchanged."
+   ]
+  },
+  "user_shadows_project": {
+   "is_error": false,
+   "content": "Launching skill: shared",
+   "follows": [
+    "Base directory for this skill: <USER>/skills/shared\n\nUSER SHARED dir=<USER>/skills/shared\n"
+   ]
+  },
+  "user_only": {
+   "is_error": false,
+   "content": "Launching skill: user-only",
+   "follows": [
+    "Base directory for this skill: <USER>/skills/user-only\n\nUSER ONLY\n"
+   ]
+  },
+  "user_command": {
+   "is_error": false,
+   "content": "Launching skill: ucmd",
+   "follows": [
+    "USER CMD u1\n"
+   ]
+  }
+ },
+ "listing": [
+  "- shared: user shared",
+  "- user-only: user only",
+  "- basic: basic fixture skill",
+  "- no-frontmatter: First line describes it.",
+  "- renamed-dir: renamed fixture",
+  "- shell-args: shell args",
+  "- shell-both: shell both",
+  "- shell-cd: shell cd",
+  "- shell-fail: shell fail",
+  "- shell-fail-empty: shell fail empty",
+  "- shell-fenced: shell fenced",
+  "- shell-file: shell file",
+  "- shell-inert: shell inert",
+  "- shell-ok: shell ok",
+  "- shell-pwd: shell pwd",
+  "- shell-stderr: shell stderr",
+  "- shell-two: shell two",
+  "- grp:inner: grouped command",
+  "- pcmd: project command",
+  "- ucmd: user command"
+ ],
+ "typed": [
+  "<command-message>grp:inner</command-message>\n<command-name>/grp:inner</command-name>\n<command-args>typed-arg</command-args>\n",
+  "GROUPED typed-arg\n"
+ ]
+}

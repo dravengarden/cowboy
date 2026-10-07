@@ -468,7 +468,9 @@ test("in-flight output commits and rollback preserve newer cancellation intent",
 const notLink = { ok: true, status: 200, text: '{"symlink":false}' };
 
 let fixtureId = 0;
-async function routingFixture({ memory = false, agents = {} } = {}) {
+async function routingFixture(
+  { memory = false, agents = {}, entries = [], omitted = [] } = {},
+) {
   // Each loaded native Mod has private state. Give every fixture its own module.
   const { register } = await import(
     `../plugins/claude-code/runtime/context-mod.js?fixture=${++fixtureId}`
@@ -493,6 +495,14 @@ async function routingFixture({ memory = false, agents = {} } = {}) {
     runtimeCwd: "/runtime",
     targetHome: "/home/target",
     hooks: { commands: [], tool: {} },
+    skills: {
+      prefix: "cowboy-target:",
+      marker: "cowboy" + "c".repeat(32),
+      entries,
+      omitted,
+      bundled: ["simplify"],
+      unavailable: { dataviz: "its files are not on the target" },
+    },
     memory,
   };
   const calls = [];
@@ -516,7 +526,15 @@ async function routingFixture({ memory = false, agents = {} } = {}) {
   await hooks.get("session.start").handler(api, {}, next);
   calls.length = 0;
   native.length = 0;
-  return { hook: hooks.get("tool.call"), api, calls, native, next, context };
+  return {
+    hook: hooks.get("tool.call"),
+    hooks,
+    api,
+    calls,
+    native,
+    next,
+    context,
+  };
 }
 
 test("every remote tool crosses the authenticated bridge without native execution", async (t) => {
@@ -668,7 +686,6 @@ test("only questions, todos and enrolled exact memory tools pass through", async
     for (
       const tool of [
         "FutureNativeTool",
-        "Skill",
         "mcp__foreign__read",
         "mcp__matrix__memory_get_extra",
         "mcp__matrix__memory_execute_extra",
@@ -702,4 +719,125 @@ test("WebFetch of the machine's own names is refused, other URLs run natively", 
   for (
     const url of ["https://example.com/", "http://10.0.0.5/", "not a url"]
   ) assert.equal(targetLoopback(url), false, url);
+});
+
+test("Skill names the target's skills natively and refuses ones that cannot work here", async () => {
+  const { hook, api, native } = await routingFixture({
+    entries: [{
+      name: "proj",
+      kind: "skill",
+      scope: "project",
+      mirrorDirectory: "/stage/target-skills/skills/proj",
+      targetDirectory: "/target/.claude/skills/proj",
+      allowedTools: [],
+    }],
+    omitted: [{ name: "hooked", reason: "its hooks would run here" }],
+  });
+  const next = (event) => {
+    native.push(event);
+    return {
+      result: { success: true, commandName: event.skill },
+      text: `Launching skill: ${event.skill}`,
+    };
+  };
+  // Native keeps the skill's messages only with its own, unchanged result;
+  // names are projected as messages are appended.
+  assert.deepEqual(
+    await hook.handler(
+      api,
+      { tool: "Skill", skill: "proj", tool_use_id: "t1" },
+      next,
+    ),
+    {
+      result: { success: true, commandName: "cowboy-target:proj" },
+      text: "Launching skill: cowboy-target:proj",
+    },
+  );
+  assert.equal(native.at(-1).skill, "cowboy-target:proj");
+  await hook.handler(api, { tool: "Skill", skill: "simplify" }, next);
+  assert.equal(native.at(-1).skill, "simplify");
+  for (const skill of ["dataviz", "hooked"]) {
+    const refused = await hook.handler(api, { tool: "Skill", skill }, next);
+    assert.match(refused.deny, /unavailable in this execution session/);
+  }
+  assert.equal(native.length, 2);
+});
+
+test("Skill calls of one skill take turns, so its expansion has one call", async () => {
+  const { hook, api } = await routingFixture({
+    entries: [{
+      name: "proj",
+      kind: "skill",
+      scope: "project",
+      mirrorDirectory: "/stage/target-skills/skills/proj",
+      targetDirectory: "/target/.claude/skills/proj",
+      allowedTools: [],
+    }],
+  });
+  const started = [];
+  const finish = Promise.withResolvers();
+  const next = async (event) => {
+    started.push(event.agentId);
+    if (started.length === 1) await finish.promise;
+    return { result: { success: true, commandName: event.skill } };
+  };
+  const first = hook.handler(
+    api,
+    { tool: "Skill", skill: "proj", agentId: "a1" },
+    next,
+  );
+  const second = hook.handler(
+    api,
+    { tool: "Skill", skill: "proj", agentId: "a2" },
+    next,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(started, ["a1"]);
+  finish.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(started, ["a1", "a2"]);
+});
+
+test("a skill's commands run on the target; one left running fails the skill", async () => {
+  const marker = "cowboy" + "c".repeat(32);
+  const { hooks, api, calls } = await routingFixture({
+    entries: [{
+      name: "proj",
+      kind: "skill",
+      scope: "project",
+      mirrorDirectory: "/stage/target-skills/skills/proj",
+      targetDirectory: "/target/.claude/skills/proj",
+      allowedTools: [],
+    }],
+  });
+  const replies = [
+    { result: { stdout: "out", stderr: "" } },
+    { result: { stdout: "partial" }, running: true },
+  ];
+  api.http.fetch = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return url.endsWith("/tool")
+      ? { ok: true, status: 200, text: JSON.stringify(replies.shift()) }
+      : { ok: true, status: 200, text: "{}" };
+  };
+  const prompt = hooks.get("skill.prompt").handler;
+  const next = (event) => ({ text: event.text });
+  assert.deepEqual(
+    await prompt(api, {
+      skill: "cowboy-target:proj",
+      text:
+        `Base directory for this skill: /stage/target-skills/skills/proj\n\nA !${marker}\`echo out\``,
+    }, next),
+    {
+      text:
+        "Base directory for this skill: /target/.claude/skills/proj\n\nA out",
+    },
+  );
+  assert.deepEqual(calls[0].body.input, { command: "echo out" });
+  const failed = await prompt(api, {
+    skill: "cowboy-target:proj",
+    text: `B !${marker}\`yes\``,
+  }, next);
+  assert.match(failed.text, /^Shell command failed for pattern "!`yes`"/);
+  assert.ok(calls.some((call) => call.url.endsWith("/cancel")));
 });

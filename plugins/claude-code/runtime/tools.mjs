@@ -15,6 +15,7 @@ import { basename, dirname, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { READ_RANGE } from "./read-range.mjs";
 import { instructionFiles, nestedInstructions } from "./instructions.mjs";
+import { skillName, skillRoots } from "./skills.mjs";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
@@ -1537,6 +1538,66 @@ export class WorkspaceTools {
     return files;
   }
 
+  // The target's skills and custom commands, in native precedence. A listing
+  // that cannot run or a failed read stops the session. As natively (2.1.287
+  // logs "Failed to read skills directory" and loads the rest), a directory
+  // or entry that cannot be read is skipped, as are files that are not UTF-8
+  // or exceed the read limit.
+  async skillFiles() {
+    const top = await this.command([
+      "git",
+      "--no-optional-locks",
+      "rev-parse",
+      "--show-toplevel",
+    ]).catch(() => ({ exitCode: 1, output: "" }));
+    const repository = top.exitCode === 0 && top.output.trim().startsWith("/")
+      ? posix.resolve(top.output.trim())
+      : undefined;
+    const roots = skillRoots(this.cwd, this.home(), repository);
+    const listing = await this.command([
+      this.shell,
+      "-c",
+      'for d in "$@"; do printf "\\036%s\\n" "$d"; if [ -d "$d" ]; then case $d in */skills) find -L "$d" -mindepth 2 -maxdepth 2 -name SKILL.md -type f 2>/dev/null;; *) find -L "$d" -name "*.md" -type f 2>/dev/null;; esac; fi; done; exit 0',
+      this.shell,
+      ...roots.map((root) => root.directory),
+    ]);
+    if (listing.exitCode !== 0 || listing.output_limit) {
+      throw new Error("Target skills could not be listed");
+    }
+    const listed = new Map(roots.map((root) => [root.directory, []]));
+    let current;
+    for (const line of listing.output.split("\n")) {
+      if (line.startsWith("\x1e")) current = listed.get(line.slice(1));
+      else if (current && line.startsWith("/")) current.push(line);
+    }
+    const found = [];
+    for (const root of roots) {
+      const files = listed.get(root.directory).sort((left, right) =>
+        left < right ? -1 : left > right ? 1 : 0
+      );
+      for (const path of files) {
+        const name = skillName(root, path);
+        if (name === undefined) continue;
+        let content;
+        try {
+          const bytes = await this.bytes(path, true);
+          if (!bytes) continue;
+          content = decode(bytes);
+        } catch (error) {
+          // The target refused this file (permissions, a directory): skip it.
+          // A failed connection still stops the session.
+          if (
+            error.remote ||
+            /UTF-8|at most 4 MiB|exceeds 4 MiB/.test(error.message)
+          ) continue;
+          throw error;
+        }
+        found.push({ ...root, name, path, content });
+      }
+    }
+    return found;
+  }
+
   // Native's gitStatus block from the target repository; undefined outside one.
   async gitStatus() {
     const git = (...args) =>
@@ -1710,12 +1771,15 @@ export class WorkspaceTools {
             return () =>
               this.state.jobs[id] = job;
           });
-          return text(JSON.stringify(complete), {
-            stdout: `${await this.persistOutput(id, output, result)}
+          return {
+            ...text(JSON.stringify(complete), {
+              stdout: `${await this.persistOutput(id, output, result)}
 Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its further output; TaskStop stops it.`,
-            stderr: "",
-            interrupted: false,
-          });
+              stderr: "",
+              interrupted: false,
+            }),
+            running: true,
+          };
         }
         if (!result.closed && /^\s*sleep\b/.test(command)) {
           // Natively a timed-out command that starts with `sleep` is killed,
@@ -2587,6 +2651,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     if (result.task) return { result: result.native, task: result.task };
     const answer = {
       result: result.native,
+      // A command still running whose output has no task notification.
+      ...(result.running ? { running: true } : {}),
       ...(result.localRead
         ? { localRead: result.localRead, localTarget: result.localTarget }
         : {}),

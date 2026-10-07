@@ -20,6 +20,13 @@ import {
 } from "./tools.mjs";
 import { startModBridge } from "./mod-bridge.mjs";
 import {
+  BUNDLED_SKILLS,
+  SKILL_PLUGIN,
+  targetSkills,
+  UNAVAILABLE_BUNDLED,
+  writeSkillPlugin,
+} from "./skills.mjs";
+import {
   claudeObservation,
   claudePrompt,
   localMemoryNative,
@@ -30,7 +37,6 @@ import {
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 const forbiddenTools = [
-  "Skill",
   "EnterWorktree",
   "ExitWorktree",
   "CronCreate",
@@ -46,10 +52,12 @@ const forbiddenTools = [
 // lifecycle, task list, web and review reporting. context-mod.js restricts
 // Agent and SendMessage to background agents of this session; their own
 // tools still route to target. WebFetch refuses the target's loopback names.
+// Skill expands the target's skills (skills.mjs) and allowed bundled ones.
 export const NATIVE_PASSTHROUGH = [
   "AskUserQuestion",
   "Agent",
   "SendMessage",
+  "Skill",
   "TaskCreate",
   "TaskGet",
   "TaskList",
@@ -255,7 +263,13 @@ export function projectHookSettings(hooks) {
   return { settings: { hooks: settings }, commands, tool };
 }
 
-export function nativeArguments(args, plugin, memoryConfig, hookSettings) {
+export function nativeArguments(
+  args,
+  plugin,
+  memoryConfig,
+  hookSettings,
+  skillPlugin,
+) {
   const values = new Set([
     "--model",
     "--fallback-model",
@@ -381,6 +395,7 @@ export function nativeArguments(args, plugin, memoryConfig, hookSettings) {
     "--strict-mcp-config",
     "--plugin-dir",
     plugin,
+    ...(skillPlugin ? ["--plugin-dir", skillPlugin] : []),
     ...(memoryConfig
       ? ["--mcp-config", memoryConfig, "--allowedTools", MATRIX_TOOLS.join(",")]
       : []),
@@ -411,7 +426,59 @@ async function send(stream, frame) {
   if (!stream.write(JSON.stringify(frame) + "\n")) await once(stream, "drain");
 }
 
-export function initializeRequest(frame) {
+// Local commands an execution session runs natively; skills.mjs adds the
+// target's skills and commands and the bundled skills that work here.
+const LOCAL_COMMANDS = ["compact", "cost", "context", "status", "help"];
+
+// The name a native command is shown and typed by in this session, or
+// undefined where the session refuses it.
+export function exposedCommand(name, skills) {
+  if (name.startsWith(skills.prefix)) {
+    const target = name.slice(skills.prefix.length);
+    return skills.entries.some((entry) => entry.name === target)
+      ? target
+      : undefined;
+  }
+  // A target skill shadows the bundled one of its name, even one that
+  // cannot run here.
+  if (
+    [...skills.entries, ...skills.omitted].some((entry) => entry.name === name)
+  ) return undefined;
+  if (
+    !/^[a-z][a-z0-9-]*$/i.test(name) || LOCAL_COMMANDS.includes(name) ||
+    skills.bundled.includes(name)
+  ) return name;
+  return undefined;
+}
+
+// Native's skills allowlist: the target's and the bundled skills that work.
+export function skillAllowlist(skills) {
+  return [
+    ...skills.entries.map((entry) => skills.prefix + entry.name),
+    ...skills.bundled.filter((name) =>
+      ![...skills.entries, ...skills.omitted].some((entry) =>
+        entry.name === name
+      )
+    ),
+  ];
+}
+
+// A user's slash command, as native names it here; refused if unavailable.
+// Other text, a path like /home/u/file included, is an ordinary prompt.
+export function nativeCommand(prompt, skills) {
+  const typed = /^\/(\S+)/.exec(prompt.trim())?.[1];
+  if (typed === undefined) return undefined;
+  if (skills.entries.some((entry) => entry.name === typed)) {
+    return skills.prefix + typed;
+  }
+  if (!/^[a-z][a-z0-9-]*$/i.test(typed)) return undefined;
+  if (exposedCommand(typed, skills) === undefined) {
+    throw new Error("This command is unavailable in an execution session");
+  }
+  return typed;
+}
+
+export function initializeRequest(frame, allowlist = []) {
   return {
     ...frame,
     request: {
@@ -419,7 +486,7 @@ export function initializeRequest(frame) {
       sdkMcpServers: [],
       toolAliases: {},
       excludeDynamicSections: true,
-      skills: [],
+      skills: allowlist,
       ...(Array.isArray(frame.request.supportedDialogKinds)
         ? { supportedDialogKinds: frame.request.supportedDialogKinds }
         : {}),
@@ -521,13 +588,31 @@ async function bridge(child, tools, context, memory, broker) {
     () => rejectReady(new Error("Claude execution module did not initialize")),
     30000,
   );
+  // The client sees commands by the names it can type here: the target's
+  // skills under their own names, without commands this session refuses.
   const cleanCommands = (frame) => {
     const result = structuredClone(frame);
+    const exposed = (name) =>
+      typeof name === "string" &&
+        !name.startsWith("cowboy-execution-ready-")
+        ? exposedCommand(name, context.skills)
+        : undefined;
     for (const value of [result, result.response?.response]) {
       if (Array.isArray(value?.commands)) {
-        value.commands = value.commands.filter((command) =>
-          !command.name.startsWith("cowboy-execution-ready-")
-        );
+        value.commands = value.commands.flatMap((command) => {
+          const name = exposed(command?.name);
+          return name === undefined ? [] : [{ ...command, name }];
+        });
+      }
+    }
+    if (result.type === "system" && result.subtype === "init") {
+      for (const key of ["slash_commands", "skills"]) {
+        if (Array.isArray(result[key])) {
+          result[key] = result[key].flatMap((name) => {
+            const shown = exposed(name);
+            return shown === undefined ? [] : [shown];
+          });
+        }
       }
     }
     return result;
@@ -539,7 +624,7 @@ async function bridge(child, tools, context, memory, broker) {
         frame.request.subtype === "initialize"
       ) {
         if (initial) throw new Error("Duplicate native initialization");
-        initial = initializeRequest(frame);
+        initial = initializeRequest(frame, skillAllowlist(context.skills));
         await send(child.stdin, initial);
         continue;
       }
@@ -590,14 +675,22 @@ async function bridge(child, tools, context, memory, broker) {
             item.text
           ).join("\n")
           : "";
-        const command = /^\/([a-z][a-z0-9-]*)(?:\s|$)/i.exec(prompt.trim());
-        if (
-          command &&
-          !["compact", "cost", "context", "status", "help"].includes(command[1])
-        ) {
-          throw new Error(
-            "This command is unavailable in an execution session",
-          );
+        const command = nativeCommand(prompt, context.skills);
+        // A target skill's command reaches native under its plugin name.
+        const typed = /^\s*\/(\S+)/.exec(prompt)?.[1];
+        if (command !== undefined && command !== typed) {
+          const rename = (text) =>
+            text.replace(/^(\s*\/)\S+/, (_match, slash) => slash + command);
+          const content = frame.message.content;
+          if (typeof content === "string") {
+            frame.message.content = rename(content);
+          } else {
+            const first = content.findIndex((item) => item.type === "text");
+            content[first] = {
+              ...content[first],
+              text: rename(content[first].text),
+            };
+          }
         }
         if (memory && prompt.trim() && !command) {
           const recalled = await memory.begin(claudePrompt(frame));
@@ -825,6 +918,25 @@ async function native(args) {
       new URL("./context-mod.js", import.meta.url),
       join(plugin, "hooks", "register.js"),
     );
+    // The target's skills, as a private plugin native loads (skills.mjs).
+    const skills = targetSkills(await tools.skillFiles());
+    const skillPlugin = skills.entries.length
+      ? join(stage, "target-skills")
+      : undefined;
+    context.skills = skillPlugin
+      ? await writeSkillPlugin(
+        skillPlugin,
+        skills,
+        "cowboy" + randomUUID().replaceAll("-", ""),
+        context.targetCwd,
+      )
+      : {
+        prefix: SKILL_PLUGIN + ":",
+        entries: [],
+        omitted: skills.omitted,
+        bundled: BUNDLED_SKILLS,
+        unavailable: UNAVAILABLE_BUNDLED,
+      };
     const memoryConfig = memory ? join(stage, "matrix-mcp.json") : undefined;
     let hookSettings;
     let hookPrefix;
@@ -876,9 +988,9 @@ async function native(args) {
       COWBOY_CLAUDE_CONTEXT: contextPath,
       ...(hookPrefix ? { CLAUDE_CODE_SHELL_PREFIX: hookPrefix } : {}),
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-      // Native tool bodies never run for project operations. Keep implicit
-      // attachments and local checkpoints disabled; Mods projects target context.
-      CLAUDE_CODE_DISABLE_ATTACHMENTS: "1",
+      // Native tool bodies never run for project operations. Keep local
+      // checkpoints disabled; context-mod.js drops the attachments that
+      // describe this machine's files and projects target context instead.
       DISABLE_TELEMETRY: "1",
       DISABLE_ERROR_REPORTING: "1",
       DISABLE_AUTOUPDATER: "1",
@@ -896,6 +1008,7 @@ async function native(args) {
       plugin,
       memoryConfig,
       hookSettings,
+      skillPlugin,
     );
     broker.mode = startingPermissionMode(nativeArgv);
     child = spawn(executable, nativeArgv, {

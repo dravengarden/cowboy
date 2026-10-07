@@ -839,6 +839,390 @@ export async function nativeLocalRead($, event, next, answer) {
   return { ...rest, ...named };
 }
 
+// Attachments native builds from this machine's files, editors and memory:
+// they would describe the runtime, not the target. Target instruction files
+// come from this module; the rest are absent.
+export const RUNTIME_ATTACHMENTS = new Set([
+  "file",
+  "directory",
+  "pdf_reference",
+  "already_read_file",
+  "compact_file_reference",
+  "at_mention_reference",
+  "edited_text_file",
+  "edited_image_file",
+  "nested_memory",
+  "dynamic_skill",
+  "diagnostics",
+  "lsp_diagnostics",
+  "selected_lines_in_ide",
+  "selected_lines_in_diff",
+  "opened_file_in_ide",
+  "plan_file_reference",
+  "relevant_memories",
+  "account_memory_recall",
+  "memory_update",
+  "memory_saved",
+]);
+
+// Text about the target's skills under their native names and directories
+// (launch.mjs loads them from a private plugin; see skills.mjs).
+export function targetSkillText(text, skills) {
+  if (typeof text !== "string" || !skills?.entries.length) return text;
+  // One pass, longest first: a skill named like the start of another's name
+  // never claims its directory, and a mapped path is not mapped again.
+  const directories = new Map(
+    skills.entries.filter((entry) => entry.mirrorDirectory).map((entry) => [
+      entry.mirrorDirectory,
+      entry.targetDirectory,
+    ]),
+  );
+  const result = directories.size
+    ? text.replace(
+      new RegExp(
+        [...directories.keys()].sort((left, right) =>
+          right.length - left.length
+        ).map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(
+          "|",
+        ),
+        "g",
+      ),
+      (path) => directories.get(path),
+    )
+    : text;
+  return result.replaceAll(skills.prefix, "");
+}
+
+// Native's skill listing as a local session shows it: the target's user
+// skills, project skills, then commands, by name; a bundled skill a target
+// skill shadows is not listed. Native renders the stored listing again for
+// later requests, so an already projected listing is left as it is.
+export function targetSkillListing(text, skills) {
+  if (typeof text !== "string" || !skills?.entries.length) return text;
+  const [head, ...items] = text.split("\n- ");
+  // Over native's budget, an entry may be its name alone.
+  const named = (item) =>
+    item.includes(": ") ? item.slice(0, item.indexOf(": ")) : item.trimEnd();
+  const own = new Map(skills.entries.map((entry) => [entry.name, entry]));
+  const rank = (entry) =>
+    entry.kind === "command" ? 2 : entry.scope === "user" ? 0 : 1;
+  const target = items.filter((item) => named(item).startsWith(skills.prefix))
+    .map((item) => ({
+      item: targetSkillText(item, skills),
+      entry: own.get(named(item).slice(skills.prefix.length)),
+    })).filter(({ entry }) => entry).sort((left, right) =>
+      rank(left.entry) - rank(right.entry) ||
+      (left.entry.name < right.entry.name
+        ? -1
+        : left.entry.name > right.entry.name
+        ? 1
+        : 0)
+    );
+  const shadowed = new Set(target.map(({ entry }) => entry.name));
+  const rest = items.filter((item) =>
+    !named(item).startsWith(skills.prefix) && !shadowed.has(named(item))
+  );
+  return [head, ...target.map(({ item }) => item), ...rest].join("\n- ");
+}
+
+// Whether a skill's allowed-tools grant a single plain command. A compound
+// command or one with expansions is left to the session's own rules.
+export function skillAllows(command, rules) {
+  if (/[;&|<>`$(){}\n\\]/.test(command)) return false;
+  return rules.some((rule) => {
+    const match = /^Bash(?:\((.*)\))?$/.exec(rule.trim());
+    if (!match) return false;
+    const pattern = match[1];
+    if (pattern === undefined || pattern === "" || pattern === "*") return true;
+    if (pattern.endsWith(":*")) {
+      const prefix = pattern.slice(0, -2);
+      return command === prefix || command.startsWith(prefix + " ");
+    }
+    if (pattern.endsWith("*")) return command.startsWith(pattern.slice(0, -1));
+    return command === pattern;
+  });
+}
+
+// Failures of a skill's shell commands, for the Skill call that loaded it.
+// One Skill call per skill at a time: native's expansion event names only
+// the skill, and this ties it to its call (agent and cancellation).
+const skillCalls = new Map();
+const skillTurns = new Map();
+let skillShellCount = 0;
+
+// One `!` command of a target skill, run by the target's Bash as native runs
+// it locally: after the permission check, without tool hooks. It belongs to
+// the Skill call that loaded the skill (its agent, its cancellation). Returns
+// the text that replaces it, or the skill's failure.
+async function skillShell($, command, raw, entry, call = {}) {
+  const decision = await decide($, { tool: "Bash" }, { command });
+  if (
+    decision?.decision !== "allow" &&
+    !(decision?.decision === "ask" && skillAllows(command, entry.allowedTools))
+  ) {
+    return {
+      failure: `Shell command permission check failed for pattern "${raw}": ${
+        decision?.reason || "Permission denied"
+      }`,
+    };
+  }
+  const id = `${context.nonce}-skill-${++skillShellCount}`;
+  const abandoned = () =>
+    call.signal?.aborted ||
+    (call.owner !== undefined && stoppedAgents.has(call.owner));
+  const abandon = () => bridgePost($, "/cancel", { id }).catch(() => {});
+  if (abandoned()) return { failure: "Tool call was cancelled" };
+  call.signal?.addEventListener("abort", abandon, { once: true });
+  let path = "/tool";
+  let body = {
+    id,
+    tool: "Bash",
+    input: { command },
+    ...(call.owner === undefined ? {} : { owner: call.owner }),
+    shell: await shellSession($),
+  };
+  try {
+    for (;;) {
+      const response = await bridgePost($, path, body);
+      if (abandoned()) {
+        abandon();
+        return { failure: "Tool call was cancelled" };
+      }
+      if (!response.ok) {
+        return { failure: `Shell command failed for pattern "${raw}":` };
+      }
+      const result = JSON.parse(response.text);
+      if (response.status === 202) {
+        path = "/result";
+        body = { id };
+        continue;
+      }
+      // Still running past the Bash timeout: the skill does not load on a
+      // half-run command, and the command does not outlive it.
+      if (result.task || result.running) {
+        abandon();
+        return {
+          failure:
+            `Shell command failed for pattern "${raw}": [stderr]\nThe command did not complete within the Bash timeout.`,
+        };
+      }
+      if (typeof result.deny === "string") {
+        const output = result.deny.replace(/^Exit code \d+\n?/, "");
+        return {
+          failure: `Shell command failed for pattern "${raw}":${
+            output ? ` [stderr]\n${output}` : ""
+          }`,
+        };
+      }
+      return {
+        text: [result.result?.stdout, result.result?.stderr].filter(Boolean)
+          .join("\n"),
+      };
+    }
+  } finally {
+    call.signal?.removeEventListener("abort", abandon);
+  }
+}
+
+// A target skill's text with its marked shell commands run on the target.
+export async function targetSkillShell(text, marker, run) {
+  const fenced = new RegExp(
+    "```" + marker + "!\\s*\\n?([\\s\\S]*?)\\n?```",
+    "g",
+  );
+  const inline = new RegExp("(?<=^|\\s)!" + marker + "`([^`]+)`", "gm");
+  const unmarked = (value) =>
+    value.replaceAll("```" + marker + "!", "```!").replaceAll(
+      "!" + marker + "`",
+      "!`",
+    );
+  let result = text;
+  for (const match of [...text.matchAll(fenced), ...text.matchAll(inline)]) {
+    const command = match[1].trim();
+    if (!command) continue;
+    const outcome = await run(command, unmarked(match[0]));
+    if (outcome.failure !== undefined) return outcome;
+    result = result.replace(match[0], () => outcome.text);
+  }
+  return { text: unmarked(result) };
+}
+
+async function skillPrompt($, event, next) {
+  const skills = context?.skills;
+  const entry = typeof event.skill === "string" && skills &&
+      event.skill.startsWith(skills.prefix)
+    ? skills.entries.find((item) =>
+      item.name === event.skill.slice(skills.prefix.length)
+    )
+    : undefined;
+  if (!entry) return next(event);
+  // A user's typed command has no Skill call; its expansion's own signal
+  // cancels it.
+  const call = skillCalls.get(event.skill) ?? { signal: next.signal };
+  const expanded = await targetSkillShell(
+    event.text,
+    skills.marker,
+    (command, raw) => skillShell($, command, raw, entry, call),
+  );
+  if (expanded.failure !== undefined) {
+    call.failure = expanded.failure;
+    return next({ ...event, text: expanded.failure });
+  }
+  return next({ ...event, text: targetSkillText(expanded.text, skills) });
+}
+
+// The target's skills as launch.mjs describes them (skills.mjs).
+export function validSkills(skills) {
+  const strings = (value) =>
+    Array.isArray(value) && value.every((item) => typeof item === "string");
+  return Boolean(skills) && skills.prefix === "cowboy-target:" &&
+    Array.isArray(skills.entries) &&
+    (skills.entries.length === 0 ||
+      /^cowboy[a-f0-9]{32}$/.test(skills.marker)) &&
+    skills.entries.every((entry) =>
+      typeof entry?.name === "string" && entry.name !== "" &&
+      ["user", "project"].includes(entry.scope) &&
+      strings(entry.allowedTools) &&
+      (entry.kind === "command" ||
+        (entry.kind === "skill" &&
+          [entry.mirrorDirectory, entry.targetDirectory].every((path) =>
+            typeof path === "string" && path.startsWith("/") &&
+            !path.endsWith("/")
+          )))
+    ) &&
+    Array.isArray(skills.omitted) &&
+    skills.omitted.every((entry) =>
+      typeof entry?.name === "string" && typeof entry.reason === "string"
+    ) && strings(skills.bundled) &&
+    Boolean(skills.unavailable) && typeof skills.unavailable === "object" &&
+    Object.values(skills.unavailable).every((reason) =>
+      typeof reason === "string"
+    );
+}
+
+// Strings of a native message about the target's skills, renamed. A stored
+// skill listing (within its reminder) is projected as it renders.
+function targetSkillValue(value, skills) {
+  if (typeof value === "string") {
+    const listing =
+      /^(<system-reminder>\n)?(The following skills are available for use with the Skill tool:[\s\S]*?)(\n<\/system-reminder>\n*)?$/
+        .exec(value);
+    return listing
+      ? (listing[1] ?? "") + targetSkillListing(listing[2], skills) +
+        (listing[3] ?? "")
+      : targetSkillText(value, skills);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => targetSkillValue(item, skills));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map((
+        [key, item],
+      ) => [key, targetSkillValue(item, skills)]),
+    );
+  }
+  return value;
+}
+
+// The Skill tool: a target skill under its native name, a bundled one that
+// works here, or a refusal that says why.
+async function skillCall($, event, next) {
+  const skills = context.skills;
+  const requested = typeof event.skill === "string"
+    ? event.skill.replace(/^\//, "")
+    : event.skill;
+  const target = skills.entries.some((entry) => entry.name === requested);
+  if (!target && Object.hasOwn(skills.unavailable, requested)) {
+    return {
+      deny: `The ${requested} skill is unavailable in this execution session: ${
+        skills.unavailable[requested]
+      }.`,
+    };
+  }
+  const omitted = skills.omitted.find((entry) => entry.name === requested);
+  if (!target && omitted) {
+    return {
+      deny:
+        `The ${requested} skill is unavailable in this execution session: ${omitted.reason}.`,
+    };
+  }
+  const skill = target ? skills.prefix + requested : event.skill;
+  const call = { owner: event.agentId, signal: next.signal };
+  const previous = skillTurns.get(skill);
+  const turn = Promise.withResolvers();
+  const queued = (previous ?? Promise.resolve()).then(() => turn.promise);
+  skillTurns.set(skill, queued);
+  let result;
+  try {
+    await previous;
+    if (
+      call.signal?.aborted ||
+      (call.owner !== undefined && stoppedAgents.has(call.owner))
+    ) return { deny: "Tool call was cancelled" };
+    skillCalls.set(skill, call);
+    result = await next({ ...event, skill });
+  } finally {
+    if (skillCalls.get(skill) === call) skillCalls.delete(skill);
+    turn.resolve();
+    if (skillTurns.get(skill) === queued) skillTurns.delete(skill);
+  }
+  if (call.failure !== undefined) return { deny: call.failure };
+  // Unchanged, native keeps the skill's own messages with its result; the
+  // names in both are projected as they are appended (targetSkillAppend).
+  return result;
+}
+
+// Attachments that name skills, projected as they are stored and rendered.
+const SKILL_ATTACHMENTS = [
+  "skill_listing",
+  "invoked_skills",
+  "command_permissions",
+  "skill_mentions",
+];
+
+// The skill a typed command names, in native's command tags; the user's own
+// arguments are left as typed.
+function targetCommandNames(value, skills) {
+  return typeof value === "string"
+    ? value.replace(
+      /<(command-message|command-name)>([^<]*)<\/\1>/g,
+      (_tag, name, text) =>
+        `<${name}>${targetSkillText(text, skills)}</${name}>`,
+    )
+    : Array.isArray(value)
+    ? value.map((item) => targetCommandNames(item, skills))
+    : typeof value?.text === "string"
+    ? { ...value, text: targetCommandNames(value.text, skills) }
+    : value;
+}
+
+// A message about the target's skills as it enters the session: the Skill
+// tool's result and messages, a skill attachment, and the name of a command
+// the user typed. Other messages (file contents, the user's own text) keep
+// what they say.
+export function targetSkillAppend(event, skills) {
+  const message = event?.message;
+  if (
+    !skills?.entries.length ||
+    !(Array.isArray(message?.content) || typeof message?.content === "string")
+  ) return event;
+  const project = (event.origin?.kind === "tool" &&
+      event.origin.tool === "Skill" &&
+      ["tool-result", "tool-message"].includes(event.door)) ||
+      (event.door === "attachment" && SKILL_ATTACHMENTS.includes(message.name))
+    ? targetSkillValue
+    : event.door === "command"
+    ? targetCommandNames
+    : undefined;
+  return project
+    ? {
+      ...event,
+      message: { ...message, content: project(message.content, skills) },
+    }
+    : event;
+}
+
 // Native tools that run where the session runs (see launch.mjs).
 const RUNTIME_TOOLS = [
   "AskUserQuestion",
@@ -952,6 +1336,9 @@ export function register(on) {
       };
     }
     if (RUNTIME_TOOLS.includes(event.tool)) return next(event);
+    if (event.tool === "Skill") {
+      return context ? skillCall($, event, next) : { deny: unavailable };
+    }
     // This module's own native background task for a target command, or its
     // TaskStop: native runs the runtime-local waiter itself.
     if (
@@ -1107,7 +1494,8 @@ export function register(on) {
               ? { deny: [result.deny, ...notes].join("\n\n") }
               : result;
           }
-          const { task, instructions: nested, ...answered } = result;
+          const { task, instructions: nested, running: _running, ...answered } =
+            result;
           if (task) {
             answered.result = await notifyOnEnd(
               $,
@@ -1161,6 +1549,25 @@ export function register(on) {
       "Execution interception failed. Local execution is disabled; inspect target state before retrying.",
   }));
 
+  // Attachments about this machine's files are left out; those naming the
+  // target's skills use their native names.
+  on(
+    "prompt.attachment",
+    (_$, event, next) =>
+      RUNTIME_ATTACHMENTS.has(event.type) ? { text: null } : next({
+        ...event,
+        text: event.type === "skill_listing"
+          ? targetSkillListing(event.text, context?.skills)
+          : SKILL_ATTACHMENTS.includes(event.type)
+          ? targetSkillText(event.text, context?.skills)
+          : event.text,
+      }),
+  ).catch(() => ({ text: null }));
+  // A target skill whose commands could not run is not shown half-expanded.
+  on("skill.prompt", skillPrompt).catch(() => ({
+    text:
+      "This skill could not be loaded from the target. Inspect the target before retrying it.",
+  }));
   on("prompt.attachment", { type: "environment" }, environment).catch(
     environment,
   );
@@ -1182,6 +1589,10 @@ export function register(on) {
     "session.append",
     { door: "tool-result" },
     (_$, event, next) => next(targetImageResult(event)),
+  );
+  on(
+    "session.append",
+    (_$, event, next) => next(targetSkillAppend(event, context?.skills)),
   );
   on(
     "session.append",
@@ -1282,7 +1693,7 @@ export function register(on) {
         ["user", "project", "local"].includes(file.kind) &&
         typeof file.content === "string" &&
         (file.parent === undefined || typeof file.parent === "string")
-      )
+      ) || !validSkills(loaded.skills)
     ) throw new Error("Invalid bound execution context");
     context = Object.freeze(loaded);
     // A resumed session may continue an agent registered by an earlier process.

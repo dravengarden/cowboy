@@ -474,7 +474,8 @@ execution-worker-conformance INPUT RECEIPT:
     cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
     cargo test --locked --all-features --lib --no-run
     # Namespace setup needs capabilities; native sandbox helpers expect an ordinary user afterward.
-    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+    # The target's home is a fresh directory: its user files are fixtures, never this account's.
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
 # Actual public login, signed fixture installation and two enrolled Machines.
 # All state is disposable; the fixture Agent makes no model requests.
@@ -547,9 +548,9 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
-    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs
+    node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs
     deno fmt --check plugins/claude-code/runtime
-    deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs
+    deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs
     deno check plugins/claude-code/runtime/build.ts
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
