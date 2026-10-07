@@ -43,7 +43,7 @@ def relay(source, target, delay_handshake):
         target.close()
 
 
-def run(binary):
+def run(binary, launcher):
     with tempfile.TemporaryDirectory(prefix="cowboy-handshake-recovery-") as temporary:
         root = Path(temporary)
         target, runtime = root / "target", root / "runtime"
@@ -106,7 +106,6 @@ def run(binary):
             environment.update(COWBOY_EXECUTION_DESCRIPTOR=str(descriptor),
                                COWBOY_PRIVATE_CODEX_EXECUTABLE=str(binary),
                                COWBOY_PRIVATE_CODEX_ARGUMENTS="[]")
-            launcher = Path(__file__).resolve().parents[1] / "components/provider-runtime/packages/codex-acp/launch.mjs"
             client = Executor([shutil.which("node"), str(launcher), "--cowboy-private-cli", "app-server"],
                               40, environment=environment, cwd=runtime)
             started = time.monotonic()
@@ -122,6 +121,7 @@ def run(binary):
             require(thread["cwd"] == str(runtime), "runtime placement changed")
             return {"schema": "cowboy.execution-handshake-recovery/v1", "accepted": True,
                     "native_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    "bridge_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
                     "initialize_seconds": round(duration, 3), "connections": count[0],
                     "checks": ["real_10_second_initialize_failure", "native_info_recovers_same_environment",
                                "thread_starts_only_after_recovery", "target_guidance_loaded", "no_model_request"]}
@@ -138,5 +138,9 @@ def run(binary):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-cli", type=Path, required=True)
+    parser.add_argument("--launcher", type=Path, default=(
+        Path(__file__).resolve().parents[1] /
+        "components/provider-runtime/packages/codex-acp/launch.mjs"
+    ))
     args = parser.parse_args()
-    print(json.dumps(run(args.native_cli.resolve()), indent=2))
+    print(json.dumps(run(args.native_cli.resolve(), args.launcher.resolve()), indent=2))

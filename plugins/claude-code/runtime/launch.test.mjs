@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   allowedControl,
   initializeRequest,
+  NATIVE_PASSTHROUGH,
   nativeArguments,
 } from "./launch.mjs";
 import { NATIVE_TOOLS } from "./tools.mjs";
@@ -31,8 +32,10 @@ test("bound launch preserves model and resume while replacing local execution su
   ]);
   assert.equal(
     args[args.indexOf("--tools") + 1],
-    [...NATIVE_TOOLS, "TodoWrite", "AskUserQuestion", "Agent", "SendMessage"]
-      .join(","),
+    [
+      ...NATIVE_TOOLS.filter((tool) => !["Glob", "Grep"].includes(tool)),
+      ...NATIVE_PASSTHROUGH,
+    ].join(","),
   );
   const disallowed = args[args.indexOf("--disallowedTools") + 1].split(",");
   assert.ok(!disallowed.includes("Agent") && !disallowed.includes("Task"));

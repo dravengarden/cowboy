@@ -42,14 +42,27 @@ const forbiddenTools = [
   "ExitPlanMode",
 ];
 
-// Native lifecycle tools. context-mod.js restricts Agent and SendMessage to
-// background agents of this session; their own tools still route to target.
-const NATIVE_PASSTHROUGH = [
-  "TodoWrite",
+// Native tools that run where the session runs, as in a local session:
+// lifecycle, task list, web and review reporting. context-mod.js restricts
+// Agent and SendMessage to background agents of this session; their own
+// tools still route to target. WebFetch refuses the target's loopback names.
+export const NATIVE_PASSTHROUGH = [
   "AskUserQuestion",
   "Agent",
   "SendMessage",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskUpdate",
+  "WebFetch",
+  "WebSearch",
+  "ReportFindings",
 ];
+
+// Native's default tool set (2.1.287) has no Glob or Grep: searches use Bash.
+const ADVERTISED_TOOLS = NATIVE_TOOLS.filter((tool) =>
+  !["Glob", "Grep"].includes(tool)
+);
 
 // Client completion frames name the native runtime-home output file. Replace
 // only the exact locator registered for that agent with its handle.
@@ -360,7 +373,7 @@ export function nativeArguments(args, plugin, memoryConfig, hookSettings) {
     "stream-json",
     "--verbose",
     "--tools",
-    [...NATIVE_TOOLS, ...NATIVE_PASSTHROUGH].join(","),
+    [...ADVERTISED_TOOLS, ...NATIVE_PASSTHROUGH].join(","),
     "--disallowedTools",
     [...disallowed].join(","),
     "--setting-sources",

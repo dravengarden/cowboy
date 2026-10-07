@@ -792,6 +792,55 @@ installation `ovh-claude-code-3-14-0-retry-1` then completed. Inventory
 reports 3.14.0 active, 3.13.0 retained for rollback and no session leases. No
 live session was restarted.
 
+### Native tool set (Plugin 3.15.0)
+
+A local Cowboy Claude session starts native with the ACP adapter's
+`--tools default`. On 2.1.287 that set (`AskUserQuestion` aside, which the
+adapter removes without form elicitation) is: Agent, Bash, CronCreate,
+CronDelete, CronList, DesignSync, Edit, EnterWorktree, ExitWorktree,
+ListAgents, NotebookEdit, Read, ReportFindings, ScheduleWakeup, SendMessage,
+Skill, TaskCreate, TaskGet, TaskList, TaskStop, TaskUpdate, WebFetch,
+WebSearch, Workflow and Write. There is no Glob, Grep or TodoWrite: searches
+go through Bash and the task list through the Task tools.
+
+The remote lane advertised Glob, Grep and TodoWrite instead, and lacked the
+Task list and web tools. 3.15.0 advertises native's set minus the tools
+below, and runs TaskCreate, TaskGet, TaskList, TaskUpdate, WebFetch,
+WebSearch and ReportFindings natively where the session runs, as in a local
+session (they read or write no target file). WebFetch of the machine's own
+names (`localhost`, `*.localhost`, 127/8, `::1`, `0.0.0.0`) is refused with a
+pointer to Bash on the target, since natively those name the user's machine,
+which here is the target.
+
+Packaged acceptance checks the advertised set
+(`native_default_tool_set_without_runtime_only_search_tools`), a native
+TaskCreate and the loopback refusal
+(`native_task_list_runs_and_target_loopback_fetch_is_refused`); the
+concurrent-search check now uses read-only Bash commands. One native review
+round reported nothing.
+
+Still not offered, each with its reason:
+
+- Skill, EnterWorktree/ExitWorktree, Workflow: they read or change the
+  project from the runtime's filesystem; target-aware versions are separate
+  work.
+- CronCreate/CronDelete/CronList, ScheduleWakeup: scheduled prompts start
+  model turns later; their lifetime across the remote binding is untested.
+- ListAgents: it lists Claude sessions on the runtime machine, not the
+  user's.
+- DesignSync: claude.ai design login, not part of this lane.
+- Searches through Bash use the target's own `rg`, `grep` and `find`; native
+  shadows them with its embedded ripgrep, which is not on the target.
+
+The [3.15.0 release receipt](experiments/claude-tool-set-release-2026-10-07.json)
+binds commit `5f93175e` and artifact
+`sha256:8d357aeb685c8e9feda83cdd9bcb22a4970763b40754089d9c92ca7f1aeb7143`:
+82 accepted checks on the exact signed package, 3.14.0/3.15.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles, five public
+artifact digests and Catalog `ready`. OVH operation
+`ovh-claude-code-3-15-0-converge` completed: 3.15.0 active, 3.14.0 retained
+for rollback, no session leases, no live session restarted.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
