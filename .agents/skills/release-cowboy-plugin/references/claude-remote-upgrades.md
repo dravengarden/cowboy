@@ -77,7 +77,12 @@ tool error. Bash parity is checked against
 `tools/claude_shell_native_baseline.json`: re-run the native-local probe for a
 candidate CLI (the shared cases are in `tools/claude_shell_cases.py`) and
 re-capture native's command line, environment and snapshot generator, since
-the facade reproduces them. Completion notifications for target commands rely
+the facade reproduces them. Process lifetimes are checked against
+`tools/claude_lifecycle_native_baseline.json` (cases in
+`tools/claude_lifecycle_cases.py`, probe `tools/claude_lifecycle_native_probe.py`):
+a command ends with its shell, a stop kills the whole tree, and the stop's
+tree kill exists because the snapshot generator leaves `set -o monitor` on;
+re-measure all three per CLI. Completion notifications for target commands rely
 on a plugin's `$.tool.call` of a native background Bash being notified like
 the model's own, on the `<task-notification>` element shape the Mod rewrites,
 and on `$.session.receive` staying unavailable (re-measure: if a later CLI

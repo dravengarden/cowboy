@@ -157,9 +157,10 @@ function processConnection() {
       calls.push({ method, id: params.processId });
       if (method === "process/start") {
         live.add(params.processId);
-        // Bash runs its command inside native's `eval` wrapper.
-        const command = /^eval '([^']*)'/m.exec(params.argv[2])?.[1] ??
-          params.argv[2];
+        // Bash runs its command inside native's `eval` wrapper, the script
+        // its status reporter starts.
+        const script = params.argv[4] ?? params.argv[2];
+        const command = /^eval '([^']*)'/m.exec(script)?.[1] ?? script;
         started.get(command)?.resolve(params.processId);
         return { processId: params.processId };
       }

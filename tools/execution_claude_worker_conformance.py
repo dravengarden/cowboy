@@ -27,6 +27,9 @@ from plugin_runtime_conformance import closed_environment
 from matrix_execution_fixture import MatrixFixture
 from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 from claude_file_cases import CASES as FILE_CASES, effects as file_effects, normalize as file_normalize, setup as file_setup
+from claude_lifecycle_cases import (CASES as LIFECYCLE_CASES, STOP as LIFECYCLE_STOP, alive as lifecycle_alive,
+                                    left_running_notified as lifecycle_notified, normalize as lifecycle_normalize,
+                                    stop_all as lifecycle_stop_all, task_id as lifecycle_task_id)
 
 
 def tool(name, arguments):
@@ -282,7 +285,7 @@ def agent_phases(args, api, client, native, session, context_checked, checks):
     observations["taskstop_target_quiescent_after_turn_seconds"] = stops(args.target / "child-b.txt")
     growing(args.target / "peer.txt", True)
     run("STOP_PEER", lambda: "stop-peer" in state.get("results", {}))
-    require("Command stopped." in state["results"]["stop-peer"], "peer job did not stop")
+    require("Successfully stopped task: " in state["results"]["stop-peer"], "peer job did not stop")
     growing(args.target / "peer.txt", False)
     context_checked(api.requests)
     checks.extend(["native_agent_taskstop_cancels_child_target_command", "native_agent_stop_preserves_peer_job",
@@ -652,6 +655,64 @@ def file_phases(args, api, client, checks):
     print("file parity diagnostic:", json.dumps(differences, ensure_ascii=False)[:20000])
     require(not differences, "file tools differ from native-local: " + ", ".join(sorted(differences)))
     checks.append("file_tools_match_native_local")
+
+
+def lifecycle_phases(args, api, client, checks):
+    """Bash process lifetimes compared with native-local ones."""
+    ids, tasks, raw = {}, [], {}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        for block in last.get("content") if isinstance(last.get("content"), list) else []:
+            if block.get("type") == "tool_result" and block.get("tool_use_id") in ids:
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = "".join(item.get("text", "") for item in content if item.get("type") == "text")
+                raw[ids[block["tool_use_id"]]] = (block.get("is_error", False), content)
+                if lifecycle_task_id(content):
+                    tasks.append(lifecycle_task_id(content))
+        if not raw and "Run the lifecycle parity fixture." not in " ".join(text_blocks(last)):
+            raise ProbeFailure("unexpected lifecycle phase request")
+        index = len(raw)
+        if index >= len(LIFECYCLE_CASES):
+            return [{"type": "text", "text": "LIFECYCLE_DONE"}]
+        case, (name, arguments) = LIFECYCLE_CASES[index]
+        call = tool(name, {"task_id": tasks[-1]} if name == LIFECYCLE_STOP else arguments)
+        ids[call[0]["id"]] = case
+        return call
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(LIFECYCLE_CASES) + 20))
+    try:
+        client.prompt(text="Run the lifecycle parity fixture.", timeout=180)
+        time.sleep(2)
+        processes = lifecycle_alive(args.target)
+        notified = lifecycle_notified(api.requests)
+    finally:
+        lifecycle_stop_all(args.target)
+    results = {case: {"is_error": error, "content": lifecycle_normalize(content, args.target, tasks)}
+               for case, (error, content) in raw.items()}
+    native = json.loads((Path(__file__).parent / "claude_lifecycle_native_baseline.json").read_text())
+    # Stated difference: no 30-minute stop for a timed-out command left running.
+    moved = native["results"]["timeout_moves"]
+    moved["content"] = moved["content"].replace(
+        " If it is still running after 30m in the background, it will be stopped and you will be notified.", "")
+    differences = {}
+    for name, value in native["results"].items():
+        actual = dict(results.get(name, {}))
+        if actual.get("is_error") and isinstance(actual.get("content"), str):
+            actual["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", actual["content"], flags=re.S)
+            value = dict(value)
+            value["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", value["content"], flags=re.S)
+        if actual != value:
+            differences["result:" + name] = {"native": value, "remote": results.get(name)}
+    if processes != native["alive"]:
+        differences["alive"] = {"native": native["alive"], "remote": processes}
+    if notified != native["left_running_notified"]:
+        differences["left_running_notified"] = {"native": native["left_running_notified"], "remote": notified}
+    print("lifecycle parity diagnostic:", json.dumps(differences, ensure_ascii=False)[:20000])
+    require(not differences, "Bash process lifetimes differ from native-local: " + ", ".join(sorted(differences)))
+    checks.append("bash_process_lifetimes_match_native_local")
 
 
 def notification_phases(args, api, client, checks):
@@ -1127,7 +1188,7 @@ def main():
         jobs = (args.target / "jobs.txt").read_text()
         require(jobs.count("background_started") == 1, "background start replayed")
         stopped = list(outputs(api.requests[-1]))[-1]
-        require("Command stopped." in json.dumps(stopped), "background cancellation did not settle")
+        require("Successfully stopped task: " in json.dumps(stopped), "background cancellation did not settle")
         time.sleep(1.2)
         require((args.target / "jobs.txt").read_text() == jobs, "background descendants survived cancellation")
         images = [item for block in outputs(api.requests[-1]) if isinstance(block.get("content"), list) for item in block["content"]
@@ -1330,6 +1391,7 @@ def main():
         shell_results = {}
         shell_phases(args, api, client, shell_results, checks)
         notification_phases(args, api, client, checks)
+        lifecycle_phases(args, api, client, checks)
         context_phases(args, api, client, checks)
         file_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)

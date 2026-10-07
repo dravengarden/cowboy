@@ -114,7 +114,7 @@ to introduce more restrictions.
 | Atomic mutations | Stale stamp refusal has evidence; it does not alone establish compare-and-write atomicity | Inspect target implementation and inject mutation between check and write; use target-side atomic primitives where promised |
 | Output limits | Large streams/backpressure and terminal events recorded | Test split UTF-8, binary/NUL, truncation markers, slow/absent reader, disk full and retained output expiration |
 | Lost replies | Lost start and outages recorded without replay | Distinguish rejected, accepted, unknown and completed effects; never resend an unknown mutation under a new identity |
-| Cancel and timeout | Foreground cancellation and retained job cancellation recorded; 3.5.0 adds per-call and per-agent cancellation and forwards interrupt to native before target cancellation | Test cancel/start races, whole process trees, detached children, late completion, keeper death and provider timeout semantics |
+| Cancel and timeout | Foreground cancellation and retained job cancellation recorded; 3.5.0 adds per-call and per-agent cancellation and forwards interrupt to native before target cancellation; Claude 3.12.0: commands end with their shell, stops kill the whole tree (job-control groups included), detached and left-running children match native-local (14 lifecycle cases) | Leftover processes end with the keeper; no 30-minute stop of moved commands; test cancel/start races, keeper death and provider timeout semantics |
 | Resume/compaction | Rebinding and Claude target context recorded | Test resume with live children, queued completion, changed plugin version, stale approvals and artifact locators |
 | Reconnect and restarts | Keeper reattachment recorded | Inject Controller, worker, keeper and native-runtime failures independently; fence old generations and late replies |
 | Deletion and shutdown | Idempotent close and no recreation recorded | Verify pending callbacks cannot resurrect sessions, issue new model turns or affect another session |
@@ -875,6 +875,102 @@ It records:
 OVH operation `ovh-claude-code-3-9-0-converge` completed. Inventory reports
 3.9.0 active, 3.8.0 retained for rollback and no session leases. No live session
 was restarted.
+
+#### Process lifetimes (Plugin 3.12.0)
+
+Native-local baselines on 2.1.287 (`tools/claude_lifecycle_native_probe.py`,
+14 cases in `tools/claude_lifecycle_cases.py`, baseline
+`tools/claude_lifecycle_native_baseline.json`) show:
+
+- A command ends when its shell exits. `server & echo started` returns at once
+  even though `server` still holds the output; what the command started keeps
+  running, also after `exit 3`, `exec` or the session's end.
+- Stopping a command (TaskStop, a timeout kill) kills its whole process tree.
+  Children started into their own session with `setsid` are left running.
+- A background command completes, and is notified, when its shell exits.
+- TaskStop answers
+  `{"message":"Successfully stopped task: <id> (<command>)","task_id","task_type":"local_bash","command"}`;
+  for a command that has already ended it fails with
+  `No task found with ID: <id>`.
+
+Measured remote differences before 3.12.0:
+
+- A command finished only when its output pipe closed. With a child holding
+  the pipe, the call waited for its timeout and then moved the command to the
+  background; a command starting with `sleep` was even killed with
+  `Exit code 143`.
+- The executor ends a stopped command's process group only. Native's shell
+  snapshot generator keeps `set -o monitor`: its `set -o | grep "on"` filter
+  matches the option name, not its state, so every `&` job runs in a group of
+  its own. A stopped or timed-out command's background jobs kept running
+  (packaged acceptance showed it for TaskStop of moved and background
+  commands and for a timeout kill; 3.11.0 behaves the same under the executor
+  with job control on).
+- TaskStop answered `Command stopped.` without the command, and "stopped" an
+  already finished command.
+
+3.12.0:
+
+- **End of a command.** The command's shell runs under a minimal parent shell
+  that writes `\x1e<nonce>:<status>` to both streams after it and exits with
+  the same status; its own notices (a killed child) are discarded. The nonce
+  is per command and recorded with the job. Each stream's output up to its
+  line is the command's, and the command ends once both lines are read; the
+  line gives the exit status, so `exit`, `exec` and traps cannot skip it.
+  Output that may begin a line is held back until it is decided, also across
+  reads. The executor's `closed` remains the end of a command killed before
+  its lines.
+- **Background completion.** The waiter finds the same line without consuming
+  the handle's output, so the notification follows the shell's exit. It
+  records the end, so a later TaskStop leaves what the command started.
+- **Stopping.** Before the executor terminates a command whose shell sourced
+  the snapshot, a target utility finds its process (by the nonce, split so the
+  utility never matches itself) and kills every descendant through `ps` and
+  `awk`, as native's tree kill does. Without `ps` only the group ends.
+- **TaskStop.** Native's answer, with the command; a finished command reads as
+  `No task found with ID: <id>`. The command is kept only while a task can be
+  stopped, at most 4 KiB each and 256 KiB in all, so the state still loads.
+
+Packaged acceptance adds `bash_process_lifetimes_match_native_local`: all 14
+results, which processes still run afterwards (by heartbeat files, since the
+target may run commands in another process namespace) and the background
+command's completion notification match the native-local baseline. The
+remaining difference is stated in the check: the moved-to-background result
+omits the 30-minute auto-stop sentence (below).
+
+Gaps:
+
+- Native stops a command moved to the background after 30 minutes; the target
+  command keeps running.
+- A command left running when the session's keeper ends is ended with it
+  (the executor reaps its groups, the Machine service owns the cgroup).
+  Natively it outlives the session. This bounds leftover processes to the
+  binding's lifetime instead of leaking them on the target.
+- A process that left the tree before the stop (its parent exited, so it was
+  reparented) is not killed. Natively the same.
+- A command whose shell had no snapshot gets only the group kill; a command
+  that itself runs `set -m` then keeps its jobs.
+- A stop that races the shell's own exit can still kill what it left running.
+- A stopped command named by a command longer than 4 KiB, or beyond the
+  256 KiB budget, is named in part or not at all.
+
+Five native review rounds were run; each finding was fixed with a regression
+test that fails without it:
+
+- A large background output could leave the end line on a later page, and the
+  parent shell's own success status was reported instead (now the waiter
+  reads to the line, and the parent exits with the command's status).
+- A tree kill that ran before the command's process existed was cached as
+  done (now it is cached only once the process was found).
+- Every task kept its full command forever, which could grow the state past
+  what loads (now bounded and dropped when the task ends).
+- stdout's end line was taken as the end of stderr too (now each stream has
+  its own).
+
+The fifth round reported none. Packaged acceptance found two defects before
+these rounds: an output larger than one read lost its rest when the executor
+reported the process closed before the end line was read, and the missing
+tree kill above.
 
 ### 2. Project configuration and implicit reads
 

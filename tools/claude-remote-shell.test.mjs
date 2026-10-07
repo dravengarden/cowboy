@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -13,8 +13,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  endedCommand,
   persistedOutput,
   shellFailure,
+  splitEnd,
   WorkspaceTools,
 } from "../plugins/claude-code/runtime/tools.mjs";
 
@@ -31,6 +33,8 @@ function localConnection(home) {
           cwd: fileURLToPath(params.cwd),
           env: { ...process.env, ...params.envPolicy.set },
           stdio: ["ignore", "pipe", "pipe"],
+          // As the executor's, each process leads a group of its own.
+          detached: true,
         });
         const job = {
           child,
@@ -58,7 +62,13 @@ function localConnection(home) {
         return { processId: params.processId };
       }
       if (method === "process/terminate") {
-        processes.get(params.processId)?.child.kill("SIGTERM");
+        // The executor ends the process's group.
+        const pid = processes.get(params.processId)?.child.pid;
+        try {
+          if (pid) process.kill(-pid, "SIGTERM");
+        } catch {
+          // Already ended.
+        }
         return {};
       }
       if (method === "process/read") {
@@ -67,8 +77,14 @@ function localConnection(home) {
           job.done,
           new Promise((resolve) => setTimeout(resolve, params.waitMs)),
         ]);
+        // As the executor's, a read is bounded and a closed process can still
+        // hold unread output.
+        let size = 0;
         const chunks = job.chunks.filter((chunk) =>
           params.afterSeq === null || chunk.seq > params.afterSeq
+        ).filter((chunk, index) =>
+          (size += Buffer.from(chunk.chunk, "base64").length) <=
+            params.maxBytes || index === 0
         );
         return {
           chunks,
@@ -345,10 +361,314 @@ test("a stopped command reads as stopped to its waiter", async (t) => {
     started.result.stdout,
     /^Command running in background with ID: \S+\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. To check interim output, use Read on that file path\.$/,
   );
-  await tools.dispatch("TaskStop", { task_id: started.task.id });
+  const stopped = await tools.dispatch("TaskStop", {
+    task_id: started.task.id,
+  });
+  assert.deepEqual(stopped.result, {
+    message:
+      `Successfully stopped task: ${started.task.id} (echo begin; sleep 30)`,
+    task_id: started.task.id,
+    task_type: "local_bash",
+    command: "echo begin; sleep 30",
+  });
   assert.deepEqual(await tools.waitTask(started.task.id, null, 1000), {
     stopped: true,
   });
+  // Natively a stopped or finished command is no longer a task.
+  assert.deepEqual(
+    await tools.dispatch("TaskStop", { task_id: started.task.id }),
+    { deny: `No task found with ID: ${started.task.id}` },
+  );
+});
+
+test("the end line is found across output boundaries", () => {
+  const end = "0123abcd";
+  assert.deepEqual(splitEnd("out\x1e0123abcd:7\nlater", end), {
+    text: "out",
+    code: 7,
+  });
+  // Text that may begin the line waits for the rest of it.
+  assert.deepEqual(splitEnd("out\x1e012", end), {
+    text: "out",
+    held: "\x1e012",
+  });
+  assert.deepEqual(splitEnd("out\x1e0123abcd:1", end), {
+    text: "out",
+    held: "\x1e0123abcd:1",
+  });
+  assert.deepEqual(splitEnd("\x1e0123abcd:12\n", end), {
+    text: "",
+    code: 12,
+  });
+  // Anything else is output.
+  assert.deepEqual(splitEnd("a\x1e0x", end), { text: "a\x1e0x", held: "" });
+  assert.deepEqual(splitEnd("\x1e0123abcd:x\n", end), {
+    text: "\x1e0123abcd:x\n",
+    held: "",
+  });
+});
+
+test("a closed command's status is its end line's, even pages later", async () => {
+  const end = "f".repeat(32);
+  // The reporting shell exits with the command's own status too.
+  const [file, ...args] = endedCommand("bash", "echo out; exit 7", end);
+  const run = spawnSync(file, args);
+  assert.equal(run.status, 7);
+  assert.equal(run.stdout.toString(), `out\n\x1e${end}:7\n`);
+  const pages = [
+    [{ seq: 1, stream: "stdout", chunk: "x".repeat(10) }],
+    [{ seq: 2, stream: "stdout", chunk: `\x1e${end}:7\n` }],
+    [],
+  ];
+  const tools = new WorkspaceTools(
+    {
+      async call(_method, params) {
+        return {
+          chunks: pages[params.afterSeq ?? 0].map((chunk) => ({
+            ...chunk,
+            chunk: Buffer.from(chunk.chunk).toString("base64"),
+          })),
+          exited: true,
+          closed: true,
+          exitCode: 0,
+        };
+      },
+    },
+    { workspace: { cwd: "/project" }, environment: { id: "fixture" } },
+    "/nonexistent/state.json",
+  );
+  tools.state = { jobs: { job: { end, afterSeq: null } } };
+  tools.save = async () => {};
+  assert.deepEqual(await tools.waitTask("job", null, 1), {
+    closed: true,
+    exitCode: 7,
+  });
+});
+
+test("task commands are kept only while running, within a bound", async (t) => {
+  const { tools, bash } = await shellFixture(t);
+  const long = `: ${"x".repeat(60000)}`;
+  // Finished foreground commands keep no command.
+  await bash({ command: long });
+  for (let index = 0; index < 70; index++) {
+    await tools.dispatch("Bash", { command: long, run_in_background: true });
+  }
+  const kept = Object.values(tools.state.jobs).filter((job) => job.command);
+  assert.equal(kept.length, 64);
+  assert.ok(kept.every((job) => job.command.length === 4096));
+  // An ended task's command is dropped when its end is read.
+  const [id] = Object.entries(tools.state.jobs).find(([, job]) => job.command);
+  await tools.dispatch("Read", { file_path: "cowboy-task://" + id });
+  assert.equal(tools.state.jobs[id].command, undefined);
+  const reloaded = new WorkspaceTools(
+    tools.connection,
+    { workspace: { cwd: tools.cwd }, environment: { id: "fixture" } },
+    tools.statePath,
+  );
+  await reloaded.load();
+  assert.equal(Object.keys(reloaded.state.jobs).length, 71);
+});
+
+test("output read after the other stream's end line is kept", async () => {
+  const end = "d".repeat(32);
+  const line = `\x1e${end}:1\n`;
+  // stdout's end line arrives before what the command wrote to stderr.
+  const chunks = [
+    ["stdout", `out\n${line}`],
+    ["stderr", "important-error\n"],
+    ["stderr", `${line}left-running\n`],
+    ["stdout", "left-running\n"],
+  ].map(([stream, text], index) => ({
+    seq: index + 1,
+    stream,
+    chunk: Buffer.from(text).toString("base64"),
+  }));
+  const tools = new WorkspaceTools(
+    {
+      async call(_method, params) {
+        const next = chunks.find((chunk) =>
+          params.afterSeq === null || chunk.seq > params.afterSeq
+        );
+        return {
+          chunks: next ? [next] : [],
+          exited: true,
+          closed: false,
+        };
+      },
+    },
+    { workspace: { cwd: "/project" }, environment: { id: "fixture" } },
+    "/nonexistent/state.json",
+  );
+  tools.state = { jobs: { job: { end, afterSeq: null } } };
+  tools.save = async (update) => void update?.();
+  const result = await tools.collect("job", 1000);
+  assert.equal(result.output, "out\nimportant-error\n");
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.closed, true);
+  assert.equal((await tools.collect("job", 1000)).output, "");
+});
+
+test("a tree kill that finds no process yet looks again", async () => {
+  const utilities = new Map();
+  let scans = 0;
+  const tools = new WorkspaceTools(
+    {
+      async call(method, params) {
+        if (method === "process/start") {
+          assert.equal(params.argv[3], "kill-tree");
+          // The command's process appears from the second scan on.
+          utilities.set(params.processId, ++scans > 1 ? "found\n" : "");
+          return { processId: params.processId };
+        }
+        if (method === "process/terminate") return {};
+        const output = utilities.get(params.processId);
+        return output === undefined
+          ? { chunks: [], exited: false, closed: false }
+          : {
+            chunks: output && params.afterSeq === null
+              ? [{
+                seq: 1,
+                stream: "stderr",
+                chunk: Buffer.from(output).toString("base64"),
+              }]
+              : [],
+            exited: true,
+            closed: true,
+            exitCode: 0,
+          };
+      },
+    },
+    { workspace: { cwd: "/project" }, environment: { id: "fixture" } },
+    "/nonexistent/state.json",
+  );
+  tools.shell = "/bin/bash";
+  tools.save = async (update) => void update?.();
+  tools.state = {
+    jobs: {
+      job: { end: "a".repeat(32), jobs: true, cancelRequested: true },
+    },
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await tools.reconcileCancellation("job");
+  }
+  assert.equal(scans, 2);
+});
+
+test("the waiter finds an end line split across its waits", async () => {
+  const end = "e".repeat(32);
+  const line = Buffer.from(`ok\x1e${end}:5\n`);
+  const chunks = [line.subarray(0, 6), line.subarray(6)].map((bytes, i) => ({
+    seq: i + 1,
+    stream: "stdout",
+    chunk: bytes.toString("base64"),
+  }));
+  let visible = 1;
+  const tools = new WorkspaceTools(
+    {
+      async call(method, params) {
+        assert.equal(method, "process/read");
+        return {
+          chunks: chunks.slice(0, visible).filter((chunk) =>
+            params.afterSeq === null || chunk.seq > params.afterSeq
+          ),
+          exited: true,
+          closed: false,
+        };
+      },
+    },
+    { workspace: { cwd: "/project" }, environment: { id: "fixture" } },
+    "/nonexistent/state.json",
+  );
+  tools.state = { jobs: { job: { end, afterSeq: null } } };
+  // Only the start of the line so far: the next wait reads it again.
+  assert.deepEqual(await tools.waitTask("job", null, 1), { afterSeq: 0 });
+  visible = 2;
+  tools.save = async () => {};
+  assert.deepEqual(await tools.waitTask("job", 0, 1), {
+    closed: true,
+    exitCode: 5,
+  });
+});
+
+test("a stopped command's jobs end with it, in groups of their own too", async (t) => {
+  const { tools, project, home } = await shellFixture(t);
+  // Native's snapshot turns job control on: each job is its own group.
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
+    .toString().trim();
+  const env = { ...process.env };
+  t.after(() => Object.assign(process.env, env));
+  process.env.HOME = home;
+  tools.startSnapshot();
+  const started = await tools.dispatch("Bash", {
+    command: "(sleep 30; echo late) & echo $! > job.pid; wait",
+    run_in_background: true,
+  });
+  let pid;
+  while (!pid) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    pid = Number(
+      await readFile(join(project, "job.pid"), "utf8").catch(() => 0),
+    );
+  }
+  t.after(() => alive(pid) && process.kill(pid));
+  assert.ok(alive(pid));
+  await tools.dispatch("TaskStop", { task_id: started.task.id });
+  // Killed already; a moment more lets the orphan be reaped.
+  for (let tries = 0; alive(pid) && tries < 40; tries++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(alive(pid), false);
+});
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+test("a command ends with its shell, leaving what it started running", async (t) => {
+  const { tools, bash, project } = await shellFixture(t);
+  const pids = [];
+  t.after(() => pids.forEach((pid) => alive(pid) && process.kill(pid)));
+  const began = Date.now();
+  // The child holds the output pipe; natively the call still returns.
+  assert.equal(
+    await bash({ command: "sleep 30 & echo $! > a.pid; echo started" }),
+    "started",
+  );
+  assert.deepEqual(
+    await bash({ command: "sleep 30 & echo $! > b.pid; exit 3" }),
+    { error: "Exit code 3" },
+  );
+  assert.equal(await bash({ command: "exec echo replaced" }), "replaced");
+  assert.ok(Date.now() - began < 10000);
+  for (const name of ["a.pid", "b.pid"]) {
+    pids.push(Number(await readFile(join(project, name), "utf8")));
+  }
+  assert.ok(pids.every(alive));
+  // A background command completes when its shell does, as natively.
+  const started = await tools.dispatch("Bash", {
+    command: "sleep 30 & echo $! > c.pid; echo child",
+    run_in_background: true,
+  });
+  assert.deepEqual(await tools.waitTask(started.task.id, null, 5000), {
+    closed: true,
+    exitCode: 0,
+  });
+  pids.push(Number(await readFile(join(project, "c.pid"), "utf8")));
+  const read = await tools.dispatch("Read", {
+    file_path: "cowboy-task://" + started.task.id,
+  });
+  assert.equal(read.result.file.content, "child\nExit code: 0");
+  // Stopping a finished command leaves what it started.
+  assert.deepEqual(
+    await tools.dispatch("TaskStop", { task_id: started.task.id }),
+    { deny: `No task found with ID: ${started.task.id}` },
+  );
+  assert.ok(pids.every(alive));
 });
 
 test("the waiter ends with the target command's status", async () => {

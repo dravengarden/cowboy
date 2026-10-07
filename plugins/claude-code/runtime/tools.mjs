@@ -51,6 +51,8 @@ export const NATIVE_TOOLS = [
   "TaskStop",
 ];
 export const TASK_OUTPUT_PREFIX = "cowboy-task://";
+const TASK_COMMAND_LIMIT = 4096;
+const TASK_COMMANDS_LIMIT = 256 * 1024;
 export const AGENT_OUTPUT_PREFIX = "cowboy-agent://";
 // Registry keys index plain objects; exclude inherited property names.
 export const AGENT_ID =
@@ -275,6 +277,47 @@ function decodeOutput(bytes) {
   }
   return { text: bytes.toString("utf8"), pending: "" };
 }
+// A Bash command ends when its shell exits, as natively, not when every
+// process holding its output pipe has (`server &` keeps it open). The
+// wrapper writes `\x1e<end>:<status>\n` after the shell; `end` is a
+// per-command nonce. Text that may begin the line is held until decided.
+export function splitEnd(buffer, end) {
+  const opening = `\x1e${end}:`;
+  const at = buffer.indexOf(opening);
+  if (at >= 0) {
+    const status = buffer.slice(at + opening.length);
+    const line = /^(\d{1,3})\n/.exec(status);
+    if (line) return { text: buffer.slice(0, at), code: Number(line[1]) };
+    if (/^\d{0,3}$/.test(status)) {
+      return { text: buffer.slice(0, at), held: buffer.slice(at) };
+    }
+    return { text: buffer, held: "" };
+  }
+  for (let size = Math.min(opening.length, buffer.length); size > 0; size--) {
+    if (opening.startsWith(buffer.slice(-size))) {
+      return { text: buffer.slice(0, -size), held: buffer.slice(-size) };
+    }
+  }
+  return { text: buffer, held: "" };
+}
+
+// The shell runs as a child of a minimal one that reports its status on both
+// streams, so `exit`, `exec` and traps in the command cannot skip the end
+// lines. That one exits with the same status, and its own notices (a killed
+// child) are not output.
+export function endedCommand(shell, script, end) {
+  return [
+    shell,
+    "-c",
+    `exec 3>&2 2>/dev/null; "$0" -c "$1" 2>&3 3>&-; s=$?; ` +
+    `printf '\\036%s:%d\\n' "$2" "$s" >&3; printf '\\036%s:%d\\n' "$2" "$s"; ` +
+    `exit "$s"`,
+    shell,
+    script,
+    end,
+  ];
+}
+
 function missing(error) {
   return error.remote &&
     /No such file|not found|NotFound/i.test(JSON.stringify(error.remote));
@@ -336,6 +379,7 @@ export class WorkspaceTools {
     // Native background agents live only as long as this Claude process.
     this.incarnation = randomUUID();
     this.foreground = new Set();
+    this.treesKilled = new Set();
     this.startingForeground = new Map();
     this.operations = new Map();
     this.calls = new Map();
@@ -784,7 +828,7 @@ export class WorkspaceTools {
     }
   }
 
-  async start(argv, processId = randomUUID(), call, set = {}) {
+  async start(argv, processId = randomUUID(), call, set = {}, fields = {}) {
     if (Object.keys(this.state.jobs).length >= 4096) {
       throw new Error("Session process limit reached");
     }
@@ -800,6 +844,7 @@ export class WorkspaceTools {
     this.state.jobs[processId] = {
       afterSeq: null,
       exited: false,
+      ...fields,
       ...(call?.owner ? { owner: call.owner } : {}),
     };
     await this.save();
@@ -859,6 +904,18 @@ export class WorkspaceTools {
   async collectOutput(processId, timeout) {
     const previous = this.state.jobs[processId];
     if (!previous) throw new Error("Task does not belong to this session");
+    // Past its end line, the pipe carries only what the command left running
+    // writes; natively that never reaches the task's output.
+    if (previous.endRead) {
+      return {
+        output: "",
+        exited: true,
+        closed: true,
+        exitCode: previous.exitCode,
+        task_id: processId,
+        output_limit: false,
+      };
+    }
     const job = { ...previous, utf8Pending: { ...previous.utf8Pending } };
     const chunks = [];
     const pending = job.utf8Pending ??= {};
@@ -884,9 +941,41 @@ export class WorkspaceTools {
           Buffer.from(pending[chunk.stream] ?? "", "base64"),
           bytes,
         ]));
-        chunks.push(decoded.text);
-        pending[chunk.stream] = decoded.pending;
+        let shown = decoded.text;
+        // Each stream has its own end line: one stream's says nothing of
+        // what the other still holds. Past it, a stream is not output.
+        const stream = chunk.stream;
+        if (job.end && job.endLines?.[stream] !== undefined) shown = "";
+        else if (job.end) {
+          const split = splitEnd(
+            (job.endHeld?.[stream] ?? "") + shown,
+            job.end,
+          );
+          shown = split.text;
+          job.endHeld = { ...job.endHeld, [stream]: split.held ?? "" };
+          if (split.code !== undefined) {
+            job.endLines = { ...job.endLines, [stream]: split.code };
+            // Bytes left unfinished come after it.
+            decoded.pending = "";
+          }
+        }
+        chunks.push(shown);
+        pending[stream] = decoded.pending;
         size += bytes.length;
+      }
+      if (
+        job.endLines?.stdout !== undefined && job.endLines.stderr !== undefined
+      ) {
+        // The shell has exited and both streams are complete.
+        job.utf8Pending = {};
+        delete job.endHeld;
+        Object.assign(job, {
+          exited: true,
+          closed: true,
+          exitCode: job.endLines.stdout,
+          endRead: true,
+        });
+        break;
       }
       job.exited = result.exited;
       job.closed = result.closed;
@@ -895,6 +984,9 @@ export class WorkspaceTools {
       // past the deadline too, until a read returns nothing.
       const drained = result.closed && result.chunks.length === 0;
       if (drained) {
+        // Killed before its end lines: held text was output after all.
+        chunks.push(job.endHeld?.stdout ?? "", job.endHeld?.stderr ?? "");
+        delete job.endHeld;
         for (const stream of ["stdout", "stderr"]) {
           chunks.push(
             Buffer.from(pending[stream] ?? "", "base64").toString("utf8"),
@@ -907,13 +999,17 @@ export class WorkspaceTools {
     await this.save(() => {
       const beforeSave = this.state.jobs[processId];
       // Concurrent changes to the record survive this cursor update: a stop
-      // (never a completion) and a directory file still to remove.
+      // (never a completion), an observed end and a directory file still to
+      // remove.
       this.state.jobs[processId] = {
         ...job,
         cancelRequested: job.closed ? false : beforeSave?.cancelRequested,
         ...(beforeSave?.stopped ? { stopped: true } : {}),
+        ...(beforeSave?.ended ? { ended: true } : {}),
         ...(beforeSave?.cwdFile ? { cwdFile: beforeSave.cwdFile } : {}),
       };
+      // Only a running task can be stopped and named.
+      if (job.closed) delete this.state.jobs[processId].command;
       return () => {
         this.state.jobs[processId] = beforeSave;
       };
@@ -929,9 +1025,20 @@ export class WorkspaceTools {
     };
   }
 
-  async startForeground(argv, call, set, id = randomUUID()) {
+  // The command a task's stop names, kept while it runs. Stored text is
+  // bounded, so the state always loads again.
+  taskCommand(command) {
+    const stored = Object.values(this.state.jobs).reduce(
+      (total, job) => total + (job.command?.length ?? 0),
+      0,
+    );
+    const kept = command.slice(0, TASK_COMMAND_LIMIT);
+    return stored + kept.length <= TASK_COMMANDS_LIMIT ? { command: kept } : {};
+  }
+
+  async startForeground(argv, call, set, id = randomUUID(), fields) {
     this.foreground.add(id);
-    const starting = this.start(argv, id, call, set);
+    const starting = this.start(argv, id, call, set, fields);
     this.startingForeground.set(id, starting);
     try {
       return await starting;
@@ -1176,15 +1283,23 @@ export class WorkspaceTools {
         "shell",
         `cwd-${randomUUID()}`,
       );
-      const argv = [
+      const end = randomUUID().replaceAll("-", "");
+      const snapshot = await this.shellSnapshot;
+      const argv = endedCommand(
         this.shell,
-        "-c",
-        this.shellCommand(command, cwdFile, await this.shellSnapshot),
-      ];
+        this.shellCommand(command, cwdFile, snapshot),
+        end,
+      );
       const environment = shellEnvironment(this.shell, call?.shell);
+      // Native's snapshot turns job control on (see killTree).
+      const fields = {
+        end,
+        ...(snapshot ? { jobs: true } : {}),
+        ...(background ? this.taskCommand(command) : {}),
+      };
       const id = await (background
-        ? this.start(argv, undefined, call, environment)
-        : this.startForeground(argv, call, environment));
+        ? this.start(argv, undefined, call, environment, fields)
+        : this.startForeground(argv, call, environment, undefined, fields));
       if (background) {
         return {
           ...text(
@@ -1215,6 +1330,12 @@ export class WorkspaceTools {
         const complete = { ...result, output };
         if (!result.closed && Buffer.byteLength(output) >= COLLECT_LIMIT) {
           // Still writing past the bound: keep what was read in a file.
+          await this.save(() => {
+            const job = this.state.jobs[id];
+            this.state.jobs[id] = { ...job, ...this.taskCommand(command) };
+            return () =>
+              this.state.jobs[id] = job;
+          });
           return text(JSON.stringify(complete), {
             stdout: `${await this.persistOutput(id, output, result)}
 Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its further output; TaskStop stops it.`,
@@ -1240,9 +1361,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           // As native's output file does, the handle reads from the start.
           await this.save(() => {
             const job = this.state.jobs[id];
-            this.state.jobs[id] = { ...job, afterSeq: null, utf8Pending: {} };
-            return () =>
-              this.state.jobs[id] = job;
+            this.state.jobs[id] = {
+              ...job,
+              afterSeq: null,
+              utf8Pending: {},
+              endHeld: {},
+              endLines: {},
+              ...this.taskCommand(command),
+            };
+            return () => this.state.jobs[id] = job;
           });
           return {
             ...text(JSON.stringify(complete), {
@@ -1291,10 +1418,16 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }
     if (name === "taskoutput" || name === "taskstop") {
       const id = checkedString(args.task_id ?? args.shell_id, "task id", 128);
-      if (!this.state.jobs[id]) {
+      const job = this.state.jobs[id];
+      if (!job) {
         throw new Error("Task does not belong to this session");
       }
       if (name === "taskstop") {
+        // Natively a finished command is no longer a task, and what it left
+        // running is not stopped with it.
+        if (job.closed || job.ended) {
+          throw new Error(`No task found with ID: ${id}`);
+        }
         await this.cancelTasks([id]);
       }
       const timeout = name === "taskstop"
@@ -1303,12 +1436,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         ? 1
         : bounded(args.timeout, 10000, 1, 120000);
       const result = await this.collect(id, timeout);
+      const command = job.command ?? "";
       return text(JSON.stringify(result), {
         message: result.closed
-          ? "Command stopped."
+          ? `Successfully stopped task: ${id} (${command})`
           : "Termination requested; inspect its output handle.",
         task_id: id,
         task_type: "local_bash",
+        command,
       });
     }
     if (name === "glob" || name === "grep") {
@@ -2100,7 +2235,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       const previous = new Map();
       for (const id of ids) {
         const job = this.state.jobs[id];
-        if (!job || job.closed) continue;
+        // An ended command's leftover processes are not its to stop.
+        if (!job || job.closed || job.ended) continue;
         previous.set(id, job);
         // `stopped` stays: a stopped command's end is not a completion.
         this.state.jobs[id] = { ...job, cancelRequested: true, stopped: true };
@@ -2123,6 +2259,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
   // watcher's own position.
   async waitTask(id, afterSeq, holdMs) {
     const deadline = Date.now() + holdMs;
+    // Output that may begin the end line, with the chunks it came from, so
+    // the next wait reads them again.
+    let held = "";
+    let from = [];
     for (;;) {
       const job = this.state.jobs[id];
       if (!job) return { gone: true };
@@ -2136,10 +2276,35 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       });
       afterSeq = result.chunks.at(-1)?.seq ?? afterSeq;
       if (this.state.jobs[id]?.stopped) return { stopped: true };
-      if (result.closed) {
+      for (const chunk of job.end ? result.chunks : []) {
+        if (chunk.stream !== "stdout") continue;
+        // The end line is ASCII; bytes map one to one onto latin1 text.
+        const text = Buffer.from(chunk.chunk, "base64").toString("latin1");
+        const split = splitEnd(held + text, job.end);
+        if (split.code !== undefined) {
+          // Recorded so TaskStop leaves what the command left running.
+          await this.save(() => {
+            const previous = this.state.jobs[id];
+            if (!previous) return;
+            this.state.jobs[id] = { ...previous, ended: true };
+            return () => this.state.jobs[id] = previous;
+          }).catch(() => {});
+          return { closed: true, exitCode: split.code };
+        }
+        from = !split.held
+          ? []
+          : split.held.length > text.length
+          ? [...from, chunk.seq]
+          : [chunk.seq];
+        held = split.held;
+      }
+      // A closed command's end line can still be on a later page.
+      if (result.closed && (!job.end || !result.chunks.length)) {
         return { closed: true, exitCode: result.exitCode ?? null };
       }
-      if (Date.now() >= deadline) return { afterSeq };
+      if (!result.closed && Date.now() >= deadline) {
+        return { afterSeq: from.length ? from[0] - 1 : afterSeq };
+      }
     }
   }
 
@@ -2164,9 +2329,43 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }).catch(() => {});
   }
 
+  // Natively a stopped command's whole process tree is killed. The executor
+  // kills only the command's process group, and native's shell snapshot
+  // turns job control on (its option filter keeps `monitor`), so each `&`
+  // job has a group of its own. Its descendants are found by the command's
+  // end nonce and killed before the command ends and they are reparented.
+  // Without `ps`, only the command's group ends. Reports whether the
+  // command's process was found.
+  async killTree(end) {
+    const result = await this.command([
+      this.shell ?? "/bin/sh",
+      "-c",
+      'ps -A -ww -o pid= -o ppid= -o command= | awk -v a="$1" -v b="$2" \'' +
+      "{ pid[NR] = $1; parent[NR] = $2 } " +
+      'index($0, a b) && root == "" { root = $1 } ' +
+      'END { if (root == "") exit; print "found" > "/dev/stderr"; ' +
+      "tree[root] = 1; grown = 1; " +
+      "while (grown) { grown = 0; for (i = 1; i <= NR; i++) " +
+      "if (!(pid[i] in tree) && (parent[i] in tree)) { tree[pid[i]] = 1; grown = 1 } } " +
+      "for (p in tree) if (p != root) print p }' | xargs kill -KILL 2>/dev/null; exit 0",
+      "kill-tree",
+      // Split, so this utility's own arguments never contain the nonce.
+      end.slice(0, 16),
+      end.slice(16),
+    ], 5000);
+    return result.output.includes("found");
+  }
+
   async reconcileCancellation(id) {
     if (!this.state.jobs[id]?.cancelRequested || this.connection.closed) return;
     try {
+      const job = this.state.jobs[id];
+      if (job.jobs && !this.treesKilled.has(id)) {
+        // Not found yet (a start still in flight): look again next time.
+        if (await this.killTree(job.end).catch(() => false)) {
+          this.treesKilled.add(id);
+        }
+      }
       await this.connection.call("process/terminate", { processId: id }).catch(
         () => {},
       );

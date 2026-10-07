@@ -1,0 +1,71 @@
+{
+ "results": {
+  "child_holds_output": {
+   "is_error": false,
+   "content": "started"
+  },
+  "child_quiet": {
+   "is_error": false,
+   "content": "started"
+  },
+  "child_new_session": {
+   "is_error": false,
+   "content": "started"
+  },
+  "exit_leaves_child": {
+   "is_error": true,
+   "content": "Exit code 3"
+  },
+  "exec_replaces_shell": {
+   "is_error": false,
+   "content": "replaced"
+  },
+  "exit_trap": {
+   "is_error": false,
+   "content": "body\ntrapped"
+  },
+  "timeout_kills_tree": {
+   "is_error": true,
+   "content": "Exit code 143\nCommand timed out after 1s"
+  },
+  "timeout_moves": {
+   "is_error": false,
+   "content": "Command did not complete within its 2s timeout and was moved to the background (ID: <task>). Output is being written to: <file>. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. To check interim output, use Read on that file path."
+  },
+  "stop_moved": {
+   "is_error": false,
+   "content": "{\"message\":\"Successfully stopped task: <task> ((i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-moved.beat; i=$((i+1)); sleep 0.2; done) & wait; echo done)\",\"task_id\":\"<task>\",\"task_type\":\"local_bash\",\"command\":\"(i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-moved.beat; i=$((i+1)); sleep 0.2; done) & wait; echo done\"}"
+  },
+  "background_tree": {
+   "is_error": false,
+   "content": "Command running in background with ID: <task>. Output is being written to: <file>. You will be notified when it completes. To check interim output, use Read on that file path."
+  },
+  "stop_background": {
+   "is_error": false,
+   "content": "{\"message\":\"Successfully stopped task: <task> ((i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-background.beat; i=$((i+1)); sleep 0.2; done) & wait)\",\"task_id\":\"<task>\",\"task_type\":\"local_bash\",\"command\":\"(i=0; while [ $i -lt 300 ] && [ ! -e lc.stop ]; do echo $i > lc-background.beat; i=$((i+1)); sleep 0.2; done) & wait\"}"
+  },
+  "background_shell_exits": {
+   "is_error": false,
+   "content": "Command running in background with ID: <task>. Output is being written to: <file>. You will be notified when it completes. To check interim output, use Read on that file path."
+  },
+  "pause": {
+   "is_error": false,
+   "content": "paused"
+  },
+  "stop_finished": {
+   "is_error": true,
+   "content": "<tool_use_error>No task found with ID: <task></tool_use_error>"
+  }
+ },
+ "alive": {
+  "lc-background.beat": false,
+  "lc-exit.beat": true,
+  "lc-held.beat": true,
+  "lc-left.beat": true,
+  "lc-moved.beat": false,
+  "lc-quiet.beat": true,
+  "lc-session.beat": true,
+  "lc-timeout.beat": false
+ },
+ "left_running_notified": true
+}
