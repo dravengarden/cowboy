@@ -16,8 +16,21 @@ conformance passed, 45 groups, between two writer builds and two reader-only bui
 that carry the new pin.
 
 **Connected Code failed** at `owned_read_failed_reply_original_login_revocation`
-(`wrong_observation`, after 17 checks). The same stage fails identically on `main`
-`6bc5b1df`, so it predates this change; its cause is unknown. It remains open.
+(`wrong_observation`, after 17 checks) before activation. The same stage failed
+identically on `main` `6bc5b1df`, so it predated this change.
+
+**Cause, found afterwards (test harness, not product):** the connected relay in
+`code_connected/proxy.rs` refuses every Machine event it does not list. Since
+`22de6bbf` the Machine sends a periodic `HostResources` event; the relay treated it
+as a wrong observation and dropped the connection about 13 s into the lost-reply
+step, so the Controller answered 401 after 13 s instead of the 40 s command timeout
+the step asserts (measured: 13.06 s before, 40.006 s after). Allowing
+`HostResources` in the relay fixes it. With that change the full connected Code
+conformance is accepted against the deployed Controller `f469cf04` and the
+pin-candidate Machine release `11rn7nyz…` (receipt
+[`code-connected-host-resources-2026-10-07.json`](../experiments/code-connected-host-resources-2026-10-07.json)).
+That run used the pin candidate Machine, not the activated writer-host release, and
+the exact native Zed pair already named in the input.
 
 ## Activation
 

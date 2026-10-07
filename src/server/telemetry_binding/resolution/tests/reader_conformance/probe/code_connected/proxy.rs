@@ -272,7 +272,9 @@ fn inspect(
             | MachineEvent::CommandResult { request_id, .. } => {
                 return record.reply(&request_id);
             }
-            MachineEvent::Inventory { .. } | MachineEvent::PluginInventory { .. } => {}
+            MachineEvent::Inventory { .. }
+            | MachineEvent::PluginInventory { .. }
+            | MachineEvent::HostResources { .. } => {}
             _ => return Err(Failure::WrongObservation),
         },
         other => handshake(other, from_machine, record)?,

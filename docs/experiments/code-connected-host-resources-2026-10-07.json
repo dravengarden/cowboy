@@ -1,0 +1,204 @@
+{
+  "schema": "dravengarden.cowboy.code-buffer-connected-conformance/v17",
+  "source_revision": "13d8598a6cfbbbbe1f04c6ce6a193e851cac1b74",
+  "artifacts": [
+    {
+      "lane": "controller",
+      "role": "supplied",
+      "release": "/nix/store/p6c4yn5kbnk1gp6l0vyjz2pb5plhlwad-cowboy-controller-release",
+      "executable": "/nix/store/f3329q6md87sgklgry537zmhvrszmcfx-cowboy-0.1.0/bin/cowboy",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "controller",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "f469cf046d8871a62af49a27eb95f78e51b86136",
+        "schema": 1
+      },
+      "source_sha256": "da4d5984e9410117ca005d98dbb672ec86242b26ee7ee7ed4386a27562de3fdb",
+      "executable_sha256": "1c1f2a3c9716cb44212483d52bae24ed481e5e202bf2ce7574c9663b371c293c",
+      "executable_chain": [
+        {
+          "path": "/nix/store/f3329q6md87sgklgry537zmhvrszmcfx-cowboy-0.1.0/bin/cowboy",
+          "sha256": "1c1f2a3c9716cb44212483d52bae24ed481e5e202bf2ce7574c9663b371c293c"
+        }
+      ]
+    },
+    {
+      "lane": "machine",
+      "role": "supplied",
+      "release": "/nix/store/11rn7nyzlaz9gkip9b13fz17xcfqbw7r-cowboy-machine-release",
+      "executable": "/nix/store/11rn7nyzlaz9gkip9b13fz17xcfqbw7r-cowboy-machine-release/bin/cowboy-machine",
+      "source": {
+        "component": "cowboy",
+        "dirty": false,
+        "lane": "machine",
+        "repository": "git@github.com:dravengarden/cowboy.git",
+        "revision": "abf08c88126a5ad39b8e4be467217264032ed931",
+        "schema": 1,
+        "sessionDeletionJournal": {
+          "readerSchema": 1,
+          "writerSchema": 0
+        },
+        "sessionIncarnations": {
+          "readerSchema": 1,
+          "writerSchema": 0
+        },
+        "workerGeneration": "worker-95d6504dc9c75698606c"
+      },
+      "source_sha256": "b9f159c1687cfa579027ffcdb3e995eb1092aae6e2ab465c2eaf31976be975ab",
+      "executable_sha256": "ef2800adfe8ddc8813ea44c2eaf7f22a6d06d04e59ad55e1822481305d214edf",
+      "executable_chain": [
+        {
+          "path": "/nix/store/11rn7nyzlaz9gkip9b13fz17xcfqbw7r-cowboy-machine-release/bin/cowboy-machine",
+          "sha256": "ef2800adfe8ddc8813ea44c2eaf7f22a6d06d04e59ad55e1822481305d214edf"
+        },
+        {
+          "path": "/nix/store/i4599j8b1airksd4xm9rafpsvk152nl1-cowboy-machine-0.1.0/bin/cowboy-machine",
+          "sha256": "d39d2ccbc64c384f6e88b8393bcb95188317ae7d3dd2042f0593b8942108d493"
+        },
+        {
+          "path": "/nix/store/i4599j8b1airksd4xm9rafpsvk152nl1-cowboy-machine-0.1.0/bin/.cowboy-machine-wrapped",
+          "sha256": "141114e030e3caabaa1611b199d81c963cf175286e1de9eb23293dad0836812e"
+        }
+      ]
+    }
+  ],
+  "native": [
+    {
+      "path": "/nix/store/z37cw1h6m1z8rnjv7ipaxvx09ab0y3ds-cowboy-zed-adapter-1.20.4/bin/cowboy-zed-adapter",
+      "sha256": "7d30f412bdb2c0af9f5e32d70ecee8f08994a30012c2feec82825afc815f4e04"
+    },
+    {
+      "path": "/nix/store/j27dma3v67b3snax2yip1gw19nmm9w66-cowboy-zed-server-x86_64-unknown-linux-musl-1.6.0/bin/cowboy-zed-server",
+      "sha256": "d84c0516b2dc872b2c3ac97a23a972056532249cea7daa6414274fee877014c3"
+    }
+  ],
+  "core_adapter": {
+    "path": "/nix/store/jxsf47y6id8c0pnlkxdmzingk23p9ih0-cowboy-code-adapter-0.1.0/bin/cowboy-code-adapter",
+    "sha256": "3485f6d3424ce9944f75662995a03fd5e857730905567ac2a8215453904e7ffa"
+  },
+  "ssh_keygen": {
+    "path": "/nix/store/k1ac1aqh0cb2xxph82l9c19yv32a7lyn-openssh-10.4p1/bin/ssh-keygen",
+    "sha256": "85ba27c28c6bbb4e57395bcd7f7e56774f0d939d235de3603893ccae056d9257"
+  },
+  "git": {
+    "path": "/nix/store/bcnisk3ydfgv26v2gw3zlky24g00yww2-git-2.54.0/bin/git",
+    "sha256": "bb109beeee3d9dc486e3b0749028e18a58572670b283a1092d9fe2034440437e"
+  },
+  "test_lsp": {
+    "path": "/home/draven/.local/state/cowboy-machine/worktrees/incarnation-carriage-20261006/plugins/zed/adapter/target/debug/examples/navigation_lsp",
+    "sha256": "a1f4d9bc56b30ae3e71e016021836315fe9ed0acb19c6b441e0eae490bb9445a"
+  },
+  "package_sha256": "e1edad3f6ba10b5dc50bcba5ffdfa5d04b8b06ed123fce12e9b46ab66a856486",
+  "release_sha256": "c2449cae78619fe0f4ce48e67bd7d302d69a99ce4dff62cc43be5a75cbf7e28b",
+  "stage": "complete",
+  "checks": [
+    "authenticated_code_installation",
+    "real_login_enrollment_and_effect_free_unready_refusal",
+    "held_real_core_file_reply_is_discarded_after_original_cookie_logout",
+    "machine_owned_root_identity_refuses_a_replaced_advertised_root",
+    "machine_owned_root_aliases_are_readable_before_and_after_replacement",
+    "machine_owned_session_root_discards_real_conditional_reply_after_replacement",
+    "machine_owned_session_root_expires_old_page_without_io_and_allows_fresh_read",
+    "cancelled_http_open_drains_without_replay",
+    "legacy_language_original_login_revocation",
+    "legacy_hover_original_login_revocation",
+    "legacy_navigation_original_login_revocation",
+    "legacy_outline_original_login_revocation",
+    "independent_owners_unicode_content_equality_and_disk_mismatch",
+    "cancelled_read_drains_before_explicit_release_without_closing_peer",
+    "owned_open_original_login_revocation",
+    "owned_query_original_login_revocation",
+    "owned_release_original_login_revocation",
+    "owned_read_failed_reply_original_login_revocation",
+    "navigation_failed_query_original_login_revocation",
+    "lost_real_navigation_execute_reply_original_query_without_replay",
+    "enrolled_protocol21_all_five_navigation_kinds_unicode_original_owner",
+    "explicit_synchronization_authentication_shared_owner_refusal_and_local_fence",
+    "synchronization_failed_query_original_login_revocation",
+    "lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall",
+    "synchronization_retirement_drains_after_cancelled_http_without_replay",
+    "cancelled_destination_observer_handoff_to_ordinary_owner_after_uninstall",
+    "lost_real_parent_release_reply_original_query_without_replay",
+    "native_budget_refusal_lost_reply_original_query_unchanged_text_and_explicit_retirement",
+    "http_uninstall_and_missing_paths_preserve_original_native_reads",
+    "complete_native_destination_text_pages_after_parent_and_path_removal",
+    "destination_content_read_after_parent_release_and_path_removal",
+    "cancelled_release_observed_once_and_independent_owner_retained",
+    "navigation_replacement_connection_and_restart_refuse_adoption",
+    "replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id",
+    "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
+    "bound_session_reads_target_without_runtime_connection_and_fences_unknown_and_replaced_routes",
+    "colocated_reads_execute_here_only_by_permission_and_fence_a_replaced_root",
+    "withdrawing_colocation_permission_routes_the_same_root_to_the_retained_machine"
+  ],
+  "wire": {
+    "connections": 5,
+    "configurations": 5,
+    "protocols": [
+      26,
+      26,
+      26,
+      26,
+      26
+    ],
+    "commands": {
+      "bufferHover": 3,
+      "bufferLanguage": 3,
+      "bufferLeaseContentSupport": 43,
+      "bufferLeaseSupport": 9,
+      "bufferLeaseTextSupport": 2,
+      "bufferNavigate": 3,
+      "bufferSymbols": 3,
+      "codeNavigationDestination": 1,
+      "codeNavigationExecute": 6,
+      "codeNavigationPrepare": 6,
+      "codeNavigationQuery": 9,
+      "codeNavigationRelease": 5,
+      "codeSyncApply": 2,
+      "codeSyncPrepare": 4,
+      "codeSyncQuery": 3,
+      "codeSyncRetire": 2,
+      "coreColocatedFile": 2,
+      "coreFile": 5,
+      "coreManifest": 1,
+      "coreSessionFile": 4,
+      "coreSwapFile": 5,
+      "ensureWorktree": 1,
+      "installationObservation": 1,
+      "installationStep": 1,
+      "openBufferLease": 9,
+      "prepareBuffer": 9,
+      "queryBufferLease": 4,
+      "readBufferLease": 45,
+      "refreshInventory": 2,
+      "releaseBufferLease": 7,
+      "uninstallObservation": 1,
+      "uninstallStep": 1
+    },
+    "session_root_observations": 15,
+    "session_root_verifications": 22,
+    "replies": 239,
+    "held_replies": 22,
+    "discarded_replies": 7,
+    "cuts": 1
+  },
+  "last_http": {
+    "status": 200,
+    "elapsed_ms": 6,
+    "result": "json"
+  },
+  "failure": null,
+  "cleanup": true,
+  "accepted": true,
+  "not_checked": [
+    "production_roles_policies_accounts_installation_and_activation",
+    "review_integration_browser_storage_and_supported_devices",
+    "real_language_implementation_or_atomic_diagnostics_freshness",
+    "dirty_buffer_override_independent_restoration_and_full_destination_view",
+    "abandoned_browser_restart_restoration_and_post_effect_recovery",
+    "agent_authentication_sessions_and_native_worker_generation_upgrade",
+    "physical_power_loss_general_graph_state_leases_and_refactor_completion"
+  ]
+}
