@@ -66,7 +66,7 @@ export const DESCRIPTIONS = {
   Bash:
     "Run Bash in the current workspace. Starts in the project directory; use cd within a command when needed. Waits up to timeout milliseconds (default 120000, maximum 600000). A running command returns a task id and cowboy-task:// output handle: use Read on that handle to wait for output, or TaskStop to cancel.",
   Read:
-    "Read a workspace file before editing it. Text has line numbers; offset starts at 1. Supports PNG, JPEG, GIF and WebP. A cowboy-task:// handle reads new retained command output and waits up to 10 seconds; handles survive resume. Use a target utility for PDFs.",
+    "Read a workspace file before editing it. Text has line numbers; offset starts at 1. Supports PNG, JPEG, GIF, WebP and PDF; pages (such as 1-5, at most 20) renders PDF pages as images. A cowboy-task:// handle reads new retained command output and waits up to 10 seconds; handles survive resume.",
   Write:
     "Write UTF-8 content. Existing files must first be read; changes since that read cause a conflict. Creates missing parent directories.",
   Edit:
@@ -316,6 +316,103 @@ export function endedCommand(shell, script, end) {
     script,
     end,
   ];
+}
+
+// Extensions native's Read refuses as binary (2.1.287); images and PDFs
+// among them have readers of their own.
+const BINARY_EXTENSIONS = new Set(
+  (".png .jpg .jpeg .gif .bmp .ico .webp .tiff .tif .mp4 .mov .avi .mkv " +
+    ".webm .wmv .flv .m4v .mpeg .mpg .mp3 .wav .ogg .flac .aac .m4a .wma " +
+    ".aiff .opus .zip .tar .gz .bz2 .7z .rar .xz .z .tgz .iso .exe .dll .so " +
+    ".dylib .bin .o .a .obj .lib .app .msi .deb .rpm .pdf .doc .docx .xls " +
+    ".xlsx .ppt .pptx .odt .ods .odp .ttf .otf .woff .woff2 .eot .pyc .pyo " +
+    ".class .jar .war .ear .node .wasm .rlib .sqlite .sqlite3 .db .mdb .idx " +
+    ".psd .ai .eps .sketch .fig .xd .blend .3ds .max .swf .fla .lockb .dat " +
+    ".data").split(" "),
+);
+
+// Native's PDF limits and `pages` grammar ("3", "1-5", "10-").
+const PDF_PAGES = 20;
+const PDF_WHOLE_PAGES = 10;
+const PDF_WHOLE_BYTES = 20 * 1024 * 1024;
+const PDF_RENDER_BYTES = 100 * 1024 * 1024;
+const PDF_REMOTE_BYTES = 10 * 1024 * 1024;
+const PDF_PAGES_BYTES = 10 * 1024 * 1024;
+// Native's size wording: "588 bytes", "6.9KB", "20MB".
+export function fileSize(bytes) {
+  const units = [["GB", 1024 ** 3], ["MB", 1024 ** 2], ["KB", 1024]];
+  for (const [unit, size] of units) {
+    if (bytes >= size) {
+      return `${(bytes / size).toFixed(1).replace(/\.0$/, "")}${unit}`;
+    }
+  }
+  return `${bytes} bytes`;
+}
+export function pdfPages(pages) {
+  const value = String(pages).trim();
+  const number = (text) => {
+    const parsed = parseInt(text, 10);
+    return isNaN(parsed) || parsed < 1 ? undefined : parsed;
+  };
+  let range;
+  if (value.endsWith("-")) {
+    const first = number(value.slice(0, -1));
+    if (first) range = { firstPage: first, lastPage: Infinity };
+  } else if (!value.includes("-")) {
+    const page = number(value);
+    if (page) range = { firstPage: page, lastPage: page };
+  } else {
+    const at = value.indexOf("-");
+    const first = number(value.slice(0, at));
+    const last = number(value.slice(at + 1));
+    if (first && last && last >= first) {
+      range = { firstPage: first, lastPage: last };
+    }
+  }
+  if (!value || !range) {
+    throw new Error(
+      `Invalid pages parameter: "${pages}". Use formats like "1-5", "3", or "10-20". Pages are 1-indexed.`,
+    );
+  }
+  const count = range.lastPage === Infinity
+    ? PDF_PAGES + 1
+    : range.lastPage - range.firstPage + 1;
+  if (count > PDF_PAGES) {
+    throw new Error(
+      `Page range "${pages}" exceeds maximum of ${PDF_PAGES} pages per request. Please use a smaller range.`,
+    );
+  }
+  return range;
+}
+
+// Native's reading of a failed `pdftoppm`.
+export function pdftoppmFailure(output, range) {
+  if (/password/i.test(output)) {
+    return "PDF is password-protected. Please provide an unprotected version.";
+  }
+  const last = /Wrong page range given.*last page \((\d+)\)/i.exec(output);
+  if (last) {
+    const count = Number(last[1]);
+    if (count === 0) {
+      return "PDF reports 0 pages (empty page tree). The PDF may be invalid.";
+    }
+    const asked = range.firstPage === range.lastPage
+      ? `page ${range.firstPage}`
+      : range.lastPage === Infinity
+      ? `pages ${range.firstPage}-`
+      : `pages ${range.firstPage}-${range.lastPage}`;
+    return `Requested ${asked} is outside the document (PDF has ${count} ${
+      count === 1 ? "page" : "pages"
+    }). Use a range within 1-${count}, maximum ${PDF_PAGES} pages per request (e.g. pages: "1-${
+      Math.min(count, PDF_PAGES)
+    }").`;
+  }
+  if (
+    /damaged|corrupt|invalid/i.test(output) ||
+    /Syntax Error(?: \(\d+\))?: Couldn't (?:find trailer dictionary|read xref table)/i
+      .test(output)
+  ) return "PDF file is corrupted or invalid.";
+  return `pdftoppm failed: ${output}`;
 }
 
 function missing(error) {
@@ -674,6 +771,181 @@ export class WorkspaceTools {
       created.catch(() => this.privateDirectories.delete(directory));
     }
     await this.privateDirectories.get(directory);
+  }
+
+  // Native 2.1.287's PDF Read, with poppler run on the target as native runs
+  // it where the session is: a whole PDF of at most 10 pages (by `pdfinfo`)
+  // becomes a document, and `pages` renders JPEG images with `pdftoppm -jpeg
+  // -r 100`. Undefined for a file that does not exist, which reads as usual.
+  async readPdf(path, pages, call) {
+    const range = pages === undefined ? undefined : pdfPages(pages);
+    let metadata;
+    try {
+      metadata = await this.connection.call("fs/getMetadata", {
+        path: pathToFileURL(path).href,
+      });
+    } catch (error) {
+      if (missing(error)) return undefined;
+      throw error;
+    }
+    const size = metadata.size;
+    if (range === undefined) {
+      const info = await this.command(
+        [
+          this.shell,
+          "-c",
+          'command -v pdfinfo >/dev/null 2>&1 || exit 127; exec pdfinfo "$1"',
+          this.shell,
+          path,
+        ],
+        10000,
+        call,
+      ).catch(() => undefined);
+      this.live(call);
+      const count = info?.exitCode === 0
+        ? Number(/^Pages:\s+(\d+)/m.exec(info.output)?.[1] ?? NaN)
+        : NaN;
+      if (count > PDF_WHOLE_PAGES) {
+        throw new Error(
+          `This PDF has ${count} pages, which is too many to read at once. Use the pages parameter to read specific page ranges (e.g., pages: "1-5"). Maximum ${PDF_PAGES} pages per request.`,
+        );
+      }
+      if (size === 0) throw new Error(`PDF file is empty: ${path}`);
+      if (size > PDF_WHOLE_BYTES) {
+        throw new Error("PDF file exceeds maximum allowed size of 20MB.");
+      }
+      // A whole PDF crosses the execution connection and the Mods bridge in
+      // one message; above this, native's own wording for a PDF too large
+      // to return from another machine applies.
+      if (size > PDF_REMOTE_BYTES) {
+        throw new Error(
+          `This PDF (${
+            fileSize(size)
+          }) is larger than can be returned whole from this machine to the calling session (at most ${
+            fileSize(PDF_REMOTE_BYTES)
+          }). Use the pages parameter with at most ${PDF_PAGES} pages per call (for example pages: 1-3, which come back as images), or read the file where the session runs.`,
+        );
+      }
+      const result = await this.connection.call("fs/readFile", {
+        path: pathToFileURL(path).href,
+      });
+      const bytes = Buffer.from(result.dataBase64, "base64");
+      if (!bytes.subarray(0, 5).toString("latin1").startsWith("%PDF-")) {
+        throw new Error(
+          `File is not a valid PDF (missing %PDF- header): ${path}`,
+        );
+      }
+      return text(`PDF file read: ${path}`, {
+        type: "pdf",
+        file: {
+          filePath: path,
+          base64: bytes.toString("base64"),
+          originalSize: bytes.length,
+        },
+      });
+    }
+    if (!metadata.isFile) {
+      throw new Error(`Path is not a regular file: ${path}`);
+    }
+    if (size === 0) throw new Error(`PDF file is empty: ${path}`);
+    if (size > PDF_RENDER_BYTES) {
+      throw new Error(
+        "PDF file exceeds maximum allowed size for text extraction (100MB).",
+      );
+    }
+    const parent = posix.join(this.home() ?? "/", ".cache", "cowboy", "pdf");
+    await this.privateDirectory(parent);
+    const directory = posix.join(parent, `pdf-${randomUUID()}`);
+    try {
+      const rendered = await this.command(
+        [
+          this.shell,
+          "-c",
+          'command -v pdftoppm >/dev/null 2>&1 || exit 127; mkdir -- "$1" || exit 126; shift; exec pdftoppm "$@"',
+          this.shell,
+          directory,
+          "-jpeg",
+          "-r",
+          "100",
+          "-f",
+          String(range.firstPage),
+          ...(range.lastPage === Infinity
+            ? []
+            : ["-l", String(range.lastPage)]),
+          path,
+          posix.join(directory, "page"),
+        ],
+        120000,
+        call,
+      );
+      if (rendered.exitCode === 127) {
+        throw new Error(
+          "pdftoppm is not installed. Install poppler-utils (e.g. `brew install poppler` or `apt-get install poppler-utils`) to enable PDF page rendering.",
+        );
+      }
+      if (rendered.exitCode !== 0) {
+        throw new Error(pdftoppmFailure(rendered.output, range));
+      }
+      const listing = await this.connection.call("fs/readDirectory", {
+        path: pathToFileURL(directory).href,
+      });
+      const names = (listing.entries ?? []).map((entry) => entry.fileName)
+        .filter((name) => name?.endsWith(".jpg")).sort();
+      if (!names.length) {
+        throw new Error(
+          "pdftoppm produced no output pages. The PDF may be invalid.",
+        );
+      }
+      // The pages cross the execution connection one by one and the Mods
+      // bridge together. Native recompresses a page above 500 KB; here a
+      // page or total too large for one message asks for fewer pages.
+      const images = [];
+      let total = 0;
+      for (const name of names) {
+        this.live(call);
+        const page = pathToFileURL(posix.join(directory, name)).href;
+        const { size: bytes } = await this.connection.call("fs/getMetadata", {
+          path: page,
+        });
+        total += bytes;
+        if (total > PDF_PAGES_BYTES) {
+          throw new Error(
+            `The rendered pages of ${path} are too large to return from this machine in one call (at most ${
+              fileSize(PDF_PAGES_BYTES)
+            } of page images). Use the pages parameter with fewer pages.`,
+          );
+        }
+        const image = await this.connection.call("fs/readFile", { path: page });
+        images.push({ base64: image.dataBase64, mediaType: "image/jpeg" });
+      }
+      return text(`PDF pages extracted: ${names.length} page(s) from ${path}`, {
+        type: "parts",
+        file: {
+          filePath: path,
+          originalSize: size,
+          outputDir: directory,
+          count: names.length,
+        },
+        firstPage: range.firstPage,
+        pages: images,
+      });
+    } finally {
+      await this.connection.call("fs/remove", {
+        path: pathToFileURL(directory).href,
+        recursive: true,
+        force: true,
+      }).catch(() => {});
+    }
+  }
+
+  // Native's Read of a file that does not exist ("Did you mean" suggestions
+  // aside).
+  missingFile() {
+    return new Error(
+      `File does not exist. Note: your current working directory is ${
+        this.state.shellCwd ?? this.cwd
+      }.`,
+    );
   }
 
   // Target-side symlink resolution; missing trailing components are kept.
@@ -1520,10 +1792,28 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       throw new Error("Unsupported execution tool");
     }
     const path = this.path(args.file_path ?? args.notebook_path);
+    if (name === "read") {
+      // Native refuses these by name alone, existing or not.
+      const extension = path.slice(path.lastIndexOf(".")).toLowerCase();
+      if (
+        BINARY_EXTENSIONS.has(extension) &&
+        ![".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"].includes(extension)
+      ) {
+        throw new Error(
+          `This tool cannot read binary files. The file appears to be a binary ${extension} file. Please use appropriate tools for binary file analysis.`,
+        );
+      }
+    }
+    if (name === "read" && posix.extname(path).toLowerCase() === ".pdf") {
+      const pdf = await this.readPdf(path, args.pages, call);
+      if (pdf) return pdf;
+    }
     let metadata;
     if (name === "read" && this.rangePython && args.pages === undefined) {
       metadata = await this.connection.call("fs/getMetadata", {
         path: pathToFileURL(path).href,
+      }).catch((error) => {
+        throw missing(error) ? this.missingFile() : error;
       });
       // Short files keep exactly the original two RPCs. Metadata is reused
       // only within this call; it is never a cross-read freshness cache.
@@ -1545,6 +1835,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         metadata,
       );
     } catch (error) {
+      if (name === "read" && missing(error)) throw this.missingFile();
       if (name === "write" && await this.isDirectory(path)) {
         throw new Error(
           `${shown} is a directory, not a file. To create a file inside it, include the file name in file_path.`,
@@ -1586,13 +1877,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           },
         });
       }
-      if (
-        args.pages !== undefined || bytes.subarray(0, 4).toString() === "%PDF"
-      ) {
-        throw new Error(
-          "Use a target PDF utility to extract the requested pages",
-        );
-      }
+      // As natively, `pages` means nothing for a file not named .pdf.
       const offset = bounded(args.offset, 1, 1, 10000000) - 1;
       const limit = bounded(args.limit, 2000, 1, 10000);
       // As natively: shown as UTF-8 (invalid bytes replaced, even for a

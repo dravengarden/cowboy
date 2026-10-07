@@ -27,6 +27,7 @@ from plugin_runtime_conformance import closed_environment
 from matrix_execution_fixture import MatrixFixture
 from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 from claude_file_cases import CASES as FILE_CASES, effects as file_effects, normalize as file_normalize, setup as file_setup
+from claude_pdf_cases import CASES as PDF_CASES, normalize as pdf_normalize, setup as pdf_setup
 from claude_lifecycle_cases import (CASES as LIFECYCLE_CASES, STOP as LIFECYCLE_STOP, alive as lifecycle_alive,
                                     left_running_notified as lifecycle_notified, normalize as lifecycle_normalize,
                                     stop_all as lifecycle_stop_all, task_id as lifecycle_task_id)
@@ -715,6 +716,50 @@ def lifecycle_phases(args, api, client, checks):
     checks.append("bash_process_lifetimes_match_native_local")
 
 
+def pdf_phases(args, api, client, checks):
+    """PDF and file-type Read results compared with native-local ones."""
+    pdf_setup(args.target)
+    steps = [tool("Read", arguments) for _, arguments in PDF_CASES]
+    ids = {call[0]["id"]: index for index, call in enumerate(steps)}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        done = [ids[block["tool_use_id"]] for block in (last.get("content") if isinstance(last.get("content"), list) else [])
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in ids]
+        if done:
+            following = max(done) + 1
+            return steps[following] if following < len(steps) else [{"type": "text", "text": "PDF_DONE"}]
+        if "Run the PDF parity fixture." in " ".join(text_blocks(last)):
+            return steps[0]
+        raise ProbeFailure("unexpected PDF phase request")
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(steps) + 20))
+    client.prompt(text="Run the PDF parity fixture.", timeout=180)
+    results = {}
+    for request in reversed(api.requests):
+        for block in outputs(request):
+            case = PDF_CASES[ids[block["tool_use_id"]]][0] if block.get("tool_use_id") in ids else None
+            if case and case not in results:
+                results[case] = {"is_error": block.get("is_error", False),
+                                 "content": pdf_normalize(block.get("content"), args.target)}
+    native = json.loads((Path(__file__).parent / "claude_pdf_native_baseline.json").read_text())["results"]
+
+    # Stated differences: a Mods-answered error is wrapped in <tool_use_error>,
+    # and a Mods-answered Read keeps the tab of an empty last line.
+    def comparable(result):
+        result = dict(result)
+        if isinstance(result.get("content"), str):
+            content = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", result["content"], flags=re.S)
+            result["content"] = re.sub(r"\n(\d+)\t$", r"\n\1", content)
+        return result
+    differences = {name: {"native": expected, "remote": results.get(name)}
+                   for name, expected in native.items() if comparable(results.get(name, {})) != comparable(expected)}
+    print("pdf parity diagnostic:", json.dumps(differences, ensure_ascii=False)[:20000])
+    require(not differences, "PDF and file-type Reads differ from native-local: " + ", ".join(sorted(differences)))
+    checks.append("pdf_and_file_type_reads_match_native_local")
+
+
 def notification_phases(args, api, client, checks):
     """Target commands left running notify the model as native background tasks do."""
     handle = re.compile(r"cowboy-task://([A-Za-z0-9-]+)")
@@ -1262,7 +1307,7 @@ def main():
         # Native validation must accept replacing a binary original, and target
         # path expansion must use the executor's home rather than Claude's.
         (args.target / "replace-image.png").write_bytes(pixel)
-        (args.target / "bad-utf8.bin").write_bytes(b"\xff\xfe\0")
+        (args.target / "bad-utf8.data-file").write_bytes(b"\xff\xfe\0")
         linked = args.target / "link-source.txt"
         linked.write_text("linked before\n")
         linked.chmod(0o751)
@@ -1276,7 +1321,7 @@ def main():
                     (args.target / "home-relative.txt").resolve(), "home fixture cannot distinguish runtime and target")
             return tool("Read", {"file_path": "~/" + relative})
         image_write = tool("Write", {"file_path": "replace-image.png", "content": "image replaced with text\n"})
-        binary_read = tool("Read", {"file_path": "bad-utf8.bin"})
+        binary_read = tool("Read", {"file_path": "bad-utf8.data-file"})
         api.steps.extend([[],
             tool("Read", {"file_path": "replace-image.png"}), image_write,
             binary_read,
@@ -1394,6 +1439,7 @@ def main():
         lifecycle_phases(args, api, client, checks)
         context_phases(args, api, client, checks)
         file_phases(args, api, client, checks)
+        pdf_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)

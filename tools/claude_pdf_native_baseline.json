@@ -1,0 +1,174 @@
+{
+ "results": {
+  "whole_one": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "text",
+     "text": "PDF file read: <project>/pdf-one.pdf (588 bytes)"
+    },
+    {
+     "type": "document",
+     "source": {
+      "type": "base64",
+      "media_type": "application/pdf",
+      "data": "<784 base64 sha256:e77b386dc95af1e1>"
+     }
+    }
+   ]
+  },
+  "whole_ten": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "text",
+     "text": "PDF file read: <project>/pdf-ten.pdf (3KB)"
+    },
+    {
+     "type": "document",
+     "source": {
+      "type": "base64",
+      "media_type": "application/pdf",
+      "data": "<4032 base64 sha256:20f4e7466dd0361c>"
+     }
+    }
+   ]
+  },
+  "whole_many": {
+   "is_error": true,
+   "content": "This PDF has 25 pages, which is too many to read at once. Use the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Maximum 20 pages per request."
+  },
+  "whole_upper_extension": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "text",
+     "text": "PDF file read: <project>/pdf-upper.PDF (588 bytes)"
+    },
+    {
+     "type": "document",
+     "source": {
+      "type": "base64",
+      "media_type": "application/pdf",
+      "data": "<784 base64 sha256:e77b386dc95af1e1>"
+     }
+    }
+   ]
+  },
+  "whole_empty": {
+   "is_error": true,
+   "content": "PDF file is empty: <project>/pdf-empty.pdf"
+  },
+  "whole_fake": {
+   "is_error": true,
+   "content": "File is not a valid PDF (missing %PDF- header): <project>/pdf-fake.pdf"
+  },
+  "pages_one": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "text",
+     "text": "PDF pages extracted: 1 page(s) from <project>/pdf-one.pdf (588 bytes)"
+    },
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<23872 base64 sha256:a3b1156bfd83917a>",
+      "media_type": "image/jpeg"
+     }
+    }
+   ]
+  },
+  "pages_range": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "text",
+     "text": "PDF pages extracted: 2 page(s) from <project>/pdf-many.pdf (6.9KB)"
+    },
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<24120 base64 sha256:6e874312700a509f>",
+      "media_type": "image/jpeg"
+     }
+    },
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<24156 base64 sha256:62f886c00e4b018f>",
+      "media_type": "image/jpeg"
+     }
+    }
+   ]
+  },
+  "pages_past_end": {
+   "is_error": true,
+   "content": "Requested page 30 is outside the document (PDF has 25 pages). Use a range within 1-25, maximum 20 pages per request (e.g. pages: \"1-20\")."
+  },
+  "pages_range_past_end": {
+   "is_error": false,
+   "content": [
+    {
+     "type": "text",
+     "text": "PDF pages extracted: 1 page(s) from <project>/pdf-one.pdf (588 bytes)"
+    },
+    {
+     "type": "image",
+     "source": {
+      "type": "base64",
+      "data": "<23872 base64 sha256:a3b1156bfd83917a>",
+      "media_type": "image/jpeg"
+     }
+    }
+   ]
+  },
+  "pages_invalid": {
+   "is_error": true,
+   "content": "<tool_use_error>Invalid pages parameter: \"abc\". Use formats like \"1-5\", \"3\", or \"10-20\". Pages are 1-indexed.</tool_use_error>"
+  },
+  "pages_too_many": {
+   "is_error": true,
+   "content": "<tool_use_error>Page range \"1-25\" exceeds maximum of 20 pages per request. Please use a smaller range.</tool_use_error>"
+  },
+  "pages_open_range": {
+   "is_error": true,
+   "content": "<tool_use_error>Page range \"24-\" exceeds maximum of 20 pages per request. Please use a smaller range.</tool_use_error>"
+  },
+  "pages_fake": {
+   "is_error": true,
+   "content": "PDF file is corrupted or invalid."
+  },
+  "pages_on_text": {
+   "is_error": false,
+   "content": "1\thello\n2"
+  },
+  "pdf_bytes_binary_extension": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .bin file. Please use appropriate tools for binary file analysis.</tool_use_error>"
+  },
+  "pdf_bytes_no_extension": {
+   "is_error": false,
+   "content": "1\t%PDF-1.4\n2\t1 0 obj\n3\t<< /Type /Catalog /Pages 2 0 R >>\n4\tendobj\n5\t2 0 obj\n6\t<< /Type /Pages /Kids [4 0 R] /Count 1 >>\n7\tendobj\n8\t3 0 obj\n9\t<< /Length 44 >>\n10\tstream\n11\tBT /F1 24 Tf 72 720 Td (Page 1 marker) Tj ET\n12\tendstream\n13\tendobj\n14\t4 0 obj\n15\t<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 3 0 R /Resources << /Font << /F1 5 0 R >> >> >>\n16\tendobj\n17\t5 0 obj\n18\t<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n19\tendobj\n20\txref\n21\t0 6\n22\t0000000000 65535 f \n23\t0000000009 00000 n \n24\t0000000058 00000 n \n25\t0000000115 00000 n \n26\t0000000209 00000 n \n27\t0000000335 00000 n \n28\ttrailer\n29\t<< /Size 6 /Root 1 0 R >>\n30\tstartxref\n31\t405\n32\t%%EOF\n33"
+  },
+  "binary_extension_text": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .zip file. Please use appropriate tools for binary file analysis.</tool_use_error>"
+  },
+  "binary_extension_missing": {
+   "is_error": true,
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .exe file. Please use appropriate tools for binary file analysis.</tool_use_error>"
+  },
+  "missing_text": {
+   "is_error": true,
+   "content": "File does not exist. Note: your current working directory is <project>."
+  },
+  "missing_pdf": {
+   "is_error": true,
+   "content": "File does not exist. Note: your current working directory is <project>."
+  }
+ }
+}

@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -14,6 +15,8 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   endedCommand,
+  pdfPages,
+  pdftoppmFailure,
   persistedOutput,
   shellFailure,
   splitEnd,
@@ -111,8 +114,18 @@ function localConnection(home) {
         return {};
       }
       if (method === "fs/remove") {
-        await rm(path, { force: true });
+        await rm(path, { force: true, recursive: params.recursive === true });
         return {};
+      }
+      if (method === "fs/readDirectory") {
+        const entries = await readdir(path, { withFileTypes: true });
+        return {
+          entries: entries.map((entry) => ({
+            fileName: entry.name,
+            isDirectory: entry.isDirectory(),
+            isFile: entry.isFile(),
+          })),
+        };
       }
       throw new Error(`Unexpected ${method}`);
     },
@@ -812,4 +825,177 @@ test("a nested instruction load that fails is reported", async (t) => {
   };
   const result = await tools.dispatch("Read", { file_path: "sub/a.txt" });
   assert.deepEqual(result.instructions, { unavailable: true });
+});
+
+test("PDF pages parse and fail as native's", () => {
+  assert.deepEqual(pdfPages(" 3 "), { firstPage: 3, lastPage: 3 });
+  assert.deepEqual(pdfPages("2-5"), { firstPage: 2, lastPage: 5 });
+  assert.throws(
+    () => pdfPages("abc"),
+    /^Error: Invalid pages parameter: "abc"\. Use formats like "1-5", "3", or "10-20"\. Pages are 1-indexed\.$/,
+  );
+  assert.throws(() => pdfPages("5-2"), /Invalid pages parameter/);
+  assert.throws(
+    () => pdfPages("4-"),
+    /^Error: Page range "4-" exceeds maximum of 20 pages per request\. Please use a smaller range\.$/,
+  );
+  assert.throws(() => pdfPages("1-21"), /exceeds maximum of 20 pages/);
+  assert.equal(
+    pdftoppmFailure(
+      "Wrong page range given: the first page (3) can not be after the last page (1).",
+      { firstPage: 3, lastPage: 4 },
+    ),
+    'Requested pages 3-4 is outside the document (PDF has 1 page). Use a range within 1-1, maximum 20 pages per request (e.g. pages: "1-1").',
+  );
+  assert.equal(
+    pdftoppmFailure("Command Line Error: Incorrect password", {}),
+    "PDF is password-protected. Please provide an unprotected version.",
+  );
+});
+
+test("PDFs read on the target as native's document and page images", async (t) => {
+  const { tools, project, home } = await shellFixture(t);
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
+    .toString().trim();
+  spawnSync("python3", [
+    "-c",
+    "import sys; sys.path.insert(0, sys.argv[2]); from pathlib import Path; from claude_pdf_cases import setup; setup(Path(sys.argv[1]))",
+    project,
+    fileURLToPath(new URL(".", import.meta.url)),
+  ]);
+  const whole = await tools.dispatch("Read", { file_path: "pdf-one.pdf" });
+  assert.equal(whole.result.type, "pdf");
+  assert.equal(whole.result.file.filePath, join(project, "pdf-one.pdf"));
+  assert.ok(
+    Buffer.from(whole.result.file.base64, "base64").toString().startsWith(
+      "%PDF-",
+    ),
+  );
+  assert.match(
+    (await tools.dispatch("Read", { file_path: "pdf-many.pdf" })).deny,
+    /^This PDF has 25 pages, which is too many to read at once\./,
+  );
+  const parts = await tools.dispatch("Read", {
+    file_path: "pdf-many.pdf",
+    pages: "2-3",
+  });
+  assert.equal(parts.result.type, "parts");
+  assert.equal(parts.result.firstPage, 2);
+  assert.equal(parts.result.file.count, 2);
+  assert.ok(
+    parts.result.pages.every((page) =>
+      page.mediaType === "image/jpeg" &&
+      Buffer.from(page.base64, "base64")[0] === 0xff
+    ),
+  );
+  // The rendered pages do not stay on the target.
+  assert.deepEqual(await readdir(join(home, ".cache/cowboy/pdf")), []);
+  assert.match(
+    (await tools.dispatch("Read", { file_path: "pdf-many.pdf", pages: "30" }))
+      .deny,
+    /^Requested page 30 is outside the document \(PDF has 25 pages\)/,
+  );
+  assert.equal(
+    (await tools.dispatch("Read", { file_path: "pdf-note.txt", pages: "1" }))
+      .result.file.content,
+    "hello\n",
+  );
+  assert.match(
+    (await tools.dispatch("Read", { file_path: "pdf-bytes.bin" })).deny,
+    /cannot read binary files\. The file appears to be a binary \.bin file/,
+  );
+  assert.equal(
+    (await tools.dispatch("Read", { file_path: "pdf-missing.txt" })).deny,
+    `File does not exist. Note: your current working directory is ${project}.`,
+  );
+});
+
+test("a whole PDF too large for one message reads as native's remote refusal", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  await writeFile(
+    join(project, "large.pdf"),
+    Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(11 * 1024 * 1024)]),
+  );
+  assert.equal(
+    (await tools.dispatch("Read", { file_path: "large.pdf" })).deny,
+    "This PDF (11MB) is larger than can be returned whole from this machine to the calling session (at most 10MB). Use the pages parameter with at most 20 pages per call (for example pages: 1-3, which come back as images), or read the file where the session runs.",
+  );
+});
+
+test("an abandoned PDF Read stops its page rendering", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
+    .toString().trim();
+  const bin = join(project, "fake-bin");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "pdftoppm"),
+    `#!${tools.shell}\necho $$ > "${
+      join(project, "render.pid")
+    }"\nexec sleep 60\n`,
+    { mode: 0o755 },
+  );
+  const env = { ...process.env };
+  t.after(() => Object.assign(process.env, env));
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+  await writeFile(join(project, "doc.pdf"), "%PDF-1.4\n");
+  const reading = tools.nativeCall("Read", {
+    file_path: "doc.pdf",
+    pages: "1",
+  }, { id: "toolu_pdf" });
+  let pid;
+  while (!pid) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    pid = Number(
+      await readFile(join(project, "render.pid"), "utf8").catch(() => 0),
+    );
+  }
+  t.after(() => alive(pid) && process.kill(pid));
+  const began = Date.now();
+  await tools.cancelCall("toolu_pdf");
+  assert.ok((await reading).deny);
+  assert.ok(Date.now() - began < 10000);
+  for (let tries = 0; alive(pid) && tries < 40; tries++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(alive(pid), false);
+});
+
+test("a missing file reads as native's, with the range helper enabled too", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  const expected =
+    `File does not exist. Note: your current working directory is ${project}.`;
+  for (const rangePython of [undefined, "python3"]) {
+    tools.rangePython = rangePython;
+    for (const file_path of ["absent.txt", "absent.pdf"]) {
+      assert.equal(
+        (await tools.dispatch("Read", { file_path })).deny,
+        expected,
+      );
+    }
+  }
+});
+
+test("rendered pages too large for one message ask for fewer pages", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  tools.shell = spawnSync("bash", ["-c", "command -v bash"]).stdout
+    .toString().trim();
+  const bin = join(project, "fake-bin");
+  await mkdir(bin);
+  // Two 6 MiB "pages": each fits, together they do not.
+  await writeFile(
+    join(bin, "pdftoppm"),
+    `#!${tools.shell}\nfor p in 1 2; do head -c 6291456 /dev/zero > "\${@: -1}-$p.jpg"; done\n`,
+    { mode: 0o755 },
+  );
+  const env = { ...process.env };
+  t.after(() => Object.assign(process.env, env));
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+  await writeFile(join(project, "doc.pdf"), "%PDF-1.4\n");
+  assert.equal(
+    (await tools.dispatch("Read", { file_path: "doc.pdf", pages: "1-2" })).deny,
+    `The rendered pages of ${
+      join(project, "doc.pdf")
+    } are too large to return from this machine in one call (at most 10MB of page images). Use the pages parameter with fewer pages.`,
+  );
 });

@@ -949,6 +949,9 @@
           # happens to have procps on PATH hid this; the pinned shell must
           # declare it or four owned-runtime teardown tests abort on ENOENT.
           procps
+          # Claude's PDF reads use pdfinfo and pdftoppm where they run; the
+          # native-local baseline and the remote target both find them here.
+          poppler-utils
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)

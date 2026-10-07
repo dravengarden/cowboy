@@ -109,7 +109,7 @@ to introduce more restrictions.
 | Skills and project plugins | Claude Skill restricted; implicit local discovery is not target-aware | Target-authoritative discovery with versioned metadata, trust and native expansion; route script execution separately |
 | MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
-| Images, notebooks, PDFs | Images/notebooks have evidence; Claude describes PDF via target utility | Add native-parity PDF/pages, binary limits, image dimensions, output artifacts and user-upload placement tests |
+| Images, notebooks, PDFs | Images/notebooks have evidence; Claude 3.13.0: PDF Reads (whole document, `pages` rendered as images with the target's poppler), binary-extension refusal and missing-file messages match native-local results (21 cases) | Images are not resized or recompressed as natively (no dimension metadata); whole PDFs above 10 MB and page images above 10 MB in all are refused; output artifacts and user-upload placement untested |
 | File semantics | Claude 3.11.0: 24 Read/Write/Edit cases match native-local results and on-disk bytes and modes (encodings, BOM, CRLF, empty old_string, unread edits, directories) | Files are rewritten in place (native replaces them: inode, hard links, read-only files differ) |
 | Atomic mutations | Stale stamp refusal has evidence; it does not alone establish compare-and-write atomicity | Inspect target implementation and inject mutation between check and write; use target-side atomic primitives where promised |
 | Output limits | Large streams/backpressure and terminal events recorded | Test split UTF-8, binary/NUL, truncation markers, slow/absent reader, disk full and retained output expiration |
@@ -662,6 +662,66 @@ preserved signed envelope was restored and verified again before publication.
 OVH operation `ovh-claude-code-3-11-0-converge` completed. Inventory reports
 3.11.0 active, 3.10.0 retained for rollback and no session leases. No live session
 was restarted.
+
+### PDF and file-type Reads (Plugin 3.13.0)
+
+Native-local baselines on 2.1.287 (`tools/claude_pdf_native_probe.py`, 21
+cases in `tools/claude_pdf_cases.py`, baseline
+`tools/claude_pdf_native_baseline.json`) show, for a file named `.pdf` (any
+case):
+
+- Without `pages`: `pdfinfo` counts the pages; more than 10 is refused
+  ("This PDF has N pages, which is too many to read at once…"). Otherwise the
+  file is sent whole as a `document` block after "PDF file read: <path>
+  (<size>)". An empty file, one above 20 MB and one without a `%PDF-` header
+  have messages of their own.
+- With `pages` ("3", "1-5", "10-"; at most 20 pages): `pdftoppm -jpeg -r 100`
+  renders the pages as JPEG images after "PDF pages extracted: N page(s)
+  from <path> (<size>)". A page past the end, a corrupt or a protected file
+  have messages of their own; without `pdftoppm` native says to install
+  poppler. `pages` on a file not named `.pdf` is ignored.
+- Any file whose extension is on native's binary list (`.bin`, `.zip`,
+  `.exe`, …) is refused by name, whether or not it exists; PDF bytes under
+  another name read as text.
+- A missing file reads "File does not exist. Note: your current working
+  directory is <cwd>."
+
+Before 3.13.0 the facade refused every PDF and any `pages`, read binary-named
+files as text, and answered a missing file with the generic
+"Target operation failed" message.
+
+3.13.0 runs `pdfinfo` and `pdftoppm` on the target with native's arguments
+and limits, reads the rendered pages from a private target directory (then
+removes it) and returns native's own `pdf` and `parts` results, so native
+renders the blocks. The rendering belongs to the tool call: an interrupted or
+stopped call kills it. Binary-extension refusal and the missing-file message
+follow native's text. As natively, a PDF Read records no read state for
+later edits (native's PDF branch never enters its read-file state); a review
+finding asking for one was declined for that reason. The dev shell now provides poppler so the native-local
+baseline and the target find the same `pdfinfo`/`pdftoppm`; the rendered JPEG
+bytes match native's.
+
+Packaged acceptance adds `pdf_and_file_type_reads_match_native_local` (all 21
+results). Three native review rounds fixed: the rendering not belonging to
+the call (now cancelled with it), a whole PDF or page images too large for one
+execution or bridge message (now refused as above), and the missing-file
+message skipped when the range helper's metadata call ran first. One existing check read a `.bin` file expecting lossy text; natively
+that name is refused, so it now reads a file with an unlisted extension.
+
+Gaps:
+
+- A whole PDF crosses the execution connection and the Mods bridge in one
+  message, so above 10 MB (native: 20 MB) it is refused with native's own
+  wording for a PDF too large to return from another machine. Rendered pages
+  above 10 MB in all are refused with a request for fewer pages; native
+  recompresses each page above 500 KB instead.
+- Images (also rendered pages) are not resized or recompressed, and carry no
+  dimension metadata; native's image-extension mismatch message ("File has an
+  image extension but its content is not a valid PNG/JPEG/GIF/WebP…") is not
+  reproduced.
+- The missing-file message omits native's "Did you mean …?" suggestions.
+- Without `pdfinfo` on the target the page count is unknown and the PDF is
+  sent whole, as natively when `pdfinfo` is missing.
 
 ### 1. Preserve native Bash through an execution bridge
 
