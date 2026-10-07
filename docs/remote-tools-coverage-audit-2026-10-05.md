@@ -752,6 +752,27 @@ Gaps:
 - Like native background tasks, the notification does not survive the
   session process. The target command does, and its handle stays readable.
 
+Two native review rounds were run. The first found a stop overwritten by a
+concurrent output read, which could have produced a notification for a
+stopped command. The fix keeps the stop and comes with a regression test that
+fails without it. The second round reported none.
+
+The [3.9.0 release receipt](experiments/claude-background-notifications-release-2026-10-07.json)
+binds commit `812c8683` and artifact
+`sha256:4fdef6086dbb6485cac7946edf85072727e876994b3cb5e302e6cdd560449be6`.
+It records:
+
+- 74 accepted checks on the exact signed package
+- 3.8.0/3.9.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles
+- five public artifact digests
+- Catalog `ready`
+
+OVH operation `ovh-claude-code-3-9-0-converge` completed. Inventory reports
+3.9.0 active, 3.8.0 retained for rollback and no session leases. No live session
+was restarted.
+
 ### 2. Project configuration and implicit reads
 
 Build an explicit target project context interface for configuration, guidance,
