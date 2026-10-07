@@ -15,6 +15,8 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
 use crate::core::{Event, Hub, Status, config_option_accepts};
+
+mod startup_watch;
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole,
     RuntimeEvent, StartSession, WorkerSnapshot, WorkerState, read_frame, write_frame,
@@ -305,6 +307,81 @@ impl RemoteRuntime {
             )
             .await;
         });
+        let runtime = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut watch = startup_watch::StartupWatch::default();
+            let mut tick = tokio::time::interval(Duration::from_secs(30));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let Some(runtime) = runtime.upgrade() else {
+                    return;
+                };
+                if runtime.shared.shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                runtime.recover_stalled_startups(&mut watch, tokio::time::Instant::now());
+            }
+        });
+    }
+
+    /// See [`startup_watch`]. A disconnected runtime replays everything in
+    /// flight on reconnect, so only a connected one judges stalls.
+    fn recover_stalled_startups(
+        &self,
+        watch: &mut startup_watch::StartupWatch,
+        now: tokio::time::Instant,
+    ) {
+        if !self.connected() {
+            return;
+        }
+        let declared: Vec<String> = self.shared.declarations.lock().keys().cloned().collect();
+        let mut in_flight: HashSet<String> = self
+            .shared
+            .pending
+            .lock()
+            .values()
+            .filter_map(|command| command.session_id().map(str::to_owned))
+            .collect();
+        in_flight.extend(self.shared.resetting.lock().iter().cloned());
+        let actions = watch.observe(
+            now,
+            declared
+                .iter()
+                .map(|session_id| startup_watch::Observation {
+                    session_id,
+                    starting: self.shared.hub.status(session_id) == Some(Status::Starting),
+                    in_flight: in_flight.contains(session_id),
+                }),
+        );
+        for action in actions {
+            match action {
+                startup_watch::Action::Relaunch(session_id) => {
+                    let declaration = self.shared.declarations.lock().get(&session_id).cloned();
+                    if let Some(declaration) = declaration {
+                        tracing::warn!(
+                            session = %session_id,
+                            "session startup stalled with nothing in flight; re-issuing its launch"
+                        );
+                        self.reset(declaration);
+                    }
+                }
+                startup_watch::Action::Fail(session_id) => {
+                    if self.shared.hub.status(&session_id) != Some(Status::Starting) {
+                        continue;
+                    }
+                    tracing::warn!(
+                        session = %session_id,
+                        "session startup stalled again; reporting it crashed"
+                    );
+                    self.shared.hub.set_status(
+                        &session_id,
+                        Status::Crashed,
+                        Some("startup did not complete on the Machine".to_owned()),
+                    );
+                }
+            }
+        }
     }
 
     #[must_use]
@@ -2973,6 +3050,56 @@ mod tests {
             commands.push(command);
         }
         commands
+    }
+
+    /// The OVH incident: the reset was acknowledged, the Machine then lost the
+    /// launch, and the session stayed "starting" with nothing left to retry.
+    #[tokio::test]
+    async fn a_start_stranded_after_its_reset_ack_is_relaunched_then_reported() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
+        runtime.connect_for_test();
+        runtime
+            .shared
+            .declarations
+            .lock()
+            .insert("s".to_owned(), snapshot("s").launch.unwrap());
+        hub.set_status("s", Status::Starting, None);
+        let mut watch = startup_watch::StartupWatch::default();
+        let start = tokio::time::Instant::now();
+        runtime.recover_stalled_startups(&mut watch, start);
+        assert!(runtime.pending_for_test().is_empty());
+
+        runtime.recover_stalled_startups(&mut watch, start + startup_watch::STALL);
+        let reset = runtime
+            .pending_for_test()
+            .into_iter()
+            .find_map(|command| match command {
+                CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => {
+                    Some(command_id)
+                }
+                _ => None,
+            })
+            .expect("the stranded launch is re-issued as a reset");
+
+        // The Machine acknowledges the reset but the replacement never starts.
+        runtime.shared.pending.lock().clear();
+        runtime.shared.resetting.lock().clear();
+        hub.set_status("s", Status::Starting, None);
+        let acknowledged = start + startup_watch::STALL + Duration::from_secs(1);
+        runtime.recover_stalled_startups(&mut watch, acknowledged);
+        assert_eq!(hub.status("s"), Some(Status::Starting), "{reset}");
+        runtime.recover_stalled_startups(&mut watch, acknowledged + startup_watch::STALL);
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert!(runtime.pending_for_test().is_empty());
     }
 
     /// Every `queue` wakes the writer. Re-sending every unacknowledged command

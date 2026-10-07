@@ -3420,6 +3420,49 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
+/// The acknowledgement that refuses `command` when the core queue is full.
+/// A deletion has none: the controller forgets a stopped session's declaration
+/// even on refusal, so it keeps the reconnect path and its full replay.
+fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
+    match command {
+        CoreCommand::EnsureSession { session } => Some((
+            session.session_id.clone(),
+            format!("ensure:{}", session.session_id),
+        )),
+        CoreCommand::StopSession {
+            session_id,
+            command_id,
+        } if command_id.starts_with("reset-") => Some((session_id.clone(), command_id.clone())),
+        CoreCommand::Prompt {
+            session_id,
+            command_id,
+            ..
+        }
+        | CoreCommand::Cancel {
+            session_id,
+            command_id,
+        }
+        | CoreCommand::Permission {
+            session_id,
+            command_id,
+            ..
+        }
+        | CoreCommand::SetConfigOption {
+            session_id,
+            command_id,
+            ..
+        }
+        | CoreCommand::HibernateSession {
+            session_id,
+            command_id,
+        } => Some((session_id.clone(), command_id.clone())),
+        CoreCommand::StopSession { .. }
+        | CoreCommand::DrainSession { .. }
+        | CoreCommand::SetDesiredGeneration { .. }
+        | CoreCommand::RollProvider { .. } => None,
+    }
+}
+
 async fn handle_core(
     broker: Arc<Broker>,
     lease: u64,
@@ -3464,13 +3507,32 @@ async fn handle_core(
                         let _ = worker.tx.send(Frame::ExecutionReply { reply });
                     }
                 }
-                Frame::CoreCommand { command } => {
-                    command_tx.try_send(command).map_err(|error| {
-                        anyhow::anyhow!(
-                            "Machine core command queue saturated; reconnecting controller: {error}"
-                        )
-                    })?
-                }
+                Frame::CoreCommand { command } => match command_tx.try_send(command) {
+                    Ok(()) => {}
+                    // Refuse only the overflowing command. Reconnecting drops
+                    // every queued command at once; a rejected ack is
+                    // requeued or surfaced by the controller.
+                    Err(mpsc::error::TrySendError::Full(command)) => {
+                        let Some((session_id, command_id)) = overflow_refusal(&command) else {
+                            anyhow::bail!(
+                                "Machine core command queue saturated; reconnecting controller"
+                            );
+                        };
+                        tracing::warn!(
+                            session = %session_id,
+                            %command_id,
+                            "Machine core command queue full; refusing command"
+                        );
+                        broker.command_rejected(
+                            &session_id,
+                            command_id,
+                            "Machine is busy; retry shortly".to_owned(),
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        anyhow::bail!("Machine core command queue closed");
+                    }
+                },
                 Frame::Ack {
                     session_id,
                     worker_epoch,
@@ -4252,6 +4314,74 @@ mod tests {
         }
         assert!(!broker.cancelled_sessions.lock().contains(session_id));
         assert!(broker.sessions.lock().contains_key(session_id));
+    }
+
+    #[tokio::test]
+    async fn a_full_core_queue_refuses_the_overflow_and_keeps_the_controller() {
+        let session_id = "sess-full-queue";
+        let broker = reset_fixture(session_id, Duration::from_secs(5));
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        let lease = broker.install_controller(controller_tx);
+        let (mut controller, broker_stream) = UnixStream::pair().expect("core socket pair");
+        let (mut broker_reader, _broker_writer) = broker_stream.into_split();
+        let core_broker = Arc::clone(&broker);
+        let core_task =
+            tokio::spawn(async move { handle_core(core_broker, lease, &mut broker_reader).await });
+        // The reset waits for the stuck launch, so nothing below is consumed.
+        write_frame(
+            &mut controller,
+            &Frame::CoreCommand {
+                command: CoreCommand::StopSession {
+                    session_id: session_id.to_owned(),
+                    command_id: "reset-blocking".to_owned(),
+                },
+            },
+        )
+        .await
+        .expect("send reset");
+        let overflow = 8;
+        for index in 0..=CORE_COMMAND_QUEUE_CAPACITY + overflow {
+            write_frame(
+                &mut controller,
+                &Frame::CoreCommand {
+                    command: CoreCommand::Cancel {
+                        session_id: session_id.to_owned(),
+                        command_id: format!("cancel-{index}"),
+                    },
+                },
+            )
+            .await
+            .expect("send cancel");
+        }
+        write_frame(&mut controller, &Frame::Heartbeat)
+            .await
+            .expect("send heartbeat");
+
+        let mut refused = 0;
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(2), controller_rx.recv())
+                .await
+                .expect("controller response timeout")
+                .expect("controller response");
+            match frame {
+                Frame::CommandAck {
+                    accepted: false,
+                    reason: Some(reason),
+                    ..
+                } if reason.contains("busy") => refused += 1,
+                Frame::Heartbeat => break,
+                _ => {}
+            }
+        }
+        assert!(refused >= overflow, "{refused}");
+        assert!(!core_task.is_finished(), "the controller stays connected");
+        drop(controller);
+        broker.launching.lock().remove(session_id);
+        tokio::time::timeout(Duration::from_secs(1), core_task)
+            .await
+            .expect("core reader shutdown timeout")
+            .expect("core reader task")
+            .expect("core reader result");
     }
 
     #[tokio::test]
