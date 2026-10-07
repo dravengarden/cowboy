@@ -933,6 +933,16 @@ Gaps:
 - `update-config` edits the target's settings, which this lane reads only
   for hooks at session start.
 
+The [3.16.0 release receipt](experiments/claude-skills-release-2026-10-07.json)
+binds commit `4bbd3f46` and artifact
+`sha256:8c81ff9c90b42eddf47905975b1661c8dce01ced11867699213ddf49b5028bae`:
+85 accepted checks on the exact signed package, 3.15.0/3.16.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles (re-resolved:
+the active Controller had changed), five public artifact digests and Catalog
+`ready`. OVH operation `ovh-claude-code-3-16-0-converge` completed: 3.16.0
+active, 3.15.0 retained for rollback, no session leases, no live session
+restarted and no session errors.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
