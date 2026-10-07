@@ -130,6 +130,18 @@ const NATIVE_VERSION = (() => {
   }
 })();
 
+// Native's promise in a background command's result. The context Mod
+// removes it when it cannot arrange the completion notification.
+export const NOTIFIED = "You will be notified when it completes. ";
+
+// Native's duration in a timeout message: "1s", "1m 1s".
+export function shellDuration(ms) {
+  const seconds = Math.floor(ms / 1000);
+  return seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 // Variables native Claude Code sets for its Bash commands (2.1.287). Its
 // CLAUDE_PID names a runtime process, meaningless on the target, so it is
 // not set; native's own pkill guard that reads it is omitted with it.
@@ -842,9 +854,13 @@ export class WorkspaceTools {
     } while (Date.now() < deadline || job.closed);
     await this.save(() => {
       const beforeSave = this.state.jobs[processId];
+      // Concurrent changes to the record survive this cursor update: a stop
+      // (never a completion) and a directory file still to remove.
       this.state.jobs[processId] = {
         ...job,
         cancelRequested: job.closed ? false : beforeSave?.cancelRequested,
+        ...(beforeSave?.stopped ? { stopped: true } : {}),
+        ...(beforeSave?.cwdFile ? { cwdFile: beforeSave.cwdFile } : {}),
       };
       return () => {
         this.state.jobs[processId] = beforeSave;
@@ -1033,15 +1049,18 @@ export class WorkspaceTools {
         ? this.start(argv, undefined, call, environment)
         : this.startForeground(argv, call, environment));
       if (background) {
-        return text(
-          JSON.stringify({ task_id: id, running: true }),
-          {
-            stdout:
-              `Command running in background with ID: ${id}. Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. To check interim output, use Read on that path.`,
-            stderr: "",
-            interrupted: false,
-          },
-        );
+        return {
+          ...text(
+            JSON.stringify({ task_id: id, running: true }),
+            {
+              stdout:
+                `Command running in background with ID: ${id}. Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}To check interim output, use Read on that file path.`,
+              stderr: "",
+              interrupted: false,
+            },
+          ),
+          task: { id, command },
+        };
       }
       try {
         // Collect the whole output (bounded) so a large result can be
@@ -1066,6 +1085,20 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             interrupted: false,
           });
         }
+        if (!result.closed && /^\s*sleep\b/.test(command)) {
+          // Natively a timed-out command that starts with `sleep` is killed,
+          // not moved to the background (measured on 2.1.287).
+          await this.cancelTasks([id]);
+          return {
+            content: [{
+              type: "text",
+              text: `Exit code 143\nCommand timed out after ${
+                shellDuration(timeout)
+              }`,
+            }],
+            isError: true,
+          };
+        }
         if (!result.closed) {
           // As native's output file does, the handle reads from the start.
           await this.save(() => {
@@ -1074,13 +1107,16 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             return () =>
               this.state.jobs[id] = job;
           });
-          return text(JSON.stringify(complete), {
-            stdout: `Command did not complete within its ${
-              Math.ceil(timeout / 1000)
-            }s timeout and is still running (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. To check interim output, use Read on that path; TaskStop stops it.`,
-            stderr: "",
-            interrupted: false,
-          });
+          return {
+            ...text(JSON.stringify(complete), {
+              stdout: `Command did not complete within its ${
+                Math.ceil(timeout / 1000)
+              }s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}To check interim output, use Read on that file path.`,
+              stderr: "",
+              interrupted: false,
+            }),
+            task: { id, command },
+          };
         }
         // Natively a non-zero exit is a tool error, so project
         // PostToolUseFailure hooks run instead of PostToolUse.
@@ -1832,6 +1868,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
           "Target result unavailable; inspect state before repeating a mutation",
       };
     }
+    // A command left running is named, so its completion can be notified.
+    if (result.task) return { result: result.native, task: result.task };
     return { result: result.native };
   }
 
@@ -1848,7 +1886,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         const job = this.state.jobs[id];
         if (!job || job.closed) continue;
         previous.set(id, job);
-        this.state.jobs[id] = { ...job, cancelRequested: true };
+        // `stopped` stays: a stopped command's end is not a completion.
+        this.state.jobs[id] = { ...job, cancelRequested: true, stopped: true };
       }
       return () => {
         for (const [id, job] of previous) this.state.jobs[id] = job;
@@ -1861,6 +1900,31 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     }));
     this.scheduleCancellations();
     return ids.filter((id) => this.state.jobs[id]?.cancelRequested);
+  }
+
+  // How a command left running ends, observed for its completion notice
+  // without consuming the output its handle reads. `afterSeq` is the
+  // watcher's own position.
+  async waitTask(id, afterSeq, holdMs) {
+    const deadline = Date.now() + holdMs;
+    for (;;) {
+      const job = this.state.jobs[id];
+      if (!job) return { gone: true };
+      if (job.stopped) return { stopped: true };
+      if (job.closed) return { closed: true, exitCode: job.exitCode ?? null };
+      const result = await this.connection.call("process/read", {
+        processId: id,
+        afterSeq,
+        maxBytes: 65536,
+        waitMs: Math.max(1, Math.min(1000, deadline - Date.now())),
+      });
+      afterSeq = result.chunks.at(-1)?.seq ?? afterSeq;
+      if (this.state.jobs[id]?.stopped) return { stopped: true };
+      if (result.closed) {
+        return { closed: true, exitCode: result.exitCode ?? null };
+      }
+      if (Date.now() >= deadline) return { afterSeq };
+    }
   }
 
   async removeTarget(path) {

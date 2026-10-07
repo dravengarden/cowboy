@@ -32,7 +32,13 @@ function localConnection(home) {
           env: { ...process.env, ...params.envPolicy.set },
           stdio: ["ignore", "pipe", "pipe"],
         });
-        const job = { chunks: [], seq: 0, exitCode: null, closed: false };
+        const job = {
+          child,
+          chunks: [],
+          seq: 0,
+          exitCode: null,
+          closed: false,
+        };
         for (const stream of ["stdout", "stderr"]) {
           child[stream].on("data", (data) =>
             job.chunks.push({
@@ -50,6 +56,10 @@ function localConnection(home) {
         );
         processes.set(params.processId, job);
         return { processId: params.processId };
+      }
+      if (method === "process/terminate") {
+        processes.get(params.processId)?.child.kill("SIGTERM");
+        return {};
       }
       if (method === "process/read") {
         const job = processes.get(params.processId);
@@ -266,7 +276,7 @@ test("a timed-out command keeps all its output behind its handle", async (t) => 
 test("a command outliving its call removes its directory file when it ends", async (t) => {
   const { tools, home, bash } = await shellFixture(t);
   const timed = await tools.dispatch("Bash", {
-    command: "sleep 1",
+    command: "echo s; sleep 1",
     timeout: 200,
   });
   const id = /\(ID: ([^)]+)\)/.exec(timed.result.stdout)[1];
@@ -289,4 +299,94 @@ test("a directory reset follows a persisted output's preview", async (t) => {
     shown,
     new RegExp(`</persisted-output>\\nShell cwd was reset to ${project}$`),
   );
+});
+
+test("a timed-out command starting with sleep is killed, as natively", async (t) => {
+  const { tools } = await shellFixture(t);
+  const killed = await tools.dispatch("Bash", {
+    command: "  sleep 5 && echo x",
+    timeout: 1500,
+  });
+  assert.equal(killed.deny, "Exit code 143\nCommand timed out after 1s");
+  const moved = await tools.dispatch("Bash", {
+    command: "(sleep 2); echo x",
+    timeout: 1500,
+  });
+  assert.match(
+    moved.result.stdout,
+    /^Command did not complete within its 2s timeout and was moved to the background \(ID: [^)]+\)\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. To check interim output, use Read on that file path\.$/,
+  );
+  assert.deepEqual(moved.task.command, "(sleep 2); echo x");
+  const id = moved.task.id;
+  // The waiter's view: it ends with the command, without reading its output.
+  assert.deepEqual(await tools.waitTask(id, null, 5000), {
+    closed: true,
+    exitCode: 0,
+  });
+  const read = await tools.dispatch("Read", {
+    file_path: "cowboy-task://" + id,
+  });
+  assert.match(read.result.file.content, /^x\n/);
+});
+
+test("a stopped command reads as stopped to its waiter", async (t) => {
+  const { tools } = await shellFixture(t);
+  const started = await tools.dispatch("Bash", {
+    command: "echo begin; sleep 30",
+    run_in_background: true,
+  });
+  assert.match(
+    started.result.stdout,
+    /^Command running in background with ID: \S+\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. To check interim output, use Read on that file path\.$/,
+  );
+  await tools.dispatch("TaskStop", { task_id: started.task.id });
+  assert.deepEqual(await tools.waitTask(started.task.id, null, 1000), {
+    stopped: true,
+  });
+});
+
+test("the waiter ends with the target command's status", async () => {
+  const { waitFor } = await import(
+    "../plugins/claude-code/runtime/task-wait.mjs"
+  );
+  const replies = [{ afterSeq: 3 }, { unavailable: true }, {
+    closed: true,
+    exitCode: 7,
+  }];
+  const sent = [];
+  const code = await waitFor("job-1", {
+    post: async (path, body) => (sent.push({ path, body }), replies.shift()),
+    pause: async () => {},
+  });
+  assert.equal(code, 7);
+  assert.deepEqual(sent.map(({ body }) => body.afterSeq), [null, 3, 3]);
+  // A stopped command never reads as a completion.
+  let settled = false;
+  waitFor("job-2", {
+    post: async () => ({ stopped: true }),
+    hold: () => new Promise(() => {}),
+  }).then(() => settled = true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false);
+});
+
+test("a native task's notification reads as the target command's", async () => {
+  const { targetShellNotification } = await import(
+    "../plugins/claude-code/runtime/context-mod.js?shell-notify"
+  );
+  const tasks = new Map([["bnative1", {
+    jobId: "6f2c-job",
+    toolUseId: "toolu_model",
+    command: "make test",
+  }]]);
+  assert.equal(
+    targetShellNotification(
+      "<task-notification>\n<task-id>bnative1</task-id>\n<tool-use-id>toolu_plugin_x</tool-use-id>\n<output-file>/runtime/home/tasks/bnative1.output</output-file>\n<status>failed</status>\n<summary>Background command \"'/node' '/stage/task-wait.mjs' 6f2c-job\" failed with exit code 3</summary>\n</task-notification>",
+      tasks,
+    ),
+    '<task-notification>\n<task-id>6f2c-job</task-id>\n<tool-use-id>toolu_model</tool-use-id>\n<output-file>cowboy-task://6f2c-job</output-file>\n<status>failed</status>\n<summary>Background command "make test" failed with exit code 3</summary>\n</task-notification>',
+  );
+  const other =
+    "<task-notification>\n<task-id>else</task-id>\n</task-notification>";
+  assert.equal(targetShellNotification(other, tasks), other);
 });

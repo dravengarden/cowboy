@@ -78,6 +78,14 @@ export async function runProxy(
   } catch {
     input = undefined;
   }
+  // The waiter standing for a target command left running is not the
+  // project's command: its hooks never see it.
+  if (
+    typeof context.taskWait === "string" &&
+    input?.tool_name === "Bash" &&
+    typeof input.tool_input?.command === "string" &&
+    input.tool_input.command.startsWith(context.taskWait + " ")
+  ) return 0;
   const id = "hook-" + randomUUID();
   // Native's hook timeout terminates this process; stop the target command.
   signal.addEventListener("abort", () => {

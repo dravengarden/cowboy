@@ -98,7 +98,7 @@ to introduce more restrictions.
 | Native CodeAct | Native nested shell, patch, image, parallel/error results, yield/wait and cold resume now have pinned scripted evidence | Keep these in default native acceptance; separately test child agents and runtime failure while a cell is pending |
 | Claude tool dispatch | `context-mod.js` replaces native tool bodies with a facade | Restore native ownership where a lower-level boundary exists; retain independently tested file adapters |
 | Native Bash lifecycle | Facade retains processes but does not establish native background task registration | Explore shell prefix bridge preserving original Bash tool and native task registry |
-| Background completion | Native activity UI support exists; facade handles are a separate system | Validate completion after prompt return, native autonomous continuation, output retrieval, task count and cancellation |
+| Background completion | Claude 3.9.0: a native background task (runtime waiter) stands for each target command left running, so native delivers its completion into a running turn or as an idle turn of its own; TaskStop sends nothing; notifications are rewritten to the target handle (packaged acceptance) | No 30-minute auto-stop for timed-out commands; subagent background commands are not notified |
 | PTY and stdin | Claude facade explicitly uses `tty:false`, `pipeStdin:false` | Native-parity baseline first: do not invent PTY support where provider lacks it; test Codex PTY, resize, EOF and incremental input |
 | Shell environment | Claude 3.8.0 runs native's command shape on the target: user bash/zsh, a login-shell snapshot (rc, functions, options, aliases, PATH), `cd` persistence with native's reset, native's environment variables; 36 Bash cases match native-local results in packaged acceptance | Error results keep Mods' `<tool_use_error>` wrapper; `CLAUDE_EFFORT` starts after the first tool batch; no embedded find/grep/rg shadows or `CLAUDE_PID` |
 | Project hooks (Claude) | 3.7.0 runs target project hooks: native lifecycle/native-tool hooks through the shell prefix, facade tool hooks (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest) through the adapter | Settings are a session-start snapshot; non-command facade tool hooks refuse matching calls |
@@ -649,8 +649,7 @@ Remaining differences and their reasons:
   environment, and so does 3.8.0. Other exported variables come from the
   executor's environment, as native's come from its own process.
 - **Time-limited and background commands.** They keep `cowboy-task://`
-  handles and give no completion notification. The text follows native's,
-  without its promise of a notification. Notifications belong to matrix E.
+  handles. 3.8.0 gave no completion notification; 3.9.0 adds them (below).
 
 Four native review rounds found and fixed these defects:
 
@@ -683,6 +682,75 @@ It records:
 OVH operation `ovh-claude-code-3-8-0-converge` completed. Inventory reports
 3.8.0 active, 3.7.0 retained for rollback and no session leases. No live session
 was restarted.
+
+#### Background completion notifications (Plugin 3.9.0)
+
+Natively, a background or timed-out command becomes a native background task.
+Native-local baselines on 2.1.287 show:
+
+- When it ends during a turn, its `<task-notification>` (completed or failed,
+  with the exit code) is delivered into that turn, appended to a tool result.
+- When it ends while the session is idle, native starts a turn of its own
+  with the notification, framed as "SYSTEM NOTIFICATION - NOT USER INPUT".
+- A TaskStop'd command sends nothing.
+- A command that hits its timeout is moved to the background and notified
+  later, unless it starts with `sleep`. Such a command is killed with
+  `Exit code 143` / `Command timed out after <duration>`.
+
+Mods cannot inject such a notification. `$.session.receive` is absent at
+runtime on the pinned build. `$.prompt.submit` waits for idle and frames the
+text as a plugin prompt "in the user's place", which is the opposite of
+native's framing. A Mod can, however, start a native background Bash with
+`$.tool.call`, and native then notifies for it exactly as for its own.
+
+3.9.0 therefore pairs each target command left running with a native
+background task:
+
+- **Waiter.** The task runs `task-wait.mjs` on the runtime. It long-polls the
+  bridge (`/task-wait`), which observes the target process without consuming
+  the output its handle reads, and exits with the command's status. A
+  stopped command never reads as finished: the waiter stays until native
+  stops it.
+- **Native ownership.** Native owns the task, so delivery timing, idle turns
+  and the framing are native's own.
+- **Notification rewrite.** The Mod maps the notification to the target
+  command: the job id, the model's tool use id, `cowboy-task://` as the output
+  file and the original command line. This applies wherever native renders it
+  (prompt row, delivery and queued-command attachment).
+- **Stopping.** TaskStop on the command also stops its native task, so
+  nothing is sent.
+- **Permissions and hooks.** A `tool.check` hook keeps the waiter from asking
+  the user a second time in prompting modes. The hook proxy keeps it away
+  from project hooks.
+- **Results.** Background and moved results now read exactly as native's
+  ("You will be notified when it completes."). Without a native task (a
+  subagent's command, or a failed start), that sentence is removed instead
+  of promising a notification.
+- **Timeouts.** A timed-out command starting with `sleep` is killed with
+  native's text.
+
+Packaged acceptance adds five checks, all on the target:
+
+- an idle completion starts a native notification turn with native framing,
+  the target handle, the model's tool use id, the command line and no runtime
+  path
+- a completion during a turn is delivered into that turn
+- a stopped command sends nothing
+- a timed-out command moves to the background and is notified
+- in default mode the user is asked once, for the command, not again for its
+  notification task
+
+Gaps:
+
+- Native stops an auto-backgrounded command after 30 minutes and says so; the
+  waiter does not, and the result omits that sentence.
+- Subagents' background commands give no notification.
+- Native's other background moves are not reproduced: a message arriving
+  during a foreground command, or a user's Ctrl+B.
+- Native's duration format for timeouts of whole minutes was not measured
+  (`Xm Ys` is assumed).
+- Like native background tasks, the notification does not survive the
+  session process. The target command does, and its handle stays readable.
 
 ### 2. Project configuration and implicit reads
 

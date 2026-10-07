@@ -45,10 +45,41 @@ export function targetAgentResult(result, outputFile, handle) {
   };
 }
 
+// Native background task id -> the target command it stands for.
+const shellTasks = new Map();
+// Target job id -> its native background task, and the calls in flight that
+// start or stop one (they pass to native untouched).
+const jobMirrors = new Map();
+const mirrorCalls = new Set();
+
+// A notification for a native task standing for a target command reads as
+// one for that command: its id, tool use, output handle and command line.
+export function targetShellNotification(notification, tasks) {
+  const id = /<task-id>([^<]*)<\/task-id>/.exec(notification)?.[1];
+  const task = tasks.get(id);
+  if (!task) return notification;
+  return notification
+    .replace(`<task-id>${id}</task-id>`, `<task-id>${task.jobId}</task-id>`)
+    .replace(
+      /<tool-use-id>[^<]*<\/tool-use-id>/,
+      `<tool-use-id>${task.toolUseId}</tool-use-id>`,
+    )
+    .replace(
+      /<output-file>[^<]*<\/output-file>/,
+      `<output-file>cowboy-task://${task.jobId}</output-file>`,
+    )
+    .replace(
+      /<summary>Background command "[\s\S]*?" (completed|failed)/,
+      (_match, outcome) =>
+        `<summary>Background command "${task.command}" ${outcome}`,
+    );
+}
+
 export function targetTaskNotificationText(text, outputs) {
   return text.replace(
     /<task-notification>[\s\S]*?<\/task-notification>/g,
-    (notification) => {
+    (found) => {
+      const notification = targetShellNotification(found, shellTasks);
       const id = /<task-id>([^<]*)<\/task-id>/.exec(notification)?.[1];
       const file = outputs.get(id);
       return file === undefined ? notification : notification.replace(
@@ -457,6 +488,62 @@ async function deliverAsync($, event, call, run) {
   });
 }
 
+const NOTIFIED = "You will be notified when it completes. ";
+
+// Natively a command left running notifies the model when it ends, into a
+// running turn or as a turn of its own. A native background task running the
+// runtime-local waiter stands for the target command, so native delivers that
+// notification; without one, the result drops its promise.
+async function notifyOnEnd($, event, task, result) {
+  let nativeId;
+  if (
+    event.agentId === undefined && typeof context.taskWait === "string" &&
+    /^[a-zA-Z0-9-]{1,128}$/.test(task.id) && typeof task.command === "string"
+  ) {
+    const command = `${context.taskWait} ${task.id}`;
+    mirrorCalls.add(command);
+    try {
+      const started = await $.tool.call({
+        tool: "Bash",
+        command,
+        run_in_background: true,
+      });
+      nativeId = started?.result?.backgroundTaskId;
+    } catch {
+      nativeId = undefined;
+    } finally {
+      mirrorCalls.delete(command);
+    }
+  }
+  if (typeof nativeId !== "string" || shellTasks.size >= 4096) {
+    return { ...result, stdout: result.stdout.replace(NOTIFIED, "") };
+  }
+  shellTasks.set(nativeId, {
+    jobId: task.id,
+    toolUseId: event.tool_use_id,
+    command: task.command,
+  });
+  jobMirrors.set(task.id, nativeId);
+  return result;
+}
+
+// Natively a stopped background command sends no notification: stop the
+// native task standing for it too.
+async function stopMirror($, jobId) {
+  const nativeId = jobMirrors.get(jobId);
+  if (nativeId === undefined) return;
+  jobMirrors.delete(jobId);
+  mirrorCalls.add(nativeId);
+  try {
+    await $.tool.call({ tool: "TaskStop", task_id: nativeId });
+  } catch {
+    // The task may already have ended; its notification then still reads as
+    // the command's.
+  } finally {
+    mirrorCalls.delete(nativeId);
+  }
+}
+
 // The session id and effort native puts in a Bash command's environment.
 async function shellSession($) {
   let sessionId = hookBase.session_id;
@@ -746,10 +833,28 @@ export function register(on) {
     return description ? { description } : next(event);
   }).catch(() => ({ description: unavailable }));
 
+  // The native task standing for a target command is part of a call the
+  // session already decided; it is never put to the user again.
+  on("tool.check", (_$, event, next) =>
+    mirrorCalls.has(
+        event.tool === "Bash"
+          ? event.input?.command
+          : event.tool === "TaskStop"
+          ? event.input?.task_id
+          : undefined,
+      )
+      ? { decision: "allow" }
+      : next(event));
   on("tool.call", async ($, event, next) => {
     if (["TodoWrite", "AskUserQuestion"].includes(event.tool)) {
       return next(event);
     }
+    // This module's own native background task for a target command, or its
+    // TaskStop: native runs the runtime-local waiter itself.
+    if (
+      event.agentId === undefined &&
+      mirrorCalls.has(event.tool === "Bash" ? event.command : event.task_id)
+    ) return next(event);
     if (
       context?.memory &&
       [
@@ -872,7 +977,7 @@ export function register(on) {
               "Execution result unavailable. Inspect state before repeating a mutation.",
           };
         }
-        const result = JSON.parse(response.text);
+        let result = JSON.parse(response.text);
         if (response.status !== 202) {
           if (result.result === undefined) {
             if (typeof result.deny !== "string") return result;
@@ -896,6 +1001,19 @@ export function register(on) {
               ? { deny: [result.deny, ...notes].join("\n\n") }
               : result;
           }
+          const { task, ...answered } = result;
+          if (task) {
+            answered.result = await notifyOnEnd(
+              $,
+              event,
+              task,
+              answered.result,
+            );
+          }
+          if (event.tool === "TaskStop") {
+            await stopMirror($, input.task_id ?? input.shell_id);
+          }
+          result = answered;
           const post = await toolHooks(
             $,
             "PostToolUse",

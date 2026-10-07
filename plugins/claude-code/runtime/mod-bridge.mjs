@@ -24,6 +24,7 @@ const BODY_KEYS = {
   "/result": ["id"],
   "/cancel": ["id"],
   "/withdraw": ["id"],
+  "/task-wait": ["afterSeq,id"],
   "/agent": ["agentId,outputFile,owner,toolUseId"],
   "/agent-complete": ["agentId,answer,isAborted,reason"],
   "/agent-stop": ["agentId"],
@@ -255,6 +256,23 @@ export async function startModBridge(
         }
         approvals.delete(call.id);
         answer(200, approval.result);
+        return;
+      }
+      if (request.url === "/task-wait") {
+        // The runtime-local waiter behind a native background task that
+        // stands for a target command; it never holds a Mods fetch.
+        if (
+          call.afterSeq !== null && !Number.isSafeInteger(call.afterSeq)
+        ) {
+          answer(400, { deny: "Invalid execution call" });
+          return;
+        }
+        answer(
+          200,
+          await tools.waitTask(call.id, call.afterSeq, 25000).catch(() => ({
+            unavailable: true,
+          })),
+        );
         return;
       }
       if (request.url === "/withdraw") {

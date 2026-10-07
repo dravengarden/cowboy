@@ -998,3 +998,36 @@ test("a closed process is drained across reads, not cut at the first", async (t)
   };
   assert.equal((await tools.collect("job", 1)).output, "first second third");
 });
+
+test("a stop during an output read survives the read's cursor update", async (t) => {
+  const { tools, connection } = await fixture(t);
+  tools.state.jobs.job = { afterSeq: null, exited: false };
+  const reading = deferred();
+  const release = deferred();
+  connection.call = async (method, params) => {
+    if (method === "process/terminate") return {};
+    if (method === "process/read" && params.maxBytes === 1) {
+      return { chunks: [], exited: false, closed: false };
+    }
+    reading.resolve();
+    await release.promise;
+    return {
+      chunks: params.afterSeq === null
+        ? [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("x").toString("base64"),
+        }]
+        : [],
+      exited: false,
+      closed: false,
+    };
+  };
+  const collecting = tools.collect("job", 1);
+  await reading.promise;
+  await tools.cancelTasks(["job"]);
+  release.resolve();
+  await collecting;
+  assert.equal(tools.state.jobs.job.stopped, true);
+  assert.deepEqual(await tools.waitTask("job", null, 1), { stopped: true });
+});

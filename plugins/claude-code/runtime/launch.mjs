@@ -839,6 +839,13 @@ async function native(args) {
         flag: "wx",
       });
     }
+    // Native background tasks that stand for target commands left running
+    // run this waiter, so native delivers their completion notifications.
+    const taskWait = join(stage, "task-wait.mjs");
+    await copyFile(new URL("./task-wait.mjs", import.meta.url), taskWait);
+    context.taskWait = `${shellQuote(process.execPath)} ${
+      shellQuote(taskWait)
+    }`;
     const contextPath = join(stage, "context.json");
     await writeFile(contextPath, JSON.stringify(context), {
       mode: 0o600,

@@ -77,7 +77,12 @@ tool error. Bash parity is checked against
 `tools/claude_shell_native_baseline.json`: re-run the native-local probe for a
 candidate CLI (the shared cases are in `tools/claude_shell_cases.py`) and
 re-capture native's command line, environment and snapshot generator, since
-the facade reproduces them. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
+the facade reproduces them. Completion notifications for target commands rely
+on a plugin's `$.tool.call` of a native background Bash being notified like
+the model's own, on the `<task-notification>` element shape the Mod rewrites,
+and on `$.session.receive` staying unavailable (re-measure: if a later CLI
+offers a native notification injection, prefer it over the waiter task);
+the `*notification*` checks cover these. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
 `nonzero_bash_exit_is_native_tool_error`) cover these; the native baselines
 are in the project hooks receipt.
 

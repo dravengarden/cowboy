@@ -502,6 +502,151 @@ def shell_phases(args, api, client, shell_results, checks):
     checks.append("bash_results_match_native_local")
 
 
+def notification_phases(args, api, client, checks):
+    """Target commands left running notify the model as native background tasks do."""
+    handle = re.compile(r"cowboy-task://([A-Za-z0-9-]+)")
+    issued = {}
+    asked = []
+
+    def job_of(requests):
+        found = handle.search(json.dumps(requests[-1]["messages"][-1]))
+        require(found, "background result named no handle")
+        return found[1]
+
+    plans = {
+        "NOTIFY_IDLE": [tool("Bash", {"command": "echo bg-out; sleep 2; exit 3", "run_in_background": True})],
+        "NOTIFY_BUSY": [tool("Bash", {"command": "sleep 1; echo busy-out", "run_in_background": True}),
+                        tool("Bash", {"command": "sleep 5; echo fg"})],
+        "NOTIFY_STOP": [tool("Bash", {"command": "sleep 30", "run_in_background": True}),
+                        lambda requests: tool("TaskStop", {"task_id": job_of(requests)})],
+        "NOTIFY_TIMEOUT": [tool("Bash", {"command": "echo t1; sleep 3; echo t2", "timeout": 1000})],
+        "NOTIFY_ASK": [tool("Bash", {"command": "touch notify-asked.txt; sleep 1", "run_in_background": True})],
+    }
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        blocks = last.get("content") if isinstance(last.get("content"), list) else []
+        done = [issued[block["tool_use_id"]] for block in blocks
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in issued]
+        if done:
+            marker, index = done[-1]
+        else:
+            latest = " ".join(text_blocks(last))
+            marker = next((name for name in plans if name in latest), None)
+            if marker is None:
+                require("<task-notification>" in json.dumps(last), "unexpected notification phase request")
+                return [{"type": "text", "text": "NOTED"}]
+            index = -1
+        if index + 1 < len(plans[marker]):
+            step = plans[marker][index + 1]
+            call = step(requests) if callable(step) else step
+            issued[call[0]["id"]] = (marker, index + 1)
+            return call
+        return [{"type": "text", "text": marker + "_DONE"}]
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 60)
+
+    def pump_until(condition, seconds, message):
+        deadline = time.monotonic() + seconds
+        while not condition():
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, message)
+            try:
+                client.until(lambda frame: frame.get("type") == "result", timeout=min(remaining, 2))
+            except ProbeFailure:
+                pass
+
+    def notifications(job, since=0):
+        found = []
+        for request in api.requests[since:]:
+            for message in request.get("messages", []):
+                encoded = json.dumps(message, ensure_ascii=False)
+                if f"<task-id>{job}</task-id>" in encoded:
+                    found.append(encoded)
+        return found
+
+    def job_for(marker):
+        for request in api.requests:
+            for block in outputs(request):
+                if issued.get(block.get("tool_use_id"), (None, None))[0] == marker:
+                    found = handle.search(json.dumps(block))
+                    if found:
+                        return found[1], block
+        raise ProbeFailure("notification phase result missing")
+
+    def original_id(marker):
+        return next(identity for identity, (name, index) in issued.items() if name == marker and index == 0)
+
+    runtime_markers = [str(args.runtime), "task-wait.mjs"]
+
+    # Idle: the command ends after the turn; native starts a turn for it.
+    client.prompt(text="NOTIFY_IDLE", timeout=60)
+    job, block = job_for("NOTIFY_IDLE")
+    require("You will be notified when it completes." in json.dumps(block), "background result made no promise")
+    start = len(api.requests)
+    pump_until(lambda: notifications(job, start), 30, "idle completion did not start a turn")
+    note = notifications(job, start)[-1]
+    require("NOT USER INPUT" in note and f"<tool-use-id>{original_id('NOTIFY_IDLE')}</tool-use-id>" in note and
+            f"<output-file>cowboy-task://{job}</output-file>" in note and "<status>failed</status>" in note and
+            'Background command \\"echo bg-out; sleep 2; exit 3\\" failed with exit code 3' in note and
+            not any(marker in note for marker in runtime_markers),
+            "idle notification differs from native's: " + note[:1500])
+    checks.append("background_completion_starts_a_native_notification_turn")
+
+    # Busy: the notification is delivered into the running turn, no extra turn.
+    client.prompt(text="NOTIFY_BUSY", timeout=60)
+    busy, _ = job_for("NOTIFY_BUSY")
+    delivered = notifications(busy)
+    require(delivered and "<status>completed</status>" in delivered[0] and
+            'Background command \\"sleep 1; echo busy-out\\" completed (exit code 0)' in delivered[0],
+            "busy completion was not delivered into the running turn")
+    checks.append("background_completion_is_delivered_into_a_running_turn")
+
+    # Stopped: natively nothing is sent.
+    client.prompt(text="NOTIFY_STOP", timeout=60)
+    stopped, _ = job_for("NOTIFY_STOP")
+    start = len(api.requests)
+    time.sleep(4)
+    pump_until(lambda: True, 1, "")
+    require(not notifications(stopped, start), "a stopped background command sent a notification")
+    checks.append("stopped_background_command_sends_no_notification")
+
+    # Timeout: moved to the background as natively, then notified.
+    client.prompt(text="NOTIFY_TIMEOUT", timeout=60)
+    moved, block = job_for("NOTIFY_TIMEOUT")
+    require("did not complete within its 1s timeout and was moved to the background" in json.dumps(block),
+            "timed-out command was not moved to the background")
+    start = len(api.requests)
+    pump_until(lambda: notifications(moved, start), 30, "timed-out command sent no completion notification")
+    require("completed (exit code 0)" in notifications(moved, start)[-1], "timeout notification status differs")
+    checks.append("timed_out_command_moves_to_background_and_notifies")
+
+    # The native task behind it never asks the user a second time.
+    def answer(request):
+        asked.append(request)
+        return {"behavior": "allow", "updatedInput": request["input"]}
+    client.permission = answer
+    request_id = "fixture-notify-mode-default"
+    client.send({"type": "control_request", "request_id": request_id,
+                 "request": {"subtype": "set_permission_mode", "mode": "default"}})
+    client.until(lambda frame: frame.get("type") == "control_response" and
+                 frame["response"].get("request_id") == request_id)
+    client.prompt(text="NOTIFY_ASK", timeout=60)
+    asked_job, _ = job_for("NOTIFY_ASK")
+    start = len(api.requests)
+    pump_until(lambda: notifications(asked_job, start), 30, "background command in default mode sent no notification")
+    require(len(asked) == 1 and asked[0]["input"].get("command") == "touch notify-asked.txt; sleep 1",
+            f"the notification task asked the user: {[item.get('input') for item in asked]}")
+    request_id = "fixture-notify-mode-bypass"
+    client.send({"type": "control_request", "request_id": request_id,
+                 "request": {"subtype": "set_permission_mode", "mode": "bypassPermissions"}})
+    client.until(lambda frame: frame.get("type") == "control_response" and
+                 frame["response"].get("request_id") == request_id)
+    client.permission = None
+    checks.append("notification_task_needs_no_second_approval")
+
+
 def hook_phases(args, api, client, native, session, context_checked, checks):
     """Target project hooks: lifecycle and native-tool hooks run by native
     through the proxy, facade tool hooks by the adapter, all on the target."""
@@ -1029,6 +1174,7 @@ def main():
         permission_phases(args, api, client, context_checked, checks)
         shell_results = {}
         shell_phases(args, api, client, shell_results, checks)
+        notification_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
@@ -1085,7 +1231,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
