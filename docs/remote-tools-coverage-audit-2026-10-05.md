@@ -972,6 +972,24 @@ these rounds: an output larger than one read lost its rest when the executor
 reported the process closed before the end line was read, and the missing
 tree kill above.
 
+The [3.12.0 release receipt](experiments/claude-process-lifetimes-release-2026-10-07.json)
+binds commit `11c9e5fd` (merge `3a808a13`) and artifact
+`sha256:281faae172bd93b43f8f4543bca0dd508f3e31c8dff7d3b5172f8634e2bfd0b9`.
+It records:
+
+- 79 accepted checks on the exact signed package
+- 3.11.0/3.12.0 coexistence
+- Linux and actual macOS probes; the stop's `ps`/`awk` utility was also run
+  by hand on macOS
+- three Controller reader roles (the active Controller had changed and was
+  re-resolved; its rollback predecessor read as next-transaction recovery)
+- five public artifact digests
+- Catalog `ready`
+
+OVH operation `ovh-claude-code-3-12-0-converge` completed. Inventory reports
+3.12.0 active, 3.11.0 retained for rollback and no session leases. No live
+session was restarted.
+
 ### 2. Project configuration and implicit reads
 
 Build an explicit target project context interface for configuration, guidance,
