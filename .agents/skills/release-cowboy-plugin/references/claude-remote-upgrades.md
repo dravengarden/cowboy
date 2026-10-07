@@ -82,7 +82,10 @@ the facade reproduces them. Process lifetimes are checked against
 `tools/claude_lifecycle_cases.py`, probe `tools/claude_lifecycle_native_probe.py`):
 a command ends with its shell, a stop kills the whole tree, and the stop's
 tree kill exists because the snapshot generator leaves `set -o monitor` on;
-re-measure all three per CLI. Completion notifications for target commands rely
+re-measure all three per CLI. PDF and file-type Reads are checked against
+`tools/claude_pdf_native_baseline.json` (probe `tools/claude_pdf_native_probe.py`,
+run in the dev shell for poppler): re-measure native's page limits, `pdftoppm`
+arguments, binary-extension list and messages per CLI. Completion notifications for target commands rely
 on a plugin's `$.tool.call` of a native background Bash being notified like
 the model's own, on the `<task-notification>` element shape the Mod rewrites,
 and on `$.session.receive` staying unavailable (re-measure: if a later CLI
