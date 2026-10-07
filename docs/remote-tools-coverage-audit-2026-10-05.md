@@ -774,6 +774,24 @@ Gaps:
 - Native's Read of the copy also records the copy in its read state; the copy
   is gone afterwards and nothing edits it.
 
+The [3.14.0 release receipt](experiments/claude-image-reads-release-2026-10-07.json)
+binds commit `1a3bae91` and artifact
+`sha256:bd75137c0924e9912033d33a006762a325e3e21d795d1cdc66110c7065cafa85`:
+80 accepted checks on the exact signed package, 3.13.0/3.14.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles, five public
+artifact digests and Catalog `ready`.
+
+The first OVH converge (`ovh-claude-code-3-14-0-converge`) ended with an
+unknown outcome: the Machine's connection dropped and reconnected while the
+installation was staging (Machine receipt: staging, `authorization_ended`).
+3.13.0 stayed active. While the slot was fenced, three existing claude-code
+sessions on OVH recorded 11 errors asking to reconcile the installation
+(about 70 seconds). Two `reconcile-install` calls recorded the Machine's
+receipt and resolved the staging failure without replaying anything; a new
+installation `ovh-claude-code-3-14-0-retry-1` then completed. Inventory
+reports 3.14.0 active, 3.13.0 retained for rollback and no session leases. No
+live session was restarted.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
