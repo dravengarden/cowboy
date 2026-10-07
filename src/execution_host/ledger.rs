@@ -1,10 +1,17 @@
-//! Bounded in-process effect ownership. Tombstones live for the incarnation.
-//! Losing this process loses execution authority; the launch marker forbids an
-//! automatic same-incarnation restart. No timeout grants permission to replay.
+//! Bounded in-process effect ownership. Losing this process loses execution
+//! authority; the launch marker forbids an automatic same-incarnation restart.
+//! No timeout grants permission to replay.
+//!
+//! A completed operation's tombstone outlives every retry of its identity: a
+//! worker abandons an unanswered request after a bounded wait and never reuses
+//! the identity afterwards. Only tombstones older than that window are evicted,
+//! and only when the operation table is full, so a long-lived incarnation keeps
+//! admitting work instead of refusing every call once it has run 65,536.
 
 use crate::execution_protocol::{Event, Invocation, Outcome, Refusal};
 use sha2::{Digest as _, Sha256};
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 const MAX_OPERATIONS: usize = 65_536;
@@ -13,6 +20,8 @@ const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESULTS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EVENTS_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EVENT_BATCH_BYTES: usize = 2 * 1024 * 1024;
+/// Far beyond the worker's 180 s wait for one request and its 30 s resend.
+const TOMBSTONE_RETENTION: Duration = Duration::from_secs(15 * 60);
 
 pub(super) enum EventError {
     Full(serde_json::Value),
@@ -51,6 +60,9 @@ pub(super) struct Ledger {
     pending_bytes: usize,
     completed: VecDeque<String>,
     result_bytes: usize,
+    /// Completed operations in completion order, for tombstone eviction.
+    tombstones: VecDeque<(Instant, String)>,
+    tombstone_retention: Duration,
     pub lost: bool,
     events: VecDeque<(Event, usize)>,
     event_bytes: usize,
@@ -69,6 +81,8 @@ impl Ledger {
             pending_bytes: 0,
             completed: VecDeque::new(),
             result_bytes: 0,
+            tombstones: VecDeque::new(),
+            tombstone_retention: TOMBSTONE_RETENTION,
             lost: false,
             events: VecDeque::new(),
             event_bytes: 0,
@@ -94,6 +108,7 @@ impl Ledger {
         if self.lost {
             return Err(Refusal::EnvironmentLost);
         }
+        self.evict_tombstones(Instant::now());
         if self.pending.len() >= MAX_PENDING
             || self.operations.len() >= MAX_OPERATIONS
             || self.pending_bytes + serialized.len() > MAX_PENDING_BYTES
@@ -117,6 +132,32 @@ impl Ledger {
         Ok(Admission::New { id, receiver })
     }
 
+    /// Forget the oldest completed operations past the retry window until the
+    /// table has room. Pending and unknown effects are never forgotten.
+    fn evict_tombstones(&mut self, now: Instant) {
+        while self.operations.len() >= MAX_OPERATIONS {
+            let Some((completed, _)) = self.tombstones.front() else {
+                return;
+            };
+            if now.saturating_duration_since(*completed) < self.tombstone_retention {
+                return;
+            }
+            let (_, operation_id) = self.tombstones.pop_front().expect("front exists");
+            if let Some(entry) = self.operations.remove(&operation_id) {
+                self.result_bytes -= entry.bytes;
+            }
+            // Both queues follow completion order: the evicted identity, if
+            // its result is still retained, is at the front.
+            while self
+                .completed
+                .front()
+                .is_some_and(|id| !self.operations.contains_key(id))
+            {
+                self.completed.pop_front();
+            }
+        }
+    }
+
     pub fn observe(&self, id: &str) -> Option<watch::Receiver<Outcome>> {
         self.operations
             .get(id)
@@ -132,10 +173,14 @@ impl Ledger {
         entry.bytes = bytes;
         entry.outcome.send_replace(Outcome::Completed { reply });
         self.result_bytes += bytes;
-        self.completed.push_back(operation_id);
+        self.completed.push_back(operation_id.clone());
+        self.tombstones.push_back((Instant::now(), operation_id));
         while self.result_bytes > MAX_RESULTS_BYTES {
             let expired = self.completed.pop_front().ok_or(())?;
-            let entry = self.operations.get_mut(&expired).ok_or(())?;
+            // An evicted tombstone already released its retained result.
+            let Some(entry) = self.operations.get_mut(&expired) else {
+                continue;
+            };
             self.result_bytes -= entry.bytes;
             entry.bytes = 0;
             entry.outcome.send_replace(Outcome::ResultExpired);
@@ -295,6 +340,73 @@ mod tests {
             ledger.admit(&original).unwrap(),
             Admission::Existing(_)
         ));
+    }
+
+    fn numbered(index: usize) -> Invocation {
+        let mut invocation = invocation();
+        invocation.operation_id = format!("operation-{index}");
+        invocation
+    }
+
+    #[test]
+    fn full_table_evicts_only_tombstones_past_the_retry_window() {
+        let mut ledger = Ledger::new();
+        for index in 0..MAX_OPERATIONS {
+            let Admission::New { id, .. } = ledger.admit(&numbered(index)).unwrap() else {
+                panic!("new admission");
+            };
+            ledger.finish(id, json!({"result": {}})).unwrap();
+        }
+        // Inside the retry window a full table still refuses new work and
+        // keeps answering retries of completed identities.
+        assert!(matches!(
+            ledger.admit(&numbered(MAX_OPERATIONS)),
+            Err(Refusal::Capacity)
+        ));
+        assert!(matches!(
+            ledger.admit(&numbered(0)).unwrap(),
+            Admission::Existing(_)
+        ));
+
+        ledger.tombstone_retention = Duration::ZERO;
+        let Admission::New { id, .. } = ledger.admit(&numbered(MAX_OPERATIONS)).unwrap() else {
+            panic!("admission after eviction");
+        };
+        assert!(ledger.observe("operation-0").is_none());
+        assert!(ledger.observe("operation-1").is_some());
+        assert_eq!(ledger.operations.len(), MAX_OPERATIONS);
+        ledger.finish(id, json!({"result": {}})).unwrap();
+    }
+
+    #[test]
+    fn eviction_keeps_pending_effects_and_result_accounting() {
+        let mut ledger = Ledger::new();
+        ledger.tombstone_retention = Duration::ZERO;
+        let Admission::New { id: pending, .. } = ledger.admit(&numbered(0)).unwrap() else {
+            panic!("pending admission");
+        };
+        for index in 1..MAX_OPERATIONS {
+            let Admission::New { id, .. } = ledger.admit(&numbered(index)).unwrap() else {
+                panic!("new admission");
+            };
+            ledger.finish(id, json!({"result": "x"})).unwrap();
+        }
+        for index in MAX_OPERATIONS..MAX_OPERATIONS + 8 {
+            let Admission::New { id, .. } = ledger.admit(&numbered(index)).unwrap() else {
+                panic!("admission after eviction");
+            };
+            ledger.finish(id, json!({"result": "x"})).unwrap();
+        }
+        assert!(ledger.observe("operation-0").is_some());
+        assert!(ledger.observe("operation-1").is_none());
+        let retained: usize = ledger.operations.values().map(|entry| entry.bytes).sum();
+        assert_eq!(ledger.result_bytes, retained);
+        assert_eq!(ledger.completed.len(), MAX_OPERATIONS - 1);
+        ledger
+            .finish(pending, json!({"result": "a".repeat(MAX_RESULTS_BYTES)}))
+            .unwrap();
+        let retained: usize = ledger.operations.values().map(|entry| entry.bytes).sum();
+        assert_eq!(ledger.result_bytes, retained);
     }
 
     #[test]
