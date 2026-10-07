@@ -871,6 +871,23 @@ Ten native review rounds were run, and the last reported none. Fixed findings:
 - a Git status that cannot be read reported as unavailable, not clean
 - the target's Git section added when native had none
 
+The [3.10.0 release receipt](experiments/claude-target-instructions-release-2026-10-07.json)
+binds feature commit `f3ca57a8`, release merge `e2323171` and artifact
+`sha256:f102b54e23792271f439d5b44a0201160fed67e5adcc97ed9a2d38041b97c888`.
+It records:
+
+- 77 accepted checks on the exact signed package
+- 3.9.0/3.10.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles, re-resolved because the active Controller had
+  changed
+- five public artifact digests
+- Catalog `ready`
+
+OVH operation `ovh-claude-code-3-10-0-converge` completed. Inventory reports
+3.10.0 active, 3.9.0 retained for rollback and no session leases. No live session
+was restarted.
+
 ### 3. Native agents and orchestration
 
 Codex already selects the execution environment at thread start and every turn.
