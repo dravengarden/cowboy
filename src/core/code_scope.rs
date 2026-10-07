@@ -128,6 +128,28 @@ impl Hub {
             .and_then(SessionCodeScope::observe)
     }
 
+    /// Record the durable lineage the owning Machine reported for a Session.
+    /// Returns whether it changed. A change (a reset's new lineage, a Machine
+    /// that starts or stops reporting one) gives the Session a new observation
+    /// lifetime, so every earlier observation is stale and none is updated in
+    /// place; an unchanged value (every reconnect and snapshot of the same
+    /// lineage) leaves them current.
+    pub(crate) fn set_machine_lineage(&self, session_id: &str, lineage: Option<&str>) -> bool {
+        let mut sessions = self.inner.sessions.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        if session.machine_lineage.as_deref() == lineage {
+            return false;
+        }
+        session.machine_lineage = lineage.map(str::to_owned);
+        // A new lifetime as well, so a lineage that is ever reported again (a
+        // restored older dataset, say) cannot revive an observation made under
+        // it: equality of the value alone would.
+        session.code_incarnation = CodeIncarnation::default();
+        true
+    }
+
     /// Recheck the exact original observation. Removal, replacement or cwd ABA
     /// cannot revive it; unrelated UI/worker status does not invalidate it.
     pub(crate) fn code_scope_is_current(&self, scope: &SessionCodeScope) -> bool {

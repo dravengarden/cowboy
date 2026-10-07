@@ -528,7 +528,11 @@ impl Broker {
                 drain_requested: false,
                 exit_detail: None,
                 background_tasks: None,
+                incarnation: None,
             });
+        }
+        for snapshot in &mut snapshots {
+            snapshot.incarnation = self.reported_lineage(&snapshot.session_id);
         }
         snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
         snapshots
@@ -1084,6 +1088,7 @@ impl Broker {
                     drain_requested: !desired.is_empty() && generation != desired && !pinned,
                     exit_detail: None,
                     background_tasks: None,
+                    incarnation: None,
                 },
                 last_seen: Instant::now(),
                 receive_probe: None,
@@ -1126,7 +1131,19 @@ impl Broker {
         }
     }
 
-    fn send_controller(&self, frame: Frame) {
+    /// The Session's durable lineage, reported only while this build's writer
+    /// is admitted. A reader-only build could miss a rotation made by a writer
+    /// elsewhere, so it reports none rather than a value nobody maintains.
+    fn reported_lineage(&self, session_id: &str) -> Option<String> {
+        let store = self.incarnations.lock();
+        let store = store.as_ref().filter(|store| store.writer_enabled())?;
+        store.get(session_id).map(|entry| entry.incarnation.clone())
+    }
+
+    fn send_controller(&self, mut frame: Frame) {
+        if let Frame::Snapshot { worker } = &mut frame {
+            worker.incarnation = self.reported_lineage(&worker.session_id);
+        }
         if let Some(tx) = self.current_controller() {
             let _ = tx.send(frame);
         }
@@ -4749,6 +4766,7 @@ mod tests {
                 drain_requested: false,
                 exit_detail: None,
                 background_tasks: None,
+                incarnation: None,
             },
             1,
         );
@@ -4857,6 +4875,86 @@ mod tests {
             .as_ref()
             .and_then(|store| store.get("sess-1"))
             .map(|entry| (entry.incarnation.clone(), entry.epoch, entry.origin))
+    }
+
+    #[tokio::test]
+    async fn only_an_admitted_writer_stamps_its_lineage_on_every_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let (broker, _launch, _worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        // No store: nothing is reported.
+        assert!(
+            broker
+                .snapshots()
+                .iter()
+                .all(|worker| worker.incarnation.is_none())
+        );
+
+        let namespace = root.path().join("incarnations");
+        attach_incarnations(&broker, &namespace, true);
+        let value = broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-1", incarnations::Origin::Adopted)
+            .unwrap();
+        // Bulk snapshots (Welcome, resync) and individually sent ones agree.
+        assert_eq!(
+            broker.snapshots()[0].incarnation.as_deref(),
+            Some(value.as_str())
+        );
+        broker.publish_session_state("sess-1", WorkerState::Running);
+        let Some(Frame::Snapshot { worker }) = controller_rx.recv().await else {
+            panic!("published snapshot");
+        };
+        assert_eq!(worker.incarnation.as_deref(), Some(value.as_str()));
+        // A worker-supplied value is never trusted: the Machine overwrites it.
+        let mut forged = broker.snapshots().into_iter().next().unwrap();
+        forged.incarnation = Some("f".repeat(32));
+        broker.send_controller(Frame::Snapshot {
+            worker: Box::new(forged),
+        });
+        let Some(Frame::Snapshot { worker }) = controller_rx.recv().await else {
+            panic!("forged snapshot");
+        };
+        assert_eq!(worker.incarnation.as_deref(), Some(value.as_str()));
+        assert!(
+            broker
+                .incarnations
+                .lock()
+                .as_mut()
+                .unwrap()
+                .end("sess-1")
+                .is_ok()
+        );
+        assert!(broker.snapshots()[0].incarnation.is_none());
+
+        // A reader-only build holds the same record but reports nothing, since
+        // it could miss a rotation made by a writer elsewhere.
+        broker
+            .incarnations
+            .lock()
+            .as_mut()
+            .unwrap()
+            .mint("sess-1", incarnations::Origin::Adopted)
+            .unwrap();
+        *broker.incarnations.lock() = None;
+        attach_incarnations(&broker, &namespace, false);
+        assert!(lineage(&broker).is_some());
+        assert!(
+            broker
+                .snapshots()
+                .iter()
+                .all(|worker| worker.incarnation.is_none())
+        );
+        broker.publish_session_state("sess-1", WorkerState::Running);
+        let Some(Frame::Snapshot { worker }) = controller_rx.recv().await else {
+            panic!("reader-only snapshot");
+        };
+        assert!(worker.incarnation.is_none());
     }
 
     #[tokio::test]
@@ -7596,6 +7694,7 @@ mod tests {
                     drain_requested: false,
                     exit_detail: None,
                     background_tasks: None,
+                    incarnation: None,
                 }),
             },
         )
