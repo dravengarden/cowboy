@@ -1,4 +1,6 @@
 //! Opt-in, idle-only adoption of the Machine's installed Provider release.
+use std::collections::HashSet;
+
 use super::*;
 
 fn key(session: &str) -> String {
@@ -72,6 +74,25 @@ fn eligible(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
     )
 }
 
+/// Machines that may start one automatic update in this pass: none of their
+/// sessions is still starting. Updating a whole idle fleet at once relaunches
+/// every worker together and can overrun the Machine's command queue.
+fn machines_ready_for_update<'a>(
+    sessions: impl IntoIterator<Item = (&'a str, Status)>,
+) -> HashSet<String> {
+    let mut ready = HashSet::new();
+    let mut starting = HashSet::new();
+    for (machine, status) in sessions {
+        if status == Status::Starting {
+            starting.insert(machine);
+        } else {
+            ready.insert(machine.to_owned());
+        }
+    }
+    ready.retain(|machine| !starting.contains(machine.as_str()));
+    ready
+}
+
 pub(super) async fn run(state: Arc<AppState>) {
     let mut shutdown = state.shutdown.clone();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -81,9 +102,18 @@ pub(super) async fn run(state: Arc<AppState>) {
             _ = shutdown.changed() => break,
             _ = tick.tick() => {},
         }
-        for meta in state.hub.session_list() {
+        let sessions = state.hub.session_list();
+        let mut ready = machines_ready_for_update(
+            sessions
+                .iter()
+                .map(|meta| (meta.machine_id.as_str(), meta.status)),
+        );
+        for meta in sessions {
             // Do not revive stopped/crashed sessions, or retry a failed native resume.
-            if meta.status != Status::Running || !eligible(&state, &meta) {
+            if meta.status != Status::Running
+                || !ready.contains(&meta.machine_id)
+                || !eligible(&state, &meta)
+            {
                 continue;
             }
             let Ok(_fence) = ProviderReloadFence::acquire(
@@ -105,6 +135,7 @@ pub(super) async fn run(state: Arc<AppState>) {
             // the Hub lock, preserves native identity, and fences racing prompts.
             match apply_session_provider_reload(&state, &meta, &target) {
                 Ok(()) => {
+                    ready.remove(&meta.machine_id);
                     tracing::info!(session = %meta.id, version = %target.version, "automatic Provider update started")
                 }
                 Err(error) => {
@@ -118,6 +149,18 @@ pub(super) async fn run(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_machine_updates_one_session_at_a_time() {
+        let ready = machines_ready_for_update([
+            ("ovh", Status::Running),
+            ("ovh", Status::Starting),
+            ("hawk", Status::Running),
+            ("hawk", Status::Exited),
+            ("falcon", Status::Starting),
+        ]);
+        assert_eq!(ready, HashSet::from(["hawk".to_owned()]));
+    }
 
     #[test]
     fn policy_is_opt_in_session_scoped_and_restored() {
