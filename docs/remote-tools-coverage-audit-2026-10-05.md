@@ -645,6 +645,24 @@ and fixed:
 - the range helper's strict decoding
 - lost-write retries, for unread and for new files
 
+The [3.11.0 release receipt](experiments/claude-file-semantics-release-2026-10-07.json)
+binds feature commit `fb6e2ff7` and artifact
+`sha256:994a0575c7025a1c6b042b33ca7afea20ab39c9a0a3287509e4a83d61834b1a3`.
+It records:
+
+- 72 packaged checks, including file parity, on the exact signed package
+- 3.10.0/3.11.0 coexistence
+- Linux and actual macOS probes
+- three Controller reader roles
+- five public artifact digests
+- Catalog `ready`
+
+A gate run after signing rebuilt the unsigned release envelope in `dist`. The
+preserved signed envelope was restored and verified again before publication.
+OVH operation `ovh-claude-code-3-11-0-converge` completed. Inventory reports
+3.11.0 active, 3.10.0 retained for rollback and no session leases. No live session
+was restarted.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
