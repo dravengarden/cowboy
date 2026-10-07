@@ -45,6 +45,33 @@ fn newer(current: &str, target: &str) -> bool {
     }
 }
 
+/// A session adopts the installed release when it opted in itself, or when
+/// `plugins.auto_update_idle_sessions` is on and it has had no event for
+/// `plugins.auto_update_idle_after`. System sessions only update on opt-in.
+fn wants_update(
+    opted_in: bool,
+    fleet_policy: bool,
+    system: bool,
+    idle_for: Option<std::time::Duration>,
+    idle_after: std::time::Duration,
+) -> bool {
+    opted_in || (fleet_policy && !system && idle_for.is_some_and(|idle| idle >= idle_after))
+}
+
+fn eligible(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    wants_update(
+        enabled(&state.hub, &meta.id),
+        state
+            .service_config
+            .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_SESSIONS),
+        meta.system,
+        state.hub.session_idle_for(&meta.id),
+        state
+            .service_config
+            .get(&crate::config::schema::PLUGIN_AUTO_UPDATE_IDLE_AFTER),
+    )
+}
+
 pub(super) async fn run(state: Arc<AppState>) {
     let mut shutdown = state.shutdown.clone();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -56,7 +83,7 @@ pub(super) async fn run(state: Arc<AppState>) {
         }
         for meta in state.hub.session_list() {
             // Do not revive stopped/crashed sessions, or retry a failed native resume.
-            if meta.status != Status::Running || !enabled(&state.hub, &meta.id) {
+            if meta.status != Status::Running || !eligible(&state, &meta) {
                 continue;
             }
             let Ok(_fence) = ProviderReloadFence::acquire(
@@ -69,7 +96,7 @@ pub(super) async fn run(state: Arc<AppState>) {
                 continue;
             };
             if !newer(&meta.provider_version, &target.version)
-                || !enabled(&state.hub, &meta.id)
+                || !eligible(&state, &meta)
                 || *shutdown.borrow()
             {
                 continue;
@@ -111,6 +138,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn fleet_policy_updates_only_long_idle_non_system_sessions() {
+        let hour = std::time::Duration::from_hours(1);
+        let idle = |minutes| Some(std::time::Duration::from_mins(minutes));
+        // Opt-in alone keeps its previous meaning, regardless of idleness.
+        assert!(wants_update(true, false, false, idle(0), hour));
+        assert!(wants_update(true, false, true, None, hour));
+        // Fleet policy needs the full idle period.
+        assert!(!wants_update(false, true, false, idle(59), hour));
+        assert!(wants_update(false, true, false, idle(60), hour));
+        assert!(!wants_update(false, true, false, None, hour));
+        // System sessions and a disabled policy never update without opt-in.
+        assert!(!wants_update(false, true, true, idle(600), hour));
+        assert!(!wants_update(false, false, false, idle(600), hour));
     }
 
     #[test]
