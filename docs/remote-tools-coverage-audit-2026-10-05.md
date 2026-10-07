@@ -943,6 +943,18 @@ the active Controller had changed), five public artifact digests and Catalog
 active, 3.15.0 retained for rollback, no session leases, no live session
 restarted and no session errors.
 
+Main had meanwhile released claude-code 3.15.1 (component release 3.42.0,
+execution recovery) from 3.15.0, so 3.16.0 lacked its package record. 3.16.1
+merges both; its runtime archives are byte-identical to 3.16.0's. The
+[3.16.1 receipt](experiments/claude-skills-merge-release-2026-10-08.json)
+binds merge `35d7835e` and artifact
+`sha256:96259ce4ae999e5555fbe0d6a54b52bb86ab14f7e5b1dd1c909b4612682cd175`
+with the same 85 checks, 3.16.0/3.16.1 coexistence, macOS, Catalog readers
+and public digests. OVH operation `ovh-claude-code-3-16-1-converge` completed:
+3.16.1 active, 3.16.0 retained for rollback. The Controller moved idle
+claude-code sessions to the new version on its own schedule, with no
+claude-code session error.
+
 ### 1. Preserve native Bash through an execution bridge
 
 The official [environment-variable reference](https://code.claude.com/docs/en/env-vars)
