@@ -1122,6 +1122,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         crate::machine_transport::HEADER,
         crate::machine_transport::CHUNKED.parse()?,
     );
+    request.headers_mut().insert(
+        crate::machine_transport::COMPRESSION_HEADER,
+        crate::machine_transport::DEFLATE.parse()?,
+    );
     let (mut socket, response) = tokio_tungstenite::connect_async(request)
         .await
         .context("connecting Machine WebSocket")?;
@@ -1129,6 +1133,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         .headers()
         .get(crate::machine_transport::HEADER)
         .is_some_and(|value| value == crate::machine_transport::CHUNKED);
+    let compressed = chunked
+        && response
+            .headers()
+            .get(crate::machine_transport::COMPRESSION_HEADER)
+            .is_some_and(|value| value == crate::machine_transport::DEFLATE);
     let challenge = receive_frame(&mut socket).await?;
     let MachineFrame::Challenge {
         challenge_id,
@@ -1253,7 +1262,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let mut controller_writer = tokio::spawn(write_controller_messages(
         socket_sink,
         controller_write_rx,
-        chunked,
+        (chunked, compressed),
     ));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
@@ -1303,7 +1312,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                 message = socket_stream.next() => {
                     let message = match message {
                         Some(Ok(Message::Binary(bytes))) => {
-                            match decoder.chunk(chunked, &bytes)? {
+                            match decoder.chunk((chunked, compressed), &bytes).await? {
                                 Some(text) => Some(Ok(Message::Text(text.into()))),
                                 None => continue,
                             }
@@ -3757,13 +3766,13 @@ fn queue_controller_frame(
 async fn write_controller_messages<S>(
     socket: S,
     messages: tokio::sync::mpsc::UnboundedReceiver<Message>,
-    chunked: bool,
+    features: impl Into<crate::machine_transport::Features>,
 ) -> anyhow::Result<()>
 where
     S: futures::Sink<Message> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
 {
-    crate::machine_transport::write(socket, messages, chunked).await
+    crate::machine_transport::write(socket, messages, features).await
 }
 
 async fn write_runtime_frames<W>(

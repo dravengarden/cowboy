@@ -1,5 +1,46 @@
 # Execution connection recovery
 
+## October 8 tool latency follow-up
+
+The Controller still recorded OVH Machine and broker heartbeat timeouts after
+the small-frame fairness change, including 16:11 and 16:21 UTC. Filtering only
+lines containing both `ovh` and a selected timeout phrase missed broker records;
+that filter is not evidence of an outage-free observation window.
+
+At 16:14:10 UTC multiple independent executor sessions completed requests that
+had waited about 18 seconds, within milliseconds of one another. The shared
+Machine link preserves application FIFO, so a large message delays unrelated
+tool requests and replies even when heartbeat scheduling is fair. Claude's
+target hook path sends a full native transcript for each hook invocation.
+A live 1,942,094-byte transcript produced 2,589,478 bytes after base64 wrapping.
+An independent OVH-to-Hawk SSH transfer took 9.832 seconds for 1 MiB, compared
+with 2.535 and 2.721 seconds for empty SSH requests. Stormbird additionally
+reported proxy UDP response timeouts; these are separate underlay evidence,
+not proof that every slow tool call has the same physical cause.
+
+Machine peers now separately negotiate `x-cowboy-machine-compression: zlib-v1`
+alongside `chunks-v1`. Large messages compress only when this reduces their
+size by at least ten percent. A high bit on the connection-local chunk length
+identifies compressed payloads; the existing authenticated application messages,
+worker protocol and durable records are unchanged. Compression uses an isolated
+dictionary for each message; compression and decompression run off the async
+executor. Both encoded and
+decoded payloads retain the existing frame limit; malformed, truncated,
+trailing, unnegotiated and oversized streams fail closed. Old peers keep their
+existing text or chunked transport. Heartbeats still overtake chunks, while
+application frames remain in order.
+
+Fast zlib reduced that real base64 envelope to 1,003,942 bytes (61% fewer), in
+41.24 milliseconds. This is a measured payload reduction, not a claimed 61%
+end-to-end speedup. Regression tests reconstruct all application bytes, check
+the following tool reply's order and reduced wire budget, and exercise real
+WebSocket backpressure with compression both enabled and disabled.
+
+Codex owns execution semantics and resume; this host-to-host transport gap is
+outside the native runtime. Claude shares the same transport, with no separate
+tool or session implementation. Delete this framing extension when the owning
+Machine transport provides bounded compression and heartbeat isolation itself.
+
 ## October 8 Claude execution endpoint recovery
 
 At 14:42:10 UTC, `sess-1791173104587` exhausted the worker's 180-second

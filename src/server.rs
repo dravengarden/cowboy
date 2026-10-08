@@ -13963,12 +13963,12 @@ impl MachineHeartbeatWatchdog {
 async fn write_machine_messages<S>(
     sink: S,
     messages: mpsc::UnboundedReceiver<Message>,
-    chunked: bool,
+    features: impl Into<crate::machine_transport::Features>,
 ) -> anyhow::Result<()>
 where
     S: SinkExt<Message> + Unpin,
 {
-    crate::machine_transport::write(sink, messages, chunked).await
+    crate::machine_transport::write(sink, messages, features).await
 }
 
 fn queue_machine_message(tx: &mpsc::UnboundedSender<Message>, message: Message) -> Result<(), ()> {
@@ -14138,11 +14138,22 @@ async fn machine_ws_upgrade(
     let chunked = headers
         .get(crate::machine_transport::HEADER)
         .is_some_and(|value| value == crate::machine_transport::CHUNKED);
-    let mut response = ws.on_upgrade(move |socket| handle_machine_ws(socket, state, chunked));
+    let compressed = chunked
+        && headers
+            .get(crate::machine_transport::COMPRESSION_HEADER)
+            .is_some_and(|value| value == crate::machine_transport::DEFLATE);
+    let mut response =
+        ws.on_upgrade(move |socket| handle_machine_ws(socket, state, chunked, compressed));
     if chunked {
         response.headers_mut().insert(
             crate::machine_transport::HEADER,
             axum::http::HeaderValue::from_static(crate::machine_transport::CHUNKED),
+        );
+    }
+    if compressed {
+        response.headers_mut().insert(
+            crate::machine_transport::COMPRESSION_HEADER,
+            axum::http::HeaderValue::from_static(crate::machine_transport::DEFLATE),
         );
     }
     response
@@ -14301,7 +14312,12 @@ mod provider_usage_source_tests {
     }
 }
 
-async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>, chunked: bool) {
+async fn handle_machine_ws(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    chunked: bool,
+    compressed: bool,
+) {
     let Some(store) = state.store.as_ref().cloned() else {
         let _ = send_json(
             &mut socket,
@@ -14483,7 +14499,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>, chunked:
         state.machine_snapshots.publish().await;
         return;
     }
-    tracing::info!(machine = %hello.machine_id, chunked, "Machine connected");
+    tracing::info!(machine = %hello.machine_id, chunked, compressed, "Machine connected");
     // Keep WebSocket writes out of the Machine read loop. A runtime replay or
     // command response may fill the socket while the Machine is still sending
     // heartbeats; the read side must continue to make progress independently.
@@ -14496,7 +14512,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>, chunked:
     let mut socket_writer = tokio::spawn(write_machine_messages(
         socket_sink,
         machine_write_rx,
-        chunked,
+        (chunked, compressed),
     ));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
     // A declared connection mode is a request to be read on this host, not
@@ -14749,7 +14765,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>, chunked:
             break;
         };
         let message = match message {
-            Message::Binary(bytes) => match decoder.chunk(chunked, &bytes) {
+            Message::Binary(bytes) => match decoder.chunk((chunked, compressed), &bytes).await {
                 Ok(Some(text)) => Message::Text(text.into()),
                 Ok(None) => continue,
                 Err(_) => break,
