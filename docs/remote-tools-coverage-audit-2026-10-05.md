@@ -38,6 +38,38 @@ unavailable. Missing tests do not establish impossibility.
 
 ## Coverage matrix
 
+### Disposition of every matrix row (Claude lane, 2026-10-08)
+
+Status after Plugin 3.19.0. "Matches native" means a native-local
+measurement and the remote result agree; "intentional" names a gap kept on
+purpose with its fallback; "open" names remaining work and its owner.
+
+| Surface | Disposition | Evidence or reason |
+| --- | --- | --- |
+| Basic commands and edits | Matches native | 3.8.0 (36 Bash cases), 3.11.0 (24 file cases) |
+| Native CodeAct | Codex lane; not re-audited here | Pinned Codex receipts above |
+| Claude tool dispatch | Intentional: target tools are answered through Mods `tool.call`, the narrowest native interface 2.1.287 offers; native owns everything else, descriptions included since 3.18.0 | No lower boundary exists in the pinned CLI |
+| Native Bash lifecycle, background completion | Matches native | 3.9.0, 3.12.0, 3.18.0, 3.19.0 |
+| PTY and stdin | Matches native | Measured 2026-10-08: native and remote Bash both run with stdin `/dev/null`, no terminal on stdin or stdout, `read` fails at once |
+| Shell environment | Matches native within the executor's environment; open: the Machine's closed executor environment (7 variables on Hawk against about 99 for a local session) | Machine design; aligning it is a Machine release and configuration change awaiting the user's decision |
+| Project hooks, hook types | Matches native for command hooks (3.7.0); intentional: non-command facade tool hooks refuse the matching call rather than skip the project's review | 3.7.0 receipt |
+| Permission modes | Matches native for mode decisions and asks (3.6.0); intentional: plan mode refused, no persisted "always allow" rules | Plan files and rule storage live in the runtime home |
+| Native agents | Matches native for background agents (3.5.0, 3.19.0); intentional: foreground, nested, teammate and isolated agents refused with a message | 3.5.0 receipt |
+| Skills and project plugins | Matches native for target skills and commands (3.16.0); intentional: marketplace plugin skills, hook-declaring skills and six bundled skills refused with their reason | 3.16.0 receipt |
+| MCP and web tools | Matches native for scopes, precedence and placement (3.17.0); intentional: target-loopback, headers-helper and unresolved-variable remote servers omitted | 3.17.0 receipt |
+| Plans and task artifacts | Intentional: plan mode refused; native task-list tools run where the session runs (3.15.0) | Plan files would be runtime files |
+| Images, notebooks, PDFs | Matches native (3.13.0, 3.14.0); intentional size bounds stated there | 32 cases |
+| File semantics, atomic mutations | Matches native's check-then-write (native also compares the read state and then writes); intentional: files rewritten in place | 3.11.0; aliased-edit follow-up |
+| Output limits | Matches native for persisted output and split UTF-8; not tested: target disk full, retained-output expiry | Executor-owned behavior |
+| Lost replies | Fail closed without replay | Packaged lost start and lost write-reply checks |
+| Cancel and timeout | Matches native for foreground, background, deadline and tree stops; pending-start cancellation tested (3.4.8). Keeper or executor loss fails closed (Machine policy: expose loss, retain the worktree, no replay); open: the worker collapses the loss into a generic refusal, so the model reads "inspect state" while every tool fails | Worker owns the refusal detail |
+| Resume and compaction | Covered: agent outcomes across resume, runtime file attachments dropped after compaction, abandoned asks withdrawn; idle sessions move to a new Plugin version on the Controller's schedule | 3.5.0, 3.6.0, 3.10.0 |
+| Reconnect and restarts | Covered at the Plugin boundary: lost start receipt, 35-second outage, Machine restart reattach, restarted launcher reconnect (3.17.0); Controller and worker fault injection is Machine/Controller scope | Packaged acceptance |
+| Deletion and shutdown | Covered: idempotent close, no recreation; target processes and MCP servers end with the session | Packaged acceptance, 3.17.0 |
+| Authorization and paths | Covered: every packaged turn checks that runtime paths and runtime guidance never reach the model | `context_checked` in acceptance |
+| Upgrade and platform | Covered per release: coexistence with the previous generation, Linux and actual macOS runtime probes; targets measured are Linux with bash | Release receipts |
+| Observability and cost | Open (owner: Cowboy telemetry): causal correlation of session, binding, operation, native tool and agent ids is not established | Not part of the Plugin releases |
+
 ### Candidate output fixes
 
 Follow-up implementation on `cae2d52f` prepares Claude Plugin 3.4.8 without
