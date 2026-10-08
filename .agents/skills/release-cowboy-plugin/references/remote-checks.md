@@ -12,9 +12,11 @@ Use the commit of the last accepted release (or the revision whose receipts
 are reused) as the base. The output lists:
 
 - `native_changed`: native sets whose pins changed: `claude` and `codex`
-  (`runtime.dependencies` in each Plugin's `provider.json`), `exec-server`
-  (`components/execution-runtime/lock.json`) and `node`
-  (`components/provider-runtime/lock.json`).
+  (`runtime.dependencies` in each Plugin's `provider.json`, and their CLI and
+  ACP adapter entries in `components/provider-runtime/lock.json`),
+  `exec-server` (`components/execution-runtime/lock.json`) and `node` (the
+  provider-runtime lock's `node`). Other components of the shared lock do not
+  count.
 - `suites`: each selected suite with its `kind`, `command` and the reasons it
   was selected. `unit` suites are cheap source gates; `packaged` suites run the
   built release bytes with a real worker and keeper; `native` suites compare

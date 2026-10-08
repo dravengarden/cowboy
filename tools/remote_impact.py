@@ -2,14 +2,17 @@
 """Which remote execution checks a change needs, from its Git diff.
 
 Reads tools/remote_check_map.json and prints JSON with:
-- "native_changed": native sets (pinned CLIs, executor, Node) whose pins changed;
+- "native_changed": native sets (pinned CLIs and adapters, executor, Node) whose
+  pins changed; a pin is a JSON value in a manifest or lock file, compared
+  between the two revisions, so other components in a shared lock do not count;
 - "suites": each selected suite with its command, kind (unit, packaged, native)
   and why it was selected. "claude-worker" also carries "phases" for the
   conformance input's "phases" field ("all" omits the field; [] runs the base
   turn alone) and "native_probes" to re-run: diff each fresh receipt with its
   baseline and add the phases the map lists for any probe that differs;
-- "unmapped": changed remote files the map does not name. They select every
-  suite until the map is extended in the same change.
+- "unmapped": changed remote files no packaged or native suite, pin, manifest
+  or inert entry names (a unit gate's directory does not count). They select
+  every suite until the map is extended in the same change.
 
 A manifest under "manifests" counts as changed only when a key outside its
 "inert" list changed; a native set's pinned dependencies count as a native
@@ -54,9 +57,9 @@ def impact(changed, check_map, native_changed=(), manifests_changed=(), closure=
     suites = check_map["suites"]
     known = set(check_map["manifests"]) | set(check_map["inert"])
     for spec in check_map["native"].values():
-        known |= set(spec.get("inputs", []))
+        known |= set(spec.get("inputs", [])) | {pin["file"] for pin in spec.get("pins", [])}
     for spec in suites.values():
-        known |= set(spec.get("paths", []))
+        known |= set(spec.get("paths", [])) if spec["kind"] != "unit" else set()
         known |= closure(spec["entry"]) if "entry" in spec else set()
         for entries in spec.get("phases", {}).values():
             known |= set(entries)
@@ -108,6 +111,35 @@ def impact(changed, check_map, native_changed=(), manifests_changed=(), closure=
     return {"native_changed": sorted(native_changed), "suites": selected, "unmapped": unmapped}
 
 
+def value_at(document, keys):
+    for key in keys:
+        document = document.get(key, {}) if isinstance(document, dict) else {}
+    return document
+
+
+def pinned_changes(changed, check_map, before, after):
+    """Native sets whose pins differ, and manifests whose non-inert, unpinned keys differ.
+
+    before/after load a file's JSON at the base and head revisions."""
+    native = sorted(name for name, spec in check_map["native"].items() if any(
+        pin["file"] in changed and value_at(before(pin["file"]), pin["path"]) != value_at(after(pin["file"]), pin["path"])
+        for pin in spec.get("pins", [])))
+
+    def relevant(load, path):
+        value = {key: json.loads(json.dumps(item)) for key, item in load(path).items()
+                 if key not in check_map["manifests"][path]["inert"]}
+        for spec in check_map["native"].values():
+            for pin in spec.get("pins", []):
+                if pin["file"] == path:
+                    parent = value_at(value, pin["path"][:-1])
+                    if isinstance(parent, dict):
+                        parent.pop(pin["path"][-1], None)
+        return value
+    manifests = sorted(path for path in check_map["manifests"] if path in changed and
+                       relevant(before, path) != relevant(after, path))
+    return native, manifests
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", required=True)
@@ -117,31 +149,12 @@ def main():
                              capture_output=True, text=True).stdout.split()
     check_map = json.loads(CHECK_MAP.read_text())
 
-    def manifest(rev, path):
-        shown = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=ROOT, capture_output=True, text=True)
-        return json.loads(shown.stdout) if shown.returncode == 0 else {}
-
-    def pinned(rev, spec):
-        value = manifest(rev, spec["manifest"])
-        for key in spec["path"]:
-            value = value.get(key, {}) if isinstance(value, dict) else {}
-        return value
-
-    def relevant(rev, path):
-        value = {key: item for key, item in manifest(rev, path).items()
-                 if key not in check_map["manifests"][path]["inert"]}
-        for spec in check_map["native"].values():
-            if spec.get("manifest") == path:
-                parent = value
-                for key in spec["path"][:-1]:
-                    parent = parent.get(key, {}) if isinstance(parent, dict) else {}
-                if isinstance(parent, dict):
-                    parent.pop(spec["path"][-1], None)
-        return value
-    native = [name for name, spec in check_map["native"].items() if "manifest" in spec and
-              spec["manifest"] in changed and pinned(args.base, spec) != pinned(args.head, spec)]
-    manifests = [path for path in check_map["manifests"] if path in changed and
-                 relevant(args.base, path) != relevant(args.head, path)]
+    def loader(rev):
+        def load(path):
+            shown = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=ROOT, capture_output=True, text=True)
+            return json.loads(shown.stdout) if shown.returncode == 0 else {}
+        return load
+    native, manifests = pinned_changes(changed, check_map, loader(args.base), loader(args.head))
     print(json.dumps({"changed": changed, "manifests_changed": manifests,
                       **impact(changed, check_map, native, manifests)}, indent=1))
 

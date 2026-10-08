@@ -1,20 +1,223 @@
 {
-  "schema": 1,
-  "note": "Which remote execution checks a change needs. tools/remote_impact.py reads it; the flow is in .agents/skills/release-cowboy-plugin/references/remote-checks.md. A suite runs when a changed file matches its paths, its entry's tools/ import closure, or a native set it uses changed. Inert entries are research probes and plugin files no remote path loads.",
-  "lanes": [
-    "plugins/claude-code/",
-    "plugins/codex/",
-    "components/provider-runtime/",
-    "components/execution-runtime/",
-    "src/execution_",
+ "schema": 1,
+ "note": "Which remote execution checks a change needs. tools/remote_impact.py reads it; the flow is in .agents/skills/release-cowboy-plugin/references/remote-checks.md. A suite runs when a changed file matches its paths, its entry's tools/ import closure, or a native set it uses changed. Inert entries are research probes and plugin files no remote path loads.",
+ "lanes": [
+  "plugins/claude-code/",
+  "plugins/codex/",
+  "components/provider-runtime/",
+  "components/execution-runtime/",
+  "src/execution_",
+  "src/worker_execution",
+  "src/remote_runtime",
+  "src/runtime_wire.rs",
+  "src/machine_",
+  "tools/claude",
+  "tools/execution_",
+  "tools/remote_",
+  "tools/matrix_execution_fixture.py",
+  "src/server/execution.rs",
+  "src/server/execution/",
+  "src/bin/cowboy-acp-worker.rs",
+  "src/worker.rs",
+  "src/acp_bridge.rs",
+  "src/bin/cowboy-execution-host.rs",
+  "src/bin/cowboy-machine.rs",
+  "src/bin/cowboy-machine-install.rs",
+  "components/memory-client/"
+ ],
+ "native": {
+  "claude": {
+   "pins": [
+    {
+     "file": "plugins/claude-code/provider.json",
+     "path": [
+      "runtime",
+      "dependencies"
+     ]
+    },
+    {
+     "file": "components/provider-runtime/lock.json",
+     "path": [
+      "components",
+      "anthropic-claude-code"
+     ]
+    },
+    {
+     "file": "components/provider-runtime/lock.json",
+     "path": [
+      "components",
+      "claude-agent-acp"
+     ]
+    }
+   ]
+  },
+  "codex": {
+   "pins": [
+    {
+     "file": "plugins/codex/provider.json",
+     "path": [
+      "runtime",
+      "dependencies"
+     ]
+    },
+    {
+     "file": "components/provider-runtime/lock.json",
+     "path": [
+      "components",
+      "openai-codex"
+     ]
+    },
+    {
+     "file": "components/provider-runtime/lock.json",
+     "path": [
+      "components",
+      "codex-acp"
+     ]
+    }
+   ]
+  },
+  "exec-server": {
+   "inputs": [
+    "components/execution-runtime/lock.json"
+   ]
+  },
+  "node": {
+   "pins": [
+    {
+     "file": "components/provider-runtime/lock.json",
+     "path": [
+      "node"
+     ]
+    }
+   ]
+  }
+ },
+ "manifests": {
+  "plugins/claude-code/provider.json": {
+   "inert": [
+    "version",
+    "display",
+    "card_layout",
+    "activity",
+    "configuration_presets"
+   ]
+  },
+  "plugins/claude-code/plugin.json": {
+   "inert": [
+    "version",
+    "component_release"
+   ]
+  },
+  "plugins/claude-code/host.json": {
+   "inert": [
+    "ui",
+    "visual",
+    "usage"
+   ]
+  },
+  "plugins/codex/provider.json": {
+   "inert": [
+    "version",
+    "display",
+    "card_layout",
+    "activity",
+    "configuration_presets"
+   ]
+  },
+  "plugins/codex/plugin.json": {
+   "inert": [
+    "version",
+    "component_release"
+   ]
+  },
+  "plugins/codex/host.json": {
+   "inert": [
+    "ui",
+    "visual",
+    "usage"
+   ]
+  }
+ },
+ "inert": [
+  "plugins/claude-code/USAGE.md",
+  "plugins/claude-code/collector/",
+  "plugins/claude-code/usage.test.js",
+  "tools/claude_native_agent_probe.py",
+  "tools/claude_native_shell_probe.py",
+  "tools/claude_native_task_stop_probe.py",
+  "plugins/codex/collector/",
+  "plugins/codex/runtime/README.md",
+  "tools/remote_impact.py",
+  "tools/remote_check_map.json",
+  "components/provider-runtime/packages/gemini/",
+  "components/provider-runtime/check.ts",
+  "plugins/codex/runtime/resume_conformance.py"
+ ],
+ "suites": {
+  "claude-remote-check": {
+   "kind": "unit",
+   "command": "just claude-remote-check",
+   "paths": [
+    "plugins/claude-code/runtime/",
+    "components/memory-client/",
+    "tools/claude-remote-",
+    "tools/claude_native_behavior_baseline.json",
+    "tools/remote_impact.py",
+    "tools/remote_check_map.json",
+    "tools/remote_impact_test.py",
+    "tools/register-memory-client.mjs"
+   ],
+   "native": [
+    "claude"
+   ],
+   "manifests": [
+    "plugins/claude-code/provider.json",
+    "plugins/claude-code/plugin.json",
+    "plugins/claude-code/host.json"
+   ]
+  },
+  "codex-adapter-check": {
+   "kind": "unit",
+   "command": "just provider-check (its codex-acp launch_test and codex runtime checks)",
+   "paths": [
+    "components/provider-runtime/packages/codex-acp/",
+    "plugins/codex/runtime/"
+   ],
+   "native": [
+    "codex"
+   ],
+   "manifests": [
+    "plugins/codex/provider.json",
+    "plugins/codex/plugin.json",
+    "plugins/codex/host.json"
+   ]
+  },
+  "execution-rust-tests": {
+   "kind": "unit",
+   "command": "cargo test --locked --all-features --lib -- worker_execution execution_ remote_runtime runtime_wire machine_ server::execution worker acp_bridge",
+   "paths": [
     "src/worker_execution",
+    "src/execution_host",
+    "src/execution_protocol.rs",
+    "src/execution_environment.rs",
+    "src/execution_target_environment.rs",
     "src/remote_runtime",
     "src/runtime_wire.rs",
-    "src/machine_",
-    "tools/claude",
-    "tools/execution_",
-    "tools/remote_",
-    "tools/matrix_execution_fixture.py",
+    "src/machine_transport",
+    "src/machine_protocol",
+    "Cargo.toml",
+    "Cargo.lock",
+    "flake.nix",
+    "flake.lock",
+    "src/machine_broker",
+    "src/machine_control",
+    "src/machine_auth.rs",
+    "src/machine_cli",
+    "src/machine_install",
+    "src/machine_components",
+    "src/machine_convergence",
+    "src/machine_plugins",
+    "src/machine_code_plugins",
     "src/server/execution.rs",
     "src/server/execution/",
     "src/bin/cowboy-acp-worker.rs",
@@ -22,467 +225,306 @@
     "src/acp_bridge.rs",
     "src/bin/cowboy-execution-host.rs",
     "src/bin/cowboy-machine.rs",
-    "src/bin/cowboy-machine-install.rs",
+    "src/bin/cowboy-machine-install.rs"
+   ]
+  },
+  "claude-worker": {
+   "kind": "packaged",
+   "command": "just execution-worker-conformance <claude input> <new receipt>",
+   "entry": "tools/execution_claude_worker_conformance.py",
+   "paths": [
+    "plugins/claude-code/runtime/launch.mjs",
+    "plugins/claude-code/runtime/context-mod.js",
+    "plugins/claude-code/runtime/tools.mjs",
+    "plugins/claude-code/runtime/connection.mjs",
+    "plugins/claude-code/runtime/mod-bridge.mjs",
+    "plugins/claude-code/runtime/build.ts",
+    "tools/execution_claude_worker_conformance.py",
+    "tools/execution_environment_claude_probe.py",
+    "plugins/claude-code/runtime/memory.mjs",
+    "src/worker_execution",
+    "src/execution_host",
+    "src/execution_protocol.rs",
+    "src/execution_environment.rs",
+    "src/execution_target_environment.rs",
+    "src/remote_runtime",
+    "src/runtime_wire.rs",
+    "src/machine_transport",
+    "src/machine_protocol",
+    "Cargo.toml",
+    "Cargo.lock",
+    "flake.nix",
+    "flake.lock",
+    "components/provider-runtime/packages/claude-agent-acp/",
+    "components/provider-runtime/build.ts",
+    "components/provider-runtime/package.json",
+    "src/bin/cowboy-acp-worker.rs",
+    "src/worker.rs",
+    "src/acp_bridge.rs",
+    "src/bin/cowboy-execution-host.rs",
     "components/memory-client/"
-  ],
-  "native": {
-    "claude": {
-      "manifest": "plugins/claude-code/provider.json",
-      "path": [
-        "runtime",
-        "dependencies"
-      ]
+   ],
+   "native": [
+    "claude",
+    "exec-server",
+    "node"
+   ],
+   "manifests": [
+    "plugins/claude-code/provider.json",
+    "plugins/claude-code/plugin.json",
+    "plugins/claude-code/host.json"
+   ],
+   "phases": {
+    "shell": [
+     "tools/claude_shell_cases.py",
+     "tools/claude_shell_native_baseline.json"
+    ],
+    "notifications": [
+     "plugins/claude-code/runtime/task-wait.mjs"
+    ],
+    "lifecycle": [
+     "plugins/claude-code/runtime/task-wait.mjs",
+     "tools/claude_lifecycle_cases.py",
+     "tools/claude_lifecycle_native_baseline.json"
+    ],
+    "context": [
+     "plugins/claude-code/runtime/instructions.mjs"
+    ],
+    "files": [
+     "plugins/claude-code/runtime/read-range.mjs",
+     "tools/claude_file_cases.py",
+     "tools/claude_file_native_baseline.json",
+     "tools/claude-range-native-probe.mjs"
+    ],
+    "pdf": [
+     "tools/claude_pdf_cases.py",
+     "tools/claude_pdf_native_baseline.json"
+    ],
+    "skills": [
+     "plugins/claude-code/runtime/skills.mjs",
+     "tools/claude_skill_cases.py",
+     "tools/claude_skill_native_baseline.json"
+    ],
+    "mcp": [
+     "plugins/claude-code/runtime/mcp.mjs",
+     "plugins/claude-code/runtime/mcp-proxy.mjs",
+     "tools/claude_mcp_cases.py"
+    ],
+    "agent_background": [
+     "plugins/claude-code/runtime/task-wait.mjs"
+    ],
+    "hooks": [
+     "plugins/claude-code/runtime/hook-proxy.mjs"
+    ],
+    "agents": [],
+    "permissions": []
+   },
+   "native_probes": {
+    "tools/claude_native_behavior_probe.py": {
+     "baseline": "tools/claude_native_behavior_baseline.json",
+     "phases": [
+      "notifications",
+      "lifecycle",
+      "mcp",
+      "agent_background"
+     ]
     },
-    "codex": {
-      "manifest": "plugins/codex/provider.json",
-      "path": [
-        "runtime",
-        "dependencies"
-      ]
+    "tools/claude_shell_native_probe.py": {
+     "baseline": "tools/claude_shell_native_baseline.json",
+     "phases": [
+      "shell"
+     ]
     },
-    "exec-server": {
-      "inputs": [
-        "components/execution-runtime/lock.json"
-      ]
+    "tools/claude_lifecycle_native_probe.py": {
+     "baseline": "tools/claude_lifecycle_native_baseline.json",
+     "phases": [
+      "lifecycle"
+     ]
     },
-    "node": {
-      "inputs": [
-        "components/provider-runtime/lock.json"
-      ]
+    "tools/claude_file_native_probe.py": {
+     "baseline": "tools/claude_file_native_baseline.json",
+     "phases": [
+      "files"
+     ]
+    },
+    "tools/claude_pdf_native_probe.py": {
+     "baseline": "tools/claude_pdf_native_baseline.json",
+     "phases": [
+      "pdf"
+     ]
+    },
+    "tools/claude_skill_native_probe.py": {
+     "baseline": "tools/claude_skill_native_baseline.json",
+     "phases": [
+      "skills"
+     ]
     }
+   }
   },
-  "manifests": {
-    "plugins/claude-code/provider.json": {
-      "inert": [
-        "version",
-        "display",
-        "card_layout",
-        "activity",
-        "configuration_presets"
-      ]
-    },
-    "plugins/claude-code/plugin.json": {
-      "inert": [
-        "version",
-        "component_release"
-      ]
-    },
-    "plugins/claude-code/host.json": {
-      "inert": [
-        "ui",
-        "visual",
-        "usage"
-      ]
-    },
-    "plugins/codex/provider.json": {
-      "inert": [
-        "version",
-        "display",
-        "card_layout",
-        "activity",
-        "configuration_presets"
-      ]
-    },
-    "plugins/codex/plugin.json": {
-      "inert": [
-        "version",
-        "component_release"
-      ]
-    },
-    "plugins/codex/host.json": {
-      "inert": [
-        "ui",
-        "visual",
-        "usage"
-      ]
-    }
+  "codex-worker": {
+   "kind": "packaged",
+   "command": "just execution-worker-conformance <codex input> <new receipt>",
+   "entry": "tools/execution_worker_conformance.py",
+   "paths": [
+    "src/worker_execution",
+    "src/execution_host",
+    "src/execution_protocol.rs",
+    "src/execution_environment.rs",
+    "src/execution_target_environment.rs",
+    "src/remote_runtime",
+    "src/runtime_wire.rs",
+    "src/machine_transport",
+    "src/machine_protocol",
+    "Cargo.toml",
+    "Cargo.lock",
+    "flake.nix",
+    "flake.lock",
+    "plugins/codex/runtime/launch.mjs",
+    "plugins/codex/runtime/adapter.patch",
+    "plugins/codex/runtime/memory.mjs",
+    "plugins/codex/runtime/build.ts",
+    "plugins/codex/runtime/source.json",
+    "components/provider-runtime/packages/codex-acp/",
+    "components/provider-runtime/build.ts",
+    "components/provider-runtime/package.json",
+    "src/bin/cowboy-acp-worker.rs",
+    "src/worker.rs",
+    "src/acp_bridge.rs",
+    "src/bin/cowboy-execution-host.rs",
+    "components/memory-client/"
+   ],
+   "native": [
+    "codex",
+    "exec-server",
+    "node"
+   ],
+   "manifests": [
+    "plugins/codex/provider.json",
+    "plugins/codex/plugin.json",
+    "plugins/codex/host.json"
+   ]
   },
-  "inert": [
-    "plugins/claude-code/USAGE.md",
-    "plugins/claude-code/collector/",
-    "plugins/claude-code/usage.test.js",
-    "tools/claude_native_agent_probe.py",
-    "tools/claude_native_shell_probe.py",
-    "tools/claude_native_task_stop_probe.py",
-    "plugins/codex/collector/",
-    "plugins/codex/runtime/README.md",
-    "tools/remote_impact.py",
-    "tools/remote_check_map.json",
-    "components/provider-runtime/packages/gemini/",
-    "components/provider-runtime/check.ts"
-  ],
-  "suites": {
-    "claude-remote-check": {
-      "kind": "unit",
-      "command": "just claude-remote-check",
-      "paths": [
-        "plugins/claude-code/runtime/",
-        "components/memory-client/",
-        "tools/claude-remote-",
-        "tools/claude_native_behavior_baseline.json",
-        "tools/remote_impact.py",
-        "tools/remote_check_map.json",
-        "tools/remote_impact_test.py",
-        "tools/register-memory-client.mjs"
-      ],
-      "native": [
-        "claude"
-      ],
-      "manifests": [
-        "plugins/claude-code/provider.json",
-        "plugins/claude-code/plugin.json",
-        "plugins/claude-code/host.json"
-      ]
-    },
-    "codex-adapter-check": {
-      "kind": "unit",
-      "command": "just provider-check (its codex-acp launch_test and codex runtime checks)",
-      "paths": [
-        "components/provider-runtime/packages/codex-acp/",
-        "plugins/codex/runtime/"
-      ],
-      "native": [
-        "codex"
-      ],
-      "manifests": [
-        "plugins/codex/provider.json",
-        "plugins/codex/plugin.json",
-        "plugins/codex/host.json"
-      ]
-    },
-    "execution-rust-tests": {
-      "kind": "unit",
-      "command": "cargo test --locked --all-features --lib -- worker_execution execution_ remote_runtime runtime_wire machine_ server::execution worker acp_bridge",
-      "paths": [
-        "src/worker_execution",
-        "src/execution_host",
-        "src/execution_protocol.rs",
-        "src/execution_environment.rs",
-        "src/execution_target_environment.rs",
-        "src/remote_runtime",
-        "src/runtime_wire.rs",
-        "src/machine_transport",
-        "src/machine_protocol",
-        "Cargo.toml",
-        "Cargo.lock",
-        "flake.nix",
-        "flake.lock",
-        "src/machine_broker",
-        "src/machine_control",
-        "src/machine_auth.rs",
-        "src/machine_cli",
-        "src/machine_install",
-        "src/machine_components",
-        "src/machine_convergence",
-        "src/machine_plugins",
-        "src/machine_code_plugins",
-        "src/server/execution.rs",
-        "src/server/execution/",
-        "src/bin/cowboy-acp-worker.rs",
-        "src/worker.rs",
-        "src/acp_bridge.rs",
-        "src/bin/cowboy-execution-host.rs",
-        "src/bin/cowboy-machine.rs",
-        "src/bin/cowboy-machine-install.rs"
-      ]
-    },
-    "claude-worker": {
-      "kind": "packaged",
-      "command": "just execution-worker-conformance <claude input> <new receipt>",
-      "entry": "tools/execution_claude_worker_conformance.py",
-      "paths": [
-        "plugins/claude-code/runtime/launch.mjs",
-        "plugins/claude-code/runtime/context-mod.js",
-        "plugins/claude-code/runtime/tools.mjs",
-        "plugins/claude-code/runtime/connection.mjs",
-        "plugins/claude-code/runtime/mod-bridge.mjs",
-        "plugins/claude-code/runtime/build.ts",
-        "tools/execution_claude_worker_conformance.py",
-        "tools/execution_environment_claude_probe.py",
-        "plugins/claude-code/runtime/memory.mjs",
-        "src/worker_execution",
-        "src/execution_host",
-        "src/execution_protocol.rs",
-        "src/execution_environment.rs",
-        "src/execution_target_environment.rs",
-        "src/remote_runtime",
-        "src/runtime_wire.rs",
-        "src/machine_transport",
-        "src/machine_protocol",
-        "Cargo.toml",
-        "Cargo.lock",
-        "flake.nix",
-        "flake.lock",
-        "components/provider-runtime/packages/claude-agent-acp/",
-        "components/provider-runtime/build.ts",
-        "components/provider-runtime/package.json",
-        "src/bin/cowboy-acp-worker.rs",
-        "src/worker.rs",
-        "src/acp_bridge.rs",
-        "src/bin/cowboy-execution-host.rs",
-        "components/memory-client/"
-      ],
-      "native": [
-        "claude",
-        "exec-server",
-        "node"
-      ],
-      "manifests": [
-        "plugins/claude-code/provider.json",
-        "plugins/claude-code/plugin.json",
-        "plugins/claude-code/host.json"
-      ],
-      "phases": {
-        "shell": [
-          "tools/claude_shell_cases.py",
-          "tools/claude_shell_native_baseline.json"
-        ],
-        "notifications": [
-          "plugins/claude-code/runtime/task-wait.mjs"
-        ],
-        "lifecycle": [
-          "plugins/claude-code/runtime/task-wait.mjs",
-          "tools/claude_lifecycle_cases.py",
-          "tools/claude_lifecycle_native_baseline.json"
-        ],
-        "context": [
-          "plugins/claude-code/runtime/instructions.mjs"
-        ],
-        "files": [
-          "plugins/claude-code/runtime/read-range.mjs",
-          "tools/claude_file_cases.py",
-          "tools/claude_file_native_baseline.json",
-          "tools/claude-range-native-probe.mjs"
-        ],
-        "pdf": [
-          "tools/claude_pdf_cases.py",
-          "tools/claude_pdf_native_baseline.json"
-        ],
-        "skills": [
-          "plugins/claude-code/runtime/skills.mjs",
-          "tools/claude_skill_cases.py",
-          "tools/claude_skill_native_baseline.json"
-        ],
-        "mcp": [
-          "plugins/claude-code/runtime/mcp.mjs",
-          "plugins/claude-code/runtime/mcp-proxy.mjs",
-          "tools/claude_mcp_cases.py"
-        ],
-        "agent_background": [
-          "plugins/claude-code/runtime/task-wait.mjs"
-        ],
-        "hooks": [
-          "plugins/claude-code/runtime/hook-proxy.mjs"
-        ],
-        "agents": [],
-        "permissions": []
-      },
-      "native_probes": {
-        "tools/claude_native_behavior_probe.py": {
-          "baseline": "tools/claude_native_behavior_baseline.json",
-          "phases": [
-            "notifications",
-            "lifecycle",
-            "mcp",
-            "agent_background"
-          ]
-        },
-        "tools/claude_shell_native_probe.py": {
-          "baseline": "tools/claude_shell_native_baseline.json",
-          "phases": [
-            "shell"
-          ]
-        },
-        "tools/claude_lifecycle_native_probe.py": {
-          "baseline": "tools/claude_lifecycle_native_baseline.json",
-          "phases": [
-            "lifecycle"
-          ]
-        },
-        "tools/claude_file_native_probe.py": {
-          "baseline": "tools/claude_file_native_baseline.json",
-          "phases": [
-            "files"
-          ]
-        },
-        "tools/claude_pdf_native_probe.py": {
-          "baseline": "tools/claude_pdf_native_baseline.json",
-          "phases": [
-            "pdf"
-          ]
-        },
-        "tools/claude_skill_native_probe.py": {
-          "baseline": "tools/claude_skill_native_baseline.json",
-          "phases": [
-            "skills"
-          ]
-        }
-      }
-    },
-    "codex-worker": {
-      "kind": "packaged",
-      "command": "just execution-worker-conformance <codex input> <new receipt>",
-      "entry": "tools/execution_worker_conformance.py",
-      "paths": [
-        "src/worker_execution",
-        "src/execution_host",
-        "src/execution_protocol.rs",
-        "src/execution_environment.rs",
-        "src/execution_target_environment.rs",
-        "src/remote_runtime",
-        "src/runtime_wire.rs",
-        "src/machine_transport",
-        "src/machine_protocol",
-        "Cargo.toml",
-        "Cargo.lock",
-        "flake.nix",
-        "flake.lock",
-        "plugins/codex/runtime/launch.mjs",
-        "plugins/codex/runtime/adapter.patch",
-        "plugins/codex/runtime/memory.mjs",
-        "plugins/codex/runtime/build.ts",
-        "plugins/codex/runtime/source.json",
-        "components/provider-runtime/packages/codex-acp/",
-        "components/provider-runtime/build.ts",
-        "components/provider-runtime/package.json",
-        "src/bin/cowboy-acp-worker.rs",
-        "src/worker.rs",
-        "src/acp_bridge.rs",
-        "src/bin/cowboy-execution-host.rs",
-        "components/memory-client/"
-      ],
-      "native": [
-        "codex",
-        "exec-server",
-        "node"
-      ],
-      "manifests": [
-        "plugins/codex/provider.json",
-        "plugins/codex/plugin.json",
-        "plugins/codex/host.json"
-      ]
-    },
-    "session": {
-      "kind": "packaged",
-      "command": "just execution-session-conformance <input> <new receipt>",
-      "entry": "tools/execution_session_conformance.py",
-      "paths": [
-        "src/worker_execution",
-        "src/execution_host",
-        "src/execution_protocol.rs",
-        "src/execution_environment.rs",
-        "src/execution_target_environment.rs",
-        "src/remote_runtime",
-        "src/runtime_wire.rs",
-        "src/machine_transport",
-        "src/machine_protocol",
-        "Cargo.toml",
-        "Cargo.lock",
-        "flake.nix",
-        "flake.lock",
-        "src/machine_broker",
-        "src/machine_control",
-        "src/machine_auth.rs",
-        "src/machine_cli",
-        "src/machine_install",
-        "src/machine_components",
-        "src/machine_convergence",
-        "src/machine_plugins",
-        "src/machine_code_plugins",
-        "src/server/execution.rs",
-        "src/server/execution/",
-        "src/bin/cowboy-acp-worker.rs",
-        "src/worker.rs",
-        "src/acp_bridge.rs",
-        "src/bin/cowboy-execution-host.rs",
-        "src/bin/cowboy-machine.rs",
-        "src/bin/cowboy-machine-install.rs"
-      ],
-      "native": [
-        "exec-server"
-      ],
-      "manifests": [
-        "plugins/codex/provider.json",
-        "plugins/codex/plugin.json"
-      ]
-    },
-    "keeper": {
-      "kind": "packaged",
-      "command": "just execution-keeper-conformance KEEPER CLI VERSION SHA256 <new receipt>",
-      "entry": "tools/execution_keeper_conformance.py",
-      "paths": [
-        "src/execution_host",
-        "src/execution_protocol.rs",
-        "src/execution_environment.rs",
-        "src/execution_target_environment.rs",
-        "Cargo.toml",
-        "Cargo.lock",
-        "src/bin/cowboy-execution-host.rs"
-      ],
-      "native": [
-        "exec-server"
-      ]
-    },
-    "claude-task-stop": {
-      "kind": "packaged",
-      "command": "just execution-claude-task-stop-conformance KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA <new receipt>",
-      "entry": "tools/claude_native_task_stop_probe.py",
-      "paths": [
-        "src/execution_host",
-        "src/execution_protocol.rs",
-        "src/bin/cowboy-execution-host.rs"
-      ],
-      "native": [
-        "claude",
-        "exec-server"
-      ]
-    },
-    "lifetime": {
-      "kind": "native",
-      "command": "just execution-lifetime-conformance CLI VERSION SHA256 <new receipt>",
-      "entry": "tools/execution_environment_lifetime_probe.ts",
-      "native": [
-        "exec-server"
-      ]
-    },
-    "codex-turn": {
-      "kind": "native",
-      "command": "just execution-codex-turn-conformance CLI VERSION SHA256 <new receipt>",
-      "entry": "tools/execution_environment_codex_turn_probe.py",
-      "native": [
-        "codex",
-        "exec-server"
-      ]
-    },
-    "child-stop": {
-      "kind": "native",
-      "command": "just execution-child-stop-conformance CLI SHA256 <new receipt>",
-      "entry": "tools/execution_native_child_stop_probe.py",
-      "native": [
-        "codex",
-        "exec-server"
-      ]
-    },
-    "codex-hooks": {
-      "kind": "native",
-      "command": "tools/remote_native_hooks_probe.py under the isolation wrapper (docs/remote-tools-coverage-audit-2026-10-05.md)",
-      "entry": "tools/remote_native_hooks_probe.py",
-      "native": [
-        "codex",
-        "exec-server"
-      ]
-    },
-    "handshake-recovery": {
-      "kind": "native",
-      "command": "tools/execution_handshake_recovery_probe.py (docs/execution-connection-recovery.md)",
-      "entry": "tools/execution_handshake_recovery_probe.py",
-      "native": [
-        "exec-server",
-        "node"
-      ],
-      "paths": [
-        "components/provider-runtime/packages/codex-acp/launch.mjs"
-      ]
-    }
+  "session": {
+   "kind": "packaged",
+   "command": "just execution-session-conformance <input> <new receipt>",
+   "entry": "tools/execution_session_conformance.py",
+   "paths": [
+    "src/worker_execution",
+    "src/execution_host",
+    "src/execution_protocol.rs",
+    "src/execution_environment.rs",
+    "src/execution_target_environment.rs",
+    "src/remote_runtime",
+    "src/runtime_wire.rs",
+    "src/machine_transport",
+    "src/machine_protocol",
+    "Cargo.toml",
+    "Cargo.lock",
+    "flake.nix",
+    "flake.lock",
+    "src/machine_broker",
+    "src/machine_control",
+    "src/machine_auth.rs",
+    "src/machine_cli",
+    "src/machine_install",
+    "src/machine_components",
+    "src/machine_convergence",
+    "src/machine_plugins",
+    "src/machine_code_plugins",
+    "src/server/execution.rs",
+    "src/server/execution/",
+    "src/bin/cowboy-acp-worker.rs",
+    "src/worker.rs",
+    "src/acp_bridge.rs",
+    "src/bin/cowboy-execution-host.rs",
+    "src/bin/cowboy-machine.rs",
+    "src/bin/cowboy-machine-install.rs"
+   ],
+   "native": [
+    "exec-server"
+   ],
+   "manifests": [
+    "plugins/codex/provider.json",
+    "plugins/codex/plugin.json"
+   ]
+  },
+  "keeper": {
+   "kind": "packaged",
+   "command": "just execution-keeper-conformance KEEPER CLI VERSION SHA256 <new receipt>",
+   "entry": "tools/execution_keeper_conformance.py",
+   "paths": [
+    "src/execution_host",
+    "src/execution_protocol.rs",
+    "src/execution_environment.rs",
+    "src/execution_target_environment.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "src/bin/cowboy-execution-host.rs"
+   ],
+   "native": [
+    "exec-server"
+   ]
+  },
+  "claude-task-stop": {
+   "kind": "packaged",
+   "command": "just execution-claude-task-stop-conformance KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA <new receipt>",
+   "entry": "tools/claude_native_task_stop_probe.py",
+   "paths": [
+    "src/execution_host",
+    "src/execution_protocol.rs",
+    "src/bin/cowboy-execution-host.rs"
+   ],
+   "native": [
+    "claude",
+    "exec-server"
+   ]
+  },
+  "lifetime": {
+   "kind": "native",
+   "command": "just execution-lifetime-conformance CLI VERSION SHA256 <new receipt>",
+   "entry": "tools/execution_environment_lifetime_probe.ts",
+   "native": [
+    "exec-server"
+   ]
+  },
+  "codex-turn": {
+   "kind": "native",
+   "command": "just execution-codex-turn-conformance CLI VERSION SHA256 <new receipt>",
+   "entry": "tools/execution_environment_codex_turn_probe.py",
+   "native": [
+    "codex",
+    "exec-server"
+   ]
+  },
+  "child-stop": {
+   "kind": "native",
+   "command": "just execution-child-stop-conformance CLI SHA256 <new receipt>",
+   "entry": "tools/execution_native_child_stop_probe.py",
+   "native": [
+    "codex",
+    "exec-server"
+   ]
+  },
+  "codex-hooks": {
+   "kind": "native",
+   "command": "tools/remote_native_hooks_probe.py under the isolation wrapper (docs/remote-tools-coverage-audit-2026-10-05.md)",
+   "entry": "tools/remote_native_hooks_probe.py",
+   "native": [
+    "codex",
+    "exec-server"
+   ]
+  },
+  "handshake-recovery": {
+   "kind": "native",
+   "command": "tools/execution_handshake_recovery_probe.py (docs/execution-connection-recovery.md)",
+   "entry": "tools/execution_handshake_recovery_probe.py",
+   "native": [
+    "exec-server",
+    "node"
+   ],
+   "paths": [
+    "components/provider-runtime/packages/codex-acp/launch.mjs"
+   ]
   }
+ }
 }

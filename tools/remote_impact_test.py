@@ -6,7 +6,7 @@ import unittest
 
 from claude_native_behavior_probe import stable
 from execution_claude_worker_conformance import PHASES
-from remote_impact import imports, impact
+from remote_impact import imports, impact, pinned_changes
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK_MAP = json.loads((ROOT / "tools/remote_check_map.json").read_text())
@@ -77,11 +77,17 @@ class ImpactTest(unittest.TestCase):
     def test_the_codex_acp_launcher_runs_its_handshake_probe(self):
         selected = suites(["components/provider-runtime/packages/codex-acp/launch.mjs"])
         self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "handshake-recovery"})
-        self.assertIn("handshake-recovery", suites(["components/provider-runtime/lock.json"]))
+        self.assertIn("handshake-recovery", suites(["components/provider-runtime/lock.json"], native_changed=["node"]))
 
     def test_a_codex_runtime_manifest_change_runs_the_session_fixture_built_from_it(self):
         selected = suites(["plugins/codex/provider.json"], manifests_changed=["plugins/codex/provider.json"])
         self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "session"})
+
+    def test_a_new_runtime_module_is_unmapped_even_under_a_unit_gate_directory(self):
+        for path in [CLAUDE + "new-module.mjs", "plugins/codex/runtime/new-module.mjs"]:
+            result = impact([path], CHECK_MAP)
+            self.assertEqual(result["unmapped"], [path])
+            self.assertEqual(set(result["suites"]), set(CHECK_MAP["suites"]))
 
     def test_a_shared_harness_module_runs_every_suite_importing_it(self):
         shared = "tools/execution_environment_probe.py"
@@ -107,6 +113,39 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual(impact(changed, CHECK_MAP), {"native_changed": [], "suites": {}, "unmapped": []})
 
 
+class PinnedChangesTest(unittest.TestCase):
+    LOCK = "components/provider-runtime/lock.json"
+
+    def compare(self, path, before, after):
+        return pinned_changes([path], CHECK_MAP, lambda _: before, lambda _: after)
+
+    def test_each_lock_component_marks_its_own_native_set(self):
+        base = {"node": {"version": "1"}, "components": {"anthropic-claude-code": {"url": "a"},
+                "openai-codex": {"url": "a"}, "google-gemini-cli": {"url": "a"}}}
+
+        def changed(*keys):
+            after = json.loads(json.dumps(base))
+            target = after
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = {"url": "b"}
+            return self.compare(self.LOCK, base, after)[0]
+        self.assertEqual(changed("components", "anthropic-claude-code"), ["claude"])
+        self.assertEqual(changed("components", "openai-codex"), ["codex"])
+        self.assertEqual(changed("node"), ["node"])
+        self.assertEqual(changed("components", "google-gemini-cli"), [])
+
+    def test_manifest_pins_are_native_and_inert_keys_are_ignored(self):
+        path = "plugins/codex/provider.json"
+        base = {"version": "1", "runtime": {"dependencies": [1], "entrypoint": "a"}}
+        self.assertEqual(self.compare(path, base, {"version": "2", "runtime": {"dependencies": [1], "entrypoint": "a"}}),
+                         ([], []))
+        self.assertEqual(self.compare(path, base, {"version": "1", "runtime": {"dependencies": [2], "entrypoint": "a"}}),
+                         (["codex"], []))
+        self.assertEqual(self.compare(path, base, {"version": "1", "runtime": {"dependencies": [1], "entrypoint": "b"}}),
+                         ([], [path]))
+
+
 class CheckMapTest(unittest.TestCase):
     def test_claude_phases_match_the_conformance_harness(self):
         claude = CHECK_MAP["suites"]["claude-worker"]
@@ -117,7 +156,7 @@ class CheckMapTest(unittest.TestCase):
     def test_every_named_file_exists(self):
         named = list(CHECK_MAP["manifests"]) + list(CHECK_MAP["inert"])
         for spec in CHECK_MAP["native"].values():
-            named += spec.get("inputs", []) + ([spec["manifest"]] if "manifest" in spec else [])
+            named += spec.get("inputs", []) + [pin["file"] for pin in spec.get("pins", [])]
         for spec in CHECK_MAP["suites"].values():
             named += spec.get("paths", []) + spec.get("manifests", []) + ([spec["entry"]] if "entry" in spec else [])
             named += [entry for entries in spec.get("phases", {}).values() for entry in entries]
