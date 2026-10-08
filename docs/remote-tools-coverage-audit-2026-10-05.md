@@ -98,7 +98,7 @@ to introduce more restrictions.
 | Native CodeAct | Native nested shell, patch, image, parallel/error results, yield/wait and cold resume now have pinned scripted evidence | Keep these in default native acceptance; separately test child agents and runtime failure while a cell is pending |
 | Claude tool dispatch | `context-mod.js` replaces native tool bodies with a facade | Restore native ownership where a lower-level boundary exists; retain independently tested file adapters |
 | Native Bash lifecycle | Facade retains processes but does not establish native background task registration | Explore shell prefix bridge preserving original Bash tool and native task registry |
-| Background completion | Claude 3.9.0: a native background task (runtime waiter) stands for each target command left running, so native delivers its completion into a running turn or as an idle turn of its own; TaskStop sends nothing; notifications are rewritten to the target handle. 3.18.0: native's background deadline (requested timeout, else 30 minutes; 30 minutes for a moved command) stops the target command too (packaged acceptance) | Subagent background commands are not notified |
+| Background completion | Claude 3.9.0: a native background task (runtime waiter) stands for each target command left running, so native delivers its completion into a running turn or as an idle turn of its own; TaskStop sends nothing; notifications are rewritten to the target handle. 3.18.0: native's background deadline (requested timeout, else 30 minutes; 30 minutes for a moved command) stops the target command too. 3.19.0: a background agent's background commands notify that agent, resuming it if it ended (packaged acceptance) | Notifications do not survive a native process restart, as natively |
 | PTY and stdin | Claude facade explicitly uses `tty:false`, `pipeStdin:false` | Native-parity baseline first: do not invent PTY support where provider lacks it; test Codex PTY, resize, EOF and incremental input |
 | Shell environment | Claude 3.8.0 runs native's command shape on the target: user bash/zsh, a login-shell snapshot (rc, functions, options, aliases, PATH), `cd` persistence with native's reset, native's environment variables; 36 Bash cases match native-local results in packaged acceptance | Error results keep Mods' `<tool_use_error>` wrapper; `CLAUDE_EFFORT` starts after the first tool batch; no embedded find/grep/rg shadows or `CLAUDE_PID` |
 | Project hooks (Claude) | 3.7.0 runs target project hooks: native lifecycle/native-tool hooks through the shell prefix, facade tool hooks (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest) through the adapter | Settings are a session-start snapshot; non-command facade tool hooks refuse matching calls |
@@ -840,6 +840,26 @@ Linux and actual macOS probes, three Controller reader roles, five public
 artifact digests and Catalog `ready`. OVH operation
 `ovh-claude-code-3-15-0-converge` completed: 3.15.0 active, 3.14.0 retained
 for rollback, no session leases, no live session restarted.
+
+### Agents' background commands and the target environment (Plugin 3.19.0)
+
+Native 2.1.287 delivers a background agent's background command completion to
+that agent (measured): into its running turn, or, if it has ended, by resuming
+it, after which the parent is notified of the agent's new result. The remote
+lane gave agents' background commands no notification, because the native
+task standing for a target command was started by the plugin's own
+`$.tool.call`, and a plugin's call belongs to the main session even with an
+agent id (measured). 3.19.0 runs the agent's own Bash call natively as that
+task (the `tool.call` hook's `next` with the waiter command), so native
+registers it as the agent's; the model still sees the target command's
+result. Packaged acceptance runs a background agent whose background command
+notifies it while it waits
+(`agent_background_command_notifies_the_agent_as_natively`). One native
+review round reported nothing.
+
+The plugin also stops asking the executor to drop credential-like variables
+(user decision); see the MCP section for the Machine's closed environment,
+which still decides what reaches the target.
 
 ### Tool descriptions and background deadlines (Plugin 3.18.0)
 
