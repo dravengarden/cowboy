@@ -96,10 +96,16 @@ a Skill result drops the skill's messages, so names are projected in
 would have run `!` commands (the mirror marks them so native does not); stored
 attachments, the skill listing among them, render again on later requests;
 and the attachment types `context-mod.js` drops as runtime-located
-(`RUNTIME_ATTACHMENTS`) still cover native's producers. Target tools keep native's descriptions; re-capture
-`tools/claude_tool_descriptions_native_baseline.json` per CLI. Background
-deadlines rely on native stopping the waiter task at its deadline with the
-measured notification text (`background_deadline_*`). Target MCP servers
+(`RUNTIME_ATTACHMENTS`) still cover native's producers. Target tools keep
+native's descriptions, background deadlines rely on native stopping the waiter
+task at its deadline with the measured notification text
+(`background_deadline_*`), and an agent's background waiter must be the
+agent's own call so native notifies the agent; these, Bash stdin, MCP scopes
+and agent notification routing are captured in
+`tools/claude_native_behavior_baseline.json` by
+`tools/claude_native_behavior_probe.py`, and
+`tools/claude-remote-native-baseline.test.mjs` pins the plugin's assumptions
+to that receipt. Target MCP servers
 (`mcp.mjs`, `mcp-proxy.mjs`) rely on measured native
 scope, precedence and expansion rules, on the exec-server's `process/write`
 and `process/output` notifications, and on native passing
@@ -199,6 +205,37 @@ still loads, intercepts and validates the Mod correctly. See the
 [Mods implementation record](../../../../docs/experiments/claude-mods-execution-2026-10-02.md).
 
 ## Keep upgrades efficient
+
+Select checks from the actual change instead of re-running everything:
+
+```bash
+nix develop -c python3 tools/claude_remote_impact.py --base <accepted release commit>
+```
+
+`tools/claude_remote_check_map.json` maps lane files to the packaged
+acceptance phases (`PHASES` in `tools/execution_claude_worker_conformance.py`)
+and native probes; `just claude-remote-check` fails when a tracked lane file
+is missing from the map or the map names a missing file or phase. Use the
+output as follows:
+
+- `native_probes` (the pinned native dependencies in `provider.json` or the
+  runtime lock changed, or a probe or its baseline did): run each probe
+  against the candidate's native into a fresh receipt and diff it with its
+  baseline. Where it differs, decide whether the plugin must follow, update
+  the baseline in the same change, and run `just claude-remote-check`; add
+  the `phases` the map lists for that probe. Identical receipts need no
+  packaged phase beyond the base turn.
+- `phases`: set the conformance input's `"phases"` to this list (the base
+  startup and turn always run; `[]` runs them alone). `"all"` (a core file,
+  a non-inert manifest key or an unmapped file changed) omits the field for
+  the full run. The receipt records `scope` and `phases`.
+- `unmapped`: extend the map in the same change; until then the change runs
+  in full.
+
+A version, display or preset bump selects nothing, and a later candidate
+reuses the accepted receipt for every unselected phase. Contract inspection
+above still applies to a native change; extend a probe when it finds an
+unmeasured behavior.
 
 For presets/descriptions only, with unchanged runtime inputs and routing,
 reuse accepted immutable runtime artifacts through the owned builder; run the

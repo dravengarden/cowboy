@@ -1302,6 +1302,11 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
     return client
 
 
+# Acceptance phases after the base turn, in their run order.
+PHASES = ["agents", "permissions", "shell", "notifications", "lifecycle", "context", "files", "pdf", "skills",
+          "mcp", "agent_background", "hooks"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["native-cli", "descriptor", "runtime", "target", "receipt"]:
@@ -1310,6 +1315,8 @@ def main():
     require([name for _, name in socket.if_nameindex()] == ["lo"], "loopback namespace required")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "new receipt required")
     inputs = json.loads(Path(os.environ["COWBOY_TEST_EXECUTION_INPUT"]).read_text())
+    selected = set(inputs.get("phases") or PHASES)
+    require(selected <= set(PHASES), "unknown acceptance phase: " + ", ".join(sorted(selected - set(PHASES))))
     binary = Path(inputs["claude_cli"])
     require(hashlib.sha256(binary.read_bytes()).hexdigest() == inputs["claude_sha256"], "Claude artifact changed")
     launcher = Path(inputs["adapter_launcher"])
@@ -1430,7 +1437,7 @@ def main():
                 "native's runtime tools are not advertised: " + ",".join(sorted(main_tools)))
         checks.append("native_default_tool_set_without_runtime_only_search_tools")
         # Target tools keep native's own descriptions.
-        expected = json.loads((Path(__file__).parent / "claude_tool_descriptions_native_baseline.json").read_text())["descriptions"]
+        expected = json.loads((Path(__file__).parent / "claude_native_behavior_baseline.json").read_text())["tool_descriptions"]
         described = {definition["name"]: definition.get("description") for definition in api.requests[-1].get("tools", [])}
         differing = sorted(name for name, text in expected.items() if described.get(name) != text)
         for name in differing:
@@ -1660,19 +1667,27 @@ def main():
         require((args.target / "foreground.txt").read_text() == foreground, "foreground descendants survived interruption")
         context_checked(api.requests)
         checks.append("native_interrupt_stops_foreground_target_process")
-        client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
-        permission_phases(args, api, client, context_checked, checks)
+        # The base turn above always runs; an incremental run names the
+        # phases its change affects (tools/claude_remote_check_map.json).
+        agent_observations = []
+        if "agents" in selected:
+            client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)
+        if "permissions" in selected:
+            permission_phases(args, api, client, context_checked, checks)
         shell_results = {}
-        shell_phases(args, api, client, shell_results, checks)
-        notification_phases(args, api, client, checks)
-        lifecycle_phases(args, api, client, checks)
-        context_phases(args, api, client, checks)
-        file_phases(args, api, client, checks)
-        pdf_phases(args, api, client, checks)
-        skill_phases(args, api, client, checks)
-        mcp_phases(args, api, client, checks)
-        subagent_background_phases(args, api, client, checks)
-        client = hook_phases(args, api, client, native, session, context_checked, checks)
+        for name, phase in [("shell", lambda: shell_phases(args, api, client, shell_results, checks)),
+                            ("notifications", lambda: notification_phases(args, api, client, checks)),
+                            ("lifecycle", lambda: lifecycle_phases(args, api, client, checks)),
+                            ("context", lambda: context_phases(args, api, client, checks)),
+                            ("files", lambda: file_phases(args, api, client, checks)),
+                            ("pdf", lambda: pdf_phases(args, api, client, checks)),
+                            ("skills", lambda: skill_phases(args, api, client, checks)),
+                            ("mcp", lambda: mcp_phases(args, api, client, checks)),
+                            ("agent_background", lambda: subagent_background_phases(args, api, client, checks))]:
+            if name in selected:
+                phase()
+        if "hooks" in selected:
+            client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
         title_requests = len(api.title_requests)
@@ -1770,6 +1785,7 @@ def main():
         checks.extend(memory.accept(api.requests))
         receipt = {
             "schema": "cowboy.claude-execution-worker-conformance/v1", "accepted": False, "checks": checks,
+            "scope": "full" if selected == set(PHASES) else "incremental", "phases": sorted(selected),
             "claude_version": inputs["claude_version"], "claude_sha256": inputs["claude_sha256"],
             "executor_sha256": inputs["sha256"], "executor_version": inputs["version"],
             "packaged_launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),

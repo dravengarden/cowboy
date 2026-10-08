@@ -469,7 +469,7 @@ const notLink = { ok: true, status: 200, text: '{"symlink":false}' };
 
 let fixtureId = 0;
 async function routingFixture(
-  { memory = false, agents = {}, entries = [], omitted = [] } = {},
+  { memory = false, agents = {}, entries = [], omitted = [], taskWait } = {},
 ) {
   // Each loaded native Mod has private state. Give every fixture its own module.
   const { register } = await import(
@@ -495,6 +495,7 @@ async function routingFixture(
     runtimeCwd: "/runtime",
     targetHome: "/home/target",
     hooks: { commands: [], tool: {} },
+    ...(taskWait ? { taskWait } : {}),
     mcp: {
       servers: [{
         name: "targetdb",
@@ -850,4 +851,80 @@ test("a skill's commands run on the target; one left running fails the skill", a
   }, next);
   assert.match(failed.text, /^Shell command failed for pattern "!`yes`"/);
   assert.ok(calls.some((call) => call.url.endsWith("/cancel")));
+});
+
+test("target tools keep native's descriptions", async () => {
+  const { hooks, api } = await routingFixture();
+  const describe = hooks.get("tool.describe").handler;
+  for (
+    const tool of ["Bash", "Read", "Write", "Edit", "NotebookEdit", "TaskStop"]
+  ) {
+    assert.deepEqual(
+      await describe(api, { tool }, (event) => ({ described: event.tool })),
+      { described: tool },
+    );
+  }
+});
+
+test("a background command's waiter is the agent's own call, the main session's a plugin call", async () => {
+  for (const agentId of [undefined, "a1b2c3"]) {
+    const { hook, api } = await routingFixture({
+      taskWait: "'/node' '/stage/task-wait.mjs'",
+      ...(agentId ? { agents: { [agentId]: "/runtime/agent.output" } } : {}),
+    });
+    const pluginCalls = [];
+    api.tool.call = async (call) => {
+      pluginCalls.push(call);
+      return { result: { backgroundTaskId: "bmain" } };
+    };
+    api.http.fetch = async (url) =>
+      url.endsWith("/tool")
+        ? {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            result: {
+              stdout:
+                "Command running in background with ID: job-1. You will be notified when it completes. ",
+            },
+            task: { id: "job-1", command: "make long" },
+          }),
+        }
+        : { ok: true, status: 200, text: "{}" };
+    const nextCalls = [];
+    const next = async (event) => {
+      nextCalls.push(event);
+      return { result: { backgroundTaskId: "bagent" } };
+    };
+    const result = await hook.handler(api, {
+      tool: "Bash",
+      tool_use_id: "toolu_1",
+      command: "make long",
+      run_in_background: true,
+      timeout: 5000,
+      description: "long",
+      ...(agentId ? { agentId } : {}),
+    }, next);
+    assert.match(
+      result.result.stdout,
+      /You will be notified when it completes/,
+    );
+    const waiter = {
+      command: "'/node' '/stage/task-wait.mjs' job-1",
+      run_in_background: true,
+      timeout: 5000,
+    };
+    if (agentId) {
+      assert.equal(pluginCalls.length, 0);
+      assert.deepEqual(nextCalls, [{
+        tool: "Bash",
+        tool_use_id: "toolu_1",
+        agentId,
+        ...waiter,
+      }]);
+    } else {
+      assert.equal(nextCalls.length, 0);
+      assert.deepEqual(pluginCalls, [{ tool: "Bash", ...waiter }]);
+    }
+  }
 });

@@ -926,8 +926,8 @@ Two differences the earlier phases had not recorded:
   the target command, and adds native's 30-minute sentence to a moved
   command's result.
 
-Packaged acceptance compares the six descriptions with
-`tools/claude_tool_descriptions_native_baseline.json`
+Packaged acceptance compares the six descriptions with the
+`tool_descriptions` of `tools/claude_native_behavior_baseline.json`
 (`target_tools_carry_native_descriptions`), runs a background command with a
 3-second timeout and checks native's notification and that the target command
 stopped (`background_deadline_stops_the_target_command_as_natively`); the
@@ -2026,6 +2026,27 @@ bytes. Existing checks remain valuable but cannot be promoted to full fleet
 coverage. Report every unsupported or untested path explicitly. Prototype
 success does not authorize enabling a production capability before its safety
 and compatibility cases pass.
+
+### Incremental checks for later upgrades (2026-10-08)
+
+The measured native behaviors this lane relies on are kept as baselines with
+probes; the newest group is also pinned by unit tests:
+
+| Behavior | Baseline (probe) | Compared by |
+| --- | --- | --- |
+| Tool descriptions, background deadlines, Bash stdin, MCP scopes, agent background notifications | `claude_native_behavior_baseline.json` (`claude_native_behavior_probe.py`) | unit tests in `claude-remote-native-baseline.test.mjs`; packaged descriptions check |
+| Bash command line, environment, snapshot | `claude_shell_native_baseline.json` | packaged `shell` phase |
+| Process lifetimes and stops | `claude_lifecycle_native_baseline.json` | packaged `lifecycle` phase |
+| File reads | `claude_file_native_baseline.json` | packaged `files` phase |
+| PDF and file-type reads | `claude_pdf_native_baseline.json` | packaged `pdf` phase |
+| Skills and commands | `claude_skill_native_baseline.json` | packaged `skills` phase |
+
+`tools/claude_remote_impact.py` turns a Git diff into the probes and packaged
+phases to run, from `tools/claude_remote_check_map.json`; the conformance
+harness accepts a `"phases"` subset. Against this branch's history it selects
+nothing for the 3.19.0 and 3.19.1 version-only releases and the full run for
+the 3.18.0 change to `tools.mjs`. The flow is in the
+[upgrade reference](../.agents/skills/release-cowboy-plugin/references/claude-remote-upgrades.md#keep-upgrades-efficient).
 
 ## Source map
 
