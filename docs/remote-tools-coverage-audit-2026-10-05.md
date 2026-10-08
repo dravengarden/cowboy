@@ -861,6 +861,15 @@ The plugin also stops asking the executor to drop credential-like variables
 (user decision); see the MCP section for the Machine's closed environment,
 which still decides what reaches the target.
 
+The [3.19.0 release receipt](experiments/claude-agent-background-release-2026-10-08.json)
+binds commits `446346f5` and `98828c9b` and artifact
+`sha256:d7469ce2bc3a30e19314539393cdb0e02af808c4fe0f896b2ee9cec4ad7579ed`:
+90 accepted checks on the exact signed package, 3.18.0/3.19.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles, five public
+artifact digests and Catalog `ready`. OVH operation
+`ovh-claude-code-3-19-0-converge` completed: 3.19.0 active, 3.18.0 retained
+for rollback, no session leases, no live session restarted by this task.
+
 ### Tool descriptions and background deadlines (Plugin 3.18.0)
 
 Two differences the earlier phases had not recorded:
