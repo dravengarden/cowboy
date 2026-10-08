@@ -17,8 +17,18 @@ other observability routes), not the public, credential-free
 {"schema":1,
  "deletionJournal":{"writerEnabled":true,"deletedSessions":7},
  "sessionIncarnations":{"writerEnabled":true,"lineages":6},
- "cleanupContinuations":{"pending":0}}
+ "cleanupContinuations":{"pending":0},
+ "controllerObserved":{"sessions":8,"withLineage":8}}
 ```
+
+`controllerObserved` is added by the Controller itself, not reported by the Machine:
+how many of that Machine's Sessions the Controller knows, and for how many it holds a
+Machine-reported [lineage](plugin-session-incarnation-carriage.md). It is counts only,
+read from the live Hub, so it is process-local and starts at `withLineage: 0` after a
+Controller restart until the Machine's snapshots arrive. A Machine with no admitted
+incarnation writer leaves it at 0, which is how the carriage is told apart from the
+process-local fence. The Machine's own part of the reply is unchanged and still decoded
+against the closed schema.
 
 A dataset the Machine does not hold is `null` (for example the cleanup namespace on a
 build without an admitted deletion writer). The report carries counts and writer flags

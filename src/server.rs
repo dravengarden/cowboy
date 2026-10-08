@@ -11887,7 +11887,19 @@ async fn api_machine_durable_state(
         }
     };
     match crate::durable_state::DurableState::from_reply(reply) {
-        Ok(status) => Json(status).into_response(),
+        Ok(status) => {
+            // The Machine's closed report is returned unchanged; what this
+            // Controller itself holds is added beside it, as counts only.
+            let (sessions, with_lineage) = state.hub.lineage_counts(&machine_id);
+            let mut body = serde_json::to_value(status).unwrap_or_default();
+            if let Some(object) = body.as_object_mut() {
+                object.insert(
+                    "controllerObserved".to_owned(),
+                    serde_json::json!({"sessions": sessions, "withLineage": with_lineage}),
+                );
+            }
+            Json(body).into_response()
+        }
         Err(error) => (
             StatusCode::BAD_GATEWAY,
             format!("Machine reported invalid durable state: {error}"),
