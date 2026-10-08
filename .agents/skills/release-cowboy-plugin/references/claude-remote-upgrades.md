@@ -206,34 +206,11 @@ still loads, intercepts and validates the Mod correctly. See the
 
 ## Keep upgrades efficient
 
-Select checks from the actual change instead of re-running everything:
-
-```bash
-nix develop -c python3 tools/claude_remote_impact.py --base <accepted release commit>
-```
-
-`tools/claude_remote_check_map.json` maps lane files to the packaged
-acceptance phases (`PHASES` in `tools/execution_claude_worker_conformance.py`)
-and native probes; `just claude-remote-check` fails when a tracked lane file
-is missing from the map or the map names a missing file or phase. Use the
-output as follows:
-
-- `native_probes` (the pinned native dependencies in `provider.json` or the
-  runtime lock changed, or a probe or its baseline did): run each probe
-  against the candidate's native into a fresh receipt and diff it with its
-  baseline. Where it differs, decide whether the plugin must follow, update
-  the baseline in the same change, and run `just claude-remote-check`; add
-  the `phases` the map lists for that probe. Identical receipts need no
-  packaged phase beyond the base turn.
-- `phases`: set the conformance input's `"phases"` to this list (the base
-  startup and turn always run; `[]` runs them alone). `"all"` (a core file,
-  a non-inert manifest key or an unmapped file changed) omits the field for
-  the full run. The receipt records `scope` and `phases`.
-- `unmapped`: extend the map in the same change; until then the change runs
-  in full.
-
-A version, display or preset bump selects nothing, and a later candidate
-reuses the accepted receipt for every unselected phase. Contract inspection
+Select checks from the actual change with
+[remote execution checks by change](remote-checks.md), which covers every
+remote suite, the Claude `claude-worker` phases and the native probes. A
+version, display or preset bump selects nothing, and a later candidate reuses
+the accepted receipt for every unselected suite and phase. Contract inspection
 above still applies to a native change; extend a probe when it finds an
 unmeasured behavior.
 

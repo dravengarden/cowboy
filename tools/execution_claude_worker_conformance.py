@@ -1698,7 +1698,7 @@ def main():
         context_checked(api.requests)
         checks.append("native_interrupt_stops_foreground_target_process")
         # The base turn above always runs; an incremental run names the
-        # phases its change affects (tools/claude_remote_check_map.json).
+        # phases its change affects (tools/remote_check_map.json).
         agent_observations = []
         if "agents" in selected:
             client, agent_observations = agent_phases(args, api, client, native, session, context_checked, checks)

@@ -555,7 +555,7 @@ claude-remote-check:
     deno fmt --check plugins/claude-code/runtime
     deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs
     deno check plugins/claude-code/runtime/build.ts
-    python3 -m unittest discover -s tools -p claude_remote_impact_test.py
+    python3 -m unittest discover -s tools -p remote_impact_test.py
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.

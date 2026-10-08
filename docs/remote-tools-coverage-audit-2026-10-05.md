@@ -2041,12 +2041,15 @@ probes; the newest group is also pinned by unit tests:
 | PDF and file-type reads | `claude_pdf_native_baseline.json` | packaged `pdf` phase |
 | Skills and commands | `claude_skill_native_baseline.json` | packaged `skills` phase |
 
-`tools/claude_remote_impact.py` turns a Git diff into the probes and packaged
-phases to run, from `tools/claude_remote_check_map.json`; the conformance
-harness accepts a `"phases"` subset. Against this branch's history it selects
-nothing for the 3.19.0 and 3.19.1 version-only releases and the full run for
-the 3.18.0 change to `tools.mjs`. The flow is in the
-[upgrade reference](../.agents/skills/release-cowboy-plugin/references/claude-remote-upgrades.md#keep-upgrades-efficient).
+`tools/remote_impact.py` turns a Git diff into the remote suites, Claude
+phases and native probes to run, from `tools/remote_check_map.json`; it covers
+the Claude and Codex lanes, the shared execution transport, keeper and Machine
+control, and every native executor probe. The Claude conformance harness
+accepts a `"phases"` subset. Against main's history it selects nothing for the
+3.19.0 and 3.19.1 version-only releases, the full Claude run for the 3.18.0
+change to `tools.mjs`, and the Rust tests, both worker suites and the session
+gate for the `machine_transport` heartbeat fix. The flow is in
+[remote checks by change](../.agents/skills/release-cowboy-plugin/references/remote-checks.md).
 
 ## Source map
 
