@@ -41,7 +41,9 @@ lists for that probe. The Claude-specific contract review is in
 | Executor (`exec-server`) or Node lock | every suite built on them; `claude-worker` in full |
 | A Claude runtime feature module | `claude-remote-check`, `claude-worker` with that module's phase |
 | A Claude runtime core module | `claude-remote-check`, `claude-worker` in full |
-| Codex launcher, adapter patch or `codex-acp` launcher | `codex-adapter-check`, `codex-worker` |
+| Codex launcher or adapter patch | `codex-adapter-check`, `codex-worker` |
+| `codex-acp` launcher | `codex-adapter-check`, `codex-worker`, `handshake-recovery` |
+| Non-inert keys of a Plugin manifest | that Plugin's unit gate and worker suite; Codex also `session`, whose fixture is built from it |
 | Execution transport, keeper, protocol or wire modules | `execution-rust-tests`, both worker suites, `session`; keeper modules add `keeper` and `claude-task-stop` |
 | Worker binary, `worker.rs` or `acp_bridge.rs` | `execution-rust-tests`, both worker suites, `session` |
 | Keeper binary (`cowboy-execution-host`) | as the keeper modules |

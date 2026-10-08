@@ -74,6 +74,15 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual(set(suites(["src/bin/cowboy-execution-host.rs"])), {
             "execution-rust-tests", "claude-worker", "codex-worker", "session", "keeper", "claude-task-stop"})
 
+    def test_the_codex_acp_launcher_runs_its_handshake_probe(self):
+        selected = suites(["components/provider-runtime/packages/codex-acp/launch.mjs"])
+        self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "handshake-recovery"})
+        self.assertIn("handshake-recovery", suites(["components/provider-runtime/lock.json"]))
+
+    def test_a_codex_runtime_manifest_change_runs_the_session_fixture_built_from_it(self):
+        selected = suites(["plugins/codex/provider.json"], manifests_changed=["plugins/codex/provider.json"])
+        self.assertEqual(set(selected), {"codex-adapter-check", "codex-worker", "session"})
+
     def test_a_shared_harness_module_runs_every_suite_importing_it(self):
         shared = "tools/execution_environment_probe.py"
         expected = {name for name, spec in CHECK_MAP["suites"].items() if "entry" in spec and
