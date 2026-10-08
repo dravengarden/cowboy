@@ -587,9 +587,12 @@ async function bridge(child, tools, context, memory, broker) {
   };
   const checkId = randomUUID();
   const privateCommand = "cowboy-execution-ready-" + context.nonce;
+  // Readiness crosses the Machine link to the target. A transient overlay
+  // stall of 30-60 s is routine on cross-border links; it must delay startup,
+  // not fail it. Stay below the Worker's 240 s session/resume deadline.
   const timeout = setTimeout(
     () => rejectReady(new Error("Claude execution module did not initialize")),
-    30000,
+    150000,
   );
   // The client sees commands by the names it can type here: the target's
   // skills under their own names, without commands this session refuses.
