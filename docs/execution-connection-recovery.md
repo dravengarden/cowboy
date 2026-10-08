@@ -32,6 +32,15 @@ schema or native hook disposition changes; only the existing adapter's
 connection lifetime changes. Installed idle-session convergence and retained
 busy generations must be reported separately from package publication.
 
+The [release receipt](experiments/claude-execution-recovery-release-2026-10-08.json)
+records the exact packaged 91-check acceptance, current/rollback Catalog
+readers, old/new worker coexistence, public artifact hashes and completed OVH
+installation. Version 3.19.2 is active on OVH. Existing sessions retain their
+generation until the configured one-hour idle upgrade gate permits replacement.
+The original session resumed with the same native ID and completed `echo ok`
+on retained 3.19.1; this production recovery is distinct from the packaged
+3.19.2 same-process reconnection proof. Busy sessions were not interrupted.
+
 The October 7 incident combined Machine connection replacement with a native
 execution readiness failure. The Create dialog exposed the connection fence;
 several Claude sessions encountered the installation reconciliation fence;
