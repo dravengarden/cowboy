@@ -980,6 +980,12 @@ mod machine_health_tests {
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
 const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+/// An execution-bound native interrupt first cancels its target processes over
+/// the Machine execution link: several round trips, each a second or more on a
+/// slow link, and the link can stall for 30-60 s. That is progress, not a hung
+/// turn. Recycling instead forces a cold remote resume that crosses the same
+/// link and costs far more than the cancellation it replaces.
+const EXECUTION_FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 const QUEUE_EDIT_RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
 /// A connected Machine still needs time to replay its authoritative worker
@@ -3099,18 +3105,31 @@ async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
     }
 }
 
+fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Duration {
+    if state
+        .hub
+        .session_info(session_id)
+        .is_some_and(|info| info.meta.execution_binding.is_some())
+    {
+        EXECUTION_FORCE_CANCEL_GRACE
+    } else {
+        FORCE_CANCEL_GRACE
+    }
+}
+
 fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
     let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =
         state.hub.status_revision(session_id)
     else {
         return Ok(());
     };
+    let grace = force_cancel_grace(state, session_id);
     state.supervisor.request_cancel_for_recycle(session_id)?;
     let hub = state.hub.clone();
     let supervisor = Arc::clone(&state.supervisor);
     let session_id = session_id.to_owned();
     tokio::spawn(async move {
-        tokio::time::sleep(FORCE_CANCEL_GRACE).await;
+        tokio::time::sleep(grace).await;
         if !hub.set_status_if_revision(
             &session_id,
             Some(cancelled_revision),
@@ -3121,7 +3140,7 @@ fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), 
         }
         tracing::error!(
             session = %session_id,
-            grace_seconds = FORCE_CANCEL_GRACE.as_secs(),
+            grace_seconds = grace.as_secs(),
             "force cancel did not end turn; recycling only this session worker"
         );
         // The interrupted edge frees Hub's in-flight guard, but its automatic
