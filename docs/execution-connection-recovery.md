@@ -75,3 +75,26 @@ is used. Native 0.159.3 with SHA-256
 `8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479`
 passed in 11.121 seconds with two connections. This is recovery evidence, not
 a production deployment receipt.
+
+## October 8 small-frame replay follow-up
+
+OVH repeatedly reauthenticated while Controller logs reported both the
+35-second broker watchdog and the 45-second Machine watchdog. The host service
+had zero systemd restarts; worker recovery and execution-response timeouts
+followed the connection losses. An established Machine socket had sent about
+40 MB while its last received application bytes were over 100 seconds old.
+These observations identify the affected transport, but do not attribute every
+historical disconnect to one frame or establish the physical loss mechanism.
+
+The chunk writer admitted urgent traffic only while splitting a large frame.
+During a backlog of small application frames, new heartbeats waited behind the
+entire replay, including small frames already moved to the writer's private
+queue. A deterministic sink that injects a heartbeat during the first of 32
+small writes reproduced that ordering failure on the deployed implementation.
+
+The writer now checks for urgent traffic between small writes as well as
+between chunks. Both drains are bounded; application frames retain FIFO order,
+and a silent connection retains the existing watchdog deadlines. The regression
+requires the heartbeat immediately after the in-progress first write and
+checks every application frame's original order. This transport is shared by
+Codex and Claude; it does not change their native execution or recovery APIs.
