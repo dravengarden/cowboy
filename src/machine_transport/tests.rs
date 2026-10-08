@@ -3,6 +3,75 @@ use std::sync::{Arc, Mutex};
 use tokio_tungstenite::tungstenite::Message as Ws;
 
 #[tokio::test]
+async fn small_frame_replay_yields_to_the_heartbeat_producer() {
+    let (tx, rx) = mpsc::unbounded_channel();
+    for index in 0..32 {
+        tx.send(Ws::Text(format!("application-{index}").into()))
+            .unwrap();
+    }
+    let (first_write, written) = tokio::sync::oneshot::channel();
+    let producer = tokio::spawn(async move {
+        written.await.unwrap();
+        tx.send(Ws::Text("{\"type\":\"heartbeat\",\"sent_at_ms\":1}".into()))
+            .unwrap();
+    });
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&output);
+    let sink = futures::sink::unfold(Some(first_write), move |signal, message: Ws| {
+        let captured = Arc::clone(&captured);
+        async move {
+            captured.lock().unwrap().push(message);
+            if let Some(signal) = signal {
+                signal.send(()).unwrap();
+            }
+            Ok::<_, std::io::Error>(None)
+        }
+    });
+    write(Box::pin(sink), rx, true).await.unwrap();
+    producer.await.unwrap();
+    let output = output.lock().unwrap();
+    assert!(output[1].urgent(), "writer starved the heartbeat producer");
+    assert_eq!(output.len(), 33);
+}
+
+#[tokio::test]
+async fn heartbeats_overtake_a_backlog_of_small_application_frames() {
+    let (tx, rx) = mpsc::unbounded_channel();
+    for index in 0..32 {
+        tx.send(Ws::Text(format!("application-{index}").into()))
+            .unwrap();
+    }
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&output);
+    let sink = futures::sink::unfold(Some(tx), move |sender, message: Ws| {
+        let captured = Arc::clone(&captured);
+        async move {
+            captured.lock().unwrap().push(message);
+            if let Some(sender) = sender {
+                sender
+                    .send(Ws::Text("{\"type\":\"heartbeat\",\"sent_at_ms\":1}".into()))
+                    .unwrap();
+            }
+            Ok::<_, std::io::Error>(None)
+        }
+    });
+    write(Box::pin(sink), rx, true).await.unwrap();
+    let output = output.lock().unwrap();
+    assert!(output[1].urgent(), "heartbeat waited behind the replay");
+    let application: Vec<_> = output
+        .iter()
+        .filter(|message| !message.urgent())
+        .map(|message| message.text().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        application,
+        (0..32)
+            .map(|index| format!("application-{index}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
 async fn real_websocket_backpressure_preserves_heartbeat_during_bulk_transfer() {
     use futures::StreamExt;
     use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
