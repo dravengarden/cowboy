@@ -225,10 +225,10 @@ pub struct Args {
     desired_generation: String,
     #[arg(long, value_enum, default_value_t = CliSpawnMode::Direct)]
     spawn_mode: CliSpawnMode,
-    // ACP permits one 60 s initialize retry, then independently bounds session
-    // establishment and startup configuration at 60 s each. Stay above that
-    // 240 s worst case so the Machine host never preempts the phase-aware error.
-    #[arg(long, default_value_t = 255)]
+    // ACP permits one 60 s initialize retry, then independently bounds a new
+    // session at 180 s and startup configuration at 60 s. Stay above that
+    // 360 s worst case so the Machine host never preempts the phase-aware error.
+    #[arg(long, default_value_t = 375)]
     worker_ready_timeout_seconds: u64,
     /// Cowboy controller base URL.
     #[arg(

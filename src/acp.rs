@@ -62,6 +62,10 @@ use crate::provider::LaunchSpec;
 /// against one opaque deadline.
 pub(crate) const STARTUP_PHASE_TIMEOUT: Duration = Duration::from_mins(1);
 const RESUME_PHASE_TIMEOUT: Duration = Duration::from_mins(4);
+// A new session of a remote-execution binding initializes its Provider over the
+// Machine link to the target. A transient link stall must not turn into a
+// startup failure; a genuinely hung agent is still bounded.
+const NEW_PHASE_TIMEOUT: Duration = Duration::from_mins(3);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 const CLAUDE_EMPTY_STREAM_MESSAGE: &str = "API Error: Stream ended without receiving any events";
@@ -1596,6 +1600,14 @@ mod startup_mode_tests {
             resume.to_string(),
             "agent did not complete ACP session/resume within 240s"
         );
+        assert_eq!(
+            StartupTimeout::new(StartupPhase::New).to_string(),
+            "agent did not complete ACP session/new within 180s"
+        );
+        assert_eq!(
+            initialize.to_string(),
+            "agent did not complete ACP initialize within 60s"
+        );
         assert!(crate::provider_behavior::is_native_session_restore_timeout(
             &resume.to_string()
         ));
@@ -1853,13 +1865,13 @@ impl StartupTimeout {
 }
 
 const fn startup_phase_timeout(phase: StartupPhase) -> Duration {
-    if matches!(phase, StartupPhase::Resume) {
+    match phase {
         // App Server must scan the native rollout before it can resume. Large
         // image-heavy threads can take longer than a normal ACP handshake even
         // when excludeTurns avoids serializing their history back to the adapter.
-        RESUME_PHASE_TIMEOUT
-    } else {
-        STARTUP_PHASE_TIMEOUT
+        StartupPhase::Resume => RESUME_PHASE_TIMEOUT,
+        StartupPhase::New => NEW_PHASE_TIMEOUT,
+        _ => STARTUP_PHASE_TIMEOUT,
     }
 }
 
