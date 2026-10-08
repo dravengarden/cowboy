@@ -398,7 +398,13 @@ async fn serve(socket: TcpStream, token: &str, client: Arc<Client>) -> Result<()
                         }
                         ids.insert(id.to_string());
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
-                        let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
+                        // Native sends parameterless requests such as
+                        // environment/info with `"params": null`; the wire
+                        // contract carries an object.
+                        let params = match message.get("params") {
+                            None | Some(Value::Null) => json!({}),
+                            Some(params) => params.clone(),
+                        };
                         let client = Arc::clone(&client);
                         calls.spawn(async move {
                             let reply = client.invoke(method, params).await.unwrap_or_else(|_| json!({"error": {"code": -32000, "message": "Execution unavailable or result unknown; no local fallback and no replay"}}));

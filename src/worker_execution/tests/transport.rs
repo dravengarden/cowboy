@@ -338,3 +338,32 @@ async fn bulk_input_cannot_take_the_next_event_polls_byte_budget() {
         assert_eq!(task.await.unwrap().unwrap(), json!({"result":{}}));
     }
 }
+
+#[tokio::test]
+async fn null_params_reach_the_target_as_an_empty_object() {
+    let mut fixture = Fixture::new().await;
+    let mut socket = fixture.initialize(0, false).await;
+    let _events = fixture.request().await;
+    send(
+        &mut socket,
+        json!({"id":1,"method":"environment/info","params":null}),
+    )
+    .await;
+    let request = fixture.request().await;
+    let Command::Invoke { invocation, .. } = &request.command else {
+        panic!("environment/info was not invoked on the target");
+    };
+    assert_eq!(invocation.method, "environment/info");
+    assert_eq!(invocation.params, json!({}));
+    fixture.answer(
+        request,
+        Response::Operation {
+            outcome: Outcome::Completed {
+                reply: json!({"result":{"shell":{"name":"bash","path":"/bin/bash"}}}),
+            },
+        },
+    );
+    let reply = receive(&mut socket).await;
+    assert_eq!(reply["id"], 1);
+    assert_eq!(reply["result"]["shell"]["path"], "/bin/bash");
+}
