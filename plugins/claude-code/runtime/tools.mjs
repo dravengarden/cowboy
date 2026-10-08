@@ -28,6 +28,10 @@ const INLINE_OUTPUT = 30000;
 const MAX_PERSISTED = MAX_FILE;
 const COLLECT_LIMIT = MAX_PERSISTED - 1024 * 1024;
 const MAX_READ_STATE = 512 * 1024;
+// Startup reads kept in flight ahead of an order-dependent walk. Startup also
+// runs git status (7 commands), the shell snapshot and the other walks at
+// once; together they stay below the connection's 15 pending requests.
+const READ_AHEAD = 3;
 const RANGE_FILE_THRESHOLD = 128 * 1024;
 const text = (value, native) => ({
   ...(native === undefined ? {} : { native }),
@@ -35,6 +39,41 @@ const text = (value, native) => ({
   isError: false,
 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Each target read costs a round trip to the executor. A walk that decides
+// files in order (instruction precedence, skill shadowing) awaits reads
+// already in flight instead: `read.prefetch(paths)` issues at most `limit`
+// at a time, `read(path)` returns the same single result. A failed read
+// surfaces exactly where the walk awaits it.
+export function readAhead(read, limit) {
+  const results = new Map();
+  const queue = [];
+  let active = 0;
+  const get = (path) => {
+    if (!results.has(path)) {
+      const result = read(path);
+      result.catch(() => {});
+      results.set(path, result);
+    }
+    return results.get(path);
+  };
+  const pump = () => {
+    while (active < limit && queue.length) {
+      const path = queue.shift();
+      if (results.has(path)) continue;
+      active++;
+      get(path).catch(() => {}).finally(() => {
+        active--;
+        pump();
+      });
+    }
+  };
+  get.prefetch = (paths) => {
+    queue.push(...paths);
+    pump();
+  };
+  return get;
+}
+
 export function bindingKey(binding) {
   const canonical = (value) =>
     Array.isArray(value)
@@ -622,13 +661,15 @@ export class WorkspaceTools {
   // their source of truth; this is a session-start snapshot.
   async projectHooks() {
     const hooks = {};
-    for (const name of ["settings.json", "settings.local.json"]) {
+    const paths = ["settings.json", "settings.local.json"].map((name) =>
+      posix.join(this.cwd, ".claude", name)
+    );
+    const read = readAhead((path) => this.bytes(path, true), paths.length);
+    read.prefetch(paths);
+    for (const path of paths) {
       // Missing means none. Any other read failure stops the session rather
       // than starting it without the project's guards.
-      const bytes = await this.bytes(
-        posix.join(this.cwd, ".claude", name),
-        true,
-      );
+      const bytes = await read(path);
       if (!bytes) continue;
       let settings;
       try {
@@ -1474,9 +1515,12 @@ export class WorkspaceTools {
     this.startSnapshot();
     const python = platform.output.split("\n")[3]?.trim();
     this.rangePython = python?.startsWith("/") ? python : undefined;
-    const instructions = await this.instructions();
+    // Independent target queries; gitStatus never rejects.
+    const [instructions, git] = await Promise.all([
+      this.instructions(),
+      this.gitStatus(),
+    ]);
     const shellName = basename(userShell?.trim() || "");
-    const git = await this.gitStatus();
     return {
       schema: 1,
       nonce: randomUUID().replaceAll("-", ""),
@@ -1503,6 +1547,28 @@ export class WorkspaceTools {
     const roots = [...(home ? [home] : []), ...directories].map((directory) =>
       posix.join(directory, ".claude", "rules")
     );
+    const fresh = async (path) => {
+      // Only an absent file is skipped; a failed read stops the session
+      // rather than starting it without the project's instructions.
+      const bytes = await this.bytes(path, true);
+      if (!bytes) return undefined;
+      try {
+        return decode(bytes);
+      } catch {
+        return undefined;
+      }
+    };
+    // The fixed candidates instructionFiles visits, in its order, read while
+    // the rules are listed.
+    const read = readAhead(fresh, READ_AHEAD);
+    read.prefetch([
+      ...(home ? [posix.join(home, ".claude", "CLAUDE.md")] : []),
+      ...directories.flatMap((directory) => [
+        posix.join(directory, "CLAUDE.md"),
+        posix.join(directory, ".claude", "CLAUDE.md"),
+        posix.join(directory, "CLAUDE.local.md"),
+      ]),
+    ]);
     // A listing that cannot run stops the session, as an unreadable
     // instruction file does. Entries find cannot follow (broken links,
     // unreadable directories) are skipped.
@@ -1519,17 +1585,7 @@ export class WorkspaceTools {
     const ruleFiles = listing.output.split("\n")
       .filter((line) => line.startsWith("/"))
       .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
-    const read = async (path) => {
-      // Only an absent file is skipped; a failed read stops the session
-      // rather than starting it without the project's instructions.
-      const bytes = await this.bytes(path, true);
-      if (!bytes) return undefined;
-      try {
-        return decode(bytes);
-      } catch {
-        return undefined;
-      }
-    };
+    read.prefetch(ruleFiles);
     const { files, conditional } = await instructionFiles({
       cwd: this.cwd,
       home,
@@ -1547,7 +1603,14 @@ export class WorkspaceTools {
     // Each conversation (the main one, each agent) is shown a nested file
     // once; what started the session counts for all of them.
     const initial = files.map((file) => file.path);
-    this.nested = { read, conditional, home, initial, attached: new Map() };
+    // Later Reads see the target as it is then, not this startup snapshot.
+    this.nested = {
+      read: fresh,
+      conditional,
+      home,
+      initial,
+      attached: new Map(),
+    };
     return files;
   }
 
@@ -1566,14 +1629,18 @@ export class WorkspaceTools {
         throw error;
       }
     };
+    const projectPaths = projectConfigDirectories(this.cwd).map((directory) =>
+      posix.join(directory, ".mcp.json")
+    );
+    const userPath = home ? posix.join(home, ".claude.json") : undefined;
+    const ahead = readAhead(read, READ_AHEAD);
+    ahead.prefetch([...projectPaths, ...(userPath ? [userPath] : [])]);
     const projectConfigs = [];
-    for (const directory of projectConfigDirectories(this.cwd)) {
-      const text = await read(posix.join(directory, ".mcp.json"));
+    for (const path of projectPaths) {
+      const text = await ahead(path);
       if (text !== undefined) projectConfigs.push(text);
     }
-    const userConfig = home
-      ? await read(posix.join(home, ".claude.json"))
-      : undefined;
+    const userConfig = userPath ? await ahead(userPath) : undefined;
     // Only the variables the configuration names are read; printenv ends
     // each value with a newline of its own.
     const names = [
@@ -1617,7 +1684,12 @@ export class WorkspaceTools {
     };
   }
 
-  async repositoryRoot() {
+  // One startup answer shared by the skill and MCP walks.
+  repositoryRoot() {
+    return this.startupRepositoryRoot ??= this.findRepositoryRoot();
+  }
+
+  async findRepositoryRoot() {
     const top = await this.command([
       "git",
       "--no-optional-locks",
@@ -1868,30 +1940,33 @@ export class WorkspaceTools {
       if (line.startsWith("\x1e")) current = listed.get(line.slice(1));
       else if (current && line.startsWith("/")) current.push(line);
     }
-    const found = [];
-    for (const root of roots) {
-      const files = listed.get(root.directory).sort((left, right) =>
+    const entries = roots.flatMap((root) =>
+      listed.get(root.directory).sort((left, right) =>
         left < right ? -1 : left > right ? 1 : 0
-      );
-      for (const path of files) {
+      ).flatMap((path) => {
         const name = skillName(root, path);
-        if (name === undefined) continue;
-        let content;
-        try {
-          const bytes = await this.bytes(path, true);
-          if (!bytes) continue;
-          content = decode(bytes);
-        } catch (error) {
-          // The target refused this file (permissions, a directory): skip it.
-          // A failed connection still stops the session.
-          if (
-            error.remote ||
-            /UTF-8|at most 4 MiB|exceeds 4 MiB/.test(error.message)
-          ) continue;
-          throw error;
-        }
-        found.push({ ...root, name, path, content });
+        return name === undefined ? [] : [{ root, path, name }];
+      })
+    );
+    const read = readAhead((path) => this.bytes(path, true), READ_AHEAD);
+    read.prefetch(entries.map((entry) => entry.path));
+    const found = [];
+    for (const { root, path, name } of entries) {
+      let content;
+      try {
+        const bytes = await read(path);
+        if (!bytes) continue;
+        content = decode(bytes);
+      } catch (error) {
+        // The target refused this file (permissions, a directory): skip it.
+        // A failed connection still stops the session.
+        if (
+          error.remote ||
+          /UTF-8|at most 4 MiB|exceeds 4 MiB/.test(error.message)
+        ) continue;
+        throw error;
       }
+      found.push({ ...root, name, path, content });
     }
     return found;
   }

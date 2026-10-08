@@ -15,6 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  readAhead,
   TASK_OUTPUT_PREFIX,
   textBytes,
   textFile,
@@ -1253,4 +1254,32 @@ test("a range Read shows invalid UTF-8 as a whole-file Read does", async (t) => 
     limit: 1,
   });
   assert.equal(read.result.file.content, "caf�");
+});
+
+test("read-ahead keeps a bounded number of reads in flight and reads each path once", async () => {
+  let active = 0;
+  let peak = 0;
+  const reads = [];
+  const read = readAhead(async (path) => {
+    reads.push(path);
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active--;
+    if (path === "broken") throw new Error("target refused");
+    return path.toUpperCase();
+  }, 3);
+  const paths = ["a", "b", "broken", "c", "d", "e", "a"];
+  read.prefetch(paths);
+  assert.ok(active <= 3);
+  // The walk sees results in its own order; a failure surfaces where it is
+  // awaited, without stopping the reads ahead of it.
+  assert.equal(await read("a"), "A");
+  assert.equal(await read("b"), "B");
+  await assert.rejects(read("broken"), /target refused/);
+  for (const path of ["c", "d", "e"]) {
+    assert.equal(await read(path), path.toUpperCase());
+  }
+  assert.ok(peak <= 3, `peak ${peak}`);
+  assert.deepEqual(reads.toSorted(), ["a", "b", "broken", "c", "d", "e"]);
 });

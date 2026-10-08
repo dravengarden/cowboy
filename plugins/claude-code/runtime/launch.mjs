@@ -899,6 +899,15 @@ async function native(args) {
       };
     }
     const context = await tools.context();
+    // Independent target reads, started together: each costs round trips to
+    // the executor. Each result is still awaited where it is used.
+    const started = [
+      tools.projectHooks(),
+      tools.skillFiles(),
+      tools.mcpInputs(),
+    ];
+    for (const result of started) result.catch(() => {});
+    const [projectHooksStarted, skillFilesStarted, mcpInputsStarted] = started;
     // The exact native argv below sets the starting mode before any tool runs.
     const broker = new PermissionBroker("default");
     modBridge = await startModBridge(tools, {
@@ -913,7 +922,7 @@ async function native(args) {
     context.descriptions = DESCRIPTIONS;
     context.agents = tools.agentLocators();
     context.hooks = { commands: [], tool: {} };
-    const projectHooks = await tools.projectHooks();
+    const projectHooks = await projectHooksStarted;
     // Native evaluates permission paths against its own working directory.
     context.targetCwd = posix.resolve(descriptor.binding.workspace.cwd);
     context.runtimeCwd = process.cwd();
@@ -935,7 +944,7 @@ async function native(args) {
       join(plugin, "hooks", "register.js"),
     );
     // The target's skills, as a private plugin native loads (skills.mjs).
-    const skills = targetSkills(await tools.skillFiles());
+    const skills = targetSkills(await skillFilesStarted);
     const skillPlugin = skills.entries.length
       ? join(stage, "target-skills")
       : undefined;
@@ -956,7 +965,7 @@ async function native(args) {
     // The target's MCP servers (mcp.mjs): stdio ones run on the target
     // through mcp-proxy.mjs, remote ones are reached from here.
     await tools.stopMcpServers();
-    const mcp = targetMcpServers(await tools.mcpInputs());
+    const mcp = targetMcpServers(await mcpInputsStarted);
     const mcpEntries = mcp.entries.filter((entry) =>
       !(memory && entry.name === "matrix")
     );
