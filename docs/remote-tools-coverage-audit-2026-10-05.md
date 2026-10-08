@@ -920,6 +920,15 @@ Gaps:
   3.6.0 rule gap).
 - Servers are a session-start snapshot; `/mcp` changes are refused as before.
 
+The [3.17.0 release receipt](experiments/claude-mcp-release-2026-10-08.json)
+binds feature commit `d3e8203f`, release merge `38905216` and artifact
+`sha256:991ac736cd1eff51396a94ab81bbdab0ca1fec71d9e71109f34e0d159f09f5c0`:
+87 accepted checks on the exact signed package, 3.16.1/3.17.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles, five public
+artifact digests and Catalog `ready`. OVH operation
+`ovh-claude-code-3-17-0-converge` completed: 3.17.0 active, 3.16.1 retained
+for rollback, no session leases, no live session restarted by this task.
+
 ### Skills, commands and native reminders (Plugin 3.16.0)
 
 Native 2.1.287 in a local session (measured with a scripted API):
