@@ -26,7 +26,10 @@ class ImpactTest(unittest.TestCase):
     def test_a_claude_native_bump_selects_only_claude_suites(self):
         selected = suites(["plugins/claude-code/provider.json"], native_changed=["claude"])
         self.assertEqual(set(selected), {"claude-remote-check", "claude-worker", "claude-task-stop"})
-        self.assertEqual(selected["claude-worker"]["phases"], [])
+        claude = CHECK_MAP["suites"]["claude-worker"]
+        self.assertEqual(selected["claude-worker"]["phases"],
+                         sorted(set(claude["phases"]) - set(claude["native_covered"])))
+        self.assertIn("hooks", selected["claude-worker"]["phases"])
         self.assertEqual(selected["claude-worker"]["native_probes"],
                          sorted(CHECK_MAP["suites"]["claude-worker"]["native_probes"]))
 
@@ -152,6 +155,9 @@ class CheckMapTest(unittest.TestCase):
         self.assertEqual(set(claude["phases"]), set(PHASES))
         for spec in claude["native_probes"].values():
             self.assertLessEqual(set(spec["phases"]), set(PHASES))
+        # A phase counts as covered only when some probe measures it.
+        measured = {phase for spec in claude["native_probes"].values() for phase in spec["phases"]}
+        self.assertLessEqual(set(claude["native_covered"]), measured)
 
     def test_every_named_file_exists(self):
         named = list(CHECK_MAP["manifests"]) + list(CHECK_MAP["inert"])

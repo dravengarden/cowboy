@@ -30,7 +30,11 @@ listed native probe into a fresh receipt and diff it with its baseline (probe
 receipts replace per-run ids and paths, so equal behavior compares equal).
 Where it differs, decide whether the plugin must follow, update the baseline
 in the same change, run `just claude-remote-check`, and add the phases the map
-lists for that probe. The Claude-specific contract review is in
+lists for that probe. Probes measure only the phases in the map's
+`native_covered`; a native change also runs every other phase, because the
+plugin relies on native behavior there that no probe captures yet. Moving a
+phase into `native_covered` requires a probe and baseline for its native
+assumptions. The Claude-specific contract review is in
 [Claude Remote compatibility](claude-remote-upgrades.md).
 
 ## What selects what
@@ -38,7 +42,7 @@ lists for that probe. The Claude-specific contract review is in
 | Change | Suites |
 | --- | --- |
 | Version, display or preset fields of a Plugin manifest | none |
-| Claude native pins | `claude-remote-check`, `claude-worker` (probes, then phases), `claude-task-stop` |
+| Claude native pins | `claude-remote-check`, `claude-worker` (probes, phases outside `native_covered`, then phases of differing probes), `claude-task-stop` |
 | Codex native pins | `codex-adapter-check`, `codex-worker`, `codex-turn`, `child-stop`, `codex-hooks` |
 | Executor (`exec-server`) or Node lock | every suite built on them; `claude-worker` in full |
 | A Claude runtime feature module | `claude-remote-check`, `claude-worker` with that module's phase |

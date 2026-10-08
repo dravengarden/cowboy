@@ -9,7 +9,8 @@ Reads tools/remote_check_map.json and prints JSON with:
   and why it was selected. "claude-worker" also carries "phases" for the
   conformance input's "phases" field ("all" omits the field; [] runs the base
   turn alone) and "native_probes" to re-run: diff each fresh receipt with its
-  baseline and add the phases the map lists for any probe that differs;
+  baseline and add the phases the map lists for any probe that differs. A
+  native change also runs every phase outside "native_covered";
 - "unmapped": changed remote files no packaged or native suite, pin, manifest
   or inert entry names (a unit gate's directory does not count). They select
   every suite until the map is extended in the same change.
@@ -93,7 +94,10 @@ def impact(changed, check_map, native_changed=(), manifests_changed=(), closure=
                     probes.append(probe)
                     phases.update(probe_spec["phases"])
             if "claude" in native:
+                # Probes measure only the "native_covered" phases; the others
+                # rely on native behavior no probe captures, so they run.
                 probes = list(spec["native_probes"])
+                phases.update(set(spec["phases"]) - set(spec["native_covered"]))
             if phases or probes:
                 phase_reasons.append({"phases": sorted(phases)})
             full = bool(hits and any(not any(matches(path, entries) for entries in spec["phases"].values()) and
