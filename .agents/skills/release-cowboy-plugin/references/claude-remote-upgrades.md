@@ -96,7 +96,11 @@ a Skill result drops the skill's messages, so names are projected in
 would have run `!` commands (the mirror marks them so native does not); stored
 attachments, the skill listing among them, render again on later requests;
 and the attachment types `context-mod.js` drops as runtime-located
-(`RUNTIME_ATTACHMENTS`) still cover native's producers. Completion notifications for target commands rely
+(`RUNTIME_ATTACHMENTS`) still cover native's producers. Target MCP servers (`mcp.mjs`, `mcp-proxy.mjs`) rely on measured native
+scope, precedence and expansion rules, on the exec-server's `process/write`
+and `process/output` notifications, and on native passing
+`CLAUDE_CODE_SESSION_ID`/`CLAUDECODE` to stdio servers; re-measure them per CLI
+and executor (the `target_mcp_*` checks). Completion notifications for target commands rely
 on a plugin's `$.tool.call` of a native background Bash being notified like
 the model's own, on the `<task-notification>` element shape the Mod rewrites,
 and on `$.session.receive` staying unavailable (re-measure: if a later CLI

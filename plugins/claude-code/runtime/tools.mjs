@@ -16,9 +16,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { READ_RANGE } from "./read-range.mjs";
 import { instructionFiles, nestedInstructions } from "./instructions.mjs";
 import { skillName, skillRoots } from "./skills.mjs";
+import { projectConfigDirectories } from "./mcp.mjs";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_OUTPUT = 64 * 1024;
+const MCP_CALLS = 4;
 // Native shows at most this many characters of Bash output inline.
 const INLINE_OUTPUT = 30000;
 // A foreground command's output is persisted up to this bound (what Read can
@@ -478,6 +480,7 @@ export class WorkspaceTools {
       reads: {},
       jobs: {},
       agents: {},
+      mcp: {},
     };
     // Native background agents live only as long as this Claude process.
     this.incarnation = randomUUID();
@@ -504,7 +507,11 @@ export class WorkspaceTools {
         throw new Error("Tool state belongs to another execution environment");
       }
       // Earlier generations stored no agents; their absence means none.
-      this.state = { ...state, agents: state.agents ?? {} };
+      this.state = {
+        ...state,
+        agents: state.agents ?? {},
+        mcp: state.mcp ?? {},
+      };
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
@@ -1244,7 +1251,9 @@ export class WorkspaceTools {
       arg0: null,
       envPolicy: {
         inherit: "all",
-        ignoreDefaultExcludes: false,
+        // The executor drops variables named like credentials by default;
+        // MCP servers natively see Claude Code's whole environment.
+        ignoreDefaultExcludes: fields.environment === "all",
         exclude: [],
         set,
         includeOnly: [],
@@ -1423,8 +1432,8 @@ export class WorkspaceTools {
     }
   }
 
-  async command(argv, timeout = 10000, call) {
-    const id = await this.startForeground(argv, call);
+  async command(argv, timeout = 10000, call, fields) {
+    const id = await this.startForeground(argv, call, {}, undefined, fields);
     try {
       const result = await this.collect(id, timeout);
       if (!result.exited) {
@@ -1538,22 +1547,310 @@ export class WorkspaceTools {
     return files;
   }
 
-  // The target's skills and custom commands, in native precedence. A listing
-  // that cannot run or a failed read stops the session. As natively (2.1.287
-  // logs "Failed to read skills directory" and loads the rest), a directory
-  // or entry that cannot be read is skipped, as are files that are not UTF-8
-  // or exceed the read limit.
-  async skillFiles() {
+  // What native reads to find the target's MCP servers (mcp.mjs): the
+  // user's ~/.claude.json, each ancestor's `.mcp.json` and the environment
+  // Claude Code would run in, which is the executor's.
+  async mcpInputs() {
+    const home = this.home();
+    const read = async (path) => {
+      try {
+        const bytes = await this.bytes(path, true);
+        return bytes ? decode(bytes) : undefined;
+      } catch (error) {
+        // An unreadable file reads as absent, as natively.
+        if (error.remote || /UTF-8|4 MiB/.test(error.message)) return undefined;
+        throw error;
+      }
+    };
+    const projectConfigs = [];
+    for (const directory of projectConfigDirectories(this.cwd)) {
+      const text = await read(posix.join(directory, ".mcp.json"));
+      if (text !== undefined) projectConfigs.push(text);
+    }
+    const userConfig = home
+      ? await read(posix.join(home, ".claude.json"))
+      : undefined;
+    // Only the variables the configuration names are read; printenv ends
+    // each value with a newline of its own.
+    const names = [
+      ...new Set(
+        [userConfig, ...projectConfigs].flatMap((text) =>
+          [...(text ?? "").matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)/g)].map((
+            match,
+          ) => match[1])
+        ),
+      ),
+    ].slice(0, 256);
+    let environment = {};
+    if (names.length) {
+      const listed = await this.command(
+        [
+          "sh",
+          "-c",
+          'for n; do if printenv "$n" >/dev/null; then printf "%s=" "$n"; printenv "$n"; printf "\\0"; fi; done; exit 0',
+          "sh",
+          ...names,
+        ],
+        10000,
+        undefined,
+        { environment: "all" },
+      );
+      if (listed.exitCode !== 0 || listed.output_limit) {
+        throw new Error("Target environment could not be read");
+      }
+      environment = Object.fromEntries(
+        listed.output.split("\0").filter((item) => item.includes("=")).map((
+          item,
+        ) => [
+          item.slice(0, item.indexOf("=")),
+          item.slice(item.indexOf("=") + 1).replace(/\n$/, ""),
+        ]),
+      );
+    }
+    return {
+      userConfig,
+      projectConfigs,
+      cwd: this.cwd,
+      repositoryRoot: await this.repositoryRoot(),
+      environment,
+    };
+  }
+
+  async repositoryRoot() {
     const top = await this.command([
       "git",
       "--no-optional-locks",
       "rev-parse",
       "--show-toplevel",
     ]).catch(() => ({ exitCode: 1, output: "" }));
-    const repository = top.exitCode === 0 && top.output.trim().startsWith("/")
+    return top.exitCode === 0 && top.output.trim().startsWith("/")
       ? posix.resolve(top.output.trim())
       : undefined;
-    const roots = skillRoots(this.cwd, this.home(), repository);
+  }
+
+  // MCP traffic shares the execution connection's bounded requests with
+  // the session's tools: it queues for a few slots of its own instead of
+  // taking them all (or being refused when they are taken).
+  mcpCall(method, params) {
+    this.mcpSlots ??= { active: 0, waiting: [] };
+    const slots = this.mcpSlots;
+    const run = async () => {
+      slots.active++;
+      try {
+        return await this.connection.call(method, params);
+      } finally {
+        slots.active--;
+        slots.waiting.shift()?.();
+      }
+    };
+    if (slots.active < MCP_CALLS) return run();
+    return new Promise((resolve) => slots.waiting.push(resolve)).then(run);
+  }
+
+  // A target MCP server's process, its stdin piped (mcp-proxy.mjs). Native
+  // gives a stdio server the session's environment variables beside its own.
+  async mcpStart(server, set) {
+    if (this.mcpClosed) throw new Error("The session is ending");
+    const id = randomUUID();
+    // A stop waits for a start in flight, so it cannot outrun it.
+    const started = Promise.withResolvers();
+    this.mcpStarting ??= new Map();
+    this.mcpStarting.set(id, started.promise);
+    try {
+      return await this.mcpLaunch(id, server, set);
+    } finally {
+      started.resolve();
+      this.mcpStarting.delete(id);
+    }
+  }
+
+  async mcpLaunch(id, server, set) {
+    // Exit numbers, to tell an exit from lost output (mcpRead).
+    if (!this.mcpExits) {
+      this.mcpExits = new Map();
+      this.connection.listeners?.add((frame) => {
+        const exited = frame.method === "process/exited" &&
+          Object.hasOwn(this.state.mcp, frame.params?.processId);
+        if (exited && Number.isSafeInteger(frame.params.seq)) {
+          this.mcpExits.set(frame.params.processId, frame.params.seq);
+        }
+      });
+    }
+    await this.save(() => {
+      const previous = this.state.mcp;
+      this.state.mcp = { ...previous, [id]: server.name };
+      return () => this.state.mcp = previous;
+    });
+    const result = await this.mcpCall("process/start", {
+      processId: id,
+      argv: server.argv,
+      cwd: pathToFileURL(this.cwd).href,
+      env: {},
+      tty: false,
+      pipeStdin: true,
+      arg0: null,
+      envPolicy: {
+        inherit: "all",
+        ignoreDefaultExcludes: true,
+        exclude: [],
+        set: { ...set, CLAUDE_PROJECT_DIR: this.cwd, ...server.env },
+        includeOnly: [],
+      },
+    });
+    if (result.processId !== id) {
+      throw new Error("Target process identity changed");
+    }
+    return id;
+  }
+
+  async mcpWrite(id, data) {
+    if (!Object.hasOwn(this.state.mcp, id)) {
+      throw new Error("MCP process does not belong to this session");
+    }
+    // Writes of one process stay in order; a starting process is retried.
+    return await this.ordered(`mcp-write:${id}`, async () => {
+      const writeId = randomUUID();
+      for (let attempt = 0;; attempt++) {
+        const result = await this.mcpCall("process/write", {
+          processId: id,
+          chunk: data,
+          writeId,
+        });
+        if (result.status !== "starting" || attempt >= 50) return result.status;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    });
+  }
+
+  async mcpRead(id, afterSeq, waitMs) {
+    if (!Object.hasOwn(this.state.mcp, id)) {
+      throw new Error("MCP process does not belong to this session");
+    }
+    // An idle server costs no executor calls: wait for its output or end
+    // notification (or a lost one, bounded), then read without waiting.
+    const read = () =>
+      this.mcpCall("process/read", {
+        processId: id,
+        afterSeq,
+        maxBytes: MAX_OUTPUT * 16,
+        waitMs: 0,
+      });
+    // Listen before reading, so output arriving in between still wakes it.
+    let listener;
+    let timer;
+    const notified = new Promise((resolve) => {
+      listener = (frame) => {
+        if (frame.method === "closed" || frame.params?.processId === id) {
+          resolve();
+        }
+      };
+      timer = setTimeout(resolve, waitMs);
+      this.connection.listeners?.add(listener);
+    });
+    let result;
+    try {
+      result = await read();
+      if (!result.chunks.length && !result.closed) {
+        await notified;
+        result = await read();
+      }
+    } finally {
+      clearTimeout(timer);
+      this.connection.listeners?.delete(listener);
+    }
+    // The executor retains bounded output (sequence numbers start at 1). A
+    // gap would hand native a cut JSON-RPC stream, so the server ends
+    // instead, saying why. Its exit and close take numbers of their own.
+    let expected = afterSeq ?? 0;
+    for (const chunk of result.chunks) {
+      // The exit's own number (from its notification) may fall between
+      // output still draining; any other gap is lost output. The read's
+      // reply can arrive before the exit notification: wait for it briefly.
+      if (
+        chunk.seq === expected + 2 && result.exited && this.mcpExits &&
+        !this.mcpExits.has(id)
+      ) {
+        for (
+          let waited = 0;
+          waited < 2000 && !this.mcpExits.has(id);
+          waited += 50
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+      if (
+        chunk.seq === expected + 2 &&
+        this.mcpExits?.get(id) === expected + 1
+      ) {
+        expected = chunk.seq;
+        continue;
+      }
+      if (chunk.seq !== expected + 1) {
+        await this.mcpStop(id).catch(() => {});
+        return { chunks: [], afterSeq, closed: true, exitCode: 1, lost: true };
+      }
+      expected = chunk.seq;
+    }
+    return {
+      chunks: result.chunks.map((chunk) => ({
+        stream: chunk.stream,
+        data: chunk.chunk,
+      })),
+      afterSeq: result.chunks.at(-1)?.seq ?? afterSeq,
+      // A closed process can still hold unread pages; it has ended for the
+      // relay only once a read returns nothing more.
+      closed: result.closed === true && !result.chunks.length,
+      exitCode: result.exitCode ?? null,
+    };
+  }
+
+  async mcpStop(id) {
+    await this.mcpStarting?.get(id);
+    if (!Object.hasOwn(this.state.mcp, id)) return;
+    try {
+      await this.mcpCall("process/terminate", { processId: id });
+    } catch (error) {
+      // Unless the executor says the process is gone, it may still run:
+      // keep its record, so a later stop (or the next launcher) ends it.
+      if (
+        !/unknown process|not found|no such process/i.test(
+          JSON.stringify(error.remote ?? null),
+        )
+      ) throw error;
+    }
+    await this.save(() => {
+      const previous = this.state.mcp;
+      const { [id]: _stopped, ...rest } = previous;
+      this.state.mcp = rest;
+      return () => this.state.mcp = previous;
+    });
+  }
+
+  // MCP servers an earlier launcher left running end with it; at the
+  // session's end (`closing`), no new one starts and those starting are
+  // waited for, so none outlives it.
+  async stopMcpServers(closing = false) {
+    if (closing) {
+      this.mcpClosed = true;
+      await Promise.all([...(this.mcpStarting?.values() ?? [])]);
+    }
+    // One at a time: the connection admits a bounded number of requests.
+    for (const id of Object.keys(this.state.mcp)) {
+      await this.mcpStop(id).catch(() => {});
+    }
+  }
+
+  // The target's skills and custom commands, in native precedence. A listing
+  // that cannot run or a failed read stops the session. As natively (2.1.287
+  // logs "Failed to read skills directory" and loads the rest), a directory
+  // or entry that cannot be read is skipped, as are files that are not UTF-8
+  // or exceed the read limit.
+  async skillFiles() {
+    const roots = skillRoots(
+      this.cwd,
+      this.home(),
+      await this.repositoryRoot(),
+    );
     const listing = await this.command([
       this.shell,
       "-c",

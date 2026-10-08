@@ -74,6 +74,8 @@ try {
       "task-wait.mjs",
       "instructions.mjs",
       "skills.mjs",
+      "mcp.mjs",
+      "mcp-proxy.mjs",
       "memory.mjs",
     ];
     const digests: Record<string, string> = {};

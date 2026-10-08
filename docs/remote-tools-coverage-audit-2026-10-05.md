@@ -107,7 +107,7 @@ to introduce more restrictions.
 | Permission modes | Claude 3.6.0 drops the forced bypass: native `$.tool.check` decides each target call under the session's mode and rules, asks reach the SDK host in native `can_use_tool` shape, denial precedes any target effect, amended input runs, dontAsk denies, and abandoned asks are withdrawn (packaged acceptance) | No "always allow" rule persistence, auto-mode classifier or command-string path mapping; plan mode stays refused |
 | Native agents | Codex fresh and fully forked children inherit target guidance and route direct/CodeAct commands through the keeper in pinned native acceptance. Claude 3.5.0 admits native background subagents: child calls carry `agentId`, launch/notification/client locators use `cowboy-agent://`, outcomes are durable across resume, TaskStop/interrupt cancel the child's target commands (packaged worker acceptance) | Partial output stream, permission modes, grandchildren, teammates, worktree/remote isolation, custom agents and native-runtime crash with a live agent remain unaccepted; those inputs are refused |
 | Skills and project plugins | Claude 3.16.0: the target's user and project skills and commands load from the target at session start under their native names, listing, precedence, arguments, directories and `!` commands (run on the target); seven bundled skills that work through target tools are offered (29 cases match native-local results) | Target plugin (marketplace) skills, skills that may declare hooks or a non-bash shell, nested-directory skill discovery and six bundled skills with runtime files are not offered |
-| MCP and web/browser tools | Claude bound allowlist chiefly admits Matrix plus owned tools | Classify runtime/service/target placement per server/tool; preserve native discovery/auth/elicitation, without moving all MCP servers to target |
+| MCP and web/browser tools | Claude 3.17.0: the target's user, project and local MCP servers load in native's scopes and precedence; stdio servers run on the target behind a stdio relay, remote (http/sse) servers are reached from the runtime as WebFetch is; native owns discovery, tools, instructions and permissions | Servers at the target's own loopback addresses, with a headers helper or ws transport are not offered; OAuth for remote servers runs on the runtime; servers are a session-start snapshot |
 | Plans and task artifacts | Plan tools restricted in Claude lane | Separate runtime transcript from target plan/artifact storage; preserve native approval and resume semantics |
 | Images, notebooks, PDFs | Claude 3.13.0/3.14.0: PDF Reads (whole document, `pages` rendered with the target's poppler), images (native's own Read of a private local copy: same checks, resizing, recompression and size note), binary-extension refusal and missing-file messages match native-local results (32 cases) | Whole PDFs above 10 MB and page images above 10 MB in all are refused; images above 64 MB; output artifacts and user-upload placement untested |
 | File semantics | Claude 3.11.0: 24 Read/Write/Edit cases match native-local results and on-disk bytes and modes (encodings, BOM, CRLF, empty old_string, unread edits, directories) | Files are rewritten in place (native replaces them: inode, hard links, read-only files differ) |
@@ -840,6 +840,85 @@ Linux and actual macOS probes, three Controller reader roles, five public
 artifact digests and Catalog `ready`. OVH operation
 `ovh-claude-code-3-15-0-converge` completed: 3.15.0 active, 3.14.0 retained
 for rollback, no session leases, no live session restarted.
+
+### MCP servers (Plugin 3.17.0)
+
+Native 2.1.287 in a local session (measured, SDK mode, settings sources
+user, project and local):
+
+- **Scopes.** User servers from `~/.claude.json` `mcpServers`; project
+  servers from the `.mcp.json` of every directory from the root down to the
+  working directory, nearer files overriding, loaded without an approval
+  prompt; local servers from `~/.claude.json`
+  `projects[<repository root, else working directory>].mcpServers`.
+- **Precedence.** Local over project over user. `disabledMcpjsonServers`
+  drops a project server; `disabledMcpServers` turns a server off.
+- **Startup.** `${VAR}` and `${VAR:-default}` expand from Claude Code's
+  environment; a stdio server starts in the working directory with that
+  environment plus `CLAUDE_PROJECT_DIR`, `CLAUDE_CODE_SESSION_ID` and
+  `CLAUDECODE`; server instructions reach the model in an
+  `# MCP Server Instructions` reminder.
+
+Before 3.17.0 the remote lane loaded only Matrix (`--strict-mcp-config`).
+
+3.17.0 reads the target's configuration at session start (`mcp.mjs`,
+`WorkspaceTools.mcpInputs`; only the variables it names are read from the
+executor's environment) and hands native an `--mcp-config`:
+
+- **stdio servers run on the target.** Native starts `mcp-proxy.mjs` for each;
+  it starts the server through the exec-server with stdin piped
+  (`process/write`) and relays its stdin, stdout and stderr. Native still owns
+  the MCP session: initialize, tool listing, instructions, permissions,
+  cancellation and reconnection. Output wake-ups come from the executor's
+  `process/output` notifications, so an idle server makes no executor calls;
+  MCP calls queue for four of the connection's slots. Servers end with the
+  session, and a launcher ends any an earlier one left.
+- **Remote servers are reached from the runtime**, as WebFetch is, with
+  their URL and headers expanded from the target's environment.
+- **Not offered:** servers at
+  the target's own loopback names (the runtime cannot reach them), servers
+  with a `headersHelper` (it would run on the runtime), ws or other
+  transports and invalid entries.
+
+Packaged acceptance runs user, project and local servers and a shadowed name
+on the target (`target_mcp_servers_run_on_target_in_native_scopes_and_precedence`:
+server, working directory, expanded arguments and environment,
+`CLAUDE_PROJECT_DIR`, `CLAUDECODE`), checks the instructions reminder and that
+the loopback server is absent. The first candidate polled each server's output
+and slowed every other target call until the first turn timed out; reads now
+wait on notifications. A later run found a restarted launcher refused by the
+one-connection endpoint while the previous connection was closing; the
+launcher now retries the connection briefly.
+
+Twelve native review rounds were run; the last reported none. Fixed findings:
+
+- a closed server's unread output pages, and output the executor no longer
+  retains: a gap in its sequence ends the server with a stated reason
+  instead of handing native a cut JSON-RPC stream (an exit's own number,
+  known from its notification, is not a gap)
+- MCP calls exceeding the connection's request limit, now queued on four
+  slots; leftover-server cleanup one at a time, keeping a record when the
+  stop's outcome is unknown, and waiting for starts in flight at session end
+- remote servers whose URL or headers name variables the target does not
+  set (native would expand them from the runtime's environment), loopback
+  names written with a trailing dot or as IPv4-mapped IPv6 (also for
+  WebFetch)
+- relay backpressure toward a slow native reader
+- credential-like variables (`*TOKEN*`, `*KEY*`, ...) that the executor drops
+  by default: MCP servers and the variables their configuration names now
+  get the executor's whole environment, as natively
+
+Gaps:
+
+- Bash commands still run with the executor's default exclusion of
+  credential-like variables, which a local session's Bash does not apply;
+  aligning it is a separate decision because it exposes those variables to
+  model-run commands.
+- A disabled server is absent rather than listed as disabled.
+- Remote servers' OAuth and their network origin are the runtime's.
+- Target `.claude/settings.json` MCP permission rules are not read (the
+  3.6.0 rule gap).
+- Servers are a session-start snapshot; `/mcp` changes are refused as before.
 
 ### Skills, commands and native reminders (Plugin 3.16.0)
 

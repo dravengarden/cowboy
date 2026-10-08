@@ -28,6 +28,7 @@ from matrix_execution_fixture import MatrixFixture
 from claude_shell_cases import CASES as SHELL_CASES, normalize as shell_normalize
 from claude_file_cases import CASES as FILE_CASES, effects as file_effects, normalize as file_normalize, setup as file_setup
 from claude_pdf_cases import CASES as PDF_CASES, normalize as pdf_normalize, notes as pdf_notes, setup as pdf_setup
+from claude_mcp_cases import CALLS as MCP_CALLS, expected as mcp_expected, setup as mcp_setup
 from claude_skill_cases import (CASES as SKILL_CASES, contents as skill_contents, listing as skill_listing,
                                 normalize as skill_normalize, setup as skill_setup)
 from claude_lifecycle_cases import (CASES as LIFECYCLE_CASES, STOP as LIFECYCLE_STOP, alive as lifecycle_alive,
@@ -765,6 +766,53 @@ def pdf_phases(args, api, client, checks):
     checks.append("pdf_and_file_type_reads_match_native_local")
 
 
+def mcp_phases(args, api, client, checks):
+    """The target's MCP servers load and run on the target as natively."""
+    home = Path(os.environ["HOME"])
+    calls = {name: tool(f"mcp__{name}__where", {}) for name in MCP_CALLS}
+    order = list(calls.values())
+    position = {call[0]["id"]: index for index, call in enumerate(order)}
+
+    def router(requests):
+        last = requests[-1]["messages"][-1]
+        done = [position[block["tool_use_id"]] for block in (last.get("content") if isinstance(last.get("content"), list) else [])
+                if block.get("type") == "tool_result" and block.get("tool_use_id") in position]
+        if done:
+            following = max(done) + 1
+            return order[following] if following < len(order) else [{"type": "text", "text": "MCP_DONE"}]
+        if "Run the MCP fixture." in " ".join(text_blocks(last)):
+            return order[0]
+        raise ProbeFailure("unexpected MCP phase request")
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * (len(order) + 10))
+    client.prompt(text="Run the MCP fixture.", timeout=180)
+    names = {definition["name"] for definition in api.requests[-1].get("tools", [])}
+    require({f"mcp__{name}__where" for name in MCP_CALLS} <= names and "mcp__loopsrv__where" not in names,
+            "target MCP tools differ: " + ",".join(sorted(name for name in names if name.startswith("mcp__"))))
+    results = {}
+    for message in api.requests[-1]["messages"]:
+        for block in message["content"] if isinstance(message.get("content"), list) else []:
+            for name, call in calls.items():
+                if block.get("type") == "tool_result" and block.get("tool_use_id") == call[0]["id"]:
+                    content = block.get("content")
+                    text = content[0]["text"] if isinstance(content, list) else content
+                    try:
+                        results[name] = json.loads(text)
+                    except (TypeError, ValueError):
+                        results[name] = {"error": text, "is_error": block.get("is_error")}
+    print("mcp diagnostic:", json.dumps(results, ensure_ascii=False)[:4000])
+    for name in MCP_CALLS:
+        require(results.get(name) == mcp_expected(args.target, home, name),
+                f"target MCP server {name} differs: " + json.dumps(results.get(name))[:1000])
+    checks.append("target_mcp_servers_run_on_target_in_native_scopes_and_precedence")
+    encoded = json.dumps(api.requests[-1]["messages"], ensure_ascii=False)
+    require("# MCP Server Instructions" in encoded and "projsrv instructions" in encoded and
+            "dup-local instructions" in encoded and "dup-user instructions" not in encoded,
+            "target MCP instructions did not reach the model as natively")
+    checks.append("target_mcp_instructions_reach_the_model")
+
+
 def skill_phases(args, api, client, checks):
     """Target skills and commands: native's Skill results, listing and typed commands."""
     user = Path(os.environ["HOME"]) / ".claude"
@@ -1215,6 +1263,7 @@ def main():
     write_context_fixture(args.target)
     # The target's home is the harness's fresh one (see the justfile).
     skill_setup(args.target, Path(os.environ["HOME"]) / ".claude")
+    mcp_setup(args.target, Path(os.environ["HOME"]))
     def png_chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
     pixel = (b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) +
@@ -1274,7 +1323,8 @@ def main():
                     "auxiliary request leaked runtime context")
         for index, request in enumerate(requests):
             names = {definition["name"] for definition in request.get("tools", [])}
-            require(not any(name.startswith("mcp__") and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget", "mcp__matrix__memory_read", "mcp__matrix__memory_execute", "mcp__matrix__memory_receipt"}) for name in names), "Unowned MCP tool definitions remain advertised")
+            target_mcp = {f"mcp__{name}__where" for name in MCP_CALLS}
+            require(not any(name.startswith("mcp__") and name not in target_mcp and not (memory.enabled and name in {"mcp__matrix__memory_search", "mcp__matrix__memory_get", "mcp__matrix__memory_put", "mcp__matrix__memory_forget", "mcp__matrix__memory_read", "mcp__matrix__memory_execute", "mcp__matrix__memory_receipt"}) for name in names), "Unowned MCP tool definitions remain advertised")
             # Native's default set (2.1.287): no Glob, Grep or TodoWrite; the
             # task list, web and review tools run where the session runs.
             require(not names or ({"Read", "Edit", "Write", "Bash", "NotebookEdit"} <= names
@@ -1308,7 +1358,13 @@ def main():
                               frame["response"].get("request_id") == "forbidden-mcp")
         require(denied["response"]["subtype"] == "error", "execution override was accepted")
         checks.append("native_control_cannot_replace_bound_execution")
-        result = client.prompt(timeout=150)
+        try:
+            result = client.prompt(timeout=150)
+        except ProbeFailure:
+            client.stderr.seek(0)
+            print("native stderr diagnostic:", client.stderr.read()[-4000:].decode("utf-8", "replace"))
+            print("first turn diagnostic:", len(api.requests), json.dumps(api.requests[-1]["messages"][-2:] if api.requests else None)[-3000:])
+            raise
         session = result["session_id"]
         context_checked(api.requests)
         main_tools = {definition["name"] for definition in api.requests[-1].get("tools", [])}
@@ -1549,6 +1605,7 @@ def main():
         file_phases(args, api, client, checks)
         pdf_phases(args, api, client, checks)
         skill_phases(args, api, client, checks)
+        mcp_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
@@ -1605,7 +1662,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:
@@ -1623,7 +1680,7 @@ def main():
                 failed.stderr.seek(0)
                 diagnostic = failed.stderr.read().decode()
                 require(("--bare" if extra else "execution module is missing or disabled") in diagnostic,
-                        "readiness failed for an unrelated reason")
+                        "readiness failed for an unrelated reason: " + diagnostic[-2000:])
             finally:
                 failed.close()
         checks.extend(["broken_module_refused_before_model_request", "bare_mode_refused_without_changing_authentication"])

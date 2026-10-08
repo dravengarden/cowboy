@@ -495,6 +495,14 @@ async function routingFixture(
     runtimeCwd: "/runtime",
     targetHome: "/home/target",
     hooks: { commands: [], tool: {} },
+    mcp: {
+      servers: [{
+        name: "targetdb",
+        prefix: "mcp__targetdb__",
+        placement: "target",
+      }],
+      omitted: [],
+    },
     skills: {
       prefix: "cowboy-target:",
       marker: "cowboy" + "c".repeat(32),
@@ -675,6 +683,7 @@ test("only questions, todos and enrolled exact memory tools pass through", async
       "WebFetch",
       "WebSearch",
       "ReportFindings",
+      "mcp__targetdb__query",
       ...(memory ? memoryTools : []),
     ];
     for (const tool of allowed) {
@@ -687,6 +696,7 @@ test("only questions, todos and enrolled exact memory tools pass through", async
       const tool of [
         "FutureNativeTool",
         "mcp__foreign__read",
+        "mcp__targetdbx__query",
         "mcp__matrix__memory_get_extra",
         "mcp__matrix__memory_execute_extra",
         ...(memory ? [] : memoryTools),

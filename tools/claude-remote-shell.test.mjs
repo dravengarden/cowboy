@@ -35,7 +35,7 @@ function localConnection(home) {
         const child = spawn(params.argv[0], params.argv.slice(1), {
           cwd: fileURLToPath(params.cwd),
           env: { ...process.env, ...params.envPolicy.set },
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [params.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
           // As the executor's, each process leads a group of its own.
           detached: true,
         });
@@ -63,6 +63,12 @@ function localConnection(home) {
         );
         processes.set(params.processId, job);
         return { processId: params.processId };
+      }
+      if (method === "process/write") {
+        const job = processes.get(params.processId);
+        if (!job) return { status: "unknownProcess" };
+        job.child.stdin.write(Buffer.from(params.chunk, "base64"));
+        return { status: "accepted" };
       }
       if (method === "process/terminate") {
         // The executor ends the process's group.
@@ -1035,4 +1041,50 @@ test("target skills and commands are found as native finds them", async (t) => {
       "project:command:grp:inner:G\n",
     ],
   );
+});
+
+test("a target MCP server runs on the target with its stdin relayed", async (t) => {
+  const { tools, project } = await shellFixture(t);
+  await writeFile(
+    join(project, "server.sh"),
+    'while IFS= read -r line; do printf "%s|%s|%s\\n" "$line" "$PWD" "$FOO$CLAUDE_PROJECT_DIR$CLAUDECODE"; done\n',
+  );
+  const id = await tools.mcpStart(
+    { name: "db", argv: ["sh", "server.sh"], env: { FOO: "foo:" } },
+    { CLAUDECODE: "1" },
+  );
+  assert.equal(
+    await tools.mcpWrite(id, Buffer.from("ping\n").toString("base64")),
+    "accepted",
+  );
+  let output = "";
+  let afterSeq = null;
+  while (!output.includes("\n")) {
+    const read = await tools.mcpRead(id, afterSeq, 1000);
+    afterSeq = read.afterSeq;
+    output += read.chunks.map((chunk) =>
+      Buffer.from(chunk.data, "base64").toString()
+    ).join("");
+  }
+  assert.equal(output, `ping|${project}|foo:${project}1\n`);
+  assert.deepEqual(Object.values(tools.state.mcp), ["db"]);
+  await tools.mcpStop(id);
+  assert.deepEqual(tools.state.mcp, {});
+  await assert.rejects(tools.mcpWrite(id, "eA=="), /does not belong/);
+});
+
+test("the target's MCP configuration is read as native reads it", async (t) => {
+  const { tools, project, home } = await shellFixture(t);
+  await writeFile(
+    join(home, ".claude.json"),
+    JSON.stringify({ mcpServers: { u: { command: "u", args: ["${HOME}"] } } }),
+  );
+  await writeFile(
+    join(project, ".mcp.json"),
+    JSON.stringify({ mcpServers: { p: { command: "p" } } }),
+  );
+  const inputs = await tools.mcpInputs();
+  assert.equal(inputs.projectConfigs.length, 1);
+  assert.equal(inputs.environment.HOME, process.env.HOME);
+  assert.equal(inputs.cwd, project);
 });

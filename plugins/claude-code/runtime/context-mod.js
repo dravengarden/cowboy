@@ -1071,6 +1071,19 @@ async function skillPrompt($, event, next) {
   return next({ ...event, text: targetSkillText(expanded.text, skills) });
 }
 
+// The target's MCP servers as launch.mjs describes them (mcp.mjs).
+export function validMcp(mcp) {
+  return Boolean(mcp) && Array.isArray(mcp.servers) &&
+    mcp.servers.every((server) =>
+      typeof server?.name === "string" &&
+      server.prefix === "mcp__" + server.name + "__" &&
+      ["target", "runtime"].includes(server.placement)
+    ) && Array.isArray(mcp.omitted) &&
+    mcp.omitted.every((server) =>
+      typeof server?.name === "string" && typeof server.reason === "string"
+    );
+}
+
 // The target's skills as launch.mjs describes them (skills.mjs).
 export function validSkills(skills) {
   const strings = (value) =>
@@ -1243,8 +1256,12 @@ export function targetLoopback(url) {
   } catch {
     return false;
   }
+  // A trailing dot names the same host; an IPv4-mapped address the same IP.
+  host = host.replace(/\.$/, "").replace(/^::ffff:/, "");
   return host === "localhost" || host.endsWith(".localhost") ||
-    host === "::1" || host === "0.0.0.0" || /^127\.\d+\.\d+\.\d+$/.test(host);
+    host === "::1" || host === "0.0.0.0" || host === "::" ||
+    /^127\.\d+\.\d+\.\d+$/.test(host) ||
+    /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host);
 }
 
 export function targetImageResult(event) {
@@ -1336,6 +1353,14 @@ export function register(on) {
       };
     }
     if (RUNTIME_TOOLS.includes(event.tool)) return next(event);
+    // The target's MCP servers: native owns the call; a stdio server's
+    // process runs on the target behind its relay (mcp.mjs).
+    if (
+      typeof event.tool === "string" &&
+      context?.mcp.servers.some((server) =>
+        event.tool.startsWith(server.prefix)
+      )
+    ) return next(event);
     if (event.tool === "Skill") {
       return context ? skillCall($, event, next) : { deny: unavailable };
     }
@@ -1693,7 +1718,7 @@ export function register(on) {
         ["user", "project", "local"].includes(file.kind) &&
         typeof file.content === "string" &&
         (file.parent === undefined || typeof file.parent === "string")
-      ) || !validSkills(loaded.skills)
+      ) || !validSkills(loaded.skills) || !validMcp(loaded.mcp)
     ) throw new Error("Invalid bound execution context");
     context = Object.freeze(loaded);
     // A resumed session may continue an agent registered by an earlier process.

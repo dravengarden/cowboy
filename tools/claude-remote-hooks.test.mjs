@@ -472,6 +472,7 @@ async function modFixture(hooks, runs, base) {
           runtimeCwd: "/runtime",
           targetHome: "/home/target",
           hooks,
+          mcp: { servers: [], omitted: [] },
           skills: {
             prefix: "cowboy-target:",
             entries: [],

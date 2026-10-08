@@ -37,6 +37,9 @@ export async function readDescriptor(path) {
 export class Connection {
   pending = new Map();
   closed = false;
+  // Executor notifications (process output and ends), for readers that wait
+  // on them instead of polling.
+  listeners = new Set();
 
   static async open(descriptor) {
     const connection = new Connection();
@@ -49,7 +52,12 @@ export class Connection {
     connection.socket.on("message", (bytes) => {
       try {
         const frame = JSON.parse(bytes.toString());
-        if (frame.id === undefined) return;
+        if (frame.id === undefined) {
+          if (typeof frame.method === "string") {
+            for (const listener of connection.listeners) listener(frame);
+          }
+          return;
+        }
         const call = connection.pending.get(frame.id);
         if (!call) throw new Error("Unexpected execution reply");
         connection.pending.delete(frame.id);
@@ -127,6 +135,7 @@ export class Connection {
       );
     }
     this.pending.clear();
+    for (const listener of this.listeners) listener({ method: "closed" });
     this.socket?.terminate();
   }
 }

@@ -34,7 +34,22 @@ const BODY_KEYS = {
   "/hook": null,
   "/link": ["path"],
   "/local-release": ["path"],
+  "/mcp-start": ["env,server"],
+  "/mcp-write": ["data,id"],
+  "/mcp-read": ["afterSeq,id"],
+  "/mcp-stop": ["id"],
 };
+
+// The session variables native gives a stdio MCP server, as the relay
+// received them.
+function mcpEnvironment(value) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    Object.entries(value).every(([key, item]) =>
+      ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"].includes(key) &&
+      typeof item === "string" && /^[a-zA-Z0-9-]{1,128}$/.test(item)
+    );
+}
+const MCP_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 // Private per-process endpoint. The existing authenticated Cowboy execution
 // connection still owns remote operations, reconnect and effect deduplication.
@@ -148,6 +163,46 @@ export async function startModBridge(
           ? await tools.isSymlink(call.path).catch(() => null)
           : null;
         answer(200, { symlink });
+        return;
+      }
+      if (request.url.startsWith("/mcp-")) {
+        // A target stdio MCP server's relay (mcp-proxy.mjs).
+        if (request.url === "/mcp-start") {
+          const server = tools.mcpServers?.get(call.server);
+          if (!server || !mcpEnvironment(call.env)) {
+            answer(400, { deny: "Invalid execution call" });
+            return;
+          }
+          answer(200, { id: await tools.mcpStart(server, call.env) });
+          return;
+        }
+        if (typeof call.id !== "string" || !MCP_ID.test(call.id)) {
+          answer(400, { deny: "Invalid execution call" });
+          return;
+        }
+        if (request.url === "/mcp-write") {
+          if (
+            typeof call.data !== "string" || !call.data ||
+            !/^[A-Za-z0-9+/]*={0,2}$/.test(call.data)
+          ) {
+            answer(400, { deny: "Invalid execution call" });
+            return;
+          }
+          answer(200, { status: await tools.mcpWrite(call.id, call.data) });
+          return;
+        }
+        if (request.url === "/mcp-read") {
+          if (
+            call.afterSeq !== null && !Number.isSafeInteger(call.afterSeq)
+          ) {
+            answer(400, { deny: "Invalid execution call" });
+            return;
+          }
+          answer(200, await tools.mcpRead(call.id, call.afterSeq, 25000));
+          return;
+        }
+        await tools.mcpStop(call.id);
+        answer(200, { stopped: true });
         return;
       }
       if (request.url === "/local-release") {

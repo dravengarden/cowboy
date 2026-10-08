@@ -19,6 +19,7 @@ import {
   WorkspaceTools,
 } from "./tools.mjs";
 import { startModBridge } from "./mod-bridge.mjs";
+import { mcpToolPrefix, nativeMcpServers, targetMcpServers } from "./mcp.mjs";
 import {
   BUNDLED_SKILLS,
   SKILL_PLUGIN,
@@ -269,6 +270,7 @@ export function nativeArguments(
   memoryConfig,
   hookSettings,
   skillPlugin,
+  matrix = Boolean(memoryConfig),
 ) {
   const values = new Set([
     "--model",
@@ -396,8 +398,9 @@ export function nativeArguments(
     "--plugin-dir",
     plugin,
     ...(skillPlugin ? ["--plugin-dir", skillPlugin] : []),
-    ...(memoryConfig
-      ? ["--mcp-config", memoryConfig, "--allowedTools", MATRIX_TOOLS.join(",")]
+    ...(memoryConfig ? ["--mcp-config", memoryConfig] : []),
+    ...(memoryConfig && matrix
+      ? ["--allowedTools", MATRIX_TOOLS.join(",")]
       : []),
     ...(hookSettings ? ["--settings", hookSettings] : []),
     ...forwarded,
@@ -854,10 +857,20 @@ async function native(args) {
     throw new Error("Invalid private execution directory");
   }
   const stage = await mkdtemp(join(root, "native-"));
-  let child, connection, modBridge, memory;
+  let child, connection, modBridge, memory, tools;
   try {
-    connection = await Connection.open(descriptor);
-    const tools = new WorkspaceTools(
+    // The endpoint serves one connection; a restarted session can arrive
+    // while the previous process's connection is still being torn down.
+    for (let attempt = 0;; attempt++) {
+      try {
+        connection = await Connection.open(descriptor);
+        break;
+      } catch (error) {
+        if (attempt >= 20) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+    tools = new WorkspaceTools(
       connection,
       descriptor.binding,
       join(root, "state.json"),
@@ -937,7 +950,29 @@ async function native(args) {
         bundled: BUNDLED_SKILLS,
         unavailable: UNAVAILABLE_BUNDLED,
       };
-    const memoryConfig = memory ? join(stage, "matrix-mcp.json") : undefined;
+    // The target's MCP servers (mcp.mjs): stdio ones run on the target
+    // through mcp-proxy.mjs, remote ones are reached from here.
+    await tools.stopMcpServers();
+    const mcp = targetMcpServers(await tools.mcpInputs());
+    const mcpEntries = mcp.entries.filter((entry) =>
+      !(memory && entry.name === "matrix")
+    );
+    tools.mcpServers = new Map(
+      mcpEntries.filter((entry) => entry.placement === "target").map((
+        entry,
+      ) => [entry.name, entry]),
+    );
+    context.mcp = {
+      servers: mcpEntries.map((entry) => ({
+        name: entry.name,
+        prefix: mcpToolPrefix(entry.name),
+        placement: entry.placement,
+      })),
+      omitted: mcp.omitted,
+    };
+    const memoryConfig = memory || mcpEntries.length
+      ? join(stage, "mcp.json")
+      : undefined;
     let hookSettings;
     let hookPrefix;
     if (Object.keys(projectHooks).length) {
@@ -976,10 +1011,20 @@ async function native(args) {
       mode: 0o600,
       flag: "wx",
     });
-    if (memory) {
+    if (memoryConfig) {
+      const proxy = join(stage, "mcp-proxy.mjs");
+      await copyFile(new URL("./mcp-proxy.mjs", import.meta.url), proxy);
       await writeFile(
         memoryConfig,
-        JSON.stringify({ mcpServers: { matrix: memory.mcp() } }),
+        JSON.stringify({
+          mcpServers: {
+            ...nativeMcpServers(mcpEntries, {
+              command: process.execPath,
+              args: [proxy, contextPath],
+            }),
+            ...(memory ? { matrix: memory.mcp() } : {}),
+          },
+        }),
         { mode: 0o600, flag: "wx" },
       );
     }
@@ -1009,6 +1054,7 @@ async function native(args) {
       memoryConfig,
       hookSettings,
       skillPlugin,
+      Boolean(memory),
     );
     broker.mode = startingPermissionMode(nativeArgv);
     child = spawn(executable, nativeArgv, {
@@ -1034,6 +1080,8 @@ async function native(args) {
     process.stdin.destroy();
   } finally {
     child?.kill("SIGTERM");
+    // Target MCP servers end with the session, as natively.
+    await tools?.stopMcpServers(true).catch(() => {});
     connection?.close();
     await memory?.close();
     await modBridge?.close();
@@ -1099,7 +1147,8 @@ if (
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(
       (error.cowboyDiagnostic ??
-        "Cowboy Claude execution binding failed; local fallback is disabled") +
+        "Cowboy Claude execution binding failed; local fallback is disabled" +
+          ` (${String(error?.message ?? error).slice(0, 500)})`) +
         "\n",
     );
     process.exitCode = 1;
