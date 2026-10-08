@@ -877,6 +877,15 @@ up to two hours is accepted, as natively (a foreground one stays at ten
 minutes); a deadline stop the target did not confirm says so in the
 notification instead of reading as stopped.
 
+The [3.18.0 release receipt](experiments/claude-deadline-release-2026-10-08.json)
+binds commit `04890852` and artifact
+`sha256:07cf132d68ff5f2d43e8658d8b98d7d9966e899b76de1c8b8c1669f2f1df7140`:
+89 accepted checks on the exact signed package, 3.17.0/3.18.0 coexistence,
+Linux and actual macOS probes, three Controller reader roles, five public
+artifact digests and Catalog `ready`. OVH operation
+`ovh-claude-code-3-18-0-converge` completed: 3.18.0 active, 3.17.0 retained
+for rollback, no session leases, no live session restarted by this task.
+
 ### MCP servers (Plugin 3.17.0)
 
 Native 2.1.287 in a local session (measured, SDK mode, settings sources
