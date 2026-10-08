@@ -4,6 +4,7 @@ import {
   confirmedImageSrc,
   envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
+  promptEchoText,
   rememberSendImagePreviews,
   retainUnpresentedOptimistic,
 } from "./sendImagePreviews.ts";
@@ -203,4 +204,10 @@ Deno.test("confirmed previews follow inline document order instead of attachment
     "![second](cowboy-att:second) caption ![first](cowboy-att:first)");
   assertEquals(confirmedImageSrc("/artifact/1", "reordered", 0), "data:image/png;base64,Yg==");
   assertEquals(confirmedImageSrc("/artifact/2", "reordered", 1), "data:image/png;base64,YQ==");
+});
+
+Deno.test("the echoed text of a tagged prompt is recovered for draft retirement", () => {
+  const events = [envelope(1, "text", "c1"), envelope(2, "image", "c1"), envelope(3, "text", "c2")];
+  assertEquals(promptEchoText(events, "c1"), "caption");
+  assertEquals(promptEchoText(events, "missing"), undefined);
 });

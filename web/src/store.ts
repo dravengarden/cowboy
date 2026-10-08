@@ -31,6 +31,7 @@ import { actionErrorMessage } from "./actionErrorMessage";
 import {
   envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
+  promptEchoText,
   rememberSendImagePreviews,
 } from "./sendImagePreviews";
 import {
@@ -49,11 +50,15 @@ import {
 import {
   type DeliveryOrigin,
   type DeliveryStatus,
+  deliveryDeadlineDeferred,
   deliveryStallMs,
   destinationForPrompt,
+  FROZEN_TIMER_SLACK_MS,
   homeForOrigin,
   lateEchoRetiresRecoveryDraft,
+  recoveredSendId,
   recoveryDraftCmid,
+  recoveryDraftMatchesEcho,
   retryDeliveryAttempt,
   statusAfterExplicitSend,
   unconfirmedSendDisposition,
@@ -522,6 +527,9 @@ const foregroundProbe = new ForegroundProbe(FOREGROUND_PROBE_MS);
 let foregroundProbeStartedAt = 0;
 let lastMessageAt = 0;
 let lastForegroundRecoveryAt = 0;
+// Delivery deadlines only count time this page could actually observe an echo.
+let socketReadyAt = 0;
+let visibleSince = 0;
 let livenessTimer: ReturnType<typeof setInterval> | undefined;
 
 function markAlive(): void {
@@ -643,6 +651,7 @@ if (typeof document !== "undefined") {
     }
     if (notifyScheduled) flushNotify();
     const now = Date.now();
+    if (now - lastForegroundRecoveryAt >= FOREGROUND_RECOVERY_COALESCE_MS) visibleSince = now;
     // iOS can dispatch both visibilitychange and pageshow for one foreground
     // transition. Coalesce refresh work; the probe and bootstrap guards also
     // preserve recovery when events arrive farther apart than this window.
@@ -1707,6 +1716,7 @@ function handle(msg: Outbound): void {
           }
         }
       }
+      retireEchoedRecoveryDrafts(msg.session_id, msg.events);
       const retry = sessionHydrationRetryTimers.get(msg.session_id);
       if (retry !== undefined) clearTimeout(retry);
       sessionHydrationRetryTimers.delete(msg.session_id);
@@ -1845,6 +1855,8 @@ function handle(msg: Outbound): void {
       if (msg.state.startsWith("queue:")) {
         telemetryOperations.acknowledge(msg.state.slice("queue:".length), msg.confirmed);
         applyQueuePatch(msg.state.slice("queue:".length), msg.version, msg.value, msg.confirmed, resync);
+        const queueSession = msg.state.slice("queue:".length);
+        retireEchoedRecoveryDrafts(queueSession, state.timelines.get(queueSession) ?? []);
       } else if (msg.state === "drafts") {
         // Independent documents converge over HTTP; this only announces which
         // ones changed so open editors merge them in without polling.
@@ -2314,6 +2326,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     clearTimeout(bootstrapGuard);
     ready = true;
     socketReady = true;
+    socketReadyAt = Date.now();
     connectionSpan?.end();
     const readyAt = performance.now();
     const connectDurationMs = readyAt - connectStartedAt;
@@ -2528,6 +2541,7 @@ function isConnected(): boolean {
 // and provider echo. A deadline still means unconfirmed, never proven lost.
 const SEND_TIMEOUT_MS = 60_000;
 const SEND_CHECK_MS = 10_000;
+const DELIVERY_RECHECK_MS = 20_000;
 
 function newCmid(): string {
   return `c-${newUuid()}`;
@@ -3610,7 +3624,7 @@ const CHAT_CREATION_MUTATORS = new Set(["submitPrompt", "addQueue", "frontQueue"
 function observeRecoveredSend(env: Envelope): void {
   if (env.kind === "update" && env.update.sessionUpdate === "user_message_chunk") {
     if (env.cmid === undefined) return;
-    retireParkedDraftOnEcho(env.session_id, env.cmid);
+    retireEchoedRecoveryDrafts(env.session_id, [env]);
     const pending = qClients.get(env.session_id)?.pending() ?? [];
     const index = pending.findIndex((mutation) => mutation.id === env.cmid ||
       (mutation.args as { row?: QueuedMessage }).row?.cmid === env.cmid);
@@ -3680,7 +3694,12 @@ function parkUnconfirmedSend(sessionId: string, id: string, phase: DeliveryStatu
   const echoCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
   const refused = qFailure.has(id) || (echoCmid !== undefined && qFailure.has(echoCmid));
   if (unconfirmedSendDisposition({ mutation: mutation.name, phase, refused }) !== "draft") return;
-  void saveRecoveredSendAsDraft(sessionId, id).then((parked) => {
+  // The live stream may have missed the echo (a resumed zombie socket, a
+  // reload). The session snapshot confirms an accepted prompt, which retires
+  // the mutation so nothing below parks or announces it.
+  void hydrateSession(sessionId).catch(() => undefined).then(() =>
+    saveRecoveredSendAsDraft(sessionId, id)
+  ).then((parked) => {
     if (!parked) return;
     reportClientLog("info", "unconfirmed_send_parked", "Unconfirmed message saved to drafts", {
       session_id: sessionId, mutation_id: id, phase,
@@ -3692,16 +3711,29 @@ function parkUnconfirmedSend(sessionId: string, id: string, phase: DeliveryStatu
 }
 
 /** A parked send that the agent echoes after all did arrive; drop its draft
- * unless the user already changed it. */
-function retireParkedDraftOnEcho(sessionId: string, cmid: string): void {
-  const parked = parkedSends.get(cmid);
-  if (parked === undefined) return;
-  parkedSends.delete(cmid);
-  const draft = qClients.get(sessionId)?.get().drafts.find((row) => row.cmid === parked.draftCmid);
-  if (draft === undefined || !lateEchoRetiresRecoveryDraft(parked, draft)) return;
-  void removeDraft(sessionId, draft.id).catch((error: unknown) => {
-    reportClientLog("warn", "parked_draft_retire_failed", error, { session_id: sessionId, mutation_id: cmid });
-  });
+ * unless the user already changed it. Tab-local parking state is preferred;
+ * without it (a reload, another device) the echoed text must match. */
+const retiringRecoveryDrafts = new Set<string>();
+function retireEchoedRecoveryDrafts(sessionId: string, events: readonly Envelope[]): void {
+  for (const draft of qClients.get(sessionId)?.get().drafts ?? []) {
+    const sendId = draft.cmid === undefined ? null : recoveredSendId(draft.cmid);
+    if (sendId === null || retiringRecoveryDrafts.has(draft.id)) continue;
+    const echo = promptEchoText(events, sendId);
+    if (echo === undefined) continue;
+    const parked = parkedSends.get(sendId);
+    parkedSends.delete(sendId);
+    const unchanged = parked === undefined
+      ? recoveryDraftMatchesEcho(draft.text, echo)
+      : lateEchoRetiresRecoveryDraft(parked, draft);
+    if (!unchanged) continue;
+    retiringRecoveryDrafts.add(draft.id);
+    reportClientLog("info", "parked_draft_retired", "Parked message was delivered; duplicate draft removed", {
+      session_id: sessionId, mutation_id: sendId,
+    });
+    void removeDraft(sessionId, draft.id).catch((error: unknown) => {
+      reportClientLog("warn", "parked_draft_retire_failed", error, { session_id: sessionId, mutation_id: sendId });
+    }).finally(() => retiringRecoveryDrafts.delete(draft.id));
+  }
 }
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
@@ -4152,15 +4184,49 @@ function armQTimers(
   const statusIds = deliveryStatusIds(mutationId, echoCmid);
   optTimers.set(mutationId, {
     check: setTimeout(() => checkUnconfirmedDelivery(sessionId, mutationId), SEND_CHECK_MS),
-    fail: setTimeout(() => {
-      reportClientLog("warn", "delivery_confirmation_timeout", "Outgoing message remains unconfirmed; local copy retained", {
-        session_id: sessionId, mutation_id: mutationId, timeout_ms: SEND_TIMEOUT_MS,
-      });
-      failDelivery(sessionId, statusIds);
-      clearOptTimers(mutationId);
-      parkUnconfirmedSend(sessionId, mutationId, "sending");
-    }, SEND_TIMEOUT_MS),
+    fail: armDeliveryDeadline(sessionId, mutationId, statusIds, SEND_TIMEOUT_MS),
   });
+}
+
+/** True when a deadline armed at `armedAt` fired without a fair chance to see
+ * the echo: the page was frozen, hidden, offline, or has only just resumed. */
+function deliveryDeadlineShouldWait(armedAt: number, delayMs: number): boolean {
+  return deliveryDeadlineDeferred({
+    armedAt,
+    delayMs,
+    now: Date.now(),
+    visible: globalThis.document?.visibilityState !== "hidden",
+    connectedSince: isConnected() ? socketReadyAt : null,
+    visibleSince,
+    settleMs: SEND_CHECK_MS,
+  });
+}
+
+function armDeliveryDeadline(
+  sessionId: string,
+  mutationId: string,
+  statusIds: readonly string[],
+  delayMs: number,
+): ReturnType<typeof setTimeout> {
+  const armedAt = Date.now();
+  const timer = setTimeout(() => {
+    const timers = optTimers.get(mutationId);
+    if (timers?.fail !== timer) return;
+    if (deliveryDeadlineShouldWait(armedAt, delayMs)) {
+      // Re-check through the authoritative snapshot and give the resumed
+      // connection a fresh, fully observed window.
+      checkUnconfirmedDelivery(sessionId, mutationId);
+      timers.fail = armDeliveryDeadline(sessionId, mutationId, statusIds, DELIVERY_RECHECK_MS);
+      return;
+    }
+    reportClientLog("warn", "delivery_confirmation_timeout", "Outgoing message remains unconfirmed; local copy retained", {
+      session_id: sessionId, mutation_id: mutationId, timeout_ms: SEND_TIMEOUT_MS,
+    });
+    failDelivery(sessionId, statusIds);
+    clearOptTimers(mutationId);
+    parkUnconfirmedSend(sessionId, mutationId, "sending");
+  }, delayMs);
+  return timer;
 }
 
 // --- Delivery stall watchdogs ----------------------------------------------
@@ -4211,12 +4277,19 @@ function reconcileStallWatchdogs(sessionId: string): void {
     // or a chatty re-render would postpone the escape indefinitely.
     if (stallTimers.get(mutation.id)?.phase === phase) continue;
     clearStallTimer(mutation.id);
+    const armedAt = Date.now();
     stallTimers.set(mutation.id, {
       session: sessionId,
       phase,
       timer: setTimeout(() => {
         stallTimers.delete(mutation.id);
-        resolveStalledDelivery(sessionId, mutation.id, phase);
+        // A frozen or just-resumed page re-arms the same phase from now. A
+        // local write does not wait on the network, only on a frozen page.
+        const wait = phase === "committing"
+          ? Date.now() - armedAt > delay + FROZEN_TIMER_SLACK_MS
+          : deliveryDeadlineShouldWait(armedAt, delay);
+        if (wait) reconcileStallWatchdogs(sessionId);
+        else resolveStalledDelivery(sessionId, mutation.id, phase);
       }, delay),
     });
   }

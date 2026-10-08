@@ -360,7 +360,13 @@ Hub refusal is not left in the transcript as a red row. Its fate is unknown
 and the conversation has often moved on, sometimes from another device, so it
 is parked in the session's drafts (cmid `recovery-<id>`) before its local
 retry record is retired, with a quiet "Saved to drafts" notice. It is never
-resubmitted automatically. If the original echoes later, the parked draft is
+resubmitted automatically. A deadline only counts time the page could observe
+an echo: a timer that fires late because the page was frozen, or while it is
+hidden, offline or within the first seconds after resuming or reconnecting, is
+re-armed after an authoritative snapshot check instead of parking. Parking
+itself first refreshes the session snapshot, so a prompt the agent already
+received is confirmed rather than saved. If the original echoes later, through
+the live stream, a reconnect snapshot or after a reload, the parked draft is
 removed unless the user already edited it. Hub refusals, a wedged local write
 and queue edits or moves stay `held` with their inline chrome; a draft save
 failure also leaves the held row in place.

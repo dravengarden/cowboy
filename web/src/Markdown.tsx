@@ -58,6 +58,7 @@ export const Markdown = memo(function Markdown({
   centerCopy = false,
   touchWrap = false,
   streaming = false,
+  frontmatter = false,
   onLinkClick,
 }: {
   text: string;
@@ -68,6 +69,9 @@ export const Markdown = memo(function Markdown({
   centerCopy?: boolean;
   /** Soft-wrap fenced code on touch surfaces. */
   touchWrap?: boolean;
+  /** The text is a Markdown file: hide its leading YAML front matter. Off for
+   *  chat prose, where a reply wrapped in `---` rules is content. */
+  frontmatter?: boolean;
   /** Claim a link before it opens as a web address — the code reviewer uses
    *  this to follow a relative path to another file in the workspace. Return
    *  true when the host navigated. */
@@ -82,6 +86,7 @@ export const Markdown = memo(function Markdown({
           centerCopy={centerCopy}
           touchWrap={touchWrap}
           streaming={streaming}
+          frontmatter={frontmatter}
           {...(onLinkClick ? { onLinkClick } : {})}
         />
       </Suspense>

@@ -3,13 +3,16 @@ import {
   canReturnFromPendingRow,
   COMMITTING_STALL_MS,
   CONNECTED_PENDING_STALL_MS,
+  deliveryDeadlineDeferred,
   deliveryStallMs,
   destinationForPrompt,
   firstDeliveryAttempt,
   homeForOrigin,
   lateEchoRetiresRecoveryDraft,
   pendingSyncAppearance,
+  recoveredSendId,
   recoveryDraftCmid,
+  recoveryDraftMatchesEcho,
   retryDeliveryAttempt,
   returnLabelForHome,
   statusAfterExplicitSend,
@@ -183,4 +186,31 @@ Deno.test("a late echo retires only an untouched recovery draft", () => {
     }),
     false,
   );
+});
+
+Deno.test("a delivery deadline waits out frozen, hidden, offline and resuming time", () => {
+  const settled = {
+    armedAt: 0,
+    delayMs: 60_000,
+    now: 60_000,
+    visible: true,
+    connectedSince: 0,
+    visibleSince: 0,
+    settleMs: 10_000,
+  };
+  assertEquals(deliveryDeadlineDeferred(settled), false);
+  // iOS runs a frozen timer on resume long after it was due.
+  assertEquals(deliveryDeadlineDeferred({ ...settled, now: 600_000 }), true);
+  assertEquals(deliveryDeadlineDeferred({ ...settled, visible: false }), true);
+  assertEquals(deliveryDeadlineDeferred({ ...settled, connectedSince: null }), true);
+  assertEquals(deliveryDeadlineDeferred({ ...settled, connectedSince: 55_000 }), true);
+  assertEquals(deliveryDeadlineDeferred({ ...settled, visibleSince: 55_000 }), true);
+});
+
+Deno.test("recovery drafts map back to the parked send and match its echo", () => {
+  assertEquals(recoveredSendId(recoveryDraftCmid("cmid-1")), "cmid-1");
+  assertEquals(recoveredSendId("cmid-1"), null);
+  assertEquals(recoveredSendId("recovery-"), null);
+  assert(recoveryDraftMatchesEcho("hello\n world", "hello world"));
+  assert(!recoveryDraftMatchesEcho("hello world, edited", "hello world"));
 });
