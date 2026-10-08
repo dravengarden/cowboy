@@ -63,6 +63,17 @@ class ImpactTest(unittest.TestCase):
     def test_machine_control_runs_its_session_gate(self):
         self.assertEqual(set(suites(["src/machine_broker.rs"])), {"execution-rust-tests", "session"})
 
+    def test_the_execution_session_api_runs_its_session_gate(self):
+        self.assertEqual(set(suites(["src/server/execution/sessions.rs"])), {"execution-rust-tests", "session"})
+
+    def test_the_shared_memory_client_runs_both_worker_suites(self):
+        selected = suites(["components/memory-client/index.mjs"])
+        self.assertEqual(set(selected), {"claude-remote-check", "claude-worker", "codex-worker"})
+
+    def test_the_keeper_binary_runs_every_keeper_suite(self):
+        self.assertEqual(set(suites(["src/bin/cowboy-execution-host.rs"])), {
+            "execution-rust-tests", "claude-worker", "codex-worker", "session", "keeper", "claude-task-stop"})
+
     def test_a_shared_harness_module_runs_every_suite_importing_it(self):
         shared = "tools/execution_environment_probe.py"
         expected = {name for name, spec in CHECK_MAP["suites"].items() if "entry" in spec and

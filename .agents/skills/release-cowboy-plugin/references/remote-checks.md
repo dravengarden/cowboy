@@ -43,7 +43,11 @@ lists for that probe. The Claude-specific contract review is in
 | A Claude runtime core module | `claude-remote-check`, `claude-worker` in full |
 | Codex launcher, adapter patch or `codex-acp` launcher | `codex-adapter-check`, `codex-worker` |
 | Execution transport, keeper, protocol or wire modules | `execution-rust-tests`, both worker suites, `session`; keeper modules add `keeper` and `claude-task-stop` |
-| Machine control modules (`src/machine_*`) | `execution-rust-tests`, `session` |
+| Worker binary, `worker.rs` or `acp_bridge.rs` | `execution-rust-tests`, both worker suites, `session` |
+| Keeper binary (`cowboy-execution-host`) | as the keeper modules |
+| Machine control modules (`src/machine_*`) or Machine binaries | `execution-rust-tests`, `session` |
+| Server execution-session API (`src/server/execution*`) | `execution-rust-tests`, `session` |
+| Shared `components/memory-client` | `claude-remote-check`, both worker suites |
 | A harness file under `tools/` | every suite whose entry imports it, transitively |
 
 `just claude-remote-check` and `python3 -m unittest discover -s tools -p
