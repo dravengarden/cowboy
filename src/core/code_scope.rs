@@ -150,6 +150,22 @@ impl Hub {
         true
     }
 
+    /// How many Sessions of one Machine this Controller knows, and for how many it
+    /// holds a Machine-reported lineage. Counts only: no Session ID or lineage
+    /// value, so it can be shown without granting anything.
+    pub(crate) fn lineage_counts(&self, machine_id: &str) -> (u64, u64) {
+        let sessions = self.inner.sessions.lock();
+        sessions
+            .values()
+            .filter(|session| session.meta.machine_id == machine_id)
+            .fold((0, 0), |(total, carried), session| {
+                (
+                    total + 1,
+                    carried + u64::from(session.machine_lineage.is_some()),
+                )
+            })
+    }
+
     /// Recheck the exact original observation. Removal, replacement or cwd ABA
     /// cannot revive it; unrelated UI/worker status does not invalidate it.
     pub(crate) fn code_scope_is_current(&self, scope: &SessionCodeScope) -> bool {

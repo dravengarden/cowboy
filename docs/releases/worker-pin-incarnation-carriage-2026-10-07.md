@@ -53,7 +53,9 @@ They will be recycled as their sessions revive; new launches use the new generat
 
 ## Not observed
 
-- The carried lineage is process-local on the Controller and not exposed, so its
-  stamping and consumption were not seen in production, only in tests.
+- Whether a lineage *change* retires a real observation: only tests show it. (Carriage
+  itself was later seen: after the Controller release of `77c62f36`, which adds
+  `controllerObserved` to the durable-state report, Hawk read `sessions: 8,
+  withLineage: 8` right after the restart. Counts only, not the values.)
 - A reset rotating a lineage and a deletion ending one on a live Session.
 - Gemini and Grok resume paths; Claude native execution for the current Claude plugin.

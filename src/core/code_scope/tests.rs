@@ -171,6 +171,26 @@ fn execution_environment_unknown_or_wrong_runtime_never_resolves_as_local() {
 }
 
 #[test]
+fn lineage_counts_report_carried_lineages_per_machine_without_values() {
+    let hub = Hub::new();
+    create(&hub, "one");
+    create(&hub, "two");
+    let machine = hub
+        .session_code_scope("one")
+        .unwrap()
+        .machine_id()
+        .to_owned();
+    assert_eq!(hub.lineage_counts(&machine), (2, 0));
+    hub.set_machine_lineage("one", Some("a".repeat(32).as_str()));
+    assert_eq!(hub.lineage_counts(&machine), (2, 1));
+    // A lineage that stops being reported is no longer counted.
+    hub.set_machine_lineage("one", None);
+    assert_eq!(hub.lineage_counts(&machine), (2, 0));
+    // Another Machine's Sessions are never mixed in.
+    assert_eq!(hub.lineage_counts("other-machine"), (0, 0));
+}
+
+#[test]
 fn a_changed_machine_lineage_retires_observations_but_repeats_do_not() {
     let hub = Hub::new();
     create(&hub, "session");

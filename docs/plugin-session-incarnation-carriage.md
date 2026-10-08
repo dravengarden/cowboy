@@ -78,8 +78,12 @@ advance to it (`f469cf04`) were pushed after a fresh full gate (all six steps ex
 `worker-95d6504d…`) and then the Controller were activated on Hawk; see
 [the release record](releases/worker-pin-incarnation-carriage-2026-10-07.md). The
 Machine now stamps the lineage and the Controller consumes it. The value is
-process-local on the Controller and not exposed by any diagnostic, so no production
-observation of it has been made.
+process-local on the Controller. Commit `77c62f36` added a content-free count to the
+[durable-state report](machine-durable-state-diagnostics.md), and the Controller
+release of that commit was the first production observation: immediately after its
+restart `controllerObserved` read `sessions: 8, withLineage: 8` for Hawk, matching the
+Machine's 8 lineages. The values themselves, and a lineage change retiring a real
+observation, remain unobserved.
 
 ## Limits
 
