@@ -142,6 +142,7 @@
     "plugins/claude-code/usage.test.js",
     "tools/claude_native_agent_probe.py",
     "tools/claude_native_shell_probe.py",
-    "tools/claude_native_task_stop_probe.py"
+    "tools/claude_native_task_stop_probe.py",
+    "tools/claude_remote_impact.py"
   ]
 }

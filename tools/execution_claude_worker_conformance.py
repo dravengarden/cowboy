@@ -1315,7 +1315,7 @@ def main():
     require([name for _, name in socket.if_nameindex()] == ["lo"], "loopback namespace required")
     require(args.receipt.is_absolute() and not args.receipt.exists(), "new receipt required")
     inputs = json.loads(Path(os.environ["COWBOY_TEST_EXECUTION_INPUT"]).read_text())
-    selected = set(inputs.get("phases") or PHASES)
+    selected = set(inputs["phases"] if "phases" in inputs else PHASES)
     require(selected <= set(PHASES), "unknown acceptance phase: " + ", ".join(sorted(selected - set(PHASES))))
     binary = Path(inputs["claude_cli"])
     require(hashlib.sha256(binary.read_bytes()).hexdigest() == inputs["claude_sha256"], "Claude artifact changed")

@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import unittest
 
+from claude_native_behavior_probe import stable
 from claude_remote_impact import impact
 from execution_claude_worker_conformance import PHASES
 
@@ -62,10 +63,25 @@ class CheckMapTest(unittest.TestCase):
             self.assertTrue((ROOT / entry).exists() or list(ROOT.glob(entry + "*")), entry)
 
     def test_every_tracked_lane_file_is_mapped(self):
-        tracked = subprocess.run(["git", "ls-files", "plugins/claude-code", "tools"], cwd=ROOT, check=True,
+        tracked = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard",
+                                  "plugins/claude-code", "tools"], cwd=ROOT, check=True,
                                  capture_output=True, text=True).stdout.split()
         tracked = [path for path in tracked if (ROOT / path).exists()]
         self.assertEqual(impact(tracked, CHECK_MAP)["unmapped"], [])
+
+
+class StableReceiptTest(unittest.TestCase):
+    def test_receipts_of_two_runs_compare_equal(self):
+        def run(root, session, first, second, use):
+            return stable(f"(ID: {first}) {root}/home/-{root[1:].replace('/', '-')}-project/{session}/tasks/"
+                          f"{first}.output <task-id>{second}</task-id> {use}", root)
+        one = run("/tmp/cowboy-native-bash-ab12", "ce41a9d4-6659-416a-bd43-6489e606117b", "bq9loql5h", "b7wnwlqif",
+                  "toolu_c8b6")
+        two = run("/tmp/cowboy-native-bash-zz99", "0f0f0f0f-1111-2222-3333-444444444444", "bxxxxxxx1", "byyyyyyy2",
+                  "toolu_ffff")
+        self.assertEqual(one, two)
+        self.assertEqual(one, "(ID: task1) <ROOT>/home/-ROOT-project/SESSION/tasks/task1.output "
+                              "<task-id>task2</task-id> toolu_1")
 
 
 if __name__ == "__main__":
