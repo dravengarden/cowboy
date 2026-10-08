@@ -1,3 +1,4 @@
+import { stripImageTokens } from "./attachments.ts";
 import { shouldUseTranscriptDelivery } from "./durableDelivery.ts";
 
 /** Where a local-first send started. Drives the failed-row "return to X" home. */
@@ -140,10 +141,52 @@ export function unconfirmedSendDisposition(input: {
   return "draft";
 }
 
+/** Slack before a late timer callback counts as a frozen page. */
+export const FROZEN_TIMER_SLACK_MS = 5_000;
+
+/**
+ * Whether an acknowledgement deadline that just fired is evidence of a lost
+ * send. Time the page spent suspended, hidden, disconnected, or still
+ * reconnecting is not: mobile browsers freeze timers in the background and run
+ * them on resume before the socket or the visibility event catches up, which
+ * would otherwise park a prompt the agent is already answering. Such a deadline
+ * is re-armed instead of declaring the send undelivered.
+ */
+export function deliveryDeadlineDeferred(input: {
+  readonly armedAt: number;
+  readonly delayMs: number;
+  readonly now: number;
+  readonly visible: boolean;
+  readonly connectedSince: number | null;
+  readonly visibleSince: number;
+  readonly settleMs: number;
+}): boolean {
+  if (!input.visible || input.connectedSince === null) return true;
+  if (input.now - input.armedAt > input.delayMs + FROZEN_TIMER_SLACK_MS) return true;
+  return input.now - input.connectedSince < input.settleMs ||
+    input.now - input.visibleSince < input.settleMs;
+}
+
+/** A recovery draft whose original prompt is in the transcript after all is a
+ * duplicate, unless the user has since edited it. Works without tab-local
+ * parking state, so a reload or another device can retire it too. */
+export function recoveryDraftMatchesEcho(draftText: string, echoText: string): boolean {
+  const normalize = (text: string): string => stripImageTokens(text).replace(/\s/g, "");
+  return normalize(draftText) === normalize(echoText);
+}
+
+const RECOVERY_DRAFT_PREFIX = "recovery-";
+
 /** Deterministic id for the draft that preserves one parked send, so parking
  * the same send twice (a retry, a reload) cannot create a second draft. */
 export function recoveryDraftCmid(sendId: string): string {
-  return `recovery-${sendId}`;
+  return `${RECOVERY_DRAFT_PREFIX}${sendId}`;
+}
+/** The parked send a recovery draft preserves, or null for any other draft. */
+export function recoveredSendId(draftCmid: string): string | null {
+  return draftCmid.startsWith(RECOVERY_DRAFT_PREFIX) && draftCmid.length > RECOVERY_DRAFT_PREFIX.length
+    ? draftCmid.slice(RECOVERY_DRAFT_PREFIX.length)
+    : null;
 }
 
 /** A send that was parked and then echoed late did reach the agent. Its

@@ -148,6 +148,20 @@ export function promptEchoReadyToReplaceOptimistic(
   return renderable && images >= needed && files >= neededFiles && textLength >= neededText;
 }
 
+/** The text a tagged prompt echo carried, or undefined when `events` hold no
+ * user echo for `cmid`. */
+export function promptEchoText(
+  events: readonly Envelope[],
+  cmid: string,
+): string | undefined {
+  let text: string | undefined;
+  for (const env of events) {
+    if (env.cmid !== cmid || userMessageChunkType(env) === undefined) continue;
+    text = (text ?? "") + (userMessageChunkType(env) === "text" ? userMessageChunkContent(env)?.text ?? "" : "");
+  }
+  return text;
+}
+
 /** The daemon echoes every block of a prompt before the provider starts that
  * turn, so agent work after a tagged echo proves the whole prompt has already
  * been echoed. Lifecycle frames can interleave between echo blocks and do not
