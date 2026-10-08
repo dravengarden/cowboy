@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "source_revision": "1f09647428fa21bfd394a5630884d17b79a80411",
+  "activation_receipt": "https://github.com/dravengarden/columbus/blob/eec16020/machines/ovh/docs/tool-latency-activation-2026-10-08.json",
+  "diagnosis": {
+    "observed_route": "proxy_udp",
+    "peer": "ovh",
+    "failures": 138,
+    "last_failure": "response_timeout",
+    "active_rtt_ms": [
+      1549,
+      1430
+    ],
+    "ssh": [
+      {
+        "probe": "true",
+        "seconds": 2.535,
+        "exit": 0
+      },
+      {
+        "probe": "head -c 1048576 /dev/zero",
+        "seconds": 9.832,
+        "exit": 0
+      },
+      {
+        "probe": "true",
+        "seconds": 2.721,
+        "exit": 0
+      }
+    ],
+    "payload": {
+      "transcript_bytes": 1942094,
+      "wire_bytes": 2589478,
+      "compressed_bytes": 1003942,
+      "compression_ms": 41.24
+    }
+  },
+  "post_activation_observation": {
+    "request_start_at_or_after": "2026-10-08T17:10:22Z",
+    "last_completion": "2026-10-08T17:16:54.030429+00:00",
+    "samples": 2663,
+    "p50_ms": 170.6,
+    "p95_ms": 352.1,
+    "p99_ms": 801.9,
+    "max_ms": 3874.3,
+    "scope": "execution RPCs including expected native refusals, excluding requests begun before activation; not whole tools or a controlled before/after benchmark",
+    "controller_and_ovh_heartbeat_or_execution_response_timeouts": 0
+  },
+  "verification": {
+    "complete_check": "passed",
+    "final_transport_regressions": 8,
+    "final_all_feature_clippy": "passed",
+    "native_review": "no blocking findings",
+    "integrated_origin_main": true,
+    "retained_workers": 26,
+    "active_compression": true
+  },
+  "limits": [
+    "Physical/proxy loss is not established as eliminated.",
+    "The data point for actual transcript compression reports byte counts only; no conversation content is retained in this receipt."
+  ]
+}

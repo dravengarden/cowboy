@@ -36,6 +36,15 @@ end-to-end speedup. Regression tests reconstruct all application bytes, check
 the following tool reply's order and reduced wire budget, and exercise real
 WebSocket backpressure with compression both enabled and disabled.
 
+The [accepted observation](experiments/machine-tool-latency-compression-2026-10-08.json)
+links the protected host-maintenance receipt and records production negotiation
+at 17:10:21 UTC. All 26 workers survived the host-only switch. Over the following
+6.5 minutes, 2,663 execution RPCs begun after activation had a 170.6 ms median,
+352.1 ms P95 and 3,874.3 ms maximum; no heartbeat or execution-response timeout
+appeared in that observation. RPC duration excludes model generation and is not
+whole-tool duration. This finite observation does not prove the underlying
+proxy path will remain loss-free.
+
 Codex owns execution semantics and resume; this host-to-host transport gap is
 outside the native runtime. Claude shares the same transport, with no separate
 tool or session implementation. Delete this framing extension when the owning
