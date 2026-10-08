@@ -39,6 +39,46 @@ const text = (value, native) => ({
   isError: false,
 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Only disposable hook input is cached. A verified base plus an append is
+// materialized into an exclusive snapshot before the hook can start. Never
+// expose the shared cache to a hook, or retry a hook after a lost receipt.
+const HOOK_TRANSCRIPT = String.raw`
+import hashlib, os, stat, sys
+cache, delta, snapshot, base_hash, wanted = sys.argv[1:]
+limit = 8 * 1024 * 1024
+def read(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise ValueError('Transcript is not a file')
+        data = f.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError('Transcript exceeds limit')
+        return data
+base = b''
+if base_hash:
+    try:
+        base = read(cache)
+        if hashlib.sha256(base).hexdigest() != base_hash:
+            sys.exit(75)
+    except (OSError, ValueError):
+        sys.exit(75)
+data = base + read(delta)
+if len(data) > limit or hashlib.sha256(data).hexdigest() != wanted:
+    raise ValueError('Transcript digest mismatch')
+def write(path):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(data)
+write(snapshot)
+temporary = snapshot + '.cache'
+try:
+    write(temporary)
+    os.replace(temporary, cache)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+`;
 // Each target read costs a round trip to the executor. A walk that decides
 // files in order (instruction precedence, skill shadowing) awaits reads
 // already in flight instead: `read.prefetch(paths)` issues at most `limit`
@@ -712,10 +752,7 @@ export class WorkspaceTools {
     try {
       await this.privateDirectory(directory);
       if (copy) {
-        await this.connection.call("fs/writeFile", {
-          path: pathToFileURL(copy).href,
-          dataBase64: transcript.toString("base64"),
-        });
+        await this.hookTranscript(transcript, copy, call);
         input = JSON.stringify({ ...JSON.parse(input), transcript_path: copy });
       }
       await this.connection.call("fs/writeFile", {
@@ -801,6 +838,77 @@ export class WorkspaceTools {
         }).catch(() => {});
       }
     }
+  }
+
+  async hookTranscript(transcript, copy, call) {
+    // Small inputs and targets without Python retain the original contract.
+    if (!this.rangePython || transcript.length < 128 * 1024) {
+      await this.connection.call("fs/writeFile", {
+        path: pathToFileURL(copy).href,
+        dataBase64: transcript.toString("base64"),
+      });
+      return;
+    }
+    // Bound memory/storage to one latest transcript per execution binding.
+    // Serializing preparation does not serialize the hooks themselves.
+    await this.ordered("hook-transcript", async () => {
+      const previous = this.hookTranscriptBase;
+      this.hookTranscriptBase = undefined;
+      const append = previous && transcript.length >= previous.bytes.length &&
+        transcript.subarray(0, previous.bytes.length).equals(previous.bytes);
+      const digest = hash(transcript);
+      const cache = posix.join(
+        posix.dirname(copy),
+        `transcript-${this.state.binding}.cache`,
+      );
+      const delta = copy + ".delta";
+      const prepare = async (bytes, base) => {
+        await this.connection.call("fs/writeFile", {
+          path: pathToFileURL(delta).href,
+          dataBase64: bytes.toString("base64"),
+        });
+        return await this.command(
+          [
+            this.rangePython,
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            HOOK_TRANSCRIPT,
+            cache,
+            delta,
+            copy,
+            base,
+            digest,
+          ],
+          10000,
+          call,
+          { cancelOnError: true },
+        );
+      };
+      try {
+        let result = await prepare(
+          append ? transcript.subarray(previous.bytes.length) : transcript,
+          append ? previous.digest : "",
+        );
+        // Explicit cache miss, before snapshot creation or hook execution.
+        // A transport error is never grounds to retry any process start.
+        if (append && result.exitCode === 75) {
+          result = await prepare(transcript, "");
+        }
+        if (result.exitCode !== 0) {
+          throw new Error("Target hook transcript preparation failed");
+        }
+        this.hookTranscriptBase = { bytes: Buffer.from(transcript), digest };
+      } finally {
+        for (const path of [delta, copy + ".cache"]) {
+          await this.connection.call("fs/remove", {
+            path: pathToFileURL(path).href,
+            force: true,
+          }).catch(() => {});
+        }
+      }
+    });
   }
 
   // The target counterpart of native's per-session CLAUDE_ENV_FILE.
@@ -1480,9 +1588,12 @@ export class WorkspaceTools {
     }
   }
 
-  async command(argv, timeout = 10000, call) {
-    const id = await this.startForeground(argv, call);
+  async command(argv, timeout = 10000, call, { cancelOnError = false } = {}) {
+    const id = randomUUID();
+    let started = false;
     try {
+      await this.startForeground(argv, call, undefined, id);
+      started = true;
       const result = await this.collect(id, timeout);
       if (!result.exited) {
         await this.cancelTasks([id]);
@@ -1490,8 +1601,13 @@ export class WorkspaceTools {
         throw new Error("Target utility exceeded its limit");
       }
       return result;
+    } catch (error) {
+      // Cache preparation can still create files after a lost start/read
+      // reply. Request durable cancellation before its caller cleans them up.
+      if (cancelOnError) await this.cancelTasks([id]).catch(() => {});
+      throw error;
     } finally {
-      this.foreground.delete(id);
+      if (started || cancelOnError) this.foreground.delete(id);
       if (this.state.jobs[id]?.closed) {
         // Private utilities never publish an output handle. Keep uncertain or
         // still-running identities; only an observed closed job can expire.

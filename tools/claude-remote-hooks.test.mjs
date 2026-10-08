@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   DESCRIPTIONS,
   WorkspaceTools,
@@ -220,6 +229,152 @@ async function fixture(t, connection) {
   tools.shell = "/bin/bash";
   return tools;
 }
+
+test("hook transcripts send only appends and keep immutable, verified snapshots", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-transcripts-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const writes = [];
+  const tools = await fixture(t, {
+    async call(method, params) {
+      const path = fileURLToPath(params.path);
+      if (method === "fs/writeFile") {
+        const bytes = Buffer.from(params.dataBase64, "base64");
+        writes.push(bytes.length);
+        await writeFile(path, bytes);
+      } else if (method === "fs/remove") await rm(path, { force: true });
+      else assert.fail(method);
+      return {};
+    },
+  });
+  tools.rangePython = "python3";
+  await writeFile(
+    join(directory, "hashlib.py"),
+    'raise RuntimeError("project module")',
+  );
+  const execute = async (argv) => {
+    try {
+      await promisify(execFile)(argv[0], argv.slice(1), {
+        cwd: directory,
+        env: { ...process.env, PYTHONPATH: directory },
+      });
+      return { exitCode: 0 };
+    } catch (error) {
+      if (typeof error.code !== "number") throw error;
+      return { exitCode: error.code };
+    }
+  };
+  tools.command = execute;
+  const initial = Buffer.from('{"text":"会话🦅"}\r\n'.repeat(100000));
+  const addition = Buffer.from('{"next":"incremental"}\n');
+  const extended = Buffer.concat([initial, addition]);
+  const paths = ["first", "second", "same"].map((name) =>
+    join(directory, name + ".jsonl")
+  );
+  // Concurrent requests only serialize preparation, and every snapshot stays
+  // byte-identical after the next cache update.
+  await Promise.all(
+    [initial, extended, extended].map((bytes, index) =>
+      tools.hookTranscript(bytes, paths[index])
+    ),
+  );
+  assert.deepEqual(writes, [initial.length, addition.length, 0]);
+  for (const [index, bytes] of [initial, extended, extended].entries()) {
+    assert.deepEqual(await readFile(paths[index]), bytes);
+  }
+  const cache = join(directory, `transcript-${tools.state.binding}.cache`);
+  for (const defect of ["missing", "corrupt", "symlink"]) {
+    await rm(cache, { force: true });
+    if (defect === "corrupt") await writeFile(cache, "corrupt");
+    if (defect === "symlink") await symlink(paths[0], cache);
+    writes.length = 0;
+    const copy = join(directory, defect + ".jsonl");
+    await tools.hookTranscript(extended, copy);
+    assert.deepEqual(writes, [0, extended.length]);
+    assert.deepEqual(await readFile(copy), extended);
+    assert.deepEqual(await readFile(paths[0]), initial);
+  }
+  // Truncation/compaction and same-sized rewrites send a fresh base.
+  for (
+    const [index, bytes] of [initial, Buffer.alloc(initial.length, 120)]
+      .entries()
+  ) {
+    writes.length = 0;
+    await tools.hookTranscript(
+      bytes,
+      join(directory, `rewrite-${index}.jsonl`),
+    );
+    assert.deepEqual(writes, [bytes.length]);
+  }
+  // A completed utility with a lost reply is not replayed. The next distinct
+  // hook safely sends a full base, without assuming the previous write failed.
+  let starts = 0;
+  tools.command = async (argv) => {
+    starts++;
+    await execute(argv);
+    throw new Error("lost receipt");
+  };
+  await assert.rejects(
+    tools.hookTranscript(extended, join(directory, "lost.jsonl")),
+    /lost receipt/,
+  );
+  assert.equal(starts, 1);
+  assert.equal(tools.hookTranscriptBase, undefined);
+  tools.command = execute;
+  writes.length = 0;
+  await tools.hookTranscript(extended, join(directory, "recovered.jsonl"));
+  assert.deepEqual(writes, [extended.length]);
+});
+
+test("uncertain transcript preparation is cancelled before input cleanup", async (t) => {
+  for (const lost of ["start", "read"]) {
+    const events = [];
+    const tools = await fixture(t, {
+      async call(method) {
+        events.push(method);
+        return {};
+      },
+    });
+    tools.rangePython = "python3";
+    let admitted;
+    tools.startForeground = async (_argv, _call, _set, id) => {
+      admitted = id;
+      events.push("admitted");
+      if (lost === "start") throw new Error("lost start");
+      return id;
+    };
+    tools.collect = async () => {
+      throw new Error("lost read");
+    };
+    tools.cancelTasks = async (ids) => {
+      assert.deepEqual(ids, [admitted]);
+      events.push("cancelled");
+    };
+    await assert.rejects(
+      tools.hookTranscript(Buffer.alloc(200000, 120), "/target/snapshot.jsonl"),
+      new RegExp("lost " + lost),
+    );
+    assert.deepEqual(events, [
+      "fs/writeFile",
+      "admitted",
+      "cancelled",
+      "fs/remove",
+      "fs/remove",
+    ]);
+    assert.equal(tools.hookTranscriptBase, undefined);
+  }
+});
+
+test("ordinary utilities retain uncertain starts for foreground cancellation", async (t) => {
+  const tools = await fixture(t, {});
+  let admitted;
+  tools.startForeground = async (_argv, _call, _set, id) => {
+    admitted = id;
+    tools.foreground.add(id);
+    throw new Error("lost start");
+  };
+  await assert.rejects(tools.command(["utility"]), /lost start/);
+  assert.ok(tools.foreground.has(admitted));
+});
 
 test("project hook settings come from the target project", async (t) => {
   const files = {

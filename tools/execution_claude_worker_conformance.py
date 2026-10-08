@@ -1106,7 +1106,9 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
     marker = lambda name: f'printf "%s\\n" {name} >> "$CLAUDE_PROJECT_DIR/hook-events.txt"'
     # The hook reads its transcript_path on the target and requires content.
     transcript_readable = ("python3 -c 'import json,os,sys; p=json.load(sys.stdin).get(\"transcript_path\"); "
-                           "sys.exit(0 if p and os.path.getsize(p) > 0 else 1)'")
+                           "data=open(p,\"rb\").read(); assert data; "
+                           "open(\"hook-transcript-sizes.jsonl\",\"a\").write(json.dumps({\"size\":len(data),"
+                           "\"sentinel\":b\"TRANSCRIPT_SYNC_SENTINEL\" in data})+\"\\n\")'")
     (hooks_dir / "settings.json").write_text(json.dumps({"hooks": {
         "SessionStart": [{"hooks": [{"type": "command",
                                       "command": marker("SessionStart") + '; printf "%s" "$CLAUDE_PROJECT_DIR" > hook-project-dir.txt'
@@ -1220,7 +1222,10 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
         if name == "HOOK_PERMREQ":
             client.permission = slow_host
             mode("default")
-        client.prompt(text=name, timeout=60)
+        # Cross the incremental-copy threshold using genuine native history.
+        # Subsequent hooks must continue seeing the original large prompt.
+        prompt = name + (" TRANSCRIPT_SYNC_SENTINEL " + "x" * 200000 if name == "HOOK_BLOCK" else "")
+        client.prompt(text=prompt, timeout=60)
         if name == "HOOK_PERMREQ":
             mode("bypassPermissions")
             client.permission = None
@@ -1266,11 +1271,20 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
     for name in ["SessionStart", "ExecForm", "UserPromptSubmit", "Agent", "PostWrite", "PostTranscript", "ReadFailed",
                  "PermissionRequest", "Stop", "StopTranscript"]:
         require(name in recorded, f"target {name} hook did not run on the target")
+    sizes = [json.loads(line) for line in (args.target / "hook-transcript-sizes.jsonl").read_text().splitlines()]
+    large = [item for item in sizes if item["size"] >= 200000]
+    require(len(large) >= 3 and all(item["sentinel"] for item in large),
+            "incremental target transcript snapshots lost native history")
     # The fixture executor shares this host's HOME; only new entries count.
     # A background child's hook may still be running: its copies must go when it ends.
     deadline = time.monotonic() + 15
     while True:
         leftovers = set(hook_inputs.iterdir() if hook_inputs.exists() else []) - inputs_before
+        caches = {path for path in leftovers if re.fullmatch(r"transcript-[a-f0-9]{64}\.cache", path.name)}
+        require(len(caches) <= 1 and all(path.stat().st_size <= 8 * 1024 * 1024 and
+                                       path.stat().st_mode & 0o777 == 0o600 for path in caches),
+                "target transcript cache is not bounded and private")
+        leftovers -= caches
         if not leftovers or time.monotonic() > deadline:
             break
         time.sleep(0.2)
@@ -1294,7 +1308,8 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
         require(encoded.count(str(args.runtime)) == encoded.count(collision) and
                 str(args.runtime.parent / "claude-home") not in encoded and
                 "TARGET_CLAUDE_GUIDANCE_MUST_REACH_MODEL" in encoded, "runtime context reached model")
-    checks.extend(["project_lifecycle_hooks_run_on_target", "native_tool_hooks_run_on_target",
+    checks.extend(["incremental_hook_snapshots_preserve_large_native_history",
+                   "project_lifecycle_hooks_run_on_target", "native_tool_hooks_run_on_target",
                    "session_start_env_file_reaches_target_bash", "facade_tool_failure_hooks_run_on_target",
                    "nonzero_bash_exit_is_native_tool_error", "permission_request_hook_answers_pending_prompt",
                    "subagent_tool_hooks_name_the_agent",

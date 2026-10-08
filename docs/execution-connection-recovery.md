@@ -11,7 +11,7 @@ At 16:14:10 UTC multiple independent executor sessions completed requests that
 had waited about 18 seconds, within milliseconds of one another. The shared
 Machine link preserves application FIFO, so a large message delays unrelated
 tool requests and replies even when heartbeat scheduling is fair. Claude's
-target hook path sends a full native transcript for each hook invocation.
+target hook path then sent a full native transcript for each hook invocation.
 A live 1,942,094-byte transcript produced 2,589,478 bytes after base64 wrapping.
 An independent OVH-to-Hawk SSH transfer took 9.832 seconds for 1 MiB, compared
 with 2.535 and 2.721 seconds for empty SSH requests. Stormbird additionally
@@ -44,6 +44,34 @@ at 17:10:21 UTC. All 26 workers survived the host-only switch. Over the followin
 appeared in that observation. RPC duration excludes model generation and is not
 whole-tool duration. This finite observation does not prove the underlying
 proxy path will remain loss-free.
+
+## Incremental hook transcripts
+
+Claude Plugin 3.19.3 replaces repeated large transcript uploads with verified
+appends. Native Claude still owns history on the runtime Machine; project hooks
+still receive a complete, private snapshot on the execution Machine. For
+transcripts of at least 128 KiB on a target with Python, the adapter retains one
+latest base in memory and one private cache file per execution binding (each
+bounded by the existing 8 MiB transcript limit). No transcript content enters
+durable adapter state or telemetry. Targets without Python and smaller inputs
+keep the original full-copy behavior.
+
+Only an exact byte prefix permits an append. The target verifies both the base
+and assembled SHA-256 digests before exposing an exclusive per-hook snapshot;
+hooks never receive the cache path. Snapshot preparation is serialized, while
+hook commands can still run concurrently. Truncation, compaction and rewrites
+send a new full base. A missing, changed or symlinked cache explicitly requests
+a full refresh before any hook runs. Transport errors never retry a process
+start; the next distinct hook starts with a fresh base after uncertainty.
+Each invocation removes its temporary inputs and snapshot. The single cache is
+disposable, replaced atomically, and contains only the latest bounded copy.
+
+Source regression exercises a multi-megabyte Unicode/CRLF transcript, concurrent
+snapshots, zero-byte unchanged uploads, cache damage, rewrites and a lost
+preparation receipt. Packaged-native acceptance additionally requires repeated
+target hooks to read the original large prompt after subsequent history appends.
+This optimization reduces transcript transfer, not model requests or the
+underlying network's round-trip time.
 
 Codex owns execution semantics and resume; this host-to-host transport gap is
 outside the native runtime. Claude shares the same transport, with no separate
