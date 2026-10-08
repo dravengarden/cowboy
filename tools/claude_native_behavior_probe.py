@@ -15,6 +15,7 @@ Usage (dev shell): PYTHONPATH=tools python3 tools/claude_native_behavior_probe.p
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -89,11 +90,28 @@ class Session:
                 pass
 
     def normalize(self, value):
-        return json.loads(json.dumps(value).replace(str(self.root), "<ROOT>"))
+        return json.loads(stable(json.dumps(value), str(self.root)))
 
     def close(self):
         self.client.close()
         self.api.close()
+
+
+def stable(text, root):
+    """Replace per-run values (root, its session-directory key, ids) so receipts of one binary compare equal."""
+    text = text.replace(root, "<ROOT>").replace(re.sub(r"[^A-Za-z0-9]", "-", root), "-ROOT")
+    text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "SESSION", text)
+    tasks = {}
+    for found in re.findall(r"(?:ID: |<task-id>|tasks/)([a-z0-9]{6,})\b", text):
+        tasks.setdefault(found, "task%d" % (len(tasks) + 1))
+    for found, name in tasks.items():
+        text = re.sub(r"\b%s\b" % found, name, text)
+    uses = {}
+    for found in re.findall(r"toolu_[A-Za-z0-9]+", text):
+        uses.setdefault(found, "toolu_%d" % (len(uses) + 1))
+    for found, name in uses.items():
+        text = text.replace(found, name)
+    return text
 
 
 def results(api):
