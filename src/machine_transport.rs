@@ -92,6 +92,9 @@ where
                 }
             }
             send(&mut sink, message).await?;
+            // A ready sink and the private queue need not yield on their own.
+            // Let heartbeat producers run before admitting the next frame.
+            tokio::task::yield_now().await;
             continue;
         };
         ensure!(

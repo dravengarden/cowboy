@@ -98,3 +98,12 @@ and a silent connection retains the existing watchdog deadlines. The regression
 requires the heartbeat immediately after the in-progress first write and
 checks every application frame's original order. This transport is shared by
 Codex and Claude; it does not change their native execution or recovery APIs.
+
+The first deployment still experienced watchdog failures under production
+replay. A second deterministic test uses a separately scheduled heartbeat
+producer and a ready sink: the private queue drained all 32 small frames before
+the producer could run. Priority alone cannot help a heartbeat that has not
+been enqueued. The small-frame path now yields after each write, matching the
+existing chunk path. Both regressions are required: prompt producer scheduling
+and urgent-message ordering. This follow-up does not extend watchdog deadlines
+or treat bulk byte progress as a broker heartbeat.
