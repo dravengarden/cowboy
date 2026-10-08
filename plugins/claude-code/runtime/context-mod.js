@@ -564,27 +564,42 @@ const DEADLINE =
 // running turn or as a turn of its own. A native background task running the
 // runtime-local waiter stands for the target command, so native delivers that
 // notification; without one, the result drops its promise.
-async function notifyOnEnd($, event, task, result, input = event) {
+async function notifyOnEnd($, event, task, result, input = event, next) {
   let nativeId;
   if (
-    event.agentId === undefined && typeof context.taskWait === "string" &&
+    typeof context.taskWait === "string" &&
     /^[a-zA-Z0-9-]{1,128}$/.test(task.id) && typeof task.command === "string"
   ) {
     const command = `${context.taskWait} ${task.id}`;
+    // Native gives the task standing for it the command's own background
+    // deadline: the requested timeout (as hooks and approvals amended it),
+    // else 30 minutes.
+    const deadline = input.run_in_background === true &&
+        Number.isSafeInteger(input.timeout) && input.timeout > 0
+      ? { timeout: input.timeout }
+      : {};
     mirrorCalls.add(command);
     try {
-      // Native gives the task standing for it the command's own background
-      // deadline: the requested timeout, else 30 minutes.
-      const started = await $.tool.call({
-        tool: "Bash",
-        command,
-        run_in_background: true,
-        // As the command ran: hooks and approvals may have amended it.
-        ...(input.run_in_background === true &&
-            Number.isSafeInteger(input.timeout) && input.timeout > 0
-          ? { timeout: input.timeout }
-          : {}),
-      });
+      let started;
+      if (event.agentId === undefined) {
+        started = await $.tool.call({
+          tool: "Bash",
+          command,
+          run_in_background: true,
+          ...deadline,
+        });
+      } else {
+        // A plugin's own call belongs to the main session (measured). The
+        // agent's call itself, run natively as the task, makes it the
+        // agent's: native notifies the agent, resuming it if it ended.
+        const { timeout: _timeout, description: _description, ...rest } = event;
+        started = await next({
+          ...rest,
+          command,
+          run_in_background: true,
+          ...deadline,
+        });
+      }
       nativeId = started?.result?.backgroundTaskId;
     } catch {
       nativeId = undefined;
@@ -1606,6 +1621,7 @@ export function register(on) {
               task,
               answered.result,
               input,
+              next,
             );
           }
           if (event.tool === "TaskStop") {

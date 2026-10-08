@@ -762,6 +762,47 @@ def pdf_phases(args, api, client, checks):
     checks.append("pdf_and_file_type_reads_match_native_local")
 
 
+def subagent_background_phases(args, api, client, checks):
+    """A background agent's background command notifies that agent, as natively."""
+    background = tool("Bash", {"command": "sleep 2; echo sub-bg-out", "run_in_background": True})
+    waiting = tool("Bash", {"command": "sleep 6; echo sub-waited"})
+    seen = []
+
+    def router(requests):
+        request = requests[-1]
+        first = json.dumps(request["messages"][0])
+        last = json.dumps(request["messages"][-1], ensure_ascii=False)
+        if "SUBBG_CHILD" in first:
+            seen.append(last)
+            if len(request["messages"]) == 1:
+                return background
+            if background[0]["id"] in last:
+                return waiting
+            return [{"type": "text", "text": "SUBBG_CHILD_DONE"}]
+        if "SUBBG_PARENT" in last and len(request["messages"][-1].get("content", [])) and \
+                not any(block.get("type") == "tool_result" for block in request["messages"][-1]["content"]
+                        if isinstance(block, dict)):
+            return tool("Agent", {"description": "background child", "prompt": "SUBBG_CHILD run it",
+                                  "subagent_type": "general-purpose", "run_in_background": True})
+        return [{"type": "text", "text": "SUBBG_NOTED"}]
+
+    del api.steps[len(api.requests):]
+    api.steps.extend([router] * 30)
+    client.prompt(text="SUBBG_PARENT", timeout=60)
+    deadline = time.monotonic() + 60
+    while not any("sub-bg-out" in item or "<task-notification>" in item for item in seen[2:]):
+        require(time.monotonic() < deadline, "the agent's background command never notified it: " + json.dumps(seen)[-2000:])
+        try:
+            client.until(lambda frame: frame.get("type") == "result", timeout=2)
+        except ProbeFailure:
+            pass
+    note = next(item for item in seen[2:] if "<task-notification>" in item)
+    require("cowboy-task://" in note and "sleep 2; echo sub-bg-out" in note and
+            str(args.runtime) not in note and "task-wait.mjs" not in note,
+            "the agent's notification differs from native's: " + note[:1500])
+    checks.append("agent_background_command_notifies_the_agent_as_natively")
+
+
 def mcp_phases(args, api, client, checks):
     """The target's MCP servers load and run on the target as natively."""
     home = Path(os.environ["HOME"])
@@ -1630,6 +1671,7 @@ def main():
         pdf_phases(args, api, client, checks)
         skill_phases(args, api, client, checks)
         mcp_phases(args, api, client, checks)
+        subagent_background_phases(args, api, client, checks)
         client = hook_phases(args, api, client, native, session, context_checked, checks)
         client.close(); client = None
         native_requests = len(api.requests)
