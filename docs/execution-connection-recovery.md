@@ -73,6 +73,14 @@ target hooks to read the original large prompt after subsequent history appends.
 This optimization reduces transcript transfer, not model requests or the
 underlying network's round-trip time.
 
+The [3.19.3 release receipt](experiments/claude-hook-transcript-release-2026-10-09.json)
+records all 92 packaged-native checks, 252 source tests, Catalog/worker
+compatibility, public artifact readback and completed OVH installation. The
+synthetic 2,300,000-byte fixture uploads 23 bytes on its next append and zero
+body bytes when unchanged; these exclude control framing. Existing running
+sessions keep their generation until the normal idle upgrade, so installation
+alone is not evidence of lower latency in an already running native process.
+
 Codex owns execution semantics and resume; this host-to-host transport gap is
 outside the native runtime. Claude shares the same transport, with no separate
 tool or session implementation. Delete this framing extension when the owning
