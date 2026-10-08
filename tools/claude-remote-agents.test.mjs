@@ -1085,3 +1085,46 @@ test("cancellation while a start is persisted submits nothing", async (t) => {
   assert.deepEqual(connection.calls, []);
   assert.deepEqual(JSON.parse(await readFile(state, "utf8")).jobs, {});
 });
+
+test("a target command native stopped at its deadline reads, and stops, as the command", async () => {
+  const { deadlineTasks, targetShellNotification } = await import(
+    "../plugins/claude-code/runtime/context-mod.js"
+  );
+  const tasks = new Map([["b1", {
+    jobId: "job-1",
+    toolUseId: "toolu_target",
+    command: "make long",
+  }]]);
+  const notification =
+    "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_mirror</tool-use-id>\n<output-file>/runtime/tasks/b1.output</output-file>\n<status>killed</status>\n<summary>Background command \"'/node' '/stage/task-wait.mjs' job-1\" was stopped after reaching its background time limit</summary>\n<note>If the work in progress still needs it, start it again with `run_in_background` and a longer `timeout`.</note>\n</task-notification>";
+  const projected = targetShellNotification(notification, tasks);
+  assert.match(
+    projected,
+    /<summary>Background command "make long" was stopped after reaching its background time limit<\/summary>/,
+  );
+  assert.ok(
+    !projected.includes("task-wait") && !projected.includes("/runtime"),
+  );
+  // Only known tasks, and only a deadline stop, end their command.
+  assert.deepEqual(deadlineTasks(notification), []);
+});
+
+test("a deadline stop the target did not confirm is said in the notification", async () => {
+  const { unconfirmedStop } = await import(
+    "../plugins/claude-code/runtime/context-mod.js"
+  );
+  const event = {
+    message: {
+      content: [{
+        type: "text",
+        text:
+          "<task-notification>\n<task-id>job-1</task-id>\n<status>killed</status>\n</task-notification>",
+      }],
+    },
+  };
+  assert.match(
+    unconfirmedStop(event, ["job-1"]).message.content[0].text,
+    /<note>The target did not confirm that this command stopped; read cowboy-task:\/\/job-1 before relying on it.<\/note>\n<\/task-notification>$/,
+  );
+  assert.equal(unconfirmedStop(event, []), event);
+});

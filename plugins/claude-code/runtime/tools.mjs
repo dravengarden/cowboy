@@ -142,6 +142,10 @@ const NATIVE_VERSION = (() => {
 // Native's promise in a background command's result. The context Mod
 // removes it when it cannot arrange the completion notification.
 export const NOTIFIED = "You will be notified when it completes. ";
+// Native stops a background command at its deadline (2.1.287, measured): a
+// moved one after 30 minutes, said in its result.
+export const DEADLINE =
+  "If it is still running after 30m in the background, it will be stopped and you will be notified. ";
 
 // Native's duration in a timeout message: "1s", "1m 1s".
 export function shellDuration(ms) {
@@ -2002,8 +2006,15 @@ export class WorkspaceTools {
   async invoke(name, args, call) {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
-      const timeout = bounded(args.timeout, 120000, 1, 600000);
       const background = args.run_in_background === true;
+      // Native: a foreground timeout up to 10 minutes; a background one is
+      // its deadline, up to 2 hours (enforced by native's task for it).
+      const timeout = bounded(
+        args.timeout,
+        120000,
+        1,
+        background ? 7200000 : 600000,
+      );
       // A foreground command reports its final directory, as native's
       // `pwd -P >| file` does; a background one never moves the session.
       // The name is unguessable, as native's own; the shell creates its
@@ -2110,7 +2121,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             ...text(JSON.stringify(complete), {
               stdout: `Command did not complete within its ${
                 Math.ceil(timeout / 1000)
-              }s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}To check interim output, use Read on that file path.`,
+              }s timeout and was moved to the background (ID: ${id}). Output is being written to: ${TASK_OUTPUT_PREFIX}${id}. ${NOTIFIED}${DEADLINE}To check interim output, use Read on that file path.`,
               stderr: "",
               interrupted: false,
             }),

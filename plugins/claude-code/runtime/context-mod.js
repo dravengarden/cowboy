@@ -69,10 +69,78 @@ export function targetShellNotification(notification, tasks) {
       `<output-file>cowboy-task://${task.jobId}</output-file>`,
     )
     .replace(
-      /<summary>Background command "[\s\S]*?" (completed|failed)/,
+      /<summary>Background command "[\s\S]*?" (completed|failed|was stopped)/,
       (_match, outcome) =>
         `<summary>Background command "${task.command}" ${outcome}`,
     );
+}
+
+// Native task ids whose notification says native stopped them at their
+// background deadline; the target commands they stand for stop with them.
+export function deadlineTasks(text) {
+  return [
+    ...String(text).matchAll(
+      /<task-notification>[\s\S]*?<\/task-notification>/g,
+    ),
+  ].filter(([found]) =>
+    /<status>killed<\/status>/.test(found) &&
+    /was stopped after reaching its background time limit/.test(found)
+  ).map(([found]) => /<task-id>([^<]*)<\/task-id>/.exec(found)?.[1]).filter(
+    (id) => shellTasks.has(id),
+  );
+}
+
+// A target command native stopped at its deadline ends before the model
+// reads that it was stopped. Returns the jobs whose stop the target did not
+// confirm.
+async function stopAtDeadline($, event) {
+  if (event.origin?.kind !== "task-notification") return [];
+  const content = event.message?.content;
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+    ? content.map((block) => block.text ?? "").join("\n")
+    : "";
+  const unconfirmed = [];
+  for (const nativeId of deadlineTasks(text)) {
+    const jobId = shellTasks.get(nativeId).jobId;
+    jobMirrors.delete(jobId);
+    const response = await bridgePost($, "/task-deadline", { id: jobId })
+      .catch(() => undefined);
+    let stopped = false;
+    try {
+      stopped = response?.ok && JSON.parse(response.text).stopped === true;
+    } catch {
+      stopped = false;
+    }
+    if (!stopped) unconfirmed.push(jobId);
+  }
+  return unconfirmed;
+}
+
+// A deadline notification whose target stop is unconfirmed says so.
+export function unconfirmedStop(event, jobs) {
+  if (!jobs.length) return event;
+  const note = (text) =>
+    text.replace(
+      /(<task-id>([^<]*)<\/task-id>[\s\S]*?)(<\/task-notification>)/g,
+      (whole, body, id, end) =>
+        jobs.includes(id)
+          ? `${body}<note>The target did not confirm that this command stopped; read cowboy-task://${id} before relying on it.</note>\n${end}`
+          : whole,
+    );
+  const content = event.message.content;
+  return {
+    ...event,
+    message: {
+      ...event.message,
+      content: typeof content === "string"
+        ? note(content)
+        : content.map((block) =>
+          block.type === "text" ? { ...block, text: note(block.text) } : block
+        ),
+    },
+  };
 }
 
 export function targetTaskNotificationText(text, outputs) {
@@ -489,12 +557,14 @@ async function deliverAsync($, event, call, run) {
 }
 
 const NOTIFIED = "You will be notified when it completes. ";
+const DEADLINE =
+  "If it is still running after 30m in the background, it will be stopped and you will be notified. ";
 
 // Natively a command left running notifies the model when it ends, into a
 // running turn or as a turn of its own. A native background task running the
 // runtime-local waiter stands for the target command, so native delivers that
 // notification; without one, the result drops its promise.
-async function notifyOnEnd($, event, task, result) {
+async function notifyOnEnd($, event, task, result, input = event) {
   let nativeId;
   if (
     event.agentId === undefined && typeof context.taskWait === "string" &&
@@ -503,10 +573,17 @@ async function notifyOnEnd($, event, task, result) {
     const command = `${context.taskWait} ${task.id}`;
     mirrorCalls.add(command);
     try {
+      // Native gives the task standing for it the command's own background
+      // deadline: the requested timeout, else 30 minutes.
       const started = await $.tool.call({
         tool: "Bash",
         command,
         run_in_background: true,
+        // As the command ran: hooks and approvals may have amended it.
+        ...(input.run_in_background === true &&
+            Number.isSafeInteger(input.timeout) && input.timeout > 0
+          ? { timeout: input.timeout }
+          : {}),
       });
       nativeId = started?.result?.backgroundTaskId;
     } catch {
@@ -516,7 +593,10 @@ async function notifyOnEnd($, event, task, result) {
     }
   }
   if (typeof nativeId !== "string" || shellTasks.size >= 4096) {
-    return { ...result, stdout: result.stdout.replace(NOTIFIED, "") };
+    return {
+      ...result,
+      stdout: result.stdout.replace(NOTIFIED, "").replace(DEADLINE, ""),
+    };
   }
   shellTasks.set(nativeId, {
     jobId: task.id,
@@ -1328,10 +1408,8 @@ export function register(on) {
   on("prompt.attachment", { type: "file" }, () => ({ text: null })).catch(
     () => ({ text: null }),
   );
-  on("tool.describe", async ($, event, next) => {
-    const description = context?.descriptions[event.tool];
-    return description ? { description } : next(event);
-  }).catch(() => ({ description: unavailable }));
+  // Target tools keep native's own descriptions, as in a local session.
+  on("tool.describe", (_$, event, next) => next(event));
 
   // The native task standing for a target command is part of a call the
   // session already decided; it is never put to the user again.
@@ -1527,6 +1605,7 @@ export function register(on) {
               event,
               task,
               answered.result,
+              input,
             );
           }
           if (event.tool === "TaskStop") {
@@ -1629,12 +1708,28 @@ export function register(on) {
   on(
     "session.append",
     { door: "prompt" },
-    (_$, event, next) => next(targetTaskNotification(event, agentOutputs)),
+    async ($, event, next) => {
+      const unconfirmed = await stopAtDeadline($, event);
+      return next(
+        unconfirmedStop(
+          targetTaskNotification(event, agentOutputs),
+          unconfirmed,
+        ),
+      );
+    },
   );
   on(
     "session.append",
     { door: "delivery" },
-    (_$, event, next) => next(targetTaskNotification(event, agentOutputs)),
+    async ($, event, next) => {
+      const unconfirmed = await stopAtDeadline($, event);
+      return next(
+        unconfirmedStop(
+          targetTaskNotification(event, agentOutputs),
+          unconfirmed,
+        ),
+      );
+    },
   );
   // The model reads queued notifications through this render, including
   // re-renders after resume; the stored row above is projected separately.

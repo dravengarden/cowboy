@@ -697,10 +697,6 @@ def lifecycle_phases(args, api, client, checks):
     results = {case: {"is_error": error, "content": lifecycle_normalize(content, args.target, tasks)}
                for case, (error, content) in raw.items()}
     native = json.loads((Path(__file__).parent / "claude_lifecycle_native_baseline.json").read_text())
-    # Stated difference: no 30-minute stop for a timed-out command left running.
-    moved = native["results"]["timeout_moves"]
-    moved["content"] = moved["content"].replace(
-        " If it is still running after 30m in the background, it will be stopped and you will be notified.", "")
     differences = {}
     for name, value in native["results"].items():
         actual = dict(results.get(name, {}))
@@ -915,6 +911,8 @@ def notification_phases(args, api, client, checks):
                         lambda requests: tool("TaskStop", {"task_id": job_of(requests)})],
         "NOTIFY_TIMEOUT": [tool("Bash", {"command": "echo t1; sleep 3; echo t2", "timeout": 1000})],
         "NOTIFY_ASK": [tool("Bash", {"command": "touch notify-asked.txt; sleep 1", "run_in_background": True})],
+        "NOTIFY_DEADLINE": [tool("Bash", {"command": "while :; do echo beat >> deadline-beat.txt; sleep 0.2; done",
+                                          "run_in_background": True, "timeout": 3000})],
     }
 
     def router(requests):
@@ -1015,6 +1013,24 @@ def notification_phases(args, api, client, checks):
     pump_until(lambda: notifications(moved, start), 30, "timed-out command sent no completion notification")
     require("completed (exit code 0)" in notifications(moved, start)[-1], "timeout notification status differs")
     checks.append("timed_out_command_moves_to_background_and_notifies")
+
+    # Deadline: native stops a background command at its timeout and says so;
+    # the target command stops with it.
+    client.prompt(text="NOTIFY_DEADLINE", timeout=60)
+    limited, _ = job_for("NOTIFY_DEADLINE")
+    start = len(api.requests)
+    pump_until(lambda: notifications(limited, start), 30, "a background deadline sent no notification")
+    note = notifications(limited, start)[-1]
+    require("<status>killed</status>" in note and
+            'Background command \\"while :; do echo beat >> deadline-beat.txt; sleep 0.2; done\\" was stopped after reaching its background time limit' in note and
+            f"<output-file>cowboy-task://{limited}</output-file>" in note and
+            not any(marker in note for marker in runtime_markers),
+            "deadline notification differs from native's: " + note[:1500])
+    beat = args.target / "deadline-beat.txt"
+    before = beat.stat().st_size
+    time.sleep(2)
+    require(beat.stat().st_size == before, "the target command kept running past its background deadline")
+    checks.append("background_deadline_stops_the_target_command_as_natively")
 
     # The native task behind it never asks the user a second time.
     def answer(request):
@@ -1372,6 +1388,14 @@ def main():
                  "Agent"} <= main_tools,
                 "native's runtime tools are not advertised: " + ",".join(sorted(main_tools)))
         checks.append("native_default_tool_set_without_runtime_only_search_tools")
+        # Target tools keep native's own descriptions.
+        expected = json.loads((Path(__file__).parent / "claude_tool_descriptions_native_baseline.json").read_text())["descriptions"]
+        described = {definition["name"]: definition.get("description") for definition in api.requests[-1].get("tools", [])}
+        differing = sorted(name for name, text in expected.items() if described.get(name) != text)
+        for name in differing:
+            print("tool description diagnostic:", name, json.dumps(described.get(name))[:1500])
+        require(not differing, "tool descriptions differ from native's: " + ", ".join(differing))
+        checks.append("target_tools_carry_native_descriptions")
         require((args.target / "fixture.txt").read_bytes() == content.encode(), "target edit bytes changed")
         require((args.target / "once.txt").read_text() == "once", "command did not execute exactly once")
         require((args.target / quoted).read_text() == "external change\n", "stale edit overwrote external change")

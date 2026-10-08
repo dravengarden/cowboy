@@ -361,7 +361,7 @@ test("a timed-out command starting with sleep is killed, as natively", async (t)
   });
   assert.match(
     moved.result.stdout,
-    /^Command did not complete within its 2s timeout and was moved to the background \(ID: [^)]+\)\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. To check interim output, use Read on that file path\.$/,
+    /^Command did not complete within its 2s timeout and was moved to the background \(ID: [^)]+\)\. Output is being written to: cowboy-task:\/\/\S+\. You will be notified when it completes\. If it is still running after 30m in the background, it will be stopped and you will be notified\. To check interim output, use Read on that file path\.$/,
   );
   assert.deepEqual(moved.task.command, "(sleep 2); echo x");
   const id = moved.task.id;
@@ -1087,4 +1087,20 @@ test("the target's MCP configuration is read as native reads it", async (t) => {
   assert.equal(inputs.projectConfigs.length, 1);
   assert.equal(inputs.environment.HOME, process.env.HOME);
   assert.equal(inputs.cwd, project);
+});
+
+test("a background command's timeout is its deadline, up to two hours", async (t) => {
+  const { tools } = await shellFixture(t);
+  const started = await tools.dispatch("Bash", {
+    command: "sleep 30",
+    run_in_background: true,
+    timeout: 1800000,
+  });
+  assert.ok(started.task?.id, JSON.stringify(started));
+  await tools.cancelTasks([started.task.id]);
+  const refused = await tools.dispatch("Bash", {
+    command: "true",
+    timeout: 1800000,
+  }).catch((error) => ({ deny: error.message }));
+  assert.match(refused.deny, /Invalid tool limit/);
 });

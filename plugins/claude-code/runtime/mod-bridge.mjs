@@ -25,6 +25,7 @@ const BODY_KEYS = {
   "/cancel": ["id"],
   "/withdraw": ["id"],
   "/task-wait": ["afterSeq,id"],
+  "/task-deadline": ["id"],
   "/agent": ["agentId,outputFile,owner,toolUseId"],
   "/agent-complete": ["agentId,answer,isAborted,reason"],
   "/agent-stop": ["agentId"],
@@ -320,6 +321,14 @@ export async function startModBridge(
         }
         approvals.delete(call.id);
         answer(200, approval.result);
+        return;
+      }
+      if (request.url === "/task-deadline") {
+        // Native stopped the task standing for this command at its
+        // background deadline: the command stops too.
+        // Stopped only when the target confirmed it; pending ids are not.
+        const pending = await tools.cancelTasks([call.id]).catch(() => null);
+        answer(200, { stopped: Array.isArray(pending) && !pending.length });
         return;
       }
       if (request.url === "/task-wait") {

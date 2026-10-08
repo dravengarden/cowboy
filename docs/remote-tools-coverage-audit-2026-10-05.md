@@ -98,7 +98,7 @@ to introduce more restrictions.
 | Native CodeAct | Native nested shell, patch, image, parallel/error results, yield/wait and cold resume now have pinned scripted evidence | Keep these in default native acceptance; separately test child agents and runtime failure while a cell is pending |
 | Claude tool dispatch | `context-mod.js` replaces native tool bodies with a facade | Restore native ownership where a lower-level boundary exists; retain independently tested file adapters |
 | Native Bash lifecycle | Facade retains processes but does not establish native background task registration | Explore shell prefix bridge preserving original Bash tool and native task registry |
-| Background completion | Claude 3.9.0: a native background task (runtime waiter) stands for each target command left running, so native delivers its completion into a running turn or as an idle turn of its own; TaskStop sends nothing; notifications are rewritten to the target handle (packaged acceptance) | No 30-minute auto-stop for timed-out commands; subagent background commands are not notified |
+| Background completion | Claude 3.9.0: a native background task (runtime waiter) stands for each target command left running, so native delivers its completion into a running turn or as an idle turn of its own; TaskStop sends nothing; notifications are rewritten to the target handle. 3.18.0: native's background deadline (requested timeout, else 30 minutes; 30 minutes for a moved command) stops the target command too (packaged acceptance) | Subagent background commands are not notified |
 | PTY and stdin | Claude facade explicitly uses `tty:false`, `pipeStdin:false` | Native-parity baseline first: do not invent PTY support where provider lacks it; test Codex PTY, resize, EOF and incremental input |
 | Shell environment | Claude 3.8.0 runs native's command shape on the target: user bash/zsh, a login-shell snapshot (rc, functions, options, aliases, PATH), `cd` persistence with native's reset, native's environment variables; 36 Bash cases match native-local results in packaged acceptance | Error results keep Mods' `<tool_use_error>` wrapper; `CLAUDE_EFFORT` starts after the first tool batch; no embedded find/grep/rg shadows or `CLAUDE_PID` |
 | Project hooks (Claude) | 3.7.0 runs target project hooks: native lifecycle/native-tool hooks through the shell prefix, facade tool hooks (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest) through the adapter | Settings are a session-start snapshot; non-command facade tool hooks refuse matching calls |
@@ -114,7 +114,7 @@ to introduce more restrictions.
 | Atomic mutations | Stale stamp refusal has evidence; it does not alone establish compare-and-write atomicity | Inspect target implementation and inject mutation between check and write; use target-side atomic primitives where promised |
 | Output limits | Large streams/backpressure and terminal events recorded | Test split UTF-8, binary/NUL, truncation markers, slow/absent reader, disk full and retained output expiration |
 | Lost replies | Lost start and outages recorded without replay | Distinguish rejected, accepted, unknown and completed effects; never resend an unknown mutation under a new identity |
-| Cancel and timeout | Foreground cancellation and retained job cancellation recorded; 3.5.0 adds per-call and per-agent cancellation and forwards interrupt to native before target cancellation; Claude 3.12.0: commands end with their shell, stops kill the whole tree (job-control groups included), detached and left-running children match native-local (14 lifecycle cases) | Leftover processes end with the keeper; no 30-minute stop of moved commands; test cancel/start races, keeper death and provider timeout semantics |
+| Cancel and timeout | Foreground cancellation and retained job cancellation recorded; 3.5.0 adds per-call and per-agent cancellation and forwards interrupt to native before target cancellation; Claude 3.12.0: commands end with their shell, stops kill the whole tree (job-control groups included), detached and left-running children match native-local (14 lifecycle cases) | Leftover processes end with the keeper; test cancel/start races, keeper death and provider timeout semantics |
 | Resume/compaction | Rebinding and Claude target context recorded | Test resume with live children, queued completion, changed plugin version, stale approvals and artifact locators |
 | Reconnect and restarts | Keeper reattachment recorded | Inject Controller, worker, keeper and native-runtime failures independently; fence old generations and late replies |
 | Deletion and shutdown | Idempotent close and no recreation recorded | Verify pending callbacks cannot resurrect sessions, issue new model turns or affect another session |
@@ -840,6 +840,42 @@ Linux and actual macOS probes, three Controller reader roles, five public
 artifact digests and Catalog `ready`. OVH operation
 `ovh-claude-code-3-15-0-converge` completed: 3.15.0 active, 3.14.0 retained
 for rollback, no session leases, no live session restarted.
+
+### Tool descriptions and background deadlines (Plugin 3.18.0)
+
+Two differences the earlier phases had not recorded:
+
+- **Tool descriptions.** The remote lane replaced native's descriptions of
+  Bash, Read, Write, Edit, NotebookEdit and TaskStop with short ones of its
+  own (Bash: one paragraph instead of native's ~10,000 characters with its
+  background, sleep, git commit and pull request guidance). The model was
+  therefore instructed differently from a local session. 3.18.0 keeps
+  native's own descriptions; they hold for the target (absolute paths,
+  images, PDFs, notebooks, background output read with Read).
+- **Background deadlines.** Native 2.1.287 stops a background command at its
+  deadline (measured): the requested `timeout` for `run_in_background`
+  (default 30 minutes, at most 2 hours), 30 minutes for a command moved to
+  the background, whose result says so. It then notifies with status
+  `killed` and "was stopped after reaching its background time limit".
+  In the remote lane native applied the deadline to the runtime waiter that
+  stands for the target command: the waiter ended, the target command kept
+  running, and the notification named the waiter's runtime command line.
+  3.18.0 gives the waiter the command's own deadline, stops the target
+  command before the notification is stored, rewrites the notification to
+  the target command, and adds native's 30-minute sentence to a moved
+  command's result.
+
+Packaged acceptance compares the six descriptions with
+`tools/claude_tool_descriptions_native_baseline.json`
+(`target_tools_carry_native_descriptions`), runs a background command with a
+3-second timeout and checks native's notification and that the target command
+stopped (`background_deadline_stops_the_target_command_as_natively`); the
+lifecycle comparison no longer excludes the 30-minute sentence. Four native
+review rounds were run; the last reported none. Fixed findings: the deadline
+follows the input as hooks or approvals amended it; a background `timeout`
+up to two hours is accepted, as natively (a foreground one stays at ten
+minutes); a deadline stop the target did not confirm says so in the
+notification instead of reading as stopped.
 
 ### MCP servers (Plugin 3.17.0)
 
