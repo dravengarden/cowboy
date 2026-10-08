@@ -1,5 +1,37 @@
 # Execution connection recovery
 
+## October 8 Claude execution endpoint recovery
+
+At 14:42:10 UTC, `sess-1791173104587` exhausted the worker's 180-second
+execution response deadline and its private endpoint disconnected. At 15:44,
+after Machine heartbeats had recovered, the same native Claude process still
+rejected Read with `Execution unavailable; no replay` and refused Bash because
+its target PreToolUse hook could not run. The Plugin's `Connection.closed`
+flag was permanent: new calls never attempted to reconnect.
+
+Claude Plugin 3.19.2 reconnects only for a new call, authenticates against the
+original private descriptor, and initializes with the original executor
+session ID. Concurrent callers share one handshake. A changed executor
+identity is refused; explicit shutdown remains terminal. Calls whose replies
+were lost still fail without replay, including writes and process starts.
+Codex retains its native executor-session recovery; this change belongs to
+Claude's existing Mods adapter and adds no Columbus session state.
+
+The WebSocket regression commits a write and drops its acknowledgement, then
+checks concurrent new reads, one reconnect, unchanged executor identity and
+exactly one write. It fails on the previous Plugin. Packaged acceptance also
+closes the real worker endpoint and exercises Read and Bash again inside the
+same native Claude process, with the runtime filesystem untouched.
+
+Official tool and Mods contracts were checked on 2026-10-08:
+[tools](https://code.claude.com/docs/en/tools-reference),
+[events](https://code.claude.com/docs/en/plugins/mods/events), and
+[versioned types](https://code.claude.com/docs/en/plugins/mods/create).
+CLI 2.1.287, ACP 0.84.0 and executor 0.159.3 remain pinned. No tool inventory,
+schema or native hook disposition changes; only the existing adapter's
+connection lifetime changes. Installed idle-session convergence and retained
+busy generations must be reported separately from package publication.
+
 The October 7 incident combined Machine connection replacement with a native
 execution readiness failure. The Create dialog exposed the connection fence;
 several Claude sessions encountered the installation reconciliation fence;

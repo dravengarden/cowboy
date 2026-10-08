@@ -548,6 +548,9 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
+    mkdir -p dist/claude-source-tests
+    cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
+    npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs
     deno fmt --check plugins/claude-code/runtime
     deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs

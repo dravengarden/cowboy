@@ -534,6 +534,9 @@ export class WorkspaceTools {
     this.calls = new Map();
     this.completedCalls = new Map();
     this.saves = Promise.resolve();
+    this.connection.listeners?.add((frame) => {
+      if (frame.method === "connected") this.scheduleCancellations();
+    });
   }
 
   async load() {

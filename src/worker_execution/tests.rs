@@ -254,6 +254,8 @@ async fn native_worker_execution() {
     let relay_slow_events = Arc::clone(&slow_events);
     let event_gaps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let relay_event_gaps = Arc::clone(&event_gaps);
+    let claude_reconnect = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let relay_claude_reconnect = Arc::clone(&claude_reconnect);
     let relay = tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_millis(50));
         let mut tasks = tokio::task::JoinSet::new();
@@ -275,6 +277,7 @@ async fn native_worker_execution() {
                 let slow_events = Arc::clone(&relay_slow_events);
                 let event_gaps = Arc::clone(&relay_event_gaps);
                 let write_reply_lost = Arc::clone(&relay_write_reply_lost);
+                let claude_reconnect = Arc::clone(&relay_claude_reconnect);
                 if let Command::Invoke { invocation, .. } = &request.command {
                     let params = invocation.params.to_string();
                     let filename = invocation.params["path"]
@@ -331,6 +334,7 @@ async fn native_worker_execution() {
                     _ => false,
                 };
                 tasks.spawn(async move {
+                    let event_poll = matches!(request.command, Command::Events { .. });
                     if matches!(request.command, Command::Events { .. }) && slow_events.load(std::sync::atomic::Ordering::Relaxed) {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
@@ -351,6 +355,26 @@ async fn native_worker_execution() {
                             &[],
                         )
                         .await;
+                    let reconnect_marker = std::path::Path::new(&request.binding.workspace.cwd)
+                        .join("claude-reconnect-request");
+                    if event_poll && reconnect_marker.exists()
+                        && !claude_reconnect.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        // Exercise the real endpoint's close path. The next
+                        // Claude tool call must resume this exact keeper;
+                        // neither the native process nor its history restarts.
+                        client.complete(RuntimeReply {
+                            session_id: request.session_id,
+                            worker_epoch: request.worker_epoch,
+                            request_id: request.request_id,
+                            scope: Scope::from_binding(&request.binding),
+                            response: MachineResponse::Call {
+                                response: Response::Refused { reason: wire::Refusal::CursorExpired },
+                            },
+                        });
+                        std::fs::write(reconnect_marker.with_file_name("claude-reconnect-closed"), "closed").unwrap();
+                        return;
+                    }
                     if write_reply
                         && matches!(&response, MachineResponse::Call { response: Response::Operation { outcome: Outcome::Completed { reply } } } if reply.get("error").is_none())
                         && !write_reply_lost.swap(true, std::sync::atomic::Ordering::SeqCst)
@@ -421,6 +445,10 @@ async fn native_worker_execution() {
     .join(&binding.environment.incarnation);
     assert!(status.success(), "native worker execution failed");
     if input["provider"] == "claude-code" {
+        assert!(
+            claude_reconnect.load(std::sync::atomic::Ordering::SeqCst),
+            "native Claude must cross the closed endpoint fixture"
+        );
         assert!(
             write_reply_lost.load(std::sync::atomic::Ordering::SeqCst),
             "native write must cross the lost completion fixture"

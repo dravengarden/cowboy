@@ -1515,6 +1515,21 @@ def main():
                 "lost write completion replayed over a later target mutation")
         require(not (args.runtime / "lost-write-receipt.txt").exists(), "write escaped to runtime")
         checks.append("lost_file_write_completion_preserves_later_external_change")
+        (args.target / "claude-reconnect-request").write_text("close the endpoint")
+        deadline = time.monotonic() + 15
+        while not (args.target / "claude-reconnect-closed").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        require((args.target / "claude-reconnect-closed").exists(), "endpoint close fixture did not run")
+        time.sleep(0.2)
+        api.steps.extend([[], tool("Read", {"file_path": "fixture.txt"}),
+                          tool("Bash", {"command": "printf recovered >> reconnect-once.txt"})])
+        client.prompt(timeout=90)
+        resumed_results = list(outputs(api.requests[-1]))[-2:]
+        require(len(resumed_results) == 2 and not any(block.get("is_error") for block in resumed_results),
+                "new tools did not recover after execution endpoint close")
+        require((args.target / "reconnect-once.txt").read_text() == "recovered" and
+                not (args.runtime / "reconnect-once.txt").exists(), "reconnect replayed or escaped the target")
+        checks.append("closed_execution_endpoint_recovers_in_same_native_session_without_replay")
         api.steps.extend([[], [{"type": "text", "text": "<summary>Continue the target fixture. The target project instructions remain authoritative.</summary>"}],
                           tool("Read", {"file_path": "fixture.txt"})])
         client.prompt(text="/compact", timeout=90)

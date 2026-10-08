@@ -28,6 +28,7 @@ tools/__pycache__/
 
 # Local / runtime
 /dist/matrix-codeact/
+/dist/claude-source-tests/
 /output/
 .env
 .env.*

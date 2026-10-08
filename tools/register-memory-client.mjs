@@ -9,6 +9,15 @@ registerHooks({
         shortCircuit: true,
       };
     }
+    if (specifier === "ws") {
+      return next(specifier, {
+        ...context,
+        parentURL: new URL(
+          "../dist/claude-source-tests/package.json",
+          import.meta.url,
+        ).href,
+      });
+    }
     return next(specifier, context);
   },
 });

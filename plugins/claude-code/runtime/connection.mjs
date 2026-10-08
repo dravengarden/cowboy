@@ -32,24 +32,45 @@ export async function readDescriptor(path) {
   return descriptor;
 }
 
-// One authenticated connection per native process. Cowboy owns reconnect and
-// operation deduplication beneath it. A lost reply is never resubmitted here.
+// One authenticated connection per native process. New calls can reconnect to
+// the same executor session. A lost reply is never resubmitted here.
 export class Connection {
   pending = new Map();
-  closed = false;
+  closed = true;
+  stopped = false;
+  connecting = null;
   // Executor notifications (process output and ends), for readers that wait
   // on them instead of polling.
   listeners = new Set();
 
   static async open(descriptor) {
     const connection = new Connection();
-    connection.socket = new WebSocket(descriptor.endpoint, {
+    connection.descriptor = structuredClone(descriptor);
+    await connection.ensureConnected();
+    return connection;
+  }
+
+  async ensureConnected() {
+    if (this.stopped) throw new Error("Execution unavailable; no replay");
+    if (this.connecting) return await this.connecting;
+    if (!this.closed) return;
+    this.connecting = this.connect().finally(() => this.connecting = null);
+    await this.connecting;
+  }
+
+  async connect() {
+    const connection = this;
+    const descriptor = this.descriptor;
+    const socket = new WebSocket(descriptor.endpoint, {
       headers: { Authorization: `Bearer ${descriptor.bearer_token}` },
       maxPayload: 14 * 1024 * 1024,
       handshakeTimeout: 10000,
       followRedirects: false,
     });
-    connection.socket.on("message", (bytes) => {
+    this.socket = socket;
+    this.closed = false;
+    socket.on("message", (bytes) => {
+      if (connection.socket !== socket || connection.closed) return;
       try {
         const frame = JSON.parse(bytes.toString());
         if (frame.id === undefined) {
@@ -71,28 +92,36 @@ export class Connection {
         connection.close();
       }
     });
-    connection.socket.on("close", () => connection.close());
-    connection.socket.on("error", () => connection.close());
-    await new Promise((resolve, reject) => {
-      connection.socket.once("open", resolve);
-      connection.socket.once(
-        "error",
-        () => reject(new Error("Execution connection refused")),
-      );
-      connection.socket.once(
-        "close",
-        () => reject(new Error("Execution connection closed")),
-      );
-    });
+    const disconnected = () => {
+      if (connection.socket === socket) connection.disconnect();
+    };
+    socket.on("close", disconnected);
+    socket.on("error", disconnected);
     try {
-      const initialized = await connection.call("initialize", {
+      await new Promise((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once(
+          "error",
+          () => reject(new Error("Execution connection refused")),
+        );
+        socket.once(
+          "close",
+          () => reject(new Error("Execution connection closed")),
+        );
+      });
+      const initialized = await connection.request("initialize", {
         clientName: "cowboy-claude",
+        ...(connection.sessionId
+          ? { resumeSessionId: connection.sessionId }
+          : {}),
       });
       const info = initialized.environmentInfo;
       if (
         info?.executorVersion !== "0.159.3" || info.platformOs !== "linux" ||
         fileURLToPath(info.cwd) !== descriptor.binding.workspace.cwd ||
-        !isAbsolute(info.shell?.path ?? "")
+        !isAbsolute(info.shell?.path ?? "") ||
+        typeof initialized.sessionId !== "string" || !initialized.sessionId ||
+        (connection.sessionId && connection.sessionId !== initialized.sessionId)
       ) {
         connection.close();
         throw new Error("Execution environment differs from binding");
@@ -101,15 +130,23 @@ export class Connection {
         JSON.stringify({ method: "initialized", params: {} }),
       );
       connection.info = info;
-      return connection;
+      connection.sessionId = initialized.sessionId;
+      for (const listener of connection.listeners) {
+        listener({ method: "connected" });
+      }
     } catch (error) {
-      connection.close();
+      connection.disconnect();
       throw error;
     }
   }
 
-  call(method, params) {
-    if (this.closed) {
+  async call(method, params) {
+    await this.ensureConnected();
+    return await this.request(method, params);
+  }
+
+  request(method, params) {
+    if (this.closed || this.stopped) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
     if (this.pending.size >= 15) {
@@ -117,13 +154,22 @@ export class Connection {
     }
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const timer = setTimeout(() => this.close(), 185000);
+      const timer = setTimeout(() => this.disconnect(), 185000);
       this.pending.set(id, { resolve, reject, timer });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch {
+        this.disconnect();
+      }
     });
   }
 
   close() {
+    this.stopped = true;
+    this.disconnect();
+  }
+
+  disconnect() {
     if (this.closed) return;
     this.closed = true;
     for (const { reject, timer } of this.pending.values()) {
