@@ -1,0 +1,61 @@
+{
+ "schema": "cowboy.claude-startup-read-ahead-release/v1",
+ "date": "2026-10-08",
+ "source_commits": [
+  "2ec9891c",
+  "4a50aae4"
+ ],
+ "plugin": "claude-code",
+ "previous_version": "3.19.0",
+ "version": "3.19.1",
+ "artifact_digest": "sha256:0b67f54b13bb064ff76354b4f197a5aacd4dccfaa3066387ed1aea60aaf31305",
+ "adapter_artifacts": {
+  "linux-x86_64": "sha256:eb6ab1d93825508bf9e2415ba7fea8a488006edd05a8719d14e8d93183c173e1",
+  "macos-aarch64": "sha256:fe73d582aea3de4b1fe21d491024487efcfd0d4fa4d2fa883e039a639193f89d"
+ },
+ "native_pins": {
+  "claude_cli": "2.1.287",
+  "claude_agent_acp": "0.84.0",
+  "executor": "0.159.3"
+ },
+ "changes": [
+  "startup instruction, rule, skill, MCP config and hook settings reads run a bounded three ahead of their ordered walks",
+  "git status runs beside instruction discovery; hook, skill and MCP walks start together"
+ ],
+ "gates": {
+  "source_tests": 237,
+  "check_compact": "passed",
+  "native_worker_conformance": {
+   "accepted": true,
+   "checks": 90,
+   "same_check_set_as_3_19_0": true
+  }
+ },
+ "not_run": [
+  "catalog-reader-conformance (release envelope unchanged from 3.19.0)",
+  "macOS execution probes (macOS adapter differs only in the same copied JS sources)"
+ ],
+ "public_artifacts": "all published URLs re-downloaded and hash-matched",
+ "production": {
+  "machine": "ovh",
+  "operation_id": "ovh-claude-code-3-19-1-converge",
+  "phase": "completed",
+  "receipt": "applied"
+ },
+ "measurement": {
+  "metric": "sdk-initialize durationMs, same sessions, idle auto-update after install",
+  "before_3_19_0_07_39_utc": {
+   "sess-1791179743140": 24326,
+   "sess-1791173104587": 23181,
+   "sess-1791179743141": 22442,
+   "sess-1791185761956": 20962
+  },
+  "after_3_19_1_11_22_utc": {
+   "sess-1791179743140": 21046,
+   "sess-1791173104587": 18322,
+   "sess-1791179743141": 15558,
+   "sess-1791185761956": 23090
+  },
+  "observation": "the startup read phase fell from roughly 20 s to about 5 s; about 10 s of mostly serial target calls remain after it (likely target MCP startup and native readiness)"
+ }
+}
