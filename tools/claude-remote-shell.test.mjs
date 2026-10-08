@@ -1104,3 +1104,13 @@ test("a background command's timeout is its deadline, up to two hours", async (t
   }).catch((error) => ({ deny: error.message }));
   assert.match(refused.deny, /Invalid tool limit/);
 });
+
+test("commands see credential-like variables, as natively", async (t) => {
+  const { bash } = await shellFixture(t);
+  process.env.COWBOY_FIXTURE_TOKEN = "fixture-secret";
+  t.after(() => delete process.env.COWBOY_FIXTURE_TOKEN);
+  assert.equal(
+    await bash({ command: 'printf "%s" "$COWBOY_FIXTURE_TOKEN"' }),
+    "fixture-secret",
+  );
+});

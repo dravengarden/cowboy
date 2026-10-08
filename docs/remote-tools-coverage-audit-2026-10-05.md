@@ -955,10 +955,19 @@ Twelve native review rounds were run; the last reported none. Fixed findings:
 
 Gaps:
 
-- Bash commands still run with the executor's default exclusion of
-  credential-like variables, which a local session's Bash does not apply;
-  aligning it is a separate decision because it exposes those variables to
-  model-run commands.
+- Target commands do not see the environment a local session's commands
+  see. The executor's environment is closed by Machine design
+  ([execution environments](execution-environments.md)): only a fixed base
+  set (on Hawk observed as `HOME`, `PATH`, `SHELL`, `USER`, `LOGNAME`,
+  `LANG` and the executor's own `CODEX_HOME`) plus operator-listed names,
+  never credential-shaped ones. A local Cowboy session's commands inherit
+  the worker's environment (on Hawk about 99 variables, among them
+  `SSH_AUTH_SOCK`, `DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`,
+  `EDITOR` and the Columbus and cache locations). The user accepts exposing
+  credential-like variables; the plugin therefore no longer applies the
+  executor's own default exclusion, but the Machine's closed set still
+  decides what reaches the target. Aligning it is a Machine release and
+  configuration change, not a plugin one.
 - A disabled server is absent rather than listed as disabled.
 - Remote servers' OAuth and their network origin are the runtime's.
 - Target `.claude/settings.json` MCP permission rules are not read (the

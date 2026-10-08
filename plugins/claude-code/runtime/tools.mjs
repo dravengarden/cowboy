@@ -1256,8 +1256,8 @@ export class WorkspaceTools {
       envPolicy: {
         inherit: "all",
         // The executor drops variables named like credentials by default;
-        // MCP servers natively see Claude Code's whole environment.
-        ignoreDefaultExcludes: fields.environment === "all",
+        // natively commands, hooks and MCP servers see the whole environment.
+        ignoreDefaultExcludes: true,
         exclude: [],
         set,
         includeOnly: [],
@@ -1436,8 +1436,8 @@ export class WorkspaceTools {
     }
   }
 
-  async command(argv, timeout = 10000, call, fields) {
-    const id = await this.startForeground(argv, call, {}, undefined, fields);
+  async command(argv, timeout = 10000, call) {
+    const id = await this.startForeground(argv, call);
     try {
       const result = await this.collect(id, timeout);
       if (!result.exited) {
@@ -1595,9 +1595,6 @@ export class WorkspaceTools {
           "sh",
           ...names,
         ],
-        10000,
-        undefined,
-        { environment: "all" },
       );
       if (listed.exitCode !== 0 || listed.output_limit) {
         throw new Error("Target environment could not be read");
