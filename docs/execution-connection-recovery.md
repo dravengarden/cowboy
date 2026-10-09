@@ -1,5 +1,35 @@
 # Execution connection recovery
 
+## October 9 pending delivery follow-up
+
+The `fix falcon` session retained a Controller-owned unacknowledged prompt
+while a second submission of the same text remained queued. Explicit recovery
+preserved the former as a draft and paused the queue. This establishes the
+blocked handoff, not why the original acknowledgement was absent. The old
+session's 3.19.4 Provider and 25.8 MB transcript do not, by themselves, explain
+the missing acknowledgement.
+
+A sequenced `TurnStarted` or an owned snapshot naming the exact pending turn
+now also proves worker admission. Losing the separate `CommandAck` must not
+leave that prompt pending or replay it on reconnect. An idle snapshot, another
+turn, or a broker placeholder never proves admission. Every 30 seconds a live
+connection with pending prompts requests an adoption-only owner snapshot; it
+does not resend prompts, launch workers or interrupt turns. Repeated config
+snapshots can release an already-reconciled startup gate without replaying
+preferences. Host Operator session inspection includes content-free delivery
+state so a configuration wait, an unwritten prompt and a missing receipt are
+distinguishable.
+
+The browser separately bounds the receipt-to-transcript-echo gap. An accepted
+queue mutation may disappear before the echo; its retained bubble must still
+have a deadline. Repeated receipts do not extend it. A stale confirmation uses
+the latest accepted queue snapshot to locate the delivered row. Timeout means
+unconfirmed echo, not proof that execution failed, and never resubmits work.
+
+These are Cowboy transport and presentation responsibilities shared by Codex
+and the Claude adapter; native runtimes still own turns and tool effects. No
+Provider release, execution protocol or native model contract changes here.
+
 ## October 8 tool latency follow-up
 
 The Controller still recorded OVH Machine and broker heartbeat timeouts after

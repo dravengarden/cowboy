@@ -24,6 +24,7 @@ pub(in crate::server) async fn list(State(state): State<Arc<AppState>>) -> Json<
             "id":m.id,"title":m.title,"status":m.status,"provider":m.provider,
             "provider_version":m.provider_version,"native_session_id":m.agent_session_id,
             "background_tasks":m.background_tasks,"execution_binding":m.execution_binding,
+            "delivery":state.runtime_router.runtime(&m.machine_id).map(|runtime| runtime.delivery_diagnostics(&m.id)),
         })).collect::<Vec<_>>()}),
     )
 }

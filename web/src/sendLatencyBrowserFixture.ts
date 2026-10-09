@@ -138,6 +138,32 @@ export async function run() {
     samples.push({ kind, milliseconds: performance.now() - began });
   };
   try {
+    if (scenario === "receipt-stall" || scenario === "receipt-queued-stale" || scenario === "receipt-background") {
+      openSession(session);
+      await until(() => snapshot?.connected === true, "connected");
+      await submitPrompt(session, "receipt without echo");
+      if (scenario === "receipt-queued-stale") {
+        await until(() => snapshot.queues.get(session)?.some((row) => row.id === "server-queued") === true &&
+          (snapshot.optimisticMessages.get(session) ?? []).length === 0, "stale receipt reconciles latest queue");
+        return ["stale confirmation retires the bubble using the authoritative queue"];
+      }
+      await until(() => (snapshot.optimisticMessages.get(session) ?? []).some((row) => row.status === "sending"), "sending bubble");
+      if (scenario === "receipt-background") {
+        let visibility = "hidden";
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+        document.dispatchEvent(new Event("visibilitychange"));
+        await delay(65_000);
+        if ((snapshot.optimisticMessages.get(session) ?? []).some((row) => row.status === "failed")) {
+          throw new Error("background receipt-to-echo gap was reported as failed");
+        }
+        visibility = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+        await until(() => (snapshot.optimisticMessages.get(session) ?? []).some((row) => row.status === "failed"), "foreground echo deadline", 40_000);
+        return ["background time does not cause failure", "visible connected echo wait remains bounded"];
+      }
+      await until(() => (snapshot.optimisticMessages.get(session) ?? []).some((row) => row.status === "failed"), "bounded missing echo", 70_000);
+      return ["receipt without echo stops spinning", "repeated receipt does not extend deadline"];
+    }
     if (scenario.startsWith("failed-recovery")) {
       openSession(session);
       await until(() => snapshot?.connected && snapshot.hydrated.has(session), "connected session");

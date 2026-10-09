@@ -321,8 +321,46 @@ impl RemoteRuntime {
                     return;
                 }
                 runtime.recover_stalled_startups(&mut watch, tokio::time::Instant::now());
+                runtime.refresh_pending_delivery();
             }
         });
+    }
+
+    /// Refresh admission evidence on a live but quiet connection. Adoption only
+    /// asks the broker for its existing owner; it cannot replay a prompt or
+    /// launch a replacement. Ordinary command wakeups remain write-once.
+    fn refresh_pending_delivery(&self) {
+        if !self.connected() {
+            return;
+        }
+        let sessions: HashSet<String> = self
+            .shared
+            .pending
+            .lock()
+            .values()
+            .filter_map(|command| match command {
+                CoreCommand::Prompt { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .collect();
+        for id in sessions {
+            // A concurrent reset must supersede this probe, never be replaced
+            // by an adoption carrying its old launch metadata.
+            let resetting = self.shared.resetting.lock();
+            if resetting.contains(&id) {
+                continue;
+            }
+            let key = format!("ensure:{id}");
+            let declaration = self.shared.declarations.lock().get(&id).cloned();
+            if let Some(mut session) = declaration {
+                session.adopt_only = true;
+                let mut pending = self.shared.pending.lock();
+                if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(key) {
+                    entry.insert(CoreCommand::EnsureSession { session });
+                    let _ = self.shared.notify.send(());
+                }
+            }
+        }
     }
 
     /// See [`startup_watch`]. A disconnected runtime replays everything in
@@ -453,6 +491,49 @@ impl RemoteRuntime {
                 .count(),
             pending_commands: self.shared.pending.lock().len(),
         }
+    }
+
+    /// Content-free evidence for the host Operator; never exposes prompt bodies.
+    pub(crate) fn delivery_diagnostics(&self, session_id: &str) -> serde_json::Value {
+        let prompts: Vec<_> = self
+            .shared
+            .pending
+            .lock()
+            .iter()
+            .filter_map(|(id, command)| match command {
+                CoreCommand::Prompt {
+                    session_id: owner,
+                    turn_id,
+                    ..
+                } if owner == session_id => Some((id.clone(), turn_id.clone())),
+                _ => None,
+            })
+            .collect();
+        let sent = self.shared.sent.lock();
+        let prompts: Vec<_> = prompts
+            .into_iter()
+            .map(|(id, turn)| {
+                serde_json::json!({
+                    "written_to_connection": sent.contains(&id), "command_id": id, "turn_id": turn,
+                })
+            })
+            .collect();
+        drop(sent);
+        let worker = self.shared.workers.lock().get(session_id).map(|worker| {
+            serde_json::json!({
+                "epoch": worker.worker_epoch, "state": worker.state,
+                "current_turn_id": worker.current_turn_id,
+                "pending_prompt_count": worker.pending_prompt_count,
+                "has_config_options": worker.config_options.is_some(),
+                "drain_requested": worker.drain_requested,
+            })
+        });
+        serde_json::json!({
+            "connected": self.connected(), "pending_prompts": prompts, "worker": worker,
+            "waiting_configuration": self.shared.config_startups.lock().contains(session_id),
+            "resetting": self.shared.resetting.lock().contains(session_id),
+            "dispatch_guard": self.shared.hub.session_has_in_flight_prompt(session_id),
+        })
     }
 
     pub fn ensure(&self, mut session: StartSession) {
@@ -1274,6 +1355,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     }
                     let auto_permission = codex_full_access_permission(shared, &session_id, &event);
                     let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
+                    if let RuntimeEvent::TurnStarted {
+                        turn_id,
+                        command_id,
+                    } = &event
+                    {
+                        acknowledge_prompt_start(shared, &session_id, turn_id, Some(command_id));
+                    }
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                     if let RuntimeEvent::Status {
                         state: WorkerState::Crashed | WorkerState::Exited,
@@ -1607,17 +1695,49 @@ fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
             false
         }
     };
-    if already_synced {
-        return;
+    if !already_synced {
+        queue_persisted_config(
+            shared,
+            &worker.session_id,
+            worker.config_options.as_ref(),
+            false,
+        );
     }
-    queue_persisted_config(
-        shared,
-        &worker.session_id,
-        worker.config_options.as_ref(),
-        false,
-    );
     if shared.config_startups.lock().remove(&worker.session_id) {
         let _ = shared.notify.send(());
+    }
+}
+
+// The sequenced turn event (or an owned active-turn snapshot) proves admission
+// even if the unsequenced CommandAck was lost. Never resend an acknowledged
+// prompt on a later connection, and never mistake an idle snapshot for proof.
+fn acknowledge_prompt_start(shared: &Shared, session: &str, turn: &str, command_id: Option<&str>) {
+    let admitted = {
+        let mut pending = shared.pending.lock();
+        let key = pending.iter().find_map(|(key, command)| match command {
+            CoreCommand::Prompt {
+                session_id,
+                turn_id,
+                ..
+            } if session_id == session
+                && turn_id == turn
+                && command_id.is_none_or(|id| key == id) =>
+            {
+                Some(key.clone())
+            }
+            _ => None,
+        });
+        key.and_then(|key| pending.remove(&key).map(|command| (key, command)))
+    };
+    if let Some((key, command)) = admitted {
+        shared.sent.lock().remove(&key);
+        if let CoreCommand::Prompt {
+            trace: Some(trace), ..
+        } = command
+            && let Some((_, telemetry)) = shared.telemetry.lock().as_ref()
+        {
+            telemetry.finish_delivery_trace(&trace, true);
+        }
     }
 }
 
@@ -1739,6 +1859,11 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
 fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     if !shared.hub.accept_runtime_snapshot(worker) {
         return false;
+    }
+    if worker.has_connected_owner()
+        && let Some(turn_id) = worker.current_turn_id.as_deref()
+    {
+        acknowledge_prompt_start(shared, &worker.session_id, turn_id, None);
     }
     shared.optimistic_revivals.lock().remove(&worker.session_id);
     shared
@@ -3173,6 +3298,107 @@ mod tests {
     /// Every `queue` wakes the writer. Re-sending every unacknowledged command
     /// on each wake made a burst of resets quadratic and saturated the
     /// Machine's bounded core command queue.
+    #[tokio::test]
+    async fn started_turn_is_a_receipt_even_when_command_ack_is_lost() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub, vec![snapshot("s")]);
+        let id = runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type":"text","text":"once"})],
+            Some("c-once".into()),
+        );
+        let commands = pending_wire_commands(&runtime).await;
+        let turn_id = commands
+            .iter()
+            .find_map(|command| match command {
+                CoreCommand::Prompt { turn_id, .. } => Some(turn_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        handle_frame(
+            &runtime.shared,
+            Frame::WorkerEvent {
+                session_id: "s".into(),
+                worker_epoch: snapshot("s").worker_epoch,
+                runtime_seq: 1,
+                event: RuntimeEvent::TurnStarted {
+                    turn_id,
+                    command_id: id.clone(),
+                },
+                diagnostics: Vec::new(),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .unwrap();
+        assert!(!runtime.shared.pending.lock().contains_key(&id));
+        runtime.shared.sent.lock().clear();
+        assert!(
+            pending_wire_commands(&runtime)
+                .await
+                .iter()
+                .all(|command| !matches!(command, CoreCommand::Prompt { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn quiet_delivery_refreshes_evidence_without_replaying_the_prompt() {
+        let runtime =
+            RemoteRuntime::for_test(hub_with_stale_spark_preferences(), vec![snapshot("s")]);
+        runtime.shared.connected.store(true, Ordering::Release);
+        let id = runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type":"text","text":"once"})],
+            None,
+        );
+        let first = pending_wire_commands(&runtime).await;
+        let turn = first
+            .iter()
+            .find_map(|command| match command {
+                CoreCommand::Prompt { turn_id, .. } => Some(turn_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        runtime.refresh_pending_delivery();
+        let probe = pending_wire_commands(&runtime).await;
+        assert_eq!(probe.len(), 1);
+        assert!(matches!(&probe[0], CoreCommand::EnsureSession { session } if session.adopt_only));
+        runtime.refresh_pending_delivery();
+        assert!(pending_wire_commands(&runtime).await.is_empty());
+        let mut worker = snapshot("s");
+        worker.current_turn_id = Some("unrelated-turn".into());
+        apply_snapshot(&runtime.shared, &worker);
+        assert!(runtime.shared.pending.lock().contains_key(&id));
+        worker.current_turn_id = Some(turn);
+        worker.worker_epoch = "broker-s".into();
+        apply_snapshot(&runtime.shared, &worker);
+        assert!(runtime.shared.pending.lock().contains_key(&id));
+        worker.worker_epoch = snapshot("s").worker_epoch;
+        apply_snapshot(&runtime.shared, &worker);
+        assert!(!runtime.shared.pending.lock().contains_key(&id));
+    }
+
+    #[tokio::test]
+    async fn authoritative_config_snapshot_releases_a_rearmed_gate_without_replaying_preferences() {
+        let runtime =
+            RemoteRuntime::for_test(hub_with_stale_spark_preferences(), vec![snapshot("s")]);
+        let mut worker = snapshot("s");
+        worker.config_options = Some(serde_json::json!([]));
+        sync_config_for_worker(&runtime.shared, &worker);
+        runtime.shared.config_startups.lock().insert("s".into());
+        sync_config_for_worker(&runtime.shared, &worker);
+        assert!(!runtime.shared.config_startups.lock().contains("s"));
+        assert!(runtime.shared.pending.lock().is_empty());
+    }
+
     #[tokio::test]
     async fn each_wake_writes_only_commands_not_already_on_the_wire() {
         let ids: Vec<String> = (0..12).map(|index| format!("s{index}")).collect();

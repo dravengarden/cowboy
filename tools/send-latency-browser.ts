@@ -8,6 +8,7 @@ const local = args.includes("--local") || metadata || queued;
 const safety = args.includes("--safety");
 const recovery = args.includes("--transcript-recovery");
 const slowMobile = args.includes("--slow-mobile");
+const receiptStall = args.includes("--receipt-stall");
 const draftSend = args.includes("--draft-send");
 const continuity = args.includes("--continuity");
 const updateSettings = args.includes("--update-settings");
@@ -16,7 +17,7 @@ const bundles = args.filter((argument) =>
   argument !== "--queued" && argument !== "--metadata" &&
   argument !== "--local" &&
   argument !== "--safety" && argument !== "--transcript-recovery" &&
-  argument !== "--slow-mobile" &&
+  argument !== "--slow-mobile" && argument !== "--receipt-stall" &&
     argument !== "--draft-send" && argument !== "--continuity" && argument !== "--update-settings" && argument !== "--failed-recovery"
 );
 if (
@@ -49,7 +50,9 @@ const session = {
   updated_at_ms: 0,
 };
 const cases = bundles.flatMap((bundle) =>
-  (slowMobile
+  (receiptStall
+    ? ["receipt-stall", "receipt-queued-stale", "receipt-background"]
+    : slowMobile
     ? ["slow-mobile", "lost-send"]
     : failedRecovery
     ? ["failed-recovery", "failed-recovery-storage-error", "failed-recovery-no-work", "failed-recovery-review", "failed-recovery-review-storage-error", "failed-recovery-late-confirmation", "failed-recovery-concurrent", "failed-recovery-queue", "failed-recovery-force"]
@@ -295,6 +298,23 @@ for (const { bundle, scenario } of cases) {
           if (seen.has(message.cmid)) return;
           seen.add(message.cmid);
           deliveries++;
+          if (scenario === "receipt-queued-stale") {
+            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: 3,
+              value: { queue: [{ id: "server-queued", cmid: message.cmid, text: message.text, content: [] }], drafts: [] }, confirmed: [] }));
+            await delay(30);
+            socket.send(JSON.stringify({ type: "sync_patch", state: `queue:${session.id}`, version: 2,
+              value: { queue: [], drafts: [] }, confirmed: [message.cmid] }));
+            return;
+          }
+          if (scenario === "receipt-stall" || scenario === "receipt-background") {
+            const receipt = { type: "sync_patch", state: `queue:${session.id}`, version: 2,
+              value: { queue: [], drafts: [] }, confirmed: [message.cmid] };
+            socket.send(JSON.stringify(receipt));
+            // Repeated confirmation must not keep restarting the echo timer.
+            await delay(35_000);
+            if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(receipt));
+            return;
+          }
           if (recoveryCase && deliveries === 1) {
             failedCmid = message.cmid;
             failedBlocks = message.content ?? [{ type: "text", text: message.text }];
@@ -487,7 +507,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
             }`,
           ),
         ),
-      45_000,
+      receiptStall ? 120_000 : 45_000,
     );
     const result = await report.promise;
     const digest = Array.from(
@@ -517,7 +537,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
           ? scenario.endsWith("storage-error") || scenario === "failed-recovery-no-work" ? 1 : scenario === "failed-recovery-concurrent" ? 3 : 2
           : continuity
           ? 4
-          : local || draftSend || slowMobile
+          : local || draftSend || slowMobile || receiptStall
           ? 1
           : safety || recovery
           ? 0
