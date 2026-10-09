@@ -75,10 +75,15 @@ fn error(code: &str, admission: &str) -> Value {
 
 fn emit(value: &Value) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string(value)?);
-    if value.get("error").is_some() {
+    if refused(value) {
         anyhow::bail!("managed call refused; see JSON error code");
     }
     Ok(())
+}
+
+/// Call summaries always carry `error`; only a non-null code is a refusal.
+fn refused(value: &Value) -> bool {
+    value.get("error").is_some_and(|error| !error.is_null())
 }
 
 fn read_input(path: &Path) -> Result<Vec<u8>, &'static str> {
@@ -270,4 +275,19 @@ pub async fn call(args: CallArgs) -> anyhow::Result<()> {
         Err(code) => return emit(&error(code, "not_submitted")),
     };
     emit(&exchange(context, action, wait_ms).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_present_error_code_is_a_refusal() {
+        assert!(refused(&error("grant_revoked", "not_submitted")));
+        assert!(refused(
+            &json!({"state":"failed","error":{"code":"timeout"}})
+        ));
+        assert!(!refused(&json!({"state":"completed","error":null})));
+        assert!(!refused(&json!({"state":"running"})));
+    }
 }
