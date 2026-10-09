@@ -62,6 +62,22 @@ pub struct Context {
     pub scope: ContextScope,
     #[serde(default)]
     pub files: Vec<String>,
+    /// Absolute top level of the Git work tree to snapshot on the execution
+    /// target. Omitted means the caller's current worktree. The target only
+    /// accepts a work tree of a repository registered on that Machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+/// A lexical absolute path without `.`/`..`, empty or control components.
+pub(crate) fn absolute_root(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() <= 4096
+        && !value.chars().any(char::is_control)
+        && (value == "/"
+            || value[1..]
+                .split('/')
+                .all(|part| !matches!(part, "" | "." | "..")))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +241,11 @@ impl Request {
             return Err(InputError::InvalidInstruction);
         }
         if self.context.files.len() > 32
+            || self
+                .context
+                .root
+                .as_deref()
+                .is_some_and(|root| !absolute_root(root) || root == "/")
             || self.context.files.iter().any(|file| !relative_file(file))
             || self
                 .context
@@ -375,6 +396,29 @@ mod tests {
                 parse(&value).unwrap_err(),
                 InputError::InvalidContext,
                 "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn context_root_is_an_exact_absolute_target_path() {
+        let mut value = example();
+        value["context"]["root"] = json!("/srv/worktrees/marketplace-service/task");
+        assert!(parse(&value).is_ok());
+        for root in [
+            "relative/path",
+            "/",
+            "/a/../b",
+            "/a/./b",
+            "/a//b",
+            "/a/b/",
+            "/a\nb",
+        ] {
+            value["context"]["root"] = json!(root);
+            assert_eq!(
+                parse(&value).unwrap_err(),
+                InputError::InvalidContext,
+                "{root}"
             );
         }
     }

@@ -48,7 +48,6 @@ pub fn read_round(workspace: &Path) -> Option<RoundMarker> {
     (marker.schema == 1).then_some(marker)
 }
 
-
 /// ACP prompt metadata for a managed child turn. Adapters that declare the
 /// managed profile apply `outputSchema` as a native turn constraint.
 pub const PROMPT_META_KEY: &str = "cowboy.dev/managedCall";

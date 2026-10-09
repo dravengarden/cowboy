@@ -95,11 +95,19 @@ impl std::fmt::Debug for Request {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
-    Inventory { executor: Option<ExecutorInventory> },
-    Prepared { binding: BindingV1 },
-    RuntimePrepared { runtime: RuntimeLocation },
+    Inventory {
+        executor: Option<ExecutorInventory>,
+    },
+    Prepared {
+        binding: BindingV1,
+    },
+    RuntimePrepared {
+        runtime: RuntimeLocation,
+    },
     Closed,
-    Call { response: KeeperResponse },
+    Call {
+        response: KeeperResponse,
+    },
     CallGateway,
     ManagedRound {
         prepared: crate::managed_calls::protocol::ChildPrepared,
@@ -108,7 +116,9 @@ pub enum Response {
     ManagedRoundRefused {
         code: String,
     },
-    Refused { reason: Refusal },
+    Refused {
+        reason: Refusal,
+    },
 }
 
 impl std::fmt::Debug for Response {

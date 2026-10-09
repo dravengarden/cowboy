@@ -2415,7 +2415,10 @@ impl Hub {
         for entry in s.log.iter().filter(|entry| entry.seq > after_seq) {
             match &entry.event {
                 Event::Update { update } => {
-                    match update.get("sessionUpdate").and_then(serde_json::Value::as_str) {
+                    match update
+                        .get("sessionUpdate")
+                        .and_then(serde_json::Value::as_str)
+                    {
                         Some("user_message_chunk") => turn.prompted = true,
                         Some("agent_message_chunk") => {
                             if let Some(text) = update
@@ -2426,8 +2429,14 @@ impl Hub {
                                 final_text.push_str(text);
                             }
                         }
-                        Some("agent_thought_chunk" | "usage_update" | "available_commands_update"
-                            | "current_mode_update" | "config_option_update") | None => {}
+                        Some(
+                            "agent_thought_chunk"
+                            | "usage_update"
+                            | "available_commands_update"
+                            | "current_mode_update"
+                            | "config_option_update",
+                        )
+                        | None => {}
                         Some(_) => final_text.clear(),
                     }
                 }
@@ -6004,7 +6013,12 @@ mod managed_call_tests {
     fn client_entry_points_cannot_prompt_a_managed_child() {
         let hub = Hub::new();
         hub.create_session(child("child"));
-        hub.submit("child", "injected".into(), Vec::new(), Some("client-1".into()));
+        hub.submit(
+            "child",
+            "injected".into(),
+            Vec::new(),
+            Some("client-1".into()),
+        );
         assert!(!hub.force_submit("child", "forced".into(), Vec::new(), None, true));
         hub.add_draft("child", "draft".into(), Vec::new(), None);
         hub.activate_all_drafts("child");
@@ -6019,7 +6033,12 @@ mod managed_call_tests {
         let hub = Hub::new();
         hub.create_session(child("child"));
         hub.push("child", update("agent_message_chunk", "previous call"));
-        hub.push("child", Event::TurnEnd { stop_reason: "end_turn".into() });
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                stop_reason: "end_turn".into(),
+            },
+        );
         let cursor = hub.last_event_seq("child").unwrap();
         hub.push("child", update("user_message_chunk", "review"));
         hub.push("child", update("agent_message_chunk", "I will inspect"));
@@ -6033,7 +6052,12 @@ mod managed_call_tests {
         hub.push("child", update("agent_message_chunk", "\"approve\"}"));
         let running = hub.managed_turn("child", cursor).unwrap();
         assert!(running.prompted && running.stop_reason.is_none());
-        hub.push("child", Event::TurnEnd { stop_reason: "end_turn".into() });
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                stop_reason: "end_turn".into(),
+            },
+        );
         let ended = hub.managed_turn("child", cursor).unwrap();
         assert_eq!(ended.stop_reason.as_deref(), Some("end_turn"));
         assert_eq!(ended.final_text, "{\"verdict\":\"approve\"}");

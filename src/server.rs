@@ -10289,6 +10289,10 @@ async fn serve_axum(
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/calls", get(managed_calls::list))
         .route("/api/sessions/{id}/calls/{call_id}", get(managed_calls::inspect))
+        .route(
+            "/api/sessions/{id}/calls/{call_id}/cancel",
+            post(managed_calls::cancel),
+        )
         .route("/api/execution-sessions", post(execution::sessions::create))
         .route("/api/execution-environments", get(execution::sessions::availability))
         .route(
@@ -15130,10 +15134,11 @@ async fn handle_machine_ws(
                         let _ = queue_machine_json(
                             &outgoing,
                             &crate::machine_protocol::MachineFrame::Command {
-                                command: crate::machine_protocol::MachineCommand::ManagedCallReply {
-                                    request_id,
-                                    response,
-                                },
+                                command:
+                                    crate::machine_protocol::MachineCommand::ManagedCallReply {
+                                        request_id,
+                                        response,
+                                    },
                             },
                         );
                     }

@@ -390,7 +390,9 @@ impl Supervisor {
             })
         {
             // Only the parent's managed call controls a child conversation.
-            return Err("this child conversation is controlled by its parent's managed call".into());
+            return Err(
+                "this child conversation is controlled by its parent's managed call".into(),
+            );
         }
         self.prepare_session_inner(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;

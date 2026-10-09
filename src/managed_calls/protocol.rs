@@ -162,10 +162,12 @@ impl ChildRound {
             && !self.source_cwd.contains('\0')
             && self.files.len() <= 32
             && self.files.iter().all(|file| super::relative_file(file))
-            && self
-                .output_schema
-                .as_ref()
-                .is_none_or(|schema| super::OutputFormat::JsonSchema { schema: schema.clone() }.validate())
+            && self.output_schema.as_ref().is_none_or(|schema| {
+                super::OutputFormat::JsonSchema {
+                    schema: schema.clone(),
+                }
+                .validate()
+            })
     }
 }
 

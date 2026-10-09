@@ -258,7 +258,10 @@ impl Record {
             && self.result.as_ref().is_none_or(|result| {
                 serde_json::to_vec(result).is_ok_and(|bytes| bytes.len() <= 1024 * 1024)
             })
-            && self.runtime_machine_id.as_ref().is_none_or(|id| super::valid_id(id))
+            && self
+                .runtime_machine_id
+                .as_ref()
+                .is_none_or(|id| super::valid_id(id))
             && self
                 .provider_version
                 .as_ref()
@@ -292,7 +295,10 @@ impl Record {
             && once(&self.input_revision, &next.input_revision)
             && self.runtime_machine_id == next.runtime_machine_id
             && once(&self.provider_version, &next.provider_version)
-            && once(&self.provider_generation_digest, &next.provider_generation_digest)
+            && once(
+                &self.provider_generation_digest,
+                &next.provider_generation_digest,
+            )
             && once(&self.child_cursor, &next.child_cursor)
             && once(&self.cancel_requested_at_ms, &next.cancel_requested_at_ms)
             && once(&self.result, &next.result)

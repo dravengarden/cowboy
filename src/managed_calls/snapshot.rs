@@ -18,9 +18,9 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use super::protocol::{ChildPrepared, ChildRound};
-use super::round::{MAX_ROUND_BYTES, RoundMarker, read_private};
 #[cfg(test)]
 use super::round::read_round;
+use super::round::{MAX_ROUND_BYTES, RoundMarker, read_private};
 use crate::execution_environment::ManagedChildV1;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -78,7 +78,6 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     Ok(())
 }
-
 
 struct Git {
     home: Option<std::ffi::OsString>,
@@ -170,11 +169,56 @@ fn source_allowed(
     workspaces: &[PathBuf],
 ) -> bool {
     std::fs::canonicalize(source).is_ok_and(|canonical| canonical == source)
-        && (roots.all().any(|root| {
-            std::fs::canonicalize(root).is_ok_and(|root| source.starts_with(root))
-        }) || workspaces.iter().any(|workspace| {
-            std::fs::canonicalize(workspace).is_ok_and(|root| source.starts_with(root))
-        }))
+        && (roots
+            .all()
+            .any(|root| std::fs::canonicalize(root).is_ok_and(|root| source.starts_with(root)))
+            || workspaces.iter().any(|workspace| {
+                std::fs::canonicalize(workspace).is_ok_and(|root| source.starts_with(root))
+            }))
+}
+
+async fn common_git_dir(git: &Git, path: &Path) -> Option<PathBuf> {
+    let common = git
+        .run(
+            &[],
+            &[
+                os("-C"),
+                path.as_os_str(),
+                os("rev-parse"),
+                os("--path-format=absolute"),
+                os("--git-common-dir"),
+            ],
+            "not_a_repository",
+        )
+        .await
+        .ok()?;
+    std::fs::canonicalize(common).ok()
+}
+
+/// A source outside the Machine's roots is accepted only as a work tree of a
+/// repository the Machine registered: its common Git directory must be the
+/// same as one registered workspace's.
+async fn source_permitted(
+    git: &Git,
+    source: &Path,
+    roots: &crate::session_workspace::WorktreeRoots,
+    workspaces: &[PathBuf],
+) -> bool {
+    if source_allowed(source, roots, workspaces) {
+        return true;
+    }
+    if std::fs::canonicalize(source).ok().as_deref() != Some(source) {
+        return false;
+    }
+    let Some(common) = common_git_dir(git, source).await else {
+        return false;
+    };
+    for workspace in workspaces {
+        if common_git_dir(git, workspace).await.as_ref() == Some(&common) {
+            return true;
+        }
+    }
+    false
 }
 
 struct Capture {
@@ -257,7 +301,12 @@ async fn capture(
 }
 
 /// Refuse inputs this snapshot cannot represent faithfully.
-async fn refuse_unsupported(git: &Git, source: &Path, repo: &Path, tree: &str) -> Result<(), &'static str> {
+async fn refuse_unsupported(
+    git: &Git,
+    source: &Path,
+    repo: &Path,
+    tree: &str,
+) -> Result<(), &'static str> {
     let source_os = source.as_os_str();
     // A clean/smudge filter (Git LFS, git-crypt) means repository bytes differ
     // from what a reviewer should read; do not guess.
@@ -367,7 +416,8 @@ pub async fn prepare(
         return Err("invalid_request");
     }
     let source = PathBuf::from(&round.source_cwd);
-    if !source_allowed(&source, roots, workspaces) {
+    let git = Git::new();
+    if !source_permitted(&git, &source, roots, workspaces).await {
         return Err("source_unavailable");
     }
     private_directory(managed).map_err(|_| "preparation_failed")?;
@@ -390,7 +440,11 @@ pub async fn prepare(
     let marker = directory.join("snapshot.json");
     match read_private(&marker, 16 * 1024) {
         Some(bytes) => {
-            if serde_json::from_slice::<ManagedChildV1>(&bytes).ok().as_ref() != Some(&identity) {
+            if serde_json::from_slice::<ManagedChildV1>(&bytes)
+                .ok()
+                .as_ref()
+                != Some(&identity)
+            {
                 return Err("identity_mismatch");
             }
         }
@@ -417,7 +471,6 @@ pub async fn prepare(
             worktree_tree: existing.worktree_tree,
         });
     }
-    let git = Git::new();
     let top = git
         .run(
             &[],
@@ -475,8 +528,7 @@ pub async fn prepare(
     }
     // Repository internals inherit the private child directory's protection.
     std::fs::create_dir_all(repo.join("info")).map_err(|_| "preparation_failed")?;
-    std::fs::create_dir_all(repo.join("objects").join("info"))
-        .map_err(|_| "preparation_failed")?;
+    std::fs::create_dir_all(repo.join("objects").join("info")).map_err(|_| "preparation_failed")?;
     write_private(
         &repo.join("objects").join("info").join("alternates"),
         format!("{}\n", objects.display()).as_bytes(),
@@ -492,7 +544,8 @@ pub async fn prepare(
         let path = source.join(file);
         let metadata = std::fs::symlink_metadata(&path).map_err(|_| "context_unreadable")?;
         if !metadata.is_file()
-            || std::fs::canonicalize(&path).map_or(true, |canonical| !canonical.starts_with(&source))
+            || std::fs::canonicalize(&path)
+                .map_or(true, |canonical| !canonical.starts_with(&source))
         {
             return Err("context_unsupported");
         }
@@ -567,9 +620,7 @@ pub async fn prepare(
             .filter(|line| !line.contains("refs/heads/cowboy-snapshot"))
             .collect::<Vec<_>>()
             .join("\n");
-        input.push_str(&format!(
-            "\nupdate refs/heads/cowboy-snapshot {working}\n"
-        ));
+        input.push_str(&format!("\nupdate refs/heads/cowboy-snapshot {working}\n"));
         stdin
             .write_all(input.as_bytes())
             .await
@@ -602,12 +653,7 @@ pub async fn prepare(
         .await?;
         git.run(
             &[],
-            &[
-                os("-C"),
-                workspace.as_os_str(),
-                os("clean"),
-                os("-ffdxq"),
-            ],
+            &[os("-C"), workspace.as_os_str(), os("clean"), os("-ffdxq")],
             "checkout_failed",
         )
         .await?;
@@ -705,7 +751,10 @@ mod tests {
 
     fn root() -> PathBuf {
         let path = std::env::temp_dir().join(format!("cw-snap-{}", rand::random::<u64>()));
-        std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
         std::fs::canonicalize(path).unwrap()
     }
 
@@ -752,15 +801,24 @@ mod tests {
         .await
         .unwrap();
         let workspace = PathBuf::from(&prepared.cwd);
-        assert_eq!(std::fs::read_to_string(workspace.join("a.txt")).unwrap(), "working\n");
-        assert_eq!(std::fs::read_to_string(workspace.join("new.txt")).unwrap(), "untracked\n");
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "working\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("new.txt")).unwrap(),
+            "untracked\n"
+        );
         assert_eq!(
             std::fs::read_to_string(workspace.join("ignored/review.md")).unwrap(),
             "explicit\n"
         );
         assert!(!workspace.join("ignored/secret").exists());
         // The parent's index and refs are unchanged; staged content is a commit.
-        assert_eq!(std::fs::read(source.join(".git/index")).unwrap(), index_before);
+        assert_eq!(
+            std::fs::read(source.join(".git/index")).unwrap(),
+            index_before
+        );
         let staged = StdCommand::new("git")
             .arg("-C")
             .arg(&workspace)
@@ -791,18 +849,29 @@ mod tests {
         .unwrap();
         assert_eq!(repeated, prepared);
         // The next round refreshes the same workspace path in place.
-        let next = prepare(&managed, "hawk", &round(&source, "call-2", vec![]), &roots, &[])
-            .await
-            .unwrap();
+        let next = prepare(
+            &managed,
+            "hawk",
+            &round(&source, "call-2", vec![]),
+            &roots,
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(next.cwd, prepared.cwd);
         assert_ne!(next.input_revision, prepared.input_revision);
-        assert_eq!(std::fs::read_to_string(workspace.join("a.txt")).unwrap(), "later\n");
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "later\n"
+        );
         assert!(!workspace.join("ignored/review.md").exists());
         // A different parent cannot adopt this child directory.
         let mut foreign = round(&source, "call-3", vec![]);
         foreign.parent_session_id = "parent-2".into();
         assert_eq!(
-            prepare(&managed, "hawk", &foreign, &roots, &[]).await.unwrap_err(),
+            prepare(&managed, "hawk", &foreign, &roots, &[])
+                .await
+                .unwrap_err(),
             "identity_mismatch"
         );
         close(&managed, "child-1").unwrap();
@@ -820,11 +889,66 @@ mod tests {
         git(&source, &["add", "."]);
         git(&source, &["commit", "-qm", "base"]);
         let managed = base.join("managed");
-        let elsewhere = crate::session_workspace::WorktreeRoots::single(PathBuf::from("/nonexistent"));
+        let elsewhere =
+            crate::session_workspace::WorktreeRoots::single(PathBuf::from("/nonexistent"));
         assert_eq!(
-            prepare(&managed, "hawk", &round(&source, "c", vec![]), &elsewhere, &[])
-                .await
-                .unwrap_err(),
+            prepare(
+                &managed,
+                "hawk",
+                &round(&source, "c", vec![]),
+                &elsewhere,
+                &[]
+            )
+            .await
+            .unwrap_err(),
+            "source_unavailable"
+        );
+        // A linked work tree elsewhere belongs to the registered repository.
+        let linked = base.join("elsewhere").join("task");
+        git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "task",
+                linked.to_str().unwrap(),
+            ],
+        );
+        let linked = std::fs::canonicalize(linked).unwrap();
+        let mut outside = round(&source, "linked", vec![]);
+        outside.child_session_id = "child-linked".into();
+        outside.source_cwd = linked.display().to_string();
+        assert!(
+            prepare(
+                &managed,
+                "hawk",
+                &outside,
+                &elsewhere,
+                std::slice::from_ref(&source)
+            )
+            .await
+            .is_ok()
+        );
+        let unrelated = base.join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        git(&unrelated, &["init", "-q"]);
+        outside.source_cwd = std::fs::canonicalize(&unrelated)
+            .unwrap()
+            .display()
+            .to_string();
+        outside.call_id = "unrelated".into();
+        assert_eq!(
+            prepare(
+                &managed,
+                "hawk",
+                &outside,
+                &elsewhere,
+                std::slice::from_ref(&source)
+            )
+            .await
+            .unwrap_err(),
             "source_unavailable"
         );
         let roots = crate::session_workspace::WorktreeRoots::single(base.clone());

@@ -103,6 +103,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
 | `␣T` + `R/U/A/L/C/X/T` | Top bar group: run config, usage, verify, reload, compact, clear; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
+| `␣G` | Open or close Calls (Agents this session called) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
 | `␣,` | Settings |
 | `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |

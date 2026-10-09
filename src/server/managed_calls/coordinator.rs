@@ -16,13 +16,13 @@ use serde_json::{Value, json};
 
 use super::super::AppState;
 use crate::machine_control::ConnectionToken;
+use crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION;
+use crate::machine_protocol::execution;
 use crate::managed_calls::authority::Authority;
 use crate::managed_calls::lifecycle::{Record, State};
 use crate::managed_calls::protocol::{Action, Grant};
 use crate::managed_calls::service::Ledger;
 use crate::managed_calls::{Conversation, Request};
-use crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION;
-use crate::machine_protocol::execution;
 
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(2);
 const INSTALL_RETRY: Duration = Duration::from_secs(30);
@@ -56,7 +56,10 @@ fn random_id(prefix: &str) -> String {
 }
 
 /// Current authority for a parent, derived only from Controller state.
-fn current_authority(state: &AppState, parent: &str) -> Option<(crate::core::SessionMeta, Authority)> {
+fn current_authority(
+    state: &AppState,
+    parent: &str,
+) -> Option<(crate::core::SessionMeta, Authority)> {
     let info = state.hub.session_info(parent)?;
     let runtime = state.runtime_router.runtime(&info.meta.machine_id)?;
     let authority = runtime
@@ -159,8 +162,12 @@ fn reconcile(state: &Arc<AppState>) {
         // is cleanup, not the security boundary.
         let state = Arc::clone(state);
         tokio::spawn(async move {
-            let _ = execution_action(&state, &machine, execution::Action::RevokeCallGateway { grant })
-                .await;
+            let _ = execution_action(
+                &state,
+                &machine,
+                execution::Action::RevokeCallGateway { grant },
+            )
+            .await;
         });
     }
     for (grant, machine, connection) in install {
@@ -253,7 +260,8 @@ fn authorize(
         return Err("permission_denied");
     }
     let store = state.store.clone().ok_or("capacity")?;
-    let ledger = Ledger::for_parent(store, &state.service_id, &meta).map_err(|_| "permission_denied")?;
+    let ledger =
+        Ledger::for_parent(store, &state.service_id, &meta).map_err(|_| "permission_denied")?;
     Ok((meta, ledger))
 }
 
@@ -418,9 +426,7 @@ pub(super) async fn provider_readiness(
             package
                 .manifest
                 .runtime
-                .launch_arguments(Some(
-                    cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
-                ))
+                .launch_arguments(Some(cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1))
                 .is_ok()
         });
     if !supports {
@@ -471,6 +477,9 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "runtime_machine_id": meta.machine_id,
             "machine_id": placement.machine_id,
             "workspace_id": placement.workspace_id,
+            // The default snapshot root; `context.root` may name another work
+            // tree of a repository registered on this Machine.
+            "cwd": placement.cwd,
         },
     })
 }
@@ -497,7 +506,10 @@ async fn start(
     }
     let readiness = provider_readiness(state, &ledger.placement().machine_id, provider).await;
     if !readiness.available {
-        return error(readiness.reason.unwrap_or("provider_unavailable"), "not_submitted");
+        return error(
+            readiness.reason.unwrap_or("provider_unavailable"),
+            "not_submitted",
+        );
     }
     if let Conversation::Continue { child_session_id } = &request.conversation
         && let Some(child) = state.hub.session_info(child_session_id)
@@ -549,18 +561,21 @@ async fn wait_started(state: &AppState, ledger: &Ledger, record: &Record, wait_m
 }
 
 async fn cancel(state: &Arc<AppState>, ledger: &Ledger, call: &str) -> Value {
-    let Some(store) = state.store.as_ref() else {
-        return error("capacity", "not_submitted");
-    };
+    match cancel_call(state, &ledger.placement().parent_session_id, call).await {
+        Some(record) => envelope(&record),
+        None => error("not_found", "not_submitted"),
+    }
+}
+
+/// Record a durable stop request (or cancel a call that never launched).
+/// Idempotent: a terminal or already stopping call is returned unchanged.
+pub(super) async fn cancel_call(state: &Arc<AppState>, parent: &str, call: &str) -> Option<Record> {
+    let store = state.store.as_ref()?;
     for _ in 0..8 {
-        let record = match ledger.inspect(call).await {
-            Ok(Some(record)) => record,
-            Ok(None) => return error("not_found", "not_submitted"),
-            Err(_) => return error("capacity", "not_submitted"),
-        };
+        let record = store.managed_call(parent, call).await.ok()??;
         if record.state.terminal() || record.cancel_requested_at_ms.is_some() {
             super::runner::ensure_runner(state, &record);
-            return envelope(&record);
+            return Some(record);
         }
         let mut next = record.clone();
         next.revision += 1;
@@ -571,17 +586,13 @@ async fn cancel(state: &Arc<AppState>, ledger: &Ledger, call: &str) -> Value {
         if record.state == State::Queued {
             next.state = State::Cancelled;
         }
-        match store.advance_managed_call(&record, &next).await {
-            Ok(true) => {
-                super::runner::ensure_runner(state, &next);
-                state.managed_calls.notify();
-                return envelope(&next);
-            }
-            Ok(false) => continue,
-            Err(_) => return error("capacity", "not_submitted"),
+        if store.advance_managed_call(&record, &next).await.ok()? {
+            super::runner::ensure_runner(state, &next);
+            state.managed_calls.notify();
+            return Some(next);
         }
     }
-    error("capacity", "not_submitted")
+    None
 }
 
 /// Delete one managed child conversation. An active call keeps its child; the
@@ -597,7 +608,10 @@ pub(in crate::server) fn delete_child(state: &Arc<AppState>, child: &str) -> Res
         .as_ref()
         .and_then(crate::execution_environment::ExecutionBinding::managed_child)
         .ok_or("Not a managed child")?;
-    let store = state.store.clone().ok_or("Managed calls require durable storage")?;
+    let store = state
+        .store
+        .clone()
+        .ok_or("Managed calls require durable storage")?;
     let state = Arc::clone(state);
     let child = child.to_owned();
     // Deletion consults durable call state first, so it runs asynchronously

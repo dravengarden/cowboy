@@ -105,7 +105,10 @@ impl CallHost {
         // Remove it rather than letting a tool reach a stale socket path.
         for entry in std::fs::read_dir(&sessions)? {
             let path = entry?.path();
-            if path.extension().is_some_and(|extension| extension == "json") {
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -162,10 +165,10 @@ impl CallHost {
         // Revoke first: a tool must never read a context that names a socket
         // whose grant the Controller has already replaced.
         if installed.remove(&grant.parent_session_id).is_some() {
-            let _ = std::fs::remove_file(self.sessions.join(format!(
-                "{}.json",
-                grant.parent_session_id
-            )));
+            let _ = std::fs::remove_file(
+                self.sessions
+                    .join(format!("{}.json", grant.parent_session_id)),
+            );
         }
         let digest = format!("{:x}", Sha256::digest(grant.grant_id.as_bytes()));
         let directory = self.sockets.join(&digest[..16]);
@@ -295,7 +298,10 @@ mod tests {
 
     fn state() -> PathBuf {
         let root = std::env::temp_dir().join(format!("cw-host-{}", rand::random::<u64>()));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
         root
     }
 

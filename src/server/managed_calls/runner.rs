@@ -299,7 +299,11 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         parent_session_id: record.placement.parent_session_id.clone(),
         call_id: record.call_id.clone(),
         workspace_id: record.placement.workspace_id.clone(),
-        source_cwd: record.placement.cwd.clone(),
+        source_cwd: request
+            .context
+            .root
+            .clone()
+            .unwrap_or_else(|| record.placement.cwd.clone()),
         files: request.context.files.clone(),
         output_schema: output_schema(&request),
         profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
@@ -318,8 +322,12 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             let code = match code.as_str() {
                 "input_changed" => "input_changed",
                 "child_busy" => return Step::Wait(Duration::from_secs(1)),
-                "submodule_unsupported" | "symlink_unsupported" | "filter_unsupported"
-                | "subdirectory_unsupported" | "context_unsupported" | "index_unsupported"
+                "submodule_unsupported"
+                | "symlink_unsupported"
+                | "filter_unsupported"
+                | "subdirectory_unsupported"
+                | "context_unsupported"
+                | "index_unsupported"
                 | "unborn_head" => "unsupported_input",
                 "context_unreadable" => "context_unreadable",
                 _ => "snapshot_unavailable",
@@ -368,7 +376,8 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         .hub
         .session_info(&record.placement.parent_session_id)
         .ok_or("parent_unavailable")?;
-    let (Some(version), Some(digest)) = (&record.provider_version, &record.provider_generation_digest)
+    let (Some(version), Some(digest)) =
+        (&record.provider_version, &record.provider_generation_digest)
     else {
         return Err("provider_unavailable");
     };
@@ -408,12 +417,15 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
     let workspace = workspaces
         .iter()
         .find(|workspace| workspace.id == record.placement.workspace_id);
-    let owner = parent.meta.owner_user_id.as_deref().map(|user_id| {
-        crate::supervisor::SessionOwner {
-            user_id,
-            username: parent.meta.owner_username.as_deref(),
-        }
-    });
+    let owner =
+        parent
+            .meta
+            .owner_user_id
+            .as_deref()
+            .map(|user_id| crate::supervisor::SessionOwner {
+                user_id,
+                username: parent.meta.owner_username.as_deref(),
+            });
     state
         .provider_auth
         .with_scheduling_generation(

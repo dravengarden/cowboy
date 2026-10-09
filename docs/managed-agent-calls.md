@@ -1,17 +1,62 @@
 # Managed agent calls
 
-Status: implementation in progress; the commands and UI below are not shipped.
+Status: implemented in source; see "Implementation" for the shipped mechanism
+and "Acceptance" for what has been proven in production.
 
-Implemented source includes the closed CLI/request contract, private local
-gateway primitive, parent-scoped durable ledger, observation API, signed native
-launch-profile selection and worker guards against permission widening. These
-pieces do not yet form a working launch path. Production grant issuance and
-gateway wiring, snapshot preparation, native Provider profile acceptance,
-structured-output forwarding, child lifecycle dispatch, the review UI and the
-outer Suger transport adapter remain required before release. No Provider source
-currently advertises the managed read-only profile; unsupported launch attempts
-must remain refused. Candidate component release 3.43.0 records SDK compatibility
-inputs, not successful native acceptance or a published installation.
+## Implementation
+
+- **Grant.** The Controller derives `Authority` from the parent's live worker
+  (connected owner, worker epoch, exact launch, owner, Provider generation and
+  execution binding) and issues an opaque grant for that incarnation. It installs
+  the grant on the parent's execution Machine (`InstallCallGateway`, Machine
+  protocol 28) and revokes it when the authority changes. Every forwarded action
+  is accepted only from that Machine's current connection, for the grant
+  installed there, after re-deriving authority and comparing it with the issued
+  one. Native session-id materialization does not revoke; worker replacement,
+  owner or generation change and a closing parent do.
+- **Ingress.** `cowboy-machine` hosts one private Unix-socket gateway per
+  grant. A stable per-session context file
+  (`<state>/calls/sessions/<session>.json`) is atomically replaced when a grant
+  changes. Local parent workers receive `COWBOY_CALL_CONTEXT` from the broker;
+  Remote parents receive it from their target execution keeper, which adds it to
+  `process/start` only on the outbound native frame, so ledger replay still
+  compares the original parameters. Operator target environment policy is
+  unchanged. Machine→Controller requests are `ManagedCall` events answered by
+  `ManagedCallReply`; neither read loop awaits the other side.
+- **Snapshot.** The target Machine captures `HEAD`, the index and the working
+  tree (tracked plus non-ignored untracked files and explicitly named context
+  files) as two synthetic commits in a child-owned repository that borrows the
+  source objects through `alternates`. It captures twice and refuses a mixed
+  state (`input_changed`); filters/LFS, submodules, escaping symlinks and
+  subdirectory roots are refused. `context.root` may name another work tree of a
+  repository registered on that Machine. The child workspace path is stable; a
+  continued conversation is hibernated and refreshed in place, so its binding
+  never changes. Repeating a call id returns the original receipt.
+- **Child.** A managed child is an ordinary Cowboy session with a
+  `managed_child` execution binding on the target Machine. Client prompt entry
+  points refuse it; the runner submits its single prompt with a reserved
+  message id. The worker forwards the Machine-written round as ACP prompt
+  `_meta["cowboy.dev/managedCall"]`; a turn without it is refused.
+- **Native profile.** Only Providers whose signed package declares
+  `provider.managed-profiles.v1` with `read_only_v1` arguments can run a child.
+  Codex 3.4.0's adapter forces `approval never` and a read-only, network-less
+  sandbox on every managed turn, maps `outputSchema` to the native
+  `turn/start` constraint, refuses mode changes and slash commands, never trusts
+  the snapshot project (no project config, rules, hooks or MCP), disables every
+  configured MCP server by exact name, disables hooks, plugins, apps, notify and
+  native memories, and refuses to start while any ExecPolicy `allow` rule exists
+  (those run commands outside the sandbox).
+- **Lifecycle.** One Controller runner per call drives Queued → Starting →
+  Running → terminal through CAS transitions, records the child event cursor
+  before submitting, resubmits only a prompt with no trace under the same id,
+  keeps a completion that wins a stop race, and stops only the exact child
+  worker after a bounded grace. Controller start recovers every non-terminal
+  call. A deleted or closing parent cancels its calls; its children are deleted
+  once those are terminal. Deleting a child with an active call is refused.
+- **UI.** The Prompt stack shows a Calls dock (Desktop `␣G`, J/K/Enter; Mobile
+  full-height page with drill-in). Each call shows Provider, runtime and
+  execution Machines, state, labels, snapshot, result, verdict and findings,
+  stop and open-conversation actions. Children are hidden from the session list.
 
 ## Product contract
 
@@ -71,9 +116,9 @@ runtime and exact worker launch. Broker placeholders, resetting/draining workers
 closed parents and changed launch metadata cannot produce it. Comparing this
 observation includes the worker epoch and parent ownership/placement revision;
 turn changes, titles and native conversation materialization do not change it.
-This is the authority check for the future grant issuer, not a shipped grant or
-CLI context producer. The observation API's `parent_runtime_ready` is advisory
-and must never substitute for revalidation at dispatch.
+The grant issuer and every forwarded action use this check. The observation
+API's `parent_runtime_ready` is advisory and never substitutes for revalidation
+at dispatch.
 
 Call list responses contain summaries with `has_result`, not full review bodies.
 Opening a call uses its parent-scoped detail endpoint to read the complete result.
@@ -81,10 +126,10 @@ The store still validates the full durable records before projecting summaries;
 the bounded response does not imply a separate lightweight storage index.
 
 Runtime-only environment injection is separate from operator-configurable target
-environment variables. The current closed target environment intentionally rejects
-`COWBOY_*`, `CODEX_*` and `CLAUDE_*`; do not relax its operator allowlist. New
-wiring requires an explicit versioned native boundary and compatibility tests.
-An old worker/keeper without this capability fails with `context_unavailable`.
+environment variables. The closed target environment still rejects `COWBOY_*`,
+`CODEX_*` and `CLAUDE_*` from operators; the keeper adds only the call context
+from its own launch contract. An old worker/keeper without this capability
+fails with `context_unavailable`.
 It must not infer the parent from a shared Unix uid, cwd, process name or last
 active session. Local sessions and Remote targets need the same scoped contract;
 a target-only implementation is not accepted as coverage of both.

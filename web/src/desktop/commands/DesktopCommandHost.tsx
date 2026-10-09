@@ -424,6 +424,28 @@ export function DesktopCommandHost({
       run: () => workspace.focusRegion("prompt.plan"),
     },
     {
+      id: "prompt.focusCalls",
+      title: "Open or Close Calls",
+      description: "Open and focus the Agents this session called, or close them when Calls already owns focus",
+      group: "Prompt",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
+      when: () => document.querySelector("[data-desktop-region='prompt.calls'] > *") !== null,
+      disabledReason: "This session has not called another Agent",
+      consumeWhenDisabled: true,
+      run: () => {
+        const toggle = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.calls'] button[aria-label='Expand calls'], [data-desktop-region='prompt.calls'] button[aria-label='Collapse calls']",
+        );
+        if (workspace.focusedRegion === "prompt.calls") {
+          if (toggle?.getAttribute("aria-label") === "Collapse calls") toggle.click();
+          workspace.focusRegion("prompt.composer");
+          return;
+        }
+        if (toggle?.getAttribute("aria-label") === "Expand calls") toggle.click();
+        workspace.focusRegion("prompt.calls");
+      },
+    },
+    {
       id: "prompt.focusQueue",
       title: "Open or Close Queue",
       description:

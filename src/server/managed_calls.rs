@@ -91,3 +91,21 @@ pub(super) async fn inspect(
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
+
+/// A product user may stop a visible parent's call. Recording the request is
+/// not proof that the child stopped; the runner observes the actual outcome.
+pub(super) async fn cancel(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path((parent, call)): Path<(String, String)>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent)
+        || !crate::managed_calls::valid_id(&call)
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match coordinator::cancel_call(&state, &parent, &call).await {
+        Some(record) => Json(json!({"schema":1,"call":record.summary()})).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
