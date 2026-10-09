@@ -14,12 +14,16 @@ const CWD: &str = "/fixture/workspace";
 
 struct HubSink {
     hub: Hub,
+    managed_read_only: AtomicBool,
     allocations: AtomicUsize,
     prompt_starts: Mutex<Vec<Option<String>>>,
     prompt_completions: Mutex<Vec<(Option<String>, String)>>,
 }
 
 impl AgentSink for HubSink {
+    fn session_is_managed_read_only(&self, _: &str) -> bool {
+        self.managed_read_only.load(Ordering::SeqCst)
+    }
     fn prompt_started(&self, _: &str, cmid: Option<&str>) {
         self.prompt_starts.lock().push(cmid.map(str::to_owned));
     }
@@ -92,6 +96,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
     }
     let sink = Arc::new(HubSink {
         hub,
+        managed_read_only: AtomicBool::new(false),
         allocations: AtomicUsize::new(0),
         prompt_starts: Mutex::default(),
         prompt_completions: Mutex::default(),
@@ -346,6 +351,125 @@ fn fixture_options(model: &str, effort: &str) -> Value {
         {"id":"reasoning_effort", "name":"Reasoning", "type":"select", "currentValue":effort,
          "options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}
     ])
+}
+
+#[tokio::test]
+async fn managed_read_only_never_sends_startup_or_replayed_permission_overrides() {
+    for provider in ["codex", "claude-code"] {
+        exercise_managed_read_only(provider).await;
+    }
+}
+
+/// Exercise the actual ACP handshake and command loop. The peer advertises
+/// ordinary full-access controls; neither startup nor a later caller can select
+/// them. Native sandbox enforcement remains a separate Provider acceptance gate.
+#[allow(clippy::too_many_lines)]
+async fn exercise_managed_read_only(provider: &str) {
+    let (state, sink) = fixture_state(false);
+    sink.managed_read_only.store(true, Ordering::SeqCst);
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let main_state = state.clone();
+    let notifications = state.clone();
+    let client = Client
+        .builder()
+        .on_receive_notification(
+            async move |notification: SessionNotification,
+                        _: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                handle_session_notification(&notifications, &notification);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .connect_with(
+            ByteStreams::new(client_write.compat_write(), client_read.compat()),
+            async move |cx: ConnectionTo<Agent>| {
+                run_session(
+                    &main_state,
+                    cx,
+                    None,
+                    PathBuf::from(CWD),
+                    &mut command_rx,
+                    provider,
+                    &startup,
+                )
+                .await
+            },
+        );
+    let peer = async {
+        let (read, mut write) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(read).lines();
+        let options = json!([{
+            "id":CODEX_FULL_ACCESS_CONFIG_ID,"name":"Approval","type":"select",
+            "currentValue":"read-only","options":[
+                {"value":"read-only","name":"Read only"},
+                {"value":CODEX_FULL_ACCESS_CONFIG_VALUE,"name":"Full access"}
+            ]
+        }]);
+        for method in ["initialize", "session/new"] {
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            let result = if method == "initialize" {
+                json!({"protocolVersion":1,"agentCapabilities":{}})
+            } else {
+                json!({"sessionId":NATIVE,"configOptions":options,"modes":{
+                    "currentModeId":"default","availableModes":[
+                        {"id":"default","name":"Default"},
+                        {"id":"bypassPermissions","name":"Full access"}
+                    ]
+                }})
+            };
+            send_json(
+                &mut write,
+                json!({"jsonrpc":"2.0","id":request["id"],"result":result}),
+            )
+            .await;
+        }
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        assert_eq!(sink.hub.persisted_config_options(SESSION), Some(json!([])));
+        send_json(&mut write, json!({"jsonrpc":"2.0","method":"session/update","params":{
+            "sessionId":NATIVE,"update":{"sessionUpdate":"config_option_update","configOptions":options}
+        }})).await;
+        command_tx
+            .send(AgentCommand::SetConfigOption {
+                config_id: CODEX_FULL_ACCESS_CONFIG_ID.into(),
+                value: json!(CODEX_FULL_ACCESS_CONFIG_VALUE),
+            })
+            .unwrap();
+        let (done, completed) = oneshot::channel();
+        command_tx
+            .send(AgentCommand::Prompt(
+                vec![serde_json::from_value(json!({"type":"text","text":"review"})).unwrap()],
+                Some("managed-call-1".into()),
+                Some(done),
+            ))
+            .unwrap();
+        // An unexpected startup/config RPC appears here instead of the prompt.
+        let request: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "session/prompt");
+        send_json(
+            &mut write,
+            json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+        )
+        .await;
+        assert!(completed.await.unwrap().is_ok());
+        assert_eq!(sink.hub.persisted_config_options(SESSION), Some(json!([])));
+        drop(command_tx);
+        assert!(lines.next_line().await.unwrap().is_none());
+    };
+    let (result, ()) =
+        tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+            .await
+            .unwrap();
+    assert!(result.is_ok(), "{result:?}");
 }
 
 /// The peer withholds real ACP replies while a restored prompt is already

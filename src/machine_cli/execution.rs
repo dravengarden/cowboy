@@ -56,6 +56,7 @@ pub struct Manager {
     systemd: bool,
     prepare: Mutex<()>,
     gates: parking_lot::Mutex<HashMap<String, Arc<Semaphore>>>,
+    calls: Option<Arc<crate::managed_calls::host::CallHost>>,
 }
 
 impl Manager {
@@ -63,6 +64,13 @@ impl Manager {
     /// Neither an advertised source root nor a caller-supplied path substitutes
     /// for this marker, and checking it never creates or repairs an entry.
     pub(super) fn owns_runtime_entry(&self, session: &crate::runtime_wire::StartSession) -> bool {
+        if let Some(child) = session
+            .execution_binding
+            .as_ref()
+            .and_then(|binding| binding.managed_child())
+        {
+            return self.owns_managed_child(&child, session);
+        }
         let Some(binding) = session
             .execution_binding
             .as_ref()
@@ -98,6 +106,46 @@ impl Manager {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             == Some(expected)
+    }
+
+    fn owns_managed_child(
+        &self,
+        child: &crate::execution_environment::ManagedChildV1,
+        session: &crate::runtime_wire::StartSession,
+    ) -> bool {
+        if self.service_id.is_none()
+            || !child.accepts(&session.session_id, &self.machine_id, &session.cwd)
+        {
+            return false;
+        }
+        let directory = self.root.join("managed").join(&child.session_id);
+        let workspace = directory.join("workspace");
+        let marker = directory.join("snapshot.json");
+        if Path::new(&child.cwd) != workspace
+            || directory.canonicalize().ok().as_ref() != Some(&directory)
+            || workspace.canonicalize().ok().as_ref() != Some(&workspace)
+        {
+            return false;
+        }
+        for path in [&directory, &marker] {
+            let Ok(metadata) = std::fs::symlink_metadata(path) else {
+                return false;
+            };
+            if metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.mode() & 0o077 != 0
+                || (path == &directory && !metadata.is_dir())
+                || (path == &marker && (!metadata.is_file() || metadata.len() > 16384))
+            {
+                return false;
+            }
+        }
+        std::fs::read(marker)
+            .ok()
+            .and_then(|bytes| {
+                serde_json::from_slice::<crate::execution_environment::ManagedChildV1>(&bytes).ok()
+            })
+            .as_ref()
+            == Some(child)
     }
 
     pub fn new(
@@ -148,7 +196,22 @@ impl Manager {
             systemd,
             prepare: Mutex::new(()),
             gates: parking_lot::Mutex::new(HashMap::new()),
+            calls: None,
         })
+    }
+
+    /// Host managed-call gateways and managed child rounds on this Machine.
+    pub fn with_calls(mut self, calls: Arc<crate::managed_calls::host::CallHost>) -> Self {
+        self.calls = Some(calls);
+        self
+    }
+
+    pub fn calls(&self) -> Option<&Arc<crate::managed_calls::host::CallHost>> {
+        self.calls.as_ref()
+    }
+
+    fn managed_root(&self) -> PathBuf {
+        self.root.join("managed")
     }
 
     /// Use the Machine's session worktree roots and copy the operator-declared
@@ -226,6 +289,66 @@ impl Manager {
                 Ok(response) => Response::Call { response },
                 Err(reason) => Response::Refused { reason },
             },
+            Action::InstallCallGateway { grant } => match &self.calls {
+                Some(calls) if self.service_id.is_some() => match calls.install(&grant) {
+                    Ok(()) => Response::CallGateway,
+                    Err(error) => {
+                        tracing::warn!(%error, "managed call gateway refused");
+                        Response::Refused {
+                            reason: Refusal::Unavailable,
+                        }
+                    }
+                },
+                _ => Response::Refused {
+                    reason: Refusal::Unavailable,
+                },
+            },
+            Action::RevokeCallGateway { grant } => match &self.calls {
+                Some(calls) => {
+                    calls.revoke(&grant);
+                    Response::CallGateway
+                }
+                None => Response::CallGateway,
+            },
+            Action::PrepareManagedRound { round } => {
+                if self.service_id.is_none() || self.machine_id == "local" || !round.validate() {
+                    return Response::Refused {
+                        reason: Refusal::InvalidRequest,
+                    };
+                }
+                let roots = self.worktrees.clone();
+                let sources: Vec<PathBuf> = workspaces
+                    .iter()
+                    .map(|workspace| PathBuf::from(&workspace.canonical_path))
+                    .collect();
+                let managed = self.managed_root();
+                match crate::managed_calls::snapshot::prepare(
+                    &managed,
+                    &self.machine_id,
+                    &round,
+                    &roots,
+                    &sources,
+                )
+                .await
+                {
+                    Ok(prepared) => Response::ManagedRound { prepared },
+                    Err(code) => Response::ManagedRoundRefused { code: code.into() },
+                }
+            }
+            Action::CloseManagedChild { child_session_id } => {
+                if !crate::managed_calls::valid_id(&child_session_id) {
+                    return Response::Refused {
+                        reason: Refusal::InvalidRequest,
+                    };
+                }
+                match crate::managed_calls::snapshot::close(&self.managed_root(), &child_session_id)
+                {
+                    Ok(()) => Response::Closed,
+                    Err(_) => Response::Refused {
+                        reason: Refusal::EnvironmentLost,
+                    },
+                }
+            }
         }
     }
 
@@ -426,6 +549,11 @@ impl Manager {
             executor: config.executor.clone(),
             capability: format!("{}{}", random_id(), random_id()),
             environment,
+            call_context: self
+                .calls
+                .as_ref()
+                .and_then(|calls| calls.context_path(session_id))
+                .map(|path| path.display().to_string()),
         };
         let file = std::fs::OpenOptions::new()
             .create_new(true)

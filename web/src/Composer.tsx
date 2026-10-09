@@ -170,6 +170,7 @@ import { ShortcutKeycap } from "./ShortcutKeycap";
 import { HintTooltip } from "./HintTooltip";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
+import { ManagedCallsDock } from "./ManagedCallsDock";
 import {
   mobileComposerFocusMotion,
   mobileComposerIdleEditorMinHeight,
@@ -215,6 +216,7 @@ import {
 import { desktopSessionActionSx } from "./desktop/DesktopEmbeddedControl";
 import { ACTION_ICON_WIDTH_PX } from "./desktop/topBarDensity";
 import {
+  DESKTOP_FOCUS_CALLS_SHORTCUT,
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_SHORTCUTS,
@@ -1978,6 +1980,37 @@ export function ComposerWorkspace({
           Composer. Hidden when there is no plan, when dismissed, or when a
           finished plan has been superseded by a new turn (see showPlan). */
       }
+      {
+        /* Managed calls this session delegated to other Providers. Hidden
+          until the parent has at least one call. */
+      }
+      <Box
+        data-composer-stack-slot="calls"
+        data-mobile-input-context={!desktop ? "calls" : undefined}
+        {...(desktop
+          ? {
+            "data-desktop-region": "prompt.calls",
+            tabIndex: -1,
+          }
+          : {})}
+        sx={{ "&:empty": { display: "none" } }}
+      >
+        <ManagedCallsDock
+          sessionId={sessionId}
+          desktop={desktop}
+          shortcut={desktop
+            ? (
+              <Suspense fallback={null}>
+                <DesktopRegionShortcut
+                  shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                  title="Focus Calls"
+                  singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                />
+              </Suspense>
+            )
+            : undefined}
+        />
+      </Box>
       {showPlan && plan && (
         <Box
           data-composer-stack-slot="plan"

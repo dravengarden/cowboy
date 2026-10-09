@@ -310,6 +310,19 @@ pub struct Envelope {
     pub cmid: Option<String>,
 }
 
+/// Client message id prefix reserved for Controller-owned managed call turns.
+pub const MANAGED_CALL_CMID_PREFIX: &str = "managed-call:";
+
+/// One managed child turn as observed in the Hub's hot log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedTurn {
+    /// The prompt is queued, in flight or already echoed into the transcript.
+    pub prompted: bool,
+    pub stop_reason: Option<String>,
+    pub final_text: String,
+    pub status: Status,
+}
+
 /// Extract `(user_prompt, assistant_partial)` for the LAST turn in a session's
 /// log — the turn cut off by a restart. Walks to the last `user_message_chunk`
 /// group (the prompt) and concatenates the `agent_message_chunk` text after it
@@ -458,6 +471,16 @@ impl SessionMeta {
     /// signed Provider must also accept this executor contract.
     pub(crate) fn require_runtime_launch(&self) -> Result<(), String> {
         if let Some(binding) = &self.execution_binding {
+            if let Some(child) = binding.managed_child() {
+                return if child.accepts(&self.id, &self.machine_id, &self.cwd)
+                    && !self.provider_version.is_empty()
+                    && !self.provider_generation_digest.is_empty()
+                {
+                    Ok(())
+                } else {
+                    Err("managed child does not match its pinned session".into())
+                };
+            }
             let binding = binding
                 .for_runtime(&self.machine_id, &self.cwd)
                 .map_err(str::to_owned)?;
@@ -2357,6 +2380,96 @@ impl Hub {
             Status::Interrupted,
             Some("turn cut off by a cowboy restart — it never finished".to_owned()),
         );
+    }
+
+    /// The newest event sequence already assigned in a session, used as a
+    /// managed call's cursor before its prompt is submitted.
+    #[must_use]
+    pub fn last_event_seq(&self, session_id: &str) -> Option<u64> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|s| s.next_seq.saturating_sub(1))
+    }
+
+    /// Observe one managed child turn after `after_seq` from the hot log.
+    /// The final assistant text is the agent message after the turn's last
+    /// non-message update, which is what a native final response contains.
+    #[must_use]
+    pub fn managed_turn(&self, session_id: &str, after_seq: u64) -> Option<ManagedTurn> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        let mut turn = ManagedTurn {
+            prompted: s.in_flight
+                || s.queue.iter().any(|m| {
+                    m.cmid
+                        .as_deref()
+                        .is_some_and(|c| c.starts_with(MANAGED_CALL_CMID_PREFIX))
+                }),
+            stop_reason: None,
+            final_text: String::new(),
+            status: s.meta.status,
+        };
+        let mut final_text = String::new();
+        for entry in s.log.iter().filter(|entry| entry.seq > after_seq) {
+            match &entry.event {
+                Event::Update { update } => {
+                    match update
+                        .get("sessionUpdate")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        Some("user_message_chunk") => turn.prompted = true,
+                        Some("agent_message_chunk") => {
+                            if let Some(text) = update
+                                .get("content")
+                                .and_then(|content| content.get("text"))
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                final_text.push_str(text);
+                            }
+                        }
+                        Some(
+                            "agent_thought_chunk"
+                            | "usage_update"
+                            | "available_commands_update"
+                            | "current_mode_update"
+                            | "config_option_update",
+                        )
+                        | None => {}
+                        Some(_) => final_text.clear(),
+                    }
+                }
+                Event::TurnEnd { stop_reason } => {
+                    turn.stop_reason = Some(stop_reason.clone());
+                    break;
+                }
+                _ => {}
+            }
+        }
+        turn.final_text = final_text;
+        Some(turn)
+    }
+
+    /// Submit a managed call's prompt to its child. Client entry points refuse
+    /// managed children; only the Controller-owned call runner reaches here.
+    pub fn submit_managed_prompt(&self, session_id: &str, call_id: &str, text: String) {
+        self.submit_inner(
+            session_id,
+            text,
+            Vec::new(),
+            Some(format!("{MANAGED_CALL_CMID_PREFIX}{call_id}")),
+            true,
+        );
+    }
+
+    fn is_managed_child(&self, session_id: &str) -> bool {
+        self.inner.sessions.lock().get(session_id).is_some_and(|s| {
+            s.meta
+                .execution_binding
+                .as_ref()
+                .is_some_and(|binding| binding.managed_child().is_some())
+        })
     }
 
     /// Subscribe to the live event stream.
@@ -4821,6 +4934,25 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        self.submit_inner(session_id, text, content, cmid, false);
+    }
+
+    fn submit_inner(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        managed: bool,
+    ) {
+        // One controller owns a managed child conversation: its parent call.
+        if !managed && self.is_managed_child(session_id) {
+            self.broadcast_error(
+                Some(session_id.to_owned()),
+                "This child conversation is controlled by its parent's managed call".to_owned(),
+            );
+            return;
+        }
         // A human (or any non-wakeup) submit resets the scheduler's runaway guard
         // — the autonomous-fire streak only counts unattended iterations.
         if !cmid
@@ -4897,6 +5029,9 @@ impl Hub {
         // ("jump to front" / `submit { front: true }`).
         interrupt_on_busy: bool,
     ) -> bool {
+        if self.is_managed_child(session_id) {
+            return false;
+        }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
         let mut interrupt = false;
@@ -5125,6 +5260,9 @@ impl Hub {
     /// (`allow_revive` = true) — unlike the auto-drain. If the agent is mid-turn it
     /// just becomes next in line.
     pub fn request_send_queued(&self, session_id: &str, id: &str) {
+        if self.is_managed_child(session_id) {
+            return;
+        }
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5145,6 +5283,9 @@ impl Hub {
     /// Overlay "Retry" for an errored/crashed turn: re-run the last user prompt
     /// (reviving the session). No-op if there's no prior prompt.
     pub fn retry_turn(&self, session_id: &str) {
+        if self.is_managed_child(session_id) {
+            return;
+        }
         let (prompt, status, retry_cmid, already_queued) = {
             let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
@@ -5393,6 +5534,9 @@ impl Hub {
     /// (the user removed/activated it before it fired — the timer was cancelled,
     /// but a fire already in-flight is harmless here).
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
+        if self.is_managed_child(session_id) {
+            return;
+        }
         let fired = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5622,6 +5766,9 @@ impl Hub {
 
     /// Activate one draft: remove it from drafts and submit it (send-or-queue).
     pub fn activate_draft(&self, session_id: &str, id: &str, cmid: Option<String>) {
+        if self.is_managed_child(session_id) {
+            return;
+        }
         let msg = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5647,6 +5794,9 @@ impl Hub {
 
     /// Activate every draft, front-to-back, then clear them.
     pub fn activate_all_drafts(&self, session_id: &str) {
+        if self.is_managed_child(session_id) {
+            return;
+        }
         let msgs = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -5812,6 +5962,106 @@ fn sort_by_id_order<T>(items: &mut [T], order: &[String], id_of: impl Fn(&T) -> 
 impl Default for Hub {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod managed_call_tests {
+    use super::*;
+
+    fn child(id: &str) -> SessionRegistration {
+        let binding = crate::execution_environment::ManagedChildV1 {
+            schema: 1,
+            phase: "managed_child".into(),
+            session_id: id.into(),
+            parent_session_id: "parent".into(),
+            machine_id: "hawk".into(),
+            workspace_id: "project".into(),
+            cwd: "/owned/managed/child/workspace".into(),
+            profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        };
+        SessionRegistration {
+            id: id.to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: "3.4.0".to_owned(),
+            provider_generation_digest: "generation".to_owned(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: Some(crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(binding).unwrap(),
+            )),
+            cwd: "/owned/managed/child/workspace".to_owned(),
+            title: "child".to_owned(),
+            origin: SessionOrigin::Api,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        }
+    }
+
+    fn update(kind: &str, text: &str) -> Event {
+        Event::Update {
+            update: serde_json::json!({"sessionUpdate": kind, "content": {"type":"text","text": text}}),
+        }
+    }
+
+    #[test]
+    fn client_entry_points_cannot_prompt_a_managed_child() {
+        let hub = Hub::new();
+        hub.create_session(child("child"));
+        hub.submit(
+            "child",
+            "injected".into(),
+            Vec::new(),
+            Some("client-1".into()),
+        );
+        assert!(!hub.force_submit("child", "forced".into(), Vec::new(), None, true));
+        hub.add_draft("child", "draft".into(), Vec::new(), None);
+        hub.activate_all_drafts("child");
+        let turn = hub.managed_turn("child", 0).unwrap();
+        assert!(!turn.prompted);
+        hub.submit_managed_prompt("child", "call-1", "review".into());
+        assert!(hub.managed_turn("child", 0).unwrap().prompted);
+    }
+
+    #[test]
+    fn managed_turn_returns_the_final_message_after_its_last_tool_update() {
+        let hub = Hub::new();
+        hub.create_session(child("child"));
+        hub.push("child", update("agent_message_chunk", "previous call"));
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                stop_reason: "end_turn".into(),
+            },
+        );
+        let cursor = hub.last_event_seq("child").unwrap();
+        hub.push("child", update("user_message_chunk", "review"));
+        hub.push("child", update("agent_message_chunk", "I will inspect"));
+        hub.push(
+            "child",
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate":"tool_call","toolCallId":"t"}),
+            },
+        );
+        hub.push("child", update("agent_message_chunk", "{\"verdict\":"));
+        hub.push("child", update("agent_message_chunk", "\"approve\"}"));
+        let running = hub.managed_turn("child", cursor).unwrap();
+        assert!(running.prompted && running.stop_reason.is_none());
+        hub.push(
+            "child",
+            Event::TurnEnd {
+                stop_reason: "end_turn".into(),
+            },
+        );
+        let ended = hub.managed_turn("child", cursor).unwrap();
+        assert_eq!(ended.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(ended.final_text, "{\"verdict\":\"approve\"}");
+        assert!(hub.managed_turn("missing", 0).is_none());
     }
 }
 

@@ -378,6 +378,22 @@ impl Supervisor {
             );
             return Err(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD.to_owned());
         }
+        if let AgentCommand::Prompt(_, cmid, _) = &command
+            && !cmid
+                .as_deref()
+                .is_some_and(|cmid| cmid.starts_with(crate::core::MANAGED_CALL_CMID_PREFIX))
+            && self.hub.session_info(session_id).is_some_and(|info| {
+                info.meta
+                    .execution_binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.managed_child().is_some())
+            })
+        {
+            // Only the parent's managed call controls a child conversation.
+            return Err(
+                "this child conversation is controlled by its parent's managed call".into(),
+            );
+        }
         self.prepare_session_inner(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;
         match command {

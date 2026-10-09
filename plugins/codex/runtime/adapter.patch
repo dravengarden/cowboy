@@ -1,16 +1,137 @@
+diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
+index ecdf1b8..0f02b7a 100644
+--- a/src/CodexAcpClient.ts
++++ b/src/CodexAcpClient.ts
+@@ -26,6 +26,7 @@ import type {ServiceTier} from "./app-server/ServiceTier";
+ import type {JsonValue} from "./app-server/serde_json/JsonValue";
+ import {ModelId} from "./ModelId";
+ import {AgentMode} from "./AgentMode";
++import {MANAGED_SANDBOX_POLICY, managedProfileActive, managedTurn} from "./CowboyManagedProfile";
+ import path from "node:path";
+ import {logger} from "./Logger";
+ import {sanitizeMcpServerName} from "./McpServerName";
+@@ -864,14 +865,22 @@ export class CodexAcpClient {
+             apiType: activeProvider.apiType,
+             baseUrl: activeProvider.baseUrl,
+         });
++        // A managed snapshot is never trusted: its project config, rules,
++        // hooks and MCP servers stay disabled, and client MCP servers are
++        // not configured for it.
++        const managed = managedProfileActive();
+         const mergedConfig = {
+             ...forceGitRootTurnDiffPaths(mergeGatewayConfig(this.config, this.gatewayConfig)),
+-            projects: Object.fromEntries(sessionRoots.map(root => [root, {
+-                trust_level: "trusted",
+-            }])),
++            ...(managed ? {} : {
++                projects: Object.fromEntries(sessionRoots.map(root => [root, {
++                    trust_level: "trusted",
++                }])),
++            }),
+         };
+-        const configWithWorkspaceRoots = mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
+-        if (mcpServers.length === 0) {
++        const configWithWorkspaceRoots = managed
++            ? mergedConfig
++            : mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
++        if (managed || mcpServers.length === 0) {
+             return configWithWorkspaceRoots;
+         }
+ 
+@@ -1059,6 +1068,9 @@ export class CodexAcpClient {
+     ): Promise<TurnCompletedNotification | null> {
+         const input = buildPromptItems(request.prompt);
+         const effort = modelId.effort as ReasoningEffort | null; //TODO remove unsafe conversion
++        // Resolve before any effect: a managed turn without its metadata, or
++        // an ordinary turn carrying it, is refused instead of downgraded.
++        const managed = managedTurn(request._meta);
+         await this.refreshSkills(cwd, additionalDirectories);
+         if (shouldCancel?.()) {
+             return null;
+@@ -1066,13 +1078,16 @@ export class CodexAcpClient {
+         return await this.codexClient.runTurn({
+             threadId: request.sessionId,
+             input: input,
+-            approvalPolicy: agentMode.approvalPolicy,
+-            approvalsReviewer: agentMode.approvalsReviewer,
+-            sandboxPolicy: addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories),
++            approvalPolicy: managed ? "never" : agentMode.approvalPolicy,
++            approvalsReviewer: managed ? "user" : agentMode.approvalsReviewer,
++            sandboxPolicy: managed
++                ? MANAGED_SANDBOX_POLICY
++                : addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories),
+             summary: disableSummary ? "none" : "auto",
+             effort: effort,
+             model: modelId.model,
+             serviceTier: serviceTier,
++            ...(managed ? {outputSchema: managed.outputSchema} : {}),
+         }, onTurnStarted);
+     }
+ 
+diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
+index 3b79ee4..dea4529 100644
+--- a/src/CodexAcpServer.ts
++++ b/src/CodexAcpServer.ts
+@@ -32,6 +32,7 @@ import type {
+ import type {RateLimitsMap} from "./RateLimitsMap";
+ import {ModelId} from "./ModelId";
+ import {AgentMode, MODE_CONFIG_ID} from "./AgentMode";
++import {refuseManagedReconfiguration} from "./CowboyManagedProfile";
+ import {
+     COLLABORATION_MODE_CONFIG_ID,
+     createCollaborationModeConfigOption,
+@@ -1396,6 +1397,7 @@ export class CodexAcpServer {
+         });
+         const sessionState = this.sessions.get(_params.sessionId);
+         if (!sessionState) throw new Error(`Session ${_params.sessionId} not found`);
++        refuseManagedReconfiguration();
+ 
+         this.applyModeChange(sessionState, _params.modeId);
+         return {};
+@@ -1408,6 +1410,9 @@ export class CodexAcpServer {
+         });
+         const sessionState = this.sessions.get(params.sessionId);
+         if (!sessionState) throw new Error(`Session ${params.sessionId} not found`);
++        if (params.configId === MODE_CONFIG_ID) {
++            refuseManagedReconfiguration();
++        }
+ 
+         await this.applySessionConfigOption(sessionState, params);
+ 
+diff --git a/src/CodexCommands.ts b/src/CodexCommands.ts
+index 43d6122..a5e3b4e 100644
+--- a/src/CodexCommands.ts
++++ b/src/CodexCommands.ts
+@@ -1,4 +1,5 @@
+ import type * as acp from "@agentclientprotocol/sdk";
++import {managedProfileActive} from "./CowboyManagedProfile";
+ import type {AvailableCommand} from "@agentclientprotocol/sdk";
+ import {ACPSessionConnection, type AcpClientConnection} from "./ACPSessionConnection";
+ import {AIR_COMMAND_ACTION_KEY, airOnlyMeta} from "./AirExtension";
+@@ -224,6 +225,9 @@ export class CodexCommands {
+         sessionState: SessionState,
+         options: CommandHandleOptions = {},
+     ): Promise<CommandHandleResult> {
++        // A managed child's prompt is the caller's literal text; it never
++        // starts native review, goal or compaction turns.
++        if (managedProfileActive()) return { handled: false };
+         const command = this.parseCommand(prompt);
+         if (command === null) return { handled: false };
+         const commandName = command.name;
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
+index 0f79117..15bd31c 100644
 --- a/src/CodexJsonRpcConnection.ts
 +++ b/src/CodexJsonRpcConnection.ts
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,7 @@ import type {MessageConnection} from "vscode-jsonrpc/node";
  import type {ChildProcessWithoutNullStreams} from "node:child_process";
  import {spawn} from "node:child_process";
  import {createRequire} from "node:module";
 +import {isAbsolute} from "node:path";
-
+ 
  import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
  import {logger} from "./Logger";
-@@ -14,12 +15,30 @@
-
+@@ -14,12 +15,30 @@ export interface CodexConnection {
+ 
  export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv): CodexConnection {
      const spawnEnv = env ?? process.env;
 +    const configuration: unknown = JSON.parse(spawnEnv['COWBOY_PRIVATE_CODEX_ARGUMENTS'] ?? '[]');
@@ -29,7 +150,7 @@ diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
 +            spawnEnv['COWBOY_PRIVATE_CODEX_EXECUTABLE'] !== codexPath)) {
 +        throw new Error('Remote execution requires its exact private bridge');
 +    }
-
+ 
      let codex: ChildProcessWithoutNullStreams;
 -    if (codexPath) {
 +    if (executionBridge) {
@@ -42,21 +163,84 @@ diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
      } else {
          const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
          codex = spawn(process.execPath, [bundledCodexPath, 'app-server'], {env: spawnEnv});
-@@ -31,6 +50,13 @@
-     const writer = createJSONRPCWriter(codex.stdin);
-
+@@ -32,6 +51,13 @@ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv
+ 
      let connection = rpc.createMessageConnection(reader, writer);
-+
+ 
 +    // Closing the stream must reject pending requests, including resume. The
 +    // JSON-RPC library's close notification alone does not dispose requests.
 +    connection.onClose(() => {
 +        connection.dispose();
 +        if (codex.exitCode === null && codex.signalCode === null) codex.kill();
 +    });
-
++
      connection.listen();
-
+ 
+     // Terminate all current activities on process termination
+diff --git a/src/CowboyManagedProfile.ts b/src/CowboyManagedProfile.ts
+new file mode 100644
+index 0000000..6703242
+--- /dev/null
++++ b/src/CowboyManagedProfile.ts
+@@ -0,0 +1,56 @@
++// Cowboy-owned managed read-only profile. The Provider launcher enables it
++// only for a signed managed launch; it never widens an ordinary session.
++import type {JsonValue} from "./app-server/serde_json/JsonValue";
++import type {SandboxPolicy} from "./app-server/v2";
++
++export const MANAGED_PROFILE_ENV = "COWBOY_PRIVATE_MANAGED_PROFILE";
++export const MANAGED_PROFILE = "read-only-v1";
++export const MANAGED_CALL_META_KEY = "cowboy.dev/managedCall";
++
++/** Every turn of a managed child: never ask, never write, no network. */
++export const MANAGED_SANDBOX_POLICY: SandboxPolicy = {type: "readOnly", networkAccess: false};
++
++export function managedProfileActive(): boolean {
++    return process.env[MANAGED_PROFILE_ENV] === MANAGED_PROFILE;
++}
++
++export interface ManagedTurn {
++    callId: string;
++    outputSchema: JsonValue | null;
++}
++
++/**
++ * Resolve the Cowboy turn metadata. A managed child refuses a turn without
++ * it, and an ordinary session refuses it rather than silently ignoring an
++ * output constraint it cannot enforce.
++ */
++export function managedTurn(meta: unknown): ManagedTurn | null {
++    const entry = meta !== null && typeof meta === "object"
++        ? (meta as Record<string, unknown>)[MANAGED_CALL_META_KEY]
++        : undefined;
++    if (!managedProfileActive()) {
++        if (entry !== undefined) {
++            throw new Error("Managed call metadata requires the managed read-only profile");
++        }
++        return null;
++    }
++    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
++        throw new Error("Managed read-only turn is missing its Cowboy call metadata");
++    }
++    const value = entry as Record<string, unknown>;
++    const callId = value["callId"];
++    const schema = value["outputSchema"];
++    if (typeof callId !== "string" || callId.length === 0
++        || typeof value["inputRevision"] !== "string"
++        || (schema !== null && schema !== undefined
++            && (typeof schema !== "object" || Array.isArray(schema)))) {
++        throw new Error("Managed read-only turn has invalid Cowboy call metadata");
++    }
++    return {callId, outputSchema: (schema ?? null) as JsonValue | null};
++}
++
++export function refuseManagedReconfiguration(): void {
++    if (managedProfileActive()) {
++        throw new Error("Managed read-only profile configuration is fixed");
++    }
++}
 diff --git a/src/StdUtils.ts b/src/StdUtils.ts
+index 96e8d70..bf9b040 100644
 --- a/src/StdUtils.ts
 +++ b/src/StdUtils.ts
 @@ -1,9 +1,7 @@
@@ -66,13 +250,13 @@ diff --git a/src/StdUtils.ts b/src/StdUtils.ts
  import type {DataCallback, Disposable, Message, MessageReader, MessageWriter, PartialMessageInfo} from "vscode-jsonrpc/node";
  import * as acp from "@agentclientprotocol/sdk";
 -import {logger} from "./Logger";
-
+ 
  //TODO ask to include proper jsonrpc field and remove
  export function createJSONRPCWriter(writable: Writable): MessageWriter {
-@@ -30,43 +28,112 @@
+@@ -30,43 +28,112 @@ export function createJSONRPCWriter(writable: Writable): MessageWriter {
      };
  }
-
+ 
 -//TODO ask to include proper jsonrpc field and remove
 -export function createJSONRPCReader(readable: Readable): MessageReader {
 +// Legacy history loads can still contain a large inline-image frame. Resume
@@ -213,9 +397,9 @@ diff --git a/src/StdUtils.ts b/src/StdUtils.ts
 +        }
 +    };
  }
-
+ 
  export function createJsonStream(readable: Readable, writable: Writable){
-@@ -74,41 +141,3 @@
+@@ -74,41 +141,3 @@ export function createJsonStream(readable: Readable, writable: Writable){
      const output = Readable.toWeb(readable) as ReadableStream<Uint8Array>;
      return acp.ndJsonStream(input, output);
  }
@@ -258,6 +442,8 @@ diff --git a/src/StdUtils.ts b/src/StdUtils.ts
 -    }
 -}
 diff --git a/src/__tests__/CodexJsonRpcConnection.test.ts b/src/__tests__/CodexJsonRpcConnection.test.ts
+new file mode 100644
+index 0000000..3fdff74
 --- /dev/null
 +++ b/src/__tests__/CodexJsonRpcConnection.test.ts
 @@ -0,0 +1,51 @@
@@ -312,21 +498,52 @@ diff --git a/src/__tests__/CodexJsonRpcConnection.test.ts b/src/__tests__/CodexJ
 +        {...environment, COWBOY_PRIVATE_CODEX_EXECUTABLE: '/different/codex'},
 +    ]) expect(() => startCodexConnection('/exact/codex', changed)).toThrow('exact private bridge');
 +});
-diff --git a/src/__tests__/StdUtils.test.ts b/src/__tests__/StdUtils.test.ts
---- a/src/__tests__/StdUtils.test.ts
-+++ b/src/__tests__/StdUtils.test.ts
-@@ -39,8 +39,8 @@
-         ]);
-     });
-
--    it("reads several messages of one chunk and skips blank and malformed lines", async () => {
--        const messages = await read([Buffer.from('{"id":1,"result":{}}\n\n{bad\n{"id":2,"result":{}}\r\n')]);
-+    it("reads several messages of one chunk and skips blank lines", async () => {
-+        const messages = await read([Buffer.from('{"id":1,"result":{}}\n\n{"id":2,"result":{}}\r\n')]);
-
-         expect(messages).toEqual([
-             {jsonrpc: "2.0", id: 1, result: {}},
+diff --git a/src/__tests__/CowboyManagedProfile.test.ts b/src/__tests__/CowboyManagedProfile.test.ts
+new file mode 100644
+index 0000000..797fbf2
+--- /dev/null
++++ b/src/__tests__/CowboyManagedProfile.test.ts
+@@ -0,0 +1,37 @@
++import {afterEach, describe, expect, it} from "vitest";
++import {
++    MANAGED_CALL_META_KEY,
++    MANAGED_PROFILE_ENV,
++    managedTurn,
++    refuseManagedReconfiguration,
++} from "../CowboyManagedProfile";
++
++const meta = (value: unknown) => ({[MANAGED_CALL_META_KEY]: value});
++
++describe("Cowboy managed read-only profile", () => {
++    afterEach(() => {
++        delete process.env[MANAGED_PROFILE_ENV];
++    });
++
++    it("leaves ordinary sessions untouched and refuses managed metadata there", () => {
++        expect(managedTurn(undefined)).toBeNull();
++        expect(managedTurn({other: true})).toBeNull();
++        expect(() => managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: null})))
++            .toThrow(/requires the managed/);
++        expect(() => refuseManagedReconfiguration()).not.toThrow();
++    });
++
++    it("requires per-turn metadata and forwards the native output schema", () => {
++        process.env[MANAGED_PROFILE_ENV] = "read-only-v1";
++        expect(() => managedTurn(undefined)).toThrow(/missing/);
++        expect(() => managedTurn(meta({callId: "c"}))).toThrow(/invalid/);
++        expect(() => managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: []})))
++            .toThrow(/invalid/);
++        const schema = {type: "object", properties: {verdict: {type: "string"}}};
++        expect(managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: schema})))
++            .toEqual({callId: "c", outputSchema: schema});
++        expect(managedTurn(meta({callId: "c", inputRevision: "r", outputSchema: null})))
++            .toEqual({callId: "c", outputSchema: null});
++        expect(() => refuseManagedReconfiguration()).toThrow(/fixed/);
++    });
++});
 diff --git a/src/__tests__/CowboyStdUtils.test.ts b/src/__tests__/CowboyStdUtils.test.ts
+new file mode 100644
+index 0000000..8c6b285
 --- /dev/null
 +++ b/src/__tests__/CowboyStdUtils.test.ts
 @@ -0,0 +1,100 @@
@@ -430,3 +647,18 @@ diff --git a/src/__tests__/CowboyStdUtils.test.ts b/src/__tests__/CowboyStdUtils
 +        stream.destroy();
 +    });
 +});
+diff --git a/src/__tests__/StdUtils.test.ts b/src/__tests__/StdUtils.test.ts
+index bfe0ee4..2de8984 100644
+--- a/src/__tests__/StdUtils.test.ts
++++ b/src/__tests__/StdUtils.test.ts
+@@ -39,8 +39,8 @@ describe("createJSONRPCReader", () => {
+         ]);
+     });
+ 
+-    it("reads several messages of one chunk and skips blank and malformed lines", async () => {
+-        const messages = await read([Buffer.from('{"id":1,"result":{}}\n\n{bad\n{"id":2,"result":{}}\r\n')]);
++    it("reads several messages of one chunk and skips blank lines", async () => {
++        const messages = await read([Buffer.from('{"id":1,"result":{}}\n\n{"id":2,"result":{}}\r\n')]);
+ 
+         expect(messages).toEqual([
+             {jsonrpc: "2.0", id: 1, result: {}},

@@ -34,6 +34,42 @@ import {
   subscribeProviderCatalog,
 } from "./providerCatalogRegistry.ts";
 
+Deno.test("managed profiles require signed capability and validate every argument binding", () => {
+  const candidate = manifest();
+  candidate.sdk_version = PROVIDER_SDK_VERSION;
+  candidate.runtime.managed_profiles = {
+    read_only_v1: { arguments: ["--read-only"] },
+  };
+  assertThrows(() => validateProviderManifest(candidate));
+  candidate.runtime.required_capabilities.push("provider.managed-profiles.v1");
+  validateProviderManifest(candidate);
+  const old = structuredClone(candidate);
+  old.sdk_version = "3.1.12";
+  assertThrows(() => validateProviderManifest(old));
+  for (
+    const profiles of [
+      {},
+      null,
+      { read_write_v1: { arguments: ["--write"] } },
+      { read_only_v1: { arguments: [], extra: true } },
+      {
+        read_only_v1: {
+          arguments: [{
+            source: "sidecar_url",
+            sidecar: "undeclared",
+            prefix: "",
+            suffix: "",
+          }],
+        },
+      },
+    ]
+  ) {
+    const invalid = structuredClone(candidate);
+    Object.assign(invalid.runtime, { managed_profiles: profiles });
+    assertThrows(() => validateProviderManifest(invalid));
+  }
+});
+
 Deno.test("execution contracts require an exact executor and a capable signed Provider", () => {
   const candidate = manifest();
   candidate.sdk_version = PROVIDER_SDK_VERSION;

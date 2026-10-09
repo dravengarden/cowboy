@@ -9,12 +9,12 @@ blocked handoff, not why the original acknowledgement was absent. The old
 session's 3.19.4 Provider and 25.8 MB transcript do not, by themselves, explain
 the missing acknowledgement.
 
-A sequenced `TurnStarted` or an owned snapshot naming the exact pending turn
-now also proves worker admission. Losing the separate `CommandAck` must not
-leave that prompt pending or replay it on reconnect. An idle snapshot, another
-turn, or a broker placeholder never proves admission. Every 30 seconds a live
+A sequenced `TurnEnded` naming the exact pending turn also proves worker
+admission when the separate `CommandAck` was lost. Start events and active
+snapshots precede the fallible ACP send, so they retain the pending prompt for
+negative-acknowledgement recovery. Every 30 seconds a live
 connection with pending prompts requests an adoption-only owner snapshot; it
-does not resend prompts, launch workers or interrupt turns. Repeated config
+does not resend prompts or request worker launch. Repeated config
 snapshots can release an already-reconciled startup gate without replaying
 preferences. Host Operator session inspection includes content-free delivery
 state so a configuration wait, an unwritten prompt and a missing receipt are

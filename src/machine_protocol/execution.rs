@@ -42,6 +42,37 @@ pub enum Action {
         session_id: String,
         preparation: Box<PreparationV1>,
     },
+    /// Install the private call ingress for one parent on its execution
+    /// Machine. Re-sending the same grant is idempotent; a different grant
+    /// for the same parent replaces and revokes the previous one.
+    InstallCallGateway {
+        grant: crate::managed_calls::protocol::Grant,
+    },
+    RevokeCallGateway {
+        grant: crate::managed_calls::protocol::Grant,
+    },
+    /// Capture one immutable round snapshot into the child's owned workspace.
+    PrepareManagedRound {
+        round: Box<crate::managed_calls::protocol::ChildRound>,
+    },
+    /// Remove a terminal managed child's owned snapshot directory.
+    CloseManagedChild {
+        child_session_id: String,
+    },
+}
+
+impl Action {
+    /// Managed-call actions require a Machine that understands them.
+    #[must_use]
+    pub fn managed_call(&self) -> bool {
+        matches!(
+            self,
+            Self::InstallCallGateway { .. }
+                | Self::RevokeCallGateway { .. }
+                | Self::PrepareManagedRound { .. }
+                | Self::CloseManagedChild { .. }
+        )
+    }
 }
 
 impl std::fmt::Debug for Request {
@@ -54,6 +85,10 @@ impl std::fmt::Debug for Request {
             Action::Call { .. } => "ExecutionCall",
             Action::Close { .. } => "ExecutionClose",
             Action::AbandonPreparation { .. } => "ExecutionAbandonPreparation",
+            Action::InstallCallGateway { .. } => "ManagedCallGatewayInstall",
+            Action::RevokeCallGateway { .. } => "ManagedCallGatewayRevoke",
+            Action::PrepareManagedRound { .. } => "ManagedRoundPrepare",
+            Action::CloseManagedChild { .. } => "ManagedChildClose",
         })
     }
 }
@@ -61,12 +96,30 @@ impl std::fmt::Debug for Request {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
-    Inventory { executor: Option<ExecutorInventory> },
-    Prepared { binding: BindingV1 },
-    RuntimePrepared { runtime: RuntimeLocation },
+    Inventory {
+        executor: Option<ExecutorInventory>,
+    },
+    Prepared {
+        binding: BindingV1,
+    },
+    RuntimePrepared {
+        runtime: RuntimeLocation,
+    },
     Closed,
-    Call { response: KeeperResponse },
-    Refused { reason: Refusal },
+    Call {
+        response: KeeperResponse,
+    },
+    CallGateway,
+    ManagedRound {
+        prepared: crate::managed_calls::protocol::ChildPrepared,
+    },
+    /// A typed, content-free refusal for managed round preparation.
+    ManagedRoundRefused {
+        code: String,
+    },
+    Refused {
+        reason: Refusal,
+    },
 }
 
 impl std::fmt::Debug for Response {
@@ -77,6 +130,9 @@ impl std::fmt::Debug for Response {
             Self::RuntimePrepared { .. } => "ExecutionRuntimePrepared",
             Self::Closed => "ExecutionClosed",
             Self::Call { .. } => "ExecutionResult",
+            Self::CallGateway => "ManagedCallGateway",
+            Self::ManagedRound { .. } => "ManagedRoundPrepared",
+            Self::ManagedRoundRefused { .. } => "ManagedRoundRefused",
             Self::Refused { .. } => "ExecutionRefused",
         })
     }

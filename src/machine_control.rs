@@ -64,6 +64,10 @@ struct ConnectionIdentity {
 }
 
 impl ConnectionToken {
+    pub(crate) fn machine_id(&self) -> &str {
+        &self.0.machine_id
+    }
+
     pub(crate) fn same(&self, other: &Self) -> bool {
         self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
     }
@@ -1047,6 +1051,15 @@ impl MachineControl {
 
     /// Short-lived connection evidence. Never saved in the operation journal or
     /// reacquired after restart to replay an old destructive command.
+    /// The current connection and its negotiated protocol, if connected.
+    pub(crate) fn connection_protocol(&self, machine_id: &str) -> Option<(ConnectionToken, u16)> {
+        self.live
+            .read()
+            .connections
+            .get(machine_id)
+            .map(|connection| (connection.token.clone(), connection.protocol))
+    }
+
     pub(crate) fn operation_connection(&self, machine_id: &str) -> Result<ConnectionToken, String> {
         self.live
             .read()

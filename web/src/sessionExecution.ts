@@ -60,6 +60,13 @@ export function sessionExecution(session: SessionMeta): {
     return { state: "local", machineId: session.machine_id, cwd: session.cwd };
   }
   const binding = object(session.execution_binding);
+  // A managed child runs target-local in its Machine-owned read-only snapshot.
+  if (
+    binding?.schema === 1 && binding.phase === "managed_child" &&
+    typeof binding.cwd === "string" && binding.cwd === session.cwd
+  ) {
+    return { state: "ready", machineId: session.machine_id, cwd: session.cwd };
+  }
   const runtime = object(binding?.runtime);
   if (
     binding?.schema === 1 && runtime?.machine_id === session.machine_id &&

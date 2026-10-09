@@ -2462,6 +2462,9 @@ async fn agent_main(
                 if let Some(prompt) = perm_state.current_prompt() {
                     prompt.visible_update.store(true, Ordering::SeqCst);
                 }
+                if perm_state.sink.session_is_managed_read_only(&perm_state.session_id) {
+                    return responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+                }
                 if auto_approve {
                     let allow = preferred_allow_option(&req.options);
                     let outcome = match allow {
@@ -2961,6 +2964,12 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         return;
     }
     if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
+        if state.sink.session_is_managed_read_only(&state.session_id) {
+            state
+                .sink
+                .set_config_options(&state.session_id, serde_json::json!([]));
+            return;
+        }
         match serde_json::to_value(&update.config_options) {
             Ok(opts) => {
                 if let Some(label) = current_model_label(&opts) {
@@ -3239,7 +3248,8 @@ async fn run_session(
     // Codex ACP exposes its approval preset as a config option instead of a
     // session mode. Default new/revived Codex panels to Full Access when the
     // adapter advertises it; a failed set falls back to the adapter default.
-    if crate::provider::uses_config_full_access(provider_id)
+    if !state.sink.session_is_managed_read_only(&session_id)
+        && crate::provider::uses_config_full_access(provider_id)
         && config_options
             .as_ref()
             .is_some_and(|opts| codex_full_access_available(opts))
@@ -3260,7 +3270,9 @@ async fn run_session(
     // Open every provider at its own full-access session mode when advertised.
     // Codex exposes this as the config option handled above; Claude calls it
     // `bypassPermissions`, while Gemini calls the equivalent mode `yolo`.
-    if let (Some(modes), Some(want)) = (modes.as_ref(), startup_full_access_mode(provider_id)) {
+    if !state.sink.session_is_managed_read_only(&session_id)
+        && let (Some(modes), Some(want)) = (modes.as_ref(), startup_full_access_mode(provider_id))
+    {
         let has = modes
             .available_modes
             .iter()
@@ -3365,6 +3377,9 @@ async fn run_session(
     // An empty list is authoritative too: a replacement may remove all the
     // old release's options. Publish this before Running so the Controller can
     // reconcile persisted preferences before draining any queued prompt.
+    if state.sink.session_is_managed_read_only(&session_id) {
+        surfaced_options.clear();
+    }
     match serde_json::to_value(&surfaced_options) {
         Ok(v) => state.sink.set_config_options(&session_id, v),
         Err(e) => tracing::warn!(error = %e, "serializing startup config options"),
@@ -3444,6 +3459,15 @@ async fn run_session(
     // never wait behind an upstream configuration RPC.
     let mut config_fences: HashMap<String, ConfigFence> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
+        if state.sink.session_is_managed_read_only(&session_id)
+            && matches!(&cmd, AgentCommand::SetConfigOption { .. })
+        {
+            state.sink.broadcast_error(
+                Some(session_id.clone()),
+                "Managed review configuration is fixed by its native launch profile".into(),
+            );
+            continue;
+        }
         let (config_completion, previous_config) =
             if let AgentCommand::SetConfigOption { config_id, .. } = &cmd {
                 let (completion, fence) = ConfigCompletion::new();
@@ -3516,7 +3540,11 @@ async fn run_session(
                         result = wait_config_fences(fences) => result,
                         _ = cancellation.changed() => Err("prompt cancelled before configuration completed".to_owned()),
                     };
-                    if let Err(detail) = configured {
+                    // A managed child turn carries its Machine-written round
+                    // constraint; without it the prompt must not run at all.
+                    let managed_meta = configured.and_then(|()| sink.managed_prompt_meta(&sid));
+                    if let Err(detail) = &managed_meta {
+                        let detail = detail.clone();
                         if let Some(tx) = completion {
                             let _ = tx.send(Err(detail.clone()));
                         }
@@ -3548,8 +3576,11 @@ async fn run_session(
                     state.backoff.lock().take();
                     sink.prompt_started(&sid, cmid.as_deref());
                     let response = loop {
-                        let request =
-                            cx.send_request(PromptRequest::new(acp.clone(), blocks.clone()));
+                        let mut prompt_request = PromptRequest::new(acp.clone(), blocks.clone());
+                        if let Ok(Some(meta)) = &managed_meta {
+                            prompt_request = prompt_request.meta(meta.clone());
+                        }
+                        let request = cx.send_request(prompt_request);
                         // `send_request` synchronously queues the JSON-RPC
                         // request. Recheck immediately afterwards: if Stop won
                         // the tiny check/send race, queue both cancellations

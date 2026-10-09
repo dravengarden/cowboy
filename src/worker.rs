@@ -84,6 +84,16 @@ fn workspace_identity(path: &std::path::Path) -> Option<WorkspaceIdentity> {
 }
 
 impl Shared {
+    fn managed_read_only(&self) -> bool {
+        self.snapshot
+            .lock()
+            .launch
+            .as_ref()
+            .and_then(|launch| launch.execution_binding.as_ref())
+            .and_then(|binding| binding.managed_child())
+            .is_some()
+    }
+
     fn workspace_is_current(&self) -> bool {
         self.workspace_identity.is_some()
             && workspace_identity(&self.workspace_path) == self.workspace_identity
@@ -270,6 +280,20 @@ impl RemoteSink {
 }
 
 impl AgentSink for RemoteSink {
+    fn session_is_managed_read_only(&self, session_id: &str) -> bool {
+        session_id == self.shared.session_id && self.shared.managed_read_only()
+    }
+    fn managed_prompt_meta(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+        if !self.session_is_managed_read_only(session_id) {
+            return Ok(None);
+        }
+        crate::managed_calls::round::read_round(&self.shared.workspace_path)
+            .map(|round| Some(round.prompt_meta()))
+            .ok_or_else(|| "managed call round is unavailable".to_owned())
+    }
     fn prompt_started(&self, _session_id: &str, cmid: Option<&str>) {
         self.shared.telemetry.lock().started(cmid);
     }
@@ -295,6 +319,11 @@ impl AgentSink for RemoteSink {
     }
 
     fn set_config_options(&self, _session_id: &str, options: serde_json::Value) {
+        let options = if self.shared.managed_read_only() {
+            serde_json::json!([])
+        } else {
+            options
+        };
         self.shared.emit(RuntimeEvent::ConfigOptions { options });
     }
 
@@ -376,7 +405,21 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     // Reqwest's provider-neutral TLS feature also needs this before a plain
     // loopback sidecar Client is constructed during Provider preparation.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let prepared = provider::prepare(&args.provider).await?;
+    let managed_child = args
+        .execution_binding
+        .as_ref()
+        .and_then(|binding| binding.managed_child());
+    if let Some(child) = &managed_child {
+        anyhow::ensure!(
+            child.session_id == args.session_id && std::path::Path::new(&child.cwd) == args.cwd,
+            "managed child worker identity mismatch"
+        );
+    }
+    let prepared = provider::prepare(
+        &args.provider,
+        managed_child.as_ref().map(|child| child.profile),
+    )
+    .await?;
     let mut spec = prepared.spec.clone();
     // This reserved host projection must never come from a parent process.
     spec.package_remove_env
@@ -429,7 +472,9 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         execution_binding: args.execution_binding.clone(),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
-    let endpoint = if let Some(binding) = &args.execution_binding {
+    let endpoint = if let Some(binding) = &args.execution_binding
+        && managed_child.is_none()
+    {
         anyhow::ensure!(
             prepared.execution_jsonrpc,
             "Provider generation does not support execution environments"
@@ -851,6 +896,14 @@ fn handle_command(
                 config_id,
                 value,
             } => {
+                if shared.managed_read_only() {
+                    return command_ack(
+                        shared,
+                        command_id,
+                        false,
+                        Some("managed review configuration is immutable".into()),
+                    );
+                }
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
                 }
@@ -936,6 +989,65 @@ fn command_ack(
 mod tests {
     use super::*;
     use tokio::net::UnixListener;
+
+    #[test]
+    fn managed_read_only_blocks_configuration_at_worker_admission_and_projection() {
+        let (shared, _notify) = shared();
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        let options = serde_json::json!([{"id":"approval_policy","currentValue":"full-access"}]);
+        sink.set_config_options("sess-1", options.clone());
+        assert_eq!(shared.snapshot().config_options, Some(options.clone()));
+        shared.snapshot.lock().launch = Some(
+            serde_json::from_value(serde_json::json!({
+                "session_id":"sess-1", "provider":"codex", "cwd":"/snapshot", "generation":"gen-1",
+                "execution_binding":{
+                    "schema":1,"phase":"managed_child","session_id":"sess-1",
+                    "parent_session_id":"parent-1","machine_id":"hawk","workspace_id":"cowboy",
+                    "cwd":"/snapshot","profile":"read_only_v1"
+                }
+            }))
+            .unwrap(),
+        );
+        assert!(sink.session_is_managed_read_only("sess-1"));
+        assert!(!sink.session_is_managed_read_only("other-session"));
+        sink.set_config_options("sess-1", options);
+        assert_eq!(
+            shared.snapshot().config_options,
+            Some(serde_json::json!([]))
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tx = Some(tx);
+        for _ in 0..2 {
+            let ack = handle_command(
+                &shared,
+                &mut tx,
+                WorkerCommand::SetConfigOption {
+                    command_id: "widen-permissions".into(),
+                    config_id: "approval_policy".into(),
+                    value: serde_json::json!("full-access"),
+                },
+            );
+            assert!(matches!(
+                ack,
+                Frame::CommandAck {
+                    accepted: false,
+                    ..
+                }
+            ));
+            assert!(rx.try_recv().is_err());
+        }
+        let ack = handle_command(
+            &shared,
+            &mut tx,
+            WorkerCommand::Cancel {
+                command_id: "stop".into(),
+            },
+        );
+        assert!(matches!(ack, Frame::CommandAck { accepted: true, .. }));
+        assert!(matches!(rx.try_recv(), Ok(AgentCommand::Cancel)));
+    }
 
     #[test]
     fn trace_outbox_is_bounded_without_blocking_events_and_ack_releases_capacity() {
