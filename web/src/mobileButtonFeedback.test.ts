@@ -54,7 +54,7 @@ Deno.test("touch icon buttons release synthetic hover and focus paint", () => {
   assertEquals(themeSource.includes("MuiButtonBase:"), true);
   assertEquals(
     themeSource.includes(
-      "&:not(.MuiButton-contained):not([aria-selected='true']):hover, &:not(.MuiButton-contained):not([aria-selected='true']).Mui-focusVisible",
+      "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible",
     ),
     true,
   );

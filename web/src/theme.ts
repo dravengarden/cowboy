@@ -177,9 +177,12 @@ export function useThemeMode(): ThemeControls {
           },
           // Session-sheet dismiss is a ButtonBase, not an IconButton. Clear a
           // leftover hover/focus latch on unfilled controls, but retain the
-          // semantic fill of contained actions and aria-selected views. iOS
-          // keeps :hover after a tap,
-          // and transparent + contrastText paints those buttons as blank bars.
+          // semantic fill of contained actions and selected views (aria-selected
+          // or MUI's .Mui-selected, e.g. the current Session row). iOS keeps
+          // :hover after a tap, and this selector outranks MUI's own
+          // .Mui-selected:hover, so without the exclusion the current row lost
+          // its highlight; transparent + contrastText paints contained buttons
+          // as blank bars.
           MuiButtonBase: {
             defaultProps: {
               disableRipple: prefersCoarsePointer(),
@@ -189,14 +192,14 @@ export function useThemeMode(): ThemeControls {
               root: {
                 WebkitTapHighlightColor: "transparent",
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
-                  "&:not(.MuiButton-contained):not([aria-selected='true']):hover, &:not(.MuiButton-contained):not([aria-selected='true']).Mui-focusVisible":
+                  "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible":
                     {
                       backgroundColor: "transparent",
                     },
                 },
                 "@media (hover: none), (pointer: coarse), (any-pointer: coarse)":
                   {
-                    "&:not(.MuiButton-contained):not([aria-selected='true']):hover, &:not(.MuiButton-contained):not([aria-selected='true']).Mui-focusVisible":
+                    "&:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected):hover, &:not(.MuiButton-contained):not([aria-selected='true']):not(.Mui-selected).Mui-focusVisible":
                       {
                         backgroundColor: "transparent",
                       },
