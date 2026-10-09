@@ -138,8 +138,13 @@ shapes are unchanged; the `native_permission_*` and mode checks cover these.
 Agent support depends on observed Mods behavior, so re-verify it for every CLI
 candidate: the idle and queued (`delivery`/`queued_command`) notification
 shapes, `turn.complete` agent outcomes, `next.signal` on abandoned held calls,
-and that a pending Mods fetch blocks other native work (the bridge keeps each
-observation to about one second). The packaged runner's `native_agent_*` and
+and that a pending Mods fetch holds back new turns but not a running turn's
+TaskStop (the bridge keeps each observation to about one second). These, the
+classic event input, notification doors and the Mod source forms native
+silently disables (a handler built by a call, `$.session` in `session.start`,
+reading `$.session.receive`) are in `tools/claude_mods_native_baseline.json`
+(probe `tools/claude_mods_native_probe.py`), checked by
+`tools/claude-remote-mods-baseline.test.mjs`. The packaged runner's `native_agent_*` and
 `parent_turns_and_taskstop_progress_during_child_command` checks cover these.
 
 Check shared CLI/SDK/ACP consumers through the parent upgrade workflow. Standard

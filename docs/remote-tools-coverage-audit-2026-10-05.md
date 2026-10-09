@@ -2040,6 +2040,7 @@ probes; the newest group is also pinned by unit tests:
 | File reads | `claude_file_native_baseline.json` | packaged `files` phase |
 | PDF and file-type reads | `claude_pdf_native_baseline.json` | packaged `pdf` phase |
 | Skills and commands | `claude_skill_native_baseline.json` | packaged `skills` phase |
+| Mods: classic event input, agent turn outcomes, notification doors and shape, a plugin's own background command, pending-fetch blocking, Mod source forms native disables | `claude_mods_native_baseline.json` (`claude_mods_native_probe.py`) | unit tests in `claude-remote-mods-baseline.test.mjs` (including static checks of `context-mod.js`); packaged `agents`, `notifications`, `hooks` phases |
 | Project hooks: outcomes, matchers, PermissionRequest race, shell prefix, agent hook input | `claude_hooks_native_baseline.json` (`claude_hooks_native_probe.py`) | unit tests in `claude-remote-hooks-baseline.test.mjs`; packaged `hooks` phase |
 
 `tools/remote_impact.py` turns a Git diff into the remote suites, Claude

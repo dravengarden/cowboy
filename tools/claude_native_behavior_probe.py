@@ -107,7 +107,7 @@ def stable(text, root):
     for found, name in tasks.items():
         text = re.sub(r"\b%s\b" % found, name, text)
     uses = {}
-    for found in re.findall(r"toolu_[A-Za-z0-9]+", text):
+    for found in re.findall(r"toolu_[A-Za-z0-9_]+", text):
         uses.setdefault(found, "toolu_%d" % (len(uses) + 1))
     for found, name in uses.items():
         text = text.replace(found, name)
@@ -118,6 +118,7 @@ def stable(text, root):
         text = re.sub(r"\b%s\b" % found, name, text)
     text = re.sub(r"snapshot-bash-\d+-[a-z0-9]+\.sh", "snapshot-bash-SNAPSHOT.sh", text)
     text = re.sub(r"claude-[0-9a-f]{4}-cwd", "claude-CWD-cwd", text)
+    text = re.sub(r"<duration_ms>\d+</duration_ms>", "<duration_ms>0</duration_ms>", text)
     return re.sub(r'"duration_ms": \d+', '"duration_ms": 0', text)
 
 

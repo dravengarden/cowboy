@@ -166,7 +166,8 @@
         "tools/remote_check_map.json",
         "tools/remote_impact_test.py",
         "tools/register-memory-client.mjs",
-        "tools/claude_hooks_native_baseline.json"
+        "tools/claude_hooks_native_baseline.json",
+        "tools/claude_mods_native_baseline.json"
       ],
       "native": [
         "claude"
@@ -365,16 +366,26 @@
           "phases": [
             "hooks"
           ]
+        },
+        "tools/claude_mods_native_probe.py": {
+          "baseline": "tools/claude_mods_native_baseline.json",
+          "phases": [
+            "agents",
+            "notifications",
+            "agent_background",
+            "hooks"
+          ]
         }
       },
       "native_covered": [
-        "shell",
-        "lifecycle",
+        "agent_background",
         "files",
-        "pdf",
-        "skills",
+        "lifecycle",
         "mcp",
-        "agent_background"
+        "notifications",
+        "pdf",
+        "shell",
+        "skills"
       ]
     },
     "codex-worker": {

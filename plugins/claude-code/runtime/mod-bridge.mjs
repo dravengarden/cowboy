@@ -54,9 +54,10 @@ const MCP_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 // Private per-process endpoint. The existing authenticated Cowboy execution
 // connection still owns remote operations, reconnect and effect deduplication.
-// Each observation holds a pending Mods fetch. Claude 2.1.287 processes no
-// other native work meanwhile (new turns, TaskStop, agent aborts), so keep the
-// idle hold short; a ready result is still answered immediately.
+// Each observation holds a pending Mods fetch. Meanwhile Claude 2.1.287 starts
+// no new turn (a running turn's TaskStop and other agents' calls still
+// proceed; tools/claude_mods_native_baseline.json), so keep the idle hold
+// short; a ready result is still answered immediately.
 // A hook may read native's transcript; the target gets a bounded copy of
 // one under native's own projects directory, never another runtime file.
 const MAX_TRANSCRIPT = 8 * 1024 * 1024;

@@ -1,0 +1,858 @@
+{
+ "background_idle": {
+  "classic": [
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": true,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SessionStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "model",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "source",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "SessionStart",
+    "has_agent_id": false,
+    "effort": null
+   },
+   {
+    "name": "Stop",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "background_tasks",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "last_assistant_message",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_crons",
+     "session_id",
+     "stop_hook_active",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "Stop",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SubagentStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart",
+    "has_agent_id": true,
+    "effort": null
+   },
+   {
+    "name": "UserPromptSubmit",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "UserPromptSubmit",
+    "has_agent_id": false,
+    "effort": null
+   }
+  ],
+  "turns": [
+   {
+    "agent": false,
+    "keys": [
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   },
+   {
+    "agent": true,
+    "keys": [
+     "agentId",
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   }
+  ],
+  "appends": [
+   {
+    "door": "prompt",
+    "content": "[{\"type\":\"text\",\"text\":\"<task-notification>\\n<task-id>task1</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\\n<status>completed</status>\\n<summary>Agent \\\"Probe child\\\" finished</summary>\\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\\n<result>CHILD_DONE</result>\\n<usage><subagent_tokens>32</subagent_tokens><tool_uses>1</tool_uses><duration_ms>0</duration_ms></usage>\\n</task-notification>\"}]"
+   }
+  ],
+  "queued": [],
+  "notification_messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>task1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\n<status>completed</status>\n<summary>Agent \"Probe child\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>CHILD_DONE</result>\n<usage><subagent_tokens>32</subagent_tokens><tool_uses>1</tool_uses><duration_ms>0</duration_ms></usage>\n</task-notification>\n</system-reminder>",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "background_busy": {
+  "classic": [
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": true,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SessionStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "model",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "source",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "SessionStart",
+    "has_agent_id": false,
+    "effort": null
+   },
+   {
+    "name": "Stop",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "background_tasks",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "last_assistant_message",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_crons",
+     "session_id",
+     "stop_hook_active",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "Stop",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SubagentStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart",
+    "has_agent_id": true,
+    "effort": null
+   },
+   {
+    "name": "UserPromptSubmit",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "UserPromptSubmit",
+    "has_agent_id": false,
+    "effort": null
+   }
+  ],
+  "turns": [
+   {
+    "agent": false,
+    "keys": [
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   },
+   {
+    "agent": true,
+    "keys": [
+     "agentId",
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   }
+  ],
+  "appends": [
+   {
+    "door": "delivery",
+    "content": "[{\"type\":\"text\",\"text\":\"<system-reminder>\\n[SYSTEM NOTIFICATION - NOT USER INPUT]\\nThis is an automated background-task event, NOT a message from the user.\\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\\n\\n<task-notification>\\n<task-id>task1</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\\n<status>completed</status>\\n<summary>Agent \\\"Probe child\\\" finished</summary>\\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\\n<result>CHILD_DONE</result>\\n<usage><subagent_tokens>32</subagent_tokens><tool_uses>1</tool_uses><duration_ms>0</duration_ms></usage>\\n</task-notification>\\n</system-reminder>\"}]"
+   }
+  ],
+  "queued": [
+   "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>task1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\n<status>completed</status>\n<summary>Agent \"Probe child\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>CHILD_DONE</result>\n<usage><subagent_tokens>32</subagent_tokens><tool_uses>1</tool_uses><duration_ms>0</duration_ms></usage>\n</task-notification>"
+  ],
+  "notification_messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_2",
+      "type": "tool_result",
+      "content": "parent\n\n<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>task1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\n<status>completed</status>\n<summary>Agent \"Probe child\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>CHILD_DONE</result>\n<usage><subagent_tokens>32</subagent_tokens><tool_uses>1</tool_uses><duration_ms>0</duration_ms></usage>\n</task-notification>\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "taskstop_held": {
+  "classic": [
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SessionStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "model",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "source",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "SessionStart",
+    "has_agent_id": false,
+    "effort": null
+   },
+   {
+    "name": "Stop",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "background_tasks",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "last_assistant_message",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_crons",
+     "session_id",
+     "stop_hook_active",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "Stop",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SubagentStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart",
+    "has_agent_id": true,
+    "effort": null
+   },
+   {
+    "name": "UserPromptSubmit",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "UserPromptSubmit",
+    "has_agent_id": false,
+    "effort": null
+   }
+  ],
+  "turns": [
+   {
+    "agent": false,
+    "keys": [
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   },
+   {
+    "agent": true,
+    "keys": [
+     "agentId",
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": true,
+    "reason": "aborted"
+   }
+  ],
+  "appends": [
+   {
+    "door": "delivery",
+    "content": "[{\"type\":\"text\",\"text\":\"<system-reminder>\\n[SYSTEM NOTIFICATION - NOT USER INPUT]\\nThis is an automated background-task event, NOT a message from the user.\\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\\n\\n<task-notification>\\n<task-id>task1</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\\n<status>killed</status>\\n<summary>Agent \\\"Probe child\\\" was stopped by Claude</summary>\\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\\n</task-notification>\\n</system-reminder>\"}]"
+   }
+  ],
+  "queued": [
+   "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>task1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\n<status>killed</status>\n<summary>Agent \"Probe child\" was stopped by Claude</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n</task-notification>"
+  ],
+  "notification_messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_2",
+      "type": "tool_result",
+      "content": "{\"message\":\"Successfully stopped task: task1 (Probe child)\",\"task_id\":\"task1\",\"task_type\":\"local_agent\",\"command\":\"Probe child\"}\n\n<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>task1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\n<status>killed</status>\n<summary>Agent \"Probe child\" was stopped by Claude</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n</task-notification>\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   }
+  ],
+  "stop_processed_during_pending_child_fetch": true,
+  "held_handler_observed_after_stop": false
+ },
+ "plugin_background": {
+  "classic": [
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SessionStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "model",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "source",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "SessionStart",
+    "has_agent_id": false,
+    "effort": null
+   },
+   {
+    "name": "Stop",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "background_tasks",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "last_assistant_message",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_crons",
+     "session_id",
+     "stop_hook_active",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "Stop",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "UserPromptSubmit",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "UserPromptSubmit",
+    "has_agent_id": false,
+    "effort": null
+   }
+  ],
+  "turns": [
+   {
+    "agent": false,
+    "keys": [
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   }
+  ],
+  "appends": [
+   {
+    "door": "prompt",
+    "content": "[{\"type\":\"text\",\"text\":\"<task-notification>\\n<task-id>task1</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\\n<status>completed</status>\\n<summary>Background command \\\"sleep 1; echo PLUGIN_BG\\\" completed (exit code 0)</summary>\\n</task-notification>\"}]"
+   }
+  ],
+  "queued": [],
+  "notification_messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>task1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file><ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output</output-file>\n<status>completed</status>\n<summary>Background command \"sleep 1; echo PLUGIN_BG\" completed (exit code 0)</summary>\n</task-notification>\n</system-reminder>",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   }
+  ],
+  "plugin_call": [
+   "{\"result\":{\"stdout\":\"\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false,\"backgroundTaskId\":\"task1\"},\"text\":\"Command running in background with ID: task1. Output is being written to: <ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output. "
+  ],
+  "plugin_command_notified": true
+ },
+ "pending_fetch": {
+  "classic": [
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": true,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "PostToolBatch",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "tool_calls",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "PostToolBatch",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SessionStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "model",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "source",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "SessionStart",
+    "has_agent_id": false,
+    "effort": null
+   },
+   {
+    "name": "Stop",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "background_tasks",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "last_assistant_message",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_crons",
+     "session_id",
+     "stop_hook_active",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "Stop",
+    "has_agent_id": false,
+    "effort": [
+     "level"
+    ]
+   },
+   {
+    "name": "SubagentStart",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "transcript_path"
+    ],
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart",
+    "has_agent_id": true,
+    "effort": null
+   },
+   {
+    "name": "UserPromptSubmit",
+    "keys": [
+     "agent_id",
+     "agent_type",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt",
+     "prompt_id",
+     "scratchpad_dir",
+     "session_id",
+     "session_title",
+     "transcript_path"
+    ],
+    "agent_type": null,
+    "hook_event_name": "UserPromptSubmit",
+    "has_agent_id": false,
+    "effort": null
+   }
+  ],
+  "turns": [
+   {
+    "agent": false,
+    "keys": [
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   },
+   {
+    "agent": true,
+    "keys": [
+     "agentId",
+     "answer",
+     "durationMs",
+     "isAborted",
+     "reason",
+     "turnId",
+     "usage"
+    ],
+    "isAborted": false,
+    "reason": "answer"
+   }
+  ],
+  "child_progressed_during_pending_fetch": true
+ },
+ "pending_fetch_parent": {
+  "parent_turn_ran_during_pending_child_fetch": false
+ },
+ "start_api_access": {
+  "mod_active": false
+ },
+ "receive_access": {
+  "mod_active": false
+ },
+ "async_classic": {
+  "mod_active": true
+ },
+ "factory_handler": {
+  "mod_active": false
+ }
+}
