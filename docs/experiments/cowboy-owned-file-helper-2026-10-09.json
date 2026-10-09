@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "source_revision": "1d81cca037fdc31a9d116927a9d26600aabdd6c6",
+  "change": "Replace adapter Python snapshot, range-read and realpath utilities with the Cowboy-owned Rust execution keeper binary.",
+  "validation": {
+    "check_compact": "passed",
+    "native_codex_read_only_review": "no actionable findings",
+    "claude_worker_checks": 92,
+    "codex_worker_checks": 34,
+    "session_checks": 15,
+    "keeper_checks": 12,
+    "native_task_stop_cases": 4,
+    "range_checks": 7,
+    "keeper_helper_with_path_nonexistent": "passed",
+    "real_worker_snapshot_and_range_helper_invocation": "passed",
+    "previous_current_plugin_coexistence": "passed",
+    "catalog_reader_compatibility": "passed",
+    "public_artifacts_verified": 5,
+    "session_fixture_machine": "companion reader release from the same source revision; writer fixture requires administrator-owned production selection"
+  },
+  "range_measurement": {
+    "scope": "local pinned native executor, not production WAN",
+    "whole_file_rpc_json_bytes": 1398511,
+    "selected_range_rpc_json_bytes": 3930
+  },
+  "hawk": {
+    "release": "/nix/store/ym9k23j8dpnmxm5q2i15rs7h32c92rdv-cowboy-machine-writer-host-release",
+    "recovery_release": "/nix/store/7fxav1vx14wj9q90j500mvrn4ihqh8x2-cowboy-machine-release",
+    "previous_release": "/nix/store/l5smh6qmn17hm5s7qvq54bdc5vvcl8qz-cowboy-machine-writer-host-release",
+    "transaction": "1791532272891533687-1d81cca037fd",
+    "outcome": "succeeded",
+    "phase": "committed",
+    "helper_sha256": "689aea2444d15d3ca69ef6236a6f85176ec6338b3a0410f964d2879966778aa3",
+    "retained_worker_generation": "worker-db4bc66cf4d579fbffa6"
+  },
+  "ovh_plugin": {
+    "version": "3.19.6",
+    "digest": "sha256:be9e889a13e85d1e64bd542e328d994dcf5c5b1b87623b69a799dccae2d0cf98",
+    "operation_id": "ovh-claude-code-3-19-6-converge",
+    "phase": "completed",
+    "machine_receipt_state": "applied",
+    "installation_revision": "installation-9547b762063ad350c46e7947a13a6b9553fd3ba2af4b7543c96d572c1447476f",
+    "state": "active"
+  },
+  "affected_session": {
+    "id": "sess-1791185761956",
+    "recovery_operation": "execution-recover-fae836d1b65032d4670f4ce6672cd826-2",
+    "binding_revision_before": 2,
+    "binding_revision_after": 3,
+    "native_session_id_preserved": true,
+    "worktree_device_and_inode_preserved": true,
+    "actual_executor_helper_matches_release": true,
+    "status": "running",
+    "observed_provider_version": "3.19.5",
+    "provider_3_19_6_adoption": "pending session Provider update",
+    "production_tool_success_after_upgrade": "not observed"
+  },
+  "compatibility": "Existing retained keepers without the helper use bounded full copies and ordinary reads. Incremental assembly requires both the new keeper and adapter; no Python fallback is introduced.",
+  "private_receipts": "/tmp/cowboy-file-helper-20261009"
+}

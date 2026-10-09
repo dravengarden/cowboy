@@ -368,3 +368,9 @@ keeper remains compatible through bounded full copies and ordinary file reads;
 it does not regain Python dependencies. Projects may still explicitly use
 Python in their own commands or hooks. Development and acceptance fixtures
 also use Python; neither is an implicit Cowboy production runtime dependency.
+
+The [owned utility deployment receipt](experiments/cowboy-owned-file-helper-2026-10-09.json)
+records native acceptance without an interpreter on PATH, Hawk activation and
+OVH installation. The affected session's keeper has been recovered with its
+native identity and worktree preserved; adoption of the new Provider remains
+separate from installation and must be verified per session.
