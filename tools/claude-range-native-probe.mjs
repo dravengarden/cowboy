@@ -148,7 +148,7 @@ try {
     file_path: "file",
     content: "lost",
   });
-  assert.match(conflict.deny, /changed/);
+  assert.match(conflict.deny, /modified since read/);
   assert.equal(
     await readFile(path, "utf8"),
     original + "external change outside range",
