@@ -723,7 +723,6 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
           forceSheet
           cover
           portal
-          mobileDismiss="header"
         >
           <Box sx={{ pb: 2, color: "text.primary", typography: "body2" }}>
             {selectedCall
