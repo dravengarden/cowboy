@@ -38,15 +38,17 @@ const RANGE_FILE_THRESHOLD = 128 * 1024;
 // print them) and, per candidate file, F<size> (a regular file), A (certainly
 // absent: its nearest existing ancestor is a searchable directory) or O
 // (anything else, which the walk asks about itself). Output is written once
-// at the end so a single read returns it. Arguments: rule roots, `--`, skill
-// roots, `--`, candidate files.
-const STARTUP_SURVEY = String.raw`
+// at the end so a single read returns it. A missing utility fails the whole
+// survey rather than answering with empty output. Arguments: rule roots,
+// `--`, skill roots, `--`, candidate files.
+export const STARTUP_SURVEY = String.raw`
 size() { if [ "$p" = 1 ]; then find -L "$1" -maxdepth 0 -printf %s 2>/dev/null; else wc -c <"$1" 2>/dev/null; fi; }
 list() { if [ "$p" = 1 ]; then find -L "$@" -printf '%s\t%p\n' 2>/dev/null; else find -L "$@" 2>/dev/null | sed 's/^/?\t/'; fi; }
 b64() { base64 | tr -d '\n'; }
 g() { n=$1; shift; o=$(git --no-optional-locks "$@" 2>&1); c=$?; printf '\036git %s %s\n' "$n" "$c"; printf %s "$o" | head -c 6000 | b64; printf '\n'; }
 survey() {
   p=0; find / -maxdepth 0 -printf '' >/dev/null 2>&1 && p=1
+  for u in base64 tr head find uname $([ "$p" = 1 ] || echo sed wc); do command -v "$u" >/dev/null 2>&1 || return 3; done
   printf '\036platform\n%s\n' "$BASH"; uname -sr; printf '%s\n' "${"$"}{SHELL:-}" "${"$"}{COWBOY_EXECUTION_FILE_HELPER:-}"
   g inside rev-parse --is-inside-work-tree
   if [ "$c" = 0 ]; then
@@ -75,7 +77,7 @@ survey() {
   done
   printf '\036end\n'
 }
-out=$(survey "$@"); printf '%s\n' "$out"
+out=$(survey "$@") || exit "$?"; printf '%s\n' "$out"
 `;
 
 // A directory and its ancestors, root first.
@@ -99,7 +101,10 @@ export function parseStartupSurvey(output, candidates) {
     } else current?.push(line);
   }
   const platform = sections.get("platform");
-  if (!sections.has("end") || platform?.length !== 4) return undefined;
+  if (
+    !output.startsWith("\x1eplatform\n") || !sections.has("end") ||
+    platform?.length !== 4
+  ) return undefined;
   const git = {};
   for (const [header, lines] of sections) {
     const match = /^git (\w+) (\d{1,3})$/.exec(header);
@@ -112,7 +117,12 @@ export function parseStartupSurvey(output, candidates) {
       output: Buffer.from(lines[0], "base64").toString("utf8"),
     };
   }
-  if (!git.inside || !git.toplevel) return undefined;
+  // Successful answers have known shapes; anything else is not trusted.
+  if (
+    !git.inside || !git.toplevel ||
+    (git.inside.exitCode === 0 && git.inside.output.trim() !== "true") ||
+    (git.toplevel.exitCode === 0 && !git.toplevel.output.startsWith("/"))
+  ) return undefined;
   const facts = new Map();
   const listed = (lines) => {
     const paths = [];

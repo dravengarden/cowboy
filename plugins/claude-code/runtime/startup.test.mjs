@@ -14,12 +14,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseStartupSurvey, WorkspaceTools } from "./tools.mjs";
+import {
+  parseStartupSurvey,
+  STARTUP_SURVEY,
+  WorkspaceTools,
+} from "./tools.mjs";
 
 // The executor's file and process methods over this machine. `refuse`
 // rejects a process start whose argv it matches, as a target without the
 // survey's utilities would fail it.
-function localConnection(home, { refuse } = {}) {
+function localConnection(home, { refuse, path } = {}) {
   const processes = new Map();
   const calls = [];
   const remote = (error) =>
@@ -62,6 +66,7 @@ function localConnection(home, { refuse } = {}) {
         if (refuse?.(params.argv)) throw new Error("Target refused start");
         const child = spawn(params.argv[0], params.argv.slice(1), {
           cwd: fileURLToPath(params.cwd),
+          env: path ? { ...process.env, PATH: path } : process.env,
           stdio: ["ignore", "pipe", "pipe"],
         });
         const job = { chunks: [], seq: 0, exited: false, wake: () => {} };
@@ -214,6 +219,62 @@ test("the startup survey answers every walk as the per-walk queries do", async (
   );
 });
 
+test("a target missing a survey utility answers through the per-walk queries", async (t) => {
+  const paths = await tree(t);
+  // Every utility either path uses, except the survey's base64.
+  const bin = join(paths.root, "bin");
+  await mkdir(bin);
+  for (
+    const tool of [
+      "bash",
+      "sh",
+      "git",
+      "find",
+      "uname",
+      "head",
+      "tr",
+      "sed",
+      "wc",
+      "printenv",
+    ]
+  ) {
+    const resolved = execFileSync("bash", [
+      "-c",
+      'command -v "$1"',
+      "bash",
+      tool,
+    ], {
+      encoding: "utf8",
+    }).trim();
+    await symlink(resolved, join(bin, tool));
+  }
+  const status = (() => {
+    try {
+      execFileSync(join(bin, "bash"), [
+        "-c",
+        STARTUP_SURVEY,
+        "bash",
+        "--",
+        "--",
+      ], {
+        env: { PATH: bin },
+        stdio: "ignore",
+      });
+      return 0;
+    } catch (error) {
+      return error.status;
+    }
+  })();
+  assert.equal(status, 3);
+  const surveyed = await discover(t, paths, { path: bin });
+  const queried = await discover(t, paths, {
+    path: bin,
+    refuse: (argv) => argv.some((arg) => arg.includes("survey()")),
+  });
+  assert.deepEqual(surveyed.result, queried.result);
+  assert.match(surveyed.result.context.git, /Current branch: main/);
+});
+
 test("a malformed survey falls back to the per-walk queries", () => {
   const candidates = ["/a", "/b"];
   const output = [
@@ -248,7 +309,24 @@ test("a malformed survey falls back to the per-walk queries", () => {
   assert.deepEqual(parsed.skills.get("/h/.claude/skills"), [
     "/h/.claude/skills/s/SKILL.md",
   ]);
-  // Truncated output, a different candidate count or an unknown answer.
+  // Output before the survey, an empty successful Git answer, truncated
+  // output, a different candidate count or an unknown answer.
+  assert.equal(
+    parseStartupSurvey(
+      ["base64: not found", ...output, "\x1eend", ""].join("\n"),
+      candidates,
+    ),
+    undefined,
+  );
+  assert.equal(
+    parseStartupSurvey(
+      [...output.slice(0, 6), "", ...output.slice(7), "\x1eend", ""].join(
+        "\n",
+      ),
+      candidates,
+    ),
+    undefined,
+  );
   assert.equal(parseStartupSurvey(output.join("\n"), candidates), undefined);
   assert.equal(
     parseStartupSurvey([...output, "\x1eend", ""].join("\n"), ["/a"]),
