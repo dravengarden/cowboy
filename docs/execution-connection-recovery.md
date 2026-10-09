@@ -327,10 +327,12 @@ checks the standard Linux and NixOS system locations when PATH omits them, so
 Hawk can use verified append-only synchronization without changing user PATH.
 The wire limit and the project's hook decision remain unchanged.
 
-Regression coverage includes 8 MiB snapshots with and without Python and a
-genuine 6 MiB native prompt in the packaged hook scenario. The latter exceeds
-the invocation limit after Base64 encoding and must still reach target hooks
-with its original history intact. Its UserPromptSubmit guard must also receive
-the entire large prompt. Native Claude/ACP pins and public tool/Mods
+Regression coverage includes 8 MiB snapshots with and without Python and
+over 6 MiB of genuine native history accumulated across ordinary-sized turns
+in the packaged hook scenario. That history exceeds the invocation limit after
+Base64 encoding and must still reach target hooks intact. Each UserPromptSubmit
+guard also receives its complete input. A separate fresh native executor probe
+checks an 8 MiB hook input without exceeding Claude's per-turn context budget.
+Native Claude/ACP pins and public tool/Mods
 contracts are unchanged; only private transcript transport and helper discovery
 change.
