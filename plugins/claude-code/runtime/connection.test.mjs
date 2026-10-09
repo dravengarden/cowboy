@@ -100,11 +100,15 @@ test("explicit shutdown cannot reopen the execution connection", async (t) => {
 test("retained cancellation resumes after a new call restores the connection", async (t) => {
   const { state, connection } = await fixture(t);
   const directory = await mkdtemp(join(tmpdir(), "claude-reconnect-cancel-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const tools = new WorkspaceTools(connection, {
     environment: { id: "same-target" },
     workspace: { cwd: "/target" },
   }, join(directory, "state.json"));
+  // A reconciliation save can still be writing its temporary file.
+  t.after(async () => {
+    await tools.saves;
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 });
+  });
   await assert.rejects(connection.call("fs/writeFile", {}), /no replay/);
   tools.state.jobs.original = { cancelRequested: true };
   tools.scheduleCancellations();
