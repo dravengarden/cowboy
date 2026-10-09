@@ -1222,9 +1222,9 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
         if name == "HOOK_PERMREQ":
             client.permission = slow_host
             mode("default")
-        # Cross the incremental-copy threshold using genuine native history.
-        # Subsequent hooks must continue seeing the original large prompt.
-        prompt = name + (" TRANSCRIPT_SYNC_SENTINEL " + "x" * 200000 if name == "HOOK_BLOCK" else "")
+        # Genuine history exceeds the worker's 7 MiB invocation limit after
+        # Base64 encoding. First copies must chunk; subsequent copies append.
+        prompt = name + (" TRANSCRIPT_SYNC_SENTINEL " + "x" * (6 * 1024 * 1024) if name == "HOOK_BLOCK" else "")
         client.prompt(text=prompt, timeout=60)
         if name == "HOOK_PERMREQ":
             mode("bypassPermissions")
@@ -1272,7 +1272,7 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                  "PermissionRequest", "Stop", "StopTranscript"]:
         require(name in recorded, f"target {name} hook did not run on the target")
     sizes = [json.loads(line) for line in (args.target / "hook-transcript-sizes.jsonl").read_text().splitlines()]
-    large = [item for item in sizes if item["size"] >= 200000]
+    large = [item for item in sizes if item["size"] >= 6 * 1024 * 1024]
     require(len(large) >= 3 and all(item["sentinel"] for item in large),
             "incremental target transcript snapshots lost native history")
     # The fixture executor shares this host's HOME; only new entries count.

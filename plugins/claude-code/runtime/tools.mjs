@@ -840,13 +840,56 @@ export class WorkspaceTools {
     }
   }
 
+  // The execution wire admits at most 7 MiB per invocation, including Base64
+  // and JSON. An allowed 8 MiB transcript therefore needs bounded writes even
+  // for its first snapshot, or on a target without Python.
+  async hookTranscriptFile(path, bytes, call) {
+    const chunkSize = 3 * 1024 * 1024;
+    const write = (path, bytes) =>
+      this.connection.call("fs/writeFile", {
+        path: pathToFileURL(path).href,
+        dataBase64: bytes.toString("base64"),
+      });
+    if (bytes.length <= chunkSize) return await write(path, bytes);
+    const temporary = path + ".transfer-" + randomUUID();
+    const parts = [];
+    try {
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const part = temporary + "." + parts.length;
+        parts.push(part);
+        await write(part, bytes.subarray(offset, offset + chunkSize));
+      }
+      const result = await this.command(
+        [
+          this.shell,
+          "-c",
+          'umask 077; target=$1; temporary=$2; shift 2; set -C; cat -- "$@" > "$temporary" && mv -f -- "$temporary" "$target"',
+          this.shell,
+          path,
+          temporary,
+          ...parts,
+        ],
+        10000,
+        call,
+        { cancelOnError: true },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error("Target hook transcript transfer failed");
+      }
+    } finally {
+      for (const part of [...parts, temporary]) {
+        await this.connection.call("fs/remove", {
+          path: pathToFileURL(part).href,
+          force: true,
+        }).catch(() => {});
+      }
+    }
+  }
+
   async hookTranscript(transcript, copy, call) {
     // Small inputs and targets without Python retain the original contract.
     if (!this.rangePython || transcript.length < 128 * 1024) {
-      await this.connection.call("fs/writeFile", {
-        path: pathToFileURL(copy).href,
-        dataBase64: transcript.toString("base64"),
-      });
+      await this.hookTranscriptFile(copy, transcript, call);
       return;
     }
     // Bound memory/storage to one latest transcript per execution binding.
@@ -863,10 +906,7 @@ export class WorkspaceTools {
       );
       const delta = copy + ".delta";
       const prepare = async (bytes, base) => {
-        await this.connection.call("fs/writeFile", {
-          path: pathToFileURL(delta).href,
-          dataBase64: bytes.toString("base64"),
-        });
+        await this.hookTranscriptFile(delta, bytes, call);
         return await this.command(
           [
             this.rangePython,
@@ -1621,7 +1661,7 @@ export class WorkspaceTools {
     const platform = await this.command([
       "bash",
       "-c",
-      'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}"; command -v python3 || true',
+      'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}"; command -v python3 || { for p in /usr/bin/python3 /run/current-system/sw/bin/python3; do if test -x "$p"; then printf "%s\\n" "$p"; break; fi; done; }',
     ]);
     if (platform.exitCode !== 0 || !platform.output.startsWith("/")) {
       throw new Error("Target Bash is unavailable");
