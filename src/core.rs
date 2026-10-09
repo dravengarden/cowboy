@@ -355,6 +355,9 @@ pub struct ProviderUpdate {
     pub to: String,
     /// Started by the idle auto-update policy rather than an explicit Reload.
     pub automatic: bool,
+    /// Controller clock when the reload began. Clients estimate progress from
+    /// it because a worker start reports no intermediate phases.
+    pub started_at_ms: i64,
 }
 
 /// Session metadata for the list view (no event log).
@@ -3830,6 +3833,7 @@ impl Hub {
                 from: session.meta.provider_version.clone(),
                 to: version.to_owned(),
                 automatic,
+                started_at_ms: now_ms(),
             });
             session.meta.provider_version = version.to_owned();
             session.meta.provider_generation_digest = digest.to_owned();
@@ -8660,14 +8664,11 @@ mod core_tests {
         hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
             .expect("reload");
         let starting = hub.session_info(&before.id).expect("session").meta;
-        assert_eq!(
-            starting.provider_update,
-            Some(ProviderUpdate {
-                from: before.provider_version.clone(),
-                to: "new-version".to_owned(),
-                automatic: true,
-            })
-        );
+        let update = starting.provider_update.clone().expect("published update");
+        assert_eq!(update.from, before.provider_version);
+        assert_eq!(update.to, "new-version");
+        assert!(update.automatic);
+        assert!(update.started_at_ms > 0);
         let wire = serde_json::to_value(&starting).expect("serialize");
         assert_eq!(wire["provider_update"]["automatic"], true);
         hub.set_status(&before.id, Status::Starting, None);

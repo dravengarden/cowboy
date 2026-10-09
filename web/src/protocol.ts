@@ -126,6 +126,8 @@ export interface ProviderUpdate {
   from: string;
   to: string;
   automatic: boolean;
+  /** Controller clock (epoch ms) when the reload began. */
+  started_at_ms: number;
 }
 
 export interface SessionMeta {

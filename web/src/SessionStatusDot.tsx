@@ -1,10 +1,12 @@
-import { CircularProgress, Tooltip } from "@mui/material";
+import { useEffect, useState } from "react";
+import { Box, CircularProgress, Tooltip } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
 import { Circle } from "@mui/icons-material";
 import type { ProviderUpdate, Status } from "./protocol";
 import {
   backgroundProviderUpdateLabel,
   backgroundTasksLabel,
+  providerUpdateProgress,
   waitingOnBackground,
 } from "./backgroundActivity";
 import { desktopSize } from "./surface/desktopSize";
@@ -82,13 +84,22 @@ export function StatusDot({
   // An idle session whose agent still waits on its own background work is
   // not settled either: it resumes on that work's result without a prompt.
   const waiting = waitingOnBackground(status, backgroundTasks);
-  // Conversely, an unattended Provider update is starting without anyone
-  // waiting on it; a fleet-wide rollout would otherwise spin row after row.
+  // An unattended Provider update is starting without anyone waiting on it;
+  // it fills a determinate ring instead of spinning like a cold start.
   const updating = backgroundProviderUpdateLabel(status, providerUpdate);
-  const shown: Status = waiting ? "busy" : updating ? "running" : status;
+  if (updating && providerUpdate) {
+    return (
+      <ProviderUpdateRing
+        label={updating}
+        startedAtMs={providerUpdate.started_at_ms}
+        sx={sx}
+      />
+    );
+  }
+  const shown: Status = waiting ? "busy" : status;
   const label = waiting
     ? backgroundTasksLabel(backgroundTasks ?? 0)
-    : updating ?? statusLabel(status);
+    : statusLabel(status);
   const active = shown === "busy" || shown === "starting";
   const indicator = active
     ? (
@@ -117,6 +128,68 @@ export function StatusDot({
   return (
     <Tooltip title={label} enterDelay={300}>
       {indicator}
+    </Tooltip>
+  );
+}
+
+// Determinate twin of the startup spinner: same size and info blue, a faint
+// full track, and an estimated fill that advances once a second.
+function ProviderUpdateRing({
+  label,
+  startedAtMs,
+  sx,
+}: {
+  label: string;
+  startedAtMs: number;
+  sx?: SxProps<Theme> | undefined;
+}): React.JSX.Element {
+  const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const progress = providerUpdateProgress(startedAtMs, now);
+  const size = desktopSize(11);
+  return (
+    <Tooltip title={`${label} (~${String(progress)}%)`} enterDelay={300}>
+      <Box
+        role="progressbar"
+        aria-label={label}
+        aria-valuenow={progress}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        sx={[
+          {
+            position: "relative",
+            display: "inline-flex",
+            flexShrink: 0,
+            width: size,
+            height: size,
+            color: statusColor("starting"),
+          },
+          ...extra,
+        ]}
+      >
+        <CircularProgress
+          variant="determinate"
+          value={100}
+          size={size}
+          thickness={6}
+          color="inherit"
+          aria-hidden
+          sx={{ position: "absolute", inset: 0, opacity: 0.25 }}
+        />
+        <CircularProgress
+          variant="determinate"
+          value={progress}
+          size={size}
+          thickness={6}
+          color="inherit"
+          aria-hidden
+          sx={{ position: "absolute", inset: 0 }}
+        />
+      </Box>
     </Tooltip>
   );
 }
