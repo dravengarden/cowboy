@@ -74,14 +74,24 @@ function object(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** The parent of a managed child conversation, read from its binding. */
+/**
+ * The parent of a managed child conversation, read from its binding: a
+ * target-local child's own record, or the `managed` constraint of a child
+ * whose Agent runtime is on another Machine.
+ */
 export function managedChildParent(
   session: SessionMeta | undefined,
 ): string | null {
   const binding = object(session?.execution_binding);
-  return binding?.schema === 1 && binding.phase === "managed_child" &&
-      typeof binding.parent_session_id === "string"
-    ? binding.parent_session_id
+  if (binding?.schema !== 1) return null;
+  if (binding.phase === "managed_child") {
+    return typeof binding.parent_session_id === "string"
+      ? binding.parent_session_id
+      : null;
+  }
+  const managed = object(binding.managed);
+  return typeof managed?.parent_session_id === "string"
+    ? managed.parent_session_id
     : null;
 }
 

@@ -335,11 +335,26 @@ impl Manager {
                     Err(code) => Response::ManagedRoundRefused { code: code.into() },
                 }
             }
+            Action::PrepareManagedEnvironment {
+                child_session_id,
+                runtime,
+            } => match self
+                .prepare_managed(&child_session_id, runtime, workspaces)
+                .await
+            {
+                Ok(binding) => Response::Prepared { binding },
+                Err(reason) => Response::Refused { reason },
+            },
             Action::CloseManagedChild { child_session_id } => {
                 if !crate::managed_calls::valid_id(&child_session_id) {
                     return Response::Refused {
                         reason: Refusal::InvalidRequest,
                     };
+                }
+                // Stop a remote child's environment before removing the
+                // snapshot it executes in.
+                if let Err(reason) = self.close_managed_environment(&child_session_id).await {
+                    return Response::Refused { reason };
                 }
                 match crate::managed_calls::snapshot::close(&self.managed_root(), &child_session_id)
                 {
@@ -350,6 +365,149 @@ impl Manager {
                 }
             }
         }
+    }
+
+    /// The Machine-written identity of a managed child's snapshot directory.
+    fn managed_identity(
+        &self,
+        child: &str,
+    ) -> Result<crate::execution_environment::ManagedChildV1, Refusal> {
+        let directory = self.managed_root().join(child);
+        let marker = directory.join("snapshot.json");
+        for path in [&directory, &marker] {
+            let metadata = std::fs::symlink_metadata(path).map_err(|_| Refusal::EnvironmentLost)?;
+            if metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.mode() & 0o077 != 0
+                || (path == &directory && !metadata.is_dir())
+                || (path == &marker && (!metadata.is_file() || metadata.len() > 16384))
+            {
+                return Err(Refusal::IdentityMismatch);
+            }
+        }
+        let identity: crate::execution_environment::ManagedChildV1 =
+            serde_json::from_slice(&std::fs::read(&marker).map_err(|_| Refusal::EnvironmentLost)?)
+                .map_err(|_| Refusal::IdentityMismatch)?;
+        let workspace = directory.join("workspace");
+        if identity.validate().is_err()
+            || identity.session_id != child
+            || identity.machine_id != self.machine_id
+            || Path::new(&identity.cwd) != workspace
+            || workspace.canonicalize().ok().as_ref() != Some(&workspace)
+        {
+            return Err(Refusal::IdentityMismatch);
+        }
+        Ok(identity)
+    }
+
+    /// Start, or observe, the read-only environment of a managed child whose
+    /// Agent runtime is on another Machine. The keeper enforces the profile.
+    async fn prepare_managed(
+        &self,
+        child: &str,
+        runtime: RuntimeLocation,
+        workspaces: &[MachineWorkspace],
+    ) -> Result<BindingV1, Refusal> {
+        let config = self.configuration.as_ref().ok_or(Refusal::Unavailable)?;
+        if !keeper::valid_operation_id(child)
+            || !crate::managed_calls::valid_id(child)
+            || self.service_id.is_none()
+            || self.machine_id == "local"
+            || runtime.machine_id == self.machine_id
+            || !crate::managed_calls::valid_id(&runtime.machine_id)
+            || !Path::new(&runtime.cwd).is_absolute()
+        {
+            return Err(Refusal::InvalidRequest);
+        }
+        let identity = self.managed_identity(child)?;
+        let source = workspaces
+            .iter()
+            .find(|workspace| workspace.id == identity.workspace_id)
+            .ok_or(Refusal::WorkspaceUnavailable)?
+            .canonical_path
+            .clone();
+        let managed = keeper::ManagedExecution {
+            profile: identity.profile,
+            round_path: self
+                .managed_root()
+                .join(child)
+                .join("round.json")
+                .display()
+                .to_string(),
+        };
+        let _gate = self.prepare.lock().await;
+        let directory = self.root.join(child);
+        let path = directory.join("contract.json");
+        if directory.join("closed.json").exists() {
+            return Err(Refusal::EnvironmentLost);
+        }
+        if path.exists() {
+            let contract = read_contract(&path).map_err(|_| Refusal::EnvironmentLost)?;
+            if contract.session_id != child
+                || contract.binding.runtime != runtime
+                || contract.binding.workspace.cwd != identity.cwd
+                || contract.binding.workspace.id != identity.workspace_id
+                || contract.binding.environment.machine_id != self.machine_id
+                || contract.managed.as_ref() != Some(&managed)
+            {
+                return Err(Refusal::IdentityMismatch);
+            }
+            return match exchange(&directory, &contract, keeper::Command::Describe).await {
+                Ok(keeper::Response::Ready { scope, .. })
+                    if scope == Scope::from_binding(&contract.binding) =>
+                {
+                    Ok(contract.binding)
+                }
+                _ => Err(Refusal::EnvironmentLost),
+            };
+        }
+        if directory.exists() {
+            return Err(Refusal::EnvironmentLost);
+        }
+        std::fs::create_dir_all(&self.root).map_err(|_| Refusal::PreparationFailed)?;
+        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| Refusal::PreparationFailed)?;
+        let binding = BindingV1 {
+            schema: 1,
+            id: random_id(),
+            revision: 1,
+            runtime,
+            environment: EnvironmentLocation {
+                machine_id: self.machine_id.clone(),
+                id: random_id(),
+                incarnation: random_id(),
+                executor_digest: format!("sha256:{}", config.executor.sha256),
+                protocol: 1,
+            },
+            workspace: WorkspaceLocation {
+                id: identity.workspace_id.clone(),
+                worktree_id: child.to_owned(),
+                source_path: source,
+                cwd: identity.cwd.clone(),
+            },
+            access: ExecutionAccess::Project,
+            managed: Some(crate::execution_environment::ManagedBindingV1 {
+                parent_session_id: identity.parent_session_id.clone(),
+                profile: identity.profile,
+            }),
+        };
+        binding.validate().map_err(|_| Refusal::InvalidRequest)?;
+        self.start_keeper(config, child, &directory, binding, None, Some(managed))
+            .await
+    }
+
+    /// Stop a managed child's environment, if it has one. Absent is closed.
+    async fn close_managed_environment(&self, child: &str) -> Result<(), Refusal> {
+        let directory = self.root.join(child);
+        let path = directory.join("contract.json");
+        if !path.exists() {
+            return Ok(());
+        }
+        let contract = read_contract(&path).map_err(|_| Refusal::EnvironmentLost)?;
+        if contract.session_id != child || contract.managed.is_none() {
+            return Err(Refusal::IdentityMismatch);
+        }
+        let _gate = self.prepare.lock().await;
+        self.close_locked(child, &contract.binding).await
     }
 
     async fn prepare_runtime(&self, session_id: &str) -> Result<RuntimeLocation, Refusal> {
@@ -447,6 +605,8 @@ impl Manager {
                 || contract.binding.workspace.source_path != workspace.canonical_path
                 || contract.binding.environment.machine_id != self.machine_id
                 || contract.binding.runtime != runtime
+                // A managed environment never becomes an ordinary one.
+                || contract.managed.is_some()
             {
                 return Err(Refusal::IdentityMismatch);
             }
@@ -510,10 +670,33 @@ impl Manager {
                 cwd: prepared.path,
             },
             access: ExecutionAccess::Project,
+            managed: None,
         };
         binding.validate().map_err(|_| Refusal::InvalidRequest)?;
-        std::fs::create_dir(&directory).map_err(|_| Refusal::EnvironmentLost)?;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        let call_context = self
+            .calls
+            .as_ref()
+            .and_then(|calls| calls.context_path(session_id))
+            .map(|path| path.display().to_string());
+        self.start_keeper(config, session_id, &directory, binding, call_context, None)
+            .await
+    }
+
+    /// Create an admitted environment's private directory, contract and keeper.
+    /// The caller holds the preparation gate and has checked that neither the
+    /// directory nor a tombstone exists.
+    async fn start_keeper(
+        &self,
+        config: &Configuration,
+        session_id: &str,
+        directory: &Path,
+        binding: BindingV1,
+        call_context: Option<String>,
+        managed: Option<keeper::ManagedExecution>,
+    ) -> Result<BindingV1, Refusal> {
+        let path = directory.join("contract.json");
+        std::fs::create_dir(directory).map_err(|_| Refusal::EnvironmentLost)?;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
             .map_err(|_| Refusal::PreparationFailed)?;
         if let Some(retention) = &config.retention {
             let status = tokio::time::timeout(
@@ -549,11 +732,8 @@ impl Manager {
             executor: config.executor.clone(),
             capability: format!("{}{}", random_id(), random_id()),
             environment,
-            call_context: self
-                .calls
-                .as_ref()
-                .and_then(|calls| calls.context_path(session_id))
-                .map(|path| path.display().to_string()),
+            call_context,
+            managed,
         };
         let file = std::fs::OpenOptions::new()
             .create_new(true)
@@ -563,16 +743,16 @@ impl Manager {
             .map_err(|_| Refusal::PreparationFailed)?;
         serde_json::to_writer(&file, &contract).map_err(|_| Refusal::PreparationFailed)?;
         file.sync_all().map_err(|_| Refusal::PreparationFailed)?;
-        std::fs::File::open(&directory)
+        std::fs::File::open(directory)
             .and_then(|file| file.sync_all())
             .map_err(|_| Refusal::PreparationFailed)?;
-        self.spawn(config, &path, &directory, &binding)
+        self.spawn(config, &path, directory, &binding)
             .await
             .map_err(|_| Refusal::PreparationFailed)?;
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Ok(keeper::Response::Ready { scope, .. }) =
-                    exchange(&directory, &contract, keeper::Command::Describe).await
+                    exchange(directory, &contract, keeper::Command::Describe).await
                     && scope == Scope::from_binding(&binding)
                 {
                     return binding;

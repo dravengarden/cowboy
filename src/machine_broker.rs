@@ -2621,6 +2621,22 @@ impl Broker {
             && managed_child.is_none()
         {
             let binding = binding.decode().map_err(anyhow::Error::msg)?;
+            if let Some(managed) = &binding.managed {
+                // A remote managed child launches only its signed profile.
+                ensure!(
+                    binding.workspace.worktree_id == session.session_id,
+                    "managed child placement mismatch"
+                );
+                let installed = provider
+                    .as_ref()
+                    .context("managed child requires an exact Provider generation")?;
+                let bytes = std::fs::read(&installed.package_path)?;
+                let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes)?;
+                package
+                    .manifest
+                    .runtime
+                    .launch_arguments(Some(managed.profile))?;
+            }
             ensure!(
                 behavior
                     .execution

@@ -34,6 +34,28 @@ pub struct BindingV1 {
     pub environment: EnvironmentLocation,
     pub workspace: WorkspaceLocation,
     pub access: ExecutionAccess,
+    /// Present only for a managed child whose Agent runtime is on another
+    /// Machine. Older readers refuse the field and therefore the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<ManagedBindingV1>,
+}
+
+/// The parent-owned constraint of a remotely executed managed child. Its
+/// execution Machine enforces `profile`; its runtime applies the turn round.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedBindingV1 {
+    pub parent_session_id: String,
+    pub profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+}
+
+impl std::hash::Hash for ManagedBindingV1 {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.parent_session_id.hash(state);
+        match self.profile {
+            cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1 => 1_u8.hash(state),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -141,6 +163,7 @@ impl RecoveryV1 {
             && next.runtime == self.previous.runtime
             && next.workspace == self.previous.workspace
             && next.access == self.previous.access
+            && next.managed == self.previous.managed
             && next.environment.machine_id == self.previous.environment.machine_id
             && next.environment.executor_digest == self.previous.environment.executor_digest
             && next.environment.protocol == self.previous.environment.protocol
@@ -181,6 +204,7 @@ impl PreparationV1 {
             && binding.workspace.id == self.workspace_id
             && binding.workspace.source_path == self.source_path
             && binding.access == ExecutionAccess::Project
+            && binding.managed.is_none()
     }
 }
 
@@ -217,6 +241,17 @@ impl ExecutionBinding {
         let child = ManagedChildV1::deserialize(&self.0).ok()?;
         child.validate().ok()?;
         Some(child)
+    }
+
+    /// The parent and profile of any managed child, local or remote.
+    pub fn managed(&self) -> Option<ManagedBindingV1> {
+        if let Some(child) = self.managed_child() {
+            return Some(ManagedBindingV1 {
+                parent_session_id: child.parent_session_id,
+                profile: child.profile,
+            });
+        }
+        self.decode().ok()?.managed
     }
     pub fn from_record(record: serde_json::Value) -> Self {
         Self(record)
@@ -295,6 +330,14 @@ impl BindingV1 {
             .all(|value| valid_path(value))
             || !valid_digest(&self.environment.executor_digest)
             || self.string_bytes() > MAX_BINDING_BYTES
+            || self.managed.as_ref().is_some_and(|managed| {
+                // A remote managed child executes elsewhere, only in a
+                // Machine-owned snapshot it is named after.
+                !crate::managed_calls::valid_id(&managed.parent_session_id)
+                    || managed.parent_session_id == self.workspace.worktree_id
+                    || self.runtime.machine_id == self.environment.machine_id
+                    || self.access != ExecutionAccess::Project
+            })
         {
             return Err("execution environment binding is invalid");
         }
@@ -316,6 +359,11 @@ impl BindingV1 {
             &self.workspace.cwd,
         ]
         .into_iter()
+        .chain(
+            self.managed
+                .as_ref()
+                .map(|managed| &managed.parent_session_id),
+        )
         .map(String::len)
         .sum()
     }
@@ -421,6 +469,61 @@ mod tests {
         let malformed = ExecutionBinding::from_record(malformed);
         assert!(malformed.managed_child().is_none());
         assert!(malformed.decode().is_err());
+    }
+
+    #[test]
+    fn split_managed_children_are_ordinary_remote_bindings_with_a_parent() {
+        let mut record = fixture().record().clone();
+        record["workspace"]["worktree_id"] = serde_json::json!("child-1");
+        record["managed"] =
+            serde_json::json!({"parent_session_id": "parent-1", "profile": "read_only_v1"});
+        let binding = ExecutionBinding::from_record(record.clone());
+        let decoded = binding.decode().unwrap();
+        let managed = binding.managed().unwrap();
+        assert_eq!(managed.parent_session_id, "parent-1");
+        assert_eq!(decoded.managed, Some(managed));
+        assert!(binding.managed_child().is_none());
+        assert!(fixture().managed().is_none());
+        // Same-Machine, self-parented, host-scoped or unknown profiles refuse.
+        for (path, value) in [
+            ("/environment/machine_id", serde_json::json!("ovh")),
+            ("/managed/parent_session_id", serde_json::json!("child-1")),
+            ("/access", serde_json::json!("host")),
+            ("/managed/profile", serde_json::json!("full_access")),
+            ("/managed/parent_session_id", serde_json::json!("../parent")),
+        ] {
+            let mut invalid = record.clone();
+            *invalid.pointer_mut(path).unwrap() = value;
+            let invalid = ExecutionBinding::from_record(invalid);
+            assert!(invalid.decode().is_err(), "{path}");
+            assert!(invalid.managed().is_none(), "{path}");
+        }
+        // Neither creation nor recovery can add or drop the constraint.
+        let ordinary = fixture().decode().unwrap();
+        let intent = PreparationV1 {
+            schema: 1,
+            phase: "preparing".into(),
+            runtime: decoded.runtime.clone(),
+            machine_id: decoded.environment.machine_id.clone(),
+            workspace_id: decoded.workspace.id.clone(),
+            source_path: decoded.workspace.source_path.clone(),
+            executor_digest: decoded.environment.executor_digest.clone(),
+        };
+        assert!(intent.accepts(&ordinary));
+        assert!(!intent.accepts(&decoded));
+        let recovery = RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "repair-1".into(),
+            previous: decoded.clone(),
+        };
+        let mut next = decoded;
+        next.revision += 1;
+        next.environment.id = "new-environment".into();
+        next.environment.incarnation = "new-incarnation".into();
+        assert!(recovery.accepts(&next));
+        next.managed = None;
+        assert!(!recovery.accepts(&next));
     }
 
     #[test]

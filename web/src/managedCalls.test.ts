@@ -56,6 +56,18 @@ Deno.test("managed children are recognised only from their exact binding", () =>
   } as unknown as SessionMeta;
   assert.equal(managedChildParent(remote), null);
   assert.equal(managedChildParent(undefined), null);
+  // A child whose Agent runtime is on another Machine is still a child.
+  const split = {
+    id: "split",
+    execution_binding: {
+      schema: 1,
+      runtime: {},
+      environment: {},
+      managed: { parent_session_id: "parent", profile: "read_only_v1" },
+    },
+  } as unknown as SessionMeta;
+  assert.equal(managedChildParent(split), "parent");
+  assert.ok(isManagedChild(split));
 });
 
 Deno.test("execution status, verdicts and findings stay separate facts", () => {

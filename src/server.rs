@@ -20148,7 +20148,7 @@ fn handle_command(
                 .hub
                 .session_info(&session_id)
                 .and_then(|info| info.meta.execution_binding);
-            if binding.as_ref().is_some_and(|binding| binding.managed_child().is_some()) {
+            if binding.as_ref().is_some_and(|binding| binding.managed().is_some()) {
                 managed_calls::delete_child(state, &session_id)
             } else if binding.is_some() {
                 let result = execution::sessions::delete(state, &session_id);

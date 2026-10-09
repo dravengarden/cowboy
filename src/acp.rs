@@ -3519,7 +3519,11 @@ async fn run_session(
                 let capture_completion = completion.is_some();
                 let mut cancellation = state.prompt_cancellation.subscribe();
                 let cancellation_generation = *cancellation.borrow_and_update();
-                let fences = config_fences.values().cloned().collect();
+                let fences = config_fences
+                    .values()
+                    .cloned()
+                    .chain(state.sink.managed_round_fence(&session_id))
+                    .collect();
                 cx.clone().spawn(async move {
                     let _prompt_guard = state.prompt_lock.lock().await;
                     if *cancellation.borrow_and_update() != cancellation_generation {

@@ -4,6 +4,7 @@
 
 pub mod file_helper;
 mod ledger;
+mod read_only;
 
 use crate::execution_protocol::{
     self as wire, Command, LaunchContract, Outcome, Refusal, Request, Response, Scope,
@@ -48,6 +49,8 @@ pub fn log_context(path: &Path) -> Result<crate::logs::Context> {
 struct Host {
     scope: Scope,
     call_context: Option<String>,
+    /// A managed child's environment: every request is constrained read-only.
+    read_only: bool,
     capability_digest: [u8; 32],
     initialization: Value,
     cwd: PathBuf,
@@ -136,6 +139,23 @@ fn validate_contract(contract: &LaunchContract) -> Result<()> {
         }),
         "invalid call context"
     );
+    ensure!(
+        contract.managed.is_some() == contract.binding.managed.is_some()
+            && contract.managed.as_ref().is_none_or(|managed| {
+                // A managed child cannot itself delegate through a call context.
+                contract.call_context.is_none()
+                    && Path::new(&managed.round_path).is_absolute()
+                    && managed.round_path.len() <= 4096
+                    && !managed.round_path.contains('\0')
+                    && contract
+                        .binding
+                        .managed
+                        .as_ref()
+                        .map(|binding| binding.profile)
+                        == Some(managed.profile)
+            }),
+        "invalid managed execution constraint"
+    );
     Ok(())
 }
 
@@ -199,6 +219,14 @@ impl Host {
                     Err(Refusal::InvalidRequest)
                 } else if !self.current_workspace() {
                     Err(Refusal::WorkspaceChanged)
+                } else if let Some(read_only::Decision::Refuse(reply)) = self
+                    .read_only
+                    .then(|| read_only::decide(&invocation.method, &invocation.params, &self.cwd))
+                {
+                    // Deterministic and effect-free: answered without admission.
+                    Ok(Response::Operation {
+                        outcome: Outcome::Completed { reply },
+                    })
                 } else {
                     let admission = {
                         // Reserve before admitting so a full local queue proves
@@ -213,9 +241,19 @@ impl Host {
                                     if let Ok(Admission::New { id, .. }) = &result {
                                         // The ledger retains the admitted params;
                                         // only the native frame carries context.
+                                        let constrained = match self.read_only.then(|| {
+                                            read_only::decide(
+                                                &invocation.method,
+                                                &invocation.params,
+                                                &self.cwd,
+                                            )
+                                        }) {
+                                            Some(read_only::Decision::Forward(params)) => params,
+                                            _ => invocation.params.clone(),
+                                        };
                                         let params = wire::with_call_context(
                                             &invocation.method,
-                                            &invocation.params,
+                                            &constrained,
                                             self.call_context.as_deref(),
                                         );
                                         permit.send(json!({"id": id, "method": invocation.method, "params": params}));
@@ -429,6 +467,17 @@ pub async fn run(args: Args) -> Result<()> {
         write_json(&mut input, &json!({"method": "initialized", "params": {}})).await?;
         Ok::<_, anyhow::Error>(result)
     }).await??;
+    let mut initialization = initialization;
+    if let Some(managed) = &contract.managed {
+        // The Provider learns its constraint from the target it executes on.
+        initialization
+            .as_object_mut()
+            .context("executor initialization is not an object")?
+            .insert(
+                wire::MANAGED_INITIALIZATION_KEY.to_owned(),
+                json!({"schema": 1, "profile": managed.profile, "roundPath": managed.round_path}),
+            );
+    }
     let (writer, mut requests) = mpsc::channel(64);
     tracing::info!(
         event_name = "cowboy.execution.ready",
@@ -439,6 +488,7 @@ pub async fn run(args: Args) -> Result<()> {
     let host = Arc::new(Host {
         scope: Scope::from_binding(&contract.binding),
         call_context: contract.call_context.clone(),
+        read_only: contract.managed.is_some(),
         capability_digest: Sha256::digest(contract.capability.as_bytes()).into(),
         initialization,
         cwd,

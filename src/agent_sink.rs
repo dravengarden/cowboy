@@ -33,6 +33,14 @@ pub trait AgentSink: Send + Sync + 'static {
     ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
         Ok(None)
     }
+    /// Completes once `managed_prompt_meta` can answer: a remote managed
+    /// child reads its round from the execution target before its prompt.
+    fn managed_round_fence(
+        &self,
+        _session_id: &str,
+    ) -> Option<tokio::sync::watch::Receiver<Option<Result<(), String>>>> {
+        None
+    }
     fn broadcast_error(&self, session_id: Option<String>, message: String);
     fn requeue_prompt(
         &self,

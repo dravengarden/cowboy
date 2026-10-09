@@ -63,7 +63,23 @@ pub struct LaunchContract {
     /// the operator environment or an admitted invocation's parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_context: Option<String>,
+    /// Machine-owned constraint of a managed child's environment. The keeper,
+    /// never the Provider, enforces it on every native request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<ManagedExecution>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedExecution {
+    pub profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+    /// Machine-written round marker; a Provider reads its turn constraint.
+    pub round_path: String,
+}
+
+/// Key a managed keeper adds to its native initialization so the Provider
+/// learns its constraint from the target, not from its own arguments.
+pub const MANAGED_INITIALIZATION_KEY: &str = "cowboyManaged";
 
 /// Name of the private variable that locates a session's call context.
 pub const CALL_CONTEXT_ENV: &str = "COWBOY_CALL_CONTEXT";
