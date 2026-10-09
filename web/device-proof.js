@@ -73,14 +73,29 @@
     return challengePromise;
   }
 
+  // Name the failed step. A proof failure happens before dispatch, so the
+  // server never sees it; the sign-in bridge shows this message instead.
+  async function step(name, operation) {
+    try {
+      return await operation;
+    } catch (error) {
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      throw new Error(`${name} failed (${detail})`, { cause: error });
+    }
+  }
+
   async function proof(url, method = "GET") {
     const target = new URL(url, globalThis.location.origin);
     if (target.protocol === "wss:") target.protocol = "https:";
     if (target.origin !== globalThis.location.origin || target.protocol !== "https:") {
       throw new Error("Device proofs require the Cowboy HTTPS origin");
     }
-    const [keys, boot] = await Promise.all([identity(), challenge()]);
-    const key = base64(new Uint8Array(await crypto.subtle.exportKey("raw", keys.publicKey)));
+    const [keys, boot] = await Promise.all([
+      step("Device identity", identity()), step("Device challenge", challenge()),
+    ]);
+    const key = base64(new Uint8Array(
+      await step("Device key export", crypto.subtle.exportKey("raw", keys.publicKey)),
+    ));
     const value = {
       key, epoch: boot.epoch, origin: target.origin,
       time: Date.now() + boot.offset,
@@ -90,9 +105,9 @@
       "cowboy-browser-proof-v1", value.epoch, value.origin, key,
       method.toUpperCase(), target.pathname + target.search, value.time, value.nonce,
     ].join("\n");
-    value.signature = base64(new Uint8Array(await crypto.subtle.sign(
+    value.signature = base64(new Uint8Array(await step("Device signature", crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" }, keys.privateKey, new TextEncoder().encode(message),
-    )));
+    ))));
     return base64(new TextEncoder().encode(JSON.stringify(value)));
   }
 

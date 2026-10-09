@@ -115,7 +115,7 @@ async fn callback_bridge(request: axum::extract::Request) -> Response {
     );
     let mut response = axum::response::Html(format!(
         r#"<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer">
-<title>Completing sign in</title><p id="status">Completing sign in…</p>
+<title>Completing sign in</title><p id="status">Completing sign in…</p><p id="detail"></p>
 <script src="/device-proof.js"></script><script>
 (async () => {{
 try {{
@@ -124,12 +124,20 @@ const input = JSON.parse(atob("{encoded}"));
 const response = await fetch(input.target, {{ method: input.method, credentials: "same-origin",
   headers: {{ "Content-Type": "application/x-www-form-urlencoded" }},
   body: input.method === "POST" ? input.body : undefined }});
+if (!response.ok) throw new Error(`Cowboy answered HTTP ${{response.status}}`);
 const result = await response.json();
-if (!response.ok || typeof result.redirect !== "string") throw new Error();
+if (typeof result.redirect !== "string") throw new Error("Cowboy returned no redirect");
 location.replace(result.redirect);
-}} catch {{ document.getElementById("status").textContent = "Sign in failed. Return to Cowboy and try again."; }}
+}} catch (error) {{
+// A failure before dispatch never reaches the server, so name it on screen.
+console.error(error);
+document.getElementById("status").textContent = "Sign in failed. Return to Cowboy and try again.";
+document.getElementById("detail").textContent = error instanceof Error
+  ? `${{error.name}}: ${{error.message}}` : String(error);
+}}
 }})();</script>"#
-    )).into_response();
+    ))
+    .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());

@@ -115,6 +115,7 @@ import { AppIconSettings } from "./AppIconSettings";
 import { ClientUpdateSettings } from "./ClientUpdateSettings";
 import { useClientUpdateSettings } from "./clientUpdateSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
+import { AgentToolsSettings } from "./AgentToolsPanel";
 import { claimKeyboard } from "./keyboardClaim";
 import { KEYBOARD_INSET_CHANGED_EVENT, useKeyboardOpen } from "./keyboardInset";
 import {
@@ -6002,6 +6003,9 @@ function DesktopSettingsContent({
                     </DesktopSettingsRow>
                 </Box>
             </DesktopPanel>
+            <DesktopPanel label="Agent tools" sx={{ gridColumn: "1 / -1" }}>
+                <AgentToolsSettings />
+            </DesktopPanel>
         </Box>
     );
 }
@@ -7589,11 +7593,12 @@ function SettingsShell({
                 <MobileSettingsRoute
                     id="agent"
                     title="Agent behavior"
-                    description="Composer diagnostics"
+                    description="Agent tools and composer diagnostics"
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
                     <Stack spacing={2}>
+                <AgentToolsSettings />
                 <Stack
                     direction="row"
                     alignItems="center"

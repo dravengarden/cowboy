@@ -792,6 +792,18 @@ mod tests {
                 "call",
                 "start",
                 "--provider",
+                "auto",
+                "--request-file",
+                "-"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "cowboy",
+                "call",
+                "start",
+                "--provider",
                 "/bin/sh",
                 "--request-file",
                 "-"

@@ -50,7 +50,9 @@ impl Action {
                 request,
                 wait_ms,
             } => {
-                if !matches!(provider.as_str(), "codex" | "claude-code") || *wait_ms > MAX_WAIT_MS {
+                if !matches!(provider.as_str(), "codex" | "claude-code" | "auto")
+                    || *wait_ms > MAX_WAIT_MS
+                {
                     return Err(InputError::InvalidContract);
                 }
                 request.validate()?;

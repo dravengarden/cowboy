@@ -131,6 +131,13 @@ pub struct Record {
     /// Classified terminal cause; the original output stays in `result`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<CallError>,
+    /// The child agent's configuration preset chosen by the parent's policy;
+    /// absent keeps the agent's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// How the agent was chosen: `explicit` or `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +198,10 @@ pub struct Summary<'a> {
     pub provider_version: &'a Option<String>,
     pub cancel_requested: bool,
     pub error: &'a Option<CallError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<&'a str>,
     /// Optional projection of a structured review result. Execution success
     /// and review findings are distinct; the caller owns their disposition.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -221,6 +232,8 @@ impl Record {
             provider_version: &self.provider_version,
             cancel_requested: self.cancel_requested_at_ms.is_some(),
             error: &self.error,
+            preset: self.preset.as_deref(),
+            selection: self.selection.as_deref(),
             verdict: self
                 .result
                 .as_ref()
@@ -272,6 +285,14 @@ impl Record {
                 .is_none_or(|digest| !digest.is_empty() && digest.len() <= 128)
             && self.error.as_ref().is_none_or(CallError::validate)
             && (self.error.is_none() || matches!(self.state, State::Failed | State::Cancelled))
+            && self
+                .preset
+                .as_ref()
+                .is_none_or(|preset| !preset.is_empty() && preset.len() <= 128)
+            && self
+                .selection
+                .as_deref()
+                .is_none_or(|selection| matches!(selection, "explicit" | "auto"))
     }
 
     /// Check a CAS replacement independently of backend SQL. Placement, native
@@ -294,6 +315,8 @@ impl Record {
             && self.revision.checked_add(1) == Some(next.revision)
             && once(&self.input_revision, &next.input_revision)
             && once(&self.runtime_machine_id, &next.runtime_machine_id)
+            && self.preset == next.preset
+            && self.selection == next.selection
             && once(&self.provider_version, &next.provider_version)
             && once(
                 &self.provider_generation_digest,
@@ -362,6 +385,8 @@ mod tests {
             child_cursor: None,
             cancel_requested_at_ms: None,
             error: None,
+            preset: None,
+            selection: None,
         }
     }
 

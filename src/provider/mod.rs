@@ -49,6 +49,9 @@ pub(crate) struct PreparedLaunch {
     pub spec: LaunchSpec,
     pub sidecars: Vec<tokio::process::Child>,
     pub execution_jsonrpc: bool,
+    /// Configuration options the signed package's presets set (model,
+    /// reasoning). A managed child accepts only these from Cowboy.
+    pub preset_options: std::collections::BTreeSet<String>,
 }
 
 impl LaunchSpec {
@@ -417,6 +420,7 @@ pub(crate) async fn prepare(
             spec,
             sidecars: Vec::new(),
             execution_jsonrpc: false,
+            preset_options: std::collections::BTreeSet::new(),
         });
     }
     prepare_package_launch(id, profile).await
@@ -551,6 +555,13 @@ async fn prepare_package_launch(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(PreparedLaunch {
+        preset_options: package
+            .manifest
+            .configuration
+            .presets
+            .iter()
+            .flat_map(|preset| preset.values.keys().cloned())
+            .collect(),
         execution_jsonrpc: package
             .manifest
             .runtime

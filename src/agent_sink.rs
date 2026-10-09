@@ -25,6 +25,11 @@ pub trait AgentSink: Send + Sync + 'static {
     fn session_is_managed_read_only(&self, _session_id: &str) -> bool {
         false
     }
+    /// A managed child accepts only the options its signed presets set, such
+    /// as model and reasoning; mode and permission options stay fixed.
+    fn managed_config_option_allowed(&self, _session_id: &str, _config_id: &str) -> bool {
+        false
+    }
     /// Native turn metadata for a managed child prompt. `Err` refuses the
     /// turn: a managed child never runs without its Machine-written round.
     fn managed_prompt_meta(

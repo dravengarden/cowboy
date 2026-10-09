@@ -2980,6 +2980,16 @@ impl Hub {
         self.inner.settings.lock().clone()
     }
 
+    /// One internal setting; JSON null means absent.
+    pub fn setting(&self, key: &str) -> Option<serde_json::Value> {
+        self.inner
+            .settings
+            .lock()
+            .get(key)
+            .filter(|value| !value.is_null())
+            .cloned()
+    }
+
     /// Restore internal auth/admin state before the HTTP server starts.
     pub fn load_settings(&self, entries: Vec<(String, serde_json::Value)>) {
         self.with_settings_mut(|settings| settings.extend(entries));

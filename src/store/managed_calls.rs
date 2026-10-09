@@ -96,6 +96,11 @@ impl Store {
         dispatch!(self, active_managed_calls())
     }
 
+    /// A parent's active and total call counts, for its session budget.
+    pub async fn managed_call_counts(&self, parent: &str) -> Result<(u64, u64)> {
+        dispatch!(self, managed_call_counts(parent))
+    }
+
     /// Returns the original record after duplicate admission. A caller must
     /// claim Queued -> Starting using CAS; inserting/observing grants no launch.
     pub async fn admit_managed_call(&self, record: &Record, request: &Request) -> Result<Record> {
@@ -153,6 +158,12 @@ macro_rules! implementation {
                 sqlx::query_as::<_, Row>("SELECT call_id, parent_session_id, request_id, request_document, child_session_id, state, revision, document, document_sha256 FROM managed_agent_calls WHERE parent_session_id = $1 AND ($2 IS NULL OR admission_order < (SELECT admission_order FROM managed_agent_calls WHERE parent_session_id = $1 AND call_id = $2)) ORDER BY admission_order DESC LIMIT 100")
                     .bind(parent).bind(before).fetch_all(&self.pool).await?
                     .into_iter().map(|row| row.decode().map(|(record, _)| record)).collect()
+            }
+
+            async fn managed_call_counts(&self, parent: &str) -> Result<(u64, u64)> {
+                let (active, total): (i64, i64) = sqlx::query_as("SELECT COALESCE(SUM(CASE WHEN state IN ('queued', 'starting', 'running', 'waiting_input', 'stopping') THEN 1 ELSE 0 END), 0), COUNT(*) FROM managed_agent_calls WHERE parent_session_id = $1")
+                    .bind(parent).fetch_one(&self.pool).await?;
+                Ok((u64::try_from(active)?, u64::try_from(total)?))
             }
 
             async fn active_managed_calls(&self) -> Result<Vec<Record>> {
@@ -258,6 +269,8 @@ mod tests {
             child_cursor: None,
             cancel_requested_at_ms: None,
             error: None,
+            preset: None,
+            selection: None,
         };
         let (overlapping, overlapping_record) = assert_admission(&store, &first, &request).await;
         assert_lifecycle(&store, &first, &overlapping, &overlapping_record).await;

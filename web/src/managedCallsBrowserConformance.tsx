@@ -9,6 +9,57 @@ import { composerStackExpandedStore } from "./composerStackAccordion";
 import { managementEntryFixture } from "./providerManagement.fixture";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
 import type { ManagedCallSummary } from "./managedCalls";
+import { AgentToolsSettings, SessionToolsSection } from "./AgentToolsPanel";
+import {
+  type AgentTools,
+  overrideFor,
+  type SessionToolsOverride,
+} from "./agentTools";
+
+const toolsDefaults: AgentTools = {
+  schema: 1,
+  matrix: { tools: true, recall: true },
+  calls: {
+    enabled: false,
+    targets: [{ agent: "claude-code" }, { agent: "codex" }],
+    default: "auto",
+    max_concurrent: 4,
+    max_per_session: 64,
+  },
+};
+const toolsCatalog = {
+  call_targets: [
+    {
+      agent: "codex",
+      presets: [{
+        id: "astra-max",
+        name: "Astra · Max",
+        detail: "",
+        is_default: false,
+      }],
+    },
+    {
+      agent: "claude-code",
+      presets: [{
+        id: "opus-high",
+        name: "Opus · High",
+        detail: "",
+        is_default: false,
+      }],
+    },
+  ],
+};
+
+function overlay(
+  defaults: AgentTools,
+  override: SessionToolsOverride,
+): AgentTools {
+  return {
+    ...defaults,
+    matrix: { ...defaults.matrix, ...override.matrix },
+    calls: { ...defaults.calls, ...override.calls },
+  };
+}
 
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
@@ -95,6 +146,19 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   let calls: ManagedCallSummary[] = [];
   const cancels: string[] = [];
   const cancelCount = (): number => cancels.length;
+  let sessionOverride: SessionToolsOverride = { schema: 1 };
+  const sessionWrites: SessionToolsOverride[] = [];
+  let agentDefaults: AgentTools = toolsDefaults;
+  const agentWrites: (AgentTools | null)[] = [];
+  const sessionTools = () => ({
+    session_id: "parent",
+    agent: "claude-code",
+    defaults: toolsDefaults,
+    defaults_customized: false,
+    override: sessionOverride,
+    effective: overlay(toolsDefaults, sessionOverride),
+    catalog: toolsCatalog,
+  });
   const provider = managementEntryFixture("codex");
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -107,6 +171,37 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
           authentication_executors: [],
         }),
       );
+    }
+    if (url === "/api/sessions/parent/tools") {
+      if (init?.method === "PUT") {
+        sessionOverride = JSON.parse(String(init.body)) as SessionToolsOverride;
+        sessionWrites.push(sessionOverride);
+      }
+      return Promise.resolve(Response.json(sessionTools()));
+    }
+    if (url === "/api/agent-tools") {
+      return Promise.resolve(Response.json({
+        schema: 1,
+        agents: [{
+          agent: "codex",
+          settings: agentDefaults,
+          customized: agentDefaults !== toolsDefaults,
+        }],
+        catalog: toolsCatalog,
+      }));
+    }
+    if (url === "/api/agent-tools/codex" && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as {
+        settings: AgentTools | null;
+      };
+      agentWrites.push(body.settings);
+      agentDefaults = body.settings ?? toolsDefaults;
+      return Promise.resolve(Response.json({
+        schema: 1,
+        agent: "codex",
+        settings: agentDefaults,
+        customized: body.settings !== null,
+      }));
     }
     if (url === "/api/sessions/parent/calls") {
       return Promise.resolve(
@@ -319,6 +414,106 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "child notice must open its parent",
     );
     tests.push("child-notice-links-parent");
+
+    // Session tools: calls start off; enabling them stores only the change.
+    root.unmount();
+    root = createRoot(container);
+    render(<SessionToolsSection sessionId="parent" />);
+    const allow = await until(
+      () =>
+        document.querySelector<HTMLInputElement>(
+          "input[aria-label='Allow agent calls']",
+        ),
+      "session tools did not load",
+    );
+    check(!allow.checked, "agent calls must start off");
+    check(
+      text().includes("Claude defaults"),
+      "inherited defaults must be named",
+    );
+    allow.click();
+    await until(
+      () => sessionWrites.length === 1 ? true : null,
+      "enabling calls was not saved",
+    );
+    check(
+      JSON.stringify(sessionWrites[0]) ===
+        JSON.stringify({ schema: 1, calls: { enabled: true } }),
+      `session override must hold only the change: ${
+        JSON.stringify(sessionWrites[0])
+      }`,
+    );
+    await until(
+      () => button("Use Claude defaults"),
+      "an overridden session must offer its defaults",
+    );
+    const codexAllowed = await until(
+      () => {
+        const input = document.querySelector<HTMLInputElement>(
+          "input[aria-label='Allow calls to Codex']",
+        );
+        return input && !input.disabled ? input : null;
+      },
+      "targets must be editable once calls are on",
+    );
+    codexAllowed.click();
+    await until(
+      () => sessionWrites.length === 2 ? true : null,
+      "removing a target was not saved",
+    );
+    check(
+      JSON.stringify(sessionWrites[1]?.calls?.targets) ===
+        JSON.stringify([{ agent: "claude-code" }]),
+      `removing Codex must keep only Claude: ${
+        JSON.stringify(sessionWrites[1])
+      }`,
+    );
+    (await until(() => {
+      const reset = button("Use Claude defaults");
+      return reset && !reset.disabled ? reset : null;
+    }, "reset must be available after saving")).click();
+    await until(
+      () => sessionWrites.length === 3 ? true : null,
+      "reset was not saved",
+    );
+    check(
+      JSON.stringify(sessionWrites[2]) === JSON.stringify({ schema: 1 }),
+      "reset must clear the override",
+    );
+    check(
+      JSON.stringify(overrideFor(toolsDefaults, toolsDefaults)) ===
+        JSON.stringify({ schema: 1 }),
+      "defaults must produce an empty override",
+    );
+    tests.push("session-tools-store-only-changes");
+
+    // Agent defaults: one switch writes the whole default for that kind.
+    root.unmount();
+    root = createRoot(container);
+    render(<AgentToolsSettings />);
+    const defaultsSwitch = await until(
+      () =>
+        document.querySelector<HTMLInputElement>(
+          "input[aria-label='Allow agent calls']",
+        ),
+      "agent defaults did not load",
+    );
+    defaultsSwitch.click();
+    await until(
+      () => agentWrites.length === 1 ? true : null,
+      "agent defaults were not saved",
+    );
+    check(agentWrites[0]?.calls.enabled === true, "defaults must enable calls");
+    (await until(() => {
+      const reset = button("Reset");
+      return reset && !reset.disabled ? reset : null;
+    }, "customized defaults must offer reset")).click();
+    await until(
+      () => agentWrites.length === 2 ? true : null,
+      "reset defaults were not saved",
+    );
+    check(agentWrites[1] === null, "reset must restore built-in defaults");
+    tests.push("agent-defaults-save-and-reset");
     return tests;
   } finally {
     root.unmount();

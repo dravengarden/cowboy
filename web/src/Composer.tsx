@@ -171,6 +171,8 @@ import { HintTooltip } from "./HintTooltip";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { ManagedCallsDock } from "./ManagedCallsDock";
+import { SessionToolsSection } from "./AgentToolsPanel";
+import { isManagedChild } from "./managedCalls";
 import {
   mobileComposerFocusMotion,
   mobileComposerIdleEditorMinHeight,
@@ -7192,6 +7194,12 @@ function ComposerSheet({
                 </Stack>
               )}
           </Box>
+        </>
+      )}
+      {session && !isManagedChild(session) && (
+        <>
+          <Divider />
+          <SessionToolsSection sessionId={session.id} />
         </>
       )}
       <SessionActionConfirmDialog
