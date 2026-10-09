@@ -113,7 +113,9 @@ newly issued grant. A stable parent ID or Unix uid cannot replace that check.
 
 The Controller now derives an authority observation from its current connected
 runtime and exact worker launch. Broker placeholders, resetting/draining workers,
-closed parents and changed launch metadata cannot produce it. Comparing this
+closed parents and changed launch metadata cannot produce it. A pending drain
+request alone does not revoke it: the busy worker remains the exact owner until
+its safe boundary, and its replacement epoch then revokes the grant. Comparing this
 observation includes the worker epoch and parent ownership/placement revision;
 turn changes, titles and native conversation materialization do not change it.
 The grant issuer and every forwarded action use this check. The observation
