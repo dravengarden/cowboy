@@ -1197,11 +1197,18 @@ mod tests {
             serde_json::from_str(include_str!("../../plugins/codex/provider.json")).unwrap();
         let mut package = build_package(source.compile().unwrap()).unwrap();
         package.manifest.sdk_version = "2.4.0".to_owned();
-        package
-            .manifest
-            .runtime
-            .required_capabilities
-            .remove(&cowboy_provider_sdk::RuntimeCapability::ProviderExecutionJsonrpcV1);
+        // Historical releases predate managed launch profiles.
+        package.manifest.runtime.managed_profiles.clear();
+        for capability in [
+            cowboy_provider_sdk::RuntimeCapability::ProviderExecutionJsonrpcV1,
+            cowboy_provider_sdk::RuntimeCapability::ProviderManagedProfilesV1,
+        ] {
+            package
+                .manifest
+                .runtime
+                .required_capabilities
+                .remove(&capability);
+        }
         package.manifest.runtime.behavior.execution = None;
         package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
         let bytes = serde_json::to_vec(&package).unwrap();

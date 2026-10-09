@@ -587,6 +587,10 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
           : mobileComposerPanelFrameSx),
         mb: desktop ? 1 : 0,
         bgcolor: "background.default",
+        // Own the text color and typography: rows and details are rendered in
+        // ButtonBase/Sheet surfaces that would otherwise inherit the page's.
+        color: "text.primary",
+        typography: "body2",
         overflow: "hidden",
       }}
     >
@@ -721,7 +725,7 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
           portal
           mobileDismiss="header"
         >
-          <Box sx={{ pb: 2 }}>
+          <Box sx={{ pb: 2, color: "text.primary", typography: "body2" }}>
             {selectedCall
               ? (
                 <CallDetailView

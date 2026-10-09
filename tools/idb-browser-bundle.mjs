@@ -17,7 +17,8 @@ if (
   suite !== "sign-in" && suite !== "desktop-composer" &&
   suite !== "session-move" && suite !== "session-fold" &&
   suite !== "draft-documents" && suite !== "keyboard-acceptance" &&
-  suite !== "editor-plugin-sandbox" && suite !== "tool-inspector"
+  suite !== "editor-plugin-sandbox" && suite !== "tool-inspector" &&
+  suite !== "managed-calls"
 ) {
   throw new Error("unknown suite");
 }
@@ -45,7 +46,7 @@ await build({
         suite === "project-placement" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
-        suite === "tool-inspector"
+        suite === "tool-inspector" || suite === "managed-calls"
         ? "development"
         : "production",
     ),
@@ -85,7 +86,7 @@ await build({
         suite === "workspace-extensions" || suite === "desktop-composer" ||
         suite === "session-move" || suite === "session-fold" ||
         suite === "draft-documents" || suite === "keyboard-acceptance" ||
-        suite === "tool-inspector"
+        suite === "tool-inspector" || suite === "managed-calls"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
@@ -94,6 +95,8 @@ await build({
           ? "../web/src/editorPlugins/editorPluginSandboxBrowserConformance.ts"
           : suite === "tool-inspector"
           ? "../web/src/toolInspectorBrowserConformance.tsx"
+          : suite === "managed-calls"
+          ? "../web/src/managedCallsBrowserConformance.tsx"
           : suite === "keyboard-acceptance"
           ? "../web/src/desktop/keyboardAcceptanceFixture.tsx"
           : suite === "draft-documents"
