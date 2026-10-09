@@ -388,6 +388,41 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     Step::Again
 }
 
+/// Record the policy's preset as the child's configuration preferences.
+/// Every worker start replays them before its first prompt, so each round of
+/// a continued conversation keeps the same model and reasoning. A preset
+/// missing from the exact generation is refused rather than guessed.
+fn apply_preset(
+    state: &AppState,
+    record: &Record,
+    version: &str,
+    digest: &str,
+) -> Result<(), &'static str> {
+    let Some(preset) = &record.preset else {
+        return Ok(());
+    };
+    let values = state
+        .provider_catalog
+        .package(&record.provider, version, digest)
+        .and_then(|package| {
+            package
+                .manifest
+                .configuration
+                .presets
+                .into_iter()
+                .find(|candidate| candidate.id == *preset)
+        })
+        .ok_or("preset_unavailable")?
+        .values;
+    for (config_id, value) in values {
+        state
+            .hub
+            .set_config_preference(&record.child_session_id, config_id, json!(value))
+            .map_err(|_| "preset_unavailable")?;
+    }
+    Ok(())
+}
+
 /// A transient preparation failure; the same launch is repeated.
 const RETRY: &str = "retry";
 
@@ -577,6 +612,7 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         )
         .map_err(|_| "authentication_required")?
         .map_err(|_| "provider_unavailable")?;
+    apply_preset(state, record, version, digest)?;
     state
         .supervisor
         .start_registered_session(&record.child_session_id)

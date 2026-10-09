@@ -47,6 +47,8 @@ pub struct Request {
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
     Review,
+    /// A review of design artifacts (specs, plans, records) rather than code.
+    DesignReview,
     Analysis,
 }
 

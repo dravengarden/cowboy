@@ -182,6 +182,50 @@ limits and resolved default placement for this authenticated context. Outside a
 managed context it explains that a Cowboy session is required. Ordinary human
 client login is a separate explicit ingress, not an automatic fallback.
 
+## Agent tools policy
+
+Agent calls cost tokens, so they are off until a person turns them on. Cowboy
+owns one two-layer policy per agent kind (`codex`, `claude-code`):
+
+- **Global defaults** (`agent_tools:<agent>` in Hub settings; Settings → Agent
+  tools; `GET /api/agent-tools`, `PUT /api/agent-tools/{agent}` for Owners).
+  Built-in defaults: calls off, both targets allowed with the other agent kind
+  first, default `auto`, at most 4 concurrent and 64 total calls per parent
+  session; Matrix memory tools and automatic recall on.
+- **Session override** (`session_tools:<session>`; the session's **Tools**
+  section in the mobile session sheet and the desktop Run configuration modal;
+  `GET`/`PUT /api/sessions/{id}/tools` for users who can mutate the session).
+  It stores only the fields that differ; an empty override is removed, so the
+  session follows later changes to its agent kind's defaults.
+
+The effective policy is the override applied to the defaults. A target names an
+agent kind and optionally a preset from that Provider's signed configuration
+presets (model and reasoning). `cowboy codex`/`cowboy claude` request one kind;
+`cowboy call start --provider auto` lets the policy pick: the configured default
+when it is a kind, otherwise the allowed targets with a kind different from the
+caller first, falling back to the next ready target. `continue` keeps the
+child's original kind. The selection (`explicit`/`auto`) and preset are part of
+the durable record, so a replay with the same `request_id` must match them.
+
+Refusals happen before anything is recorded (`admission: not_submitted`):
+`calls_disabled` when calls are off, `policy_denied` when the requested kind is
+not an allowed target, `concurrency_limit` when the parent already has its
+maximum running calls (safe to resubmit the same request later) and
+`call_limit` when its total budget is spent. The limits are a soft admission
+budget; concurrent submissions may pass them together. `cowboy call
+capabilities` reports `enabled`, `default`, the limits and a per-Provider reason.
+
+The runner applies the selected preset's exact value map as configuration
+preferences for the child before its first prompt. The managed worker accepts
+`session/set_config_option` only for option ids that the signed package's
+presets declare and never persists them as the user's preferences; mode and
+every other option remain refused. A preset missing from the exact admitted
+Provider generation fails the call with `preset_unavailable`.
+
+The Matrix switches are stored and displayed now; Provider adapters enforce
+them in a later phase. Managed children have no Tools section; their policy is
+fixed by the managed profile.
+
 ## CLI contract
 
 Both Provider aliases use one parser and one wire schema. `claude` resolves to

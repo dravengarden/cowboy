@@ -15,6 +15,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::super::AppState;
+use super::super::agent_tools;
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION;
 use crate::machine_protocol::execution;
@@ -313,7 +314,7 @@ pub(in crate::server) async fn handle(
             provider,
             request,
             wait_ms,
-        } => start(state, &ledger, &provider, *request, wait_ms).await,
+        } => start(state, &meta, &ledger, &provider, *request, wait_ms).await,
         Action::Inspect { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
@@ -563,8 +564,13 @@ pub(super) async fn provider_readiness(
 
 async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger: &Ledger) -> Value {
     let placement = ledger.placement();
+    let policy = agent_tools::effective(state, meta).calls;
     let mut providers = Vec::new();
-    for provider in ["codex", "claude-code"] {
+    for provider in agent_tools::CALL_TARGETS {
+        let target = policy
+            .targets
+            .iter()
+            .find(|target| target.agent == provider);
         let (runtime, readiness) = child_runtime(
             state,
             &placement.machine_id,
@@ -572,13 +578,23 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             provider,
         )
         .await;
+        // The session's policy decides first; readiness explains the rest.
+        let reason = if !policy.enabled {
+            Some("calls_disabled")
+        } else if target.is_none() {
+            Some("policy_denied")
+        } else {
+            readiness.reason
+        };
+        let available = reason.is_none() && readiness.available;
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
-            "available": readiness.available,
-            "runtime_machine_id": readiness.available.then_some(runtime),
-            "reason": readiness.reason,
+            "available": available,
+            "runtime_machine_id": available.then_some(runtime),
+            "reason": reason,
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
+            "preset": target.and_then(|target| target.preset.as_ref()),
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -587,12 +603,16 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     json!({
         "schema": 1,
         "state": "ok",
+        "enabled": policy.enabled,
+        "default": policy.default,
         "providers": providers,
-        "purposes": ["review","analysis"],
+        "purposes": ["review","design_review","analysis"],
         "limits": {
             "max_request_bytes": crate::managed_calls::MAX_REQUEST_BYTES,
             "max_wait_ms": crate::managed_calls::protocol::MAX_WAIT_MS,
             "max_context_files": 32,
+            "max_concurrent": policy.max_concurrent,
+            "max_per_session": policy.max_per_session,
         },
         "placement": {
             "runtime_machine_id": meta.machine_id,
@@ -605,18 +625,30 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     })
 }
 
+/// A repeated request id names the same call: an explicit agent must match,
+/// and Auto matches a call Auto chose.
+fn same_request(original: &Record, requested: &str) -> bool {
+    if requested == agent_tools::AUTO {
+        original.selection.as_deref() == Some(agent_tools::AUTO)
+    } else {
+        original.provider == requested
+    }
+}
+
 async fn start(
     state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
     ledger: &Ledger,
-    provider: &str,
+    requested: &str,
     request: Request,
     wait_ms: u64,
 ) -> Value {
     // A repeated request id observes the original call, even if the Provider
-    // has since become unavailable; conflicting inputs are refused.
+    // has since become unavailable or the policy changed; conflicting inputs
+    // are refused.
     match ledger.observe(&request.request_id).await {
         Ok(Some(original)) => {
-            if original.request_digest != request.digest() || original.provider != provider {
+            if original.request_digest != request.digest() || !same_request(&original, requested) {
                 return error("request_conflict", "not_submitted");
             }
             super::runner::ensure_runner(state, &original);
@@ -625,28 +657,76 @@ async fn start(
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
     }
-    let (_, readiness) = child_runtime(
-        state,
-        &ledger.placement().machine_id,
-        Some(ledger.runtime_machine_id()),
-        provider,
-    )
-    .await;
-    if !readiness.available {
-        return error(
-            readiness.reason.unwrap_or("provider_unavailable"),
-            "not_submitted",
-        );
+    let policy = agent_tools::effective(state, meta).calls;
+    // A continued conversation keeps its own agent.
+    let continued = match &request.conversation {
+        Conversation::Continue { child_session_id } => {
+            match state.hub.session_info(child_session_id) {
+                Some(child) if !child.meta.closing => Some(child.meta.provider),
+                _ => return error("conversation_unavailable", "not_submitted"),
+            }
+        }
+        Conversation::Fresh {} => None,
+    };
+    let requested = match &continued {
+        Some(agent) if requested == agent_tools::AUTO || requested == agent => agent.as_str(),
+        Some(_) => return error("conversation_unavailable", "not_submitted"),
+        None => requested,
+    };
+    let (mut targets, selection) = match agent_tools::choose(&policy, &meta.provider, requested) {
+        agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
+        agent_tools::Choice::Refused(code) => return error(code, "not_submitted"),
+    };
+    if continued.is_some() {
+        targets.truncate(1);
     }
-    if let Conversation::Continue { child_session_id } = &request.conversation
-        && let Some(child) = state.hub.session_info(child_session_id)
-        && (child.meta.provider != provider || child.meta.closing)
+    // A soft per-session budget: concurrent admissions may pass it together.
+    match state
+        .store
+        .as_ref()
+        .map(|store| store.managed_call_counts(&meta.id))
     {
-        return error("conversation_unavailable", "not_submitted");
+        Some(counts) => match counts.await {
+            Ok((active, _)) if active >= u64::from(policy.max_concurrent) => {
+                return error("concurrency_limit", "not_submitted");
+            }
+            Ok((_, total)) if total >= u64::from(policy.max_per_session) => {
+                return error("call_limit", "not_submitted");
+            }
+            Ok(_) => {}
+            Err(_) => return error("capacity", "not_submitted"),
+        },
+        None => return error("capacity", "not_submitted"),
     }
+    let mut chosen = None;
+    let mut refusal = None;
+    for target in targets {
+        let (_, readiness) = child_runtime(
+            state,
+            &ledger.placement().machine_id,
+            Some(ledger.runtime_machine_id()),
+            &target.agent,
+        )
+        .await;
+        if readiness.available {
+            chosen = Some(target);
+            break;
+        }
+        refusal.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
+    }
+    let Some(target) = chosen else {
+        return error(refusal.unwrap_or("provider_unavailable"), "not_submitted");
+    };
     let call_id = random_id("call");
     let child_id = state.supervisor.reserve_session_id();
-    let record = match ledger.admit(provider, &request, &call_id, &child_id).await {
+    let choice = crate::managed_calls::service::Choice {
+        preset: target.preset.clone(),
+        selection,
+    };
+    let record = match ledger
+        .admit(&target.agent, &request, &call_id, &child_id, &choice)
+        .await
+    {
         Ok(record) => record,
         Err(error_detail) => {
             let text = error_detail.to_string();

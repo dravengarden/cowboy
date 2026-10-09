@@ -709,7 +709,11 @@ async fn run_config_queue(
                                         && option.get("currentValue") == Some(&value)
                                 })
                             });
-                            state.sink.set_config_options(&state.session_id, options);
+                            // A managed child's options stay hidden, as from its
+                            // notifications; its call record names the preset.
+                            if !state.sink.session_is_managed_read_only(&state.session_id) {
+                                state.sink.set_config_options(&state.session_id, options);
+                            }
                             if !confirmed {
                                 completion
                                     .finish(Err(format!("provider did not confirm {config_id}")));
@@ -3460,7 +3464,8 @@ async fn run_session(
     let mut config_fences: HashMap<String, ConfigFence> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
         if state.sink.session_is_managed_read_only(&session_id)
-            && matches!(&cmd, AgentCommand::SetConfigOption { .. })
+            && matches!(&cmd, AgentCommand::SetConfigOption { config_id, .. }
+                if !state.sink.managed_config_option_allowed(&session_id, config_id))
         {
             state.sink.broadcast_error(
                 Some(session_id.clone()),

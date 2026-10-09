@@ -24,6 +24,9 @@ impl AgentSink for HubSink {
     fn session_is_managed_read_only(&self, _: &str) -> bool {
         self.managed_read_only.load(Ordering::SeqCst)
     }
+    fn managed_config_option_allowed(&self, _: &str, config_id: &str) -> bool {
+        config_id == "model"
+    }
     fn prompt_started(&self, _: &str, cmid: Option<&str>) {
         self.prompt_starts.lock().push(cmid.map(str::to_owned));
     }
@@ -408,6 +411,10 @@ async fn exercise_managed_read_only(provider: &str) {
                 {"value":"read-only","name":"Read only"},
                 {"value":CODEX_FULL_ACCESS_CONFIG_VALUE,"name":"Full access"}
             ]
+        }, {
+            "id":"model","name":"Model","type":"select","currentValue":"base","options":[
+                {"value":"base","name":"Base"},{"value":"strong","name":"Strong"}
+            ]
         }]);
         for method in ["initialize", "session/new"] {
             let request: Value =
@@ -443,6 +450,26 @@ async fn exercise_managed_read_only(provider: &str) {
                 value: json!(CODEX_FULL_ACCESS_CONFIG_VALUE),
             })
             .unwrap();
+        // The policy's preset (model, reasoning) is the one configuration a
+        // managed child accepts, and it is applied before the prompt.
+        command_tx
+            .send(AgentCommand::SetConfigOption {
+                config_id: "model".into(),
+                value: json!("strong"),
+            })
+            .unwrap();
+        let request: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "session/set_config_option");
+        assert_eq!(request["params"]["configId"], "model");
+        assert_eq!(request["params"]["value"], "strong");
+        let mut confirmed = options.clone();
+        confirmed[1]["currentValue"] = json!("strong");
+        send_json(
+            &mut write,
+            json!({"jsonrpc":"2.0","id":request["id"],"result":{"configOptions":confirmed}}),
+        )
+        .await;
         let (done, completed) = oneshot::channel();
         command_tx
             .send(AgentCommand::Prompt(

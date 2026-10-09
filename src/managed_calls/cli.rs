@@ -37,7 +37,7 @@ pub struct CallArgs {
 enum CallCommand {
     /// Submit using the same contract as the Provider shortcuts.
     Start {
-        #[arg(long, value_parser = ["codex", "claude-code"])]
+        #[arg(long, value_parser = ["codex", "claude-code", "auto"])]
         provider: String,
         #[command(flatten)]
         request: StartArgs,

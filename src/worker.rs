@@ -70,6 +70,8 @@ struct Shared {
     /// A remote managed child's round, read once from its execution target
     /// before the first prompt; each round starts a new worker.
     managed_round: Option<ManagedRound>,
+    /// Options the signed package's presets set; see `PreparedLaunch`.
+    preset_options: std::collections::BTreeSet<String>,
 }
 
 struct ManagedRound {
@@ -290,6 +292,9 @@ impl RemoteSink {
 impl AgentSink for RemoteSink {
     fn session_is_managed_read_only(&self, session_id: &str) -> bool {
         session_id == self.shared.session_id && self.shared.managed_read_only()
+    }
+    fn managed_config_option_allowed(&self, session_id: &str, config_id: &str) -> bool {
+        session_id == self.shared.session_id && self.shared.preset_options.contains(config_id)
     }
     fn managed_prompt_meta(
         &self,
@@ -616,6 +621,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             .as_ref()
             .map(|endpoint| Arc::clone(&endpoint.client)),
         managed_round,
+        preset_options: prepared.preset_options.clone(),
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -1355,6 +1361,7 @@ mod tests {
                 workspace_identity: expected_workspace_identity,
                 execution: None,
                 managed_round: None,
+                preset_options: std::collections::BTreeSet::new(),
             }),
             rx,
         )

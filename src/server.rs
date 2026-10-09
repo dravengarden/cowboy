@@ -10,6 +10,7 @@
 //! Machine connections use one-time enrollment plus an OpenSSH Ed25519
 //! challenge before WebSocket protocol negotiation.
 
+mod agent_tools;
 mod dormant_pins;
 mod secure_transport;
 mod session_provider_updates;
@@ -10288,6 +10289,12 @@ async fn serve_axum(
         .route("/api/machine/connect", any(machine_ws_upgrade))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/calls", get(managed_calls::list))
+        .route(
+            "/api/sessions/{id}/tools",
+            get(agent_tools::session).put(agent_tools::configure_session),
+        )
+        .route("/api/agent-tools", get(agent_tools::list))
+        .route("/api/agent-tools/{agent}", put(agent_tools::configure_agent))
         .route("/api/sessions/{id}/calls/{call_id}", get(managed_calls::inspect))
         .route(
             "/api/sessions/{id}/calls/{call_id}/cancel",

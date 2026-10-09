@@ -9,6 +9,24 @@ use super::{
 };
 use crate::{core::SessionMeta, store::Store};
 
+/// The parent's policy decision recorded with an admitted call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub preset: Option<String>,
+    /// `explicit` or `auto`.
+    pub selection: &'static str,
+}
+
+impl Choice {
+    #[must_use]
+    pub fn explicit() -> Self {
+        Self {
+            preset: None,
+            selection: "explicit",
+        }
+    }
+}
+
 pub struct Ledger {
     store: Store,
     placement: Placement,
@@ -61,6 +79,7 @@ impl Ledger {
         request: &Request,
         call_id: &str,
         fresh_child_id: &str,
+        choice: &Choice,
     ) -> Result<Record> {
         request.validate()?;
         if let Some(original) = self.observe(&request.request_id).await? {
@@ -115,6 +134,8 @@ impl Ledger {
             child_cursor: None,
             cancel_requested_at_ms: None,
             error: None,
+            preset: choice.preset.clone(),
+            selection: Some(choice.selection.to_owned()),
         };
         self.store.admit_managed_call(&record, request).await
     }
@@ -323,7 +344,7 @@ mod tests {
         let ledger = Ledger::for_parent(store, "service-test", &parent).unwrap();
         let request = Request::parse(br#"{"schema":1,"request_id":"review-1","purpose":"review","instruction":"Review this round","context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"}}"#).unwrap();
         let first = ledger
-            .admit("codex", &request, "call-1", "child-1")
+            .admit("codex", &request, "call-1", "child-1", &Choice::explicit())
             .await
             .unwrap();
         let (a, b) = tokio::join!(
@@ -339,7 +360,13 @@ mod tests {
                 .is_none()
         );
         let observed = ledger
-            .admit("codex", &request, "replacement-call", "replacement-child")
+            .admit(
+                "codex",
+                &request,
+                "replacement-call",
+                "replacement-child",
+                &Choice::explicit(),
+            )
             .await
             .unwrap();
         assert_eq!(observed.state, State::Starting);
@@ -351,7 +378,7 @@ mod tests {
         };
         assert!(
             ledger
-                .admit("codex", &followup, "call-2", "unused")
+                .admit("codex", &followup, "call-2", "unused", &Choice::explicit())
                 .await
                 .is_err()
         );
