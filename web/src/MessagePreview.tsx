@@ -62,6 +62,11 @@ function MessagePreviewImpl({
   // the keyboard.  Resolve an actual tap on pointer-up (while rejecting scroll
   // gestures and nested controls), and suppress the duplicate click.
   const editTap = useReliableTouchTap<HTMLDivElement>(() => onClick?.());
+  // The disclosure lives in the Mobile Queue/Draft momentum scrollport, where
+  // WebKit can deliver pointerup and drop the click after the scroll settles.
+  const disclosureTap = useReliableTouchTap<HTMLButtonElement>(() =>
+    setExpanded((v) => !v)
+  );
   seedInlineAttachments(attachments);
   const attachmentKey = attachments
     .map((attachment) => `${attachment.id}:${attachment.previewUrl ?? ""}`)
@@ -142,9 +147,10 @@ function MessagePreviewImpl({
           endIcon={expanded
             ? <ExpandLess sx={{ fontSize: desktopSize(16) }} />
             : <ExpandMore sx={{ fontSize: desktopSize(16) }} />}
+          {...disclosureTap}
           onClick={(e): void => {
             e.stopPropagation();
-            setExpanded((v) => !v);
+            disclosureTap.onClick(e);
           }}
           sx={{
             textTransform: "none",

@@ -7,6 +7,7 @@ import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
 import { composerStackExpandedStore } from "./composerStackAccordion";
+import { MessagePreview } from "./MessagePreview";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 60));
 function check(value: unknown, message: string): asserts value {
@@ -189,6 +190,89 @@ export async function checkPendingPanelLayout(): Promise<string> {
   } finally {
     expanded.set(previous);
     document.documentElement.style.fontSize = originalFont;
+    root.unmount();
+    container.remove();
+  }
+}
+
+/** Show more / less commits a stationary touch on pointerup (WebKit may drop
+ *  the click after scroll momentum) without letting the paired click undo it. */
+export async function checkPendingPreviewTouchDisclosure(): Promise<string> {
+  const container = document.createElement("div");
+  container.style.width = "320px";
+  document.body.append(container);
+  const root = createRoot(container);
+  const text = Array.from({ length: 12 }, (_, n) => `Line ${n + 1} of a long draft`)
+    .join("\n");
+  const opened: string[] = [];
+  const disclosure = (): HTMLButtonElement => {
+    const button = [...container.querySelectorAll("button")].find((b) =>
+      /Show (more|less)/.test(b.textContent ?? "")
+    );
+    check(button, "Disclosure exists");
+    return button;
+  };
+  const touch = (type: string, button: HTMLElement, dy = 0): void => {
+    const rect = button.getBoundingClientRect();
+    button.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 7,
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2 + dy,
+      }),
+    );
+  };
+  try {
+    flushSync(() =>
+      root.render(
+        <BrowserProductTheme>
+          <CssBaseline />
+          <MessagePreview text={text} onClick={() => opened.push("edit")} />
+        </BrowserProductTheme>,
+      )
+    );
+    await tick();
+    check(disclosure().textContent?.includes("Show more"), "Long draft clamps");
+
+    // Momentum case: pointerup arrives, the compatibility click never does.
+    touch("pointerdown", disclosure());
+    touch("pointerup", disclosure());
+    await tick();
+    check(disclosure().textContent?.includes("Show less"), "Touch expands on pointerup");
+
+    // A late paired click is consumed instead of collapsing again.
+    disclosure().dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    await tick();
+    check(disclosure().textContent?.includes("Show less"), "Paired click is consumed");
+
+    // A scroll gesture over the control stays native and does not toggle.
+    touch("pointerdown", disclosure());
+    touch("pointermove", disclosure(), 40);
+    touch("pointerup", disclosure(), 40);
+    await tick();
+    check(disclosure().textContent?.includes("Show less"), "Scroll does not toggle");
+
+    // Mouse and keyboard keep the ordinary click path.
+    disclosure().dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", isPrimary: true }),
+    );
+    disclosure().dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    await tick();
+    check(disclosure().textContent?.includes("Show more"), "Mouse click collapses");
+    disclosure().click();
+    await tick();
+    check(disclosure().textContent?.includes("Show less"), "Keyboard click expands");
+    check(opened.length === 0, "Disclosure never opens the card's edit");
+    return "Pending preview Show more toggles once per stationary touch, consumes its paired click, ignores scrolls, and keeps mouse/keyboard clicks";
+  } finally {
     root.unmount();
     container.remove();
   }

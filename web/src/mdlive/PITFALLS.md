@@ -2949,6 +2949,19 @@ not on a physical iPad/iPhone.
     and `img.decode()` did not help the instant case either). Measured in
     Chrome and the iOS 26.5 Simulator, not on a physical iPhone.
 
+121. **A pending card's Show more / Show less needs the stationary-touch
+    fallback too.** Field report: expanding or collapsing a Draft sometimes
+    does nothing until a second tap. The disclosure sits in the same Mobile
+    30vh momentum scrollport as the pending Send arrow (#102), and an expanded
+    long draft is exactly what the user scrolls before reaching Show less.
+    WebKit delivered `pointerup` but dropped the compatibility `click`, and the
+    toggle was click-only. It now uses `useReliableTouchTap`: a stationary
+    touch toggles on `pointerup`, its paired click is consumed so it cannot
+    toggle back, movement stays native scrolling, and mouse/keyboard use the
+    ordinary click. `stopPropagation` still keeps the click from opening the
+    card's edit. Diagnosed from code and #65/#102, not reproduced on a
+    physical iPhone.
+
 ### 2026-10-05 Touch Draft drops the navigation capsule
 
 User request: the touch Draft page has no Back/Forward/Create/Settings capsule.

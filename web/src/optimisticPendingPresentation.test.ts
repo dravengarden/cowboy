@@ -205,3 +205,18 @@ Deno.test("unfocused pending draft activation actively recovers a missing server
   assert(discard.includes("discardDurableDelivery(store, cmid"));
   assert(discard.includes('qStatus.set(cmid, "failed")'));
 });
+
+Deno.test("pending preview Show more toggles on a stationary touch", () => {
+  assert(
+    previewSource.includes(
+      "const disclosureTap = useReliableTouchTap<HTMLButtonElement>(() =>",
+    ),
+  );
+  const button = previewSource.slice(
+    previewSource.indexOf("{...disclosureTap}"),
+    previewSource.indexOf('{expanded ? "Show less" : "Show more"}'),
+  );
+  assert(button.includes("e.stopPropagation();"));
+  assert(button.includes("disclosureTap.onClick(e);"));
+  assertEquals(button.includes("setExpanded("), false);
+});
