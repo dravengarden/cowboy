@@ -755,10 +755,7 @@ export class WorkspaceTools {
         await this.hookTranscript(transcript, copy, call);
         input = JSON.stringify({ ...JSON.parse(input), transcript_path: copy });
       }
-      await this.connection.call("fs/writeFile", {
-        path: pathToFileURL(file).href,
-        dataBase64: Buffer.from(input).toString("base64"),
-      });
+      await this.hookInputFile(file, Buffer.from(input), call);
       // Shell form runs through the shell; exec form runs its argv directly
       // (resolved on PATH), with the project placeholder as a plain string.
       started = true;
@@ -843,7 +840,7 @@ export class WorkspaceTools {
   // The execution wire admits at most 7 MiB per invocation, including Base64
   // and JSON. An allowed 8 MiB transcript therefore needs bounded writes even
   // for its first snapshot, or on a target without Python.
-  async hookTranscriptFile(path, bytes, call) {
+  async hookInputFile(path, bytes, call) {
     const chunkSize = 3 * 1024 * 1024;
     const write = (path, bytes) =>
       this.connection.call("fs/writeFile", {
@@ -889,7 +886,7 @@ export class WorkspaceTools {
   async hookTranscript(transcript, copy, call) {
     // Small inputs and targets without Python retain the original contract.
     if (!this.rangePython || transcript.length < 128 * 1024) {
-      await this.hookTranscriptFile(copy, transcript, call);
+      await this.hookInputFile(copy, transcript, call);
       return;
     }
     // Bound memory/storage to one latest transcript per execution binding.
@@ -906,7 +903,7 @@ export class WorkspaceTools {
       );
       const delta = copy + ".delta";
       const prepare = async (bytes, base) => {
-        await this.hookTranscriptFile(delta, bytes, call);
+        await this.hookInputFile(delta, bytes, call);
         return await this.command(
           [
             this.rangePython,

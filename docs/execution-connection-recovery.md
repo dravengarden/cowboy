@@ -319,7 +319,7 @@ Base64 alone expanded that request to 9,785,748 bytes, above the worker's
 the PreToolUse guard correctly refused the Bash call but reported only that the
 hook could not run. Startup readiness did not exercise this large-input path.
 
-Claude Plugin 3.19.5 bounds transcript uploads to 3 MiB raw chunks before
+Claude Plugin 3.19.5 bounds transcript and hook-input uploads to 3 MiB raw chunks before
 assembling a private target file. Both first/cache-miss copies and the no-Python
 fallback use that path. Assembly has a unique temporary path, cancellation on
 unknown results and cleanup; it never retries a hook. Python discovery also
@@ -330,6 +330,7 @@ The wire limit and the project's hook decision remain unchanged.
 Regression coverage includes 8 MiB snapshots with and without Python and a
 genuine 6 MiB native prompt in the packaged hook scenario. The latter exceeds
 the invocation limit after Base64 encoding and must still reach target hooks
-with its original history intact. Native Claude/ACP pins and public tool/Mods
+with its original history intact. Its UserPromptSubmit guard must also receive
+the entire large prompt. Native Claude/ACP pins and public tool/Mods
 contracts are unchanged; only private transcript transport and helper discovery
 change.

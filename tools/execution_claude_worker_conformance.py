@@ -1116,7 +1116,8 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                                      # Exec form: no shell, placeholder substituted as a plain string.
                                      {"type": "command", "command": "sh", "args": [
                                          "-c", 'printf "%s\\n" ExecForm >> "$1/hook-events.txt"', "sh", "${CLAUDE_PROJECT_DIR}"]}]}],
-        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": marker("UserPromptSubmit")}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": marker("UserPromptSubmit") +
+            " && python3 -c 'import json,sys; print(len(json.load(sys.stdin).get(\"prompt\",\"\")))' >> hook-prompt-sizes.txt"}]}],
         "Stop": [{"hooks": [{"type": "command", "command": (
             transcript_readable + " && " + marker("StopTranscript") + "; " + marker("Stop"))}]}],
         "PreToolUse": [
@@ -1275,6 +1276,8 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
     large = [item for item in sizes if item["size"] >= 6 * 1024 * 1024]
     require(len(large) >= 3 and all(item["sentinel"] for item in large),
             "incremental target transcript snapshots lost native history")
+    require(max(map(int, (args.target / "hook-prompt-sizes.txt").read_text().split())) >= 6 * 1024 * 1024,
+            "large UserPromptSubmit input did not reach its target guard")
     # The fixture executor shares this host's HOME; only new entries count.
     # A background child's hook may still be running: its copies must go when it ends.
     deadline = time.monotonic() + 15
