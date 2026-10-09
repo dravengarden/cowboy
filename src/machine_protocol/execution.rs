@@ -63,6 +63,7 @@ pub enum Action {
 
 impl Action {
     /// Managed-call actions require a Machine that understands them.
+    #[must_use]
     pub fn managed_call(&self) -> bool {
         matches!(
             self,

@@ -313,7 +313,7 @@ pub(in crate::server) async fn handle(
             provider,
             request,
             wait_ms,
-        } => start(state, &ledger, &provider, request, wait_ms).await,
+        } => start(state, &ledger, &provider, *request, wait_ms).await,
         Action::Inspect { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
@@ -400,6 +400,11 @@ pub(super) async fn provider_readiness(
     };
     if !state.runtime_router.connected(machine) {
         return unavailable("machine_unavailable");
+    }
+    // Host policy may pin a Provider's runtime to other Machines. A managed
+    // child runs on the parent's execution Machine, never elsewhere.
+    if !state.supervisor.runtime_allowed(provider, machine) {
+        return unavailable("runtime_policy");
     }
     let inventory = super::super::execution::sessions::providers(record);
     let authentication = state.provider_auth.status(provider);

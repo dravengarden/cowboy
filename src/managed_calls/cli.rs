@@ -222,7 +222,7 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
         context,
         Action::Start {
             provider: provider.into(),
-            request,
+            request: Box::new(request),
             wait_ms: args.wait_ms,
         },
         args.wait_ms,

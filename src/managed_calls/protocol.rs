@@ -14,7 +14,7 @@ pub enum Action {
     Capabilities {},
     Start {
         provider: String,
-        request: Request,
+        request: Box<Request>,
         wait_ms: u64,
     },
     Inspect {
