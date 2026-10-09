@@ -153,6 +153,8 @@
           ./src/machine_cli.rs
           ./src/machine_cli
           ./src/machine_auth.rs
+          ./src/managed_calls.rs
+          ./src/managed_calls
           ./src/component_proof.rs
           ./src/machine_components.rs
           ./src/machine_components
@@ -237,6 +239,7 @@
         ./src/runtime_trace.rs
         ./src/logs.rs
         ./src/logs
+        ./src/managed_calls/round.rs
         ./src/worker.rs
         ./src/worker_execution.rs
         ./src/worker_telemetry.rs
@@ -338,7 +341,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-mYJXQox61ERPCHrvAy7s0/AAvHSWioAiRXt8QQzZalI=";
+        hash = "sha256-Dh7Ct4o87CF5A7C6ZSJQO3A6kCiUZR/Yh61GM+cX3Tc=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
