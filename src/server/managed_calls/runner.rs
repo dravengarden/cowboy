@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::AppState;
-use super::coordinator::{child_runtime, execution_action};
+use super::coordinator::{child_runtime, execution_action, runtime_readiness};
 use crate::core::Status;
 use crate::execution_environment::{ExecutionBinding, ManagedChildV1};
 use crate::machine_protocol::execution;
@@ -189,22 +189,26 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("parent_unavailable", None)).await;
         return Step::Again;
     };
-    let (version, digest) = match state.hub.session_info(&record.child_session_id) {
-        // A continued conversation keeps its own exact Provider generation.
+    let (runtime, version, digest) = match state.hub.session_info(&record.child_session_id) {
+        // A continued conversation keeps its own runtime and exact Provider
+        // generation.
         Some(child) => (
+            child.meta.machine_id.clone(),
             child.meta.provider_version.clone(),
             child.meta.provider_generation_digest.clone(),
         ),
         None => {
-            let (_, readiness) = child_runtime(
+            let (runtime, readiness) = child_runtime(
                 state,
                 &record.placement.machine_id,
-                record.runtime_machine_id.as_deref(),
+                Some(parent.meta.machine_id.as_str()),
                 &record.provider,
             )
             .await;
             match readiness.generation {
-                Some(generation) if readiness.available => (generation.version, generation.digest),
+                Some(generation) if readiness.available => {
+                    (runtime, generation.version, generation.digest)
+                }
                 _ => {
                     advance(
                         state,
@@ -218,7 +222,10 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             }
         }
     };
-    match ledger.claim(&record.call_id, &version, &digest).await {
+    match ledger
+        .claim(&record.call_id, &runtime, &version, &digest)
+        .await
+    {
         Ok(_) => {
             state.managed_calls.notify();
             Step::Again
@@ -487,10 +494,15 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
     else {
         return Err("provider_unavailable");
     };
-    let (runtime, readiness) = child_runtime(
+    // The runtime chosen when the call was claimed; never re-selected.
+    let runtime = record
+        .runtime_machine_id
+        .clone()
+        .ok_or("provider_unavailable")?;
+    let readiness = runtime_readiness(
         state,
         &record.placement.machine_id,
-        record.runtime_machine_id.as_deref(),
+        &runtime,
         &record.provider,
     )
     .await;

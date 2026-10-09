@@ -108,7 +108,8 @@ impl Ledger {
             updated_at_ms: now,
             input_revision: None,
             result: None,
-            runtime_machine_id: Some(self.runtime_machine_id.clone()),
+            // The child's own runtime is chosen when the call is claimed.
+            runtime_machine_id: None,
             provider_version: None,
             provider_generation_digest: None,
             child_cursor: None,
@@ -124,6 +125,7 @@ impl Ledger {
     pub async fn claim(
         &self,
         call: &str,
+        runtime_machine_id: &str,
         provider_version: &str,
         provider_generation_digest: &str,
     ) -> Result<Option<(Record, Request)>> {
@@ -147,6 +149,7 @@ impl Ledger {
         next.updated_at_ms = chrono::Utc::now()
             .timestamp_millis()
             .max(previous.updated_at_ms);
+        next.runtime_machine_id = Some(runtime_machine_id.into());
         next.provider_version = Some(provider_version.into());
         next.provider_generation_digest = Some(provider_generation_digest.into());
         if self.store.advance_managed_call(&previous, &next).await? {
@@ -324,13 +327,13 @@ mod tests {
             .await
             .unwrap();
         let (a, b) = tokio::join!(
-            ledger.claim(&first.call_id, "1.0.0", "generation"),
-            ledger.claim(&first.call_id, "1.0.0", "generation")
+            ledger.claim(&first.call_id, "hawk", "1.0.0", "generation"),
+            ledger.claim(&first.call_id, "hawk", "1.0.0", "generation")
         );
         assert_ne!(a.unwrap().is_some(), b.unwrap().is_some());
         assert!(
             ledger
-                .claim(&first.call_id, "1.0.0", "generation")
+                .claim(&first.call_id, "hawk", "1.0.0", "generation")
                 .await
                 .unwrap()
                 .is_none()

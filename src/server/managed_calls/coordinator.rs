@@ -413,19 +413,11 @@ pub(super) async fn child_runtime(
         if !state.supervisor.runtime_allowed(provider, &runtime) {
             continue;
         }
-        let readiness = provider_readiness(state, &runtime, provider).await;
-        let checked = match (&readiness.generation, readiness.available) {
-            (Some(generation), true) => {
-                remote_ready(state, execution_machine, &runtime, generation).await
-            }
-            _ => Err(readiness.reason.unwrap_or("provider_unavailable")),
-        };
-        match checked {
-            Ok(()) => return (runtime, readiness),
-            Err(reason) => {
-                remote_reason.get_or_insert(reason);
-            }
+        let readiness = runtime_readiness(state, execution_machine, &runtime, provider).await;
+        if readiness.available {
+            return (runtime, readiness);
         }
+        remote_reason.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
     }
     let readiness = match remote_reason {
         Some(reason) => ProviderReadiness {
@@ -437,6 +429,33 @@ pub(super) async fn child_runtime(
         None => local,
     };
     (execution_machine.to_owned(), readiness)
+}
+
+/// Whether a child of `provider` can run with its runtime on `runtime` and
+/// its execution on `execution_machine`.
+pub(super) async fn runtime_readiness(
+    state: &AppState,
+    execution_machine: &str,
+    runtime: &str,
+    provider: &str,
+) -> ProviderReadiness {
+    let readiness = provider_readiness(state, runtime, provider).await;
+    if runtime == execution_machine || !readiness.available {
+        return readiness;
+    }
+    let checked = match &readiness.generation {
+        Some(generation) => remote_ready(state, execution_machine, runtime, generation).await,
+        None => Err("provider_unavailable"),
+    };
+    match checked {
+        Ok(()) => readiness,
+        Err(reason) => ProviderReadiness {
+            available: false,
+            reason: Some(reason),
+            generation: None,
+            structured_output: false,
+        },
+    }
 }
 
 /// A split child needs both Machines to understand remote managed bindings
