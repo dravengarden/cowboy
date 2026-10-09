@@ -20695,7 +20695,7 @@
           "sources": [
             "components/provider-sdk"
           ],
-          "digest": "sha256:c7d6d8a802c54fd983384577d67880d8600d19b8d7101996838d2c245c0d913a",
+          "digest": "sha256:ff93c9e8f95b8fbaa92c3ae0edc79ab3008df006a19c144e464ed86a5edb55e0",
           "package": {
             "kind": "cargo",
             "name": "cowboy-provider-sdk",

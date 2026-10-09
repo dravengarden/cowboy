@@ -3945,6 +3945,18 @@ mod tests {
         let source: StandardProviderSource =
             serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
         let mut manifest = build_package(source.compile().unwrap()).unwrap().manifest;
+        // The released Codex declares the profile; model a package that does not.
+        assert!(
+            manifest
+                .runtime
+                .launch_arguments(Some(ManagedRuntimeProfile::ReadOnlyV1))
+                .is_ok()
+        );
+        manifest.runtime.managed_profiles.clear();
+        manifest
+            .runtime
+            .required_capabilities
+            .remove(&RuntimeCapability::ProviderManagedProfilesV1);
         let ordinary = manifest.runtime.arguments.clone();
         assert!(
             manifest
@@ -4016,6 +4028,13 @@ mod tests {
         let source: StandardProviderSource =
             serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
         let mut package = build_package(source.compile().unwrap()).unwrap();
+        // Historical releases predate managed launch profiles.
+        package.manifest.runtime.managed_profiles.clear();
+        package
+            .manifest
+            .runtime
+            .required_capabilities
+            .remove(&RuntimeCapability::ProviderManagedProfilesV1);
         package.manifest.sdk_version = "2.4.0".to_owned();
         // A historical release cannot claim a contract introduced by 3.1.12.
         package.contract_fingerprint = contract_fingerprint(&package.manifest).unwrap();
