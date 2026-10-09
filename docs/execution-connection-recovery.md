@@ -336,3 +336,6 @@ checks an 8 MiB hook input without exceeding Claude's per-turn context budget.
 Native Claude/ACP pins and public tool/Mods
 contracts are unchanged; only private transcript transport and helper discovery
 change.
+
+The [release and recovery receipt](experiments/claude-hook-frame-recovery-2026-10-09.json)
+separates package acceptance, OVH installation and the affected session's adoption.

@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "observed_at": "2026-10-09T07:11:00Z",
+  "implementation_revision": "5aeccb27",
+  "acceptance_revision": "cb0493c1",
+  "root_cause": {
+    "session": "sess-1791185761956",
+    "transcript_bytes": 7339309,
+    "base64_bytes": 9785748,
+    "worker_invocation_limit_bytes": 7340032,
+    "target_python_missing_from_service_path": true,
+    "failure_boundary": "worker validation before target admission"
+  },
+  "release": {
+    "plugin": "claude-code",
+    "version": "3.19.5",
+    "artifact_digest": "sha256:f9805e58db07eaa035a607dae0dd581d2d92e46101eec970cf311f62464d783f",
+    "native_claude": "2.1.287",
+    "native_acp": "0.84.0",
+    "published_at": "2026-10-09T07:08:16Z"
+  },
+  "checks": {
+    "check_compact": "passed",
+    "claude_remote_node_tests": 280,
+    "claude_remote_python_tests": 27,
+    "native_worker_scope": "full",
+    "native_worker_receipt_checks": 92,
+    "native_worker_accepted": true,
+    "large_native_history_post_tool_hook": "passed",
+    "fresh_native_executor_8_mib_transcript_with_and_without_python": "passed",
+    "fresh_native_executor_8_mib_hook_stdin": "passed",
+    "previous_source_8_mib_transcript": "rejected by invocation limit",
+    "packaged_worker_coexistence": "passed",
+    "catalog_reader_compatibility": "passed",
+    "signed_release_verification": "passed",
+    "public_artifact_hash_readbacks": 5,
+    "native_read_only_review": "no actionable findings"
+  },
+  "installation": {
+    "machine": "ovh",
+    "operation_id": "ovh-claude-code-3-19-5-converge",
+    "phase": "completed",
+    "machine_receipt_state": "applied",
+    "revision": "installation-3d948f4cb5d7c9724ac9535ec51bdb38d44a35859a29eab914845026b9d5d171",
+    "remaining_convergence": []
+  },
+  "affected_session": {
+    "id": "sess-1791185761956",
+    "native_session_id": "b30e9513-fe67-4d0a-8997-dd40340813dd",
+    "status": "running",
+    "provider_version": "3.19.4",
+    "adoption": "pending explicit Update Provider or existing idle update policy",
+    "last_observed_event_at": "2026-10-09T06:31:50Z",
+    "idle_update_earliest_at": "2026-10-09T07:31:50Z",
+    "synthetic_production_prompts_sent": 0,
+    "production_tool_success_observed": false
+  },
+  "limits": [
+    "Native worker acceptance ran on Linux x86_64; macOS runtime execution was not exercised.",
+    "Installation and session startup do not prove a production tool call succeeded."
+  ]
+}
