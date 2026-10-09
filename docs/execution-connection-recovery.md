@@ -282,3 +282,29 @@ started target remains fenced; recovery never clears a native start marker to
 guess that replay is safe. Older readers preserve the opaque recovery intent and
 refuse launch. A successful target receipt is not proof of Provider readiness:
 observe the resumed Session and target connectivity before reporting success.
+
+### October 9, 2026 production recovery
+
+Controller `d2e5e752` and the OVH Machine were activated with successful owner
+receipts. Hawk activated writer-host `f7236e0c`, retaining both schema-one writer
+capabilities, with a same-revision, same-generation reader recovery artifact.
+The selected worker generation is `worker-db4bc66cf4d579fbffa6`.
+
+All 26 OVH-to-Hawk bound Sessions reached `running`; all 26 target keepers and
+their 26 OVH workers were observed on the accepted binaries. The 23 vulnerable
+keepers were replaced. The other three Sessions also needed worker recovery
+after their exited/crashed runtime was observed. Workspace paths and directory
+device/inode identities were unchanged. All 22 nonempty native conversations
+retained their IDs. Three previously cleared Claude Sessions and one empty
+Codex Session acquired fresh native IDs; their event records contained no user
+messages or tool history. Recovery did not submit synthetic user prompts.
+
+Exact artifacts passed 15 Session recovery checks, 11 keeper checks, 34 Codex
+worker checks and 86 packaged Claude worker checks. The complete repository
+gate also passed. After the maintenance window, the Controller observation
+contained no new capacity, watchdog, timeout or session error. This observation
+establishes startup/readiness recovery, not a guarantee against future network
+faults. Queues remain paused for inspection; uncertain prompts remain drafts.
+
+Sanitized artifact and activation evidence is recorded in
+[`experiments/remote-execution-recovery-2026-10-09.json`](experiments/remote-execution-recovery-2026-10-09.json).

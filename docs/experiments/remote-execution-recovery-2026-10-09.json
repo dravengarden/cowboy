@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "observed_at": "2026-10-09T01:48:02Z",
+  "implementation_revision": "d2e5e752b5f4c8531d07f2cf8907a5bc07f1893a",
+  "worker_pin_revision": "f7236e0c094da9a9ee9aac66fd0a16b2844cbef1",
+  "worker_generation": "worker-db4bc66cf4d579fbffa6",
+  "artifacts": {
+    "controller": "/nix/store/n87bjinbcbq5nvncbhaipnv853asw13j-cowboy-controller-release",
+    "ovh_machine": "/nix/store/04w1cm9bb1qczffrmkj50pqrqbzz0k60-cowboy-machine-release",
+    "hawk_machine": "/nix/store/l5smh6qmn17hm5s7qvq54bdc5vvcl8qz-cowboy-machine-writer-host-release",
+    "hawk_recovery": "/nix/store/10rfs228k1nah3xqgw3jivgzc7d47jvw-cowboy-machine-release"
+  },
+  "activation_receipts": {
+    "controller_transaction": "1791509781188777304-d2e5e752b5f4",
+    "hawk_machine_transaction": "1791510277004099284-f7236e0c094d",
+    "ovh_receipt": "/var/lib/columbus/ovh-machine-d2e5e752b5f4-20261009T014007Z",
+    "outcome": "succeeded"
+  },
+  "checks": {
+    "repository_check_compact": "passed",
+    "session_conformance": 15,
+    "keeper_conformance": 11,
+    "codex_worker_conformance": 34,
+    "claude_worker_conformance": 86,
+    "atomic_record_failure_regression": "passed"
+  },
+  "production": {
+    "bound_sessions_running": 26,
+    "accepted_keeper_binaries": 26,
+    "accepted_bound_worker_binaries": 26,
+    "vulnerable_keepers_replaced": 23,
+    "unchanged_worktree_inodes": 26,
+    "nonempty_native_conversation_ids_preserved": 22,
+    "empty_or_cleared_sessions_with_new_native_ids": 4,
+    "synthetic_user_prompts_sent": 0,
+    "queue_policy": "paused; uncertain prompts retained as unscheduled drafts",
+    "observation_scope": "startup/readiness and post-maintenance Controller errors"
+  }
+}
