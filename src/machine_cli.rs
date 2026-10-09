@@ -1134,6 +1134,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         crate::machine_transport::COMPRESSION_HEADER,
         crate::machine_transport::DEFLATE.parse()?,
     );
+    request.headers_mut().insert(
+        crate::machine_transport::PACING_HEADER,
+        crate::machine_transport::CREDIT.parse()?,
+    );
     let (mut socket, response) = tokio_tungstenite::connect_async(request)
         .await
         .context("connecting Machine WebSocket")?;
@@ -1146,6 +1150,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             .headers()
             .get(crate::machine_transport::COMPRESSION_HEADER)
             .is_some_and(|value| value == crate::machine_transport::DEFLATE);
+    let paced = chunked
+        && response
+            .headers()
+            .get(crate::machine_transport::PACING_HEADER)
+            .is_some_and(|value| value == crate::machine_transport::CREDIT);
     let challenge = receive_frame(&mut socket).await?;
     let MachineFrame::Challenge {
         challenge_id,
@@ -1273,16 +1282,18 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     // non-blocking and let the writer's per-frame timeout bound a stalled
     // connection; dropping the connection also drops this short-lived queue.
     let (controller_write_tx, controller_write_rx) = tokio::sync::mpsc::unbounded_channel();
+    let credit = Arc::new(crate::machine_transport::Credit::default());
     let mut controller_writer = tokio::spawn(write_controller_messages(
         socket_sink,
         controller_write_rx,
-        (chunked, compressed),
+        (chunked, compressed, paced),
+        Some(Arc::clone(&credit)),
     ));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
-    let mut decoder = crate::machine_transport::Decoder::default();
+    let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced));
     // The Controller may stop hearing this Machine while its frames still
     // arrive here; record how the socket ended and how long it was silent.
     let connected_at = tokio::time::Instant::now();
@@ -1332,7 +1343,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                     last_inbound = tokio::time::Instant::now();
                     let message = match message {
                         Some(Ok(Message::Binary(bytes))) => {
-                            match decoder.chunk((chunked, compressed), &bytes).await? {
+                            let decoded = decoder.chunk((chunked, compressed), &bytes).await?;
+                            if let Some(credit) = decoder.credit() {
+                                queue_controller_message(&controller_write_tx, credit)?;
+                            }
+                            match decoded {
                                 Some(text) => Some(Ok(Message::Text(text.into()))),
                                 None => continue,
                             }
@@ -1361,6 +1376,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                         }
                         Some(Ok(Message::Ping(value))) => {
                             queue_controller_message(&controller_write_tx, Message::Pong(value))?;
+                        }
+                        Some(Ok(Message::Pong(payload))) => {
+                            credit.observe(&payload);
                         }
                         Some(Ok(Message::Text(text))) => {
                             let frame: MachineFrame = serde_json::from_str(&text)
@@ -3809,12 +3827,13 @@ async fn write_controller_messages<S>(
     socket: S,
     messages: tokio::sync::mpsc::UnboundedReceiver<Message>,
     features: impl Into<crate::machine_transport::Features>,
+    credit: Option<Arc<crate::machine_transport::Credit>>,
 ) -> anyhow::Result<()>
 where
     S: futures::Sink<Message> + Unpin,
     S::Error: std::error::Error + Send + Sync + 'static,
 {
-    crate::machine_transport::write(socket, messages, features).await
+    crate::machine_transport::write(socket, messages, features, credit).await
 }
 
 async fn write_runtime_frames<W>(
@@ -4096,7 +4115,7 @@ mod tests {
             std::future::pending::<Result<(), std::io::Error>>().await
         });
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let writer = tokio::spawn(write_controller_messages(Box::pin(sink), rx, false));
+        let writer = tokio::spawn(write_controller_messages(Box::pin(sink), rx, false, None));
 
         queue_controller_frame(&tx, &MachineFrame::Heartbeat { sent_at_ms: 0 })
             .expect("queue frame that stalls in the WebSocket sink");

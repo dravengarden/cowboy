@@ -13987,11 +13987,12 @@ async fn write_machine_messages<S>(
     sink: S,
     messages: mpsc::UnboundedReceiver<Message>,
     features: impl Into<crate::machine_transport::Features>,
+    credit: Option<Arc<crate::machine_transport::Credit>>,
 ) -> anyhow::Result<()>
 where
     S: SinkExt<Message> + Unpin,
 {
-    crate::machine_transport::write(sink, messages, features).await
+    crate::machine_transport::write(sink, messages, features, credit).await
 }
 
 fn queue_machine_message(tx: &mpsc::UnboundedSender<Message>, message: Message) -> Result<(), ()> {
@@ -14128,7 +14129,7 @@ mod machine_runtime_bridge_tests {
             std::future::pending::<Result<(), std::io::Error>>().await
         });
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let writer = tokio::spawn(write_machine_messages(Box::pin(sink), rx, false));
+        let writer = tokio::spawn(write_machine_messages(Box::pin(sink), rx, false, None));
 
         queue_machine_json(&tx, &MachineFrame::Heartbeat { sent_at_ms: 0 })
             .expect("queue frame that stalls in the Machine WebSocket sink");
@@ -14165,8 +14166,12 @@ async fn machine_ws_upgrade(
         && headers
             .get(crate::machine_transport::COMPRESSION_HEADER)
             .is_some_and(|value| value == crate::machine_transport::DEFLATE);
+    let paced = chunked
+        && headers
+            .get(crate::machine_transport::PACING_HEADER)
+            .is_some_and(|value| value == crate::machine_transport::CREDIT);
     let mut response =
-        ws.on_upgrade(move |socket| handle_machine_ws(socket, state, chunked, compressed));
+        ws.on_upgrade(move |socket| handle_machine_ws(socket, state, (chunked, compressed, paced)));
     if chunked {
         response.headers_mut().insert(
             crate::machine_transport::HEADER,
@@ -14177,6 +14182,12 @@ async fn machine_ws_upgrade(
         response.headers_mut().insert(
             crate::machine_transport::COMPRESSION_HEADER,
             axum::http::HeaderValue::from_static(crate::machine_transport::DEFLATE),
+        );
+    }
+    if paced {
+        response.headers_mut().insert(
+            crate::machine_transport::PACING_HEADER,
+            axum::http::HeaderValue::from_static(crate::machine_transport::CREDIT),
         );
     }
     response
@@ -14338,8 +14349,7 @@ mod provider_usage_source_tests {
 async fn handle_machine_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
-    chunked: bool,
-    compressed: bool,
+    (chunked, compressed, paced): (bool, bool, bool),
 ) {
     let Some(store) = state.store.as_ref().cloned() else {
         let _ = send_json(
@@ -14522,7 +14532,7 @@ async fn handle_machine_ws(
         state.machine_snapshots.publish().await;
         return;
     }
-    tracing::info!(machine = %hello.machine_id, chunked, compressed, "Machine connected");
+    tracing::info!(machine = %hello.machine_id, chunked, compressed, paced, "Machine connected");
     // Keep WebSocket writes out of the Machine read loop. A runtime replay or
     // command response may fill the socket while the Machine is still sending
     // heartbeats; the read side must continue to make progress independently.
@@ -14532,10 +14542,12 @@ async fn handle_machine_ws(
     let (socket_sink, mut socket_stream) = socket.split();
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
     let execution_calls = Arc::new(tokio::sync::Semaphore::new(64));
+    let credit = Arc::new(crate::machine_transport::Credit::default());
     let mut socket_writer = tokio::spawn(write_machine_messages(
         socket_sink,
         machine_write_rx,
-        (chunked, compressed),
+        (chunked, compressed, paced),
+        Some(Arc::clone(&credit)),
     ));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
     // A declared connection mode is a request to be read on this host, not
@@ -14686,7 +14698,7 @@ async fn handle_machine_ws(
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
     let mut heartbeat_watchdog = MachineHeartbeatWatchdog::default();
-    let mut decoder = crate::machine_transport::Decoder::default();
+    let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced));
     // Why the socket ended, and how long it had been silent: a peer close, a
     // transport error or EOF after a stall look alike otherwise.
     let connected_at = std::time::Instant::now();
@@ -14809,11 +14821,19 @@ async fn handle_machine_ws(
             }
         };
         let message = match message {
-            Message::Binary(bytes) => match decoder.chunk((chunked, compressed), &bytes).await {
-                Ok(Some(text)) => Message::Text(text.into()),
-                Ok(None) => continue,
-                Err(_) => break,
-            },
+            Message::Binary(bytes) => {
+                let decoded = decoder.chunk((chunked, compressed), &bytes).await;
+                if let Some(credit) = decoder.credit()
+                    && queue_machine_message(&machine_write_tx, credit).is_err()
+                {
+                    break;
+                }
+                match decoded {
+                    Ok(Some(text)) => Message::Text(text.into()),
+                    Ok(None) => continue,
+                    Err(_) => break,
+                }
+            }
             Message::Text(text) => {
                 if decoder.text(&text).is_err() {
                     break;
@@ -14832,6 +14852,9 @@ async fn handle_machine_ws(
                 Message::Close(_) => {
                     socket_ended("close", None, silent);
                     break;
+                }
+                Message::Pong(payload) => {
+                    credit.observe(&payload);
                 }
                 _ => {}
             }
