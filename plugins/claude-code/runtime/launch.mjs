@@ -978,7 +978,7 @@ async function native(args) {
     // servers: each could act outside the reviewed snapshot.
     const contextStarted = tools.context();
     const started = managed
-      ? [Promise.resolve({}), Promise.resolve([]), Promise.resolve({})]
+      ? [Promise.resolve({}), Promise.resolve([]), Promise.resolve(undefined)]
       : [
         tools.projectHooks(),
         tools.skillFiles(),
@@ -1044,7 +1044,9 @@ async function native(args) {
     // The target's MCP servers (mcp.mjs): stdio ones run on the target
     // through mcp-proxy.mjs, remote ones are reached from here.
     await tools.stopMcpServers();
-    const mcp = targetMcpServers(await mcpInputsStarted);
+    const mcp = managed
+      ? { entries: [], omitted: [] }
+      : targetMcpServers(await mcpInputsStarted);
     tools.endStartup();
     startupPhase("target-discovery");
     const mcpEntries = mcp.entries.filter((entry) =>

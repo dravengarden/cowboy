@@ -289,6 +289,24 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => button("Back to calls") ? null : true,
       "back did not return to the list",
     );
+    // Like every Cowboy cover sheet, the page closes from the frosted
+    // floating island, not from a header control.
+    const dismiss = await until(
+      () =>
+        document.querySelector<HTMLElement>(
+          "[data-mobile-sheet-footer-shield] button[aria-label='Close']",
+        ),
+      "mobile calls page lacks the floating close island",
+    );
+    check(
+      document.querySelectorAll("button[aria-label='Close']").length === 1,
+      "mobile calls page must have exactly one close control",
+    );
+    dismiss.click();
+    await until(
+      () => button("correctness") ? null : true,
+      "floating close did not dismiss the calls page",
+    );
     tests.push("mobile-page-drills-in-and-back");
 
     root.unmount();

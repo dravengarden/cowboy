@@ -51,8 +51,13 @@ class ImpactTest(unittest.TestCase):
 
     def test_a_claude_core_module_runs_every_phase(self):
         selected = suites([CLAUDE + "tools.mjs"])
-        self.assertEqual(set(selected), {"claude-remote-check", "claude-worker"})
+        self.assertEqual(set(selected), {"claude-remote-check", "claude-worker", "claude-managed"})
         self.assertEqual(selected["claude-worker"]["phases"], "all")
+
+    def test_the_managed_profile_runs_its_managed_turn(self):
+        selected = suites([CLAUDE + "managed.mjs"])
+        self.assertIn("claude-managed", selected)
+        self.assertIn("claude-managed", suites(["src/execution_host/read_only.rs"]))
 
     def test_a_codex_launcher_change_stays_in_its_lane(self):
         self.assertEqual(set(suites(["plugins/codex/runtime/launch.mjs"])), {"codex-adapter-check", "codex-worker"})

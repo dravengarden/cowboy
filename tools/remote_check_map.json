@@ -586,6 +586,22 @@
       "paths": [
         "components/provider-runtime/packages/codex-acp/launch.mjs"
       ]
+    },
+    "claude-managed": {
+      "kind": "packaged",
+      "command": "just execution-managed-conformance <claude input> <new receipt>",
+      "entry": "tools/execution_claude_managed_conformance.py",
+      "paths": [
+        "plugins/claude-code/runtime/managed.mjs",
+        "plugins/claude-code/runtime/launch.mjs",
+        "plugins/claude-code/runtime/context-mod.js",
+        "plugins/claude-code/runtime/tools.mjs",
+        "tools/execution_claude_managed_conformance.py",
+        "src/worker_execution/tests/native_managed.rs",
+        "src/execution_host/read_only.rs",
+        "src/managed_calls/snapshot.rs",
+        "src/machine_cli/execution.rs"
+      ]
     }
   }
 }

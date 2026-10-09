@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "observed_at": "2026-10-09T14:35:00Z",
+  "revision": "0bb159774f092aa806565eb9e5c34393574b2c2a",
+  "scope": "Managed agent calls: Claude children with split placement (runtime OVH, execution Hawk)",
+  "releases": {
+    "controller": "eb0ad07ee7cf53bad1cd9d1053a7acaa378fa8c9",
+    "web": "eb0ad07ee7cf53bad1cd9d1053a7acaa378fa8c9",
+    "hawk_machine": {
+      "revision": "0bb159774f092aa806565eb9e5c34393574b2c2a",
+      "release": "/nix/store/mvy14saql9r6n5hvlzj256mlxvs5p581-cowboy-machine-writer-host-release",
+      "worker_generation": "worker-2266b7150e0402a1e9bd"
+    },
+    "ovh_machine": {
+      "revision": "eb0ad07ee7cf53bad1cd9d1053a7acaa378fa8c9",
+      "release": "/nix/store/48yl1h03wcsjvcingqdx2rm1z0a06qyv-cowboy-machine-release",
+      "worker_generation": "worker-2266b7150e0402a1e9bd",
+      "receipt": "/var/lib/columbus/ovh-machine-eb0ad07ee7cf-20261009T123624Z",
+      "workers_retained": 22
+    },
+    "claude_code": {
+      "version": "3.19.9",
+      "artifact_digest": "sha256:e4c7c2d96bb29b23aa72e7e5eeeb8b0ad37dafb5c0092a19655095d63adab5de",
+      "installed_on": "ovh",
+      "operation_id": "ovh-claude-code-3-19-9-managed-calls",
+      "superseded": "3.19.8 (Mods denied StructuredOutput; never reused)"
+    }
+  },
+  "gates": {
+    "check_compact": "passed",
+    "claude_worker_checks": 92,
+    "claude_managed_checks": 7,
+    "codex_worker_checks": 34,
+    "keeper_checks": 12,
+    "session_checks": 15,
+    "claude_task_stop": "accepted",
+    "native_json_schema_probe": "pinned native 2.1.287 exposes StructuredOutput; a call ends the turn with validated structured_output"
+  },
+  "production_calls": {
+    "parent": "OVH Claude runtime with Hawk execution",
+    "fresh_schema": {
+      "child_runtime": "ovh",
+      "child_execution": "hawk",
+      "state": "completed",
+      "workspace_write": "Read-only file system",
+      "tmp_write": "Read-only file system",
+      "structured": "schema-valid"
+    },
+    "continue": {
+      "same_child": true,
+      "state": "completed",
+      "remembered_previous_verdict": true
+    },
+    "parallel": {
+      "calls": 2,
+      "distinct_children": true,
+      "state": "completed"
+    },
+    "observe_and_resubmit": "same call id",
+    "cancel": {
+      "state": "cancelled",
+      "seconds": 3,
+      "target_process_left": false
+    },
+    "codex_children_unchanged": "local on Hawk"
+  },
+  "limits": [
+    "Desktop/mobile Calls UI was verified by browser conformance, not on the production site (login requires the owner's Cardea device).",
+    "A managed Claude child needs a remote execution environment; a target-local Claude child is refused.",
+    "Subscription inference was used for the production calls only; gates use scripted APIs."
+  ]
+}

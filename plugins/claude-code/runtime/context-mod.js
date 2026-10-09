@@ -1346,6 +1346,8 @@ const RUNTIME_TOOLS = [
   "WebFetch",
   "WebSearch",
   "ReportFindings",
+  // Present only with --json-schema: native validates the turn's result.
+  "StructuredOutput",
 ];
 
 // A URL naming the machine itself means the target's in a local session.

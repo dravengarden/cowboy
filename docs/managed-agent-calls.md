@@ -68,6 +68,19 @@ and "Acceptance" for what has been proven in production.
   validates the result through its `StructuredOutput` tool, and the launcher
   delivers `structured_output` as the turn's final message. A managed Claude
   launch without an execution environment fails closed.
+  `just execution-managed-conformance <claude input> <new receipt>` runs this
+  path offline end to end. It uses a real Machine `Manager` snapshot of a dirty
+  work tree, `PrepareManagedEnvironment` (idempotent; an ordinary `Prepare` of
+  the same session is refused), the pinned executor behind the keeper, the
+  worker transport, and the worker's round read. It then runs the packaged
+  launcher with native Claude against a scripted API, and requires:
+  - the permission-mode change is refused;
+  - the advertised tool surface is read-only;
+  - workspace and `/tmp` writes fail inside the sandbox while snapshot reads
+    see the working tree;
+  - native `StructuredOutput` is delivered as the final message;
+  - closing the child removes the snapshot.
+  It uses no credentials or model.
 - **Lifecycle.** One Controller runner per call drives Queued → Starting →
   Running → terminal through CAS transitions, records the child event cursor
   before submitting, resubmits only a prompt with no trace under the same id,
