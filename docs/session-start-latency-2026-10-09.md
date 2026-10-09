@@ -88,3 +88,53 @@ p50 1.1 s / max 1.2 s paced.
 Production `sdk-initialize` on OVH before the change (2026-10-06..09, all
 targets and versions): new native sessions n=57, p50 14.3 s, p90 34.7 s, max
 105.5 s; resumed n=493, p50 18.0 s, p90 48.6 s, max 149.8 s.
+
+## Production rollout
+
+From clean commit `af27fbec` on `origin/main`:
+
+- Controller `/nix/store/nx34f7g9ivsvxrfk02gprzvg2l94d05h-cowboy-controller-release`
+  committed 15:29:59 UTC; OVH, Hawk, Falcon and macbook-air reconnected with
+  `paced=false`, as old Machines must.
+- OVH Machine host-only maintenance
+  (`/var/lib/columbus/ovh-machine-af27fbec71d7-20261009T153118Z`, release
+  `/nix/store/994gm7ska9y0rwlizf3j043n44ccl32h-cowboy-machine-release`) was
+  accepted with every worker retained; the Machine reconnected with
+  `paced=true`.
+- Claude 3.19.10 (artifact `sha256:44627ab18be0d7305d64200ea43555829d4a6c08d804fc13216d3efd55b11579`)
+  passed the active, rollback and cold Catalog readers, was published, and
+  `cowboy operator converge --machine ovh --plugin claude-code` upgraded OVH from
+  3.19.9. Existing sessions keep their generation until reloaded.
+
+Gates: `just check` (2061 core, 2148 web), `just claude-remote-check` (291),
+packaged `execution-worker-conformance` (92 checks, full scope) and
+`execution-session-conformance` (15 checks), six managed Codex review rounds
+(the four survey findings are fixed with regression tests; the last round
+reported none).
+
+First 46 minutes after the OVH Machine reconnect, compared with 12:00–15:28
+the same day (OVH worker logs, every execution call):
+
+| | Before | After |
+| --- | --- | --- |
+| Calls / active sessions | 53,302 / 23 | 8,422 / 9 |
+| Call p50 / p90 / p99 | 1.18 / 2.02 / 19.97 s | 0.63 / 1.92 / 6.00 s |
+| Multi-session stalls (≥ 8 s, ≥ 3 sessions) | 57.1 per hour | 0 |
+| Controller broker heartbeat timeouts | 2 at 15:17 alone | 0 |
+
+The window is short and the load lower. `sess-1791179743141` (still 3.19.4)
+was the busiest session afterwards, with 42 of its own calls over 5 s, which
+are its full transcript copies; other sessions no longer stalled behind them.
+No new native session had started on 3.19.10 by 16:22, so its production
+start time is not yet measured. The Controller's new forward log aligned two
+operations of that session: 2,046 ms at the Controller against 3,597 ms at the
+worker, and 2,001 ms against 2,181 ms.
+
+## Remaining
+
+- Sessions on Claude 3.19.4 or earlier keep copying full hook transcripts and
+  remain slow themselves until reloaded with a newer Provider.
+- The per-flow overlay throughput (about 100 KiB/s) is a Stormbird path
+  property; it is outside this change.
+- Native initialization (about 7 s at 200 ms RTT, including target MCP server
+  startup) is unchanged; the new phase log separates it in production.
