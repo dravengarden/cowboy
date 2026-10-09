@@ -111,6 +111,15 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual(set(result["suites"]), set(CHECK_MAP["suites"]))
         self.assertEqual(result["suites"]["claude-worker"]["phases"], "all")
 
+    def test_a_deleted_file_the_map_no_longer_names_is_not_unmapped(self):
+        gone = "tools/claude_remote_impact.py"
+        self.assertEqual(impact([gone], CHECK_MAP, deleted={gone}), {"native_changed": [], "suites": {}, "unmapped": []})
+        self.assertEqual(impact([gone], CHECK_MAP)["unmapped"], [gone])
+        # One the map still names selects its suites.
+        removed = "plugins/claude-code/runtime/skills.mjs"
+        self.assertEqual(impact([removed], CHECK_MAP, deleted={removed})["suites"]["claude-worker"]["phases"],
+                         ["skills"])
+
     def test_files_outside_remote_execution_select_nothing(self):
         changed = ["docs/remote-tools-coverage-audit-2026-10-05.md", "src/config.rs", "web/src/App.tsx"]
         self.assertEqual(impact(changed, CHECK_MAP), {"native_changed": [], "suites": {}, "unmapped": []})

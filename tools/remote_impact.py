@@ -50,7 +50,7 @@ def imports(entry, tools=ROOT / "tools"):
     return seen
 
 
-def impact(changed, check_map, native_changed=(), manifests_changed=(), closure=imports):
+def impact(changed, check_map, native_changed=(), manifests_changed=(), closure=imports, deleted=()):
     native_changed = set(native_changed)
     for name, spec in check_map["native"].items():
         if any(path in spec.get("inputs", []) for path in changed):
@@ -66,7 +66,10 @@ def impact(changed, check_map, native_changed=(), manifests_changed=(), closure=
             known |= set(entries)
         for probe, probe_spec in spec.get("native_probes", {}).items():
             known |= {probe, probe_spec["baseline"]}
-    unmapped = sorted(path for path in changed if matches(path, check_map["lanes"]) and not matches(path, known)
+    # A deleted file the map no longer names needs no mapping; one it still
+    # names selects its suites as any change does.
+    unmapped = sorted(path for path in changed if path not in deleted and matches(path, check_map["lanes"])
+                      and not matches(path, known)
                       and not path.endswith((".test.mjs", "_test.py", "_test.mjs", ".md")))
     selected = {}
     for name, spec in suites.items():
@@ -152,6 +155,8 @@ def main():
     changed = subprocess.run(["git", "diff", "--name-only", f"{args.base}...{args.head}"], cwd=ROOT, check=True,
                              capture_output=True, text=True).stdout.split()
     check_map = json.loads(CHECK_MAP.read_text())
+    deleted = set(subprocess.run(["git", "diff", "--name-only", "--diff-filter=D", f"{args.base}...{args.head}"],
+                                 cwd=ROOT, check=True, capture_output=True, text=True).stdout.split())
 
     def loader(rev):
         def load(path):
@@ -160,7 +165,7 @@ def main():
         return load
     native, manifests = pinned_changes(changed, check_map, loader(args.base), loader(args.head))
     print(json.dumps({"changed": changed, "manifests_changed": manifests,
-                      **impact(changed, check_map, native, manifests)}, indent=1))
+                      **impact(changed, check_map, native, manifests, deleted=deleted)}, indent=1))
 
 
 if __name__ == "__main__":
