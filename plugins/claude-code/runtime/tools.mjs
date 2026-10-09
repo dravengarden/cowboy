@@ -45,7 +45,10 @@ const RANGE_FILE_THRESHOLD = 128 * 1024;
 // `--`, skill roots, `--`, candidate files.
 export const STARTUP_SURVEY = String.raw`
 size() { if [ "$p" = 1 ]; then find -L "$1" -maxdepth 0 -printf %s 2>/dev/null; else wc -c <"$1" 2>/dev/null; fi; }
-list() { if [ "$p" = 1 ]; then find -L "$@" -printf '%s\t%p\n' 2>/dev/null; else find -L "$@" 2>/dev/null | sed 's/^/?\t/'; fi; }
+nl='
+'
+# A name containing a newline could imitate listing rows: such a tree is not surveyed.
+list() { [ -z "$(find -L "$1" -path "*$nl*" 2>/dev/null | head -c 1)" ] || return 3; if [ "$p" = 1 ]; then find -L "$@" -printf '%s\t%p\n' 2>/dev/null; else find -L "$@" 2>/dev/null | sed 's/^/?\t/'; fi; return 0; }
 b64() { base64 | tr -d '\n'; }
 g() { n=$1; shift; o=$(git --no-optional-locks "$@" 2>&1); c=$?; printf '\036git %s %s\n' "$n" "$c"; if [ "$n" = status ]; then printf %s "$o" | head -c 6000 | b64; else printf %s "$o" | b64; fi; printf '\n'; }
 survey() {
@@ -60,11 +63,11 @@ survey() {
   fi
   g toplevel rev-parse --show-toplevel
   printf '\036rules\n'
-  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do [ -d "$1" ] && list "$1" -type f -name '*.md'; shift; done; shift
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do if [ -d "$1" ]; then list "$1" -type f -name '*.md' || return 3; fi; shift; done; shift
   printf '\036skills\n'
   while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
     printf '\037%s\n' "$1"
-    if [ -d "$1" ]; then case $1 in */skills) list "$1" -mindepth 2 -maxdepth 2 -name SKILL.md -type f;; *) list "$1" -name '*.md' -type f;; esac; fi
+    if [ -d "$1" ]; then case $1 in */skills) list "$1" -mindepth 2 -maxdepth 2 -name SKILL.md -type f;; *) list "$1" -name '*.md' -type f;; esac || return 3; fi
     shift
   done; shift
   printf '\036candidates\n'

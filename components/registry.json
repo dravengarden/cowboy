@@ -20841,7 +20841,7 @@
                 "version": "0.1.1"
               }
             ],
-            "source_digest": "sha256:7b566bba0f41377aeffd44766887f2c0553c2b475cf5bba84a771be93c8d4cec"
+            "source_digest": "sha256:0b327dc35653014ef2696872ac57a1c520d1d9687a08c1252d45685d41df993e"
           },
           "claude-deepseek": {
             "component_release": "3.43.0",

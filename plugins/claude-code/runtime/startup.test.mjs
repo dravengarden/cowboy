@@ -261,6 +261,33 @@ test("long Git answers render as the per-walk queries render them", async (t) =>
   }
 });
 
+test("listed names with newlines answer through the per-walk queries", async (t) => {
+  const paths = await tree(t);
+  // A directory whose name imitates a listing row of another skill's size.
+  const forged = join(
+    dirname(paths.cwd),
+    ".claude",
+    "commands",
+    "a\n4194305\t",
+    paths.home.slice(1),
+    ".claude",
+    "skills",
+    "alpha",
+  );
+  await mkdir(forged, { recursive: true });
+  await writeFile(join(forged, "SKILL.md"), "FORGED\n");
+  const surveyed = await discover(t, paths);
+  const queried = await discover(t, paths, {
+    refuse: (argv) => argv.some((arg) => arg.includes("survey()")),
+  });
+  assert.deepEqual(surveyed.result, queried.result);
+  assert.ok(
+    surveyed.result.skills.some((skill) =>
+      skill.name === "alpha" && skill.content.includes("ALPHA")
+    ),
+  );
+});
+
 test("a target missing a survey utility answers through the per-walk queries", async (t) => {
   const paths = await tree(t);
   // Every utility either path uses, except the survey's base64.
