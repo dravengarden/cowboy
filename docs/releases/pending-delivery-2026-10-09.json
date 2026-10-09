@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "revision": "baf8dae39480404f5a2ffbdcdd2aedc9217ced97",
+  "controller": {
+    "release": "/nix/store/avg7hpq8hzzma7r5miylfi126r42r2gk-cowboy-controller-release",
+    "transaction": "1791536334515798249-baf8dae39480",
+    "committed_at": "2026-10-09T08:59:06.442404973Z",
+    "outcome": "succeeded"
+  },
+  "web": {
+    "release": "/nix/store/hx4sfd6pr2gd60wyjpixxv4knmxpbfdj-cowboy-web-release",
+    "transaction": "1791536363600457687-baf8dae39480",
+    "committed_at": "2026-10-09T08:59:23.641040106Z",
+    "outcome": "succeeded",
+    "service_worker": "cowboy-v1891",
+    "public_service_worker_http_status": 200,
+    "public_service_worker_cache_control": "no-store"
+  },
+  "validation": {
+    "check_compact": "passed",
+    "remote_runtime_tests_passed": 48,
+    "all_features_tests_passed": 2050,
+    "machine_host_tests_passed": 671,
+    "web_tests_passed": 2146,
+    "native_codex_review": "no actionable regressions",
+    "browser_bundle_sha256": "6aee5ad5d7cb9f86b15270fbb7262a9214b1828f8425e1e0f6b924065469278a",
+    "browser_scenarios": ["receipt-stall", "receipt-queued-stale", "receipt-background"],
+    "each_browser_scenario_deliveries": 1,
+    "physical_iphone_acceptance": "not performed"
+  },
+  "session_observation": {
+    "remote_sessions": 23,
+    "native_session_ids_changed_by_controller_deploy": 0,
+    "pending_prompts_after_targeted_recovery": 0,
+    "configuration_waits_after_targeted_recovery": 0,
+    "fix_falcon": "Connected owner; native tool-use entry observed at 2026-10-09T08:58:35.499Z; no pending transport receipt. This does not prove the user's entire task completed.",
+    "targeted_recovery": {
+      "session_id": "sess-1791179743143",
+      "operation_id": "execution-recover-0dd3fc05b733839e3baf569c819bf83d-2",
+      "reason": "Old worker remained draining after native end_turn at 06:34:36Z; a new prompt waited behind generation handoff.",
+      "binding_revision_before": 2,
+      "binding_revision_after": 3,
+      "outcome": "recovered",
+      "worker_state": "running",
+      "drain_requested": false,
+      "queue": "paused_for_inspection",
+      "unacknowledged_prompt": "preserved as draft; not replayed"
+    }
+  },
+  "limitations": [
+    "The initial missing acknowledgement's physical-network cause was not established.",
+    "A start event or active snapshot is not admission proof; only exact turn completion supplements CommandAck.",
+    "Existing Provider versions were not forcibly changed, and active workers were not fleet-wide restarted.",
+    "The targeted recovery repairs this stranded execution lifetime; it does not establish a general fix for every worker-drain failure."
+  ]
+}

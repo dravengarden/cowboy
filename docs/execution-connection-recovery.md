@@ -2,6 +2,10 @@
 
 ## October 9 pending delivery follow-up
 
+Controller and Web activation, regression evidence, and the one targeted
+stranded-worker recovery are recorded in the
+[deployment receipt](releases/pending-delivery-2026-10-09.json).
+
 The `fix falcon` session retained a Controller-owned unacknowledged prompt
 while a second submission of the same text remained queued. Explicit recovery
 preserved the former as a draft and paused the queue. This establishes the
