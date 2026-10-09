@@ -32,6 +32,7 @@ fn binding() -> BindingV1 {
             cwd: "/target".into(),
         },
         access: ExecutionAccess::Project,
+        managed: None,
     }
 }
 

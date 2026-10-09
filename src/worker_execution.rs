@@ -198,6 +198,54 @@ impl Client {
         }
     }
 
+    /// Read a remote managed child's current round from its execution target.
+    /// The target keeper announces the constraint it enforces and where the
+    /// Machine wrote the round; neither is taken from this worker's launch.
+    pub(crate) async fn managed_round(
+        &self,
+        profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+    ) -> Result<crate::managed_calls::round::RoundMarker> {
+        use base64::Engine as _;
+        let Response::Ready { initialization, .. } = self.call(Command::Describe).await? else {
+            bail!("execution environment unavailable");
+        };
+        let announced = initialization
+            .get(wire::MANAGED_INITIALIZATION_KEY)
+            .context("execution target does not enforce a managed profile")?;
+        ensure!(
+            announced.get("schema") == Some(&json!(1))
+                && announced
+                    .get("profile")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    == Some(profile),
+            "execution target enforces a different managed profile"
+        );
+        let path = announced
+            .get("roundPath")
+            .and_then(Value::as_str)
+            .filter(|path| Path::new(path).is_absolute())
+            .context("execution target did not name its round")?;
+        let url = url::Url::from_file_path(path)
+            .map_err(|()| anyhow::anyhow!("invalid managed round path"))?;
+        let reply = self
+            .invoke("fs/readFile".to_owned(), json!({"path": url.as_str()}))
+            .await?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(
+            reply
+                .pointer("/result/dataBase64")
+                .and_then(Value::as_str)
+                .context("managed round is unreadable")?,
+        )?;
+        ensure!(
+            bytes.len() as u64 <= crate::managed_calls::round::MAX_ROUND_BYTES,
+            "managed round exceeds its limit"
+        );
+        let round: crate::managed_calls::round::RoundMarker = serde_json::from_slice(&bytes)?;
+        ensure!(round.schema == 1, "unsupported managed round");
+        Ok(round)
+    }
+
     async fn invoke(&self, method: String, params: Value) -> Result<Value> {
         let invocation = Invocation {
             operation_id: format!("{:032x}", rand::random::<u128>()),

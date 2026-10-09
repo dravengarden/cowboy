@@ -293,7 +293,7 @@ impl Record {
             && next.updated_at_ms >= self.updated_at_ms
             && self.revision.checked_add(1) == Some(next.revision)
             && once(&self.input_revision, &next.input_revision)
-            && self.runtime_machine_id == next.runtime_machine_id
+            && once(&self.runtime_machine_id, &next.runtime_machine_id)
             && once(&self.provider_version, &next.provider_version)
             && once(
                 &self.provider_generation_digest,
@@ -399,6 +399,19 @@ mod tests {
         next.placement = current.placement.clone();
         next.child_session_id = "another-child".into();
         assert!(!current.accepts(&next));
+        // The child's runtime is chosen once, when the call is claimed.
+        let mut queued = current.clone();
+        queued.runtime_machine_id = None;
+        let mut claimed = queued.clone();
+        claimed.state = State::Starting;
+        claimed.revision = 2;
+        claimed.runtime_machine_id = Some("ovh".into());
+        assert!(queued.accepts(&claimed));
+        let mut moved = claimed.clone();
+        moved.state = State::Running;
+        moved.revision = 3;
+        moved.runtime_machine_id = Some("hawk".into());
+        assert!(!claimed.accepts(&moved));
     }
 
     #[test]

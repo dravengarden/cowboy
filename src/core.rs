@@ -2486,7 +2486,7 @@ impl Hub {
             s.meta
                 .execution_binding
                 .as_ref()
-                .is_some_and(|binding| binding.managed_child().is_some())
+                .is_some_and(|binding| binding.managed().is_some())
         })
     }
 

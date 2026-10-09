@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::AppState;
-use super::coordinator::{execution_action, provider_readiness};
+use super::coordinator::{child_runtime, execution_action, runtime_readiness};
 use crate::core::Status;
 use crate::execution_environment::{ExecutionBinding, ManagedChildV1};
 use crate::machine_protocol::execution;
@@ -189,17 +189,26 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         advance(state, store, record, fail("parent_unavailable", None)).await;
         return Step::Again;
     };
-    let (version, digest) = match state.hub.session_info(&record.child_session_id) {
-        // A continued conversation keeps its own exact Provider generation.
+    let (runtime, version, digest) = match state.hub.session_info(&record.child_session_id) {
+        // A continued conversation keeps its own runtime and exact Provider
+        // generation.
         Some(child) => (
+            child.meta.machine_id.clone(),
             child.meta.provider_version.clone(),
             child.meta.provider_generation_digest.clone(),
         ),
         None => {
-            let readiness =
-                provider_readiness(state, &record.placement.machine_id, &record.provider).await;
+            let (runtime, readiness) = child_runtime(
+                state,
+                &record.placement.machine_id,
+                Some(parent.meta.machine_id.as_str()),
+                &record.provider,
+            )
+            .await;
             match readiness.generation {
-                Some(generation) if readiness.available => (generation.version, generation.digest),
+                Some(generation) if readiness.available => {
+                    (runtime, generation.version, generation.digest)
+                }
                 _ => {
                     advance(
                         state,
@@ -213,7 +222,10 @@ async fn claim(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
             }
         }
     };
-    match ledger.claim(&record.call_id, &version, &digest).await {
+    match ledger
+        .claim(&record.call_id, &runtime, &version, &digest)
+        .await
+    {
         Ok(_) => {
             state.managed_calls.notify();
             Step::Again
@@ -273,16 +285,16 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     };
     let child = record.child_session_id.as_str();
     let existing = state.hub.session_info(child);
-    if let Some(existing) = &existing {
-        let identity = existing
-            .meta
-            .execution_binding
-            .as_ref()
-            .and_then(ExecutionBinding::managed_child);
-        if identity.as_ref().is_none_or(|identity| {
-            identity.parent_session_id != record.placement.parent_session_id
-                || identity.machine_id != record.placement.machine_id
-        }) {
+    let existing_workspace = existing.as_ref().and_then(|existing| {
+        child_workspace(&existing.meta)
+            .filter(|(parent, machine, _)| {
+                *parent == record.placement.parent_session_id
+                    && *machine == record.placement.machine_id
+            })
+            .map(|(_, _, workspace)| workspace)
+    });
+    if existing.is_some() {
+        if existing_workspace.is_none() {
             advance(state, store, record, fail("identity_mismatch", None)).await;
             return Step::Again;
         }
@@ -343,11 +355,16 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
         Err(_) => return Step::Wait(Duration::from_secs(5)),
     };
     if existing.is_none() {
-        if let Err(code) = register_child(state, record, &prepared.cwd).await {
-            advance(state, store, record, fail(code, None)).await;
-            return Step::Again;
+        match register_child(state, record, &prepared.cwd).await {
+            Ok(()) => {}
+            // Both preparations are idempotent; repeat them on the next pass.
+            Err(RETRY) => return Step::Wait(Duration::from_secs(5)),
+            Err(code) => {
+                advance(state, store, record, fail(code, None)).await;
+                return Step::Again;
+            }
         }
-    } else if existing.is_some_and(|existing| existing.meta.cwd != prepared.cwd) {
+    } else if existing_workspace.as_deref() != Some(prepared.cwd.as_str()) {
         advance(state, store, record, fail("identity_mismatch", None)).await;
         return Step::Again;
     }
@@ -371,21 +388,26 @@ async fn launch(state: &Arc<AppState>, store: &Store, record: &Record) -> Step {
     Step::Again
 }
 
-async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<(), &'static str> {
-    let parent = state
-        .hub
-        .session_info(&record.placement.parent_session_id)
-        .ok_or("parent_unavailable")?;
-    let (Some(version), Some(digest)) =
-        (&record.provider_version, &record.provider_generation_digest)
-    else {
-        return Err("provider_unavailable");
-    };
-    let readiness = provider_readiness(state, &record.placement.machine_id, &record.provider).await;
-    let generation = readiness
-        .generation
-        .filter(|generation| generation.version == *version && generation.digest == *digest)
-        .ok_or("provider_changed")?;
+/// A transient preparation failure; the same launch is repeated.
+const RETRY: &str = "retry";
+
+/// The parent, execution Machine and snapshot workspace of a managed child,
+/// whether its runtime is that Machine's or another's.
+fn child_workspace(meta: &crate::core::SessionMeta) -> Option<(String, String, String)> {
+    let binding = meta.execution_binding.as_ref()?;
+    if let Some(local) = binding.managed_child() {
+        return Some((local.parent_session_id, local.machine_id, local.cwd));
+    }
+    let remote = binding.decode().ok()?;
+    let managed = remote.managed?;
+    (remote.workspace.worktree_id == meta.id).then_some((
+        managed.parent_session_id,
+        remote.environment.machine_id,
+        remote.workspace.cwd,
+    ))
+}
+
+fn local_binding(record: &Record, cwd: &str) -> Result<ExecutionBinding, &'static str> {
     let identity = ManagedChildV1 {
         schema: 1,
         phase: "managed_child".into(),
@@ -397,9 +419,108 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
         profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
     };
     identity.validate().map_err(|_| "identity_mismatch")?;
-    let binding = ExecutionBinding::from_record(
+    Ok(ExecutionBinding::from_record(
         serde_json::to_value(&identity).map_err(|_| "identity_mismatch")?,
-    );
+    ))
+}
+
+/// Prepare the runtime Machine's private entry, then the execution Machine's
+/// read-only environment over the child's snapshot. Both are idempotent.
+async fn remote_binding(
+    state: &AppState,
+    record: &Record,
+    runtime: &str,
+    cwd: &str,
+) -> Result<ExecutionBinding, &'static str> {
+    let child = &record.child_session_id;
+    let location = match execution_action(
+        state,
+        runtime,
+        execution::Action::PrepareRuntime {
+            session_id: child.clone(),
+        },
+    )
+    .await
+    {
+        Ok(execution::Response::RuntimePrepared { runtime: location })
+            if location.machine_id == runtime =>
+        {
+            location
+        }
+        Ok(execution::Response::Refused { .. } | execution::Response::RuntimePrepared { .. }) => {
+            return Err("runtime_unavailable");
+        }
+        _ => return Err(RETRY),
+    };
+    let binding = match execution_action(
+        state,
+        &record.placement.machine_id,
+        execution::Action::PrepareManagedEnvironment {
+            child_session_id: child.clone(),
+            runtime: location.clone(),
+        },
+    )
+    .await
+    {
+        Ok(execution::Response::Prepared { binding }) => binding,
+        Ok(execution::Response::Refused { .. }) => return Err("environment_unavailable"),
+        _ => return Err(RETRY),
+    };
+    let expected = crate::execution_environment::ManagedBindingV1 {
+        parent_session_id: record.placement.parent_session_id.clone(),
+        profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+    };
+    if binding.validate().is_err()
+        || binding.managed.as_ref() != Some(&expected)
+        || binding.runtime != location
+        || binding.environment.machine_id != record.placement.machine_id
+        || binding.workspace.worktree_id != *child
+        || binding.workspace.cwd != cwd
+    {
+        return Err("identity_mismatch");
+    }
+    Ok(ExecutionBinding::from_record(
+        serde_json::to_value(&binding).map_err(|_| "identity_mismatch")?,
+    ))
+}
+
+async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<(), &'static str> {
+    let parent = state
+        .hub
+        .session_info(&record.placement.parent_session_id)
+        .ok_or("parent_unavailable")?;
+    let (Some(version), Some(digest)) =
+        (&record.provider_version, &record.provider_generation_digest)
+    else {
+        return Err("provider_unavailable");
+    };
+    // The runtime chosen when the call was claimed; never re-selected.
+    let runtime = record
+        .runtime_machine_id
+        .clone()
+        .ok_or("provider_unavailable")?;
+    let readiness = runtime_readiness(
+        state,
+        &record.placement.machine_id,
+        &runtime,
+        &record.provider,
+    )
+    .await;
+    let generation = readiness
+        .generation
+        .filter(|generation| generation.version == *version && generation.digest == *digest)
+        .ok_or("provider_changed")?;
+    let remote = runtime != record.placement.machine_id;
+    let binding = if remote {
+        remote_binding(state, record, &runtime, cwd).await?
+    } else {
+        local_binding(record, cwd)?
+    };
+    // A split child's worker runs in its runtime Machine's private entry.
+    let session_cwd = match binding.decode() {
+        Ok(remote) => remote.runtime.cwd,
+        Err(_) => cwd.to_owned(),
+    };
     let workspaces = state
         .store
         .as_ref()
@@ -436,11 +557,11 @@ async fn register_child(state: &AppState, record: &Record, cwd: &str) -> Result<
                 state.supervisor.register_session_on_with_id(
                     &record.child_session_id,
                     &record.provider,
-                    Some(cwd.to_owned()),
+                    Some(session_cwd.clone()),
                     crate::core::SessionOrigin::Api,
                     false,
                     crate::supervisor::SessionPlacement {
-                        machine_id: &record.placement.machine_id,
+                        machine_id: &runtime,
                         workspace,
                         execution_binding: Some(&binding),
                     },

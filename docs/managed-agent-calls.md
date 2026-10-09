@@ -46,6 +46,28 @@ and "Acceptance" for what has been proven in production.
   configured MCP server by exact name, disables hooks, plugins, apps, notify and
   native memories, and refuses to start while any ExecPolicy `allow` rule exists
   (those run commands outside the sandbox).
+- **Split placement.** Execution never moves off the parent's execution
+  Machine. When host policy places the Provider's runtime elsewhere (Claude is
+  pinned to OVH), a Machine allowed to run it — the parent's runtime first —
+  runs the child against that Machine's snapshot. Both Machines must speak
+  protocol 29 and the exact Provider generation must accept the target executor.
+  The runtime Machine prepares a private entry (`PrepareRuntime`); the target
+  starts a keeper over the snapshot (`PrepareManagedEnvironment`) and returns an
+  ordinary remote binding whose `managed` field names the parent and profile.
+  Older readers refuse that field. The keeper forces the pinned executor's own
+  read-only, network-free sandbox onto every `process/start` (whatever sandbox
+  the caller asked for), answers `fs/writeFile`, `fs/createDirectory`,
+  `fs/remove`, `fs/copy`, `http/request` and unknown methods with an ordinary
+  error, and announces `cowboyManaged {profile, roundPath}` in its native
+  initialization. The runtime worker reads the round through the keeper before
+  the first prompt. Claude 3.19.8 accepts a managed launch only when the binding,
+  its signed profile flag and the keeper announcement agree. It then reads the
+  round's schema through the keeper and runs native Claude in `dontAsk` mode
+  with Bash/Read/Glob/Grep and its task list, without hooks, skills, MCP
+  servers, memory, nested agents or web tools, using `--json-schema`. Native
+  validates the result through its `StructuredOutput` tool, and the launcher
+  delivers `structured_output` as the turn's final message. A managed Claude
+  launch without an execution environment fails closed.
 - **Lifecycle.** One Controller runner per call drives Queued → Starting →
   Running → terminal through CAS transitions, records the child event cursor
   before submitting, resubmits only a prompt with no trace under the same id,

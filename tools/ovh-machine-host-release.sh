@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# Replace only the OVH Machine host binary; detached ACP workers keep running.
-# See docs/ovh-machine-maintenance.md. Run on Hawk from the repository root:
-#   tools/ovh-machine-host-release.sh /nix/store/<hash>-cowboy-machine-release
+# Replace the OVH Machine host binary; detached ACP workers keep running.
+# With --workers, also select the release's worker bundle: idle workers adopt
+# it, busy ones at their native safe boundary. See docs/ovh-machine-maintenance.md.
+# Run on Hawk from the repository root:
+#   tools/ovh-machine-host-release.sh [--workers] /nix/store/<hash>-cowboy-machine-release
 set -euo pipefail
 
+workers=0
+if (($# == 2)) && [[ $1 == --workers ]]; then
+  workers=1
+  shift
+fi
 if (($# != 1)); then
-  echo "usage: $0 /nix/store/<hash>-cowboy-machine-release" >&2
+  echo "usage: $0 [--workers] /nix/store/<hash>-cowboy-machine-release" >&2
   exit 2
 fi
 release=$1
@@ -73,19 +80,31 @@ remote "sudo -n install -d -m 0755 /nix/var/nix/gcroots/ovh-cowboy-machine-$shor
 echo "== receipt $receipt"
 remote "sudo -n bash -c 'test ! -e $receipt && install -d -m 0700 -o root -g root $receipt && cat > $receipt/maintenance.py && chmod 0700 $receipt/maintenance.py'" \
   <"$script_dir/ovh_machine_host_maintenance.py"
-remote "sudo -n env RELEASE='$release' REVISION='$revision' D='$receipt' CONF='$unit_dropin' bash -s" <<'EOF'
+remote "sudo -n env RELEASE='$release' REVISION='$revision' WORKERS='$workers' D='$receipt' CONF='$unit_dropin' bash -s" <<'EOF'
 set -euo pipefail
 install -m 0600 "$CONF" "$D/previous.conf"
 python3 - <<'PY'
-import os, re
+import json, os, re
 from pathlib import Path
 d = Path(os.environ["D"])
+release = os.environ["RELEASE"]
 text = (d / "previous.conf").read_text()
 pattern = r"^(ExecStart=)/nix/store/[a-z0-9]{32}-cowboy-machine-release(/libexec/cowboy-machine )"
-text, count = re.subn(pattern, r"\g<1>" + os.environ["RELEASE"] + r"\g<2>", text, flags=re.MULTILINE)
+text, count = re.subn(pattern, r"\g<1>" + release + r"\g<2>", text, flags=re.MULTILINE)
 assert count == 1, "expected one Machine host ExecStart"
 text = re.sub(r"^# Machine host: Cowboy [a-f0-9]{40}$",
               "# Machine host: Cowboy " + os.environ["REVISION"], text, flags=re.MULTILINE)
+if os.environ["WORKERS"] == "1":
+    source = json.loads((Path(release) / "etc/cowboy-release/source.json").read_text())
+    generation = source["workerGeneration"]
+    assert re.fullmatch(r"worker-[a-f0-9]{20}", generation), source
+    text, count = re.subn(r"(--desired-generation )worker-[a-f0-9]{20}", r"\g<1>" + generation, text)
+    assert count == 1, "expected one desired worker generation"
+    text, count = re.subn(r"(--worker-command )/nix/store/[a-z0-9]{32}-cowboy-machine-release/bin/cowboy-acp-worker",
+                          r"\g<1>" + release + "/bin/cowboy-acp-worker", text)
+    assert count == 1, "expected one worker command"
+    (d / "worker-rollout.json").write_text(json.dumps({"schema": 1, "release": release}))
+    os.chmod(d / "worker-rollout.json", 0o600)
 (d / "candidate.conf").write_text(text)
 os.chmod(d / "candidate.conf", 0o600)
 PY
@@ -100,10 +119,15 @@ spec.loader.exec_module(m)
 host = m.process(int(m.systemctl("show", m.UNIT, "--value", "-p", "MainPID")))
 assert host is not None, "Machine host is not running"
 Path("host.json").write_text(json.dumps({k: host[k] for k in ("pid", "start", "exe")}))
-workers = [{k: item[k] for k in ("pid", "start", "exe")}
-           for entry in Path("/proc").iterdir()
-           if entry.name.isdigit() and (item := m.process(entry.name))
-           and Path(item["exe"]).name == "cowboy-acp-worker"]
+if Path("worker-rollout.json").exists():
+    # A rollout recognizes each session's retained or replacement worker.
+    workers = [item for entry in Path("/proc").iterdir()
+               if entry.name.isdigit() and (item := m.worker_identity(entry.name))]
+else:
+    workers = [{k: item[k] for k in ("pid", "start", "exe")}
+               for entry in Path("/proc").iterdir()
+               if entry.name.isdigit() and (item := m.process(entry.name))
+               and Path(item["exe"]).name == "cowboy-acp-worker"]
 Path("workers.json").write_text(json.dumps(workers))
 os.chmod("host.json", 0o600)
 os.chmod("workers.json", 0o600)
@@ -113,13 +137,20 @@ rm -rf "$D/__pycache__"
 diff "$D/previous.conf" "$D/candidate.conf" || true
 EOF
 
-echo "== activate (automatic rollback in 4 minutes unless accepted)"
+activate=activate
+accept=accept
+if ((workers)); then
+  activate=activate-workers
+  accept=accept-workers
+fi
+
+echo "== $activate (automatic rollback in 4 minutes unless accepted)"
 remote "sudo -n systemd-run --unit=$units-rollback --on-active=4min \
     --setenv=COLUMBUS_COWBOY_MAINTENANCE_RECEIPT=$receipt /usr/bin/python3 $receipt/maintenance.py rollback"
 # A Cowboy session on OVH may lose this SSH connection while its host restarts;
 # the activation unit and rollback timer are independent of it.
 remote "sudo -n systemd-run --unit=$units-activate --wait --collect \
-    --setenv=COLUMBUS_COWBOY_MAINTENANCE_RECEIPT=$receipt /usr/bin/python3 $receipt/maintenance.py activate" || true
+    --setenv=COLUMBUS_COWBOY_MAINTENANCE_RECEIPT=$receipt /usr/bin/python3 $receipt/maintenance.py $activate" || true
 
 echo "== verify"
 pid=0
@@ -137,9 +168,23 @@ remote "sudo -n journalctl _PID=$pid --no-pager -o cat | grep -q 'Machine contro
   exit 1
 }
 
-echo "== accept"
-remote "sudo -n env COLUMBUS_COWBOY_MAINTENANCE_RECEIPT=$receipt python3 $receipt/maintenance.py accept &&
-  sudo -n systemctl stop $units-rollback.timer && sudo -n rm -rf $receipt/__pycache__ &&
+echo "== $accept"
+# Idle workers are replaced right after the new host connects; a session can
+# be between its old and new worker for a moment. Acceptance never changes
+# anything until it succeeds, so repeat it within the rollback window.
+accepted=0
+for _ in $(seq 1 $((workers ? 20 : 1))); do
+  if remote "sudo -n env COLUMBUS_COWBOY_MAINTENANCE_RECEIPT=$receipt python3 $receipt/maintenance.py $accept"; then
+    accepted=1
+    break
+  fi
+  sleep 8
+done
+((accepted)) || {
+  echo "acceptance failed; the rollback timer will restore $receipt/previous.conf" >&2
+  exit 1
+}
+remote "sudo -n systemctl stop $units-rollback.timer && sudo -n rm -rf $receipt/__pycache__ &&
   sudo -n cat $receipt/committed.json"
 echo
 echo "OVH Machine host now runs Cowboy $revision ($receipt)"

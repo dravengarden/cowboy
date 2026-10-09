@@ -386,7 +386,7 @@ impl Supervisor {
                 info.meta
                     .execution_binding
                     .as_ref()
-                    .is_some_and(|binding| binding.managed_child().is_some())
+                    .is_some_and(|binding| binding.managed().is_some())
             })
         {
             // Only the parent's managed call controls a child conversation.

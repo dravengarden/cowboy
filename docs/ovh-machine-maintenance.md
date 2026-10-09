@@ -8,8 +8,10 @@ whose drop-in `10-plugin-admission.conf` pins two separate things:
 - the retained worker bundle: `--worker-command` and `--desired-generation`.
 
 A host-only release replaces the first and keeps the second, so detached ACP
-workers keep running and reattach. Changing the worker bundle is a separate
-maintenance boundary and is not covered here.
+workers keep running and reattach. `--workers` additionally selects the
+release's own worker bundle: idle workers adopt it after the new host connects,
+and busy ones at their native safe boundary. Use it when the worker contract
+changed (for example a Provider SDK the old worker cannot read).
 
 ## Release
 
@@ -20,6 +22,8 @@ provenance), then run on Hawk from the repository root:
 ```bash
 nix build .#cowboy-machine-release --out-link result-machine
 tools/ovh-machine-host-release.sh "$(readlink -f result-machine)"
+# or, also rolling out the release's worker bundle:
+tools/ovh-machine-host-release.sh --workers "$(readlink -f result-machine)"
 ```
 
 The driver reaches OVH only through the `ovh` SSH alias and:
@@ -39,6 +43,14 @@ The driver reaches OVH only through the `ovh` SSH alias and:
 5. waits for the new host to log `Machine controller authenticated`, then runs
    `accept` (which rechecks every worker and restores normal containment) and
    disarms the timer.
+
+With `--workers` the candidate also replaces `--desired-generation` and
+`--worker-command`, the receipt records each live worker's full session
+identity and `worker-rollout.json`, and the modes are `activate-workers` /
+`accept-workers`. Acceptance requires every original session to keep its
+exact worker or to have exactly one replacement on the new generation with the
+same session, socket, cwd and Provider generation; it is retried within the
+rollback window while idle workers are being replaced.
 
 If verification fails the driver exits and the timer restores `previous.conf`.
 The receipt keeps `awaiting-acceptance.json`, `committed.json` or

@@ -630,6 +630,9 @@ export class WorkspaceTools {
     this.connection = connection;
     this.binding = binding;
     this.cwd = binding.workspace.cwd;
+    // A managed child's target keeper runs every command read-only; the
+    // facade must not depend on target writes of its own.
+    this.readOnly = binding.managed !== undefined && binding.managed !== null;
     this.statePath = statePath;
     this.state = {
       schema: 1,
@@ -1803,7 +1806,7 @@ export class WorkspaceTools {
     this.shell = /^\/\S*\/(bash|zsh)$/.test(userShell?.trim() ?? "")
       ? userShell.trim()
       : bash;
-    this.startSnapshot();
+    if (!this.readOnly) this.startSnapshot();
     const helper = platform.split("\n")[3]?.trim();
     this.fileHelper = helper?.startsWith("/") ? helper : undefined;
     if (survey) {
@@ -2413,6 +2416,11 @@ export class WorkspaceTools {
     if (name === "bash") {
       const command = checkedString(args.command, "command", MAX_OUTPUT);
       const background = args.run_in_background === true;
+      if (background && this.readOnly) {
+        throw new Error(
+          "Background commands are unavailable in a read-only managed call; run the command in the foreground.",
+        );
+      }
       // Native: a foreground timeout up to 10 minutes; a background one is
       // its deadline, up to 2 hours (enforced by native's task for it).
       const timeout = bounded(
@@ -2425,7 +2433,9 @@ export class WorkspaceTools {
       // `pwd -P >| file` does; a background one never moves the session.
       // The name is unguessable, as native's own; the shell creates its
       // directory without a separate target command.
-      const cwdFile = background ? undefined : posix.join(
+      // Read-only targets cannot record a final directory; each command
+      // then starts in the snapshot, as after a command that left it.
+      const cwdFile = background || this.readOnly ? undefined : posix.join(
         this.home() ?? "/",
         ".cache",
         "cowboy",
@@ -2542,7 +2552,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
             isError: true,
           };
         }
-        const reset = await this.settleShellDirectory(cwdFile);
+        const reset = cwdFile ? await this.settleShellDirectory(cwdFile) : "";
         const shown = [output.trim(), reset].filter(Boolean).join("\n");
         return text(JSON.stringify(complete), {
           // Natively a reset still follows a persisted output's preview.

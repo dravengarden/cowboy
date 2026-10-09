@@ -99,7 +99,7 @@ fn reconcile(state: &Arc<AppState>) {
             || meta
                 .execution_binding
                 .as_ref()
-                .is_some_and(|binding| binding.managed_child().is_some())
+                .is_some_and(|binding| binding.managed().is_some())
         {
             continue;
         }
@@ -374,6 +374,115 @@ pub(super) struct ProviderReadiness {
     pub structured_output: bool,
 }
 
+/// Where a managed child's Agent runtime runs, and whether it can. The
+/// execution Machine is preferred. When host policy places the Provider on
+/// other Machines, one of them (the parent's runtime first) runs the child
+/// against the execution Machine's snapshot through a keeper-enforced
+/// read-only environment. Execution never moves; there is no local fallback.
+pub(super) async fn child_runtime(
+    state: &AppState,
+    execution_machine: &str,
+    parent_runtime: Option<&str>,
+    provider: &str,
+) -> (String, ProviderReadiness) {
+    let local = provider_readiness(state, execution_machine, provider).await;
+    if local.available
+        || !matches!(
+            local.reason,
+            Some("runtime_policy" | "provider_unavailable")
+        )
+    {
+        return (execution_machine.to_owned(), local);
+    }
+    let mut candidates: Vec<String> = parent_runtime.into_iter().map(str::to_owned).collect();
+    if let Some(store) = &state.store
+        && let Ok(machines) = store.list_machines().await
+    {
+        let mut registered: Vec<String> = machines
+            .into_iter()
+            .filter(|machine| !machine.revoked)
+            .map(|machine| machine.id)
+            .collect();
+        registered.sort();
+        candidates.extend(registered);
+    }
+    let mut seen = HashSet::new();
+    candidates.retain(|machine| machine != execution_machine && seen.insert(machine.clone()));
+    let mut remote_reason = None;
+    for runtime in candidates {
+        if !state.supervisor.runtime_allowed(provider, &runtime) {
+            continue;
+        }
+        let readiness = runtime_readiness(state, execution_machine, &runtime, provider).await;
+        if readiness.available {
+            return (runtime, readiness);
+        }
+        remote_reason.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
+    }
+    let readiness = match remote_reason {
+        Some(reason) => ProviderReadiness {
+            available: false,
+            reason: Some(reason),
+            generation: None,
+            structured_output: false,
+        },
+        None => local,
+    };
+    (execution_machine.to_owned(), readiness)
+}
+
+/// Whether a child of `provider` can run with its runtime on `runtime` and
+/// its execution on `execution_machine`.
+pub(super) async fn runtime_readiness(
+    state: &AppState,
+    execution_machine: &str,
+    runtime: &str,
+    provider: &str,
+) -> ProviderReadiness {
+    let readiness = provider_readiness(state, runtime, provider).await;
+    if runtime == execution_machine || !readiness.available {
+        return readiness;
+    }
+    let checked = match &readiness.generation {
+        Some(generation) => remote_ready(state, execution_machine, runtime, generation).await,
+        None => Err("provider_unavailable"),
+    };
+    match checked {
+        Ok(()) => readiness,
+        Err(reason) => ProviderReadiness {
+            available: false,
+            reason: Some(reason),
+            generation: None,
+            structured_output: false,
+        },
+    }
+}
+
+/// A split child needs both Machines to understand remote managed bindings
+/// and the exact runtime Provider to accept the target's executor.
+async fn remote_ready(
+    state: &AppState,
+    execution_machine: &str,
+    runtime_machine: &str,
+    generation: &super::super::ResolvedProviderGeneration,
+) -> Result<(), &'static str> {
+    for machine in [execution_machine, runtime_machine] {
+        match state.machine_control.connection_protocol(machine) {
+            Some((_, protocol))
+                if protocol >= crate::machine_protocol::MANAGED_ENVIRONMENT_PROTOCOL_VERSION => {}
+            Some(_) => return Err("unsupported_capability"),
+            None => return Err("machine_unavailable"),
+        }
+    }
+    let executor = super::super::execution::sessions::executor(state, execution_machine)
+        .await
+        .map_err(|_| "machine_unavailable")?;
+    if !super::super::execution::sessions::accepts(&generation.behavior, &executor) {
+        return Err("unsupported_capability");
+    }
+    Ok(())
+}
+
 /// Whether the exact installed Provider on the target can run this request.
 pub(super) async fn provider_readiness(
     state: &AppState,
@@ -456,11 +565,18 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     let placement = ledger.placement();
     let mut providers = Vec::new();
     for provider in ["codex", "claude-code"] {
-        let readiness = provider_readiness(state, &placement.machine_id, provider).await;
+        let (runtime, readiness) = child_runtime(
+            state,
+            &placement.machine_id,
+            Some(meta.machine_id.as_str()),
+            provider,
+        )
+        .await;
         providers.push(json!({
             "id": provider,
             "alias": if provider == "codex" { "codex" } else { "claude" },
             "available": readiness.available,
+            "runtime_machine_id": readiness.available.then_some(runtime),
             "reason": readiness.reason,
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
             "access": ["read-only"],
@@ -509,7 +625,13 @@ async fn start(
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
     }
-    let readiness = provider_readiness(state, &ledger.placement().machine_id, provider).await;
+    let (_, readiness) = child_runtime(
+        state,
+        &ledger.placement().machine_id,
+        Some(ledger.runtime_machine_id()),
+        provider,
+    )
+    .await;
     if !readiness.available {
         return error(
             readiness.reason.unwrap_or("provider_unavailable"),
@@ -607,12 +729,24 @@ pub(in crate::server) fn delete_child(state: &Arc<AppState>, child: &str) -> Res
         .hub
         .session_info(child)
         .ok_or("Session no longer exists")?;
-    let identity = info
+    let binding = info
         .meta
         .execution_binding
         .as_ref()
-        .and_then(crate::execution_environment::ExecutionBinding::managed_child)
         .ok_or("Not a managed child")?;
+    let identity = binding.managed().ok_or("Not a managed child")?;
+    // The snapshot (and a remote child's environment) is on the execution
+    // Machine; a remote child's worker is stopped on its runtime Machine.
+    let execution_machine = match binding.managed_child() {
+        Some(local) => local.machine_id,
+        None => {
+            binding
+                .decode()
+                .map_err(|_| "Not a managed child")?
+                .environment
+                .machine_id
+        }
+    };
     let store = state
         .store
         .clone()
@@ -637,7 +771,7 @@ pub(in crate::server) fn delete_child(state: &Arc<AppState>, child: &str) -> Res
         state.hub.delete_session(&child);
         let _ = execution_action(
             &state,
-            &identity.machine_id,
+            &execution_machine,
             execution::Action::CloseManagedChild {
                 child_session_id: child,
             },

@@ -129,6 +129,17 @@ export class Connection {
       connection.socket.send(
         JSON.stringify({ method: "initialized", params: {} }),
       );
+      // A managed target announces the constraint its keeper enforces. It
+      // is fixed for the environment's lifetime, across reconnects.
+      const managed = initialized.cowboyManaged ?? null;
+      if (
+        connection.managed !== undefined &&
+        JSON.stringify(connection.managed) !== JSON.stringify(managed)
+      ) {
+        connection.close();
+        throw new Error("Execution environment differs from binding");
+      }
+      connection.managed = managed;
       connection.info = info;
       connection.sessionId = initialized.sessionId;
       for (const listener of connection.listeners) {

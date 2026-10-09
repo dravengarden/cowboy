@@ -59,6 +59,13 @@ pub enum Action {
     CloseManagedChild {
         child_session_id: String,
     },
+    /// Start the read-only environment of a managed child whose Agent runtime
+    /// is on `runtime`'s Machine. Its workspace is the child's existing round
+    /// snapshot; repeating the request observes the same environment.
+    PrepareManagedEnvironment {
+        child_session_id: String,
+        runtime: RuntimeLocation,
+    },
 }
 
 impl Action {
@@ -71,6 +78,7 @@ impl Action {
                 | Self::RevokeCallGateway { .. }
                 | Self::PrepareManagedRound { .. }
                 | Self::CloseManagedChild { .. }
+                | Self::PrepareManagedEnvironment { .. }
         )
     }
 }
@@ -89,6 +97,7 @@ impl std::fmt::Debug for Request {
             Action::RevokeCallGateway { .. } => "ManagedCallGatewayRevoke",
             Action::PrepareManagedRound { .. } => "ManagedRoundPrepare",
             Action::CloseManagedChild { .. } => "ManagedChildClose",
+            Action::PrepareManagedEnvironment { .. } => "ManagedEnvironmentPrepare",
         })
     }
 }

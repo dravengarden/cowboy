@@ -67,6 +67,14 @@ struct Shared {
     workspace_path: PathBuf,
     workspace_identity: Option<WorkspaceIdentity>,
     execution: Option<Arc<crate::worker_execution::Client>>,
+    /// A remote managed child's round, read once from its execution target
+    /// before the first prompt; each round starts a new worker.
+    managed_round: Option<ManagedRound>,
+}
+
+struct ManagedRound {
+    ready: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    marker: Arc<Mutex<Option<crate::managed_calls::round::RoundMarker>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +98,7 @@ impl Shared {
             .launch
             .as_ref()
             .and_then(|launch| launch.execution_binding.as_ref())
-            .and_then(|binding| binding.managed_child())
+            .and_then(crate::execution_environment::ExecutionBinding::managed)
             .is_some()
     }
 
@@ -290,9 +298,30 @@ impl AgentSink for RemoteSink {
         if !self.session_is_managed_read_only(session_id) {
             return Ok(None);
         }
+        if let Some(remote) = &self.shared.managed_round {
+            return remote
+                .marker
+                .lock()
+                .as_ref()
+                .map(|round| Some(round.prompt_meta()))
+                .ok_or_else(|| "managed call round is unavailable".to_owned());
+        }
         crate::managed_calls::round::read_round(&self.shared.workspace_path)
             .map(|round| Some(round.prompt_meta()))
             .ok_or_else(|| "managed call round is unavailable".to_owned())
+    }
+    fn managed_round_fence(
+        &self,
+        session_id: &str,
+    ) -> Option<tokio::sync::watch::Receiver<Option<Result<(), String>>>> {
+        (session_id == self.shared.session_id)
+            .then(|| {
+                self.shared
+                    .managed_round
+                    .as_ref()
+                    .map(|round| round.ready.clone())
+            })
+            .flatten()
     }
     fn prompt_started(&self, _session_id: &str, cmid: Option<&str>) {
         self.shared.telemetry.lock().started(cmid);
@@ -415,11 +444,24 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             "managed child worker identity mismatch"
         );
     }
-    let prepared = provider::prepare(
-        &args.provider,
-        managed_child.as_ref().map(|child| child.profile),
-    )
-    .await?;
+    // A remote managed child executes in a snapshot named after itself.
+    let remote_managed = args
+        .execution_binding
+        .as_ref()
+        .and_then(|binding| binding.decode().ok())
+        .filter(|binding| binding.managed.is_some());
+    if let Some(binding) = &remote_managed {
+        anyhow::ensure!(
+            binding.workspace.worktree_id == args.session_id,
+            "managed child worker identity mismatch"
+        );
+    }
+    let profile = args
+        .execution_binding
+        .as_ref()
+        .and_then(crate::execution_environment::ExecutionBinding::managed)
+        .map(|managed| managed.profile);
+    let prepared = provider::prepare(&args.provider, profile).await?;
     let mut spec = prepared.spec.clone();
     // This reserved host projection must never come from a parent process.
     spec.package_remove_env
@@ -472,6 +514,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         execution_binding: args.execution_binding.clone(),
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
+    let mut managed_round = None;
     let endpoint = if let Some(binding) = &args.execution_binding
         && managed_child.is_none()
     {
@@ -480,6 +523,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             "Provider generation does not support execution environments"
         );
         let binding = binding.decode().map_err(anyhow::Error::msg)?;
+        let binding_profile = binding.managed.as_ref().map(|managed| managed.profile);
         anyhow::ensure!(
             launch
                 .provider_behavior
@@ -501,6 +545,24 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             binding,
             notify_tx.clone(),
         );
+        if let Some(profile) = binding_profile {
+            let (ready, receiver) = tokio::sync::watch::channel(None);
+            let marker = Arc::new(Mutex::new(None));
+            let (fetch, stored) = (Arc::clone(&client), Arc::clone(&marker));
+            tokio::spawn(async move {
+                let result = fetch.managed_round(profile).await.map(|round| {
+                    *stored.lock() = Some(round);
+                });
+                let _ =
+                    ready.send(Some(result.map_err(|error| {
+                        format!("managed call round is unavailable: {error}")
+                    })));
+            });
+            managed_round = Some(ManagedRound {
+                ready: receiver,
+                marker,
+            });
+        }
         let endpoint = crate::worker_execution::Endpoint::start(client, &args.cwd).await?;
         spec.env.insert(
             crate::worker_execution::DESCRIPTOR_ENV.to_owned(),
@@ -553,6 +615,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         execution: endpoint
             .as_ref()
             .map(|endpoint| Arc::clone(&endpoint.client)),
+        managed_round,
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -1291,6 +1354,7 @@ mod tests {
                 workspace_path,
                 workspace_identity: expected_workspace_identity,
                 execution: None,
+                managed_round: None,
             }),
             rx,
         )

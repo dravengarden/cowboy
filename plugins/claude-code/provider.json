@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.19.7",
+  "version": "3.19.8",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.13",
   "display": {
@@ -261,6 +261,13 @@
       }
     },
     "arguments": [],
+    "managed_profiles": {
+      "read_only_v1": {
+        "arguments": [
+          "--cowboy-managed-profile=read-only-v1"
+        ]
+      }
+    },
     "environment": {
       "CLAUDE_CODE_EXECUTABLE": {
         "source": "component_command",
@@ -340,7 +347,8 @@
     ],
     "required_capabilities": [
       "provider.runtime.v1",
-      "provider.execution-jsonrpc.v1"
+      "provider.execution-jsonrpc.v1",
+      "provider.managed-profiles.v1"
     ]
   },
   "authentication": {
