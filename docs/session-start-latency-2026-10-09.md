@@ -55,7 +55,7 @@ alone takes 1.5–2.3 s on Hawk).
 
 ## Changes
 
-- Claude 3.19.9: one ended target command (the startup survey) reports the
+- Claude 3.19.10: one ended target command (the startup survey) reports the
   platform, native's git status queries, rule and skill listings with sizes and
   candidate existence. Walks read only existing files with known metadata and
   run beside the instruction walk. Any missing utility, unexpected section,
