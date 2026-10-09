@@ -548,6 +548,7 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
+    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
@@ -561,7 +562,8 @@ claude-remote-check:
 # payload gate used by the generic Plugin release workflow.
 provider-check: claude-remote-check plugin-check
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
-    deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/source.json
+    node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
+    deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/source.json
     deno check plugins/codex/runtime/build.ts
     deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/check-provider-release-coverage.ts tools/check-provider-release-coverage_test.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/check-provider-release-coverage_test.ts

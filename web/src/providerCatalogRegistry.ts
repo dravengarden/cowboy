@@ -1,6 +1,7 @@
 import {
   compareProviderVersions,
   type MachineProviderInventory,
+  projectAgentPluginInventory,
   type ProviderCatalogEntry,
   type ProviderCatalogResponse,
   type ProviderCompatibilityProblem,
@@ -15,6 +16,10 @@ import { applyUsageHostPlugins } from "./usageHostMap";
 
 let cached: ProviderCatalogResponse | null = null;
 let pending: Promise<ProviderCatalogResponse> | null = null;
+// Installed identities that a successful Catalog read still did not carry.
+// They stay host-owned recovery rows and must not trigger another read on
+// every Machine snapshot.
+const uncatalogued = new Set<string>();
 const listeners = new Set<() => void>();
 
 export async function loadProviderCatalog(
@@ -76,6 +81,7 @@ function notifyCatalog(): void {
 export function resetProviderCatalog(): void {
   cached = null;
   pending = null;
+  uncatalogued.clear();
   applyUsageHostPlugins([]);
   applyOccupancyHostPlugins([]);
   applyVisualHostPlugins([]);
@@ -86,6 +92,77 @@ export function resetProviderCatalog(): void {
  * Keep the last validated catalog available if the Service is still recovering. */
 export function refreshProviderCatalog(): void {
   void loadProviderCatalog(true).catch((cause: unknown) => {
+    console.warn("Could not refresh Providers", cause);
+  });
+}
+
+function installedIdentity(
+  providerId: string,
+  providerVersion: string,
+  digest: string | null,
+): string {
+  return `${providerId}@${providerVersion}@${digest ?? ""}`;
+}
+
+/** Catalog identities a live Machine inventory has active but the cached
+ * Catalog does not carry. Machine inventory arrives over WS while the Catalog
+ * is only read on demand, so a Provider release installed after this tab read
+ * the Catalog would otherwise be hidden by every exact-identity join. */
+export function uncataloguedInstallations(
+  catalog: ProviderCatalogResponse,
+  machinePlugins: readonly (readonly unknown[])[],
+): string[] {
+  const known = new Set(
+    catalog.providers.map((entry) =>
+      installedIdentity(
+        entry.provider_id,
+        entry.provider_version,
+        entry.artifact_digest,
+      )
+    ),
+  );
+  const missing = new Set<string>();
+  for (const plugins of machinePlugins) {
+    let inventory;
+    try {
+      inventory = projectAgentPluginInventory(plugins);
+    } catch {
+      continue;
+    }
+    for (const installed of inventory) {
+      if (installed.state !== "active") continue;
+      const identity = installedIdentity(
+        installed.provider_id,
+        installed.provider_version,
+        installed.generation_digest,
+      );
+      if (!known.has(identity)) missing.add(identity);
+    }
+  }
+  return [...missing];
+}
+
+/** Revalidate the cached Catalog when live Machine inventory reports an
+ * active Provider release it does not carry. A tab that has not read the
+ * Catalog yet is left alone; its first read observes the current releases. */
+export function reconcileProviderCatalog(
+  machinePlugins: readonly (readonly unknown[])[],
+): void {
+  if (pending) {
+    // That read may predate the install; judge against its result instead.
+    void pending.then(() => reconcileProviderCatalog(machinePlugins), () => {});
+    return;
+  }
+  if (!cached) return;
+  const missing = uncataloguedInstallations(cached, machinePlugins)
+    .filter((identity) => !uncatalogued.has(identity));
+  if (missing.length === 0) return;
+  void loadProviderCatalog(true).then((catalog) => {
+    const still = new Set(uncataloguedInstallations(catalog, machinePlugins));
+    for (const identity of missing) {
+      if (still.has(identity)) uncatalogued.add(identity);
+    }
+  }).catch((cause: unknown) => {
     console.warn("Could not refresh Providers", cause);
   });
 }

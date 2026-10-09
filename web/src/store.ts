@@ -79,7 +79,10 @@ import {
   type ConfigOptionChange,
   configOptionsMatchChanges,
 } from "./configOptionMutation";
-import { refreshProviderCatalog } from "./providerCatalogRegistry";
+import {
+  reconcileProviderCatalog,
+  refreshProviderCatalog,
+} from "./providerCatalogRegistry";
 import { attachDraftDatabase, getDraft, pruneDrafts } from "./draftStore";
 import { announceDraftChanges } from "./documents/store";
 import {
@@ -1599,6 +1602,9 @@ function handle(msg: Outbound): void {
         machinesRevision: msg.revision,
       });
       replica.recordMachines(msg.revision, msg.machines);
+      // A Provider release installed after this tab read the Catalog would
+      // otherwise vanish from exact-identity joins until a reload.
+      reconcileProviderCatalog(msg.machines.map((machine) => machine.plugins));
       break;
     }
     case "snapshot": {
@@ -4207,6 +4213,7 @@ function armDeliveryDeadline(
   mutationId: string,
   statusIds: readonly string[],
   delayMs: number,
+  onTimeout?: () => void,
 ): ReturnType<typeof setTimeout> {
   const armedAt = Date.now();
   const timer = setTimeout(() => {
@@ -4216,12 +4223,17 @@ function armDeliveryDeadline(
       // Re-check through the authoritative snapshot and give the resumed
       // connection a fresh, fully observed window.
       checkUnconfirmedDelivery(sessionId, mutationId);
-      timers.fail = armDeliveryDeadline(sessionId, mutationId, statusIds, DELIVERY_RECHECK_MS);
+      timers.fail = armDeliveryDeadline(sessionId, mutationId, statusIds, DELIVERY_RECHECK_MS, onTimeout);
       return;
     }
     reportClientLog("warn", "delivery_confirmation_timeout", "Outgoing message remains unconfirmed; local copy retained", {
       session_id: sessionId, mutation_id: mutationId, timeout_ms: SEND_TIMEOUT_MS,
     });
+    if (onTimeout !== undefined) {
+      onTimeout();
+      clearOptTimers(mutationId);
+      return;
+    }
     failDelivery(sessionId, statusIds);
     clearOptTimers(mutationId);
     parkUnconfirmedSend(sessionId, mutationId, "sending");
@@ -4697,13 +4709,24 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     setInteractiveState({ ...state, optimisticMessages });
   }
   if (delivered.length > 0) {
-    const set = new Set<string | undefined>(acceptsValue ? delivered.filter((cmid) =>
-      next.queue.some((row) => row.cmid === cmid) ||
-      next.drafts.some((row) => row.cmid === cmid)
-    ) : []);
+    // Even an older patch can confirm delivery. Use the latest accepted base
+    // to locate its row; an old list must neither erase nor strand the bubble.
+    const base = store.baseValue();
+    const set = new Set<string | undefined>(delivered.filter((cmid) =>
+      base.queue.some((row) => row.cmid === cmid) ||
+      base.drafts.some((row) => row.cmid === cmid)
+    ));
     setState({ ...state, optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, set) });
   }
   commitQueue(sessionId);
+  // A receipt can retire the durable mutation before its transcript echo.
+  // Clearing its old timers above must not leave this retained bubble with an
+  // immortal spinner. Repeated receipts must not extend the echo deadline.
+  for (const row of state.optimisticMessages.get(sessionId) ?? []) {
+    if (row.cmid !== undefined && delivered.includes(row.cmid) && row.status === "sending" && !optTimers.has(row.cmid)) {
+      armMsgTimers(sessionId, row.cmid);
+    }
+  }
 }
 
 // The optimistic CHAT-bubble overlay is projected from the same durable queue
@@ -4756,10 +4779,9 @@ function armMsgTimers(sessionId: string, cmid: string): void {
   clearOptTimers(cmid);
   optTimers.set(cmid, {
     check: setTimeout(() => checkUnconfirmedDelivery(sessionId, cmid), SEND_CHECK_MS),
-    fail: setTimeout(() => {
+    fail: armDeliveryDeadline(sessionId, cmid, [cmid], SEND_TIMEOUT_MS, () => {
       patchMessage(sessionId, cmid, (m) => (m.status === "failed" ? m : { ...m, status: "failed" }));
-      clearOptTimers(cmid);
-    }, SEND_TIMEOUT_MS),
+    }),
   });
 }
 

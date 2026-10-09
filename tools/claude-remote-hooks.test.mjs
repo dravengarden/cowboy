@@ -1,3 +1,6 @@
+const fileHelper = fileURLToPath(
+  new URL("../target/debug/cowboy-execution-host", import.meta.url),
+);
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
@@ -246,7 +249,7 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
       return {};
     },
   });
-  tools.rangePython = "python3";
+  tools.fileHelper = fileHelper;
   await writeFile(
     join(directory, "hashlib.py"),
     'raise RuntimeError("project module")',
@@ -325,6 +328,54 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
   assert.deepEqual(writes, [extended.length]);
 });
 
+test("8 MiB hook transcripts fit the execution wire with and without the Cowboy helper", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-large-transcripts-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const helper of [undefined, fileHelper]) {
+    const writes = [];
+    const tools = await fixture(t, {
+      async call(method, params) {
+        // Same serialized invocation limit as the real worker, including
+        // Base64 expansion. This rejects the formerly unchunked 8 MiB write.
+        assert.ok(
+          Buffer.byteLength(JSON.stringify({
+            operation_id: "a".repeat(32),
+            method,
+            params,
+          })) <= 7 * 1024 * 1024,
+        );
+        const path = fileURLToPath(params.path);
+        if (method === "fs/writeFile") {
+          const bytes = Buffer.from(params.dataBase64, "base64");
+          writes.push(bytes.length);
+          await writeFile(path, bytes);
+        } else if (method === "fs/remove") await rm(path, { force: true });
+        else assert.fail(method);
+        return {};
+      },
+    });
+    tools.fileHelper = helper;
+    tools.shell = "bash";
+    tools.command = async (argv) => {
+      await promisify(execFile)(argv[0], argv.slice(1));
+      return { exitCode: 0 };
+    };
+    const bytes = Buffer.alloc(8 * 1024 * 1024, 120);
+    const path = join(directory, helper ? "helper.jsonl" : "shell.jsonl");
+    await tools.hookTranscript(bytes, path);
+    assert.deepEqual(await readFile(path), bytes);
+    assert.equal(writes.reduce((sum, size) => sum + size, 0), bytes.length);
+    assert.ok(writes.length > 1);
+    writes.length = 0;
+    await tools.hookTranscript(bytes, path + ".repeat");
+    assert.deepEqual(await readFile(path + ".repeat"), bytes);
+    assert.equal(
+      writes.reduce((sum, size) => sum + size, 0),
+      helper ? 0 : bytes.length,
+    );
+  }
+});
+
 test("uncertain transcript preparation is cancelled before input cleanup", async (t) => {
   for (const lost of ["start", "read"]) {
     const events = [];
@@ -334,7 +385,7 @@ test("uncertain transcript preparation is cancelled before input cleanup", async
         return {};
       },
     });
-    tools.rangePython = "python3";
+    tools.fileHelper = fileHelper;
     let admitted;
     tools.startForeground = async (_argv, _call, _set, id) => {
       admitted = id;

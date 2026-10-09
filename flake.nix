@@ -13,7 +13,7 @@
 
   # Machine host fixes retain the separately accepted detached-worker bundle.
   # Advance this exact source only with worker/adapter maintenance acceptance.
-  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=d2e5e752b5f4c8531d07f2cf8907a5bc07f1893a";
+  inputs.cowboy-workers.url = "git+ssh://git@github.com/dravengarden/cowboy.git?rev=8c530c061a029ab062d17a19e0c88fdb8eb10a5c";
 
   outputs = { self, nixpkgs, rust-overlay, cowboy-workers }:
     let
@@ -153,6 +153,8 @@
           ./src/machine_cli.rs
           ./src/machine_cli
           ./src/machine_auth.rs
+          ./src/managed_calls.rs
+          ./src/managed_calls
           ./src/component_proof.rs
           ./src/machine_components.rs
           ./src/machine_components
@@ -237,6 +239,7 @@
         ./src/runtime_trace.rs
         ./src/logs.rs
         ./src/logs
+        ./src/managed_calls/round.rs
         ./src/worker.rs
         ./src/worker_execution.rs
         ./src/worker_telemetry.rs
@@ -338,7 +341,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-mYJXQox61ERPCHrvAy7s0/AAvHSWioAiRXt8QQzZalI=";
+        hash = "sha256-Dh7Ct4o87CF5A7C6ZSJQO3A6kCiUZR/Yh61GM+cX3Tc=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';

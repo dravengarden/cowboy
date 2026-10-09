@@ -1105,9 +1105,9 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
     hooks_dir.mkdir(exist_ok=True)
     marker = lambda name: f'printf "%s\\n" {name} >> "$CLAUDE_PROJECT_DIR/hook-events.txt"'
     # The hook reads its transcript_path on the target and requires content.
-    transcript_readable = ("python3 -c 'import json,os,sys; p=json.load(sys.stdin).get(\"transcript_path\"); "
+    transcript_readable = ("python3 -c 'import json,os,sys; i=json.load(sys.stdin); p=i.get(\"transcript_path\"); "
                            "data=open(p,\"rb\").read(); assert data; "
-                           "open(\"hook-transcript-sizes.jsonl\",\"a\").write(json.dumps({\"size\":len(data),"
+                           "open(\"hook-transcript-sizes.jsonl\",\"a\").write(json.dumps({\"event\":i.get(\"hook_event_name\"),\"size\":len(data),"
                            "\"sentinel\":b\"TRANSCRIPT_SYNC_SENTINEL\" in data})+\"\\n\")'")
     (hooks_dir / "settings.json").write_text(json.dumps({"hooks": {
         "SessionStart": [{"hooks": [{"type": "command",
@@ -1116,7 +1116,8 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                                      # Exec form: no shell, placeholder substituted as a plain string.
                                      {"type": "command", "command": "sh", "args": [
                                          "-c", 'printf "%s\\n" ExecForm >> "$1/hook-events.txt"', "sh", "${CLAUDE_PROJECT_DIR}"]}]}],
-        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": marker("UserPromptSubmit")}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": marker("UserPromptSubmit") +
+            " && python3 -c 'import json,sys; print(len(json.load(sys.stdin).get(\"prompt\",\"\")))' >> hook-prompt-sizes.txt"}]}],
         "Stop": [{"hooks": [{"type": "command", "command": (
             transcript_readable + " && " + marker("StopTranscript") + "; " + marker("Stop"))}]}],
         "PreToolUse": [
@@ -1164,6 +1165,8 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                 block.get("type") == "tool_result" and block.get("tool_use_id") in issued for block in last["content"]):
             return [{"type": "text", "text": "HOOK_DONE"}]
         latest = " ".join(text_blocks(last))
+        if "HOOK_HISTORY " in latest:
+            return [{"type": "text", "text": "HISTORY_RECORDED"}]
         if "CHILD_READS_WITH_HOOK" in latest:
             call = tool("Read", {"file_path": "hooked.txt"})
             issued[call[0]["id"]] = "HOOK_CHILD_READ"
@@ -1195,7 +1198,7 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
 
     client.close()
     del api.steps[len(api.requests):]
-    api.steps.extend([router] * 20)
+    api.steps.extend([router] * 60)
     client = native(session)
     client.ready()
     phase_start = len(api.requests)
@@ -1218,14 +1221,38 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                              frame["response"].get("request_id") == request_id)
         require(reply["response"]["subtype"] == "success", "native rejected the permission mode")
 
+    # Build genuine history using ordinary-sized turns. One 6 MiB prompt
+    # exceeds native's context admission before any tool can run.
+    history_sizes = args.target / "hook-transcript-sizes.jsonl"
+    for _ in range(32):
+        before = history_sizes.read_text().splitlines() if history_sizes.exists() else []
+        try:
+            client.prompt(text="HOOK_HISTORY TRANSCRIPT_SYNC_SENTINEL " + "x" * 200000, timeout=60)
+        except ProbeFailure as error:
+            raise ProbeFailure(f"history setup failed; API fixture error: {api.failure}; {error}") from error
+        deadline = time.monotonic() + 10
+        while True:
+            observed = history_sizes.read_text().splitlines() if history_sizes.exists() else []
+            if len(observed) > len(before):
+                break
+            require(time.monotonic() < deadline, "history Stop hook did not record its transcript")
+            time.sleep(0.1)
+        if json.loads(observed[-1])["size"] >= 6 * 1024 * 1024:
+            break
+    else:
+        raise ProbeFailure("native history did not reach the large transcript boundary")
     for name in steps:
         if name == "HOOK_PERMREQ":
             client.permission = slow_host
             mode("default")
-        # Cross the incremental-copy threshold using genuine native history.
-        # Subsequent hooks must continue seeing the original large prompt.
-        prompt = name + (" TRANSCRIPT_SYNC_SENTINEL " + "x" * 200000 if name == "HOOK_BLOCK" else "")
-        client.prompt(text=prompt, timeout=60)
+        # Genuine history exceeds the worker's 7 MiB invocation limit after
+        # Base64 encoding. First copies must chunk; subsequent copies append.
+        prompt = name
+        try:
+            client.prompt(text=prompt, timeout=60)
+        except ProbeFailure as error:
+            raise ProbeFailure(f"{name} failed; API fixture error: {api.failure}; "
+                               f"requests: {len(api.requests) - phase_start}; {error}") from error
         if name == "HOOK_PERMREQ":
             mode("bypassPermissions")
             client.permission = None
@@ -1272,9 +1299,13 @@ def hook_phases(args, api, client, native, session, context_checked, checks):
                  "PermissionRequest", "Stop", "StopTranscript"]:
         require(name in recorded, f"target {name} hook did not run on the target")
     sizes = [json.loads(line) for line in (args.target / "hook-transcript-sizes.jsonl").read_text().splitlines()]
-    large = [item for item in sizes if item["size"] >= 200000]
+    large = [item for item in sizes if item["size"] >= 6 * 1024 * 1024]
     require(len(large) >= 3 and all(item["sentinel"] for item in large),
             "incremental target transcript snapshots lost native history")
+    require(any(item["event"] == "PostToolUse" for item in large),
+            "the tool's hook did not read the large native history")
+    require(max(map(int, (args.target / "hook-prompt-sizes.txt").read_text().split())) >= 200000,
+            "large UserPromptSubmit input did not reach its target guard")
     # The fixture executor shares this host's HOME; only new entries count.
     # A background child's hook may still be running: its copies must go when it ends.
     deadline = time.monotonic() + 15
@@ -1773,7 +1804,7 @@ def main():
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
         (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
-        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "read-range.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs"]:
+        for name in ["cowboy-launch.mjs", "connection.mjs", "tools.mjs", "mod-bridge.mjs", "memory.mjs", "matrix-client.mjs", "hook-proxy.mjs", "task-wait.mjs", "instructions.mjs", "skills.mjs", "mcp.mjs", "mcp-proxy.mjs"]:
             shutil.copyfile(launcher.parent / name, broken / "app" / name)
         (broken / "app/context-mod.js").write_text("export function register() { throw new Error('fixture broken module'); }\n")
         for extra in [(), ("--bare",)]:

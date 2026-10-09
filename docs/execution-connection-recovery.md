@@ -1,5 +1,39 @@
 # Execution connection recovery
 
+## October 9 pending delivery follow-up
+
+Controller and Web activation, regression evidence, and the one targeted
+stranded-worker recovery are recorded in the
+[deployment receipt](releases/pending-delivery-2026-10-09.json).
+
+The `fix falcon` session retained a Controller-owned unacknowledged prompt
+while a second submission of the same text remained queued. Explicit recovery
+preserved the former as a draft and paused the queue. This establishes the
+blocked handoff, not why the original acknowledgement was absent. The old
+session's 3.19.4 Provider and 25.8 MB transcript do not, by themselves, explain
+the missing acknowledgement.
+
+A sequenced `TurnEnded` naming the exact pending turn also proves worker
+admission when the separate `CommandAck` was lost. Start events and active
+snapshots precede the fallible ACP send, so they retain the pending prompt for
+negative-acknowledgement recovery. Every 30 seconds a live
+connection with pending prompts requests an adoption-only owner snapshot; it
+does not resend prompts or request worker launch. Repeated config
+snapshots can release an already-reconciled startup gate without replaying
+preferences. Host Operator session inspection includes content-free delivery
+state so a configuration wait, an unwritten prompt and a missing receipt are
+distinguishable.
+
+The browser separately bounds the receipt-to-transcript-echo gap. An accepted
+queue mutation may disappear before the echo; its retained bubble must still
+have a deadline. Repeated receipts do not extend it. A stale confirmation uses
+the latest accepted queue snapshot to locate the delivered row. Timeout means
+unconfirmed echo, not proof that execution failed, and never resubmits work.
+
+These are Cowboy transport and presentation responsibilities shared by Codex
+and the Claude adapter; native runtimes still own turns and tool effects. No
+Provider release, execution protocol or native model contract changes here.
+
 ## October 8 tool latency follow-up
 
 The Controller still recorded OVH Machine and broker heartbeat timeouts after
@@ -50,11 +84,12 @@ proxy path will remain loss-free.
 Claude Plugin 3.19.3 replaces repeated large transcript uploads with verified
 appends. Native Claude still owns history on the runtime Machine; project hooks
 still receive a complete, private snapshot on the execution Machine. For
-transcripts of at least 128 KiB on a target with Python, the adapter retains one
+transcripts of at least 128 KiB on a target with Cowboy's file helper, the adapter retains one
 latest base in memory and one private cache file per execution binding (each
 bounded by the existing 8 MiB transcript limit). No transcript content enters
-durable adapter state or telemetry. Targets without Python and smaller inputs
-keep the original full-copy behavior.
+durable adapter state or telemetry. Retained older keepers without the helper
+and smaller inputs keep the bounded full-copy behavior. Python is not used by
+the 3.19.6 adapter for this path, range reads or symlink resolution.
 
 Only an exact byte prefix permits an append. The target verifies both the base
 and assembled SHA-256 digests before exposing an exclusive per-hook snapshot;
@@ -308,3 +343,68 @@ faults. Queues remain paused for inspection; uncertain prompts remain drafts.
 
 Sanitized artifact and activation evidence is recorded in
 [`experiments/remote-execution-recovery-2026-10-09.json`](experiments/remote-execution-recovery-2026-10-09.json).
+
+### Large hook transcripts and restricted target PATH
+
+A later `OVH auto cleaner` tool attempt exposed a separate defect: its native
+transcript was 7,339,309 bytes. The target's service PATH did not contain Python,
+so the optional incremental helper fell back to one full `fs/writeFile`.
+Base64 alone expanded that request to 9,785,748 bytes, above the worker's
+7,340,032-byte invocation limit. Validation rejected it before target admission;
+the PreToolUse guard correctly refused the Bash call but reported only that the
+hook could not run. Startup readiness did not exercise this large-input path.
+
+Claude Plugin 3.19.5 bounds transcript and hook-input uploads to 3 MiB raw chunks before
+assembling a private target file. Both first/cache-miss copies and the no-Python
+fallback use that path. Assembly has a unique temporary path, cancellation on
+unknown results and cleanup; it never retries a hook. Python discovery also
+checks the standard Linux and NixOS system locations when PATH omits them, so
+Hawk can use verified append-only synchronization without changing user PATH.
+The wire limit and the project's hook decision remain unchanged.
+
+Regression coverage includes 8 MiB snapshots with and without Python and
+over 6 MiB of genuine native history accumulated across ordinary-sized turns
+in the packaged hook scenario. That history exceeds the invocation limit after
+Base64 encoding and must still reach target hooks intact. Each UserPromptSubmit
+guard also receives its complete input. A separate fresh native executor probe
+checks an 8 MiB hook input without exceeding Claude's per-turn context budget.
+Native Claude/ACP pins and public tool/Mods
+contracts are unchanged; only private transcript transport and helper discovery
+change.
+
+The [release and recovery receipt](experiments/claude-hook-frame-recovery-2026-10-09.json)
+separates package acceptance, OVH installation and the affected session's adoption.
+
+### Cowboy-owned target file utilities
+
+The 3.19.6 adapter removes its Python programs. The execution keeper's own Rust
+binary implements bounded snapshot assembly, whole-file-stamped range reads
+and symlink resolution. The keeper supplies its immutable absolute executable
+path as `COWBOY_EXECUTION_FILE_HELPER` in the owned executor environment; this is
+private executable wiring, not a behavioral setting or operator PATH lookup.
+The reserved Cowboy environment namespace cannot be supplied through an
+operator's target environment configuration. No helper is uploaded into a
+project or downloaded on demand.
+
+Native Codex still supplies filesystem RPCs, process execution, cancellation
+and remote environment binding. Its current filesystem interface lacks the
+verified append/snapshot and whole-file-stamped range operations this adapter
+needs. The narrow extension is an ordinary native `process/start` invocation
+of the owned utility, with the existing keeper ledger and permissions. No new
+RPC, execution authority, Provider-specific keeper state or replay mechanism
+is introduced. Remove these utilities when the native interface supplies the
+same bounded operations and integrity guarantees. Claude is adapter-backed;
+Codex's native tool contract remains unchanged.
+
+Deploy the updated target keeper and recover its execution lifetime before
+expecting incremental behavior from existing bindings. An older retained
+keeper remains compatible through bounded full copies and ordinary file reads;
+it does not regain Python dependencies. Projects may still explicitly use
+Python in their own commands or hooks. Development and acceptance fixtures
+also use Python; neither is an implicit Cowboy production runtime dependency.
+
+The [owned utility deployment receipt](experiments/cowboy-owned-file-helper-2026-10-09.json)
+records native acceptance without an interpreter on PATH, Hawk activation and
+OVH installation. The affected session's keeper has been recovered with its
+native identity and worktree preserved; adoption of the new Provider remains
+separate from installation and must be verified per session.

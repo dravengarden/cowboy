@@ -1,3 +1,4 @@
+import { isManagedChild } from "./managedCalls";
 import type { DraftMetadata } from "./documents/model";
 // Display rows for the Sessions sidebar: the folder tree with sessions filed
 // into their effective folders (docs/sessions-folders.md). Pure; both the
@@ -162,6 +163,9 @@ export function buildSessionTree(
   const folderOf = new Map<string, string | null>();
   const sessionsIn = new Map<string | null, SessionMeta[]>();
   for (const session of sessions) {
+    // Managed child conversations belong to their parent's Calls, not the
+    // main session list; the parent links to each one.
+    if (isManagedChild(session)) continue;
     const folder = effectiveSessionFolder(session, value, projects);
     folderOf.set(session.id, folder);
     const list = sessionsIn.get(folder) ?? [];

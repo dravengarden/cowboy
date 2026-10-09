@@ -2,6 +2,7 @@
 //! owner of a native executor or its jobs. A lost keeper cannot be relaunched
 //! under the same incarnation, and admitted effects cannot be retried as new.
 
+pub mod file_helper;
 mod ledger;
 
 use crate::execution_protocol::{
@@ -46,6 +47,7 @@ pub fn log_context(path: &Path) -> Result<crate::logs::Context> {
 
 struct Host {
     scope: Scope,
+    call_context: Option<String>,
     capability_digest: [u8; 32],
     initialization: Value,
     cwd: PathBuf,
@@ -128,6 +130,12 @@ fn validate_contract(contract: &LaunchContract) -> Result<()> {
             }),
         "invalid target environment"
     );
+    ensure!(
+        contract.call_context.as_ref().is_none_or(|path| {
+            Path::new(path).is_absolute() && path.len() <= 4096 && !path.contains('\0')
+        }),
+        "invalid call context"
+    );
     Ok(())
 }
 
@@ -203,7 +211,14 @@ impl Host {
                                 Ok(permit) => {
                                     let result = ledger.admit(&invocation);
                                     if let Ok(Admission::New { id, .. }) = &result {
-                                        permit.send(json!({"id": id, "method": invocation.method, "params": invocation.params}));
+                                        // The ledger retains the admitted params;
+                                        // only the native frame carries context.
+                                        let params = wire::with_call_context(
+                                            &invocation.method,
+                                            &invocation.params,
+                                            self.call_context.as_deref(),
+                                        );
+                                        permit.send(json!({"id": id, "method": invocation.method, "params": params}));
                                     }
                                     result
                                 }
@@ -362,6 +377,7 @@ pub async fn run(args: Args) -> Result<()> {
         .env_clear()
         .envs(&contract.environment)
         .env("CODEX_HOME", &private_home)
+        .env("COWBOY_EXECUTION_FILE_HELPER", std::env::current_exe()?)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -422,6 +438,7 @@ pub async fn run(args: Args) -> Result<()> {
     let (finished, finished_rx) = watch::channel(false);
     let host = Arc::new(Host {
         scope: Scope::from_binding(&contract.binding),
+        call_context: contract.call_context.clone(),
         capability_digest: Sha256::digest(contract.capability.as_bytes()).into(),
         initialization,
         cwd,

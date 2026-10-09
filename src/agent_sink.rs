@@ -21,6 +21,18 @@ pub trait AgentSink: Send + Sync + 'static {
     fn set_background_tasks(&self, _session_id: &str, _count: u32) {}
     fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String);
     fn session_is_system(&self, session_id: &str) -> bool;
+    /// Immutable native profile, independent of the system-session UI flag.
+    fn session_is_managed_read_only(&self, _session_id: &str) -> bool {
+        false
+    }
+    /// Native turn metadata for a managed child prompt. `Err` refuses the
+    /// turn: a managed child never runs without its Machine-written round.
+    fn managed_prompt_meta(
+        &self,
+        _session_id: &str,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+        Ok(None)
+    }
     fn broadcast_error(&self, session_id: Option<String>, message: String);
     fn requeue_prompt(
         &self,

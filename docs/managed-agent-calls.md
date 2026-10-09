@@ -1,6 +1,62 @@
 # Managed agent calls
 
-Status: implementation design; the commands and UI below are not shipped.
+Status: implemented in source; see "Implementation" for the shipped mechanism
+and "Acceptance" for what has been proven in production.
+
+## Implementation
+
+- **Grant.** The Controller derives `Authority` from the parent's live worker
+  (connected owner, worker epoch, exact launch, owner, Provider generation and
+  execution binding) and issues an opaque grant for that incarnation. It installs
+  the grant on the parent's execution Machine (`InstallCallGateway`, Machine
+  protocol 28) and revokes it when the authority changes. Every forwarded action
+  is accepted only from that Machine's current connection, for the grant
+  installed there, after re-deriving authority and comparing it with the issued
+  one. Native session-id materialization does not revoke; worker replacement,
+  owner or generation change and a closing parent do.
+- **Ingress.** `cowboy-machine` hosts one private Unix-socket gateway per
+  grant. A stable per-session context file
+  (`<state>/calls/sessions/<session>.json`) is atomically replaced when a grant
+  changes. Local parent workers receive `COWBOY_CALL_CONTEXT` from the broker;
+  Remote parents receive it from their target execution keeper, which adds it to
+  `process/start` only on the outbound native frame, so ledger replay still
+  compares the original parameters. Operator target environment policy is
+  unchanged. Machine→Controller requests are `ManagedCall` events answered by
+  `ManagedCallReply`; neither read loop awaits the other side.
+- **Snapshot.** The target Machine captures `HEAD`, the index and the working
+  tree (tracked plus non-ignored untracked files and explicitly named context
+  files) as two synthetic commits in a child-owned repository that borrows the
+  source objects through `alternates`. It captures twice and refuses a mixed
+  state (`input_changed`); filters/LFS, submodules, escaping symlinks and
+  subdirectory roots are refused. `context.root` may name another work tree of a
+  repository registered on that Machine. The child workspace path is stable; a
+  continued conversation is hibernated and refreshed in place, so its binding
+  never changes. Repeating a call id returns the original receipt.
+- **Child.** A managed child is an ordinary Cowboy session with a
+  `managed_child` execution binding on the target Machine. Client prompt entry
+  points refuse it; the runner submits its single prompt with a reserved
+  message id. The worker forwards the Machine-written round as ACP prompt
+  `_meta["cowboy.dev/managedCall"]`; a turn without it is refused.
+- **Native profile.** Only Providers whose signed package declares
+  `provider.managed-profiles.v1` with `read_only_v1` arguments can run a child.
+  Codex 3.4.0's adapter forces `approval never` and a read-only, network-less
+  sandbox on every managed turn, maps `outputSchema` to the native
+  `turn/start` constraint, refuses mode changes and slash commands, never trusts
+  the snapshot project (no project config, rules, hooks or MCP), disables every
+  configured MCP server by exact name, disables hooks, plugins, apps, notify and
+  native memories, and refuses to start while any ExecPolicy `allow` rule exists
+  (those run commands outside the sandbox).
+- **Lifecycle.** One Controller runner per call drives Queued → Starting →
+  Running → terminal through CAS transitions, records the child event cursor
+  before submitting, resubmits only a prompt with no trace under the same id,
+  keeps a completion that wins a stop race, and stops only the exact child
+  worker after a bounded grace. Controller start recovers every non-terminal
+  call. A deleted or closing parent cancels its calls; its children are deleted
+  once those are terminal. Deleting a child with an active call is refused.
+- **UI.** The Prompt stack shows a Calls dock (Desktop `␣G`, J/K/Enter; Mobile
+  full-height page with drill-in). Each call shows Provider, runtime and
+  execution Machines, state, labels, snapshot, result, verdict and findings,
+  stop and open-conversation actions. Children are hidden from the session list.
 
 ## Product contract
 
@@ -49,11 +105,33 @@ inspection. The Machine authenticates the call context and forwards the request;
 the Controller independently validates its scope and current revocation state.
 Neither the grant nor Provider authentication appears in argv, reports or logs.
 
+The parent's native conversation ID is not its authorization revision: normal
+startup assigns that ID after admission. The grant must separately fence the
+active worker incarnation so that a retired worker cannot retain call authority
+after Reload, while native conversation materialization alone does not revoke a
+newly issued grant. A stable parent ID or Unix uid cannot replace that check.
+
+The Controller now derives an authority observation from its current connected
+runtime and exact worker launch. Broker placeholders, resetting/draining workers,
+closed parents and changed launch metadata cannot produce it. A pending drain
+request alone does not revoke it: the busy worker remains the exact owner until
+its safe boundary, and its replacement epoch then revokes the grant. Comparing this
+observation includes the worker epoch and parent ownership/placement revision;
+turn changes, titles and native conversation materialization do not change it.
+The grant issuer and every forwarded action use this check. The observation
+API's `parent_runtime_ready` is advisory and never substitutes for revalidation
+at dispatch.
+
+Call list responses contain summaries with `has_result`, not full review bodies.
+Opening a call uses its parent-scoped detail endpoint to read the complete result.
+The store still validates the full durable records before projecting summaries;
+the bounded response does not imply a separate lightweight storage index.
+
 Runtime-only environment injection is separate from operator-configurable target
-environment variables. The current closed target environment intentionally rejects
-`COWBOY_*`, `CODEX_*` and `CLAUDE_*`; do not relax its operator allowlist. New
-wiring requires an explicit versioned native boundary and compatibility tests.
-An old worker/keeper without this capability fails with `context_unavailable`.
+environment variables. The closed target environment still rejects `COWBOY_*`,
+`CODEX_*` and `CLAUDE_*` from operators; the keeper adds only the call context
+from its own launch contract. An old worker/keeper without this capability
+fails with `context_unavailable`.
 It must not infer the parent from a shared Unix uid, cwd, process name or last
 active session. Local sessions and Remote targets need the same scoped contract;
 a target-only implementation is not accepted as coverage of both.
@@ -81,7 +159,7 @@ cowboy codex --request-file review.json
 cowboy claude --request-file review.json
 cowboy codex --request-file - < review.json
 cowboy call inspect call_123
-cowboy call wait call_123 --timeout 30s
+cowboy call wait call_123 --timeout-ms 30000
 cowboy call result call_123
 cowboy call cancel call_123
 ```
@@ -132,6 +210,16 @@ not a timeout error. `wait` observes the same call, never submits a new prompt.
 Cancellation is explicit and idempotent. A failed transport with uncertain
 admission tells the caller to inspect the same request id. It must never return
 an instruction to mint a replacement id and retry blindly.
+
+Requests may additionally carry
+`output: {"format":"json_schema","schema":{...}}`. This is a native turn
+constraint, included in the immutable request digest; it is not appended to the
+prompt. Omission means text output. The schema is bounded to 64 KiB and nesting
+depth 32, with remote references and schema resource rebasing refused. These
+transport checks do not prove native dialect support. Admission must require
+the exact Provider adapter to enforce the schema; otherwise return
+`unsupported_capability` before launching a child. Never silently downgrade to
+text and parse it afterwards as if native structured output were enforced.
 
 ```json
 {
@@ -270,6 +358,14 @@ concurrency and output contract. Do not shadow `node`, replace cached Plugin cod
 rewrite canonical commands, or claim automatic interception. Outside Cowboy,
 leave the original companion path intact. An unrecognized workflow revision or
 capability mismatch must report a compatibility error rather than guess.
+
+The inspected companion 1.0.6 adversarial-review path constructs its prompt
+from the Plugin template and freshly collected Git context, and passes
+`schemas/review-output.schema.json` as native `outputSchema`. The managed
+adapter must preserve both the completed prompt and this output constraint,
+then use the original result parser/renderer. Passing only the aspect's focus
+text, or replacing schema enforcement with a prompt instruction, is not a
+compatible transport substitution.
 
 The adapter reads the request file on the current target, validates its workspace,
 passes task/group/round/aspect references as labels, and writes output only to an

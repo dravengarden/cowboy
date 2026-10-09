@@ -21,22 +21,23 @@ import {
   textFile,
   WorkspaceTools,
 } from "./tools.mjs";
-import { READ_RANGE } from "./read-range.mjs";
+const fileHelper = fileURLToPath(
+  new URL("../../../target/debug/cowboy-execution-host", import.meta.url),
+);
 
 test("range reads keep whole-file conflict stamps without transferring the file", async (t) => {
   const { tools, files, calls, state, connection, binding } = await fixture(t);
   const source = "x".repeat(127) + "\n";
   const original = source.repeat(8192);
   files.set("/target with space/file", Buffer.from(original));
-  tools.rangePython = "python3";
+  tools.fileHelper = fileHelper;
   const directory = await mkdtemp(join(tmpdir(), "cowboy-range-target-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const target = join(directory, "source");
   let transferred = 0;
   tools.command = async (argv) => {
-    const script = argv.indexOf("-c") + 1;
-    assert.deepEqual(argv.slice(1, script), ["-I", "-S", "-B", "-c"]);
-    assert.equal(argv[script], READ_RANGE);
+    const script = 2;
+    assert.deepEqual(argv.slice(1, script + 1), ["read-range", "--"]);
     await writeFile(target, files.get("/target with space/file"));
     const output = execFileSync(argv[0], [
       ...argv.slice(1, script + 1),
@@ -96,8 +97,8 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
   const target = join(directory, "file");
   const run = (path, offset = 1, limit = 10) =>
     JSON.parse(execFileSync(
-      "python3",
-      ["-c", READ_RANGE, path, String(offset), String(limit)],
+      fileHelper,
+      ["read-range", "--", path, String(offset), String(limit)],
       { encoding: "utf8" },
     ));
   await writeFile(target, "");
@@ -116,17 +117,7 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
     Buffer.from(run(target).dataBase64, "base64").toString(),
     "\ufffd",
   );
-  const changed = READ_RANGE.replace(
-    "current = os.stat(path)",
-    "os.truncate(path, 0)\n        current = os.stat(path)",
-  );
-  await writeFile(target, "before");
-  const raced = JSON.parse(
-    execFileSync("python3", ["-c", changed, target, "1", "1"], {
-      encoding: "utf8",
-    }),
-  );
-  assert.match(raced.error, /changed/);
+  // A racing write is exercised deterministically in the Rust helper tests.
   await writeFile(
     target,
     Buffer.concat([Buffer.from("%PDF"), Buffer.alloc(64)]),
@@ -137,7 +128,7 @@ test("range helper handles empty files, CRLF, Unicode, missing and nonregular fi
 test("range results fail closed without granting edit authority", async (t) => {
   const { tools, files } = await fixture(t);
   files.set("/target with space/file", Buffer.alloc(128 * 1024));
-  tools.rangePython = "python3";
+  tools.fileHelper = fileHelper;
   tools.command = async () => ({
     exitCode: 0,
     output: JSON.stringify({ schema: 1, sha256: "bad", size: 10 }),
@@ -151,7 +142,7 @@ test("range results fail closed without granting edit authority", async (t) => {
 
 test("small files retain two native RPCs without a utility startup", async (t) => {
   const { tools, files, calls } = await fixture(t);
-  tools.rangePython = "python3";
+  tools.fileHelper = fileHelper;
   tools.command = () => {
     throw new Error("Short Read must not start a utility");
   };
@@ -1162,12 +1153,12 @@ test("a range Read of a CRLF file shows LF text that a later Edit matches", asyn
     "/target with space/big",
     Buffer.from(original.repeat(1200) + "target line\r\nnext\r\n"),
   );
-  tools.rangePython = "python3";
+  tools.fileHelper = fileHelper;
   const directory = await mkdtemp(join(tmpdir(), "cowboy-range-crlf-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const target = join(directory, "source");
   tools.command = async (argv) => {
-    const script = argv.indexOf("-c") + 1;
+    const script = 2;
     await writeFile(target, files.get("/target with space/big"));
     return {
       exitCode: 0,
@@ -1231,12 +1222,12 @@ test("a range Read shows invalid UTF-8 as a whole-file Read does", async (t) => 
       Buffer.from("\n".repeat(140000)),
     ]),
   );
-  tools.rangePython = "python3";
+  tools.fileHelper = fileHelper;
   const directory = await mkdtemp(join(tmpdir(), "cowboy-range-latin-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const target = join(directory, "source");
   tools.command = async (argv) => {
-    const script = argv.indexOf("-c") + 1;
+    const script = 2;
     await writeFile(target, files.get("/target with space/latin"));
     return {
       exitCode: 0,

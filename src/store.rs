@@ -39,6 +39,7 @@ mod cardea_operations;
 mod copy;
 mod core_security;
 pub(crate) mod draft_documents;
+mod managed_calls;
 mod workspace_documents;
 pub(crate) use core_security::HandoffPoint;
 mod plugin_installations;
@@ -6137,6 +6138,9 @@ impl PostgresStorage {
                purge_after_at, \
                deleted_at + make_interval(days => $1::int) \
              ) < now() \
+             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
+                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
+                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
              AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
                  WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
                  AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",

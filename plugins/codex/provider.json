@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.3.3",
+  "version": "3.4.0",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.12",
+  "sdk_version": "3.1.13",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",
@@ -144,6 +144,31 @@
       "-c",
       "model_auto_compact_token_limit_scope=\"body_after_prefix\""
     ],
+    "managed_profiles": {
+      "read_only_v1": {
+        "arguments": [
+          "--cowboy-managed-profile=read-only-v1",
+          "-c",
+          "approval_policy=never",
+          "-c",
+          "sandbox_mode=read-only",
+          "-c",
+          "features.hooks=false",
+          "-c",
+          "features.apps=false",
+          "-c",
+          "features.plugins=false",
+          "-c",
+          "notify=[]",
+          "-c",
+          "memories.generate_memories=false",
+          "-c",
+          "memories.use_memories=false",
+          "-c",
+          "model_auto_compact_token_limit_scope=\"body_after_prefix\""
+        ]
+      }
+    },
     "environment": {
       "DEFAULT_AUTH_REQUEST": "{\"methodId\":\"api-key\"}",
       "CODEX_PATH": {
@@ -220,7 +245,8 @@
     ],
     "required_capabilities": [
       "provider.runtime.v1",
-      "provider.execution-jsonrpc.v1"
+      "provider.execution-jsonrpc.v1",
+      "provider.managed-profiles.v1"
     ]
   },
   "authentication": {

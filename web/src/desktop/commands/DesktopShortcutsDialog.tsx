@@ -11,6 +11,7 @@ import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopCommands } from "./DesktopCommandProvider";
 import {
+  DESKTOP_FOCUS_CALLS_SHORTCUT,
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
   DESKTOP_RESIZE_SELECT_SHORTCUT,
@@ -46,6 +47,7 @@ const NAVIGATION: ShortcutRow[] = [
   },
   { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Message the Agent" },
   { keys: [DESKTOP_FOCUS_PLAN_SHORTCUT], title: "Focus Plan" },
+  { keys: [DESKTOP_FOCUS_CALLS_SHORTCUT], title: "Open or close Calls" },
   { keys: [DESKTOP_SHORTCUTS.focusConversation], title: "Focus Conversation Log" },
   { keys: [DESKTOP_SHORTCUTS.focusTopbar], title: "Focus Top Bar" },
   { keys: [DESKTOP_SHORTCUTS.newSession], title: "Create a new Session" },

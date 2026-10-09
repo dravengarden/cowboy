@@ -122,6 +122,7 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     t: "group:t",
     c: "workspace.focusConversation",
     l: "prompt.focusPlan",
+    g: "prompt.focusCalls",
     q: "prompt.focusQueue",
     d: "prompt.focusDrafts",
     n: "session.new",

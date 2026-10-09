@@ -147,6 +147,11 @@ function regionHints(
         { keys: "I", label: "Rename" },
         { keys: "O", label: "Order mode" },
       ];
+    case "prompt.calls":
+      return [
+        { keys: "J/K", label: "Call" },
+        { keys: "Enter", label: "Details" },
+      ];
     case "prompt.plan":
       return [
         { keys: "J/K", label: "Step" },
@@ -250,6 +255,7 @@ export function DesktopStatusLine({
       focusedRegion !== "prompt.composer"
     ? [
       { keys: DESKTOP_FOCUS_PLAN_SHORTCUT, label: "Plan" },
+      { keys: DESKTOP_SHORTCUTS.focusCalls, label: "Calls" },
       { keys: DESKTOP_SHORTCUTS.focusQueue, label: "Queue" },
       { keys: DESKTOP_SHORTCUTS.focusDrafts, label: "Drafts" },
       { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },

@@ -99,6 +99,8 @@ export const DESKTOP_WORKSPACE_KEYS = {
   focusTopbar: "T",
   focusConversation: "C",
   focusPlan: "L",
+  // Managed calls delegated to other Agents: `G` for aGents.
+  focusCalls: "G",
   focusQueue: "Q",
   focusDrafts: "D",
   newSession: "N",
@@ -190,6 +192,7 @@ export const DESKTOP_SHORTCUTS = {
     DESKTOP_WORKSPACE_KEYS.focusConversation,
   ),
   focusPlan: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
+  focusCalls: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
   focusQueue: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
   focusDrafts: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
   cycleRegion: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.cycleRegion),
@@ -216,6 +219,7 @@ export const DESKTOP_SHORTCUTS = {
 
 export const DESKTOP_FOCUS_PROMPT_SHORTCUT = DESKTOP_SHORTCUTS.focusPrompt;
 export const DESKTOP_FOCUS_PLAN_SHORTCUT = DESKTOP_SHORTCUTS.focusPlan;
+export const DESKTOP_FOCUS_CALLS_SHORTCUT = DESKTOP_SHORTCUTS.focusCalls;
 export const DESKTOP_RESIZE_SELECT_SHORTCUT = DESKTOP_SHORTCUTS.resize;
 export const DESKTOP_RESIZE_HINT = DESKTOP_SHORTCUTS.resize;
 
@@ -229,6 +233,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   t: "group:t",
   c: "workspace.focusConversation",
   l: "prompt.focusPlan",
+  g: "prompt.focusCalls",
   q: "prompt.focusQueue",
   d: "prompt.focusDrafts",
   n: "session.new",

@@ -1,6 +1,6 @@
 import { persisted, type Store } from "@cowboy/state-store";
 
-export type ComposerStackPanel = "plan" | "queued" | "draft";
+export type ComposerStackPanel = "plan" | "queued" | "draft" | "calls";
 
 const expandedPanel = persisted<ComposerStackPanel | null>(
   "cowboy:composer-stack-expanded",
@@ -8,7 +8,11 @@ const expandedPanel = persisted<ComposerStackPanel | null>(
   {
     serialize: (value) => value ?? "",
     deserialize: (raw): ComposerStackPanel | null => {
-      if (raw === "plan" || raw === "queued" || raw === "draft") return raw;
+      if (
+        raw === "plan" || raw === "queued" || raw === "draft" || raw === "calls"
+      ) {
+        return raw;
+      }
       return null;
     },
   },

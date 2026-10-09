@@ -256,6 +256,8 @@ async fn native_worker_execution() {
     let relay_event_gaps = Arc::clone(&event_gaps);
     let claude_reconnect = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let relay_claude_reconnect = Arc::clone(&claude_reconnect);
+    let file_helpers = Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let relay_file_helpers = Arc::clone(&file_helpers);
     let relay = tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_millis(50));
         let mut tasks = tokio::task::JoinSet::new();
@@ -279,6 +281,18 @@ async fn native_worker_execution() {
                 let write_reply_lost = Arc::clone(&relay_write_reply_lost);
                 let claude_reconnect = Arc::clone(&relay_claude_reconnect);
                 if let Command::Invoke { invocation, .. } = &request.command {
+                    if invocation.method == "process/start"
+                        && invocation.params["argv"][0]
+                            .as_str()
+                            .is_some_and(|path| path.ends_with("/cowboy-execution-host"))
+                    {
+                        let bit = match invocation.params["argv"][1].as_str() {
+                            Some("snapshot") => 1,
+                            Some("read-range") => 2,
+                            _ => 0,
+                        };
+                        relay_file_helpers.fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+                    }
                     let params = invocation.params.to_string();
                     let filename = invocation.params["path"]
                         .as_str()
@@ -444,6 +458,13 @@ async fn native_worker_execution() {
     ))
     .join(&binding.environment.incarnation);
     assert!(status.success(), "native worker execution failed");
+    if input["require_file_helper"] == true {
+        assert_eq!(
+            file_helpers.load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "packaged Claude must use Cowboy snapshot and range helpers through the real target transport"
+        );
+    }
     if input["provider"] == "claude-code" {
         assert!(
             claude_reconnect.load(std::sync::atomic::Ordering::SeqCst),
