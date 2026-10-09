@@ -319,16 +319,27 @@ test("a target missing a survey utility answers through the per-walk queries", a
 
 test("a malformed survey falls back to the per-walk queries", () => {
   const candidates = ["/a", "/b"];
-  const output = [
+  const answer = (name, code, text) => [
+    `\x1egit ${name} ${code}`,
+    Buffer.from(text).toString("base64"),
+  ];
+  const head = [
     "\x1eplatform",
     "/bin/bash",
     "Linux 6",
     "/bin/bash",
     "",
-    "\x1egit inside 0",
-    Buffer.from("true").toString("base64"),
-    "\x1egit toplevel 0",
-    Buffer.from("/r").toString("base64"),
+    ...answer("inside", 0, "true\n"),
+    ...answer("branch", 0, "main\n"),
+    ...answer("origin", 128, "fatal: not a symbolic ref\n"),
+    ...answer("master", 1, ""),
+    ...answer("main", 0, "0123\n"),
+    ...answer("user", 0, "Name\n"),
+    ...answer("status", 0, " M file\n"),
+    ...answer("log", 0, "0123 subject\n"),
+  ];
+  const toplevel = answer("toplevel", 0, "/r\n");
+  const tail = [
     "\x1erules",
     "12\t/r/.claude/rules/x.md",
     "\x1eskills",
@@ -338,9 +349,9 @@ test("a malformed survey falls back to the per-walk queries", () => {
     "F7",
     "A",
   ];
-  const parsed = parseStartupSurvey([...output, "\x1eend", ""].join("\n"), [
-    ...candidates,
-  ]);
+  const survey = (...parts) => [...parts.flat(), "\x1eend", ""].join("\n");
+  const parsed = parseStartupSurvey(survey(head, toplevel, tail), candidates);
+  assert.equal(parsed.git.status.output, " M file\n");
   assert.deepEqual(parsed.facts.get("/a"), { isFile: true, size: 7 });
   assert.equal(parsed.facts.get("/b"), null);
   assert.deepEqual(parsed.facts.get("/r/.claude/rules/x.md"), {
@@ -351,34 +362,32 @@ test("a malformed survey falls back to the per-walk queries", () => {
   assert.deepEqual(parsed.skills.get("/h/.claude/skills"), [
     "/h/.claude/skills/s/SKILL.md",
   ]);
-  // Output before the survey, an empty successful Git answer, truncated
-  // output, a different candidate count or an unknown answer.
-  assert.equal(
-    parseStartupSurvey(
-      ["base64: not found", ...output, "\x1eend", ""].join("\n"),
-      candidates,
-    ),
-    undefined,
+  const refused = (output, expected = candidates) =>
+    assert.equal(parseStartupSurvey(output, expected), undefined);
+  // Output before the survey.
+  refused("base64: not found\n" + survey(head, toplevel, tail));
+  // An empty successful answer, or a missing one.
+  refused(survey(head, answer("toplevel", 0, ""), tail));
+  refused(survey(head.slice(0, -2), toplevel, tail));
+  // A listed name that imitates markers: a newline and a Git section.
+  refused(
+    survey(head, toplevel, [
+      ...tail.slice(0, 4),
+      "?\t/h/.claude/commands/a",
+      ...answer("status", 0, ""),
+      "\x1eignored.md",
+      ...tail.slice(4),
+    ]),
   );
-  assert.equal(
-    parseStartupSurvey(
-      [...output.slice(0, 6), "", ...output.slice(7), "\x1eend", ""].join(
-        "\n",
-      ),
-      candidates,
-    ),
-    undefined,
+  refused(
+    survey(head, toplevel, [
+      ...tail.slice(0, 4),
+      "not a listing",
+      ...tail.slice(4),
+    ]),
   );
-  assert.equal(parseStartupSurvey(output.join("\n"), candidates), undefined);
-  assert.equal(
-    parseStartupSurvey([...output, "\x1eend", ""].join("\n"), ["/a"]),
-    undefined,
-  );
-  assert.equal(
-    parseStartupSurvey(
-      [...output.slice(0, -1), "X", "\x1eend", ""].join("\n"),
-      candidates,
-    ),
-    undefined,
-  );
+  // Truncated output, a different candidate count or an unknown answer.
+  refused([...head, ...toplevel, ...tail].join("\n"));
+  refused(survey(head, toplevel, tail), ["/a"]);
+  refused(survey(head, toplevel, [...tail.slice(0, -1), "X"]));
 });

@@ -94,58 +94,83 @@ function ancestors(cwd) {
 // The survey's answers, or undefined when any part of them is not what the
 // script prints (the walks then ask the target themselves).
 export function parseStartupSurvey(output, candidates) {
-  const sections = new Map();
-  let current;
+  const sections = [];
   for (const line of output.split("\n")) {
     if (line.startsWith("\x1e")) {
-      current = [];
-      sections.set(line.slice(1), current);
-    } else current?.push(line);
+      sections.push({ header: line.slice(1), lines: [] });
+    } else if (sections.length) sections.at(-1).lines.push(line);
+    // Diagnostics before the survey's own output.
+    else return undefined;
   }
-  const platform = sections.get("platform");
-  if (
-    !output.startsWith("\x1eplatform\n") || !sections.has("end") ||
-    platform?.length !== 4
-  ) return undefined;
+  // The script prints one exact section sequence. A listed name that imitates
+  // a marker or a listing line breaks it, and the survey is not trusted.
+  let at = 0;
+  const section = (header) =>
+    sections[at]?.header === header ? sections[at++] : undefined;
   const git = {};
-  for (const [header, lines] of sections) {
-    const match = /^git (\w+) (\d{1,3})$/.exec(header);
-    if (!match) continue;
-    if (lines.length !== 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(lines[0])) {
-      return undefined;
-    }
-    git[match[1]] = {
+  const gitAnswer = (name) => {
+    const match = /^git (\w+) (\d{1,3})$/.exec(sections[at]?.header ?? "");
+    const lines = sections[at]?.lines;
+    if (
+      match?.[1] !== name || lines.length !== 1 ||
+      !/^[A-Za-z0-9+/]*={0,2}$/.test(lines[0])
+    ) return false;
+    at++;
+    git[name] = {
       exitCode: Number(match[2]),
       output: Buffer.from(lines[0], "base64").toString("utf8"),
     };
-  }
+    return true;
+  };
+  const platform = section("platform");
+  if (platform?.lines.length !== 4 || !gitAnswer("inside")) return undefined;
+  if (
+    git.inside.exitCode === 0 &&
+    !["branch", "origin", "master", "main", "user", "status", "log"].every(
+      gitAnswer,
+    )
+  ) return undefined;
+  if (!gitAnswer("toplevel")) return undefined;
+  const [rulesSection, skillsSection, answersSection, end] = [
+    "rules",
+    "skills",
+    "candidates",
+    "end",
+  ].map(section);
+  if (
+    !end || at !== sections.length || end.lines.length !== 1 ||
+    end.lines[0] !== ""
+  ) return undefined;
   // Successful answers have known shapes; anything else is not trusted.
   if (
-    !git.inside || !git.toplevel ||
     (git.inside.exitCode === 0 && git.inside.output.trim() !== "true") ||
     (git.toplevel.exitCode === 0 && !git.toplevel.output.startsWith("/"))
   ) return undefined;
   const facts = new Map();
-  const listed = (lines) => {
-    const paths = [];
-    for (const line of lines) {
-      const match = /^(\d+|\?)\t(\/.*)$/.exec(line);
-      if (!match) continue;
-      paths.push(match[2]);
-      if (match[1] !== "?") {
-        facts.set(match[2], { isFile: true, size: Number(match[1]) });
-      }
+  const listed = (line) => {
+    const match = /^(\d+|\?)\t(\/.*)$/.exec(line);
+    if (!match) return undefined;
+    if (match[1] !== "?") {
+      facts.set(match[2], { isFile: true, size: Number(match[1]) });
     }
-    return paths;
+    return match[2];
   };
-  const rules = listed(sections.get("rules") ?? []);
+  const rules = rulesSection.lines.map(listed);
+  if (rules.includes(undefined)) return undefined;
   const skills = new Map();
   let root;
-  for (const line of sections.get("skills") ?? []) {
-    if (line.startsWith("\x1f")) skills.set(root = line.slice(1), []);
-    else if (root !== undefined) skills.get(root).push(...listed([line]));
+  for (const line of skillsSection.lines) {
+    if (line.startsWith("\x1f")) {
+      root = line.slice(1);
+      if (skills.has(root)) return undefined;
+      skills.set(root, []);
+      continue;
+    }
+    const path = root === undefined ? undefined : listed(line);
+    if (path === undefined) return undefined;
+    skills.get(root).push(path);
   }
-  const answers = sections.get("candidates") ?? [];
+  const answers = answersSection.lines;
   if (answers.length !== candidates.length) return undefined;
   for (const [index, path] of candidates.entries()) {
     const answer = answers[index];
@@ -154,8 +179,9 @@ export function parseStartupSurvey(output, candidates) {
       facts.set(path, { isFile: true, size: Number(answer.slice(1)) });
     } else if (answer !== "O") return undefined;
   }
-  return { platform: platform.join("\n"), git, rules, skills, facts };
+  return { platform: platform.lines.join("\n"), git, rules, skills, facts };
 }
+
 const text = (value, native) => ({
   ...(native === undefined ? {} : { native }),
   content: [{ type: "text", text: value }],
