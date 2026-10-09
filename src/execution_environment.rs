@@ -43,6 +43,53 @@ pub struct RuntimeLocation {
     pub cwd: String,
 }
 
+/// A target-local managed child. This deliberately does not decode as a V1
+/// remote environment: historical launchers retain the record and refuse it.
+/// The exact Provider must independently support the selected native profile.
+/// The binding is constant for the child's lifetime; each call round's input
+/// revision lives in the Machine-owned round marker, never in the binding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedChildV1 {
+    pub schema: u16,
+    pub phase: String,
+    pub session_id: String,
+    pub parent_session_id: String,
+    pub machine_id: String,
+    pub workspace_id: String,
+    pub cwd: String,
+    pub profile: cowboy_provider_sdk::ManagedRuntimeProfile,
+}
+
+impl ManagedChildV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema != 1
+            || self.phase != "managed_child"
+            || self.machine_id == "local"
+            || self.session_id == self.parent_session_id
+            || ![
+                &self.session_id,
+                &self.parent_session_id,
+                &self.machine_id,
+                &self.workspace_id,
+            ]
+            .into_iter()
+            .all(|id| crate::managed_calls::valid_id(id))
+            || !valid_path(&self.cwd)
+        {
+            return Err("invalid managed child binding");
+        }
+        Ok(())
+    }
+
+    pub fn accepts(&self, session: &str, machine: &str, cwd: &str) -> bool {
+        self.validate().is_ok()
+            && self.session_id == session
+            && self.machine_id == machine
+            && self.cwd == cwd
+    }
+}
+
 /// A durable creation intent. It deliberately cannot decode as a runnable
 /// binding: older readers and every ordinary launch path must fail closed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +213,11 @@ pub enum ExecutionAccess {
 }
 
 impl ExecutionBinding {
+    pub fn managed_child(&self) -> Option<ManagedChildV1> {
+        let child = ManagedChildV1::deserialize(&self.0).ok()?;
+        child.validate().ok()?;
+        Some(child)
+    }
     pub fn from_record(record: serde_json::Value) -> Self {
         Self(record)
     }
@@ -343,6 +395,32 @@ mod tests {
         let mut invalid = intent;
         invalid.previous.revision = u64::MAX;
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn managed_children_cannot_be_misread_as_unrestricted_local_or_remote_sessions() {
+        let child = ManagedChildV1 {
+            schema: 1,
+            phase: "managed_child".into(),
+            session_id: "child-1".into(),
+            parent_session_id: "parent-1".into(),
+            machine_id: "hawk".into(),
+            workspace_id: "cowboy".into(),
+            cwd: "/owned/snapshot/workspace".into(),
+            profile: cowboy_provider_sdk::ManagedRuntimeProfile::ReadOnlyV1,
+        };
+        let binding = ExecutionBinding::from_record(serde_json::to_value(&child).unwrap());
+        assert_eq!(binding.managed_child(), Some(child.clone()));
+        assert!(binding.decode().is_err());
+        assert!(binding.for_runtime("hawk", &child.cwd).is_err());
+        assert!(child.accepts("child-1", "hawk", &child.cwd));
+        assert!(!child.accepts("child-1", "ovh", &child.cwd));
+        assert!(!child.accepts("other-child", "hawk", &child.cwd));
+        let mut malformed = binding.record().clone();
+        malformed["profile"] = serde_json::json!("full_access");
+        let malformed = ExecutionBinding::from_record(malformed);
+        assert!(malformed.managed_child().is_none());
+        assert!(malformed.decode().is_err());
     }
 
     #[test]

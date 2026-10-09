@@ -736,6 +736,11 @@ pub struct RuntimeContract {
     pub behavior: ProviderBehaviorContract,
     #[serde(default)]
     pub arguments: Vec<RuntimeValue>,
+    /// Signed alternatives to ordinary interactive launch arguments. Absence
+    /// means unsupported, never permission to use the ordinary launch profile.
+    /// Empty maps are omitted to preserve historical package fingerprints.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub managed_profiles: BTreeMap<ManagedRuntimeProfile, ManagedLaunchProfile>,
     /// Provider-owned, non-secret process environment. Credential values are
     /// supplied only through the separate authentication projection contract.
     #[serde(default)]
@@ -766,6 +771,21 @@ pub struct RuntimeContract {
 pub enum RuntimeValue {
     Literal(String),
     Binding(RuntimeBinding),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedRuntimeProfile {
+    /// The signed adapter enforces native read-only execution and rejects
+    /// permission widening, project hooks and unscoped external tool servers.
+    ReadOnlyV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedLaunchProfile {
+    /// Complete replacement, not an append to normal full-access arguments.
+    pub arguments: Vec<RuntimeValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,6 +911,8 @@ pub enum RuntimeCapability {
     /// binds every native turn to that endpoint. No local execution fallback.
     #[serde(rename = "provider.execution-jsonrpc.v1")]
     ProviderExecutionJsonrpcV1,
+    #[serde(rename = "provider.managed-profiles.v1")]
+    ProviderManagedProfilesV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1521,6 +1543,12 @@ impl ProviderManifest {
             validate_semantic_version(&self.sdk_version, "Provider SDK version")?;
         }
         validate_display(&self.display)?;
+        if !self.runtime.managed_profiles.is_empty() {
+            ensure!(
+                semver::Version::parse(&self.sdk_version)? >= semver::Version::new(3, 1, 13),
+                "managed profiles require Provider SDK 3.1.13 or newer"
+            );
+        }
         if self
             .runtime
             .required_capabilities
@@ -2082,6 +2110,39 @@ impl TextMatchExpression {
 }
 
 impl RuntimeContract {
+    /// Resolve an exact signed launch profile without falling back to defaults.
+    ///
+    /// # Errors
+    /// Returns an error when the requested profile is absent or undeclared.
+    pub fn launch_arguments(
+        &self,
+        profile: Option<ManagedRuntimeProfile>,
+    ) -> Result<&[RuntimeValue]> {
+        match profile {
+            None => Ok(&self.arguments),
+            Some(profile) => {
+                ensure!(
+                    self.required_capabilities
+                        .contains(&RuntimeCapability::ProviderManagedProfilesV1),
+                    "Provider does not declare managed profiles"
+                );
+                Ok(&self
+                    .managed_profiles
+                    .get(&profile)
+                    .context("Provider does not support the requested managed profile")?
+                    .arguments)
+            }
+        }
+    }
+
+    fn argument_values(&self) -> impl Iterator<Item = &RuntimeValue> {
+        self.arguments.iter().chain(
+            self.managed_profiles
+                .values()
+                .flat_map(|profile| &profile.arguments),
+        )
+    }
+
     // Runtime graph validation intentionally stays in one cross-field pass so
     // platform components, capabilities, sidecars, auth links, and value
     // bindings cannot drift between partially independent validators.
@@ -2094,7 +2155,19 @@ impl RuntimeContract {
             "runtime protocol is empty"
         );
         validate_id(&self.entrypoint, "runtime entrypoint")?;
-        for argument in &self.arguments {
+        ensure!(
+            self.required_capabilities
+                .contains(&RuntimeCapability::ProviderManagedProfilesV1)
+                != self.managed_profiles.is_empty(),
+            "managed profile capability and profiles must be declared together"
+        );
+        for profile in self.managed_profiles.values() {
+            ensure!(
+                !profile.arguments.is_empty() && profile.arguments.len() <= 64,
+                "invalid managed profile arguments"
+            );
+        }
+        for argument in self.argument_values() {
             argument.validate()?;
         }
         for (name, value) in &self.environment {
@@ -2252,7 +2325,7 @@ impl RuntimeContract {
             }
             sidecar.transport.validate()?;
         }
-        for value in self.arguments.iter().chain(self.environment.values()) {
+        for value in self.argument_values().chain(self.environment.values()) {
             match value {
                 RuntimeValue::Literal(_) => {}
                 RuntimeValue::Binding(RuntimeBinding::ComponentCommand { component, .. }) => {
@@ -2586,7 +2659,10 @@ fn validate_auth_runtime_link(
             "authentication executor component is unavailable on a supported platform"
         );
     }
-    for value in runtime.arguments.iter().chain(runtime.environment.values()) {
+    for value in runtime
+        .argument_values()
+        .chain(runtime.environment.values())
+    {
         let RuntimeValue::Binding(RuntimeBinding::CredentialDirectory { bundle_key, .. }) = value
         else {
             continue;
@@ -3862,6 +3938,77 @@ mod tests {
         let mut newer = semver::Version::parse(PROVIDER_SDK_VERSION).unwrap();
         newer.patch += 1;
         assert!(validate_provider_sdk_version(&newer.to_string()).is_err());
+    }
+
+    #[test]
+    fn managed_profile_selection_never_inherits_full_access_arguments() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
+        let mut manifest = build_package(source.compile().unwrap()).unwrap().manifest;
+        let ordinary = manifest.runtime.arguments.clone();
+        assert!(
+            manifest
+                .runtime
+                .launch_arguments(Some(ManagedRuntimeProfile::ReadOnlyV1))
+                .is_err()
+        );
+        // Historical packages keep exactly the same serialized contract when
+        // they do not support profiles; their release fingerprint is unchanged.
+        assert!(
+            serde_json::to_value(&manifest.runtime)
+                .unwrap()
+                .get("managed_profiles")
+                .is_none()
+        );
+        manifest.sdk_version = PROVIDER_SDK_VERSION.into();
+        manifest.runtime.managed_profiles.insert(
+            ManagedRuntimeProfile::ReadOnlyV1,
+            ManagedLaunchProfile {
+                arguments: vec![RuntimeValue::Literal("--managed-read-only".into())],
+            },
+        );
+        assert!(manifest.validate().is_err());
+        manifest
+            .runtime
+            .required_capabilities
+            .insert(RuntimeCapability::ProviderManagedProfilesV1);
+        manifest.validate().unwrap();
+        assert_eq!(manifest.runtime.launch_arguments(None).unwrap(), ordinary);
+        assert_eq!(
+            manifest
+                .runtime
+                .launch_arguments(Some(ManagedRuntimeProfile::ReadOnlyV1))
+                .unwrap(),
+            &[RuntimeValue::Literal("--managed-read-only".into())]
+        );
+        manifest.sdk_version = "3.1.12".into();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn managed_profiles_validate_runtime_links_and_reject_unknown_modes() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
+        let mut manifest = build_package(source.compile().unwrap()).unwrap().manifest;
+        manifest.sdk_version = PROVIDER_SDK_VERSION.into();
+        manifest
+            .runtime
+            .required_capabilities
+            .insert(RuntimeCapability::ProviderManagedProfilesV1);
+        manifest.runtime.managed_profiles.insert(
+            ManagedRuntimeProfile::ReadOnlyV1,
+            ManagedLaunchProfile {
+                arguments: vec![RuntimeValue::Binding(RuntimeBinding::SidecarUrl {
+                    sidecar: "undeclared".into(),
+                    prefix: String::new(),
+                    suffix: String::new(),
+                })],
+            },
+        );
+        assert!(manifest.validate().is_err());
+        let mut wire = serde_json::to_value(&manifest.runtime).unwrap();
+        wire["managed_profiles"] = serde_json::json!({"read_write_v1":{"arguments":[]}});
+        assert!(serde_json::from_value::<RuntimeContract>(wire).is_err());
     }
 
     #[test]

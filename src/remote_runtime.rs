@@ -421,6 +421,28 @@ impl RemoteRuntime {
             })
     }
 
+    /// Resolve call authority from this runtime's current worker observation.
+    /// A broker registry placeholder or a disconnected/resetting runtime is not
+    /// evidence of a live caller, even when its durable launch still matches.
+    pub fn managed_call_authority(
+        &self,
+        service: &str,
+        parent: &crate::core::SessionMeta,
+    ) -> Result<crate::managed_calls::authority::Authority> {
+        anyhow::ensure!(self.connected(), "parent runtime is disconnected");
+        // Match merge_worker_snapshots' lock order (workers, then resetting).
+        let workers = self.shared.workers.lock();
+        let resetting = self.shared.resetting.lock();
+        anyhow::ensure!(
+            !resetting.contains(&parent.id),
+            "parent worker is resetting"
+        );
+        let worker = workers
+            .get(&parent.id)
+            .ok_or_else(|| anyhow::anyhow!("parent worker is unavailable"))?;
+        crate::managed_calls::authority::Authority::for_worker(service, parent, worker)
+    }
+
     #[must_use]
     pub fn worker_matches_cwd(&self, session_id: &str, cwd: &str) -> bool {
         self.shared
@@ -2820,6 +2842,52 @@ mod tests {
             background_tasks: None,
             incarnation: None,
         }
+    }
+
+    #[tokio::test]
+    async fn managed_call_authority_requires_connected_non_resetting_worker() {
+        let parent: crate::core::SessionMeta = serde_json::from_value(serde_json::json!({
+            "id":"s", "provider":"codex", "machine_id":"hawk",
+            "workspace_id":"project", "cwd":"/tmp", "title":"Parent", "status":"running"
+        }))
+        .unwrap();
+        let runtime = RemoteRuntime::for_test(Hub::new(), vec![snapshot("s")]);
+        assert!(
+            runtime
+                .managed_call_authority("service-test", &parent)
+                .is_err()
+        );
+        runtime.connect_for_test();
+        let original = runtime
+            .managed_call_authority("service-test", &parent)
+            .unwrap();
+        runtime.shared.resetting.lock().insert("s".into());
+        assert!(
+            runtime
+                .managed_call_authority("service-test", &parent)
+                .is_err()
+        );
+        runtime.shared.resetting.lock().clear();
+        runtime
+            .shared
+            .workers
+            .lock()
+            .get_mut("s")
+            .unwrap()
+            .worker_epoch = "replacement".into();
+        assert!(
+            !original.accepts(
+                &runtime
+                    .managed_call_authority("service-test", &parent)
+                    .unwrap()
+            )
+        );
+        runtime.shared.connected.store(false, Ordering::Release);
+        assert!(
+            runtime
+                .managed_call_authority("service-test", &parent)
+                .is_err()
+        );
     }
 
     #[tokio::test]

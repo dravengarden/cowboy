@@ -58,6 +58,38 @@ pub struct LaunchContract {
     pub capability: String,
     /// Closed target-owned environment; no Agent credentials are inherited.
     pub environment: BTreeMap<String, String>,
+    /// Machine-owned managed-call context path for this session. The keeper
+    /// adds it to native process starts after admission; it is never part of
+    /// the operator environment or an admitted invocation's parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_context: Option<String>,
+}
+
+/// Name of the private variable that locates a session's call context.
+pub const CALL_CONTEXT_ENV: &str = "COWBOY_CALL_CONTEXT";
+
+/// Add the session call context to one native process start. Applied to the
+/// outbound native frame only, so ledger replay compares the original params.
+#[must_use]
+pub fn with_call_context(
+    method: &str,
+    params: &serde_json::Value,
+    context: Option<&str>,
+) -> serde_json::Value {
+    let mut params = params.clone();
+    if method == "process/start"
+        && let Some(context) = context
+        && let Some(env) = params
+            .as_object_mut()
+            .and_then(|params| params.get_mut("env"))
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        env.insert(
+            CALL_CONTEXT_ENV.to_owned(),
+            serde_json::Value::String(context.to_owned()),
+        );
+    }
+    params
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

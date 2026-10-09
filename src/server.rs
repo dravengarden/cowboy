@@ -77,6 +77,7 @@ mod draft_documents;
 mod execution;
 #[cfg(unix)]
 mod local_operator;
+mod managed_calls;
 mod operator_approval;
 #[cfg(test)]
 mod persistence_tests;
@@ -286,6 +287,7 @@ struct AppState {
     execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
     execution_closures:
         Arc<parking_lot::Mutex<std::collections::HashMap<String, execution::Maintenance>>>,
+    managed_calls: Arc<managed_calls::Coordinator>,
     /// Machines permitted to have their Code reads executed on the
     /// Controller's own filesystem. A hello's declared connection mode is a
     /// request; this set is the permission.
@@ -1790,6 +1792,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             )?,
             execution_preparations: parking_lot::Mutex::default(),
             execution_closures: Arc::default(),
+            managed_calls: Arc::default(),
             colocated_machines: args.colocated_machines.iter().cloned().collect(),
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
@@ -10035,6 +10038,7 @@ async fn serve_axum(
         state.public_origins.as_ref().clone(),
     )?);
     execution::sessions::start_recovery(&state);
+    managed_calls::Coordinator::start(&state);
     let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir.clone()));
     let setup_needed = match state.store.as_ref() {
         Some(store) => store
@@ -10283,6 +10287,8 @@ async fn serve_axum(
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
         .route("/api/sessions", post(api_new_session))
+        .route("/api/sessions/{id}/calls", get(managed_calls::list))
+        .route("/api/sessions/{id}/calls/{call_id}", get(managed_calls::inspect))
         .route("/api/execution-sessions", post(execution::sessions::create))
         .route("/api/execution-environments", get(execution::sessions::availability))
         .route(
@@ -15098,6 +15104,41 @@ async fn handle_machine_ws(
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, None)
                     .await
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::ManagedCall {
+                        request_id,
+                        grant,
+                        action,
+                    },
+            } => {
+                // Handled off the read loop: the reply travels on this same
+                // connection and the action may wait for a bounded interval.
+                let call_state = Arc::clone(&state);
+                let call_connection = connection.clone();
+                let outgoing = machine_write_tx.clone();
+                let permit = Arc::clone(&execution_calls).try_acquire_owned();
+                tokio::spawn(async move {
+                    let response = if let Ok(_permit) = permit {
+                        managed_calls::handle(&call_state, &call_connection, grant, *action).await
+                    } else {
+                        serde_json::json!({"schema":1,"state":"error",
+                            "error":{"code":"capacity","admission":"not_submitted"}})
+                    };
+                    if call_state.machine_control.is_current(&call_connection) {
+                        let _ = queue_machine_json(
+                            &outgoing,
+                            &crate::machine_protocol::MachineFrame::Command {
+                                command: crate::machine_protocol::MachineCommand::ManagedCallReply {
+                                    request_id,
+                                    response,
+                                },
+                            },
+                        );
+                    }
+                });
+                continue;
             }
             crate::machine_protocol::MachineFrame::Event { event } => {
                 if let crate::machine_protocol::MachineEvent::LoginState {
@@ -20096,11 +20137,20 @@ fn handle_command(
             // Order: tear down agent thread first (so it doesn't push more
             // events into a soon-to-be-gone Hub session), then drop Hub state
             // + broadcast updated list.
-            if state.hub.session_info(&session_id).is_some_and(|info| info.meta.execution_binding.is_some()) {
-                execution::sessions::delete(state, &session_id)
+            let binding = state
+                .hub
+                .session_info(&session_id)
+                .and_then(|info| info.meta.execution_binding);
+            if binding.as_ref().is_some_and(|binding| binding.managed_child().is_some()) {
+                managed_calls::delete_child(state, &session_id)
+            } else if binding.is_some() {
+                let result = execution::sessions::delete(state, &session_id);
+                managed_calls::parent_deleted(state, &session_id);
+                result
             } else {
                 state.supervisor.delete_session(&session_id);
                 state.hub.delete_session(&session_id);
+                managed_calls::parent_deleted(state, &session_id);
                 Ok(())
             }
         }

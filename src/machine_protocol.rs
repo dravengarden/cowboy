@@ -22,8 +22,10 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 27;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 28;
 pub const EXECUTION_RECOVERY_PROTOCOL_VERSION: u16 = 27;
+/// Machines host parent-scoped managed-call gateways and managed child rounds.
+pub const MANAGED_CALL_PROTOCOL_VERSION: u16 = 28;
 /// Machines report host memory, swap, load and disk, and accept a
 /// non-destructive session hibernation that stops only the live worker.
 pub const HOST_RESOURCES_PROTOCOL_VERSION: u16 = 26;
@@ -1031,6 +1033,11 @@ pub enum MachineCommand {
         producer_id: String,
         sequence: u64,
     },
+    /// The Controller's single reply to a Machine-forwarded managed call.
+    ManagedCallReply {
+        request_id: String,
+        response: serde_json::Value,
+    },
 }
 
 impl MachineCommand {
@@ -1050,6 +1057,10 @@ impl MachineCommand {
             {
                 EXECUTION_RECOVERY_PROTOCOL_VERSION
             }
+            Self::Execution { request, .. } if request.action.managed_call() => {
+                MANAGED_CALL_PROTOCOL_VERSION
+            }
+            Self::ManagedCallReply { .. } => MANAGED_CALL_PROTOCOL_VERSION,
             Self::Execution { .. } => EXECUTION_ENVIRONMENT_PROTOCOL_VERSION,
             // Only a carried root identity needs the newer Machine. Ordinary
             // adapter traffic keeps its original floor below.
@@ -1246,6 +1257,13 @@ pub enum MachineEvent {
     ExecutionResponse {
         request_id: String,
         response: Box<execution::Response>,
+    },
+    /// A local gateway request for one installed parent grant. The Controller
+    /// re-derives authority before acting; the grant id is only a handle.
+    ManagedCall {
+        request_id: String,
+        grant: crate::managed_calls::protocol::Grant,
+        action: Box<crate::managed_calls::protocol::Action>,
     },
     Inventory {
         components: Vec<ComponentInventory>,

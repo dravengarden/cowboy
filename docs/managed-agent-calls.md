@@ -1,6 +1,17 @@
 # Managed agent calls
 
-Status: implementation design; the commands and UI below are not shipped.
+Status: implementation in progress; the commands and UI below are not shipped.
+
+Implemented source includes the closed CLI/request contract, private local
+gateway primitive, parent-scoped durable ledger, observation API, signed native
+launch-profile selection and worker guards against permission widening. These
+pieces do not yet form a working launch path. Production grant issuance and
+gateway wiring, snapshot preparation, native Provider profile acceptance,
+structured-output forwarding, child lifecycle dispatch, the review UI and the
+outer Suger transport adapter remain required before release. No Provider source
+currently advertises the managed read-only profile; unsupported launch attempts
+must remain refused. Candidate component release 3.43.0 records SDK compatibility
+inputs, not successful native acceptance or a published installation.
 
 ## Product contract
 
@@ -49,6 +60,26 @@ inspection. The Machine authenticates the call context and forwards the request;
 the Controller independently validates its scope and current revocation state.
 Neither the grant nor Provider authentication appears in argv, reports or logs.
 
+The parent's native conversation ID is not its authorization revision: normal
+startup assigns that ID after admission. The grant must separately fence the
+active worker incarnation so that a retired worker cannot retain call authority
+after Reload, while native conversation materialization alone does not revoke a
+newly issued grant. A stable parent ID or Unix uid cannot replace that check.
+
+The Controller now derives an authority observation from its current connected
+runtime and exact worker launch. Broker placeholders, resetting/draining workers,
+closed parents and changed launch metadata cannot produce it. Comparing this
+observation includes the worker epoch and parent ownership/placement revision;
+turn changes, titles and native conversation materialization do not change it.
+This is the authority check for the future grant issuer, not a shipped grant or
+CLI context producer. The observation API's `parent_runtime_ready` is advisory
+and must never substitute for revalidation at dispatch.
+
+Call list responses contain summaries with `has_result`, not full review bodies.
+Opening a call uses its parent-scoped detail endpoint to read the complete result.
+The store still validates the full durable records before projecting summaries;
+the bounded response does not imply a separate lightweight storage index.
+
 Runtime-only environment injection is separate from operator-configurable target
 environment variables. The current closed target environment intentionally rejects
 `COWBOY_*`, `CODEX_*` and `CLAUDE_*`; do not relax its operator allowlist. New
@@ -81,7 +112,7 @@ cowboy codex --request-file review.json
 cowboy claude --request-file review.json
 cowboy codex --request-file - < review.json
 cowboy call inspect call_123
-cowboy call wait call_123 --timeout 30s
+cowboy call wait call_123 --timeout-ms 30000
 cowboy call result call_123
 cowboy call cancel call_123
 ```
@@ -132,6 +163,16 @@ not a timeout error. `wait` observes the same call, never submits a new prompt.
 Cancellation is explicit and idempotent. A failed transport with uncertain
 admission tells the caller to inspect the same request id. It must never return
 an instruction to mint a replacement id and retry blindly.
+
+Requests may additionally carry
+`output: {"format":"json_schema","schema":{...}}`. This is a native turn
+constraint, included in the immutable request digest; it is not appended to the
+prompt. Omission means text output. The schema is bounded to 64 KiB and nesting
+depth 32, with remote references and schema resource rebasing refused. These
+transport checks do not prove native dialect support. Admission must require
+the exact Provider adapter to enforce the schema; otherwise return
+`unsupported_capability` before launching a child. Never silently downgrade to
+text and parse it afterwards as if native structured output were enforced.
 
 ```json
 {
@@ -270,6 +311,14 @@ concurrency and output contract. Do not shadow `node`, replace cached Plugin cod
 rewrite canonical commands, or claim automatic interception. Outside Cowboy,
 leave the original companion path intact. An unrecognized workflow revision or
 capability mismatch must report a compatibility error rather than guess.
+
+The inspected companion 1.0.6 adversarial-review path constructs its prompt
+from the Plugin template and freshly collected Git context, and passes
+`schemas/review-output.schema.json` as native `outputSchema`. The managed
+adapter must preserve both the completed prompt and this output constraint,
+then use the original result parser/renderer. Passing only the aspect's focus
+text, or replacing schema enforcement with a prompt instruction, is not a
+compatible transport substitution.
 
 The adapter reads the request file on the current target, validates its workspace,
 passes task/group/round/aspect references as labels, and writes output only to an

@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.12" as const;
+export const PROVIDER_SDK_VERSION = "3.1.13" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -357,6 +357,9 @@ export interface ProviderManifest {
       }>;
     };
     arguments: RuntimeValue[];
+    managed_profiles?: Partial<
+      Record<"read_only_v1", { arguments: RuntimeValue[] }>
+    >;
     environment: Record<string, RuntimeValue>;
     sidecars: RuntimeSidecar[];
     remove_environment: string[];
@@ -384,6 +387,7 @@ export interface ProviderManifest {
       | "provider.runtime.v1"
       | "provider.gateway.v1"
       | "provider.execution-jsonrpc.v1"
+      | "provider.managed-profiles.v1"
     >;
   };
   authentication: {
@@ -1082,6 +1086,38 @@ export function projectAgentPluginInventory(
     }));
 }
 
+function validateManagedProfiles(
+  input: unknown,
+  sdk: string,
+  capability: boolean,
+): RuntimeValue[] {
+  const profiles = input === undefined ? {} : input;
+  if (!isRecord(profiles)) throw new Error("Invalid managed Provider profiles");
+  const entries = Object.entries(profiles);
+  if (
+    capability !== (entries.length > 0) ||
+    (capability && compareProviderVersions(sdk, "3.1.13") < 0)
+  ) {
+    throw new Error(
+      "Managed Provider profiles require their signed capability and SDK 3.1.13",
+    );
+  }
+  const args: RuntimeValue[] = [];
+  for (const [name, profile] of entries) {
+    if (
+      name !== "read_only_v1" || !isRecord(profile) ||
+      Object.keys(profile).some((key) => key !== "arguments") ||
+      !Array.isArray(profile.arguments) || profile.arguments.length === 0 ||
+      profile.arguments.length > 64 ||
+      !profile.arguments.every(isRuntimeValue)
+    ) {
+      throw new Error("Invalid managed Provider launch profile");
+    }
+    args.push(...profile.arguments);
+  }
+  return args;
+}
+
 export function validateProviderManifest(
   input: unknown,
 ): asserts input is ProviderManifest {
@@ -1121,6 +1157,11 @@ export function validateProviderManifest(
     );
   }
   validateProviderBehavior(runtime.behavior);
+  const managedArguments = validateManagedProfiles(
+    runtime.managed_profiles,
+    String(full.sdk_version),
+    runtime.required_capabilities.includes("provider.managed-profiles.v1"),
+  );
   const dependencies = new Map<string, string>();
   for (const raw of runtime.dependencies) {
     if (
@@ -1245,6 +1286,7 @@ export function validateProviderManifest(
   for (
     const value of [
       ...(runtime.arguments as RuntimeValue[]),
+      ...managedArguments,
       ...(Object.values(runtime.environment) as RuntimeValue[]),
     ]
   ) {
@@ -1292,7 +1334,8 @@ export function validateProviderManifest(
   if (
     !runtime.required_capabilities.every((value) =>
       value === "provider.runtime.v1" || value === "provider.gateway.v1" ||
-      value === "provider.execution-jsonrpc.v1"
+      value === "provider.execution-jsonrpc.v1" ||
+      value === "provider.managed-profiles.v1"
     ) ||
     !capabilities.has("provider.runtime.v1") ||
     usesGateway !== declaresGateway ||

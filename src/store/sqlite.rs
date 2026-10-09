@@ -5277,6 +5277,9 @@ impl SqliteStorage {
         let result = sqlx::query(
             "DELETE FROM sessions WHERE deleted_at_ms IS NOT NULL \
              AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2 \
+             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
+                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
+                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
              AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
                  WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
                  AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",

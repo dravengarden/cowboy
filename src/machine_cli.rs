@@ -515,6 +515,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
         provider_store: Arc::clone(&providers),
         worktree_root,
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
+        call_context_root: Some(args.state_dir.clone()),
     };
     let controller_url = args
         .controller_url
@@ -591,16 +592,23 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
             serde_json::from_slice(&bytes).context("invalid execution component configuration")
         })
         .transpose()?;
-    let execution = Arc::new(
-        execution::Manager::new(
-            args.service_id.clone(),
-            machine_id.clone(),
-            &args.state_dir,
-            execution_config,
-            matches!(args.spawn_mode, CliSpawnMode::SystemdUser),
-        )?
-        .with_placement(worktree_roots.clone(), execution_env),
-    );
+    let mut execution = execution::Manager::new(
+        args.service_id.clone(),
+        machine_id.clone(),
+        &args.state_dir,
+        execution_config,
+        matches!(args.spawn_mode, CliSpawnMode::SystemdUser),
+    )?
+    .with_placement(worktree_roots.clone(), execution_env);
+    // Call ingress is an enrolled-Service capability. A failure to create its
+    // private directories leaves calls unavailable, never the Machine down.
+    if args.service_id.is_some() {
+        match crate::managed_calls::host::CallHost::new(&args.state_dir) {
+            Ok(calls) => execution = execution.with_calls(calls),
+            Err(error) => tracing::warn!(%error, "managed call ingress unavailable"),
+        }
+    }
+    let execution = Arc::new(execution);
     let deletion_service_id = args.service_id.clone();
     let durable_state = crate::machine_broker::DurableStateView::default();
     let controller = controller_loop(ControllerConfig {
@@ -1241,6 +1249,12 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let plugin_execution =
         PluginExecutionScope::new(config.service_id.as_deref(), &config.machine_id);
+    // Gateway actions travel only over a connection that negotiated them; a
+    // replaced or dropped connection fails the actions still waiting on it.
+    let _call_uplink = (protocol >= crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION)
+        .then(|| config.execution.calls())
+        .flatten()
+        .map(|calls| calls.attach(event_tx.clone()));
     let _provider_auth_watcher = if protocol >= 6 {
         Some(auth_watch::start(Arc::clone(&config.providers), event_tx.clone()).await?)
     } else {
@@ -1353,6 +1367,13 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                 MachineFrame::Command { command } => {
                                     anyhow::ensure!(command.minimum_protocol() <= protocol,
                                         "Machine command exceeds negotiated protocol");
+                                    if let MachineCommand::ManagedCallReply { request_id, response } = command {
+                                        // Completing a waiter never awaits this connection.
+                                        if let Some(calls) = config.execution.calls() {
+                                            calls.reply(&request_id, response);
+                                        }
+                                        continue;
+                                    }
                                     if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
                                         config.provider_usage.acknowledge(producer_id, *sequence)?;
                                         continue;
@@ -2693,9 +2714,10 @@ fn handle_machine_command(
                 });
             });
         }
-        MachineCommand::ProviderUsageAck { .. } => {
+        MachineCommand::ProviderUsageAck { .. } | MachineCommand::ManagedCallReply { .. } => {
             // Consumed synchronously by the controller connection so the
-            // durable spool advances before another batch is selected.
+            // durable spool advances before another batch is selected, and
+            // so a call reply never waits behind another command.
         }
     }
 }

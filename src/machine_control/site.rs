@@ -67,7 +67,9 @@ fn claimed_site(command: &MachineCommand) -> Option<ClaimedSite<'_>> {
         | MachineCommand::FinalizeProviderAuthCandidate { .. }
         | MachineCommand::AdapterRequest { .. }
         | MachineCommand::InvokePluginHost { .. }
-        | MachineCommand::ProviderUsageAck { .. } => return None,
+        | MachineCommand::ProviderUsageAck { .. }
+        // A reply completes an existing waiter on this connection only.
+        | MachineCommand::ManagedCallReply { .. } => return None,
     };
     Some(ClaimedSite { service, machine })
 }

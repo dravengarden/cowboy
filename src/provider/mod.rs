@@ -403,8 +403,15 @@ fn apply_host_isolation(id: &str, spec: &mut LaunchSpec) -> Option<()> {
 /// Resolve and prepare the complete process tree for one detached worker.
 /// Package-less sessions retain the bounded legacy launch path; exact signed
 /// packages additionally get linked components and session-owned sidecars.
-pub(crate) async fn prepare(id: &str) -> Result<PreparedLaunch> {
+pub(crate) async fn prepare(
+    id: &str,
+    profile: Option<cowboy_provider_sdk::ManagedRuntimeProfile>,
+) -> Result<PreparedLaunch> {
     if std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH").is_none() {
+        ensure!(
+            profile.is_none(),
+            "managed calls require an exact signed Provider package"
+        );
         let spec = lookup(id).with_context(|| format!("unknown provider {id:?}"))?;
         return Ok(PreparedLaunch {
             spec,
@@ -412,7 +419,7 @@ pub(crate) async fn prepare(id: &str) -> Result<PreparedLaunch> {
             execution_jsonrpc: false,
         });
     }
-    prepare_package_launch(id).await
+    prepare_package_launch(id, profile).await
 }
 
 /// Controller-side placeholder for an immutable Provider generation that will
@@ -440,7 +447,10 @@ pub fn remote_generation(id: &str) -> Option<LaunchSpec> {
 /// Resolve a signed, Machine-validated Provider generation supplied to this
 /// worker and start every declared sidecar before the ACP adapter. All links
 /// are closed SDK values; no shell interpolation or Provider code is involved.
-async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
+async fn prepare_package_launch(
+    id: &str,
+    profile: Option<cowboy_provider_sdk::ManagedRuntimeProfile>,
+) -> Result<PreparedLaunch> {
     let package_path = PathBuf::from(
         std::env::var_os("COWBOY_PROVIDER_PACKAGE_PATH")
             .context("exact Provider worker has no package path")?,
@@ -449,6 +459,9 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         .with_context(|| format!("reading Provider package {}", package_path.display()))?;
     let package =
         parse_process_package(&bytes).context("validating exact Provider process package")?;
+    // Resolve before starting sidecars: an unsupported profile has no launch
+    // effects, and must never inherit ordinary full-access arguments.
+    let launch_arguments = package.manifest.runtime.launch_arguments(profile)?;
     ensure!(
         package.manifest.id == id,
         "Provider package identity mismatch: expected {id:?}, got {:?}",
@@ -525,10 +538,7 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         &sidecar_auth,
         |name| std::env::var(name).ok(),
     ));
-    let arguments = package
-        .manifest
-        .runtime
-        .arguments
+    let arguments = launch_arguments
         .iter()
         .map(|value| {
             resolve_runtime_value(

@@ -228,6 +228,9 @@ pub struct MachineBrokerArgs {
     /// deletion may reclaim marked Cargo targets below this exact boundary.
     pub worktree_root: PathBuf,
     pub worker_ready_timeout: Duration,
+    /// Machine state directory whose `calls/sessions` holds managed-call
+    /// contexts. Local parent workers receive their stable context path.
+    pub call_context_root: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -899,7 +902,8 @@ impl Broker {
         // Deletion takes the same cancelled -> sessions lock order.
         let cancelled = self.cancelled_sessions.lock();
         let mut sessions = self.sessions.lock();
-        if incoming.is_some_and(|binding| binding.decode().is_err())
+        if incoming
+            .is_some_and(|binding| binding.decode().is_err() && binding.managed_child().is_none())
             || launch
                 .as_ref()
                 .is_some_and(|launch| launch.session_id != session_id)
@@ -1620,7 +1624,7 @@ impl Broker {
         if session
             .execution_binding
             .as_ref()
-            .is_some_and(|binding| binding.decode().is_err())
+            .is_some_and(|binding| binding.decode().is_err() && binding.managed_child().is_none())
             || self
                 .sessions
                 .lock()
@@ -2594,7 +2598,28 @@ impl Broker {
             },
             |provider| provider.behavior.clone(),
         );
-        if let Some(binding) = &session.execution_binding {
+        let managed_child = session
+            .execution_binding
+            .as_ref()
+            .and_then(|binding| binding.managed_child());
+        if let Some(child) = &managed_child {
+            ensure!(
+                child.session_id == session.session_id && child.cwd == session.cwd,
+                "managed child placement mismatch"
+            );
+            let installed = provider
+                .as_ref()
+                .context("managed child requires an exact Provider generation")?;
+            let bytes = std::fs::read(&installed.package_path)?;
+            let package = cowboy_provider_sdk::ProviderPackage::from_bytes(&bytes)?;
+            package
+                .manifest
+                .runtime
+                .launch_arguments(Some(child.profile))?;
+        }
+        if let Some(binding) = &session.execution_binding
+            && managed_child.is_none()
+        {
             let binding = binding.decode().map_err(anyhow::Error::msg)?;
             ensure!(
                 behavior
@@ -2616,6 +2641,20 @@ impl Broker {
         }
         let mut session_environment =
             session_context_environment(session, &behavior.configuration)?;
+        // Local parents run their tools in this worker's process tree. Remote
+        // parents receive the context from their target keeper instead, and
+        // managed children never receive one: delegation is not recursive.
+        if session.execution_binding.is_none()
+            && !session.system
+            && let Some(path) = self.args.call_context_root.as_deref().and_then(|root| {
+                crate::managed_calls::host::context_file(root, &session.session_id)
+            })
+        {
+            session_environment.push((
+                crate::execution_protocol::CALL_CONTEXT_ENV,
+                path.display().to_string(),
+            ));
+        }
         if let Some(provider) = &provider {
             session_environment.push((
                 "COWBOY_PROVIDER_PACKAGE_PATH",
@@ -4005,6 +4044,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: root.path().join("worktrees"),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         // Replay while no worker exists must retain one original context.
         handle_core_command(&broker, command.clone()).await;
@@ -4226,6 +4266,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         broker.sessions.lock().insert(
             "sess-heartbeat-reset".to_owned(),
@@ -4302,6 +4343,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: ready_timeout,
+            call_context_root: None,
         }));
         broker.sessions.lock().insert(
             session_id.to_owned(),
@@ -4505,6 +4547,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_secs(10),
+            call_context_root: None,
         });
         let session = StartSession {
             session_id: "sess-fast-failure".to_owned(),
@@ -4551,6 +4594,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         broker
@@ -4647,6 +4691,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         broker.sessions.lock().insert(
             "sess-1".to_owned(),
@@ -4723,6 +4768,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         broker.sessions.lock().insert(
             "sess-1".to_owned(),
@@ -4821,6 +4867,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         let mut sockets = Vec::new();
         for (connection_id, session_id) in [(1, "sess-silent"), (2, "sess-lagging")] {
@@ -4913,6 +4960,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         let (tx, rx) = mpsc::unbounded_channel();
         broker
@@ -6104,6 +6152,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
         broker
@@ -6144,6 +6193,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         for (session_id, provider) in [("sess-codex", "codex"), ("sess-claude", "claude-code")] {
             broker.sessions.lock().insert(
@@ -6290,6 +6340,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         broker.sessions.lock().insert(
             "sess-ready".to_owned(),
@@ -6384,6 +6435,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         broker
             .healthy_generations
@@ -6415,6 +6467,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         let launch = StartSession {
             session_id: "sess-1".to_owned(),
@@ -6471,6 +6524,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         broker
             .ensure_session(StartSession {
@@ -6511,6 +6565,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
         broker
@@ -6602,6 +6657,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
         broker
@@ -6671,6 +6727,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         let (worker_tx, mut worker_rx) = mpsc::unbounded_channel();
         broker
@@ -6732,6 +6789,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
         }));
         broker
             .cancelled_sessions
@@ -6812,6 +6870,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: worktree_root.clone(),
             worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
         }));
         broker.sessions.lock().insert(
             "sess-reset-race".to_owned(),
@@ -6898,6 +6957,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
         });
         broker
             .cancelled_sessions
@@ -6936,6 +6996,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
         }));
         broker
             .cancelled_sessions
@@ -6994,6 +7055,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
         }));
         let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
         broker
@@ -7114,6 +7176,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         let mut command = Command::new("sh");
         command.arg("-c").arg("sleep 60");
@@ -7198,6 +7261,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         });
         let mut old_command = Command::new("sh");
         old_command.arg("-c").arg("sleep 0.2");
@@ -7280,6 +7344,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: managed.clone(),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         broker
             .deleted_session_owner_collected
@@ -7346,6 +7411,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: worktree_root.clone(),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         broker
             .deleted_session_owner_collected
@@ -7427,6 +7493,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: worktree_root.clone(),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         broker.sessions.lock().insert(
             "sess-connected-delete".to_owned(),
@@ -7502,6 +7569,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: root.join("worktrees"),
             worker_ready_timeout: Duration::from_secs(1),
+            call_context_root: None,
         }));
         broker
             .deleted_session_owner_collected
@@ -7869,6 +7937,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         });
         broker
             .cancelled_sessions
@@ -7917,6 +7986,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(10),
+            call_context_root: None,
         }));
         broker.unhealthy_generations.lock().insert(
             ("gen-2".to_owned(), "codex".to_owned()),
@@ -7954,6 +8024,7 @@ mod tests {
             provider_store: test_provider_store(),
             worktree_root: PathBuf::from("/tmp/unused-worktrees"),
             worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
         }));
         for _ in 0..100 {
             if socket.exists() {

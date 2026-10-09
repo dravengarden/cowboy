@@ -102,6 +102,8 @@ mod machine_plugins;
 pub mod machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod machine_transport;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub mod managed_calls;
 #[cfg(feature = "full")]
 #[path = "provider/managed_config.rs"]
 mod managed_config;

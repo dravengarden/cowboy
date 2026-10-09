@@ -24,6 +24,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Delegate bounded work to Codex on the current session's execution target.
+    #[cfg(unix)]
+    Codex(crate::managed_calls::cli::StartArgs),
+    /// Delegate bounded work to Claude on the current session's execution target.
+    #[cfg(unix)]
+    Claude(crate::managed_calls::cli::StartArgs),
+    /// Observe and control parent-scoped managed agent calls.
+    #[cfg(unix)]
+    Call(crate::managed_calls::cli::CallArgs),
     /// Query, aggregate and analyze `OTel` evidence where it is stored.
     Logs(Box<crate::logs::cli::LogsArgs>),
     /// Inspect, validate and safely change the Service or Device configuration
@@ -478,6 +487,12 @@ impl Cli {
         let _ = rustls::crypto::ring::default_provider().install_default();
         match self.command {
             Command::Logs(args) => args.run().await,
+            #[cfg(unix)]
+            Command::Codex(args) => crate::managed_calls::cli::start("codex", args).await,
+            #[cfg(unix)]
+            Command::Claude(args) => crate::managed_calls::cli::start("claude-code", args).await,
+            #[cfg(unix)]
+            Command::Call(args) => crate::managed_calls::cli::call(args).await,
             Command::Config(args) => args.run(),
             #[cfg(feature = "full")]
             Command::Serve(args) => crate::server::serve(*args).await,
@@ -495,26 +510,7 @@ impl Cli {
             #[cfg(feature = "full")]
             Command::TryAgent(args) => run_trial_agent(args).await,
             #[cfg(feature = "full")]
-            Command::MachineEnroll(args) => {
-                let database_url = args
-                    .database_url
-                    .as_deref()
-                    .or(args.postgres_url.as_deref())
-                    .context("--database-url is required")?;
-                let store =
-                    crate::store::Store::connect(database_url, args.data_dir.join("artifacts"))
-                        .await?;
-                store.migrate().await?;
-                let token = store
-                    .create_machine_enrollment(
-                        &args.machine_id,
-                        &args.display_name,
-                        args.ttl_seconds,
-                    )
-                    .await?;
-                println!("{token}");
-                Ok(())
-            }
+            Command::MachineEnroll(args) => enroll_machine(args).await,
             #[cfg(feature = "full")]
             Command::MachineRevoke(args) => {
                 let database_url = args
@@ -569,6 +565,22 @@ impl Cli {
             }
         }
     }
+}
+
+#[cfg(feature = "full")]
+async fn enroll_machine(args: MachineEnrollArgs) -> anyhow::Result<()> {
+    let database_url = args
+        .database_url
+        .as_deref()
+        .or(args.postgres_url.as_deref())
+        .context("--database-url is required")?;
+    let store = crate::store::Store::connect(database_url, args.data_dir.join("artifacts")).await?;
+    store.migrate().await?;
+    let token = store
+        .create_machine_enrollment(&args.machine_id, &args.display_name, args.ttl_seconds)
+        .await?;
+    println!("{token}");
+    Ok(())
 }
 
 #[cfg(feature = "full")]
@@ -731,6 +743,66 @@ mod tests {
     use clap::Parser as _;
 
     use super::{Cli, Command, mask_secret};
+
+    #[test]
+    #[cfg(unix)]
+    fn managed_calls_have_provider_aliases_and_bounded_noninteractive_waits() {
+        for provider in ["codex", "claude"] {
+            assert!(
+                Cli::try_parse_from(["cowboy", provider, "--request-file", "-", "--check"]).is_ok()
+            );
+            assert!(
+                Cli::try_parse_from([
+                    "cowboy",
+                    provider,
+                    "--request-file",
+                    "-",
+                    "--wait-ms",
+                    "60001"
+                ])
+                .is_err()
+            );
+            assert!(
+                Cli::try_parse_from([
+                    "cowboy",
+                    provider,
+                    "--request-file",
+                    "-",
+                    "--parent-session-id",
+                    "victim"
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "cowboy",
+                "call",
+                "start",
+                "--provider",
+                "claude-code",
+                "--request-file",
+                "-"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "cowboy",
+                "call",
+                "start",
+                "--provider",
+                "/bin/sh",
+                "--request-file",
+                "-"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["cowboy", "call", "wait", "call-1", "--timeout-ms", "60001"])
+                .is_err()
+        );
+    }
 
     #[test]
     #[cfg(feature = "full")]

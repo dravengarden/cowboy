@@ -33,6 +33,7 @@ const TABLES: &[&str] = &[
     "telemetry_binding_journal",
     "users",
     "sessions",
+    "managed_agent_calls",
     "events",
     "settings",
     "scheduled_wakeups",
