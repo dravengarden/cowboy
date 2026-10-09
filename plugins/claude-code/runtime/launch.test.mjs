@@ -154,7 +154,8 @@ test("startup milestones reach the adapter's stderr through its private socket",
     // Anything else on the socket is not relayed.
     const other = createConnection(path);
     other.write(
-      "ordinary text\n" + "[cowboy-claude] " + "x".repeat(300) + "\n",
+      "ordinary text\n[cowboy-claude] phase=x\u001b[2J totalMs=1\n" +
+        "[cowboy-claude] " + "x".repeat(300) + "\n",
     );
     other.end();
     const deadline = Date.now() + 5000;

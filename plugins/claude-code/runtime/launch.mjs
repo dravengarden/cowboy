@@ -72,12 +72,14 @@ export function startupPhase(name) {
 }
 
 // In the adapter: a private socket whose milestone lines reach this
-// process's stderr. Only bounded `[cowboy-claude] ` lines pass.
+// process's stderr. Only exact milestone lines pass, a bounded number per
+// connection, so nothing else can be written into the worker log.
 export function startupTrace(output = process.stderr) {
   const directory = mkdtempSync(join(tmpdir(), "cowboy-claude-trace-"));
   const path = join(directory, "s");
   const server = createServer((socket) => {
     let pending = "";
+    let relayed = 0;
     // A milestone connection never keeps the adapter alive.
     socket.unref();
     socket.setEncoding("utf8");
@@ -88,9 +90,10 @@ export function startupTrace(output = process.stderr) {
       while ((newline = pending.indexOf("\n")) >= 0) {
         const line = pending.slice(0, newline);
         pending = pending.slice(newline + 1);
-        if (line.startsWith("[cowboy-claude] ") && line.length <= 256) {
-          output.write(line + "\n");
-        }
+        if (
+          /^\[cowboy-claude\] phase=[a-z-]{1,40} totalMs=\d{1,9}$/.test(line) &&
+          relayed++ < 32
+        ) output.write(line + "\n");
       }
       if (pending.length > 256) socket.destroy();
     });
@@ -1253,6 +1256,7 @@ export async function main(args) {
     const environment = { ...process.env };
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
+    delete environment[STARTUP_TRACE];
     const child = spawn(executable, inspect, {
       env: environment,
       stdio: "inherit",
@@ -1283,10 +1287,14 @@ export async function main(args) {
     process.env.CLAUDE_CODE_EXECUTABLE = fileURLToPath(
       new URL("../bin/cowboy-configured-cli", import.meta.url),
     );
-    try {
-      process.env[STARTUP_TRACE] = startupTrace().path;
-    } catch {
-      // Milestones are diagnostics; startup continues without them.
+    // Only a bound session's private CLI reports milestones; a Matrix-only
+    // local session runs native Claude itself and gets no trace socket.
+    if (process.env.COWBOY_EXECUTION_DESCRIPTOR) {
+      try {
+        process.env[STARTUP_TRACE] = startupTrace().path;
+      } catch {
+        // Milestones are diagnostics; startup continues without them.
+      }
     }
   }
   const upstream = fileURLToPath(
