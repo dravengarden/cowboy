@@ -1,4 +1,4 @@
-import { strict as assert } from "node:assert";
+import { assert } from "jsr:@std/assert";
 import {
   agentLabel,
   type AgentTools,
