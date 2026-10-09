@@ -23,7 +23,7 @@ import time
 from unittest.mock import patch
 
 from claude_mods_native_probe import FIXTURE_ENVIRONMENT, Observer, Recorder
-from claude_native_behavior_probe import stable
+from claude_native_behavior_probe import clean_root, stable
 from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFixture, tool
 from plugin_runtime_conformance import closed_environment
 
@@ -157,7 +157,7 @@ def run_mode(claude, root, mode):
 def run(claude, modes=MODES):
     receipt = {}
     for mode in modes:
-        with tempfile.TemporaryDirectory(prefix="cowboy-native-permissions-") as temp:
+        with tempfile.TemporaryDirectory(prefix="cowboy-native-permissions-", dir=clean_root()) as temp:
             try:
                 value = run_mode(claude, Path(temp), mode)
             except Exception as error:  # A failed mode is a recorded observation, not a crash.

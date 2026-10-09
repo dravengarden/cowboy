@@ -1044,7 +1044,7 @@
     "PostToolUse",
     "Stop"
    ],
-   "prefix_log": "",
+   "prefix_invocations": [],
    "stdin_keys": {
     "PostToolUse": [
      "cwd",
@@ -1106,7 +1106,14 @@
   },
   "prefixed": {
    "hooks_ran": [],
-   "prefix_log": "---\nargc=1\narg1=cat > <ROOT>/hooks.log.SessionStart.stdin; printf 'SessionStart\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\n---\nargc=1\narg1=printf '%s' \"${CLAUDE_PROJECT_DIR}\" > /dev/null # BRACED\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\nstdin_is_tty=no\n---\nargc=1\narg1=cat > <ROOT>/hooks.log.UserPromptSubmit.stdin; printf 'UserPromptSubmit\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n---\nargc=1\narg1=cat > <ROOT>/hooks.log.PreToolUse.stdin; printf 'PreToolUse\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n---\nargc=1\narg1=source <ROOT>/home/claude/shell-snapshots/snapshot-bash-SNAPSHOT.sh 2>/dev/null || true && { shopt -u extglob || setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'echo bash-ran' < /dev/null && pwd -P >| <ROOT>/home/claude-CWD-cwd\nproject_dir=\nstdin_is_tty=no\n---\nargc=1\narg1=cat > <ROOT>/hooks.log.Stop.stdin; printf 'Stop\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+   "prefix_invocations": [
+    "argc=1\narg1=cat > <ROOT>/hooks.log.PreToolUse.stdin; printf 'PreToolUse\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+    "argc=1\narg1=cat > <ROOT>/hooks.log.SessionStart.stdin; printf 'SessionStart\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+    "argc=1\narg1=cat > <ROOT>/hooks.log.Stop.stdin; printf 'Stop\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+    "argc=1\narg1=cat > <ROOT>/hooks.log.UserPromptSubmit.stdin; printf 'UserPromptSubmit\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+    "argc=1\narg1=printf '%s' \"${CLAUDE_PROJECT_DIR}\" > /dev/null # BRACED\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+    "argc=1\narg1=source <ROOT>/home/claude/shell-snapshots/snapshot-bash-SNAPSHOT.sh 2>/dev/null || true && { shopt -u extglob || setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'echo bash-ran' < /dev/null && pwd -P >| <ROOT>/home/claude-CWD-cwd\nproject_dir=\nstdin_is_tty=no\n"
+   ],
    "stdin_keys": {},
    "api_requests": 3
   }
@@ -1157,7 +1164,7 @@
    "ran": "child",
    "hooks": [
     {
-     "agent_id": "agent2",
+     "agent_id": "agent1",
      "agent_type": "general-purpose",
      "cwd": "<ROOT>/runtime",
      "effort": {
@@ -1175,12 +1182,12 @@
      "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl"
     },
     {
-     "agent_id": "agent2",
-     "agent_transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION/subagents/agent-agent2.jsonl",
+     "agent_id": "agent1",
+     "agent_transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION/subagents/agent-agent1.jsonl",
      "agent_type": "general-purpose",
      "background_tasks": [
       {
-       "id": "agent2",
+       "id": "agent1",
        "type": "subagent",
        "status": "running",
        "description": "Hook child",

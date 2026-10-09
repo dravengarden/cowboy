@@ -1,0 +1,116 @@
+{
+ "default_tools": {
+  "Agent": {
+   "input_schema": "c0512d25d4f0361d",
+   "description": "bf9f3782be80a421"
+  },
+  "AskUserQuestion": {
+   "input_schema": "ca4359704f78256e",
+   "description": "b8df6b553f936025"
+  },
+  "Bash": {
+   "input_schema": "bdaf40923f7e3ec4",
+   "description": "3837a2cd6baf0a50"
+  },
+  "CronCreate": {
+   "input_schema": "dcb40209c5b18a9f",
+   "description": "b38de2978e5fa257"
+  },
+  "CronDelete": {
+   "input_schema": "4c168429a8e44b9b",
+   "description": "7acbf6ba69816c37"
+  },
+  "CronList": {
+   "input_schema": "277aa041eeeb5241",
+   "description": "40538034826fbee5"
+  },
+  "DesignSync": {
+   "input_schema": "e4b9d0b118bc2ee2",
+   "description": "a3f6041066efb685"
+  },
+  "Edit": {
+   "input_schema": "934f1e057d134875",
+   "description": "8d4cc18acfb4b8c2"
+  },
+  "EnterPlanMode": {
+   "input_schema": "277aa041eeeb5241",
+   "description": "f8411588a57b5c38"
+  },
+  "EnterWorktree": {
+   "input_schema": "a0b0969bf1c9760d",
+   "description": "d7610d327d23b02f"
+  },
+  "ExitPlanMode": {
+   "input_schema": "12a770f9973ad50c",
+   "description": "fe30ebb4bbb58a13"
+  },
+  "ExitWorktree": {
+   "input_schema": "2d5d23ccff1dc7ff",
+   "description": "6e6c9c47472f7abb"
+  },
+  "ListAgents": {
+   "input_schema": "914feef060a70cb1",
+   "description": "fcef208b39bd163b"
+  },
+  "NotebookEdit": {
+   "input_schema": "9c1cd406f135978f",
+   "description": "fe2e4129fccf6461"
+  },
+  "Read": {
+   "input_schema": "26f36fe6e73680fc",
+   "description": "98b5f0d4ee26b770"
+  },
+  "ReportFindings": {
+   "input_schema": "85f7403fc37803e3",
+   "description": "fefdaf49d466b3b3"
+  },
+  "ScheduleWakeup": {
+   "input_schema": "fb0e02f46f22ea81",
+   "description": "cebb34b0166c7cd5"
+  },
+  "SendMessage": {
+   "input_schema": "afd48a6d4c972406",
+   "description": "4c77de09e5e6f71c"
+  },
+  "Skill": {
+   "input_schema": "a5d702970286c9b3",
+   "description": "cfa8ccb64125270c"
+  },
+  "TaskCreate": {
+   "input_schema": "d4bad4f8a7a84125",
+   "description": "4a35ac1d426297f1"
+  },
+  "TaskGet": {
+   "input_schema": "821ab9493e759380",
+   "description": "24a91950f9d8d4fa"
+  },
+  "TaskList": {
+   "input_schema": "277aa041eeeb5241",
+   "description": "77d5ed9fd50385a6"
+  },
+  "TaskStop": {
+   "input_schema": "08d0cc53dd12ce28",
+   "description": "52799babb9d70a8f"
+  },
+  "TaskUpdate": {
+   "input_schema": "e7fae4a0f2ba5940",
+   "description": "32f0eb8ffef957aa"
+  },
+  "WebFetch": {
+   "input_schema": "9d05cb4f3c0ca0c7",
+   "description": "f7470892c8d40dec"
+  },
+  "WebSearch": {
+   "input_schema": "a5d043763d6f04fb",
+   "description": "cd4f73c711b72c1c"
+  },
+  "Workflow": {
+   "input_schema": "5784507a689a53b3",
+   "description": "ef0df2163903276f"
+  },
+  "Write": {
+   "input_schema": "d24e60ae1c8771d8",
+   "description": "07cb68f13c6dac78"
+  }
+ }
+}

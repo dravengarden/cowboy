@@ -19,7 +19,7 @@ import tempfile
 import time
 from unittest.mock import patch
 
-from claude_native_behavior_probe import stable
+from claude_native_behavior_probe import clean_root, stable
 from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFixture, tool
 from plugin_runtime_conformance import closed_environment
 
@@ -159,14 +159,14 @@ def tool_hook(claude, root, name):
         api.close()
 
 
+# Hooks of one event run concurrently: each invocation logs to its own file.
 PREFIX = r'''#!/bin/sh
 {
-  printf '%s\n' "---"
   printf 'argc=%s\n' "$#"
   i=0; for a in "$@"; do i=$((i+1)); printf 'arg%s=%s\n' "$i" "$a"; done
   printf 'project_dir=%s\n' "$CLAUDE_PROJECT_DIR"
   printf 'stdin_is_tty=%s\n' "$( [ -t 0 ] && echo yes || echo no)"
-} >> "$HOOK_LOG"
+} > "$HOOK_LOG.$$"
 exec "$@"
 '''
 
@@ -218,7 +218,7 @@ def shell_prefix(claude, root, prefixed):
         time.sleep(1)
         stdins = {path.name.split(".")[-2]: json.loads(path.read_text() or "null") for path in root.glob("hooks.log.*.stdin")}
         return {"hooks_ran": hooklog.read_text().split() if hooklog.exists() else [],
-                "prefix_log": log.read_text() if log.exists() else "",
+                "prefix_invocations": sorted(path.read_text() for path in root.glob("prefix.log.*")),
                 "stdin_keys": {key: sorted(value) if isinstance(value, dict) else value for key, value in sorted(stdins.items())},
                 "api_requests": len(api.requests)}
     finally:
@@ -280,7 +280,7 @@ def run(claude):
     receipt = {}
     for key, probe in probes:
         group, name = key.split(".")
-        with tempfile.TemporaryDirectory(prefix="cowboy-native-hooks-") as temp:
+        with tempfile.TemporaryDirectory(prefix="cowboy-native-hooks-", dir=clean_root()) as temp:
             try:
                 value = probe(Path(temp))
             except Exception as error:  # A failed case is a recorded observation, not a crash.

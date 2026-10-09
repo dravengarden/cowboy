@@ -2042,6 +2042,8 @@ probes; the newest group is also pinned by unit tests:
 | Skills and commands | `claude_skill_native_baseline.json` | packaged `skills` phase |
 | Mods: classic event input, agent turn outcomes, notification doors and shape, a plugin's own background command, pending-fetch blocking, Mod source forms native disables | `claude_mods_native_baseline.json` (`claude_mods_native_probe.py`) | unit tests in `claude-remote-mods-baseline.test.mjs` (including static checks of `context-mod.js`); packaged `agents`, `notifications`, `hooks` phases |
 | Permissions: `$.tool.check` against native prompts per mode (default, acceptEdits, bypassPermissions, dontAsk), denial texts, validation before asking | `claude_permissions_native_baseline.json` (`claude_permissions_native_probe.py`) | unit tests in `claude-remote-permissions-baseline.test.mjs`; packaged `permissions` phase |
+| Context: instruction discovery and attachment, Git section inside and outside a repository, environment block, the Mod tool-context label | `claude_context_native_baseline.json` (`claude_context_native_probe.py`) | unit tests in `claude-remote-context-baseline.test.mjs`; packaged `context` phase |
+| Default tool inventory: names, schema and description digests | `claude_tools_native_baseline.json` (`claude_tools_native_probe.py`) | unit tests in `claude-remote-tools-baseline.test.mjs` (every tool classified); every packaged phase on a change |
 | Project hooks: outcomes, matchers, PermissionRequest race, shell prefix, agent hook input | `claude_hooks_native_baseline.json` (`claude_hooks_native_probe.py`) | unit tests in `claude-remote-hooks-baseline.test.mjs`; packaged `hooks` phase |
 
 Porting the scratch measurements found two model-visible differences, both
@@ -2054,6 +2056,15 @@ gained a "Permission denied: " prefix native does not add (`checkDenial` in
 and the target then refuses the call; the outcome is the same, with one extra
 prompt. plan mode is not probed: its auto-mode classifier makes its own model
 requests, and execution sessions refuse plan mode anyway.
+
+Native decides it is in a Git repository from an ancestor `.git` alone: a
+stray empty `/tmp/.git` on Hawk made every `/tmp` fixture "a git repository"
+with a placeholder Git section (branch HEAD, clean, no commits). The probes
+now place fixtures under a directory with no `.git` ancestor
+(`clean_root()`); outside a real repository native has no Git section and
+says "Is a git repository: false", as the plugin does. A target below such a
+stray `.git` would differ (native reports a repository, the plugin does not);
+this is not reproduced. Baselines from before this were re-measured.
 
 `tools/remote_impact.py` turns a Git diff into the remote suites, Claude
 phases and native probes to run, from `tools/remote_check_map.json`; it covers

@@ -120,7 +120,15 @@ instruction discovery (no AGENTS.md; CLAUDE.md, rules, imports, nested files),
 on `prompt.context` rendering `instructionFiles`, on the `session_context`
 attachment's `# gitStatus` section and on the `tool.call hook additional
 context:` label this module removes; re-measure them per CLI (the
-`*instruction*` and `*git*` checks). The packaged hook checks (`*_hook_*`/`*_hooks_*`,
+`*instruction*` and `*git*` checks).
+`tools/claude_context_native_baseline.json` (probe
+`tools/claude_context_native_probe.py`) records these, and
+`tools/claude-remote-context-baseline.test.mjs` runs the plugin's discovery
+and Git section against it. `tools/claude_tools_native_baseline.json` (probe
+`tools/claude_tools_native_probe.py`) is the default tool inventory with
+schema and description digests; `tools/claude-remote-tools-baseline.test.mjs`
+fails until every new tool is classified (routed, runtime, disallowed or not
+offered), which is the added-tool disposition above. The packaged hook checks (`*_hook_*`/`*_hooks_*`,
 `nonzero_bash_exit_is_native_tool_error`) cover these. The native hook
 baselines are in `tools/claude_hooks_native_baseline.json` (probe
 `tools/claude_hooks_native_probe.py`), and

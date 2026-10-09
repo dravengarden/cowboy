@@ -168,7 +168,9 @@
         "tools/register-memory-client.mjs",
         "tools/claude_hooks_native_baseline.json",
         "tools/claude_mods_native_baseline.json",
-        "tools/claude_permissions_native_baseline.json"
+        "tools/claude_permissions_native_baseline.json",
+        "tools/claude_context_native_baseline.json",
+        "tools/claude_tools_native_baseline.json"
       ],
       "native": [
         "claude"
@@ -382,10 +384,34 @@
           "phases": [
             "permissions"
           ]
+        },
+        "tools/claude_context_native_probe.py": {
+          "baseline": "tools/claude_context_native_baseline.json",
+          "phases": [
+            "context"
+          ]
+        },
+        "tools/claude_tools_native_probe.py": {
+          "baseline": "tools/claude_tools_native_baseline.json",
+          "phases": [
+            "agent_background",
+            "agents",
+            "context",
+            "files",
+            "hooks",
+            "lifecycle",
+            "mcp",
+            "notifications",
+            "pdf",
+            "permissions",
+            "shell",
+            "skills"
+          ]
         }
       },
       "native_covered": [
         "agent_background",
+        "context",
         "files",
         "lifecycle",
         "mcp",

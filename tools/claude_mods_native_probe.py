@@ -25,7 +25,7 @@ import threading
 import time
 from unittest.mock import patch
 
-from claude_native_behavior_probe import stable
+from claude_native_behavior_probe import clean_root, stable
 from execution_environment_claude_probe import Claude, ScriptedApi, WorkspaceFixture, tool
 from plugin_runtime_conformance import closed_environment
 
@@ -105,7 +105,7 @@ export function register(on) {
     }
     if (command.includes("PLUGIN_TRIGGER")) {
       const started = await $.tool.call({ tool: "Bash", command: "sleep 1; echo PLUGIN_BG", run_in_background: true });
-      await observe($, "plugin_call", { result: JSON.stringify(started).slice(0, 400) });
+      await observe($, "plugin_call", { result: JSON.stringify(started).slice(0, 4000) });
       return next(event);
     }
     if (command.includes("SLOWOBS")) await observe($, "slow");
@@ -355,7 +355,7 @@ SCENARIOS = ["background_idle", "background_busy", "taskstop_held", "plugin_back
 def run(claude, scenarios=SCENARIOS):
     receipt = {}
     for name in scenarios:
-        with tempfile.TemporaryDirectory(prefix="cowboy-native-mods-") as temp:
+        with tempfile.TemporaryDirectory(prefix="cowboy-native-mods-", dir=clean_root()) as temp:
             try:
                 value = summarize(name, run_scenario(claude, Path(temp), name))
             except Exception as error:  # A failed scenario is a recorded observation, not a crash.

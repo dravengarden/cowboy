@@ -37,7 +37,7 @@ import {
 } from "./memory.mjs";
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
-const forbiddenTools = [
+export const FORBIDDEN_TOOLS = [
   "EnterWorktree",
   "ExitWorktree",
   "CronCreate",
@@ -329,7 +329,7 @@ export function nativeArguments(
     "--fork-session",
   ]);
   const forwarded = [];
-  const disallowed = new Set(forbiddenTools);
+  const disallowed = new Set(FORBIDDEN_TOOLS);
   // The pinned SDK uses both --name value and --name=value, including an
   // intentionally empty --setting-sources= value.
   args = args.flatMap((argument) => {

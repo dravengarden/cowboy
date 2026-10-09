@@ -200,10 +200,11 @@ test("a shell prefix gets shell-form hooks as one argument; exec form bypasses i
     plain.hooks_ran.filter((name) => name === "PreToolUse").length,
     1,
   );
-  const entries = prefixed.prefix_log.split("---\n").filter(Boolean);
+  const entries = prefixed.prefix_invocations;
+  assert.ok(entries.length > 0);
   assert.ok(entries.every((entry) => entry.startsWith("argc=1\n")));
   assert.ok(entries.some((entry) => entry.includes("# BRACED")));
-  assert.ok(!prefixed.prefix_log.includes("EXEC_FORM"));
+  assert.ok(!entries.some((entry) => entry.includes("EXEC_FORM")));
 });
 
 test("a subagent's hook input carries its identity and the main transcript", () => {

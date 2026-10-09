@@ -1,0 +1,82 @@
+{
+ "discovery": {
+  "start": [
+   "DOT_CLAUDE_CLAUDE_MD",
+   "IMPORTED_BY_AT",
+   "PARENT_CLAUDE_MD",
+   "ROOT_CLAUDE_LOCAL_MD",
+   "ROOT_CLAUDE_MD",
+   "RULE_ALWAYS",
+   "USER_CLAUDE_MD"
+  ],
+  "after": {
+   "read sub/file.txt": [
+    "NESTED_SUB_CLAUDE_MD",
+    "RULE_SCOPED_SUB"
+   ],
+   "read sub/file.txt again": [],
+   "write sub2/new.txt": [],
+   "read sub3/e.txt": [
+    "NESTED_SUB3_CLAUDE_MD"
+   ],
+   "read ../other/f.txt": []
+  }
+ },
+ "agents_only": {
+  "start": [
+   "PARENT_CLAUDE_MD",
+   "USER_CLAUDE_MD"
+  ],
+  "after": {
+   "read sub/file.txt": [],
+   "read sub/file.txt again": [],
+   "write sub2/new.txt": [],
+   "read sub3/e.txt": [],
+   "read ../other/f.txt": []
+  }
+ },
+ "git_repository": {
+  "runtime_is_repository": true,
+  "environment_lines": [
+   "You have been invoked in the following environment: ",
+   " - Primary working directory: <ROOT>/runtime",
+   " - Is a git repository: true",
+   " - Platform: linux",
+   " - Shell: SHELL",
+   " - OS Version: OS"
+  ],
+  "git_status_header": true,
+  "attached_trailer": true,
+  "git_status_lines": [
+   "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.",
+   "",
+   "Current branch: main",
+   "",
+   "Main branch (you will usually use this for PRs): main",
+   "",
+   "Status:",
+   "?? b.txt",
+   "",
+   "Recent commits:",
+   "COMMIT first"
+  ]
+ },
+ "no_repository": {
+  "runtime_is_repository": false,
+  "environment_lines": [
+   "You have been invoked in the following environment: ",
+   " - Primary working directory: <ROOT>/runtime",
+   " - Is a git repository: false",
+   " - Platform: linux",
+   " - Shell: SHELL",
+   " - OS Version: OS"
+  ],
+  "git_status_header": false,
+  "attached_trailer": false,
+  "git_status_lines": null
+ },
+ "tool_context_label": {
+  "labeled": true,
+  "present": true
+ }
+}

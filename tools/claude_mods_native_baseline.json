@@ -671,7 +671,7 @@
    }
   ],
   "plugin_call": [
-   "{\"result\":{\"stdout\":\"\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false,\"backgroundTaskId\":\"task1\"},\"text\":\"Command running in background with ID: task1. Output is being written to: <ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output. "
+   "{\"result\":{\"stdout\":\"\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false,\"backgroundTaskId\":\"task1\"},\"text\":\"Command running in background with ID: task1. Output is being written to: <ROOT>/home/claude-1000/-ROOT-runtime/SESSION/tasks/task1.output. You will be notified when it completes. To check interim output, use Read on that file path.\"}"
   ],
   "plugin_command_notified": true
  },

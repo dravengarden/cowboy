@@ -14,6 +14,7 @@ Usage (dev shell): PYTHONPATH=tools python3 tools/claude_native_behavior_probe.p
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -95,6 +96,21 @@ class Session:
     def close(self):
         self.client.close()
         self.api.close()
+
+
+def clean_root():
+    """A directory for fixtures with no `.git` in any ancestor.
+
+    Native decides it is in a repository from an ancestor `.git` alone (a stray
+    /tmp/.git made every /tmp fixture "a git repository"), so fixtures must
+    not sit below one."""
+    for candidate in [os.environ.get("TMPDIR"), "/var/tmp", "/dev/shm", tempfile.gettempdir()]:
+        if not candidate or not os.access(candidate, os.W_OK):
+            continue
+        path = Path(candidate).resolve()
+        if not any((parent / ".git").exists() for parent in [path, *path.parents]):
+            return str(path)
+    raise RuntimeError("no fixture directory without a .git ancestor")
 
 
 def stable(text, root):
