@@ -2027,7 +2027,7 @@ function SessionList({
                                 <DragIndicator sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
                         </Box>
-                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} sx={{ mr: 1 }} />
+                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
                                 <Stack
@@ -4475,7 +4475,7 @@ export function App({
                             onPick={pick}
                             onNew={openNewSession}
                             renderStatus={(s): React.ReactNode => (
-                                <StatusDot status={s.status} backgroundTasks={s.background_tasks} />
+                                <StatusDot status={s.status} backgroundTasks={s.background_tasks} providerUpdate={s.provider_update} />
                             )}
                         />
                     </Suspense>
@@ -5046,7 +5046,7 @@ export function App({
                                     }),
                                 }}
                             >
-                                <StatusDot status={active.status} backgroundTasks={active.background_tasks} />
+                                <StatusDot status={active.status} backgroundTasks={active.background_tasks} providerUpdate={active.provider_update} />
                                 <ProviderIcon
                                     provider={active.provider}
                                     providerVersion={active.provider_version}
@@ -5250,6 +5250,7 @@ export function App({
                                     <StatusDot
                                         status={active.status}
                                         backgroundTasks={active.background_tasks}
+                                        providerUpdate={active.provider_update}
                                     />
                                 )}
                                 prompt={active.system ? (

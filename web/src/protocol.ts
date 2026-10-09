@@ -122,6 +122,12 @@ export function originLabel(o: SessionOrigin | undefined): string {
   }
 }
 
+export interface ProviderUpdate {
+  from: string;
+  to: string;
+  automatic: boolean;
+}
+
 export interface SessionMeta {
   id: string;
   provider: string;
@@ -161,6 +167,10 @@ export interface SessionMeta {
   /** Native background tasks the agent still waits on after its prompt turn
    *  ended. Presentation only; it never holds the queue. Absent = none. */
   background_tasks?: number;
+  /** Provider release switch in progress while `status` is "starting".
+   *  `automatic` marks the unattended idle update. Cleared on the next status
+   *  change. Transient. */
+  provider_update?: ProviderUpdate;
   /** Full latest ACP usage update. `raw` retains optional standard cost and
    * provider `_meta` rate-limit fields for the Info → Usage panel. */
   usage?: {

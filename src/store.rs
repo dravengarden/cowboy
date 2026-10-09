@@ -8810,6 +8810,7 @@ impl SessionRow {
             context_size: 0,
             usage: None,
             background_tasks: 0,
+            provider_update: None,
             // Derived from restored drafts in `session_list`, not stored here.
             next_schedule_ms: None,
             owner_user_id: self.owner_user_id,
@@ -8854,6 +8855,7 @@ mod storage_contract_tests {
             context_size: 0,
             usage: None,
             background_tasks: 0,
+            provider_update: None,
             next_schedule_ms: None,
             owner_user_id: None,
             owner_username: None,

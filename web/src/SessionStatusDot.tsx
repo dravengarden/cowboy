@@ -1,8 +1,9 @@
 import { CircularProgress, Tooltip } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
 import { Circle } from "@mui/icons-material";
-import type { Status } from "./protocol";
+import type { ProviderUpdate, Status } from "./protocol";
 import {
+  backgroundProviderUpdateLabel,
   backgroundTasksLabel,
   waitingOnBackground,
 } from "./backgroundActivity";
@@ -63,10 +64,12 @@ export function statusLabel(s: Status): string {
 export function StatusDot({
   status,
   backgroundTasks,
+  providerUpdate,
   sx,
 }: {
   status: Status;
   backgroundTasks?: number | undefined;
+  providerUpdate?: ProviderUpdate | undefined;
   sx?: SxProps<Theme>;
 }): React.JSX.Element {
   const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
@@ -79,10 +82,13 @@ export function StatusDot({
   // An idle session whose agent still waits on its own background work is
   // not settled either: it resumes on that work's result without a prompt.
   const waiting = waitingOnBackground(status, backgroundTasks);
-  const shown: Status = waiting ? "busy" : status;
+  // Conversely, an unattended Provider update is starting without anyone
+  // waiting on it; a fleet-wide rollout would otherwise spin row after row.
+  const updating = backgroundProviderUpdateLabel(status, providerUpdate);
+  const shown: Status = waiting ? "busy" : updating ? "running" : status;
   const label = waiting
     ? backgroundTasksLabel(backgroundTasks ?? 0)
-    : statusLabel(status);
+    : updating ?? statusLabel(status);
   const active = shown === "busy" || shown === "starting";
   const indicator = active
     ? (

@@ -15307,6 +15307,7 @@ fn apply_session_provider_reload(
     state: &AppState,
     meta: &crate::core::SessionMeta,
     target: &ResolvedProviderGeneration,
+    automatic: bool,
 ) -> Result<(), String> {
     state
         .provider_auth
@@ -15323,6 +15324,7 @@ fn apply_session_provider_reload(
                         auth_generation: meta.provider_auth_generation,
                         behavior: Some(&target.behavior),
                     },
+                    automatic,
                 )
             },
         )
@@ -15356,7 +15358,7 @@ async fn api_session_reload(
             )
                 .into_response();
         }
-        return match apply_session_provider_reload(&state, &info.meta, &target) {
+        return match apply_session_provider_reload(&state, &info.meta, &target, false) {
             Ok(()) => {
                 (StatusCode::ACCEPTED, "reloading installed Provider version").into_response()
             }

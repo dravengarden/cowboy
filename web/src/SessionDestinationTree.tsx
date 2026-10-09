@@ -478,6 +478,7 @@ export function SessionDestinationTree(
                         <StatusDot
                           status={row.session.status}
                           backgroundTasks={row.session.background_tasks}
+                          providerUpdate={row.session.provider_update}
                         />
                       )}
                   </Box>

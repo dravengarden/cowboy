@@ -708,10 +708,12 @@ impl Supervisor {
     /// Explicitly adopt a trusted installed Provider release without changing
     /// native identity, credential home, workspace, or saved user preferences.
     /// Unlike a same-version reload, this operation never interrupts a turn.
+    /// `automatic` marks an unattended idle update for client presentation.
     pub fn reload_session_provider(
         &self,
         expected: &crate::core::SessionMeta,
         generation: ProviderGeneration<'_>,
+        automatic: bool,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         let runtime = self.runtime_for_session(&expected.id)?;
@@ -727,6 +729,7 @@ impl Supervisor {
             generation.version,
             generation.digest,
             behavior,
+            automatic,
         )?;
         generation.version.clone_into(&mut launch.provider_version);
         generation
@@ -1828,7 +1831,7 @@ mod tests {
         };
         assert!(
             supervisor
-                .reload_session_provider(&before, target)
+                .reload_session_provider(&before, target, false)
                 .unwrap_err()
                 .contains("not connected")
         );
@@ -1836,7 +1839,7 @@ mod tests {
         assert_eq!(hub.status("s"), Some(Status::Running));
         runtime.connect_for_test();
         supervisor
-            .reload_session_provider(&before, target)
+            .reload_session_provider(&before, target, false)
             .expect("reload");
         let pending = runtime.pending_for_test();
         assert!(pending.iter().any(

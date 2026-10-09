@@ -133,7 +133,7 @@ pub(super) async fn run(state: Arc<AppState>) {
             }
             // The shared path rechecks the exact old binding and idle state under
             // the Hub lock, preserves native identity, and fences racing prompts.
-            match apply_session_provider_reload(&state, &meta, &target) {
+            match apply_session_provider_reload(&state, &meta, &target, true) {
                 Ok(()) => {
                     ready.remove(&meta.machine_id);
                     tracing::info!(session = %meta.id, version = %target.version, "automatic Provider update started")

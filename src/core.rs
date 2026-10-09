@@ -348,6 +348,15 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
     (prompt, partial)
 }
 
+/// An in-progress switch to another installed Provider release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUpdate {
+    pub from: String,
+    pub to: String,
+    /// Started by the idle auto-update policy rather than an explicit Reload.
+    pub automatic: bool,
+}
+
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -437,6 +446,12 @@ pub struct SessionMeta {
     /// Transient live state restored from the worker snapshot on reconnect.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub background_tasks: u32,
+    /// Provider release switch in progress while `status` is `Starting`.
+    /// Lets clients present an unattended idle update as background
+    /// maintenance instead of a cold start. Cleared on the next status change.
+    /// Transient; never persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_update: Option<ProviderUpdate>,
     /// Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
     /// `None` if none are scheduled. Derived from the drafts in `session_list`
     /// (not stored on the struct proper) so the session-row clock badge can show
@@ -2719,6 +2734,7 @@ impl Hub {
             context_size: 0,
             usage: None,
             background_tasks: 0,
+            provider_update: None,
             next_schedule_ms: None,
             owner_user_id,
             owner_username,
@@ -3772,6 +3788,7 @@ impl Hub {
         version: &str,
         digest: &str,
         behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+        automatic: bool,
     ) -> Result<(), String> {
         let meta = {
             let mut sessions = self.inner.sessions.lock();
@@ -3809,6 +3826,11 @@ impl Hub {
                 candidate.provider_behavior = Some(behavior.clone());
                 candidate.require_runtime_launch()?;
             }
+            session.meta.provider_update = Some(ProviderUpdate {
+                from: session.meta.provider_version.clone(),
+                to: version.to_owned(),
+                automatic,
+            });
             session.meta.provider_version = version.to_owned();
             session.meta.provider_generation_digest = digest.to_owned();
             session.meta.provider_behavior = Some(behavior.clone());
@@ -4119,6 +4141,9 @@ impl Hub {
                 Status::Starting | Status::Exited | Status::Interrupted
             ) {
                 s.meta.background_tasks = 0;
+            }
+            if status != Status::Starting {
+                s.meta.provider_update = None;
             }
             s.meta.status = status;
         }
@@ -6349,6 +6374,7 @@ mod runtime_reconciliation_tests {
                 context_size: 0,
                 usage: None,
                 background_tasks: 0,
+                provider_update: None,
                 next_schedule_ms: None,
                 owner_user_id: None,
                 owner_username: None,
@@ -8598,7 +8624,7 @@ mod core_tests {
         let (tx, mut rx) = mpsc::channel(4);
         hub.set_dispatch_tx(tx);
         let (history, _) = hub.snapshot(&before.id).expect("history");
-        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior)
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, false)
             .expect("reload");
         hub.submit(&before.id, "racing prompt".to_owned(), vec![], None);
         assert!(rx.try_recv().is_err(), "prompt must wait for replacement");
@@ -8627,6 +8653,42 @@ mod core_tests {
         );
     }
 
+    #[test]
+    fn provider_reload_publishes_its_update_until_the_worker_settles() {
+        let (hub, before) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior, true)
+            .expect("reload");
+        let starting = hub.session_info(&before.id).expect("session").meta;
+        assert_eq!(
+            starting.provider_update,
+            Some(ProviderUpdate {
+                from: before.provider_version.clone(),
+                to: "new-version".to_owned(),
+                automatic: true,
+            })
+        );
+        let wire = serde_json::to_value(&starting).expect("serialize");
+        assert_eq!(wire["provider_update"]["automatic"], true);
+        hub.set_status(&before.id, Status::Starting, None);
+        assert!(
+            hub.session_info(&before.id)
+                .unwrap()
+                .meta
+                .provider_update
+                .is_some()
+        );
+        hub.set_status(&before.id, Status::Running, None);
+        let settled = hub.session_info(&before.id).expect("session").meta;
+        assert_eq!(settled.provider_update, None);
+        assert!(
+            serde_json::to_value(&settled)
+                .unwrap()
+                .get("provider_update")
+                .is_none()
+        );
+    }
+
     #[tokio::test]
     async fn provider_reload_rejects_a_prompt_that_won_the_race() {
         let (hub, before) = provider_reload_fixture();
@@ -8636,7 +8698,7 @@ mod core_tests {
         assert!(rx.recv().await.is_some());
         let behavior = crate::provider::legacy_behavior("codex");
         assert!(
-            hub.begin_provider_reload(&before, "new", "new", &behavior)
+            hub.begin_provider_reload(&before, "new", "new", &behavior, false)
                 .unwrap_err()
                 .contains("current turn")
         );
@@ -8654,7 +8716,7 @@ mod core_tests {
     fn provider_reload_reconciles_interrupted_reset_without_migrating_native_identity() {
         let (hub, before) = provider_reload_fixture();
         let behavior = crate::provider::legacy_behavior("codex");
-        hub.begin_provider_reload(&before, "intended", "intended-digest", &behavior)
+        hub.begin_provider_reload(&before, "intended", "intended-digest", &behavior, false)
             .unwrap();
         let mut worker =
             super::runtime_reconciliation_tests::worker_snapshot(&before.id, "surviving-worker");
@@ -8759,14 +8821,14 @@ mod core_tests {
         let mut stale = before.clone();
         stale.provider_generation_digest = "other".to_owned();
         assert!(
-            hub.begin_provider_reload(&stale, "new", "new", &behavior)
+            hub.begin_provider_reload(&stale, "new", "new", &behavior, false)
                 .unwrap_err()
                 .contains("changed")
         );
         hub.prepare_context_reset(&before.id);
         let cleared = hub.session_info(&before.id).unwrap().meta;
         assert!(
-            hub.begin_provider_reload(&cleared, "new", "new", &behavior)
+            hub.begin_provider_reload(&cleared, "new", "new", &behavior, false)
                 .unwrap_err()
                 .contains("saved native")
         );
