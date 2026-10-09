@@ -2,7 +2,7 @@
 //! Provider/native JSON-RPC remains private to the endpoints.
 
 use super::AppState;
-use crate::execution_protocol::{RuntimeReply, RuntimeRequest, Scope};
+use crate::execution_protocol::{Command, RuntimeReply, RuntimeRequest, Scope};
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::execution::{Action, Refusal, Request, Response};
 
@@ -24,7 +24,9 @@ pub(super) async fn forward(
     runtime_machine: &str,
     request: RuntimeRequest,
 ) -> RuntimeReply {
+    let started = std::time::Instant::now();
     let response = forward_checked(state, connection, runtime_machine, &request).await;
+    observe_slow_forward(&request, started.elapsed());
     RuntimeReply {
         session_id: request.session_id,
         worker_epoch: request.worker_epoch,
@@ -32,6 +34,32 @@ pub(super) async fn forward(
         scope: Scope::from_binding(&request.binding),
         response,
     }
+}
+
+/// The worker logs each invocation's whole duration under the same operation
+/// identity. A slow one logged here too spent that time at or behind the
+/// Controller (target execution, long-poll waits); one absent here was lost
+/// in transport or queues between the worker and the Controller.
+const SLOW_FORWARD: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn observe_slow_forward(request: &RuntimeRequest, elapsed: std::time::Duration) {
+    if elapsed < SLOW_FORWARD {
+        return;
+    }
+    let (kind, operation) = match &request.command {
+        Command::Invoke { invocation, .. } => ("invoke", invocation.operation_id.as_str()),
+        Command::Observe { operation_id, .. } => ("observe", operation_id.as_str()),
+        _ => return,
+    };
+    tracing::info!(
+        event_name = "cowboy.execution.forward_observed",
+        session = %request.session_id,
+        environment_id = %request.binding.environment.id,
+        %operation,
+        kind,
+        duration_ms = elapsed.as_secs_f64() * 1000.0,
+        "slow execution forward observed"
+    );
 }
 
 async fn forward_checked(

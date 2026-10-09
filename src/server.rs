@@ -14687,6 +14687,20 @@ async fn handle_machine_ws(
     revocation_check.tick().await;
     let mut heartbeat_watchdog = MachineHeartbeatWatchdog::default();
     let mut decoder = crate::machine_transport::Decoder::default();
+    // Why the socket ended, and how long it had been silent: a peer close, a
+    // transport error or EOF after a stall look alike otherwise.
+    let connected_at = std::time::Instant::now();
+    let mut last_inbound = connected_at;
+    let socket_ended = |cause: &str, error: Option<String>, silent: std::time::Duration| {
+        tracing::warn!(
+            machine = %hello.machine_id,
+            cause,
+            error = error.as_deref().unwrap_or(""),
+            connected_ms = connected_at.elapsed().as_millis(),
+            inbound_idle_ms = silent.as_millis(),
+            "Machine WebSocket ended"
+        );
+    };
     loop {
         let message = tokio::select! {
             message = socket_stream.next() => Some(message),
@@ -14781,11 +14795,18 @@ async fn handle_machine_ws(
         let Some(message) = message else {
             continue;
         };
+        let silent = last_inbound.elapsed();
+        last_inbound = std::time::Instant::now();
         let Some(message) = message else {
+            socket_ended("eof", None, silent);
             break;
         };
-        let Ok(message) = message else {
-            break;
+        let message = match message {
+            Ok(message) => message,
+            Err(error) => {
+                socket_ended("read_error", Some(error.to_string()), silent);
+                break;
+            }
         };
         let message = match message {
             Message::Binary(bytes) => match decoder.chunk((chunked, compressed), &bytes).await {
@@ -14808,7 +14829,10 @@ async fn handle_machine_ws(
                         break;
                     }
                 }
-                Message::Close(_) => break,
+                Message::Close(_) => {
+                    socket_ended("close", None, silent);
+                    break;
+                }
                 _ => {}
             }
             continue;

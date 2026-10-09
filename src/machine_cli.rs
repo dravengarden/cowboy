@@ -1283,6 +1283,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
     let mut decoder = crate::machine_transport::Decoder::default();
+    // The Controller may stop hearing this Machine while its frames still
+    // arrive here; record how the socket ended and how long it was silent.
+    let connected_at = tokio::time::Instant::now();
+    let mut last_inbound = connected_at;
     let result: anyhow::Result<()> = async {
         loop {
             tokio::select! {
@@ -1324,6 +1328,8 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                     queue_controller_frame(&controller_write_tx, &MachineFrame::Event { event })?;
                 }
                 message = socket_stream.next() => {
+                    let silent = last_inbound.elapsed();
+                    last_inbound = tokio::time::Instant::now();
                     let message = match message {
                         Some(Ok(Message::Binary(bytes))) => {
                             match decoder.chunk((chunked, compressed), &bytes).await? {
@@ -1338,7 +1344,21 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                         other => other,
                     };
                     match message {
-                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                            let (cause, error) = match &message {
+                                Some(Ok(_)) => ("close", String::new()),
+                                Some(Err(error)) => ("read_error", error.to_string()),
+                                None => ("eof", String::new()),
+                            };
+                            tracing::warn!(
+                                cause,
+                                %error,
+                                connected_ms = connected_at.elapsed().as_millis(),
+                                inbound_idle_ms = silent.as_millis(),
+                                "Machine controller WebSocket ended"
+                            );
+                            return Ok(());
+                        }
                         Some(Ok(Message::Ping(value))) => {
                             queue_controller_message(&controller_write_tx, Message::Pong(value))?;
                         }
