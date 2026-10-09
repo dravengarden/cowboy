@@ -247,6 +247,7 @@
         "tools/execution_claude_worker_conformance.py",
         "tools/execution_environment_claude_probe.py",
         "plugins/claude-code/runtime/memory.mjs",
+        "plugins/claude-code/runtime/managed.mjs",
         "src/worker_execution",
         "src/execution_host",
         "src/execution_protocol.rs",

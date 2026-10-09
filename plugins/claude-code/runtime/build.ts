@@ -76,6 +76,7 @@ try {
       "mcp.mjs",
       "mcp-proxy.mjs",
       "memory.mjs",
+      "managed.mjs",
     ];
     const digests: Record<string, string> = {};
     for (const source of sources) {

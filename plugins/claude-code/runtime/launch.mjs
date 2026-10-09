@@ -19,6 +19,16 @@ import {
   WorkspaceTools,
 } from "./tools.mjs";
 import { startModBridge } from "./mod-bridge.mjs";
+import {
+  MANAGED_PROFILE_ENV,
+  managedArguments,
+  managedCommandRefused,
+  managedConstraint,
+  managedControlRefused,
+  managedNativeArguments,
+  parseRound,
+  structuredMessage,
+} from "./managed.mjs";
 import { mcpToolPrefix, nativeMcpServers, targetMcpServers } from "./mcp.mjs";
 import {
   BUNDLED_SKILLS,
@@ -534,7 +544,7 @@ export function allowedControl(request) {
   ]).has(request.subtype);
 }
 
-async function bridge(child, tools, context, memory, broker) {
+async function bridge(child, tools, context, memory, broker, managed) {
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => {
     resolveReady = resolve;
@@ -548,6 +558,7 @@ async function bridge(child, tools, context, memory, broker) {
   const internal = new Map();
   const modeRequests = new Map();
   let stage = "initialize";
+  let lastAssistant;
   // Native aborts the turn and background agents before it answers an
   // interrupt. Cancelling target processes first lets a held child call
   // return their exit status to a still-running agent, which then continues.
@@ -657,7 +668,10 @@ async function bridge(child, tools, context, memory, broker) {
           });
           continue;
         }
-        if (!allowedControl(frame.request)) {
+        if (
+          !allowedControl(frame.request) ||
+          (managed && managedControlRefused(frame.request))
+        ) {
           await send(process.stdout, {
             type: "control_response",
             response: {
@@ -686,6 +700,13 @@ async function bridge(child, tools, context, memory, broker) {
             item.text
           ).join("\n")
           : "";
+        if (managed && managedCommandRefused(prompt)) {
+          const error = new Error(
+            "A managed call instruction cannot be a native command",
+          );
+          error.cowboyDiagnostic = error.message;
+          throw error;
+        }
         const command = nativeCommand(prompt, context.skills);
         // A target skill's command reaches native under its plugin name.
         const typed = /^\s*\/(\S+)/.exec(prompt)?.[1];
@@ -776,6 +797,16 @@ async function bridge(child, tools, context, memory, broker) {
         continue;
       }
       if (stage === "ready") {
+        if (
+          frame.type === "assistant" && frame.parent_tool_use_id == null &&
+          frame.message?.model !== "<synthetic>"
+        ) lastAssistant = frame;
+        // Native validated the round's schema; deliver its result as the
+        // turn's final message before the turn ends.
+        if (managed?.schema && frame.type === "result") {
+          const structured = structuredMessage(frame, lastAssistant);
+          if (structured) await send(process.stdout, structured);
+        }
         const responseId = frame.type === "control_response"
           ? frame.response.request_id
           : undefined;
@@ -851,7 +882,16 @@ async function native(args) {
     throw new Error("Claude requires its exact Machine-bound executable");
   }
   const descriptorPath = process.env.COWBOY_EXECUTION_DESCRIPTOR;
+  const managedProfile = process.env[MANAGED_PROFILE_ENV] === "read-only-v1";
   if (!descriptorPath) {
+    // Only a target keeper can enforce the read-only profile.
+    if (managedProfile) {
+      const error = new Error(
+        "A managed Claude call requires a read-only execution environment",
+      );
+      error.cowboyDiagnostic = error.message;
+      throw error;
+    }
     return await localMemoryNative(executable, args);
   }
   const descriptor = await readDescriptor(descriptorPath);
@@ -884,7 +924,20 @@ async function native(args) {
       join(root, "state.json"),
     );
     await tools.load();
-    memory = await MatrixClient.open(
+    // The binding, the launch profile and the target's keeper must agree.
+    let managed;
+    if (managedProfile || connection.managed || descriptor.binding.managed) {
+      if (!managedProfile) {
+        throw new Error("A managed child must launch in its managed profile");
+      }
+      const { roundPath } = managedConstraint(
+        descriptor.binding,
+        connection.managed,
+      );
+      const round = parseRound(await tools.bytes(roundPath));
+      managed = { schema: round.output_schema };
+    }
+    memory = managed ? null : await MatrixClient.open(
       await matrixConfiguration("claude"),
       descriptor,
     );
@@ -906,11 +959,15 @@ async function native(args) {
     const context = await tools.context();
     // Independent target reads, started together: each costs round trips to
     // the executor. Each result is still awaited where it is used.
-    const started = [
-      tools.projectHooks(),
-      tools.skillFiles(),
-      tools.mcpInputs(),
-    ];
+    // A managed child runs none of the project's hooks, skills or tool
+    // servers: each could act outside the reviewed snapshot.
+    const started = managed
+      ? [Promise.resolve({}), Promise.resolve([]), Promise.resolve({})]
+      : [
+        tools.projectHooks(),
+        tools.skillFiles(),
+        tools.mcpInputs(),
+      ];
     for (const result of started) result.catch(() => {});
     const [projectHooksStarted, skillFilesStarted, mcpInputsStarted] = started;
     // The exact native argv below sets the starting mode before any tool runs.
@@ -1065,7 +1122,8 @@ async function native(args) {
     delete environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
-    const nativeArgv = nativeArguments(
+    delete environment[MANAGED_PROFILE_ENV];
+    const ordinaryArgv = nativeArguments(
       args,
       plugin,
       memoryConfig,
@@ -1073,6 +1131,9 @@ async function native(args) {
       skillPlugin,
       Boolean(memory),
     );
+    const nativeArgv = managed
+      ? managedNativeArguments(ordinaryArgv, managed.schema)
+      : ordinaryArgv;
     broker.mode = startingPermissionMode(nativeArgv);
     child = spawn(executable, nativeArgv, {
       env: environment,
@@ -1085,7 +1146,7 @@ async function native(args) {
       child.once("error", reject);
       child.once("exit", (code) => resolve(code ?? 1));
     });
-    bridge(child, tools, context, memory, broker).catch((error) => {
+    bridge(child, tools, context, memory, broker, managed).catch((error) => {
       process.stderr.write(
         (error.cowboyDiagnostic ??
           "Cowboy Claude execution initialization or transport failed; local fallback is disabled") +
@@ -1134,6 +1195,12 @@ export async function main(args) {
     return;
   }
   if (args[0] === "--cowboy-private-cli") return await native(args.slice(1));
+  // The adapter entry: only the signed managed profile selects a managed
+  // native session; an inherited variable never does.
+  const selected = managedArguments(args);
+  args = selected.args;
+  delete process.env[MANAGED_PROFILE_ENV];
+  if (selected.managed) process.env[MANAGED_PROFILE_ENV] = "read-only-v1";
   const inspection = args.length === 1 &&
     ["--version", "-V", "--help", "-h"].includes(args[0]);
   if (
