@@ -513,7 +513,7 @@ test("the broker asks the host in native shape and honors dontAsk", async () => 
   });
   broker.mode = "dontAsk";
   const before = sent.length;
-  assert.match((await broker.request(call)).message, /does not ask/);
+  assert.match((await broker.request(call)).message, /don't ask mode/);
   assert.equal(sent.length, before);
   assert.equal(
     permissionResult({ subtype: "error", error: "host gone" }).message,

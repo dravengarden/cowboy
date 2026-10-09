@@ -2041,7 +2041,19 @@ probes; the newest group is also pinned by unit tests:
 | PDF and file-type reads | `claude_pdf_native_baseline.json` | packaged `pdf` phase |
 | Skills and commands | `claude_skill_native_baseline.json` | packaged `skills` phase |
 | Mods: classic event input, agent turn outcomes, notification doors and shape, a plugin's own background command, pending-fetch blocking, Mod source forms native disables | `claude_mods_native_baseline.json` (`claude_mods_native_probe.py`) | unit tests in `claude-remote-mods-baseline.test.mjs` (including static checks of `context-mod.js`); packaged `agents`, `notifications`, `hooks` phases |
+| Permissions: `$.tool.check` against native prompts per mode (default, acceptEdits, bypassPermissions, dontAsk), denial texts, validation before asking | `claude_permissions_native_baseline.json` (`claude_permissions_native_probe.py`) | unit tests in `claude-remote-permissions-baseline.test.mjs`; packaged `permissions` phase |
 | Project hooks: outcomes, matchers, PermissionRequest race, shell prefix, agent hook input | `claude_hooks_native_baseline.json` (`claude_hooks_native_probe.py`) | unit tests in `claude-remote-hooks-baseline.test.mjs`; packaged `hooks` phase |
+
+Porting the scratch measurements found two model-visible differences, both
+fixed: a call that would prompt in dontAsk mode read "Permission to use X was
+denied: this session does not ask for approval." where native gives its own
+longer guidance (`dontAskDenial` in `launch.mjs`), and a `$.tool.check` denial
+gained a "Permission denied: " prefix native does not add (`checkDenial` in
+`context-mod.js`). One minor difference remains: native validates a file call
+(read first, unchanged since read) before asking, while the plugin asks first
+and the target then refuses the call; the outcome is the same, with one extra
+prompt. plan mode is not probed: its auto-mode classifier makes its own model
+requests, and execution sessions refuse plan mode anyway.
 
 `tools/remote_impact.py` turns a Git diff into the remote suites, Claude
 phases and native probes to run, from `tools/remote_check_map.json`; it covers

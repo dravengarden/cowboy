@@ -167,7 +167,8 @@
         "tools/remote_impact_test.py",
         "tools/register-memory-client.mjs",
         "tools/claude_hooks_native_baseline.json",
-        "tools/claude_mods_native_baseline.json"
+        "tools/claude_mods_native_baseline.json",
+        "tools/claude_permissions_native_baseline.json"
       ],
       "native": [
         "claude"
@@ -375,6 +376,12 @@
             "agent_background",
             "hooks"
           ]
+        },
+        "tools/claude_permissions_native_probe.py": {
+          "baseline": "tools/claude_permissions_native_baseline.json",
+          "phases": [
+            "permissions"
+          ]
         }
       },
       "native_covered": [
@@ -384,6 +391,7 @@
         "mcp",
         "notifications",
         "pdf",
+        "permissions",
         "shell",
         "skills"
       ]

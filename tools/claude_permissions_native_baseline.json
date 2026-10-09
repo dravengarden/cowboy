@@ -1,0 +1,746 @@
+{
+ "default": {
+  "calls": [
+   {
+    "call": "Bash {\"command\": \"ls\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "file-link.txt\ninside.txt\nlink"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cat inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "inside"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"git status\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Exit code 128\nfatal: not a git repository (or any of the parent directories): .git"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"rm -f gone.txt\"}",
+    "check": "ask",
+    "reason": "rm in '<ROOT>/runtime/gone.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir newdir\"}",
+    "check": "ask",
+    "reason": "mkdir in '<ROOT>/runtime/newdir' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch made.txt\"}",
+    "check": "ask",
+    "reason": "touch in '<ROOT>/runtime/made.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cp inside.txt copy.txt\"}",
+    "check": "ask",
+    "reason": "cp in '<ROOT>/runtime/inside.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"echo hi > out.txt\"}",
+    "check": "ask",
+    "reason": "Output redirection to '<ROOT>/runtime/out.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir link/new\"}",
+    "check": "ask",
+    "reason": "<ROOT>/runtime/link/new resolves through a symlink to <ROOT>/outside/new, which is outside the allowed working directories",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch link/made.txt\"}",
+    "check": "ask",
+    "reason": "<ROOT>/runtime/link/made.txt resolves through a symlink to <ROOT>/outside/made.txt, which is outside the allowed working directories",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\tinside\n2"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from <ROOT>/outside/outside.txt, but you haven't granted it yet.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "1\toutside\n2"
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"inside.txt\", \"new_string\": \"edited\", \"old_string\": \"inside\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to inside.txt, but you haven't granted it yet.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "The file inside.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"link/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from link/outside.txt, but you haven't granted it yet. link/outside.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "1\toutside\n2"
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"link/outside.txt\", \"new_string\": \"x\", \"old_string\": \"outside\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to link/outside.txt, but you haven't granted it yet. link/outside.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "The file link/outside.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"file-link.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from file-link.txt, but you haven't granted it yet. file-link.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "1\tx\n2"
+    }
+   },
+   {
+    "call": "Write {\"content\": \"via link\", \"file_path\": \"file-link.txt\"}",
+    "check": "deny",
+    "reason": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt."
+    }
+   },
+   {
+    "call": "Write {\"content\": \"w\", \"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to <ROOT>/outside/outside.txt, but you haven't granted it yet.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "<tool_use_error>File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.</tool_use_error>"
+    }
+   }
+  ],
+  "outside_after": "x\n",
+  "stop_reason": "user"
+ },
+ "acceptEdits": {
+  "calls": [
+   {
+    "call": "Bash {\"command\": \"ls\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "file-link.txt\ninside.txt\nlink"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cat inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "inside"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"git status\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Exit code 128\nfatal: not a git repository (or any of the parent directories): .git"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"rm -f gone.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir newdir\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch made.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cp inside.txt copy.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"echo hi > out.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir link/new\"}",
+    "check": "ask",
+    "reason": "<ROOT>/runtime/link/new resolves through a symlink to <ROOT>/outside/new, which is outside the allowed working directories",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch link/made.txt\"}",
+    "check": "ask",
+    "reason": "<ROOT>/runtime/link/made.txt resolves through a symlink to <ROOT>/outside/made.txt, which is outside the allowed working directories",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\tinside\n2"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from <ROOT>/outside/outside.txt, but you haven't granted it yet.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "1\toutside\n2"
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"inside.txt\", \"new_string\": \"edited\", \"old_string\": \"inside\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "The file inside.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"link/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from link/outside.txt, but you haven't granted it yet. link/outside.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "1\toutside\n2"
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"link/outside.txt\", \"new_string\": \"x\", \"old_string\": \"outside\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to link/outside.txt, but you haven't granted it yet. link/outside.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "The file link/outside.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"file-link.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from file-link.txt, but you haven't granted it yet. file-link.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": true,
+    "result": {
+     "is_error": false,
+     "text": "1\tx\n2"
+    }
+   },
+   {
+    "call": "Write {\"content\": \"via link\", \"file_path\": \"file-link.txt\"}",
+    "check": "deny",
+    "reason": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt."
+    }
+   },
+   {
+    "call": "Write {\"content\": \"w\", \"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to <ROOT>/outside/outside.txt, but you haven't granted it yet.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "<tool_use_error>File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.</tool_use_error>"
+    }
+   }
+  ],
+  "outside_after": "x\n",
+  "stop_reason": "user"
+ },
+ "bypassPermissions": {
+  "calls": [
+   {
+    "call": "Bash {\"command\": \"ls\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "file-link.txt\ninside.txt\nlink"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cat inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "inside"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"git status\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Exit code 128\nfatal: not a git repository (or any of the parent directories): .git"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"rm -f gone.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir newdir\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch made.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cp inside.txt copy.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"echo hi > out.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir link/new\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch link/made.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "(Bash completed with no output)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\tinside\n2"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\toutside\n2"
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"inside.txt\", \"new_string\": \"edited\", \"old_string\": \"inside\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "The file inside.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"link/outside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\toutside\n2"
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"link/outside.txt\", \"new_string\": \"x\", \"old_string\": \"outside\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "The file link/outside.txt has been updated successfully. (file state is current in your context — no need to Read it back)"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"file-link.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\tx\n2"
+    }
+   },
+   {
+    "call": "Write {\"content\": \"via link\", \"file_path\": \"file-link.txt\"}",
+    "check": "deny",
+    "reason": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt."
+    }
+   },
+   {
+    "call": "Write {\"content\": \"w\", \"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "<tool_use_error>File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.</tool_use_error>"
+    }
+   }
+  ],
+  "outside_after": "x\n",
+  "stop_reason": "user"
+ },
+ "dontAsk": {
+  "calls": [
+   {
+    "call": "Bash {\"command\": \"ls\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "file-link.txt\ninside.txt\nlink"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cat inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "inside"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"git status\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Exit code 128\nfatal: not a git repository (or any of the parent directories): .git"
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"rm -f gone.txt\"}",
+    "check": "ask",
+    "reason": "rm in '<ROOT>/runtime/gone.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir newdir\"}",
+    "check": "ask",
+    "reason": "mkdir in '<ROOT>/runtime/newdir' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch made.txt\"}",
+    "check": "ask",
+    "reason": "touch in '<ROOT>/runtime/made.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"cp inside.txt copy.txt\"}",
+    "check": "ask",
+    "reason": "cp in '<ROOT>/runtime/inside.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"echo hi > out.txt\"}",
+    "check": "ask",
+    "reason": "Output redirection to '<ROOT>/runtime/out.txt' needs approval. The path is inside the working directories for this session ('<ROOT>/runtime'), and Claude Code asks before a shell command creates, changes or removes files there.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"mkdir link/new\"}",
+    "check": "ask",
+    "reason": "<ROOT>/runtime/link/new resolves through a symlink to <ROOT>/outside/new, which is outside the allowed working directories",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Bash {\"command\": \"touch link/made.txt\"}",
+    "check": "ask",
+    "reason": "<ROOT>/runtime/link/made.txt resolves through a symlink to <ROOT>/outside/made.txt, which is outside the allowed working directories",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"inside.txt\"}",
+    "check": "allow",
+    "reason": null,
+    "native_prompted": false,
+    "result": {
+     "is_error": false,
+     "text": "1\tinside\n2"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from <ROOT>/outside/outside.txt, but you haven't granted it yet.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Read has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"inside.txt\", \"new_string\": \"edited\", \"old_string\": \"inside\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to inside.txt, but you haven't granted it yet.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Edit has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"link/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from link/outside.txt, but you haven't granted it yet. link/outside.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Read has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Edit {\"file_path\": \"link/outside.txt\", \"new_string\": \"x\", \"old_string\": \"outside\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to link/outside.txt, but you haven't granted it yet. link/outside.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>"
+    }
+   },
+   {
+    "call": "Read {\"file_path\": \"file-link.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to read from file-link.txt, but you haven't granted it yet. file-link.txt resolves through a symlink to <ROOT>/outside/outside.txt, which is outside the allowed working directories.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "Permission to use Read has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed."
+    }
+   },
+   {
+    "call": "Write {\"content\": \"via link\", \"file_path\": \"file-link.txt\"}",
+    "check": "deny",
+    "reason": "Refusing to write <ROOT>/runtime/file-link.txt: it is a symbolic link. Write to the link's target path instead: <ROOT>/outside/outside.txt.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>"
+    }
+   },
+   {
+    "call": "Write {\"content\": \"w\", \"file_path\": \"<ROOT>/outside/outside.txt\"}",
+    "check": "ask",
+    "reason": "Claude requested permissions to write to <ROOT>/outside/outside.txt, but you haven't granted it yet.",
+    "native_prompted": false,
+    "result": {
+     "is_error": true,
+     "text": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>"
+    }
+   }
+  ],
+  "outside_after": "outside\n",
+  "stop_reason": "user"
+ }
+}

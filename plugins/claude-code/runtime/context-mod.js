@@ -708,11 +708,7 @@ async function permit($, event, input, run, hook = {}) {
     check = { decision: "ask", reason: hook.ask };
   }
   if (check?.decision === "allow") return { input };
-  if (check?.decision !== "ask") {
-    return {
-      deny: "Permission denied" + (check?.reason ? ": " + check.reason : "."),
-    };
-  }
+  if (check?.decision !== "ask") return { deny: checkDenial(check) };
   let hooks;
   try {
     for (;;) {
@@ -751,6 +747,14 @@ async function permit($, event, input, run, hook = {}) {
   } finally {
     hooks?.settle();
   }
+}
+
+// Native shows a check's denial reason as the tool result itself (2.1.287,
+// tools/claude_permissions_native_baseline.json).
+export function checkDenial(check) {
+  return typeof check?.reason === "string" && check.reason
+    ? check.reason
+    : "Permission denied.";
 }
 
 function hostAnswer(result, input) {

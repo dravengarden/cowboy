@@ -125,6 +125,12 @@ export function permissionResult(response) {
   };
 }
 
+// Native's denial of a call that would prompt in dontAsk mode (2.1.287,
+// tools/claude_permissions_native_baseline.json).
+export function dontAskDenial(tool) {
+  return `Permission to use ${tool} has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed.`;
+}
+
 // Host approvals for target tools. The host answers on the same stdio channel
 // as native's own requests, so responses are matched by private request ids.
 export class PermissionBroker {
@@ -138,8 +144,7 @@ export class PermissionBroker {
     if (this.mode === "dontAsk" || !this.send) {
       return Promise.resolve({
         behavior: "deny",
-        message:
-          `Permission to use ${call.tool} was denied: this session does not ask for approval.`,
+        message: dontAskDenial(call.tool),
       });
     }
     const requestId = "cowboy-permission-" + randomUUID();
