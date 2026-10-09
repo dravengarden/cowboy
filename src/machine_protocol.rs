@@ -22,7 +22,8 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 26;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 27;
+pub const EXECUTION_RECOVERY_PROTOCOL_VERSION: u16 = 27;
 /// Machines report host memory, swap, load and disk, and accept a
 /// non-destructive session hibernation that stops only the live worker.
 pub const HOST_RESOURCES_PROTOCOL_VERSION: u16 = 26;
@@ -1044,6 +1045,11 @@ impl MachineCommand {
                 session_code::PROTOCOL_VERSION
             }
             Self::Projects { .. } => PROJECT_REGISTRY_PROTOCOL_VERSION,
+            Self::Execution { request, .. }
+                if matches!(request.action, execution::Action::Recover { .. }) =>
+            {
+                EXECUTION_RECOVERY_PROTOCOL_VERSION
+            }
             Self::Execution { .. } => EXECUTION_ENVIRONMENT_PROTOCOL_VERSION,
             // Only a carried root identity needs the newer Machine. Ordinary
             // adapter traffic keeps its original floor below.
@@ -1490,6 +1496,34 @@ mod tests {
         assert_eq!(negotiate(1, 2, 2, 3), Some(2));
         assert_eq!(negotiate(1, 1, 2, 2), None);
         assert_eq!(negotiate(1, MACHINE_PROTOCOL_VERSION, 1, 5), Some(5));
+    }
+
+    #[test]
+    fn explicit_execution_recovery_requires_its_own_protocol_floor() {
+        let request = execution::Request {
+            service_id: "service".into(),
+            machine_id: "hawk".into(),
+            action: execution::Action::Recover {
+                session_id: "session".into(),
+                intent: Box::new(crate::execution_environment::RecoveryV1 {
+                    schema: 1,
+                    phase: "recovering".into(),
+                    operation_id: "repair-1".into(),
+                    previous: crate::execution_environment::fixture().decode().unwrap(),
+                }),
+            },
+        };
+        let command = MachineCommand::Execution {
+            request_id: "request".into(),
+            request: Box::new(request),
+        };
+        assert_eq!(command.minimum_protocol(), 27);
+        assert!(command.minimum_protocol() > 26);
+        let encoded = serde_json::to_value(&command).unwrap();
+        assert_eq!(
+            serde_json::from_value::<MachineCommand>(encoded).unwrap(),
+            command
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@ use crate::machine_protocol::MachineWorkspace;
 use crate::machine_protocol::execution::{Action, ExecutorInventory, Refusal, Request, Response};
 
 mod abandonment;
+mod recovery;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,6 +172,12 @@ impl Manager {
             };
         }
         match request.action {
+            Action::Recover { session_id, intent } => {
+                match self.recover(&session_id, &intent).await {
+                    Ok(binding) => Response::Prepared { binding },
+                    Err(reason) => Response::Refused { reason },
+                }
+            }
             Action::PrepareRuntime { session_id } => {
                 match self.prepare_runtime(&session_id).await {
                     Ok(runtime) => Response::RuntimePrepared { runtime },

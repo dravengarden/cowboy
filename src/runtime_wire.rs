@@ -255,6 +255,13 @@ pub struct StartSession {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum CoreCommand {
+    /// Protocol-27 host-authorized replacement of a remote execution binding.
+    /// Ordinary `EnsureSession` must never perform this transition.
+    RecoverExecutionSession {
+        session: Box<StartSession>,
+        intent: Box<crate::execution_environment::RecoveryV1>,
+        command_id: String,
+    },
     EnsureSession {
         session: StartSession,
     },
@@ -329,6 +336,7 @@ impl CoreCommand {
     pub fn session_id(&self) -> Option<&str> {
         match self {
             Self::EnsureSession { session } => Some(&session.session_id),
+            Self::RecoverExecutionSession { session, .. } => Some(&session.session_id),
             Self::Prompt { session_id, .. }
             | Self::Cancel { session_id, .. }
             | Self::Permission { session_id, .. }

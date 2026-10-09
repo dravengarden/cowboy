@@ -3425,6 +3425,11 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
 /// even on refusal, so it keeps the reconnect path and its full replay.
 fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)> {
     match command {
+        CoreCommand::RecoverExecutionSession {
+            session,
+            command_id,
+            ..
+        } => Some((session.session_id.clone(), command_id.clone())),
         CoreCommand::EnsureSession { session } => Some((
             session.session_id.clone(),
             format!("ensure:{}", session.session_id),
@@ -3567,6 +3572,69 @@ async fn handle_core(
 
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
     match command {
+        CoreCommand::RecoverExecutionSession {
+            session,
+            intent,
+            command_id,
+        } => {
+            let valid = session
+                .execution_binding
+                .as_ref()
+                .and_then(|b| b.decode().ok())
+                .is_some_and(|b| intent.accepts(&b));
+            let previous = broker.sessions.lock().get(&session.session_id).cloned();
+            let worker = broker
+                .workers
+                .lock()
+                .get(&session.session_id)
+                .and_then(|w| w.snapshot.launch.clone());
+            let compatible = previous.iter().chain(worker.iter()).all(|old| {
+                old.cwd == session.cwd
+                    && old.provider == session.provider
+                    && old.provider_version == session.provider_version
+                    && old.provider_generation_digest == session.provider_generation_digest
+                    && old.provider_auth_generation == session.provider_auth_generation
+                    && old
+                        .execution_binding
+                        .as_ref()
+                        .and_then(|b| b.decode().ok())
+                        .is_some_and(|b| {
+                            b == intent.previous
+                                || old.execution_binding == session.execution_binding
+                        })
+            });
+            if !valid || !compatible {
+                broker.command_rejected(
+                    &session.session_id,
+                    command_id,
+                    "execution recovery identity changed".into(),
+                );
+            } else if worker
+                .as_ref()
+                .is_some_and(|old| old.execution_binding == session.execution_binding)
+            {
+                // A lost acknowledgement observes the replacement already
+                // owned by this lifetime; never interrupts it a second time.
+                broker.send_controller(Frame::CommandAck {
+                    session_id: session.session_id.clone(),
+                    command_id,
+                    accepted: true,
+                    reason: None,
+                });
+                if let Some(snapshot) = broker
+                    .workers
+                    .lock()
+                    .get(&session.session_id)
+                    .map(|w| w.snapshot.clone())
+                {
+                    broker.send_controller(Frame::Snapshot {
+                        worker: Box::new(snapshot),
+                    });
+                }
+            } else {
+                broker.reset_session(*session, command_id).await;
+            }
+        }
         CoreCommand::EnsureSession { mut session } => {
             if session.generation.is_empty() {
                 session.generation = broker.desired_generation.lock().clone();
@@ -5425,6 +5493,104 @@ mod tests {
         worker.background_tasks = Some(0);
         worker.pending_prompt_count = 1;
         assert!(hibernation_refusal(&worker).is_some());
+    }
+
+    #[tokio::test]
+    async fn execution_recovery_refuses_relocation_and_observes_existing_replacement() {
+        let (broker, mut launch, mut worker_rx) = reconnecting_worker_fixture();
+        let broker = Arc::new(broker);
+        let mut previous = crate::execution_environment::fixture().decode().unwrap();
+        previous.runtime.cwd.clone_from(&launch.cwd);
+        previous
+            .workspace
+            .worktree_id
+            .clone_from(&launch.session_id);
+        let intent = crate::execution_environment::RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "repair-1".into(),
+            previous: previous.clone(),
+        };
+        let record = |b: &crate::execution_environment::BindingV1| {
+            crate::execution_environment::ExecutionBinding::from_record(
+                serde_json::to_value(b).unwrap(),
+            )
+        };
+        launch.execution_binding = Some(record(&previous));
+        broker
+            .sessions
+            .lock()
+            .insert(launch.session_id.clone(), launch.clone());
+        broker
+            .workers
+            .lock()
+            .get_mut(&launch.session_id)
+            .unwrap()
+            .snapshot
+            .launch = Some(launch.clone());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker.install_controller(tx);
+        let mut next = previous.clone();
+        next.revision += 1;
+        next.environment.id = "replacement".into();
+        next.environment.incarnation = "replacement".into();
+        let mut candidate = launch.clone();
+        candidate.execution_binding = Some(record(&next));
+        let mut relocated = candidate.clone();
+        relocated.cwd = "/another-workspace".into();
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(relocated),
+                intent: Box::new(intent.clone()),
+                command_id: "bad-recovery".into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::CommandAck {
+                accepted: false,
+                ..
+            })
+        ));
+        assert_eq!(broker.sessions.lock()[&launch.session_id], launch);
+        assert!(worker_rx.try_recv().is_err());
+        broker
+            .sessions
+            .lock()
+            .insert(launch.session_id.clone(), candidate.clone());
+        broker
+            .workers
+            .lock()
+            .get_mut(&launch.session_id)
+            .unwrap()
+            .snapshot
+            .launch = Some(candidate.clone());
+        handle_core_command(
+            &broker,
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(candidate),
+                intent: Box::new(intent),
+                command_id: "same-recovery".into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::CommandAck { accepted: true, .. })
+        ));
+        assert!(matches!(rx.try_recv(), Ok(Frame::Snapshot { .. })));
+        assert!(
+            worker_rx.try_recv().is_err(),
+            "observation must not stop the replacement"
+        );
+        assert!(
+            !broker
+                .cancelled_sessions
+                .lock()
+                .contains(&launch.session_id)
+        );
     }
 
     #[test]

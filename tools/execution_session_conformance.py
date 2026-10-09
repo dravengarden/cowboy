@@ -433,6 +433,77 @@ def main():
             require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Run after target restart"})[0] == 202, "reattached prompt refused")
             wait(lambda: effects.read_bytes() == first_effect * 3, "reattached remote command")
             checks.append("target_machine_restart_reattaches_original_keeper_without_replay")
+            if inputs.get("execution_recovery"):
+                wait(lambda: info()["status"] == "running", "idle before explicit recovery")
+                operator = [inputs["controller"], "operator", "--data-dir", root / "controller"]
+                require(call("GET", "/v1/execution-sessions")[0] == 404,
+                        "private recovery route leaked onto public TCP")
+                run(*operator, "enable")
+                planned = json.loads(run(*operator, "recover-execution", "--session", session))["data"]
+                require(planned["supported"], "candidate Machine did not negotiate recovery")
+                saved_request = root / "recovery-request.json"
+                write(saved_request, planned["request"])
+                native_id = info().get("agent_session_id")
+                # Lose the Controller after it durably fences the old binding,
+                # before the paused target can acknowledge replacement. Only
+                # this disposable fixture's enrolled process is suspended.
+                target_process = machines["target"][0]
+                target_process.send_signal(signal.SIGSTOP)
+                interrupted = start("interrupted-recovery", [*operator, "recover-execution",
+                                    "--session", session, "--request", saved_request])
+                try:
+                    pending = planned["request"]["intent"]
+                    wait(lambda: info()["execution_binding"] == pending, "durable recovery fence")
+                    controller.kill()
+                    controller.wait(timeout=20)
+                finally:
+                    target_process.send_signal(signal.SIGCONT)
+                interrupted.wait(timeout=20)
+                if inputs.get("recovery_controller"):
+                    for index in range(2):
+                        recovery = start(f"pending-reader-{index}", recovery_command)
+                        wait(lambda: call("GET", "/healthz")[0] == 200, "pending reader")
+                        require(info()["execution_binding"] == pending, "old reader changed recovery fence")
+                        require(effects.read_bytes() == first_effect * 3, "old reader replayed interrupted effect")
+                        recovery.terminate()
+                        recovery.wait(timeout=20)
+                controller = start("controller-recovery-resumed", controller_command)
+                wait(lambda: call("GET", "/healthz")[0] == 200, "recovery Controller restart")
+                wait(lambda: connected("runtime") and connected("target"), "recovery Machines reconnect")
+                require(info()["execution_binding"] == pending, "restart lost recovery intent")
+                checks.append("lost_controller_reply_and_older_cold_readers_preserve_recovery_fence")
+                first = json.loads(run(*operator, "recover-execution", "--session", session,
+                                       "--request", saved_request))["data"]
+                recovered = first["execution_binding"]
+                require(recovered["revision"] == binding["revision"] + 1 and
+                        recovered["environment"]["incarnation"] != binding["environment"]["incarnation"] and
+                        recovered["workspace"] == binding["workspace"] and recovered["runtime"] == binding["runtime"],
+                        "recovery changed workspace or reused execution lifetime")
+                wait(lambda: info()["status"] == "running", "native resume after recovery")
+                require(info().get("agent_session_id") == native_id and effects.read_bytes() == first_effect * 3,
+                        "recovery replaced native history or replayed an effect")
+                target_process.send_signal(signal.SIGSTOP)
+                try:
+                    repeated_process = start("observing-recovery", [*operator, "recover-execution",
+                                             "--session", session, "--request", saved_request])
+                    repeated_log = Path(logs[-1].name)
+                    time.sleep(0.2)
+                    require(repeated_process.poll() is None, "recovery observation did not wait for target")
+                    require(call("POST", f"/api/sessions/{session}/prompt", {"text": "Run while observing recovery"})[0] == 202,
+                            "recovered prompt refused")
+                    wait(lambda: info()["status"] == "busy", "tool during receipt observation")
+                    time.sleep(0.5)
+                    require(info()["status"] == "busy", "receipt observation fenced healthy tool calls")
+                finally:
+                    target_process.send_signal(signal.SIGCONT)
+                require(repeated_process.wait(timeout=30) == 0, "saved recovery observation failed")
+                repeated = json.loads(repeated_log.read_text())["data"]
+                require(repeated["execution_binding"] == recovered, "same recovery operation replaced twice")
+                wait(lambda: effects.read_bytes() == first_effect * 4, "recovered target tool")
+                checks.extend(["private_host_recovery_preserves_native_history_and_worktree",
+                               "same_recovery_receipt_never_replaces_twice_or_replays_commands",
+                               "observing_recovery_receipt_does_not_fence_healthy_native_tools",
+                               "recovered_environment_executes_native_target_tools"])
             status, dataset = call("GET", "/api/sync/dataset")
             require(status == 200, "browser dataset unavailable")
             query = urllib.parse.urlencode({"dataset": dataset["dataset_id"], "bootstrap": "lazy"})
@@ -445,7 +516,7 @@ def main():
             browser.send({"type": "delete_session", "session_id": session})
             wait(lambda: call("GET", f"/api/sessions/{session}/info")[0] == 404, "confirmed environment deletion")
             browser.close()
-            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * 3, "deletion removed work or replayed tools")
+            require((cwd / "route.txt").is_file() and effects.read_bytes() == first_effect * (4 if inputs.get("execution_recovery") else 3), "deletion removed work or replayed tools")
             checks.append("public_deletion_waits_for_target_stop_and_preserves_work")
         except Exception:
             for log in logs:
