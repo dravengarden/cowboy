@@ -2054,7 +2054,7 @@ gained a "Permission denied: " prefix native does not add (`checkDenial` in
 `context-mod.js`). One minor difference remains: native validates a file call
 (read first, unchanged since read) before asking, while the plugin asks first
 and the target then refuses the call; the outcome is the same, with one extra
-prompt. plan mode is not probed: its auto-mode classifier makes its own model
+prompt; both text fixes shipped in Plugin 3.19.4 ([receipt](experiments/claude-denials-release-2026-10-09.json)). plan mode is not probed: its auto-mode classifier makes its own model
 requests, and execution sessions refuse plan mode anyway.
 
 Native decides it is in a Git repository from an ancestor `.git` alone: a

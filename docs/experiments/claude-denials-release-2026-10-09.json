@@ -1,0 +1,75 @@
+{
+  "schema": "cowboy.claude-denials-release/v1",
+  "observed_at": "2026-10-09T05:48:14.881095+00:00",
+  "source_revision": "5df9437092db3e78ac88303386c50da5a02b9fed",
+  "plugin_version": "3.19.4",
+  "artifact_digest": "sha256:079fa633efca0751ef18f959452e6b109dca5c3872a116472756436bc8104416",
+  "package_digest": "sha256:d0a848ae9eaea74b6acfe5e1c376d8f722fa3e66750fed5e1e0d1a31fe1fe549",
+  "dependencies": {
+    "claude_code": "2.1.287",
+    "claude_agent_acp": "0.84.0",
+    "changed": false
+  },
+  "change": "dontAsk denials and $.tool.check denials carry native's text (tools/claude_permissions_native_baseline.json)",
+  "selection": {
+    "tool": "tools/remote_impact.py --base 8ce9eb29",
+    "claude_worker": "all phases (context-mod.js and launch.mjs are core)",
+    "other_suites": "Rust tests, codex-worker, session and keeper were selected only by merged execution-recovery commits, accepted in docs/experiments/remote-execution-recovery-2026-10-09.json"
+  },
+  "gates": {
+    "check_compact": "passed",
+    "claude_remote_check": "279 node, 27 python",
+    "native_packaged": {
+      "accepted": true,
+      "scope": "full",
+      "checks": 92
+    },
+    "agent_worker": {
+      "executable_digest": "sha256:f82306eaeaa3c9c0c0f075787570c44d23f0b22a8360a8249dc9304590012ca8",
+      "initialize_and_session_new": "passed",
+      "stop_and_descendant_drain": "passed",
+      "sidecar_count": 0,
+      "distinct_generation_coexistence": "passed"
+    },
+    "macos_probes": [
+      {
+        "command": "claude",
+        "version": "2.1.287",
+        "status": "passed"
+      },
+      {
+        "command": "claude-agent-acp",
+        "version": "0.84.0",
+        "status": "passed"
+      }
+    ],
+    "catalog_readers": {
+      "accepted": true,
+      "not_checked": [
+        "production_signature",
+        "actual_role_provenance",
+        "complete_production_catalog_and_host_policy",
+        "historical_pre_host_migration",
+        "runtime_platform_drain_and_installation"
+      ],
+      "bridge_and_next_recovery": "/nix/store/n87bjinbcbq5nvncbhaipnv853asw13j-cowboy-controller-release",
+      "recovery": "/nix/store/ylac229nhqxdlwzdgnlb0k3a5hahnc91-cowboy-controller-release",
+      "cold": "/nix/store/yfvqk6gpd15bb60ryqykcq52s6qkvj76-cowboy-controller-release"
+    },
+    "public_readback": "package and four runtime artifacts match their digests"
+  },
+  "installation": {
+    "machine": "ovh",
+    "operation_id": "ovh-claude-code-3-19-4-converge",
+    "inventory": {
+      "plugin_version": "3.19.4",
+      "state": "active",
+      "generation_digest": "sha256:079fa633efca0751ef18f959452e6b109dca5c3872a116472756436bc8104416",
+      "rollback_generation_digest": "sha256:45eb338cea6ce300d3c1c39fccacad1b95a69b5c2ce80258141d9c8b2179e5ce",
+      "active_session_leases": 0,
+      "replica_state": "current",
+      "materialization_state": "current"
+    }
+  },
+  "rollout": "No forced live-session reload; existing sessions keep their plugin until the normal idle upgrade."
+}
