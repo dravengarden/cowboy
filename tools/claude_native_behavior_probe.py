@@ -255,7 +255,7 @@ def run(claude):
     baseline = {}
     for name, probe in [("tool_descriptions", descriptions), ("bash", deadlines_and_stdin), ("mcp", mcp),
                         ("agent_background", agent_background)]:
-        with tempfile.TemporaryDirectory(prefix=f"cowboy-native-{name}-") as temp:
+        with tempfile.TemporaryDirectory(prefix=f"cowboy-native-{name}-", dir=clean_root()) as temp:
             baseline[name] = probe(claude, Path(temp))
     return baseline
 
