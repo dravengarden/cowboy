@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { createConnection } from "node:net";
 import test from "node:test";
 import {
   allowedControl,
   initializeRequest,
   NATIVE_PASSTHROUGH,
   nativeArguments,
+  STARTUP_TRACE,
+  startupPhase,
+  startupTrace,
 } from "./launch.mjs";
 import { NATIVE_TOOLS } from "./tools.mjs";
 
@@ -136,4 +140,40 @@ test("SDK initialization cannot override the bound native tools or install local
     skills: [],
   });
   assert.equal(frame.request.systemPrompt, "OVH");
+});
+
+test("startup milestones reach the adapter's stderr through its private socket", async () => {
+  const lines = [];
+  const output = { write: (line) => lines.push(line) };
+  const { path, server } = startupTrace(output);
+  const previous = process.env[STARTUP_TRACE];
+  process.env[STARTUP_TRACE] = path;
+  try {
+    startupPhase("execution-connected");
+    startupPhase("target-discovery");
+    // Anything else on the socket is not relayed.
+    const other = createConnection(path);
+    other.write(
+      "ordinary text\n" + "[cowboy-claude] " + "x".repeat(300) + "\n",
+    );
+    other.end();
+    const deadline = Date.now() + 5000;
+    while (lines.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    if (previous === undefined) delete process.env[STARTUP_TRACE];
+    else process.env[STARTUP_TRACE] = previous;
+    server.close();
+  }
+  assert.equal(lines.length, 2);
+  assert.match(
+    lines[0],
+    /^\[cowboy-claude\] phase=execution-connected totalMs=\d+\n$/,
+  );
+  assert.match(
+    lines[1],
+    /^\[cowboy-claude\] phase=target-discovery totalMs=\d+\n$/,
+  );
 });

@@ -125,8 +125,10 @@ the same day (OVH worker logs, every execution call):
 The window is short and the load lower. `sess-1791179743141` (still 3.19.4)
 was the busiest session afterwards, with 42 of its own calls over 5 s, which
 are its full transcript copies; other sessions no longer stalled behind them.
-No new native session had started on 3.19.10 by 16:22, so its production
-start time is not yet measured. The Controller's new forward log aligned two
+After the running sessions moved to 3.19.10 (idle automatic updates and
+reloads), `sdk-initialize` until 17:20 measured: resumed n=39, p50 7.4 s,
+p90 9.5 s, max 15.2 s; new n=1, 5.0 s. Most samples are update reloads with
+warm OVH caches, so they are not the same conditions as the earlier baseline. The Controller's new forward log aligned two
 operations of that session: 2,046 ms at the Controller against 3,597 ms at the
 worker, and 2,001 ms against 2,181 ms.
 
@@ -136,5 +138,7 @@ worker, and 2,001 ms against 2,181 ms.
   remain slow themselves until reloaded with a newer Provider.
 - The per-flow overlay throughput (about 100 KiB/s) is a Stormbird path
   property; it is outside this change.
-- Native initialization (about 7 s at 200 ms RTT, including target MCP server
-  startup) is unchanged; the new phase log separates it in production.
+- Native initialization (about 5-7 s, including target MCP server startup)
+  is unchanged. The SDK discarded the launcher's stderr, so 3.19.10 milestone
+  lines never reached the worker log; 3.19.11 relays them through a private
+  socket to the adapter's stderr.

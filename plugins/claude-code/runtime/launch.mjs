@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createConnection, createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
@@ -9,7 +11,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -48,15 +50,59 @@ import {
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 
-// Startup milestones on stderr, which the worker logs beside the adapter's
-// own `[session/create]` phases: where a slow start spent its time.
+// Startup milestones, logged by the worker beside the adapter's own
+// `[session/create]` phases: where a slow start spent its time. The SDK
+// discards this process's stderr, so the adapter relays them (startupTrace).
+export const STARTUP_TRACE = "COWBOY_CLAUDE_STARTUP_TRACE";
 const launched = performance.now();
+let trace;
 export function startupPhase(name) {
-  process.stderr.write(
-    `[cowboy-claude] phase=${name} totalMs=${
-      Math.round(performance.now() - launched)
-    }\n`,
+  const line = `[cowboy-claude] phase=${name} totalMs=${
+    Math.round(performance.now() - launched)
+  }\n`;
+  const path = process.env[STARTUP_TRACE];
+  if (!path) return void process.stderr.write(line);
+  // Best effort: a lost milestone never affects the session.
+  if (!trace) {
+    trace = createConnection(path);
+    trace.on("error", () => {});
+    trace.unref();
+  }
+  trace.write(line);
+}
+
+// In the adapter: a private socket whose milestone lines reach this
+// process's stderr. Only bounded `[cowboy-claude] ` lines pass.
+export function startupTrace(output = process.stderr) {
+  const directory = mkdtempSync(join(tmpdir(), "cowboy-claude-trace-"));
+  const path = join(directory, "s");
+  const server = createServer((socket) => {
+    let pending = "";
+    // A milestone connection never keeps the adapter alive.
+    socket.unref();
+    socket.setEncoding("utf8");
+    socket.on("error", () => {});
+    socket.on("data", (chunk) => {
+      pending += chunk;
+      let newline;
+      while ((newline = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (line.startsWith("[cowboy-claude] ") && line.length <= 256) {
+          output.write(line + "\n");
+        }
+      }
+      if (pending.length > 256) socket.destroy();
+    });
+  });
+  server.on("error", () => {});
+  server.listen(path);
+  server.unref();
+  process.once(
+    "exit",
+    () => rmSync(directory, { recursive: true, force: true }),
   );
+  return { path, server };
 }
 export const FORBIDDEN_TOOLS = [
   "EnterWorktree",
@@ -1144,6 +1190,7 @@ async function native(args) {
     delete environment.COWBOY_EXECUTION_DESCRIPTOR;
     delete environment[privateCli];
     delete environment[MANAGED_PROFILE_ENV];
+    delete environment[STARTUP_TRACE];
     const ordinaryArgv = nativeArguments(
       args,
       plugin,
@@ -1236,6 +1283,11 @@ export async function main(args) {
     process.env.CLAUDE_CODE_EXECUTABLE = fileURLToPath(
       new URL("../bin/cowboy-configured-cli", import.meta.url),
     );
+    try {
+      process.env[STARTUP_TRACE] = startupTrace().path;
+    } catch {
+      // Milestones are diagnostics; startup continues without them.
+    }
   }
   const upstream = fileURLToPath(
     new URL(
