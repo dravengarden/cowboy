@@ -219,6 +219,48 @@ test("the startup survey answers every walk as the per-walk queries do", async (
   );
 });
 
+test("long Git answers render as the per-walk queries render them", async (t) => {
+  const paths = await tree(t);
+  const repository = dirname(paths.cwd);
+  // Five 1600-byte subjects exceed any short cap; 600 modified names make
+  // a status far beyond the 2000 characters the block shows.
+  for (let index = 0; index < 5; index++) {
+    execFileSync("git", [
+      "-C",
+      repository,
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      `${index} ${"subject 中文 ".repeat(100)}`,
+    ]);
+  }
+  // Tracked, then modified: git lists each one.
+  await mkdir(join(repository, "tracked"));
+  for (let index = 0; index < 600; index++) {
+    await writeFile(join(repository, "tracked", `file-${index}-名前.txt`), "a");
+  }
+  execFileSync("git", ["-C", repository, "add", "tracked"]);
+  execFileSync("git", ["-C", repository, "commit", "-q", "-m", "tracked"]);
+  for (let index = 0; index < 600; index++) {
+    await writeFile(join(repository, "tracked", `file-${index}-名前.txt`), "b");
+  }
+  const surveyed = await discover(t, paths);
+  const queried = await discover(t, paths, {
+    refuse: (argv) => argv.some((arg) => arg.includes("survey()")),
+  });
+  assert.deepEqual(surveyed.result, queried.result);
+  assert.match(surveyed.result.context.git, /truncated because it exceeds 2k/);
+  // Every listed subject is complete (the newest commit is "tracked").
+  for (let index = 1; index < 5; index++) {
+    assert.ok(
+      surveyed.result.context.git.includes(
+        `${index} ${"subject 中文 ".repeat(100).trim()}`,
+      ),
+    );
+  }
+});
+
 test("a target missing a survey utility answers through the per-walk queries", async (t) => {
   const paths = await tree(t);
   // Every utility either path uses, except the survey's base64.

@@ -38,14 +38,16 @@ const RANGE_FILE_THRESHOLD = 128 * 1024;
 // print them) and, per candidate file, F<size> (a regular file), A (certainly
 // absent: its nearest existing ancestor is a searchable directory) or O
 // (anything else, which the walk asks about itself). Output is written once
-// at the end so a single read returns it. A missing utility fails the whole
+// at the end so a single read returns it. Only git status is shortened: the
+// block shows its first 2000 characters, at most 6000 bytes, and still says it
+// was truncated. A missing utility fails the whole
 // survey rather than answering with empty output. Arguments: rule roots,
 // `--`, skill roots, `--`, candidate files.
 export const STARTUP_SURVEY = String.raw`
 size() { if [ "$p" = 1 ]; then find -L "$1" -maxdepth 0 -printf %s 2>/dev/null; else wc -c <"$1" 2>/dev/null; fi; }
 list() { if [ "$p" = 1 ]; then find -L "$@" -printf '%s\t%p\n' 2>/dev/null; else find -L "$@" 2>/dev/null | sed 's/^/?\t/'; fi; }
 b64() { base64 | tr -d '\n'; }
-g() { n=$1; shift; o=$(git --no-optional-locks "$@" 2>&1); c=$?; printf '\036git %s %s\n' "$n" "$c"; printf %s "$o" | head -c 6000 | b64; printf '\n'; }
+g() { n=$1; shift; o=$(git --no-optional-locks "$@" 2>&1); c=$?; printf '\036git %s %s\n' "$n" "$c"; if [ "$n" = status ]; then printf %s "$o" | head -c 6000 | b64; else printf %s "$o" | b64; fi; printf '\n'; }
 survey() {
   p=0; find / -maxdepth 0 -printf '' >/dev/null 2>&1 && p=1
   for u in base64 tr head find uname $([ "$p" = 1 ] || echo sed wc); do command -v "$u" >/dev/null 2>&1 || return 3; done
