@@ -215,19 +215,26 @@ impl Host {
                 invocation,
                 wait_ms,
             } => {
+                // The one native frame this invocation may send. A read-only
+                // environment decides once; a refusal is never forwarded.
+                let native = if self.read_only {
+                    read_only::decide(&invocation.method, &invocation.params, &self.cwd)
+                } else {
+                    read_only::Decision::Forward(invocation.params.clone())
+                };
                 if wait_ms > wire::MAX_WAIT_MS {
                     Err(Refusal::InvalidRequest)
                 } else if !self.current_workspace() {
                     Err(Refusal::WorkspaceChanged)
-                } else if let Some(read_only::Decision::Refuse(reply)) = self
-                    .read_only
-                    .then(|| read_only::decide(&invocation.method, &invocation.params, &self.cwd))
-                {
+                } else if let read_only::Decision::Refuse(reply) = native {
                     // Deterministic and effect-free: answered without admission.
                     Ok(Response::Operation {
                         outcome: Outcome::Completed { reply },
                     })
                 } else {
+                    let read_only::Decision::Forward(native) = native else {
+                        unreachable!("refusals return above")
+                    };
                     let admission = {
                         // Reserve before admitting so a full local queue proves
                         // non-admission. Once admitted, the writer owns the call.
@@ -241,19 +248,9 @@ impl Host {
                                     if let Ok(Admission::New { id, .. }) = &result {
                                         // The ledger retains the admitted params;
                                         // only the native frame carries context.
-                                        let constrained = match self.read_only.then(|| {
-                                            read_only::decide(
-                                                &invocation.method,
-                                                &invocation.params,
-                                                &self.cwd,
-                                            )
-                                        }) {
-                                            Some(read_only::Decision::Forward(params)) => params,
-                                            _ => invocation.params.clone(),
-                                        };
                                         let params = wire::with_call_context(
                                             &invocation.method,
-                                            &constrained,
+                                            &native,
                                             self.call_context.as_deref(),
                                         );
                                         permit.send(json!({"id": id, "method": invocation.method, "params": params}));
