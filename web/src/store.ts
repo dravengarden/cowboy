@@ -79,7 +79,10 @@ import {
   type ConfigOptionChange,
   configOptionsMatchChanges,
 } from "./configOptionMutation";
-import { refreshProviderCatalog } from "./providerCatalogRegistry";
+import {
+  reconcileProviderCatalog,
+  refreshProviderCatalog,
+} from "./providerCatalogRegistry";
 import { attachDraftDatabase, getDraft, pruneDrafts } from "./draftStore";
 import { announceDraftChanges } from "./documents/store";
 import {
@@ -1599,6 +1602,9 @@ function handle(msg: Outbound): void {
         machinesRevision: msg.revision,
       });
       replica.recordMachines(msg.revision, msg.machines);
+      // A Provider release installed after this tab read the Catalog would
+      // otherwise vanish from exact-identity joins until a reload.
+      reconcileProviderCatalog(msg.machines.map((machine) => machine.plugins));
       break;
     }
     case "snapshot": {
