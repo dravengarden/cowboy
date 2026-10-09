@@ -50,11 +50,12 @@ proxy path will remain loss-free.
 Claude Plugin 3.19.3 replaces repeated large transcript uploads with verified
 appends. Native Claude still owns history on the runtime Machine; project hooks
 still receive a complete, private snapshot on the execution Machine. For
-transcripts of at least 128 KiB on a target with Python, the adapter retains one
+transcripts of at least 128 KiB on a target with Cowboy's file helper, the adapter retains one
 latest base in memory and one private cache file per execution binding (each
 bounded by the existing 8 MiB transcript limit). No transcript content enters
-durable adapter state or telemetry. Targets without Python and smaller inputs
-keep the original full-copy behavior.
+durable adapter state or telemetry. Retained older keepers without the helper
+and smaller inputs keep the bounded full-copy behavior. Python is not used by
+the 3.19.6 adapter for this path, range reads or symlink resolution.
 
 Only an exact byte prefix permits an append. The target verifies both the base
 and assembled SHA-256 digests before exposing an exclusive per-hook snapshot;
@@ -339,3 +340,31 @@ change.
 
 The [release and recovery receipt](experiments/claude-hook-frame-recovery-2026-10-09.json)
 separates package acceptance, OVH installation and the affected session's adoption.
+
+### Cowboy-owned target file utilities
+
+The 3.19.6 adapter removes its Python programs. The execution keeper's own Rust
+binary implements bounded snapshot assembly, whole-file-stamped range reads
+and symlink resolution. The keeper supplies its immutable absolute executable
+path as `COWBOY_EXECUTION_FILE_HELPER` in the owned executor environment; this is
+private executable wiring, not a behavioral setting or operator PATH lookup.
+The reserved Cowboy environment namespace cannot be supplied through an
+operator's target environment configuration. No helper is uploaded into a
+project or downloaded on demand.
+
+Native Codex still supplies filesystem RPCs, process execution, cancellation
+and remote environment binding. Its current filesystem interface lacks the
+verified append/snapshot and whole-file-stamped range operations this adapter
+needs. The narrow extension is an ordinary native `process/start` invocation
+of the owned utility, with the existing keeper ledger and permissions. No new
+RPC, execution authority, Provider-specific keeper state or replay mechanism
+is introduced. Remove these utilities when the native interface supplies the
+same bounded operations and integrity guarantees. Claude is adapter-backed;
+Codex's native tool contract remains unchanged.
+
+Deploy the updated target keeper and recover its execution lifetime before
+expecting incremental behavior from existing bindings. An older retained
+keeper remains compatible through bounded full copies and ordinary file reads;
+it does not regain Python dependencies. Projects may still explicitly use
+Python in their own commands or hooks. Development and acceptance fixtures
+also use Python; neither is an implicit Cowboy production runtime dependency.

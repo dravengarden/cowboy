@@ -148,7 +148,10 @@ def probe(args):
             checks.append("capability_binding_and_missing_operation_enforced")
             process_id = identity()
             start = keeper.invocation("process/start", process_arguments(target, process_id,
-                "test -z \"${OPENAI_API_KEY:-}\" || exit 39; printf once >> starts; printf '%s' \"$$\" > process.pid; exec /run/current-system/sw/bin/sleep 180"))
+                "test -z \"${OPENAI_API_KEY:-}\" || exit 39; "
+                "printf '%s' \"$COWBOY_EXECUTION_FILE_HELPER\" > helper-path; "
+                "PATH=/nonexistent \"$COWBOY_EXECUTION_FILE_HELPER\" realpath -- \"$PWD\" > helper-realpath || exit 40; "
+                "printf once >> starts; printf '%s' \"$$\" > process.pid; exec /run/current-system/sw/bin/sleep 180"))
             # Disconnect before reading the result, then recover only the same
             # operation. No IPC client remains attached during the 35s interval.
             keeper.invoke(start, discard=True)
@@ -157,6 +160,10 @@ def probe(args):
                     break
                 time.sleep(0.05)
             require((target / "starts").read_text() == "once", "target command did not execute once")
+            require(Path((target / "helper-path").read_text()).resolve() == args.keeper.resolve() and
+                    (target / "helper-realpath").read_text() == str(target),
+                    "target file helper was not the owned keeper or required ambient executables")
+            checks.append("owned_file_helper_works_without_python_or_path_tools")
             time.sleep(35)
             observed = keeper.request({"kind": "observe", "operation_id": start["operation_id"], "wait_ms": 1000})
             require(observed["outcome"]["state"] == "completed", "lost receipt was not retained")

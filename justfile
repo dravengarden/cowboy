@@ -548,6 +548,7 @@ provider-release-coverage CATALOG:
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
+    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
     mkdir -p dist/claude-source-tests
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests

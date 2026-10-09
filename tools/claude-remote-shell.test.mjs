@@ -977,8 +977,8 @@ test("a missing file reads as native's, with the range helper enabled too", asyn
   const { tools, project } = await shellFixture(t);
   const expected =
     `File does not exist. Note: your current working directory is ${project}.`;
-  for (const rangePython of [undefined, "python3"]) {
-    tools.rangePython = rangePython;
+  for (const helper of [undefined, "/cowboy-file-helper"]) {
+    tools.fileHelper = helper;
     for (const file_path of ["absent.txt", "absent.pdf"]) {
       assert.equal(
         (await tools.dispatch("Read", { file_path })).deny,

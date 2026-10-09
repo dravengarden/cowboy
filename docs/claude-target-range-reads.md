@@ -31,15 +31,14 @@ atomic external-writer exclusion or a distributed file mirror.
 
 ## Execution and compatibility
 
-Startup discovers `python3` through the same target Bash probe. The helper is an
-inline, signed Provider utility executed by native `process/start`; it does not
-use SSH or any physical endpoint. Arguments are separate argv fields. `-I -S -B`
-prevents project/PYTHONPATH module shadowing, site initialization and bytecode
-creation. It imports only the standard library, writes no target files, closes
+As of Plugin 3.19.6, startup discovers Cowboy's immutable, keeper-owned Rust
+file utility through `COWBOY_EXECUTION_FILE_HELPER`. Native `process/start`
+executes it with separate argv fields. It requires no Python, interpreter
+startup or project imports. The range operation writes no target files, closes
 its descriptor and returns bounded output. Diagnostics contain no file contents
-or tracebacks.
+or tracebacks. See the [owned utility contract](execution-connection-recovery.md#cowboy-owned-target-file-utilities).
 
-Targets without Python retain native full-file Read. Images, PDFs, explicitly
+Retained older keepers without the utility retain native full-file Read. Images, PDFs, explicitly
 requested PDF pages and text selections exceeding the helper's 32 KiB payload
 budget retain the previous native path and output limits. Other helper failures
 are explicit; they do not silently fall back to runtime-local files. No native
@@ -88,12 +87,13 @@ Run from the pinned shell with an absolute pinned executor and a new receipt:
 
 ```sh
 nix develop -c node tools/claude-range-native-probe.mjs \
-  /absolute/path/to/pinned/codex /absolute/path/to/new-receipt.json
+  /absolute/path/to/pinned/codex /absolute/path/to/new-receipt.json \
+  /absolute/path/to/cowboy-execution-host
 ```
 
 The probe proves native protocol behavior, not production WSS/WAN timing. It
 reports both request count and bytes: starting a utility may require an extra
-output-read RPC and adds local Python startup cost. Do not describe byte savings
+output-read RPC and adds utility process startup cost. Do not describe byte savings
 as a measured end-to-end latency improvement. Adapter tests also cover Unicode,
 CRLF, empty/missing/changed/nonregular files, invalid helper results, storage
 failure, cold resume, stamp expiration and live/dead temporary ownership.

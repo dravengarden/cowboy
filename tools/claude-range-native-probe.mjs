@@ -16,8 +16,9 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { WorkspaceTools } from "../plugins/claude-code/runtime/tools.mjs";
 
-const [binary, receipt] = process.argv.slice(2);
+const [binary, receipt, helper] = process.argv.slice(2);
 assert.ok(binary?.startsWith("/") && receipt?.startsWith("/"));
+assert.ok(helper?.startsWith("/"));
 const lock = JSON.parse(
   await readFile("components/execution-runtime/lock.json", "utf8"),
 );
@@ -111,13 +112,9 @@ try {
     join(target, "json.py"),
     "raise RuntimeError('project module must not load')\n",
   );
-  const python = await tools.command(["bash", "-c", "command -v python3"]);
-  assert.equal(python.exitCode, 0);
   const measurements = [];
   for (const mode of ["whole_file", "target_range"]) {
-    tools.rangePython = mode === "target_range"
-      ? python.output.trim()
-      : undefined;
+    tools.fileHelper = mode === "target_range" ? helper : undefined;
     const before = calls.length;
     const start = performance.now();
     const result = await tools.nativeCall("Read", {

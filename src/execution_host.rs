@@ -2,6 +2,7 @@
 //! owner of a native executor or its jobs. A lost keeper cannot be relaunched
 //! under the same incarnation, and admitted effects cannot be retried as new.
 
+pub mod file_helper;
 mod ledger;
 
 use crate::execution_protocol::{
@@ -362,6 +363,7 @@ pub async fn run(args: Args) -> Result<()> {
         .env_clear()
         .envs(&contract.environment)
         .env("CODEX_HOME", &private_home)
+        .env("COWBOY_EXECUTION_FILE_HELPER", std::env::current_exe()?)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

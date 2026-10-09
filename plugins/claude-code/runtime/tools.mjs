@@ -13,7 +13,6 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { READ_RANGE } from "./read-range.mjs";
 import { instructionFiles, nestedInstructions } from "./instructions.mjs";
 import { skillName, skillRoots } from "./skills.mjs";
 import { projectConfigDirectories } from "./mcp.mjs";
@@ -42,43 +41,6 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // Only disposable hook input is cached. A verified base plus an append is
 // materialized into an exclusive snapshot before the hook can start. Never
 // expose the shared cache to a hook, or retry a hook after a lost receipt.
-const HOOK_TRANSCRIPT = String.raw`
-import hashlib, os, stat, sys
-cache, delta, snapshot, base_hash, wanted = sys.argv[1:]
-limit = 8 * 1024 * 1024
-def read(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            raise ValueError('Transcript is not a file')
-        data = f.read(limit + 1)
-        if len(data) > limit:
-            raise ValueError('Transcript exceeds limit')
-        return data
-base = b''
-if base_hash:
-    try:
-        base = read(cache)
-        if hashlib.sha256(base).hexdigest() != base_hash:
-            sys.exit(75)
-    except (OSError, ValueError):
-        sys.exit(75)
-data = base + read(delta)
-if len(data) > limit or hashlib.sha256(data).hexdigest() != wanted:
-    raise ValueError('Transcript digest mismatch')
-def write(path):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'wb') as f:
-        f.write(data)
-write(snapshot)
-temporary = snapshot + '.cache'
-try:
-    write(temporary)
-    os.replace(temporary, cache)
-finally:
-    if os.path.exists(temporary):
-        os.unlink(temporary)
-`;
 // Each target read costs a round trip to the executor. A walk that decides
 // files in order (instruction precedence, skill shadowing) awaits reads
 // already in flight instead: `read.prefetch(paths)` issues at most `limit`
@@ -885,7 +847,7 @@ export class WorkspaceTools {
 
   async hookTranscript(transcript, copy, call) {
     // Small inputs and targets without Python retain the original contract.
-    if (!this.rangePython || transcript.length < 128 * 1024) {
+    if (!this.fileHelper || transcript.length < 128 * 1024) {
       await this.hookInputFile(copy, transcript, call);
       return;
     }
@@ -906,12 +868,9 @@ export class WorkspaceTools {
         await this.hookInputFile(delta, bytes, call);
         return await this.command(
           [
-            this.rangePython,
-            "-I",
-            "-S",
-            "-B",
-            "-c",
-            HOOK_TRANSCRIPT,
+            this.fileHelper,
+            "snapshot",
+            "--",
             cache,
             delta,
             copy,
@@ -1252,17 +1211,14 @@ export class WorkspaceTools {
   }
 
   // Target-side symlink resolution; missing trailing components are kept.
-  // Without a target Python the path is unresolved (callers then ask).
+  // Older targets without Cowboy's helper retain the conservative ask path.
   async realpath(path) {
     checkedString(path, "file path", 16384);
-    if (!this.rangePython) return null;
+    if (!this.fileHelper) return null;
     const result = await this.command([
-      this.rangePython,
-      "-I",
-      "-S",
-      "-B",
-      "-c",
-      "import os,sys;sys.stdout.write(os.path.realpath(sys.argv[1]))",
+      this.fileHelper,
+      "realpath",
+      "--",
       path,
     ]);
     return result.exitCode === 0 && result.output.startsWith("/") &&
@@ -1315,12 +1271,9 @@ export class WorkspaceTools {
     const limit = bounded(args.limit, 2000, 1, 10000);
     const result = await this.command(
       [
-        this.rangePython,
-        "-I",
-        "-S",
-        "-B",
-        "-c",
-        READ_RANGE,
+        this.fileHelper,
+        "read-range",
+        "--",
         path,
         String(offset),
         String(limit),
@@ -1658,7 +1611,7 @@ export class WorkspaceTools {
     const platform = await this.command([
       "bash",
       "-c",
-      'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}"; command -v python3 || { for p in /usr/bin/python3 /run/current-system/sw/bin/python3; do if test -x "$p"; then printf "%s\\n" "$p"; break; fi; done; }',
+      'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}" "${COWBOY_EXECUTION_FILE_HELPER:-}"',
     ]);
     if (platform.exitCode !== 0 || !platform.output.startsWith("/")) {
       throw new Error("Target Bash is unavailable");
@@ -1669,8 +1622,8 @@ export class WorkspaceTools {
       ? userShell.trim()
       : bash;
     this.startSnapshot();
-    const python = platform.output.split("\n")[3]?.trim();
-    this.rangePython = python?.startsWith("/") ? python : undefined;
+    const helper = platform.output.split("\n")[3]?.trim();
+    this.fileHelper = helper?.startsWith("/") ? helper : undefined;
     // Independent target queries; gitStatus never rejects.
     const [instructions, git] = await Promise.all([
       this.instructions(),
@@ -2515,7 +2468,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       if (pdf) return pdf;
     }
     let metadata;
-    if (name === "read" && this.rangePython && args.pages === undefined) {
+    if (name === "read" && this.fileHelper && args.pages === undefined) {
       metadata = await this.connection.call("fs/getMetadata", {
         path: pathToFileURL(path).href,
       }).catch((error) => {

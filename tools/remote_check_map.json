@@ -296,7 +296,6 @@
           "plugins/claude-code/runtime/instructions.mjs"
         ],
         "files": [
-          "plugins/claude-code/runtime/read-range.mjs",
           "tools/claude_file_cases.py",
           "tools/claude_file_native_baseline.json",
           "tools/claude-range-native-probe.mjs"
