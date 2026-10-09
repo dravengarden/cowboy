@@ -6,7 +6,17 @@ use crate::execution_protocol::{RuntimeReply, RuntimeRequest, Scope};
 use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::execution::{Action, Refusal, Request, Response};
 
+pub(super) mod recovery;
 pub(super) mod sessions;
+
+/// Serialize lifecycle maintenance separately from admission of native calls.
+/// Recovery fences through its durable non-runnable binding; observing an
+/// already committed receipt must leave the healthy replacement usable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Maintenance {
+    Close,
+    Recover,
+}
 
 pub(super) async fn forward(
     state: &AppState,
@@ -32,10 +42,7 @@ async fn forward_checked(
 ) -> Response {
     let refused = |reason| Response::Refused { reason };
     if !state.machine_control.is_current(connection)
-        || state
-            .execution_closures
-            .lock()
-            .contains(&request.session_id)
+        || state.execution_closures.lock().get(&request.session_id) == Some(&Maintenance::Close)
         || request.binding.validate().is_err()
         || request.binding.runtime.machine_id != runtime_machine
         || !crate::execution_protocol::valid_operation_id(&request.request_id)

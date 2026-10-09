@@ -694,6 +694,72 @@ impl RemoteRuntime {
         );
     }
 
+    pub(crate) fn worker_matches_execution(
+        &self,
+        session_id: &str,
+        binding: &crate::execution_environment::BindingV1,
+    ) -> bool {
+        self.shared
+            .workers
+            .lock()
+            .get(session_id)
+            .and_then(|worker| worker.launch.as_ref())
+            .and_then(|launch| launch.execution_binding.as_ref())
+            .and_then(|record| record.decode().ok())
+            .is_some_and(|current| &current == binding)
+    }
+
+    pub fn recover_execution(
+        &self,
+        mut session: StartSession,
+        intent: crate::execution_environment::RecoveryV1,
+    ) {
+        session
+            .generation
+            .clone_from(&self.shared.desired_generation);
+        let id = session.session_id.clone();
+        self.park_recovery_prompts(&id);
+        self.shared.resetting.lock().insert(id.clone());
+        self.shared.config_startups.lock().insert(id.clone());
+        self.shared.config_sync_epochs.lock().remove(&id);
+        discard_pending_config(&self.shared, &id);
+        self.shared
+            .pending
+            .lock()
+            .retain(|_, command| command.session_id() != Some(id.as_str()));
+        self.shared.declarations.lock().insert(id, session.clone());
+        let command_id = self.next_id("execution-recover");
+        self.queue(
+            command_id.clone(),
+            CoreCommand::RecoverExecutionSession {
+                session: Box::new(session),
+                intent: Box::new(intent),
+                command_id,
+            },
+        );
+    }
+
+    pub(crate) fn retry_execution_recovery(&self, session: StartSession) {
+        self.park_recovery_prompts(&session.session_id);
+        self.reset(session);
+    }
+
+    fn park_recovery_prompts(&self, id: &str) {
+        for command in take_pending_prompts(&self.shared, id) {
+            // Preserve an unacknowledged prompt for explicit user inspection;
+            // it must not run automatically against the new execution lifetime.
+            if let CoreCommand::Prompt { content, cmid, .. } = command {
+                let text = content
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.shared.hub.add_draft(id, text, content, cmid);
+                self.shared.hub.broadcast_error(Some(id.to_owned()), "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending".into());
+            }
+        }
+    }
+
     /// Stop accepting a deployment boundary only after every command already
     /// handed off by the Hub has been acknowledged by its worker. If the
     /// runtime stays unavailable through the deadline, return prompts to the
@@ -1064,6 +1130,7 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
 
 fn command_priority(command: &CoreCommand) -> (u8, u8, String) {
     match command {
+        CoreCommand::RecoverExecutionSession { .. } => (1, 0, String::new()),
         CoreCommand::EnsureSession { .. } => (0, 0, String::new()),
         CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => {
             (1, 0, String::new())
@@ -1269,11 +1336,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             {
                 telemetry.finish_delivery_trace(trace, accepted);
             }
-            let reset_stop = matches!(
-                &command,
-                Some(CoreCommand::StopSession { command_id, .. })
-                    if command_id.starts_with("reset-")
-            );
+            let reset_stop = matches!(&command, Some(CoreCommand::RecoverExecutionSession { .. }))
+                || matches!(
+                    &command,
+                    Some(CoreCommand::StopSession { command_id, .. })
+                        if command_id.starts_with("reset-")
+                );
             if let Some(CoreCommand::StopSession { command_id, .. }) = &command {
                 if !command_id.starts_with("reset-") {
                     shared.declarations.lock().remove(&session_id);
@@ -3843,6 +3911,91 @@ mod tests {
         .expect("reset acknowledgement");
         assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
+    }
+
+    #[tokio::test]
+    async fn execution_recovery_parks_unacknowledged_prompts_without_automatic_replay() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "test".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (left, _right) = UnixStream::pair().unwrap();
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: vec![snapshot("s")],
+            buffered: Vec::new(),
+        };
+        let runtime =
+            RemoteRuntime::new(hub, &bootstrap, "gen-1".into(), Some("/bin/worker".into()));
+        runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type":"text","text":"inspect before repeating"})],
+            Some("original-prompt".into()),
+        );
+        let session = snapshot("s").launch.unwrap();
+        runtime.recover_execution(
+            session,
+            crate::execution_environment::RecoveryV1 {
+                schema: 1,
+                phase: "recovering".into(),
+                operation_id: "repair-1".into(),
+                previous: crate::execution_environment::fixture().decode().unwrap(),
+            },
+        );
+        let info = runtime.shared.hub.session_info("s").unwrap();
+        assert_eq!(info.queue_count, 0);
+        assert_eq!(info.drafts_count, 1);
+        assert!(
+            !runtime
+                .shared
+                .pending
+                .lock()
+                .values()
+                .any(|command| matches!(command, CoreCommand::Prompt { .. }))
+        );
+        assert_eq!(
+            runtime
+                .shared
+                .pending
+                .lock()
+                .values()
+                .filter(|command| matches!(command, CoreCommand::RecoverExecutionSession { .. }))
+                .count(),
+            1
+        );
+        runtime.shared.hub.set_status("s", Status::Running, None);
+        assert_eq!(
+            runtime.shared.hub.session_info("s").unwrap().drafts_count,
+            1
+        );
+        // A failed replacement already has the new binding. Its recovery retry
+        // must preserve uncertain delivery too, even though it uses normal reset.
+        runtime.shared.pending.lock().clear();
+        runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type":"text","text":"uncertain replacement effect"})],
+            Some("retry-prompt".into()),
+        );
+        runtime.retry_execution_recovery(snapshot("s").launch.unwrap());
+        let info = runtime.shared.hub.session_info("s").unwrap();
+        assert_eq!(info.queue_count, 0);
+        assert_eq!(info.drafts_count, 2);
+        assert!(
+            !runtime
+                .shared
+                .pending
+                .lock()
+                .values()
+                .any(|command| matches!(command, CoreCommand::Prompt { .. }))
+        );
     }
 
     #[tokio::test]

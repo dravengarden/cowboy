@@ -350,7 +350,7 @@ pub(in crate::server) fn start_recovery(state: &Arc<AppState>) {
 }
 
 fn schedule(state: &Arc<AppState>, session_id: &str) {
-    if state.execution_closures.lock().contains(session_id) {
+    if state.execution_closures.lock().contains_key(session_id) {
         return;
     }
     if !state
@@ -364,7 +364,7 @@ fn schedule(state: &Arc<AppState>, session_id: &str) {
     let session_id = session_id.to_owned();
     tokio::spawn(async move {
         if let Err(error) = prepare(&state, &session_id).await
-            && !state.execution_closures.lock().contains(&session_id)
+            && !state.execution_closures.lock().contains_key(&session_id)
             && state
                 .hub
                 .session_info(&session_id)
@@ -451,7 +451,7 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), String> {
         return Err("Durable session preparation changed".into());
     }
     let closures = state.execution_closures.lock();
-    if closures.contains(session_id) {
+    if closures.contains_key(session_id) {
         return Err("Execution environment is closing".into());
     }
     state
@@ -489,12 +489,24 @@ pub(in crate::server) fn delete(state: &AppState, session_id: &str) -> Result<()
             },
         )
     };
-    if !state
-        .execution_closures
-        .lock()
-        .insert(session_id.to_owned())
     {
-        return Ok(());
+        let mut maintenance = state.execution_closures.lock();
+        match maintenance.entry(session_id.to_owned()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(super::Maintenance::Close);
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if *entry.get() == super::Maintenance::Close =>
+            {
+                return Ok(());
+            }
+            _ => {
+                return Err(
+                    "Execution recovery is in progress; retain the session until it completes"
+                        .into(),
+                );
+            }
+        }
     }
     state.supervisor.delete_session(session_id);
     // The Machine stop can outlive any client acknowledgement deadline, for

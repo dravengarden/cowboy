@@ -284,7 +284,8 @@ struct AppState {
     code_navigation_admission: bool,
     project_placement: crate::project_placement::Store,
     execution_preparations: parking_lot::Mutex<std::collections::HashSet<String>>,
-    execution_closures: Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
+    execution_closures:
+        Arc<parking_lot::Mutex<std::collections::HashMap<String, execution::Maintenance>>>,
     /// Machines permitted to have their Code reads executed on the
     /// Controller's own filesystem. A hello's declared connection mode is a
     /// request; this set is the permission.

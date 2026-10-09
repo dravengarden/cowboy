@@ -234,3 +234,77 @@ been enqueued. The small-frame path now yields after each write, matching the
 existing chunk path. Both regressions are required: prompt producer scheduling
 and urgent-message ordering. This follow-up does not extend watchdog deadlines
 or treat bulk byte progress as a broker heartbeat.
+
+## Explicit execution lifetime recovery
+
+An upgraded Machine does not replace the keepers of existing sessions. Keepers
+from before the completed-operation tombstone eviction fix can exhaust their
+65,536-entry ledger and refuse subsequent operations with `capacity`, including
+launcher initialization. An established transport and a quick target refusal
+distinguish this failure from a network watchdog timeout. Updating the Provider
+alone does not update these already-running execution processes.
+
+The runtime worker is another independent release boundary. OVH's retained
+`worker-748825b42b4302fe26ca` (source `660a714b`) predates `464818d9`, which
+normalizes native parameterless `params: null` requests to the execution wire's
+required object. That worker can connect successfully and then prevent Codex
+initialization from completing. Its replacement requires explicit worker-pool
+maintenance, not merely a host-only Machine update. Preserve busy workers
+through the host transaction, then use the owned generation handoff or scoped
+Session recovery to replace them. Never change a Session's workspace or native
+conversation to hide a worker-version mismatch.
+
+Host-delegated `cowboy operator execution-sessions` lists bound sessions.
+`cowboy operator recover-execution --session ID` returns a plan and exact request.
+Save its `data.request` object, then apply it with
+`cowboy operator recover-execution --session ID --request FILE`. Only the local
+Operator socket exposes this maintenance API; runtime and target Machine protocol 27 is
+required. Active turns/background work refuse unless the saved request explicitly
+sets `interrupt_active_turn: true`. Interruption stops commands; uncertain effects
+must be inspected, never automatically replayed.
+
+The Service first commits a non-runnable recovery intent. The target records the
+exact operation, closes the old lifetime, archives its state, and starts a new
+incarnation with the same native executor and worktree. Native conversation,
+Provider, credentials and queued messages stay in their existing Session record.
+An explicit worker recovery command resumes that conversation after the new
+binding is committed; ordinary worker adoption still cannot change placement.
+Queued messages pause in the current Controller. Unacknowledged prompts are
+retained as durable unscheduled drafts for inspection, never automatically
+replayed after another Controller restart. Codex and Claude share this Machine lifecycle; each keeps its own
+native conversation and Provider adapter. This layer owns the cross-Machine
+process replacement gap, not native execution. Remove it when native runtime
+recovery can safely replace and attest the bound remote process itself.
+
+After a lost response, repeat only the saved request. Its operation identity and
+binding revision prevent creating a second lifetime. A recorded but unobservably
+started target remains fenced; recovery never clears a native start marker to
+guess that replay is safe. Older readers preserve the opaque recovery intent and
+refuse launch. A successful target receipt is not proof of Provider readiness:
+observe the resumed Session and target connectivity before reporting success.
+
+### October 9, 2026 production recovery
+
+Controller `d2e5e752` and the OVH Machine were activated with successful owner
+receipts. Hawk activated writer-host `f7236e0c`, retaining both schema-one writer
+capabilities, with a same-revision, same-generation reader recovery artifact.
+The selected worker generation is `worker-db4bc66cf4d579fbffa6`.
+
+All 26 OVH-to-Hawk bound Sessions reached `running`; all 26 target keepers and
+their 26 OVH workers were observed on the accepted binaries. The 23 vulnerable
+keepers were replaced. The other three Sessions also needed worker recovery
+after their exited/crashed runtime was observed. Workspace paths and directory
+device/inode identities were unchanged. All 22 nonempty native conversations
+retained their IDs. Three previously cleared Claude Sessions and one empty
+Codex Session acquired fresh native IDs; their event records contained no user
+messages or tool history. Recovery did not submit synthetic user prompts.
+
+Exact artifacts passed 15 Session recovery checks, 11 keeper checks, 34 Codex
+worker checks and 86 packaged Claude worker checks. The complete repository
+gate also passed. After the maintenance window, the Controller observation
+contained no new capacity, watchdog, timeout or session error. This observation
+establishes startup/readiness recovery, not a guarantee against future network
+faults. Queues remain paused for inspection; uncertain prompts remain drafts.
+
+Sanitized artifact and activation evidence is recorded in
+[`experiments/remote-execution-recovery-2026-10-09.json`](experiments/remote-execution-recovery-2026-10-09.json).

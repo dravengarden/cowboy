@@ -17,6 +17,10 @@ pub struct Request {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     Inventory,
+    Recover {
+        session_id: String,
+        intent: Box<crate::execution_environment::RecoveryV1>,
+    },
     PrepareRuntime {
         session_id: String,
     },
@@ -44,6 +48,7 @@ impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self.action {
             Action::Inventory => "ExecutionInventory",
+            Action::Recover { .. } => "ExecutionRecovery",
             Action::PrepareRuntime { .. } => "ExecutionRuntimePrepare",
             Action::Prepare { .. } => "ExecutionPrepare",
             Action::Call { .. } => "ExecutionCall",

@@ -199,6 +199,16 @@ enum OperatorCommand {
     Catalog,
     /// List enrolled Machines and their inventories.
     Machines,
+    /// Inspect remote execution bindings without changing live sessions.
+    ExecutionSessions,
+    /// Plan one explicit execution-lifetime recovery, or apply a saved request.
+    /// Retains the conversation and worktree; never replays unknown commands.
+    RecoverExecution {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        request: Option<PathBuf>,
+    },
     /// Read one connected Machine's content-free durable-state counts: terminal
     /// deletions, Session lineages and pending cleanup, with each writer flag.
     DurableState {
@@ -428,6 +438,38 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
     }
     let (method, segments, body, operation) = match args.command {
         OperatorCommand::Status => (reqwest::Method::GET, vec!["status".into()], None, None),
+        OperatorCommand::ExecutionSessions => (
+            reqwest::Method::GET,
+            vec!["execution-sessions".into()],
+            None,
+            None,
+        ),
+        OperatorCommand::RecoverExecution { session, request } => {
+            let body = request
+                .map(|path| -> Result<Value> {
+                    let mut bytes = Vec::new();
+                    std::fs::File::open(path)?
+                        .take(32 * 1024 + 1)
+                        .read_to_end(&mut bytes)?;
+                    ensure!(bytes.len() <= 32 * 1024, "recovery request exceeds limit");
+                    Ok(serde_json::from_slice(&bytes)?)
+                })
+                .transpose()?;
+            let operation = body
+                .as_ref()
+                .and_then(|b| b.get("intent")?.get("operation_id")?.as_str())
+                .map(str::to_owned);
+            (
+                if body.is_some() {
+                    reqwest::Method::POST
+                } else {
+                    reqwest::Method::GET
+                },
+                vec!["execution-sessions".into(), session, "recover".into()],
+                body,
+                operation,
+            )
+        }
         OperatorCommand::Catalog => (reqwest::Method::GET, vec!["plugins".into()], None, None),
         OperatorCommand::Machines => (reqwest::Method::GET, vec!["machines".into()], None, None),
         OperatorCommand::DurableState { machine } => (

@@ -3956,6 +3956,42 @@ impl Hub {
         Ok(())
     }
 
+    /// Publish a storage-CASed maintenance transition without changing the
+    /// native conversation, prompts, Provider, authentication or workspace.
+    pub(crate) fn accept_execution_recovery(
+        &self,
+        session_id: &str,
+        expected: &crate::execution_environment::ExecutionBinding,
+        next: crate::execution_environment::ExecutionBinding,
+    ) -> Result<(), String> {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or("session no longer exists")?;
+            if session.meta.execution_binding.as_ref() != Some(expected) {
+                return Err("execution recovery changed".into());
+            }
+            let valid = match (
+                expected.decode(),
+                next.recovery(),
+                expected.recovery(),
+                next.decode(),
+            ) {
+                (Ok(previous), Some(intent), _, _) => intent.previous == previous,
+                (_, _, Some(intent), Ok(binding)) => intent.accepts(&binding),
+                _ => false,
+            };
+            if !valid {
+                return Err("invalid execution recovery transition".into());
+            }
+            session.meta.execution_binding = Some(next);
+            session.code_incarnation = code_scope::CodeIncarnation::default();
+        }
+        self.broadcast_sessions();
+        Ok(())
+    }
+
     /// Prepare a session for a fresh-context worker replacement.
     ///
     /// Forget the resumable agent id so the next spawn uses `session/new`, and

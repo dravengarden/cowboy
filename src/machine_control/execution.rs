@@ -41,7 +41,10 @@ impl MachineControl {
         machine_id: &str,
         request: Request,
     ) -> Result<Response, String> {
-        let timeout = if matches!(request.action, Action::Prepare { .. }) {
+        let timeout = if matches!(
+            request.action,
+            Action::Prepare { .. } | Action::Recover { .. }
+        ) {
             super::WORKSPACE_ADAPTER_TIMEOUT + std::time::Duration::from_secs(30)
         } else {
             std::time::Duration::from_secs(30)

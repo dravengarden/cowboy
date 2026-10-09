@@ -649,6 +649,36 @@ impl Supervisor {
         self.recycle_session_inner(session_id)
     }
 
+    pub(crate) fn recover_execution_session(
+        &self,
+        session_id: &str,
+        intent: crate::execution_environment::RecoveryV1,
+    ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let runtime = self.runtime_for_session(session_id)?;
+        let session = self.start_session(session_id)?;
+        if !session
+            .execution_binding
+            .as_ref()
+            .and_then(|b| b.decode().ok())
+            .is_some_and(|b| intent.accepts(&b))
+        {
+            return Err("execution recovery binding changed before worker replacement".into());
+        }
+        self.hub.set_status(session_id, Status::Starting, None);
+        let binding = session
+            .execution_binding
+            .as_ref()
+            .and_then(|b| b.decode().ok())
+            .ok_or("missing execution binding")?;
+        if runtime.worker_matches_execution(session_id, &binding) {
+            runtime.retry_execution_recovery(session);
+        } else {
+            runtime.recover_execution(session, intent);
+        }
+        Ok(())
+    }
+
     /// Request native cancellation before arming a replacement watchdog.
     /// Old Machine protocols have no non-destructive hard-stop-only command:
     /// ordinary `StopSession` permanently deletes the session and its worktree.

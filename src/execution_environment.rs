@@ -57,6 +57,51 @@ pub struct PreparationV1 {
     pub executor_digest: String,
 }
 
+/// Explicit maintenance intent. Ordinary launch and older readers fail closed
+/// while the target replaces its process lifetime. Native conversation identity
+/// and workspace ownership remain in the existing Session record.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryV1 {
+    pub schema: u16,
+    pub phase: String,
+    pub operation_id: String,
+    pub previous: BindingV1,
+}
+
+impl RecoveryV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema != 1
+            || self.phase != "recovering"
+            || self.operation_id.is_empty()
+            || self.operation_id.len() > 128
+            || !self
+                .operation_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+            || self.previous.revision == u64::MAX
+        {
+            return Err("invalid execution recovery intent");
+        }
+        self.previous.validate()
+    }
+
+    pub fn accepts(&self, next: &BindingV1) -> bool {
+        self.validate().is_ok()
+            && next.validate().is_ok()
+            && next.id == self.previous.id
+            && next.revision == self.previous.revision + 1
+            && next.runtime == self.previous.runtime
+            && next.workspace == self.previous.workspace
+            && next.access == self.previous.access
+            && next.environment.machine_id == self.previous.environment.machine_id
+            && next.environment.executor_digest == self.previous.environment.executor_digest
+            && next.environment.protocol == self.previous.environment.protocol
+            && next.environment.id != self.previous.environment.id
+            && next.environment.incarnation != self.previous.environment.incarnation
+    }
+}
+
 impl PreparationV1 {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.schema != EXECUTION_BINDING_SCHEMA
@@ -140,6 +185,12 @@ impl ExecutionBinding {
         let preparation = PreparationV1::deserialize(&self.0).ok()?;
         preparation.validate().ok()?;
         Some(preparation)
+    }
+
+    pub fn recovery(&self) -> Option<RecoveryV1> {
+        let recovery = RecoveryV1::deserialize(&self.0).ok()?;
+        recovery.validate().ok()?;
+        Some(recovery)
     }
 
     pub fn for_runtime(&self, machine_id: &str, cwd: &str) -> Result<BindingV1, &'static str> {
@@ -262,6 +313,37 @@ pub(crate) fn fixture() -> ExecutionBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_recovery_fences_launch_and_requires_new_lifetime_same_workspace() {
+        let previous = fixture().decode().unwrap();
+        let intent = RecoveryV1 {
+            schema: 1,
+            phase: "recovering".into(),
+            operation_id: "repair-1".into(),
+            previous: previous.clone(),
+        };
+        let record = ExecutionBinding::from_record(serde_json::to_value(&intent).unwrap());
+        assert!(record.decode().is_err());
+        assert!(record.preparation().is_none());
+        assert_eq!(record.recovery(), Some(intent.clone()));
+        assert!(!intent.accepts(&previous));
+        let mut next = previous;
+        next.revision += 1;
+        next.environment.id = "new-environment".into();
+        next.environment.incarnation = "new-incarnation".into();
+        assert!(intent.accepts(&next));
+        next.workspace.cwd = "/different/worktree".into();
+        assert!(!intent.accepts(&next));
+        for operation in ["../escape", "a/b", "", "operation.with.dot"] {
+            let mut invalid = intent.clone();
+            invalid.operation_id = operation.into();
+            assert!(invalid.validate().is_err());
+        }
+        let mut invalid = intent;
+        invalid.previous.revision = u64::MAX;
+        assert!(invalid.validate().is_err());
+    }
 
     #[test]
     fn execution_preparation_never_decodes_as_launchable_and_matches_exact_target() {
