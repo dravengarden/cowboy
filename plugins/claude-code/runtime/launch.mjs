@@ -37,6 +37,17 @@ import {
 } from "./memory.mjs";
 
 const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
+
+// Startup milestones on stderr, which the worker logs beside the adapter's
+// own `[session/create]` phases: where a slow start spent its time.
+const launched = performance.now();
+export function startupPhase(name) {
+  process.stderr.write(
+    `[cowboy-claude] phase=${name} totalMs=${
+      Math.round(performance.now() - launched)
+    }\n`,
+  );
+}
 export const FORBIDDEN_TOOLS = [
   "EnterWorktree",
   "ExitWorktree",
@@ -728,6 +739,7 @@ async function bridge(child, tools, context, memory, broker) {
           throw new Error("Claude initialization failed");
         }
         initialReply = frame;
+        startupPhase("native-initialized");
         stage = "cost";
         await send(child.stdin, {
           type: "user",
@@ -750,6 +762,7 @@ async function bridge(child, tools, context, memory, broker) {
           frame.duration_api_ms !== 0
         ) throw new Error("Claude readiness command failed");
         stage = "check";
+        startupPhase("native-ready-command");
         await send(child.stdin, { ...initial, request_id: checkId });
         continue;
       }
@@ -770,6 +783,7 @@ async function bridge(child, tools, context, memory, broker) {
           throw error;
         }
         stage = "ready";
+        startupPhase("ready");
         clearTimeout(timeout);
         await send(process.stdout, cleanCommands(initialReply));
         resolveReady();
@@ -872,6 +886,7 @@ async function native(args) {
     for (let attempt = 0;; attempt++) {
       try {
         connection = await Connection.open(descriptor);
+        startupPhase("execution-connected");
         break;
       } catch (error) {
         if (attempt >= 20) throw error;
@@ -903,9 +918,10 @@ async function native(args) {
         return result;
       };
     }
-    const context = await tools.context();
     // Independent target reads, started together: each costs round trips to
-    // the executor. Each result is still awaited where it is used.
+    // the executor, and all wait for one startup survey (tools.begin()).
+    // Each result is still awaited where it is used.
+    const contextStarted = tools.context();
     const started = [
       tools.projectHooks(),
       tools.skillFiles(),
@@ -913,6 +929,7 @@ async function native(args) {
     ];
     for (const result of started) result.catch(() => {});
     const [projectHooksStarted, skillFilesStarted, mcpInputsStarted] = started;
+    const context = await contextStarted;
     // The exact native argv below sets the starting mode before any tool runs.
     const broker = new PermissionBroker("default");
     modBridge = await startModBridge(tools, {
@@ -971,6 +988,8 @@ async function native(args) {
     // through mcp-proxy.mjs, remote ones are reached from here.
     await tools.stopMcpServers();
     const mcp = targetMcpServers(await mcpInputsStarted);
+    tools.endStartup();
+    startupPhase("target-discovery");
     const mcpEntries = mcp.entries.filter((entry) =>
       !(memory && entry.name === "matrix")
     );
@@ -1074,6 +1093,7 @@ async function native(args) {
       Boolean(memory),
     );
     broker.mode = startingPermissionMode(nativeArgv);
+    startupPhase("native-spawn");
     child = spawn(executable, nativeArgv, {
       env: environment,
       stdio: ["pipe", "pipe", "inherit"],

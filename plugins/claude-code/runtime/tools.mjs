@@ -32,6 +32,118 @@ const MAX_READ_STATE = 512 * 1024;
 // once; together they stay below the connection's 15 pending requests.
 const READ_AHEAD = 3;
 const RANGE_FILE_THRESHOLD = 128 * 1024;
+// The questions the startup walks ask before any file is read, answered by
+// one target command instead of one round trip each: the platform, native's
+// git status queries, the rule and skill listings (with sizes where find can
+// print them) and, per candidate file, F<size> (a regular file), A (certainly
+// absent: its nearest existing ancestor is a searchable directory) or O
+// (anything else, which the walk asks about itself). Output is written once
+// at the end so a single read returns it. Arguments: rule roots, `--`, skill
+// roots, `--`, candidate files.
+const STARTUP_SURVEY = String.raw`
+size() { if [ "$p" = 1 ]; then find -L "$1" -maxdepth 0 -printf %s 2>/dev/null; else wc -c <"$1" 2>/dev/null; fi; }
+list() { if [ "$p" = 1 ]; then find -L "$@" -printf '%s\t%p\n' 2>/dev/null; else find -L "$@" 2>/dev/null | sed 's/^/?\t/'; fi; }
+b64() { base64 | tr -d '\n'; }
+g() { n=$1; shift; o=$(git --no-optional-locks "$@" 2>&1); c=$?; printf '\036git %s %s\n' "$n" "$c"; printf %s "$o" | head -c 6000 | b64; printf '\n'; }
+survey() {
+  p=0; find / -maxdepth 0 -printf '' >/dev/null 2>&1 && p=1
+  printf '\036platform\n%s\n' "$BASH"; uname -sr; printf '%s\n' "${"$"}{SHELL:-}" "${"$"}{COWBOY_EXECUTION_FILE_HELPER:-}"
+  g inside rev-parse --is-inside-work-tree
+  if [ "$c" = 0 ]; then
+    g branch branch --show-current; g origin symbolic-ref --short refs/remotes/origin/HEAD
+    g master rev-parse --verify --quiet refs/heads/master; g main rev-parse --verify --quiet refs/heads/main
+    g user config user.name; g status status --short; g log log --oneline -n 5
+  fi
+  g toplevel rev-parse --show-toplevel
+  printf '\036rules\n'
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do [ -d "$1" ] && list "$1" -type f -name '*.md'; shift; done; shift
+  printf '\036skills\n'
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    printf '\037%s\n' "$1"
+    if [ -d "$1" ]; then case $1 in */skills) list "$1" -mindepth 2 -maxdepth 2 -name SKILL.md -type f;; *) list "$1" -name '*.md' -type f;; esac; fi
+    shift
+  done; shift
+  printf '\036candidates\n'
+  for f; do
+    if [ -f "$f" ]; then s=$(size "$f") && [ -n "$s" ] && printf 'F%s\n' "$s" || printf 'O\n'
+    elif [ -e "$f" ] || [ -L "$f" ]; then printf 'O\n'
+    else
+      d=${"$"}{f%/*}; [ -n "$d" ] || d=/
+      while ! [ -e "$d" ] && ! [ -L "$d" ]; do d=${"$"}{d%/*}; [ -n "$d" ] || d=/; done
+      if [ -d "$d" ] && [ -x "$d" ]; then printf 'A\n'; else printf 'O\n'; fi
+    fi
+  done
+  printf '\036end\n'
+}
+out=$(survey "$@"); printf '%s\n' "$out"
+`;
+
+// A directory and its ancestors, root first.
+function ancestors(cwd) {
+  const directories = [];
+  for (let directory = cwd;; directory = posix.dirname(directory)) {
+    directories.unshift(directory);
+    if (directory === "/") return directories;
+  }
+}
+
+// The survey's answers, or undefined when any part of them is not what the
+// script prints (the walks then ask the target themselves).
+export function parseStartupSurvey(output, candidates) {
+  const sections = new Map();
+  let current;
+  for (const line of output.split("\n")) {
+    if (line.startsWith("\x1e")) {
+      current = [];
+      sections.set(line.slice(1), current);
+    } else current?.push(line);
+  }
+  const platform = sections.get("platform");
+  if (!sections.has("end") || platform?.length !== 4) return undefined;
+  const git = {};
+  for (const [header, lines] of sections) {
+    const match = /^git (\w+) (\d{1,3})$/.exec(header);
+    if (!match) continue;
+    if (lines.length !== 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(lines[0])) {
+      return undefined;
+    }
+    git[match[1]] = {
+      exitCode: Number(match[2]),
+      output: Buffer.from(lines[0], "base64").toString("utf8"),
+    };
+  }
+  if (!git.inside || !git.toplevel) return undefined;
+  const facts = new Map();
+  const listed = (lines) => {
+    const paths = [];
+    for (const line of lines) {
+      const match = /^(\d+|\?)\t(\/.*)$/.exec(line);
+      if (!match) continue;
+      paths.push(match[2]);
+      if (match[1] !== "?") {
+        facts.set(match[2], { isFile: true, size: Number(match[1]) });
+      }
+    }
+    return paths;
+  };
+  const rules = listed(sections.get("rules") ?? []);
+  const skills = new Map();
+  let root;
+  for (const line of sections.get("skills") ?? []) {
+    if (line.startsWith("\x1f")) skills.set(root = line.slice(1), []);
+    else if (root !== undefined) skills.get(root).push(...listed([line]));
+  }
+  const answers = sections.get("candidates") ?? [];
+  if (answers.length !== candidates.length) return undefined;
+  for (const [index, path] of candidates.entries()) {
+    const answer = answers[index];
+    if (answer === "A") facts.set(path, null);
+    else if (/^F\s*\d+\s*$/.test(answer)) {
+      facts.set(path, { isFile: true, size: Number(answer.slice(1)) });
+    } else if (answer !== "O") return undefined;
+  }
+  return { platform: platform.join("\n"), git, rules, skills, facts };
+}
 const text = (value, native) => ({
   ...(native === undefined ? {} : { native }),
   content: [{ type: "text", text: value }],
@@ -665,11 +777,12 @@ export class WorkspaceTools {
   // Project hook settings as the target project declares them. The target is
   // their source of truth; this is a session-start snapshot.
   async projectHooks() {
+    await this.beginning?.catch(() => {});
     const hooks = {};
     const paths = ["settings.json", "settings.local.json"].map((name) =>
       posix.join(this.cwd, ".claude", name)
     );
-    const read = readAhead((path) => this.bytes(path, true), paths.length);
+    const read = readAhead((path) => this.startupBytes(path), paths.length);
     read.prefetch(paths);
     for (const path of paths) {
       // Missing means none. Any other read failure stops the session rather
@@ -1578,11 +1691,18 @@ export class WorkspaceTools {
     }
   }
 
-  async command(argv, timeout = 10000, call, { cancelOnError = false } = {}) {
+  async command(
+    argv,
+    timeout = 10000,
+    call,
+    { cancelOnError = false, end } = {},
+  ) {
     const id = randomUUID();
     let started = false;
     try {
-      await this.startForeground(argv, call, undefined, id);
+      // An endedCommand's end lines complete collection without one more
+      // read to observe the closed process.
+      await this.startForeground(argv, call, undefined, id, end ? { end } : {});
       started = true;
       const result = await this.collect(id, timeout);
       if (!result.exited) {
@@ -1607,23 +1727,113 @@ export class WorkspaceTools {
     }
   }
 
-  async context() {
-    const platform = await this.command([
-      "bash",
-      "-c",
-      'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}" "${COWBOY_EXECUTION_FILE_HELPER:-}"',
-    ]);
-    if (platform.exitCode !== 0 || !platform.output.startsWith("/")) {
-      throw new Error("Target Bash is unavailable");
+  // The files the startup walks may read before any listing: instruction
+  // candidates, project hook settings and MCP configurations.
+  startupCandidates(home, directories) {
+    return [
+      ...(home ? [posix.join(home, ".claude", "CLAUDE.md")] : []),
+      ...directories.flatMap((directory) => [
+        posix.join(directory, "CLAUDE.md"),
+        posix.join(directory, ".claude", "CLAUDE.md"),
+        posix.join(directory, "CLAUDE.local.md"),
+      ]),
+      ...["settings.json", "settings.local.json"].map((name) =>
+        posix.join(this.cwd, ".claude", name)
+      ),
+      ...projectConfigDirectories(this.cwd).map((directory) =>
+        posix.join(directory, ".mcp.json")
+      ),
+      ...(home ? [posix.join(home, ".claude.json")] : []),
+    ];
+  }
+
+  // The platform and the startup survey, asked once by context(). Walks
+  // started after it await the same answer, so they can start together.
+  // Without a survey the platform is probed as before and each walk asks the
+  // target itself.
+  begin() {
+    return this.beginning ??= this.beginStartup();
+  }
+
+  async beginStartup() {
+    const home = this.home();
+    const directories = ancestors(this.cwd);
+    const candidates = this.startupCandidates(home, directories);
+    const ruleRoots = [...(home ? [home] : []), ...directories].map((
+      directory,
+    ) => posix.join(directory, ".claude", "rules"));
+    // Every root a repository root can select: skillRoots stops there.
+    const skillDirectories = skillRoots(this.cwd, home, undefined).map((
+      root,
+    ) => root.directory);
+    const args = [...ruleRoots, "--", ...skillDirectories, "--", ...candidates];
+    let survey;
+    try {
+      const end = randomUUID().replaceAll("-", "");
+      const result = await this.command(
+        endedCommand(
+          "bash",
+          `set -- ${args.map(shellLiteral).join(" ")}\n${STARTUP_SURVEY}`,
+          end,
+        ),
+        10000,
+        undefined,
+        { end },
+      );
+      if (result.exitCode === 0 && !result.output_limit) {
+        survey = parseStartupSurvey(result.output, candidates);
+      }
+    } catch {
+      // The probe below reports an unavailable target as it always did.
+    }
+    let platform = survey?.platform;
+    if (platform === undefined) {
+      const probe = await this.command([
+        "bash",
+        "-c",
+        'printf "%s\\n" "$BASH"; uname -sr; printf "%s\\n" "${SHELL:-}" "${COWBOY_EXECUTION_FILE_HELPER:-}"',
+      ]);
+      if (probe.exitCode !== 0 || !probe.output.startsWith("/")) {
+        throw new Error("Target Bash is unavailable");
+      }
+      platform = probe.output;
     }
     // As natively, commands use the user's shell when it is bash or zsh.
-    const [bash, , userShell] = platform.output.split("\n");
+    const [bash, , userShell] = platform.split("\n");
     this.shell = /^\/\S*\/(bash|zsh)$/.test(userShell?.trim() ?? "")
       ? userShell.trim()
       : bash;
     this.startSnapshot();
-    const helper = platform.output.split("\n")[3]?.trim();
+    const helper = platform.split("\n")[3]?.trim();
     this.fileHelper = helper?.startsWith("/") ? helper : undefined;
+    if (survey) {
+      const top = survey.git.toplevel;
+      this.startupRepositoryRoot ??= Promise.resolve(
+        top.exitCode === 0 && top.output.trim().startsWith("/")
+          ? posix.resolve(top.output.trim())
+          : undefined,
+      );
+    }
+    this.survey = survey;
+    return { platform, survey };
+  }
+
+  // A startup walk's read of an optional file, using the survey's answer
+  // for it when there is one: absent, or a file of a known size.
+  startupBytes(path) {
+    const fact = this.survey?.facts.get(path);
+    if (fact === null) return Promise.resolve(undefined);
+    return this.bytes(path, true, fact);
+  }
+
+  // Reads after startup see the target as it is then, not the survey.
+  endStartup() {
+    this.survey = undefined;
+  }
+
+  async context() {
+    const { platform } = await this.begin();
+    const userShell = platform.split("\n")[2];
     // Independent target queries; gitStatus never rejects.
     const [instructions, git] = await Promise.all([
       this.instructions(),
@@ -1639,7 +1849,7 @@ export class WorkspaceTools {
           git !== undefined
         }\n - Platform: linux\n - Shell: ${
           ["bash", "zsh"].includes(shellName) ? shellName : "unknown"
-        }\n - OS Version: ${platform.output.split("\n")[1].trim()}`,
+        }\n - OS Version: ${platform.split("\n")[1].trim()}`,
       git: git ?? null,
       instructionFiles: instructions,
     };
@@ -1648,18 +1858,16 @@ export class WorkspaceTools {
   // The target's instruction files, as native discovers them locally.
   async instructions() {
     const home = this.home();
-    const directories = [];
-    for (let directory = this.cwd;; directory = posix.dirname(directory)) {
-      directories.unshift(directory);
-      if (directory === "/") break;
-    }
+    const directories = ancestors(this.cwd);
     const roots = [...(home ? [home] : []), ...directories].map((directory) =>
       posix.join(directory, ".claude", "rules")
     );
-    const fresh = async (path) => {
+    const fresh = async (path, startup = false) => {
       // Only an absent file is skipped; a failed read stops the session
       // rather than starting it without the project's instructions.
-      const bytes = await this.bytes(path, true);
+      const bytes = startup
+        ? await this.startupBytes(path)
+        : await this.bytes(path, true);
       if (!bytes) return undefined;
       try {
         return decode(bytes);
@@ -1669,7 +1877,7 @@ export class WorkspaceTools {
     };
     // The fixed candidates instructionFiles visits, in its order, read while
     // the rules are listed.
-    const read = readAhead(fresh, READ_AHEAD);
+    const read = readAhead((path) => fresh(path, true), READ_AHEAD);
     read.prefetch([
       ...(home ? [posix.join(home, ".claude", "CLAUDE.md")] : []),
       ...directories.flatMap((directory) => [
@@ -1681,17 +1889,21 @@ export class WorkspaceTools {
     // A listing that cannot run stops the session, as an unreadable
     // instruction file does. Entries find cannot follow (broken links,
     // unreadable directories) are skipped.
-    const listing = await this.command([
-      this.shell,
-      "-c",
-      'for d in "$@"; do if [ -d "$d" ]; then find -L "$d" -type f -name "*.md" 2>/dev/null; fi; done; exit 0',
-      this.shell,
-      ...roots,
-    ]);
-    if (listing.exitCode !== 0 || listing.output_limit) {
-      throw new Error("Target instruction rules could not be listed");
+    let listed = this.survey?.rules;
+    if (!listed) {
+      const listing = await this.command([
+        this.shell,
+        "-c",
+        'for d in "$@"; do if [ -d "$d" ]; then find -L "$d" -type f -name "*.md" 2>/dev/null; fi; done; exit 0',
+        this.shell,
+        ...roots,
+      ]);
+      if (listing.exitCode !== 0 || listing.output_limit) {
+        throw new Error("Target instruction rules could not be listed");
+      }
+      listed = listing.output.split("\n");
     }
-    const ruleFiles = listing.output.split("\n")
+    const ruleFiles = listed
       .filter((line) => line.startsWith("/"))
       .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
     read.prefetch(ruleFiles);
@@ -1727,10 +1939,11 @@ export class WorkspaceTools {
   // user's ~/.claude.json, each ancestor's `.mcp.json` and the environment
   // Claude Code would run in, which is the executor's.
   async mcpInputs() {
+    await this.beginning?.catch(() => {});
     const home = this.home();
     const read = async (path) => {
       try {
-        const bytes = await this.bytes(path, true);
+        const bytes = await this.startupBytes(path);
         return bytes ? decode(bytes) : undefined;
       } catch (error) {
         // An unreadable file reads as absent, as natively.
@@ -2028,26 +2241,35 @@ export class WorkspaceTools {
   // or entry that cannot be read is skipped, as are files that are not UTF-8
   // or exceed the read limit.
   async skillFiles() {
+    await this.beginning?.catch(() => {});
     const roots = skillRoots(
       this.cwd,
       this.home(),
       await this.repositoryRoot(),
     );
-    const listing = await this.command([
-      this.shell,
-      "-c",
-      'for d in "$@"; do printf "\\036%s\\n" "$d"; if [ -d "$d" ]; then case $d in */skills) find -L "$d" -mindepth 2 -maxdepth 2 -name SKILL.md -type f 2>/dev/null;; *) find -L "$d" -name "*.md" -type f 2>/dev/null;; esac; fi; done; exit 0',
-      this.shell,
-      ...roots.map((root) => root.directory),
-    ]);
-    if (listing.exitCode !== 0 || listing.output_limit) {
-      throw new Error("Target skills could not be listed");
-    }
-    const listed = new Map(roots.map((root) => [root.directory, []]));
-    let current;
-    for (const line of listing.output.split("\n")) {
-      if (line.startsWith("\x1e")) current = listed.get(line.slice(1));
-      else if (current && line.startsWith("/")) current.push(line);
+    const surveyed = this.survey?.skills;
+    let listed;
+    if (roots.every((root) => surveyed?.has(root.directory))) {
+      listed = new Map(
+        roots.map((root) => [root.directory, surveyed.get(root.directory)]),
+      );
+    } else {
+      const listing = await this.command([
+        this.shell,
+        "-c",
+        'for d in "$@"; do printf "\\036%s\\n" "$d"; if [ -d "$d" ]; then case $d in */skills) find -L "$d" -mindepth 2 -maxdepth 2 -name SKILL.md -type f 2>/dev/null;; *) find -L "$d" -name "*.md" -type f 2>/dev/null;; esac; fi; done; exit 0',
+        this.shell,
+        ...roots.map((root) => root.directory),
+      ]);
+      if (listing.exitCode !== 0 || listing.output_limit) {
+        throw new Error("Target skills could not be listed");
+      }
+      listed = new Map(roots.map((root) => [root.directory, []]));
+      let current;
+      for (const line of listing.output.split("\n")) {
+        if (line.startsWith("\x1e")) current = listed.get(line.slice(1));
+        else if (current && line.startsWith("/")) current.push(line);
+      }
     }
     const entries = roots.flatMap((root) =>
       listed.get(root.directory).sort((left, right) =>
@@ -2057,7 +2279,7 @@ export class WorkspaceTools {
         return name === undefined ? [] : [{ root, path, name }];
       })
     );
-    const read = readAhead((path) => this.bytes(path, true), READ_AHEAD);
+    const read = readAhead((path) => this.startupBytes(path), READ_AHEAD);
     read.prefetch(entries.map((entry) => entry.path));
     const found = [];
     for (const { root, path, name } of entries) {
@@ -2082,22 +2304,25 @@ export class WorkspaceTools {
 
   // Native's gitStatus block from the target repository; undefined outside one.
   async gitStatus() {
-    const git = (...args) =>
-      this.command(["git", "--no-optional-locks", ...args]).catch(() => ({
-        exitCode: 1,
-        output: "",
-      }));
-    const inside = await git("rev-parse", "--is-inside-work-tree");
+    const surveyed = this.survey?.git;
+    const git = (name, ...args) =>
+      surveyed
+        ? Promise.resolve(surveyed[name] ?? { exitCode: 1, output: "" })
+        : this.command(["git", "--no-optional-locks", ...args]).catch(() => ({
+          exitCode: 1,
+          output: "",
+        }));
+    const inside = await git("inside", "rev-parse", "--is-inside-work-tree");
     if (inside.exitCode !== 0) return undefined;
     const [branch, origin, master, main, user, status, log] = await Promise.all(
       [
-        git("branch", "--show-current"),
-        git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
-        git("rev-parse", "--verify", "--quiet", "refs/heads/master"),
-        git("rev-parse", "--verify", "--quiet", "refs/heads/main"),
-        git("config", "user.name"),
-        git("status", "--short"),
-        git("log", "--oneline", "-n", "5"),
+        git("branch", "branch", "--show-current"),
+        git("origin", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
+        git("master", "rev-parse", "--verify", "--quiet", "refs/heads/master"),
+        git("main", "rev-parse", "--verify", "--quiet", "refs/heads/main"),
+        git("user", "config", "user.name"),
+        git("status", "status", "--short"),
+        git("log", "log", "--oneline", "-n", "5"),
       ],
     );
     const mainBranch = origin.exitCode === 0 && origin.output.trim()
