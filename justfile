@@ -477,6 +477,15 @@ execution-worker-conformance INPUT RECEIPT:
     # The target's home is a fresh directory: its user files are fixtures, never this account's.
     unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked --all-features --lib native_worker_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
 
+# A packaged managed Claude turn through a real read-only keeper (see
+# docs/managed-agent-calls.md). Same isolation as the worker gate.
+execution-managed-conformance INPUT RECEIPT:
+    cargo build --locked --no-default-features --features machine-host --bin cowboy-execution-host
+    cargo test --locked --all-features --lib --no-run
+    # Namespace setup needs capabilities; native sandbox helpers expect an ordinary user afterward.
+    # The target's home is a fresh directory: its user files are fixtures, never this account's.
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_EXECUTION_INPUT="$1" COWBOY_TEST_EXECUTION_RECEIPT="$2" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"; export HOME="$(mktemp -d)"; exec setpriv --inh-caps=-all --ambient-caps=-all cargo test --offline --locked --all-features --lib native_managed_claude_execution -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+
 # Actual public login, signed fixture installation and two enrolled Machines.
 # All state is disposable; the fixture Agent makes no model requests.
 execution-session-conformance INPUT RECEIPT:

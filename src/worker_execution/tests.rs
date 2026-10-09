@@ -7,6 +7,8 @@ use crate::machine_protocol::execution::{Action, Request};
 
 #[cfg(feature = "machine-host")]
 mod native_backpressure;
+#[cfg(feature = "machine-host")]
+mod native_managed;
 mod transport;
 
 fn binding() -> BindingV1 {

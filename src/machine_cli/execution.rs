@@ -321,6 +321,18 @@ impl Manager {
                     .iter()
                     .map(|workspace| PathBuf::from(&workspace.canonical_path))
                     .collect();
+                // A Machine that never hosted an execution environment has
+                // no private root yet.
+                if std::fs::create_dir_all(&self.root)
+                    .and_then(|()| {
+                        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))
+                    })
+                    .is_err()
+                {
+                    return Response::ManagedRoundRefused {
+                        code: "preparation_failed".into(),
+                    };
+                }
                 let managed = self.managed_root();
                 match crate::managed_calls::snapshot::prepare(
                     &managed,
