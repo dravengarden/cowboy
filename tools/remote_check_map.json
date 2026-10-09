@@ -165,7 +165,8 @@
         "tools/remote_impact.py",
         "tools/remote_check_map.json",
         "tools/remote_impact_test.py",
-        "tools/register-memory-client.mjs"
+        "tools/register-memory-client.mjs",
+        "tools/claude_hooks_native_baseline.json"
       ],
       "native": [
         "claude"
@@ -357,6 +358,12 @@
           "baseline": "tools/claude_skill_native_baseline.json",
           "phases": [
             "skills"
+          ]
+        },
+        "tools/claude_hooks_native_probe.py": {
+          "baseline": "tools/claude_hooks_native_baseline.json",
+          "phases": [
+            "hooks"
           ]
         }
       },

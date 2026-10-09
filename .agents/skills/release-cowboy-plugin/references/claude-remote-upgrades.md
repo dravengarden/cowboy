@@ -121,8 +121,13 @@ on `prompt.context` rendering `instructionFiles`, on the `session_context`
 attachment's `# gitStatus` section and on the `tool.call hook additional
 context:` label this module removes; re-measure them per CLI (the
 `*instruction*` and `*git*` checks). The packaged hook checks (`*_hook_*`/`*_hooks_*`,
-`nonzero_bash_exit_is_native_tool_error`) cover these; the native baselines
-are in the project hooks receipt.
+`nonzero_bash_exit_is_native_tool_error`) cover these. The native hook
+baselines are in `tools/claude_hooks_native_baseline.json` (probe
+`tools/claude_hooks_native_probe.py`), and
+`tools/claude-remote-hooks-baseline.test.mjs` checks the plugin's hook outcomes,
+matchers, PermissionRequest race, shell-prefix form and agent hook input
+against it. The order of two PermissionRequest decisions arriving together is
+a native race; the plugin resolves it to deny.
 
 Target tools are gated by native `$.tool.check` under the session's permission
 mode, with asks raised to the SDK host as native `can_use_tool` requests by the

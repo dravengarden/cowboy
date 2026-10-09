@@ -662,7 +662,8 @@ async function shellSession($) {
 
 // Project PermissionRequest hooks for a prompt the host has not answered.
 // Natively they race the prompt and each other: the first decision withdraws
-// it, and of decisions arriving together a deny wins (measured on 2.1.287).
+// it. The order of decisions arriving together is a native race (2.1.287
+// resolved it to deny once and to allow once); a deny wins here, the safe side.
 // They have their own lifecycle: the host's answer cancels them without
 // abandoning the call.
 function permissionHooks($, event, input, run) {

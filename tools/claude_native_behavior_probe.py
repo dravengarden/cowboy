@@ -111,7 +111,14 @@ def stable(text, root):
         uses.setdefault(found, "toolu_%d" % (len(uses) + 1))
     for found, name in uses.items():
         text = text.replace(found, name)
-    return text
+    agents = {}
+    for found in re.findall(r"\ba[0-9a-f]{16}\b", text):
+        agents.setdefault(found, "agent%d" % (len(agents) + 1))
+    for found, name in agents.items():
+        text = re.sub(r"\b%s\b" % found, name, text)
+    text = re.sub(r"snapshot-bash-\d+-[a-z0-9]+\.sh", "snapshot-bash-SNAPSHOT.sh", text)
+    text = re.sub(r"claude-[0-9a-f]{4}-cwd", "claude-CWD-cwd", text)
+    return re.sub(r'"duration_ms": \d+', '"duration_ms": 0', text)
 
 
 def results(api):

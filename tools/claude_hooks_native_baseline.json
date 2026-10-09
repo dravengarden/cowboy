@@ -1,0 +1,1206 @@
+{
+ "tool_hooks": {
+  "pre_exit2": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "PreToolUse:Bash hook error: [cat > /dev/null; echo PRE_BLOCK_STDERR >&2; exit 2]: PRE_BLOCK_STDERR\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_exit1": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_deny": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "PreToolUse:Bash hook error: PRE_DENY_REASON\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_allow_update": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "updated",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_ask": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    "PRE_ASK_REASON"
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_legacy_block": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "PreToolUse:Bash hook error: LEGACY_BLOCK_REASON\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_context": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)",
+      "is_error": false
+     },
+     {
+      "type": "text",
+      "text": "<system-reminder>\nPreToolUse:Bash hook additional context: PRE_CONTEXT\n</system-reminder>"
+     },
+     {
+      "type": "text",
+      "text": "<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_stop": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 1,
+   "ran": "original",
+   "asked": [],
+   "model_tail": null,
+   "result_text": "",
+   "stop_reason": "tool_use",
+   "hook_stdin": null
+  },
+  "pre_plain_stdout": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "match_partial": {
+   "event": "PreToolUse",
+   "matcher": "Bas",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "match_regex": {
+   "event": "PreToolUse",
+   "matcher": "B.*h",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "PreToolUse:Bash hook error: [cat > /dev/null; echo MATCHED >&2; exit 2]: MATCHED\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "match_alternation": {
+   "event": "PreToolUse",
+   "matcher": "Edit|Bash",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "PreToolUse:Bash hook error: [cat > /dev/null; echo MATCHED >&2; exit 2]: MATCHED\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "match_lowercase": {
+   "event": "PreToolUse",
+   "matcher": "bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "match_star": {
+   "event": "PreToolUse",
+   "matcher": "*",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "PreToolUse:Bash hook error: [cat > /dev/null; echo MATCHED >&2; exit 2]: MATCHED\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "post_exit2": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\nPostToolUse:Bash hook blocking error from command: \"cat > /dev/null; echo POST_FEEDBACK >&2; exit 2\": [cat > /dev/null; echo POST_FEEDBACK >&2; exit 2]: POST_FEEDBACK\n\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "post_block": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\nPostToolUse:Bash hook blocking error from command: \"cat > /dev/null; cat <ROOT>/out0.json\": POST_BLOCK_REASON\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "post_context": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\nPostToolUse:Bash hook additional context: POST_CONTEXT\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "post_stop": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 1,
+   "ran": "original",
+   "asked": [],
+   "model_tail": null,
+   "result_text": "",
+   "stop_reason": "tool_use",
+   "hook_stdin": null
+  },
+  "post_exit1": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "post_stdin": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": {
+    "session_id": "SESSION",
+    "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl",
+    "cwd": "<ROOT>/runtime",
+    "prompt_id": "SESSION",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "high"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "printf original >> ran.txt"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_1",
+    "duration_ms": 0
+   }
+  },
+  "pre_context_then_fail": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 3",
+      "is_error": true,
+      "tool_use_id": "toolu_1"
+     },
+     {
+      "type": "text",
+      "text": "<system-reminder>\nPreToolUse:Bash hook additional context: PRE_CONTEXT\n</system-reminder>"
+     },
+     {
+      "type": "text",
+      "text": "<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "invalid_project_settings": {
+   "event": "PreToolUse",
+   "matcher": "NoMatch",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "bash_nonzero_post": {
+   "event": "PostToolUse",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 3\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "bash_nonzero_failure": {
+   "event": "PostToolUseFailure",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 3\npartial\n\n<system-reminder>\nPostToolUseFailure:Bash hook additional context: FAIL_CONTEXT\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": {
+    "session_id": "SESSION",
+    "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl",
+    "cwd": "<ROOT>/runtime",
+    "prompt_id": "SESSION",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "high"
+    },
+    "hook_event_name": "PostToolUseFailure",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "printf original >> ran.txt; echo partial; exit 3"
+    },
+    "tool_use_id": "toolu_1",
+    "error": "Exit code 3\npartial",
+    "is_interrupt": false,
+    "duration_ms": 0
+   }
+  },
+  "failure_stop": {
+   "event": "PostToolUseFailure",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 3\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "failure_exit2": {
+   "event": "PostToolUseFailure",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 3\n\n<system-reminder>\nPostToolUseFailure:Bash hook blocking error from command: \"cat > /dev/null; echo FAIL_FEEDBACK >&2; exit 2\": [cat > /dev/null; echo FAIL_FEEDBACK >&2; exit 2]: FAIL_FEEDBACK\n\n</system-reminder>\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "pre_stop_then_fail": {
+   "event": "PreToolUse",
+   "matcher": "Bash",
+   "api_requests": 1,
+   "ran": "original",
+   "asked": [],
+   "model_tail": null,
+   "result_text": "",
+   "stop_reason": "tool_use",
+   "hook_stdin": null
+  },
+  "streams_fail": {
+   "event": "PreToolUse",
+   "matcher": "NoMatch",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 3\nOUT1\nERR1\nOUT2\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "streams_ok": {
+   "event": "PreToolUse",
+   "matcher": "NoMatch",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "OUT1\nERR1\nOUT2\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "silent_fail": {
+   "event": "PreToolUse",
+   "matcher": "NoMatch",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "Exit code 4\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_allow": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_allow_update": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_deny": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_deny_interrupt": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_none": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": {
+    "session_id": "SESSION",
+    "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl",
+    "cwd": "<ROOT>/runtime",
+    "prompt_id": "SESSION",
+    "permission_mode": "default",
+    "effort": {
+     "level": "high"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "printf original >> ran.txt; true"
+    },
+    "permission_suggestions": [
+     {
+      "type": "addRules",
+      "rules": [
+       {
+        "toolName": "Bash",
+        "ruleContent": "printf original *"
+       }
+      ],
+      "behavior": "allow",
+      "destination": "localSettings"
+     },
+     {
+      "type": "addDirectories",
+      "directories": [
+       "<ROOT>/runtime"
+      ],
+      "destination": "session"
+     }
+    ]
+   }
+  },
+  "permreq_exit2": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_nomatch": {
+   "event": "PermissionRequest",
+   "matcher": "Read",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_allow_slow_host": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_fast_allow_slow_deny": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": "original",
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "tool_use_id": "toolu_1",
+      "type": "tool_result",
+      "content": "(Bash completed with no output)\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": false,
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  },
+  "permreq_fast_deny_slow_allow": {
+   "event": "PermissionRequest",
+   "matcher": "Bash",
+   "api_requests": 2,
+   "ran": null,
+   "asked": [
+    null
+   ],
+   "model_tail": {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "content": "DENY_0\n\n<system-reminder>\n<total_tokens>14999980 tokens left</total_tokens>\n</system-reminder>",
+      "is_error": true,
+      "tool_use_id": "toolu_1",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   "result_text": "AFTER_TOOL",
+   "stop_reason": "end_turn",
+   "hook_stdin": null
+  }
+ },
+ "shell_prefix": {
+  "plain": {
+   "hooks_ran": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop"
+   ],
+   "prefix_log": "",
+   "stdin_keys": {
+    "PostToolUse": [
+     "cwd",
+     "duration_ms",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "session_id",
+     "tool_input",
+     "tool_name",
+     "tool_response",
+     "tool_use_id",
+     "transcript_path"
+    ],
+    "PreToolUse": [
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "permission_mode",
+     "prompt_id",
+     "session_id",
+     "tool_input",
+     "tool_name",
+     "tool_use_id",
+     "transcript_path"
+    ],
+    "SessionStart": [
+     "cwd",
+     "hook_event_name",
+     "session_id",
+     "source",
+     "transcript_path"
+    ],
+    "Stop": [
+     "background_tasks",
+     "cwd",
+     "effort",
+     "hook_event_name",
+     "last_assistant_message",
+     "permission_mode",
+     "prompt_id",
+     "session_crons",
+     "session_id",
+     "stop_hook_active",
+     "transcript_path"
+    ],
+    "UserPromptSubmit": [
+     "cwd",
+     "hook_event_name",
+     "permission_mode",
+     "prompt",
+     "prompt_id",
+     "session_id",
+     "transcript_path"
+    ]
+   },
+   "api_requests": 3
+  },
+  "prefixed": {
+   "hooks_ran": [],
+   "prefix_log": "---\nargc=1\narg1=cat > <ROOT>/hooks.log.SessionStart.stdin; printf 'SessionStart\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\n---\nargc=1\narg1=printf '%s' \"${CLAUDE_PROJECT_DIR}\" > /dev/null # BRACED\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\nstdin_is_tty=no\n---\nargc=1\narg1=cat > <ROOT>/hooks.log.UserPromptSubmit.stdin; printf 'UserPromptSubmit\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n---\nargc=1\narg1=cat > <ROOT>/hooks.log.PreToolUse.stdin; printf 'PreToolUse\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n---\nargc=1\narg1=source <ROOT>/home/claude/shell-snapshots/snapshot-bash-SNAPSHOT.sh 2>/dev/null || true && { shopt -u extglob || setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'echo bash-ran' < /dev/null && pwd -P >| <ROOT>/home/claude-CWD-cwd\nproject_dir=\nstdin_is_tty=no\n---\nargc=1\narg1=cat > <ROOT>/hooks.log.Stop.stdin; printf 'Stop\\n' >> <ROOT>/hooks.log\nproject_dir=<ROOT>/runtime\nstdin_is_tty=no\n",
+   "stdin_keys": {},
+   "api_requests": 3
+  }
+ },
+ "agent_hooks": {
+  "foreground": {
+   "ran": "child",
+   "hooks": [
+    {
+     "agent_id": "agent1",
+     "agent_type": "general-purpose",
+     "cwd": "<ROOT>/runtime",
+     "effort": {
+      "level": "high"
+     },
+     "hook_event_name": "PreToolUse",
+     "permission_mode": "bypassPermissions",
+     "prompt_id": "SESSION",
+     "session_id": "SESSION",
+     "tool_input": {
+      "command": "printf child >> ran.txt"
+     },
+     "tool_name": "Bash",
+     "tool_use_id": "toolu_1",
+     "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl"
+    },
+    {
+     "agent_id": "agent1",
+     "agent_transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION/subagents/agent-agent1.jsonl",
+     "agent_type": "general-purpose",
+     "background_tasks": [],
+     "cwd": "<ROOT>/runtime",
+     "effort": {
+      "level": "high"
+     },
+     "hook_event_name": "SubagentStop",
+     "last_assistant_message": "CHILD_DONE",
+     "permission_mode": "bypassPermissions",
+     "prompt_id": "SESSION",
+     "session_crons": [],
+     "session_id": "SESSION",
+     "stop_hook_active": false,
+     "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl"
+    }
+   ]
+  },
+  "background": {
+   "ran": "child",
+   "hooks": [
+    {
+     "agent_id": "agent2",
+     "agent_type": "general-purpose",
+     "cwd": "<ROOT>/runtime",
+     "effort": {
+      "level": "high"
+     },
+     "hook_event_name": "PreToolUse",
+     "permission_mode": "bypassPermissions",
+     "prompt_id": "SESSION",
+     "session_id": "SESSION",
+     "tool_input": {
+      "command": "printf child >> ran.txt"
+     },
+     "tool_name": "Bash",
+     "tool_use_id": "toolu_1",
+     "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl"
+    },
+    {
+     "agent_id": "agent2",
+     "agent_transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION/subagents/agent-agent2.jsonl",
+     "agent_type": "general-purpose",
+     "background_tasks": [
+      {
+       "id": "agent2",
+       "type": "subagent",
+       "status": "running",
+       "description": "Hook child",
+       "agent_type": "general-purpose"
+      }
+     ],
+     "cwd": "<ROOT>/runtime",
+     "effort": {
+      "level": "high"
+     },
+     "hook_event_name": "SubagentStop",
+     "last_assistant_message": "CHILD_DONE",
+     "permission_mode": "bypassPermissions",
+     "prompt_id": "SESSION",
+     "session_crons": [],
+     "session_id": "SESSION",
+     "stop_hook_active": false,
+     "transcript_path": "<ROOT>/home/claude/projects/-ROOT-runtime/SESSION.jsonl"
+    }
+   ]
+  }
+ }
+}
