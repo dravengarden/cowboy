@@ -742,6 +742,15 @@ async fn connected(
                     Frame::Replay { session_id, worker_epoch, after_runtime_seq }
                         if session_id == shared.session_id && worker_epoch == shared.worker_epoch => {
                         last_sent = after_runtime_seq;
+                        // The broker survives a Controller reconnect, so our
+                        // local socket never reconnects. Replay pending target
+                        // calls too instead of waiting for their 30s retry.
+                        // frames(true) retains request and effect identities.
+                        if let Some(execution) = &shared.execution {
+                            for frame in execution.frames(true) {
+                                write_frame(&mut writer, &frame).await?;
+                            }
+                        }
                         send_outbox(&shared, &mut writer, &mut last_sent).await?;
                     }
                     Frame::Heartbeat => {}
@@ -1285,6 +1294,114 @@ mod tests {
             }),
             rx,
         )
+    }
+
+    #[tokio::test]
+    async fn controller_replay_resends_pending_execution_without_worker_reconnect() {
+        use futures::SinkExt as _;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+
+        let root = tempfile::Builder::new()
+            .prefix("cw-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let socket = root.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (mut shared, notify_rx) = shared();
+        let binding: crate::execution_environment::BindingV1 = serde_json::from_value(
+            serde_json::json!({
+                "schema": 1, "id": "binding", "revision": 1,
+                "runtime": {"machine_id": "runtime", "cwd": "/runtime"},
+                "environment": {"machine_id": "target", "id": "environment",
+                    "incarnation": "incarnation", "executor_digest": format!("sha256:{}", "a".repeat(64)), "protocol": 1},
+                "workspace": {"id": "project", "worktree_id": "session", "source_path": "/source", "cwd": "/target"},
+                "access": "project"
+            }),
+        ).unwrap();
+        let execution = crate::worker_execution::Client::new(
+            "sess-1".into(),
+            "epoch-1".into(),
+            binding,
+            shared.notify.clone(),
+        );
+        let endpoint =
+            crate::worker_execution::Endpoint::start(Arc::clone(&execution), root.path())
+                .await
+                .unwrap();
+        Arc::get_mut(&mut shared).unwrap().execution = Some(execution);
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel();
+        let (_done_tx, mut done_rx) = mpsc::channel(1);
+        let worker = tokio::spawn(async move {
+            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx).await
+        });
+        let (mut broker, _) = listener.accept().await.unwrap();
+        assert!(matches!(
+            read_frame(&mut broker).await.unwrap(),
+            Some(Frame::Hello { .. })
+        ));
+        write_frame(
+            &mut broker,
+            &Frame::Welcome {
+                protocol: PROTOCOL_VERSION,
+                controller_epoch: 1,
+                workers: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        let descriptor: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(endpoint.descriptor()).unwrap()).unwrap();
+        let mut request = descriptor["endpoint"]
+            .as_str()
+            .unwrap()
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {}", descriptor["bearer_token"].as_str().unwrap())
+                .parse()
+                .unwrap(),
+        );
+        let (mut native, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        native
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({"id": 1, "method": "initialize", "params": {}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let initial = loop {
+            let frame = read_frame(&mut broker).await.unwrap().unwrap();
+            if matches!(frame, Frame::ExecutionRequest { .. }) {
+                break frame;
+            }
+        };
+        // Drop the reply upstream while keeping the worker's socket alive.
+        // This is the Replay the broker sends when a Controller reattaches.
+        write_frame(
+            &mut broker,
+            &Frame::Replay {
+                session_id: "sess-1".into(),
+                worker_epoch: "epoch-1".into(),
+                after_runtime_seq: 0,
+            },
+        )
+        .await
+        .unwrap();
+        let replay = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let frame = read_frame(&mut broker).await.unwrap().unwrap();
+                if matches!(frame, Frame::ExecutionRequest { .. }) {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .expect("Controller reconnect must not wait for the 30s retry");
+        assert_eq!(replay, initial, "preserve the original request identity");
+        worker.abort();
+        let _ = worker.await;
     }
 
     #[tokio::test]
