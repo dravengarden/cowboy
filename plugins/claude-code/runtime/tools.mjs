@@ -177,8 +177,14 @@ export function parseStartupSurvey(output, candidates) {
   if (answers.length !== candidates.length) return undefined;
   for (const [index, path] of candidates.entries()) {
     const answer = answers[index];
-    if (answer === "A") facts.set(path, null);
-    else if (/^F\s*\d+\s*$/.test(answer)) {
+    if (answer === "A") {
+      // A name beyond Linux's limits fails with ENAMETOOLONG rather than
+      // ENOENT; the walk asks about it itself.
+      if (
+        Buffer.byteLength(path) < 4096 &&
+        path.split("/").every((part) => Buffer.byteLength(part) <= 255)
+      ) facts.set(path, null);
+    } else if (/^F\s*\d+\s*$/.test(answer)) {
       facts.set(path, { isFile: true, size: Number(answer.slice(1)) });
     } else if (answer !== "O") return undefined;
   }

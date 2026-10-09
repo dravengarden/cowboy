@@ -391,6 +391,15 @@ test("a malformed survey falls back to the per-walk queries", () => {
   ]);
   const refused = (output, expected = candidates) =>
     assert.equal(parseStartupSurvey(output, expected), undefined);
+  // An absent answer for an overlong name is not trusted.
+  const long = "/" + "x".repeat(300) + "/CLAUDE.md";
+  assert.equal(
+    parseStartupSurvey(survey(head, toplevel, [...tail.slice(0, -1), "A"]), [
+      "/a",
+      long,
+    ]).facts.has(long),
+    false,
+  );
   // Output before the survey.
   refused("base64: not found\n" + survey(head, toplevel, tail));
   // An empty successful answer, or a missing one.
