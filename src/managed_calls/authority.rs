@@ -37,8 +37,9 @@ impl Authority {
             worker.session_id == parent.id
                 && worker.has_connected_owner()
                 && super::valid_id(&worker.worker_epoch)
-                && matches!(worker.state, WorkerState::Running | WorkerState::Busy)
-                && !worker.drain_requested,
+                // A drain request only schedules replacement at the next safe
+                // boundary; the new worker epoch revokes this authority then.
+                && matches!(worker.state, WorkerState::Running | WorkerState::Busy),
             "parent has no active worker owner"
         );
         let launch = worker
@@ -157,9 +158,15 @@ mod tests {
             changed.worker_epoch = epoch.into();
             assert!(Authority::for_worker("service-test", &parent, &changed).is_err());
         }
+        // A long busy turn after a Provider upgrade keeps its exact worker
+        // until the drain boundary, and keeps the same authority until then.
         let mut changed = worker.clone();
         changed.drain_requested = true;
-        assert!(Authority::for_worker("service-test", &parent, &changed).is_err());
+        assert!(
+            Authority::for_worker("service-test", &parent, &worker)
+                .unwrap()
+                .accepts(&Authority::for_worker("service-test", &parent, &changed).unwrap())
+        );
         changed = worker.clone();
         changed.launch.as_mut().unwrap().cwd = "/another-worktree".into();
         assert!(Authority::for_worker("service-test", &parent, &changed).is_err());
