@@ -235,20 +235,22 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
                 },
             );
         }
-        if *shutdown.borrow()
-            || !wants_update(
-                opted_in || when_idle,
-                fleet_policy,
-                meta.system,
-                state.hub.session_idle_for(&meta.id),
-                idle_after,
-            )
-        {
+        let still_wanted = || {
+            !*shutdown.borrow()
+                && wants_update(
+                    opted_in || when_idle,
+                    fleet_policy,
+                    meta.system,
+                    state.hub.session_idle_for(&meta.id),
+                    idle_after,
+                )
+        };
+        if !still_wanted() {
             continue;
         }
         let applied = match meta.status {
             Status::Running if ready.contains(&meta.machine_id) => {
-                let applied = update_running(state, &meta).await;
+                let applied = update_running(state, &meta, &still_wanted).await;
                 if applied {
                     ready.remove(&meta.machine_id);
                 }
@@ -273,7 +275,11 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
 /// Reload one idle running session through the shared explicit-Reload path,
 /// which rechecks the exact old binding and idleness under the Hub lock,
 /// preserves native identity, and fences racing prompts.
-async fn update_running(state: &Arc<AppState>, meta: &crate::core::SessionMeta) -> bool {
+async fn update_running(
+    state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
+    still_wanted: &(dyn Fn() -> bool + Sync),
+) -> bool {
     let Ok(_fence) = ProviderReloadFence::acquire(
         &state.plugin_lifecycle_fences,
         (meta.machine_id.clone(), meta.provider.clone()),
@@ -287,6 +293,11 @@ async fn update_running(state: &Arc<AppState>, meta: &crate::core::SessionMeta) 
             return false;
         }
     };
+    // Resolution awaited: never downgrade, and let a prompt that arrived
+    // meanwhile keep its session.
+    if !newer(&meta.provider_version, &target.version) || !still_wanted() {
+        return false;
+    }
     match apply_session_provider_reload(state, meta, &target, true) {
         Ok(()) => {
             tracing::info!(session = %meta.id, version = %target.version, "automatic Provider update started");
