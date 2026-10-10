@@ -187,3 +187,18 @@ snapshot. The Controller now stashes a replacement snapshot (different epoch,
 not a broker placeholder, not exited) seen while resetting and adopts it when
 the reset is acknowledged. Covered by
 `replacement_snapshot_before_reset_acknowledgement_owns_the_session`.
+
+## Hook transcripts on executors without the file helper (3.19.15)
+
+Matching each operation's worker and Controller timestamps after the
+Controller release showed the request leg (OVH worker to Controller) at a
+median 1.2 s and up to 15.5 s, with replies at 50-110 ms; several sessions'
+requests were released together. The OVH Machine's WebSocket was uploading
+50-280 KB/s, at the flow's measured ceiling. One busy session uploaded about
+10 MB a minute of `fs/writeFile` chunks for `hook-input/*.jsonl.transfer-*`:
+its Hawk executor had been running for 30 hours, since before the file helper
+existed, so every hook copied the whole transcript (over 6 MB). A plugin
+update does not replace an executor, and replacing a busy session's executor
+would stop its target processes. Without a helper, 3.19.15 performs the same
+verified append snapshot in POSIX shell with `sha256sum` or `shasum`; a target
+with neither keeps the whole-copy contract.

@@ -197,6 +197,26 @@ const text = (value, native) => ({
   isError: false,
 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+// The file helper's `snapshot` in POSIX shell: verify the cached base,
+// append the delta into a new snapshot, verify it, then replace the cache.
+// Exit 75 is a cache miss and 3 a target without a SHA-256 tool; neither
+// has created the snapshot. Arguments: cache delta snapshot base digest.
+export const SHELL_SNAPSHOT = String.raw`umask 077; set -C
+if command -v sha256sum >/dev/null 2>&1; then digest_of() { sha256sum < "$1"; }
+elif command -v shasum >/dev/null 2>&1; then digest_of() { shasum -a 256 < "$1"; }
+else exit 3; fi
+case $5 in *[!0-9a-f]*|'') exit 2;; esac
+[ "${"$"}{#5}" -eq 64 ] || exit 2
+if [ -n "$4" ]; then
+  [ -f "$1" ] && [ ! -L "$1" ] || exit 75
+  [ "$(digest_of "$1" | cut -c1-64)" = "$4" ] || exit 75
+  cat -- "$1" "$2" > "$3" || exit 1
+else
+  cat -- "$2" > "$3" || exit 1
+fi
+[ "$(digest_of "$3" | cut -c1-64)" = "$5" ] || exit 1
+cat -- "$3" > "$3.cache" && mv -f -- "$3.cache" "$1"`;
 // Only disposable hook input is cached. A verified base plus an append is
 // materialized into an exclusive snapshot before the hook can start. Never
 // expose the shared cache to a hook, or retry a hook after a lost receipt.
@@ -1009,8 +1029,10 @@ export class WorkspaceTools {
   }
 
   async hookTranscript(transcript, copy, call) {
-    // Small inputs and targets without Python retain the original contract.
-    if (!this.fileHelper || transcript.length < 128 * 1024) {
+    // Small inputs and targets without a SHA-256 tool retain the original
+    // contract. An executor started before the file helper existed (it keeps
+    // running across plugin updates) uses the same snapshot in shell.
+    if (this.hookDigestUnavailable || transcript.length < 128 * 1024) {
       await this.hookInputFile(copy, transcript, call);
       return;
     }
@@ -1031,9 +1053,9 @@ export class WorkspaceTools {
         await this.hookInputFile(delta, bytes, call);
         return await this.command(
           [
-            this.fileHelper,
-            "snapshot",
-            "--",
+            ...(this.fileHelper
+              ? [this.fileHelper, "snapshot", "--"]
+              : [this.shell, "-c", SHELL_SNAPSHOT, this.shell]),
             cache,
             delta,
             copy,
@@ -1050,6 +1072,12 @@ export class WorkspaceTools {
           append ? transcript.subarray(previous.bytes.length) : transcript,
           append ? previous.digest : "",
         );
+        // The shell snapshot found no SHA-256 tool before writing anything.
+        if (!this.fileHelper && result.exitCode === 3) {
+          this.hookDigestUnavailable = true;
+          await this.hookInputFile(copy, transcript, call);
+          return;
+        }
         // Explicit cache miss, before snapshot creation or hook execution.
         // A transport error is never grounds to retry any process start.
         if (append && result.exitCode === 75) {

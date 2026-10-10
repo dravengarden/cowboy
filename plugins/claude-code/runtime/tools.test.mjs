@@ -287,6 +287,68 @@ test("quiet output retains the cancellation-compatible one-second wait bound", a
   assert.deepEqual(waits, Array(60).fill(1000));
 });
 
+test("hook transcripts send only appended bytes to an executor without the file helper", async (t) => {
+  const { tools } = await fixture(t);
+  const directory = await mkdtemp(join(tmpdir(), "cowboy-hook-snapshot-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  tools.shell = "/bin/sh";
+  tools.fileHelper = undefined;
+  let env = process.env;
+  let sent = 0;
+  tools.hookInputFile = async (path, bytes) => {
+    sent += bytes.length;
+    await writeFile(path, bytes);
+  };
+  tools.command = async (argv) => {
+    try {
+      execFileSync(argv[0], argv.slice(1), { env, stdio: "ignore" });
+      return { exitCode: 0, closed: true, output: "" };
+    } catch (error) {
+      return { exitCode: error.status, closed: true, output: "" };
+    }
+  };
+  const cache = join(directory, `transcript-${tools.state.binding}.cache`);
+  const first = Buffer.from("x".repeat(200 * 1024));
+  await tools.hookTranscript(first, join(directory, "one.jsonl"), undefined);
+  assert.equal(sent, first.length);
+  assert.deepEqual(await readFile(join(directory, "one.jsonl")), first);
+
+  const second = Buffer.concat([first, Buffer.from("appended\n")]);
+  await tools.hookTranscript(second, join(directory, "two.jsonl"), undefined);
+  assert.equal(sent, first.length + 9);
+  assert.deepEqual(await readFile(join(directory, "two.jsonl")), second);
+  assert.deepEqual(await readFile(join(directory, "one.jsonl")), first);
+  assert.deepEqual(await readFile(cache), second);
+  assert.equal((await stat(cache)).mode & 0o777, 0o600);
+
+  // A lost cache is an explicit miss: the whole transcript once more.
+  await rm(cache);
+  const third = Buffer.concat([second, Buffer.from("more\n")]);
+  sent = 0;
+  await tools.hookTranscript(third, join(directory, "three.jsonl"), undefined);
+  assert.equal(sent, 5 + third.length);
+  assert.deepEqual(await readFile(join(directory, "three.jsonl")), third);
+
+  // Without sha256sum or shasum the original whole-copy contract remains.
+  const bin = join(directory, "bin");
+  await mkdir(bin);
+  for (const tool of ["cat", "cut", "mv"]) {
+    const path = execFileSync("sh", ["-c", `command -v ${tool}`], {
+      encoding: "utf8",
+    }).trim();
+    execFileSync("ln", ["-s", path, join(bin, tool)]);
+  }
+  env = { ...process.env, PATH: bin };
+  const fourth = Buffer.concat([third, Buffer.from("last\n")]);
+  sent = 0;
+  await tools.hookTranscript(fourth, join(directory, "four.jsonl"), undefined);
+  assert.equal(sent, 5 + fourth.length);
+  assert.deepEqual(await readFile(join(directory, "four.jsonl")), fourth);
+  sent = 0;
+  await tools.hookTranscript(fourth, join(directory, "five.jsonl"), undefined);
+  assert.equal(sent, fourth.length);
+});
+
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "cowboy-claude-tools-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
