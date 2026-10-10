@@ -169,6 +169,6 @@ test("desktop Provider update is a top-bar action only while offered", () => {
   assert(topBarSource.includes("const providerUpdate = sessionProviderUpdate(session)"));
   assert(topBarSource.includes("{providerUpdate && session && ("));
   assert(topBarSource.includes('data-desktop-topbar-action="update"'));
-  assert(topBarSource.includes('sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "P"]'));
+  assert(topBarSource.includes('sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "N"]'));
   assert(topBarSource.includes("<ProviderUpdateDialog"));
 });

@@ -1,6 +1,69 @@
+import { readdir, readFile } from "node:fs/promises";
 import { test } from "bun:test";
-import { assertEquals, assertStringIncludes } from "@std/assert";
-import { shortcutRegistrationConflict } from "./shortcutRegistrationPolicy.ts";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  type RegisteredShortcut,
+  shortcutRegistrationConflict,
+} from "./shortcutRegistrationPolicy.ts";
+
+function stringList(block: string, field: string): string[] | undefined {
+  const match = new RegExp("\\b" + field + ": \\[([^\\]]*)\\]").exec(block);
+  return match?.[1]
+    ? [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1] as string)
+    : undefined;
+}
+
+/** Every literal dotted-id command declaring a direct shortcut in web/src. */
+async function declaredDirectShortcuts(): Promise<RegisteredShortcut[]> {
+  const root = new URL("../../", import.meta.url);
+  const declared: RegisteredShortcut[] = [];
+  for (const entry of await readdir(root, { recursive: true })) {
+    if (!/\.tsx?$/.test(entry) || /\.test\.tsx?$/.test(entry)) continue;
+    const source = await readFile(new URL(entry, root), "utf8");
+    // A declaration runs from its command id to its handler.
+    for (const part of source.split(/\bid: (?="[a-z]+\.[A-Za-z.]+",)/).slice(1)) {
+      const id = /^"([^"]+)"/.exec(part)?.[1];
+      const end = part.search(/\brun: /);
+      const block = end < 0 ? part.slice(0, 1200) : part.slice(0, end);
+      const shortcut = /\bshortcut: "([^"]+)"/.exec(block)?.[1];
+      if (!id || !shortcut) continue;
+      const surface = /\bsurface: "(session|document)"/.exec(block)?.[1] as
+        | RegisteredShortcut["surface"]
+        | undefined;
+      const contexts = stringList(block, "contexts");
+      const regions = stringList(block, "regions");
+      declared.push({
+        id,
+        shortcut,
+        ...(contexts ? { contexts } : {}),
+        ...(regions ? { regions } : {}),
+        ...(surface ? { surface } : {}),
+      });
+    }
+  }
+  return declared;
+}
+
+test("declared direct shortcuts never overlap once mounted together", async () => {
+  // Registration throws during render, so a clash between two commands that
+  // only meet on one surface (a Top Bar letter and the Page view's P) takes
+  // the whole Desktop down the first time both mount.
+  const declared = await declaredDirectShortcuts();
+  for (
+    const id of [
+      "topbar.providerUpdate",
+      "conversation.toggleQuestionDirectory",
+      "conversation.toggleFollow",
+    ]
+  ) {
+    assert(declared.some((command) => command.id === id), id + " not scanned");
+  }
+  const conflicts = declared.flatMap((command) => {
+    const conflict = shortcutRegistrationConflict(command, declared);
+    return conflict ? [command.id + ": " + conflict] : [];
+  });
+  assertEquals(conflicts, []);
+});
 
 test("global bare product letters are forbidden", () => {
   assertStringIncludes(
