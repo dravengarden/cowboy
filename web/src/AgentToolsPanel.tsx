@@ -1,8 +1,12 @@
 import React, { useState } from "react";
+import Check from "@mui/icons-material/Check";
 import {
+  alpha,
   Box,
   Button,
-  Checkbox,
+  ButtonBase,
+  Chip,
+  Collapse,
   MenuItem,
   Select,
   Stack,
@@ -22,10 +26,13 @@ import {
   saveAgentTools,
   saveSessionTools,
   SESSION_LIMIT_CHOICES,
+  callableTargets,
+  sameFamily,
   type ToolsCatalog,
   useRemoteDocument,
   withTarget,
 } from "./agentTools";
+import { ProviderIcon } from "./ProviderIcon";
 
 function Row(
   { label, description, children }: {
@@ -73,13 +80,174 @@ function Heading(
   );
 }
 
+type Preset = ToolsCatalog["call_targets"][number]["presets"][number];
+
+/** One selectable model-and-reasoning choice inside a target card, in the
+ * same material as the Run configuration preset cards. */
+function PresetChoice(
+  { name, detail, tag, selected, disabled, onSelect }: {
+    name: string;
+    detail: string;
+    tag?: string | undefined;
+    selected: boolean;
+    disabled: boolean;
+    onSelect: () => void;
+  },
+): React.JSX.Element {
+  return (
+    <ButtonBase
+      role="radio"
+      aria-checked={selected}
+      aria-label={name}
+      disabled={disabled}
+      onClick={onSelect}
+      sx={{
+        width: "100%",
+        minHeight: 48,
+        px: 1.25,
+        py: 0.75,
+        borderRadius: 1,
+        border: 1,
+        borderColor: selected ? "primary.main" : "divider",
+        bgcolor: (theme) =>
+          selected
+            ? alpha(theme.palette.primary.main, 0.13)
+            : alpha(theme.palette.background.default, 0.34),
+        textAlign: "left",
+        justifyContent: "flex-start",
+        touchAction: "manipulation",
+        "&.Mui-disabled": { opacity: 0.46 },
+      }}
+    >
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction="row" spacing={0.75} alignItems="center">
+          <Typography variant="body2" sx={{ fontWeight: 650 }}>
+            {name}
+          </Typography>
+          {tag && (
+            <Chip
+              label={tag}
+              size="small"
+              color="primary"
+              variant="outlined"
+              sx={{ height: 20, fontSize: "0.625rem" }}
+            />
+          )}
+        </Stack>
+        {detail && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 0.2 }}
+          >
+            {detail}
+          </Typography>
+        )}
+      </Box>
+      <Box
+        aria-hidden
+        sx={{ width: 18, display: "grid", placeItems: "center", flexShrink: 0 }}
+      >
+        {selected && <Check sx={{ fontSize: 18 }} />}
+      </Box>
+    </ButtonBase>
+  );
+}
+
+/** A callable agent: its switch, and when allowed, the model and reasoning
+ * its calls use. One card per Provider, so a new Provider is one more card. */
+function CallTargetCard(
+  { agent, presets, allowed, preset, disabled, onAllowed, onPreset }: {
+    agent: string;
+    presets: readonly Preset[];
+    allowed: boolean;
+    preset: string | undefined;
+    disabled: boolean;
+    onAllowed: (allowed: boolean) => void;
+    onPreset: (preset: string | undefined) => void;
+  },
+): React.JSX.Element {
+  const label = agentLabel(agent);
+  const chosen = presets.find((candidate) => candidate.id === preset);
+  return (
+    <Box
+      data-call-target={agent}
+      sx={{
+        border: 1,
+        borderColor: allowed && !disabled ? "primary.main" : "divider",
+        borderRadius: 1.5,
+        bgcolor: (theme) => alpha(theme.palette.background.default, 0.34),
+        opacity: disabled ? 0.6 : 1,
+        overflow: "hidden",
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1.25}
+        sx={{ px: 1.5, py: 1, minHeight: 56 }}
+      >
+        <ProviderIcon provider={agent} sx={{ fontSize: "1.375rem" }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            {label}
+          </Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            noWrap
+            component="div"
+          >
+            {allowed ? chosen?.name ?? "Agent default" : "Not called"}
+          </Typography>
+        </Box>
+        <Switch
+          checked={allowed}
+          disabled={disabled}
+          onChange={(_, checked): void => onAllowed(checked)}
+          slotProps={{ input: { "aria-label": `Allow calls to ${label}` } }}
+        />
+      </Stack>
+      <Collapse in={allowed} unmountOnExit>
+        <Stack
+          role="radiogroup"
+          aria-label={`${label} model and reasoning`}
+          spacing={0.75}
+          sx={{ px: 1.5, pb: 1.5 }}
+        >
+          <PresetChoice
+            name="Agent default"
+            detail={`${label}'s own default model and reasoning`}
+            selected={chosen === undefined}
+            disabled={disabled}
+            onSelect={(): void => onPreset(undefined)}
+          />
+          {presets.map((candidate) => (
+            <PresetChoice
+              key={candidate.id}
+              name={candidate.name}
+              detail={candidate.detail}
+              tag={candidate.is_default ? "Provider default" : undefined}
+              selected={candidate.id === preset}
+              disabled={disabled}
+              onSelect={(): void => onPreset(candidate.id)}
+            />
+          ))}
+        </Stack>
+      </Collapse>
+    </Box>
+  );
+}
+
 function choices(values: readonly number[], current: number): number[] {
   return [...new Set([...values, current])].sort((left, right) => left - right);
 }
 
 /** One editor for a session's effective tools and an agent kind's defaults. */
 export function AgentToolsEditor(
-  { value, catalog, disabled, onChange }: {
+  { caller, value, catalog, disabled, onChange }: {
+    /** The agent kind these settings belong to; it never calls itself. */
+    caller: string;
     value: AgentTools;
     catalog: ToolsCatalog;
     disabled: boolean;
@@ -94,13 +262,18 @@ export function AgentToolsEditor(
       calls: { ...merged, default: normalizedDefault(merged) },
     });
   };
-  const allowed = calls.targets.map((target) => target.agent);
+  const targets = callableTargets(caller, catalog);
+  const allowed = calls.targets.map((target) => target.agent)
+    .filter((agent) => !sameFamily(agent, caller));
+  const names = targets.map((target) => agentLabel(target.agent));
   return (
-    <Box data-agent-tools-editor>
+    <Box data-agent-tools-editor sx={{ color: "text.primary" }}>
       <Heading>Agent calls</Heading>
       <Row
         label="Allow calls"
-        description="Start read-only Codex or Claude reviewers from this agent. Off costs no tokens."
+        description={`Start read-only ${
+          names.length > 0 ? names.join(" or ") : "agent"
+        } reviewers from this agent. Off costs no tokens.`}
       >
         <Switch
           checked={calls.enabled}
@@ -109,82 +282,59 @@ export function AgentToolsEditor(
           slotProps={{ input: { "aria-label": "Allow agent calls" } }}
         />
       </Row>
-      <Row
-        label="Default agent"
-        description="Auto prefers a different agent than the caller"
-      >
-        <Select
-          size="small"
-          value={normalizedDefault(calls)}
-          disabled={disabled || !calls.enabled}
-          onChange={(event): void =>
-            setCalls({ default: String(event.target.value) })}
-          inputProps={{ "aria-label": "Default called agent" }}
-          sx={{ minWidth: 128 }}
+      {targets.length > 1 && (
+        <Row
+          label="Default agent"
+          description="Auto tries the allowed agents in order"
         >
-          <MenuItem value={AUTO}>Auto</MenuItem>
-          {allowed.map((agent) => (
-            <MenuItem key={agent} value={agent}>{agentLabel(agent)}</MenuItem>
-          ))}
-        </Select>
-      </Row>
-      {catalog.call_targets.map(({ agent, presets }) => {
-        const target = calls.targets.find((candidate) =>
-          candidate.agent === agent
-        );
-        return (
-          <Row
-            key={agent}
-            label={agentLabel(agent)}
-            description="Model and reasoning for calls to this agent"
+          <Select
+            size="small"
+            value={normalizedDefault(calls)}
+            disabled={disabled || !calls.enabled}
+            onChange={(event): void =>
+              setCalls({ default: String(event.target.value) })}
+            inputProps={{ "aria-label": "Default called agent" }}
+            sx={{ minWidth: 128 }}
           >
-            <Select
-              size="small"
-              value={target?.preset ?? ""}
-              displayEmpty
-              disabled={disabled || !calls.enabled || target === undefined}
-              onChange={(event): void => {
-                const preset = String(event.target.value);
-                setCalls({
-                  targets: withTarget(
-                    calls.targets,
-                    agent,
-                    true,
-                    preset || undefined,
-                  ),
-                });
-              }}
-              inputProps={{
-                "aria-label": `${agentLabel(agent)} model and reasoning`,
-              }}
-              sx={{ minWidth: 168, maxWidth: 220 }}
-            >
-              <MenuItem value="">Agent default</MenuItem>
-              {presets.map((preset) => (
-                <MenuItem key={preset.id} value={preset.id}>
-                  {preset.name}
-                </MenuItem>
-              ))}
-            </Select>
-            <Checkbox
-              checked={target !== undefined}
+            <MenuItem value={AUTO}>Auto</MenuItem>
+            {allowed.map((agent) => (
+              <MenuItem key={agent} value={agent}>
+                {agentLabel(agent)}
+              </MenuItem>
+            ))}
+          </Select>
+        </Row>
+      )}
+      <Stack spacing={1} sx={{ py: 0.75 }} data-call-targets>
+        {targets.map(({ agent, presets }) => {
+          const target = calls.targets.find((candidate) =>
+            candidate.agent === agent
+          );
+          return (
+            <CallTargetCard
+              key={agent}
+              agent={agent}
+              presets={presets}
+              allowed={target !== undefined}
+              preset={target?.preset}
               disabled={disabled || !calls.enabled}
-              onChange={(_, checked): void =>
+              onAllowed={(allowedNow): void =>
                 setCalls({
                   targets: withTarget(
                     calls.targets,
                     agent,
-                    checked,
+                    allowedNow,
                     target?.preset,
                   ),
                 })}
-              inputProps={{
-                "aria-label": `Allow calls to ${agentLabel(agent)}`,
-              }}
+              onPreset={(preset): void =>
+                setCalls({
+                  targets: withTarget(calls.targets, agent, true, preset),
+                })}
             />
-          </Row>
-        );
-      })}
+          );
+        })}
+      </Stack>
       <Row
         label="Concurrent calls"
         description="Running at once from one session"
@@ -297,6 +447,7 @@ export function SessionToolsSection(
       </Typography>}
       {value && (
         <AgentToolsEditor
+          caller={value.agent}
           value={value.effective}
           catalog={value.catalog}
           disabled={saving}
@@ -371,6 +522,7 @@ export function AgentToolsSettings(): React.JSX.Element {
             )}
           </Row>
           <AgentToolsEditor
+            caller={current.agent}
             value={current.settings}
             catalog={value.catalog}
             disabled={saving}

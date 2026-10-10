@@ -580,7 +580,9 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         )
         .await;
         // The session's policy decides first; readiness explains the rest.
-        let reason = if !policy.enabled {
+        let reason = if agent_tools::same_family(provider, &meta.provider) {
+            Some("same_agent")
+        } else if !policy.enabled {
             Some("calls_disabled")
         } else if target.is_none() {
             Some("policy_denied")
@@ -676,12 +678,13 @@ async fn start(
     };
     let (mut targets, selection) = match agent_tools::choose(&policy, &meta.provider, requested) {
         agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
-        agent_tools::Choice::Refused(code) => {
+        agent_tools::Choice::Refused(code @ ("calls_disabled" | "policy_denied")) => {
             match await_approval(state, meta, &policy, requested, &request, code) {
                 Ok(admitted) => admitted,
                 Err(refusal) => return refusal,
             }
         }
+        agent_tools::Choice::Refused(code) => return error(code, "not_submitted"),
     };
     if continued.is_some() {
         targets.truncate(1);
@@ -779,7 +782,7 @@ fn await_approval(
             Err(refusal)
         }
         super::approval::Gate::Approved => {
-            let once = agent_tools::allow_once(policy.clone(), requested);
+            let once = agent_tools::allow_once(policy.clone(), &meta.provider, requested);
             match agent_tools::choose(&once, &meta.provider, requested) {
                 agent_tools::Choice::Candidates { targets, selection } => Ok((targets, selection)),
                 agent_tools::Choice::Refused(code) => Err(error(code, "not_submitted")),

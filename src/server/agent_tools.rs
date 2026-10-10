@@ -22,6 +22,25 @@ pub(super) const SCHEMA: u16 = 1;
 /// Agents a managed call can start. Each must declare the read-only profile.
 pub(super) const CALL_TARGETS: [&str; 2] = ["codex", "claude-code"];
 pub(super) const AUTO: &str = "auto";
+
+/// Agents of one family (`claude-code`, `claude-deepseek`; `codex`,
+/// `codex-deepseek`) review alike, so an agent never calls its own family.
+pub(super) fn same_family(left: &str, right: &str) -> bool {
+    fn family(agent: &str) -> &str {
+        ["claude", "codex"]
+            .into_iter()
+            .find(|family| agent == *family || agent.starts_with(&format!("{family}-")))
+            .unwrap_or(agent)
+    }
+    family(left) == family(right)
+}
+
+/// The call targets an agent of `caller`'s kind may use at all.
+fn callable(caller: &str) -> impl Iterator<Item = &'static str> + '_ {
+    CALL_TARGETS
+        .into_iter()
+        .filter(move |target| !same_family(target, caller))
+}
 const MAX_TARGETS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,14 +142,12 @@ impl AgentTools {
     /// Matrix stays on; agent calls are off until a session needs them. Every
     /// agent may call either agent, and Auto prefers the other one.
     pub fn builtin(agent: &str) -> Self {
-        let mut targets: Vec<CallTarget> = CALL_TARGETS
-            .iter()
+        let targets = callable(agent)
             .map(|target| CallTarget {
-                agent: (*target).to_owned(),
+                agent: target.to_owned(),
                 preset: None,
             })
             .collect();
-        targets.sort_by_key(|target| target.agent == agent);
         Self {
             schema: SCHEMA,
             matrix: MatrixTools {
@@ -153,6 +170,18 @@ impl AgentTools {
             && valid_default(&self.calls.default, &self.calls.targets)
             && (1..=16).contains(&self.calls.max_concurrent)
             && (1..=1000).contains(&self.calls.max_per_session)
+    }
+
+    /// Drop targets of the caller's own family (stored before this rule, or
+    /// written by hand); a default naming one falls back to Auto.
+    pub fn for_caller(mut self, caller: &str) -> Self {
+        self.calls
+            .targets
+            .retain(|target| !same_family(&target.agent, caller));
+        if !valid_default(&self.calls.default, &self.calls.targets) {
+            AUTO.clone_into(&mut self.calls.default);
+        }
+        self
     }
 
     /// Apply a session's override. The result is validated by the caller.
@@ -212,7 +241,7 @@ pub(super) fn agent_defaults(state: &AppState, agent: &str) -> (AgentTools, bool
         .filter(AgentTools::validate)
         .map_or_else(
             || (AgentTools::builtin(agent), false),
-            |stored| (stored, true),
+            |stored| (stored.for_caller(agent), true),
         )
 }
 
@@ -234,24 +263,26 @@ pub(super) fn effective(state: &AppState, session: &crate::core::SessionMeta) ->
     agent_defaults(state, &session.provider)
         .0
         .overlay(&session_override(state, &session.id))
+        .for_caller(&session.provider)
 }
 
 /// A policy that admits `requested` once, as a person approved it: calls are
 /// on and the requested agent is a target. Limits still apply.
-pub(super) fn allow_once(mut policy: CallsPolicy, requested: &str) -> CallsPolicy {
+pub(super) fn allow_once(mut policy: CallsPolicy, caller: &str, requested: &str) -> CallsPolicy {
     policy.enabled = true;
-    widen(&mut policy.targets, requested);
+    widen(&mut policy.targets, caller, requested);
     policy
 }
 
-fn widen(targets: &mut Vec<CallTarget>, requested: &str) {
+fn widen(targets: &mut Vec<CallTarget>, caller: &str, requested: &str) {
     let missing: Vec<&str> = if requested == AUTO {
         if targets.is_empty() {
-            CALL_TARGETS.to_vec()
+            callable(caller).collect()
         } else {
             Vec::new()
         }
     } else if CALL_TARGETS.contains(&requested)
+        && !same_family(requested, caller)
         && !targets.iter().any(|target| target.agent == requested)
     {
         vec![requested]
@@ -275,7 +306,7 @@ pub(super) fn allow_session(
     let current = effective(state, meta).calls;
     let mut targets = current.targets.clone();
     for agent in requested {
-        widen(&mut targets, agent);
+        widen(&mut targets, &meta.provider, agent);
     }
     session.calls.enabled = Some(true);
     if targets != current.targets {
@@ -298,6 +329,10 @@ pub(super) enum Choice {
 
 /// Resolve `requested` (an agent id or `auto`) under the parent's policy.
 pub(super) fn choose(policy: &CallsPolicy, parent_agent: &str, requested: &str) -> Choice {
+    // Not a policy question a person could answer: never offered, never asked.
+    if requested != AUTO && same_family(requested, parent_agent) {
+        return Choice::Refused("same_agent");
+    }
     if !policy.enabled {
         return Choice::Refused("calls_disabled");
     }
@@ -367,9 +402,12 @@ fn presets(state: &AppState, agent: &str) -> serde_json::Value {
         .unwrap_or_else(|| json!([]))
 }
 
-fn catalog(state: &AppState) -> serde_json::Value {
+/// Targets with their presets; `caller` limits them to the ones it may call.
+fn catalog(state: &AppState, caller: Option<&str>) -> serde_json::Value {
     json!({
-        "call_targets": CALL_TARGETS.iter().map(|agent| json!({
+        "call_targets": CALL_TARGETS.iter().filter(|agent| {
+            caller.is_none_or(|caller| !same_family(agent, caller))
+        }).map(|agent| json!({
             "agent": agent, "presets": presets(state, agent),
         })).collect::<Vec<_>>(),
     })
@@ -386,7 +424,8 @@ pub(super) async fn list(
             json!({"agent": agent, "settings": settings, "customized": customized})
         })
         .collect();
-    Json(json!({"schema": SCHEMA, "agents": agents, "catalog": catalog(&state)})).into_response()
+    Json(json!({"schema": SCHEMA, "agents": agents, "catalog": catalog(&state, None)}))
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -436,8 +475,8 @@ fn session_view(state: &AppState, meta: &crate::core::SessionMeta) -> serde_json
         "defaults": defaults,
         "defaults_customized": customized,
         "override": session,
-        "effective": defaults.clone().overlay(&session),
-        "catalog": catalog(state),
+        "effective": defaults.clone().overlay(&session).for_caller(&meta.provider),
+        "catalog": catalog(state, Some(&meta.provider)),
     })
 }
 
@@ -492,11 +531,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn calls_are_off_by_default_and_auto_prefers_the_other_agent() {
+    fn calls_are_off_by_default_and_target_only_other_families() {
         let codex = AgentTools::builtin("codex");
         assert!(codex.validate());
         assert!(codex.matrix.tools && codex.matrix.recall);
         assert!(!codex.calls.enabled);
+        let agents = |tools: &AgentTools| -> Vec<String> {
+            tools
+                .calls
+                .targets
+                .iter()
+                .map(|target| target.agent.clone())
+                .collect()
+        };
+        assert_eq!(agents(&codex), ["claude-code"]);
+        assert_eq!(agents(&AgentTools::builtin("claude-deepseek")), ["codex"]);
         assert!(matches!(
             choose(&codex.calls, "codex", AUTO),
             Choice::Refused("calls_disabled")
@@ -508,28 +557,45 @@ mod tests {
         };
         assert_eq!(selection, AUTO);
         assert_eq!(targets[0].agent, "claude-code");
-        let Choice::Candidates { targets, .. } = choose(&enabled, "claude-code", AUTO) else {
-            panic!("auto must offer candidates");
-        };
-        assert_eq!(targets[0].agent, "codex");
+        // Its own family is never a call, whatever the policy says.
         assert!(matches!(
-            choose(&enabled, "codex", "codex"),
-            Choice::Candidates {
-                selection: "explicit",
-                ..
-            }
+            choose(&enabled, "codex-deepseek", "codex"),
+            Choice::Refused("same_agent")
         ));
+        assert!(matches!(
+            choose(&codex.calls, "codex", "codex"),
+            Choice::Refused("same_agent")
+        ));
+        // A fixed default still records the caller's `auto` for replays.
+        enabled.default = "claude-code".into();
+        let Choice::Candidates { targets, selection } = choose(&enabled, "codex", AUTO) else {
+            panic!("a fixed default must offer its target");
+        };
+        assert_eq!(
+            (targets.len(), targets[0].agent.as_str(), selection),
+            (1, "claude-code", AUTO)
+        );
+        // Stored settings naming the own family are cleaned for the caller.
+        let mut stored = AgentTools::builtin("claude-code");
+        stored.calls.targets.push(CallTarget {
+            agent: "claude-code".into(),
+            preset: None,
+        });
+        stored.calls.default = "claude-code".into();
+        let cleaned = stored.for_caller("claude-code");
+        assert_eq!(agents(&cleaned), ["codex"]);
+        assert_eq!(cleaned.calls.default, AUTO);
     }
 
     #[test]
     fn an_approval_admits_the_requested_agent_once() {
         let mut calls = AgentTools::builtin("claude-code").calls;
-        calls.targets.retain(|target| target.agent == "claude-code");
+        calls.targets.clear();
         assert!(matches!(
             choose(&calls, "claude-code", "codex"),
             Choice::Refused("calls_disabled")
         ));
-        let once = allow_once(calls.clone(), "codex");
+        let once = allow_once(calls.clone(), "claude-code", "codex");
         assert!(matches!(
             choose(&once, "claude-code", "codex"),
             Choice::Candidates {
@@ -537,9 +603,14 @@ mod tests {
                 ..
             }
         ));
-        calls.targets.clear();
-        let once = allow_once(calls, AUTO);
-        assert_eq!(once.targets.len(), CALL_TARGETS.len());
+        // Approval never widens a policy to the caller's own family.
+        let once = allow_once(calls, "claude-code", AUTO);
+        let agents: Vec<_> = once
+            .targets
+            .iter()
+            .map(|target| target.agent.as_str())
+            .collect();
+        assert_eq!(agents, ["codex"]);
     }
 
     #[test]
@@ -568,12 +639,12 @@ mod tests {
         assert_eq!(effective.calls.default, AUTO);
         assert!(effective.validate());
         assert!(matches!(
-            choose(&effective.calls, "claude-code", "claude-code"),
+            choose(&effective.calls, "codex-deepseek", "claude-code"),
             Choice::Refused("policy_denied")
         ));
         let mut invalid = AgentTools::builtin("codex");
         invalid.calls.targets.push(CallTarget {
-            agent: "codex".into(),
+            agent: "claude-code".into(),
             preset: None,
         });
         assert!(!invalid.validate());

@@ -198,6 +198,13 @@ owns one two-layer policy per agent kind (`codex`, `claude-code`):
   It stores only the fields that differ; an empty override is removed, so the
   session follows later changes to its agent kind's defaults.
 
+An agent never calls its own family (`claude-code`/`claude-deepseek`;
+`codex`/`codex-deepseek`): built-in defaults list only other families, stored
+settings are cleaned of the caller's family, and such a request is refused with
+`same_agent` (not a policy question, so no approval prompt). The Tools editor
+shows one card per callable agent with its switch and its presets as choices;
+the default-agent chooser appears only when more than one agent is callable.
+
 The effective policy is the override applied to the defaults. A target names an
 agent kind and optionally a preset from that Provider's signed configuration
 presets (model and reasoning). `cowboy codex`/`cowboy claude` request one kind;

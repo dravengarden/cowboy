@@ -65,6 +65,26 @@ export function agentLabel(agent: string): string {
   ).join(" ");
 }
 
+/** Agents of one family review alike; an agent never calls its own family
+ * (mirrors `same_family` in src/server/agent_tools.rs). */
+export function sameFamily(left: string, right: string): boolean {
+  const family = (agent: string): string =>
+    ["claude", "codex"].find((name) =>
+      agent === name || agent.startsWith(`${name}-`)
+    ) ?? agent;
+  return family(left) === family(right);
+}
+
+/** The catalog targets an agent of `caller`'s kind may call. */
+export function callableTargets(
+  caller: string,
+  catalog: ToolsCatalog,
+): ToolsCatalog["call_targets"] {
+  return catalog.call_targets.filter((target) =>
+    !sameFamily(target.agent, caller)
+  );
+}
+
 /** Replace, add or remove one agent from a target list, keeping its order. */
 export function withTarget(
   targets: CallTarget[],

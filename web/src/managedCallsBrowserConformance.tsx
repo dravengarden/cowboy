@@ -28,11 +28,16 @@ const toolsDefaults: AgentTools = {
   matrix: { tools: true, recall: true },
   calls: {
     enabled: false,
-    targets: [{ agent: "claude-code" }, { agent: "codex" }],
+    targets: [{ agent: "codex" }],
     default: "auto",
     max_concurrent: 4,
     max_per_session: 64,
   },
+};
+/** A Codex kind's built-in defaults: it calls Claude, never itself. */
+const codexDefaults: AgentTools = {
+  ...toolsDefaults,
+  calls: { ...toolsDefaults.calls, targets: [{ agent: "claude-code" }] },
 };
 const toolsCatalog = {
   call_targets: [
@@ -185,7 +190,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   const cancelCount = (): number => cancels.length;
   let sessionOverride: SessionToolsOverride = { schema: 1 };
   const sessionWrites: SessionToolsOverride[] = [];
-  let agentDefaults: AgentTools = toolsDefaults;
+  let agentDefaults: AgentTools = codexDefaults;
   const agentWrites: (AgentTools | null)[] = [];
   const decisions: string[] = [];
   const sessionTools = () => ({
@@ -231,7 +236,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         agents: [{
           agent: "codex",
           settings: agentDefaults,
-          customized: agentDefaults !== toolsDefaults,
+          customized: agentDefaults !== codexDefaults,
         }],
         catalog: toolsCatalog,
       }));
@@ -241,7 +246,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         settings: AgentTools | null;
       };
       agentWrites.push(body.settings);
-      agentDefaults = body.settings ?? toolsDefaults;
+      agentDefaults = body.settings ?? codexDefaults;
       return Promise.resolve(Response.json({
         schema: 1,
         agent: "codex",
@@ -564,7 +569,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => button("Use Claude defaults"),
       "an overridden session must offer its defaults",
     );
-    const codexAllowed = await until(
+    await until(
       () => {
         const input = document.querySelector<HTMLInputElement>(
           "input[aria-label='Allow calls to Codex']",
@@ -573,16 +578,66 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       },
       "targets must be editable once calls are on",
     );
-    codexAllowed.click();
+    // A Claude session calls other families only: one card, no chooser.
+    check(
+      document.querySelectorAll("[data-call-target]").length === 1 &&
+        document.querySelector("[data-call-target='codex']"),
+      "a Claude session must offer exactly the Codex card",
+    );
+    check(
+      !document.querySelector("[aria-label='Default called agent']") &&
+        !text().includes("Default agent"),
+      "one callable agent needs no default chooser",
+    );
+    check(
+      text().includes("Start read-only Codex reviewers"),
+      "the switch must name what it starts",
+    );
+    // The card's presets are choices in the card itself.
+    (await until(
+      () =>
+        document.querySelector<HTMLElement>(
+          "[data-call-target='codex'] [role='radio'][aria-label='Astra · Max']",
+        ),
+      "the Codex card must list its presets",
+    )).click();
     await until(
       () => sessionWrites.length === 2 ? true : null,
-      "removing a target was not saved",
+      "choosing a preset was not saved",
     );
     check(
       JSON.stringify(sessionWrites[1]?.calls?.targets) ===
-        JSON.stringify([{ agent: "claude-code" }]),
-      `removing Codex must keep only Claude: ${
+        JSON.stringify([{ agent: "codex", preset: "astra-max" }]),
+      `the preset must be stored on its target: ${
         JSON.stringify(sessionWrites[1])
+      }`,
+    );
+    await until(
+      () =>
+        document.querySelector(
+            "[data-call-target='codex'] [role='radio'][aria-checked='true'][aria-label='Astra · Max']",
+          )
+          ? true
+          : null,
+      "the chosen preset must be marked",
+    );
+    (await until(
+      () => {
+        const input = document.querySelector<HTMLInputElement>(
+          "input[aria-label='Allow calls to Codex']",
+        );
+        return input && !input.disabled ? input : null;
+      },
+      "the target switch must be editable after saving",
+    )).click();
+    await until(
+      () => sessionWrites.length === 3 ? true : null,
+      "removing a target was not saved",
+    );
+    check(
+      JSON.stringify(sessionWrites[2]?.calls?.targets) === "[]",
+      `removing Codex must leave no target: ${
+        JSON.stringify(sessionWrites[2])
       }`,
     );
     (await until(() => {
@@ -590,11 +645,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       return reset && !reset.disabled ? reset : null;
     }, "reset must be available after saving")).click();
     await until(
-      () => sessionWrites.length === 3 ? true : null,
+      () => sessionWrites.length === 4 ? true : null,
       "reset was not saved",
     );
     check(
-      JSON.stringify(sessionWrites[2]) === JSON.stringify({ schema: 1 }),
+      JSON.stringify(sessionWrites[3]) === JSON.stringify({ schema: 1 }),
       "reset must clear the override",
     );
     check(
@@ -614,6 +669,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
           "input[aria-label='Allow agent calls']",
         ),
       "agent defaults did not load",
+    );
+    check(
+      document.querySelector("[data-call-target='claude-code']") &&
+        !document.querySelector("[data-call-target='codex']"),
+      "Codex defaults must offer Claude and never Codex",
     );
     defaultsSwitch.click();
     await until(
@@ -831,5 +891,57 @@ export async function renderManagedCallsPreview(
         ? true
         : null,
     "preview result",
+  );
+}
+
+/** A Claude session's Tools with calls on and a Codex preset chosen. */
+export function renderAgentToolsPreview(): void {
+  const override: SessionToolsOverride = {
+    schema: 1,
+    calls: { enabled: true, targets: [{ agent: "codex", preset: "astra-max" }] },
+  };
+  globalThis.fetch = ((input: RequestInfo | URL) =>
+    Promise.resolve(
+      String(input) === "/api/sessions/parent/tools"
+        ? Response.json({
+          session_id: "parent",
+          agent: "claude-code",
+          defaults: toolsDefaults,
+          defaults_customized: false,
+          override,
+          effective: overlay(toolsDefaults, override),
+          catalog: {
+            call_targets: [{
+              agent: "codex",
+              presets: [
+                {
+                  id: "astra-max",
+                  name: "Astra · Max",
+                  detail: "GPT-6 Astra · Max reasoning",
+                  is_default: false,
+                },
+                {
+                  id: "astra-high",
+                  name: "Astra · High",
+                  detail: "GPT-6 Astra · High reasoning",
+                  is_default: true,
+                },
+              ],
+            }, ...toolsCatalog.call_targets.filter((target) =>
+              target.agent !== "codex"
+            )],
+          },
+        })
+        : new Response("not found", { status: 404 }),
+    )) as typeof fetch;
+  const container = document.createElement("div");
+  container.style.cssText = "max-width: 560px; margin: 0 auto; padding: 16px;";
+  document.body.append(container);
+  createRoot(container).render(
+    <BrowserProductTheme>
+      <SurfaceProvider>
+        <SessionToolsSection sessionId="parent" />
+      </SurfaceProvider>
+    </BrowserProductTheme>,
   );
 }
