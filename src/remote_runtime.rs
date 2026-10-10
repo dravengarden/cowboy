@@ -95,6 +95,12 @@ struct Shared {
     /// a late `Running` edge cannot drain a force-pushed prompt into the worker
     /// that is being fenced.
     resetting: Mutex<HashSet<String>>,
+    /// The epoch each reset replaces, and the replacement's own snapshot when
+    /// it reached this Controller before the reset acknowledgement. Snapshots
+    /// are ignored while resetting and the acknowledgement forgets the old
+    /// worker, so without it the replacement's execution calls are refused as
+    /// ownerless until some later snapshot arrives.
+    reset_replacements: Mutex<HashMap<String, (String, Option<WorkerSnapshot>)>>,
     /// Dormant sessions projected as `Starting` when the client opened them,
     /// before the Machine reported its launch. A rejected declaration
     /// restores `Exited`; any worker snapshot replaces the projection.
@@ -167,6 +173,7 @@ impl RemoteRuntime {
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
                 resetting: Mutex::new(HashSet::new()),
+                reset_replacements: Mutex::new(HashMap::new()),
                 optimistic_revivals: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
@@ -226,6 +233,7 @@ impl RemoteRuntime {
                         .collect(),
                 ),
                 resetting: Mutex::new(HashSet::new()),
+                reset_replacements: Mutex::new(HashMap::new()),
                 optimistic_revivals: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
@@ -760,7 +768,7 @@ impl RemoteRuntime {
                             && previous.provider_version == session.provider_version
                     })
                 });
-        self.shared.resetting.lock().insert(session_id.clone());
+        begin_reset(&self.shared, &session_id);
         self.shared
             .config_startups
             .lock()
@@ -822,7 +830,7 @@ impl RemoteRuntime {
             .clone_from(&self.shared.desired_generation);
         let id = session.session_id.clone();
         self.park_recovery_prompts(&id);
-        self.shared.resetting.lock().insert(id.clone());
+        begin_reset(&self.shared, &id);
         self.shared.config_startups.lock().insert(id.clone());
         self.shared.config_sync_epochs.lock().remove(&id);
         discard_pending_config(&self.shared, &id);
@@ -1456,6 +1464,14 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             }
             if reset_stop {
                 shared.resetting.lock().remove(&session_id);
+                let replacement = shared
+                    .reset_replacements
+                    .lock()
+                    .remove(&session_id)
+                    .and_then(|(_, pending)| pending);
+                if accepted && let Some(worker) = replacement {
+                    adopt_snapshot(shared, worker);
+                }
                 shared.hub.set_status(
                     &session_id,
                     if accepted {
@@ -1492,15 +1508,19 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         Frame::Snapshot { worker } => {
             let session_id = worker.session_id.clone();
             if shared.resetting.lock().contains(&session_id) {
+                // Only a live worker other than the one being replaced (and
+                // not the broker's registry placeholder) is the replacement.
+                if let Some((replaced, pending)) =
+                    shared.reset_replacements.lock().get_mut(&session_id)
+                    && worker.worker_epoch != *replaced
+                    && !worker.worker_epoch.starts_with("broker-")
+                    && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+                {
+                    *pending = Some(*worker);
+                }
                 return Ok(());
             }
-            update_declaration(shared, &worker);
-            shared
-                .workers
-                .lock()
-                .insert(session_id.clone(), (*worker).clone());
-            acknowledge_pending_ensure_from_snapshot(shared, &worker);
-            apply_snapshot(shared, &worker);
+            adopt_snapshot(shared, *worker);
         }
         Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
         Frame::Heartbeat => {}
@@ -1574,6 +1594,30 @@ fn queue_permission(shared: &Shared, session_id: &str, request_id: String, optio
         },
     );
     let _ = shared.notify.send(());
+}
+
+fn begin_reset(shared: &Shared, session_id: &str) {
+    let replaced = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .map(|worker| worker.worker_epoch.clone())
+        .unwrap_or_default();
+    shared.resetting.lock().insert(session_id.to_owned());
+    shared
+        .reset_replacements
+        .lock()
+        .insert(session_id.to_owned(), (replaced, None));
+}
+
+fn adopt_snapshot(shared: &Shared, worker: WorkerSnapshot) {
+    update_declaration(shared, &worker);
+    shared
+        .workers
+        .lock()
+        .insert(worker.session_id.clone(), worker.clone());
+    acknowledge_pending_ensure_from_snapshot(shared, &worker);
+    apply_snapshot(shared, &worker);
 }
 
 fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
@@ -2362,7 +2406,7 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
     if session.generation.is_empty() {
         session.generation.clone_from(&shared.desired_generation);
     }
-    shared.resetting.lock().insert(session_id.to_owned());
+    begin_reset(shared, session_id);
     shared.config_startups.lock().insert(session_id.to_owned());
     shared.config_sync_epochs.lock().remove(session_id);
     shared
@@ -4222,6 +4266,89 @@ mod tests {
         .expect("reset acknowledgement");
         assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
+    }
+
+    #[tokio::test]
+    async fn replacement_snapshot_before_reset_acknowledgement_owns_the_session() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (left, _right) = UnixStream::pair().expect("socket pair");
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: vec![snapshot("s")],
+            buffered: Vec::new(),
+        };
+        let runtime = RemoteRuntime::new(
+            hub,
+            &bootstrap,
+            "gen-1".to_owned(),
+            Some("/bin/worker".to_owned()),
+        );
+        let replaced = snapshot("s").worker_epoch;
+        runtime.reset(snapshot("s").launch.expect("launch metadata"));
+        let snapshot_frame = |epoch: &str, state| {
+            let mut worker = snapshot("s");
+            epoch.clone_into(&mut worker.worker_epoch);
+            worker.state = state;
+            Frame::Snapshot {
+                worker: Box::new(worker),
+            }
+        };
+        // The old worker's late report and the broker placeholder are not the
+        // replacement; the replacement's report precedes the acknowledgement.
+        for frame in [
+            snapshot_frame(&replaced, WorkerState::Running),
+            snapshot_frame("broker-s", WorkerState::Starting),
+            snapshot_frame("replacement", WorkerState::Starting),
+        ] {
+            handle_frame(&runtime.shared, frame, &mut tokio::io::sink())
+                .await
+                .expect("snapshot during reset");
+        }
+        let reset_command_id = runtime
+            .shared
+            .pending
+            .lock()
+            .values()
+            .find_map(|command| match command {
+                CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => {
+                    Some(command_id.clone())
+                }
+                _ => None,
+            })
+            .expect("reset command");
+        handle_frame(
+            &runtime.shared,
+            Frame::CommandAck {
+                session_id: "s".to_owned(),
+                command_id: reset_command_id,
+                accepted: true,
+                reason: None,
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("reset acknowledgement");
+        assert_eq!(
+            runtime
+                .shared
+                .workers
+                .lock()
+                .get("s")
+                .map(|worker| worker.worker_epoch.clone()),
+            Some("replacement".to_owned())
+        );
+        assert!(runtime.shared.reset_replacements.lock().is_empty());
     }
 
     #[tokio::test]
