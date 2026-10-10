@@ -1,10 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("session settings exposes confirmed compact and clear actions", () => {
+test("session settings exposes confirmed compact and clear actions", () => {
   assertEquals(
     composerSource.includes(
       'aria-label="compact conversation from session settings"',
@@ -32,7 +34,7 @@ Deno.test("session settings exposes confirmed compact and clear actions", () => 
   );
 });
 
-Deno.test("session actions default collapsed and expand reload, compact, and clear rows", () => {
+test("session actions default collapsed and expand reload, compact, and clear rows", () => {
   assertEquals(
     composerSource.includes(
       "const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);",

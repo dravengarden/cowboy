@@ -1,15 +1,17 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   canContinueFailedTurn,
   TURN_CONTINUATION_PROMPT,
   turnFailureTelemetry,
 } from "./turnRecovery.ts";
 
-const transcript = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcript = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("continuing is offered only where a worker survived the turn", () => {
+test("continuing is offered only where a worker survived the turn", () => {
   // The plugin's `keep_worker_alive` decision reaches the client as "this
   // session is not crashed" — the controller keeps it out of `crashed` on a
   // recoverable turn failure (src/acp.rs).
@@ -22,7 +24,7 @@ Deno.test("continuing is offered only where a worker survived the turn", () => {
   }
 });
 
-Deno.test("the continuation states the one fact the agent cannot know", () => {
+test("the continuation states the one fact the agent cannot know", () => {
   // Cowboy never replays the original prompt — tools already ran
   // (docs/claude-stream-recovery.md) — so the text must say what happened and
   // what is unsafe to assume, not just "continue".
@@ -32,7 +34,7 @@ Deno.test("the continuation states the one fact the agent cannot know", () => {
   assert(TURN_CONTINUATION_PROMPT.includes("side effects"));
 });
 
-Deno.test("the failure is counted once per card, and never quotes the detail", () => {
+test("the failure is counted once per card, and never quotes the detail", () => {
   // The raw detail can quote file contents from the interrupted turn.
   assertEquals(turnFailureTelemetry("claude-code", "server_error"), {
     provider: "claude-code",
@@ -59,7 +61,7 @@ Deno.test("the failure is counted once per card, and never quotes the detail", (
   );
 });
 
-Deno.test("the card knows which session it is offering to continue", () => {
+test("the card knows which session it is offering to continue", () => {
   assert(
     transcript.includes(
       "sessionId={sessionId}\n                      status={status}",

@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   composerTimelineSlice,
   sameComposerTimelineSlice,
@@ -12,7 +13,7 @@ const update = (seq: number, sessionUpdate: string, extra = {}): Envelope => ({
   update: { sessionUpdate, ...extra },
 });
 
-Deno.test("composer timeline slice ignores ordinary transcript churn", () => {
+test("composer timeline slice ignores ordinary transcript churn", () => {
   const timeline: Envelope[] = [
     update(1, "available_commands_update", {
       availableCommands: [{ name: "compact", description: "Compact" }],
@@ -49,7 +50,7 @@ Deno.test("composer timeline slice ignores ordinary transcript churn", () => {
   assertEquals(after.availableCommands[0]?.name, "compact");
 });
 
-Deno.test("composer timeline slice reacts to every composer-owned signal", () => {
+test("composer timeline slice reacts to every composer-owned signal", () => {
   const base: Envelope[] = [
     update(1, "available_commands_update", {
       availableCommands: [{ name: "compact", description: "Compact" }],
@@ -112,7 +113,7 @@ Deno.test("composer timeline slice reacts to every composer-owned signal", () =>
   assertEquals(completed.completionSeq, 8);
 });
 
-Deno.test("context clear is a composer input-interaction boundary", () => {
+test("context clear is a composer input-interaction boundary", () => {
   const before = composerTimelineSlice([
     update(1, "available_commands_update"),
   ]);

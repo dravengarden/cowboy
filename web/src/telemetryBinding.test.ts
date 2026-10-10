@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   confirmResolutionOnce,
   matchesResolution,
@@ -15,11 +17,11 @@ import {
 } from "./telemetryBinding.ts";
 
 const fixture = JSON.parse(
-  Deno.readTextFileSync(
+  readFileSync(
     new URL(
       "../../tests/fixtures/telemetry-resolution-surface.json",
       import.meta.url,
-    ),
+    ), "utf8",
   ),
 ).public;
 const signal = () => new AbortController().signal;
@@ -28,7 +30,7 @@ const response = (value: unknown) =>
     headers: { "content-type": "application/json" },
   });
 
-Deno.test("Rust public projections and closed Web decoders agree", () => {
+test("Rust public projections and closed Web decoders agree", () => {
   assertEquals(parseBindingStatus(fixture.absent), fixture.absent);
   assertEquals(parseBindingStatus(fixture.retained), fixture.retained);
   assertEquals(parseResolutionPlan(fixture.plan), fixture.plan);
@@ -42,7 +44,7 @@ Deno.test("Rust public projections and closed Web decoders agree", () => {
   assert(!JSON.stringify(fixture).includes("operator"));
 });
 
-Deno.test("resolution schemas reject unknown actions, authority fields and incoherent phases", () => {
+test("resolution schemas reject unknown actions, authority fields and incoherent phases", () => {
   for (
     const value of [
       null,
@@ -84,7 +86,7 @@ Deno.test("resolution schemas reject unknown actions, authority fields and incoh
   );
 });
 
-Deno.test("binding revisions remain canonical u64 decimal strings, never JS numbers", () => {
+test("binding revisions remain canonical u64 decimal strings, never JS numbers", () => {
   const installation = {
     plugin_id: "victoria",
     plugin_version: "1.2.0",
@@ -124,7 +126,7 @@ Deno.test("binding revisions remain canonical u64 decimal strings, never JS numb
   );
 });
 
-Deno.test("receipt correlation binds action, target, full original digest and new confirmation ID", () => {
+test("receipt correlation binds action, target, full original digest and new confirmation ID", () => {
   const plan = parseResolutionPlan(fixture.plan);
   const receipt = parseResolutionReceipt(fixture.receipt);
   for (
@@ -140,7 +142,7 @@ Deno.test("receipt correlation binds action, target, full original digest and ne
   }
 });
 
-Deno.test("preview expiry is sticky across slow, regressed and repaired clocks", () => {
+test("preview expiry is sticky across slow, regressed and repaired clocks", () => {
   const wall = 1_000_000;
   for (
     const [mono, nextWall] of [
@@ -160,7 +162,7 @@ Deno.test("preview expiry is sticky across slow, regressed and repaired clocks",
   assertEquals(deadline.ended(111, wall + 1), true);
 });
 
-Deno.test("HTTP confirmation sends only the finite plan reference with fresh noncached credentials", async () => {
+test("HTTP confirmation sends only the finite plan reference with fresh noncached credentials", async () => {
   const previous = globalThis.fetch;
   const calls: { url: string; init?: RequestInit }[] = [];
   const plan = parseResolutionPlan(fixture.plan);
@@ -186,7 +188,7 @@ Deno.test("HTTP confirmation sends only the finite plan reference with fresh non
   }
 });
 
-Deno.test("lost confirmation response permits one exact GET, never another POST", async () => {
+test("lost confirmation response permits one exact GET, never another POST", async () => {
   const previous = globalThis.fetch;
   const plan = parseResolutionPlan(fixture.plan);
   for (const outcome of ["exact", "foreign", "missing"]) {
@@ -219,7 +221,7 @@ Deno.test("lost confirmation response permits one exact GET, never another POST"
   }
 });
 
-Deno.test("ended owner forbids result inspection and successful confirmation needs no GET", async () => {
+test("ended owner forbids result inspection and successful confirmation needs no GET", async () => {
   const previous = globalThis.fetch;
   const plan = parseResolutionPlan(fixture.plan);
   for (const success of [true, false]) {
@@ -242,7 +244,7 @@ Deno.test("ended owner forbids result inspection and successful confirmation nee
   }
 });
 
-Deno.test("HTML, oversized, malformed and foreign responses never become successful evidence", async () => {
+test("HTML, oversized, malformed and foreign responses never become successful evidence", async () => {
   const previous = globalThis.fetch;
   for (
     const make of [
@@ -272,12 +274,12 @@ Deno.test("HTML, oversized, malformed and foreign responses never become success
   }
 });
 
-Deno.test("the product Info entry uses core mobile/desktop confirmation and clears stale scopes", () => {
-  const panel = Deno.readTextFileSync(
-    new URL("./TelemetryBindingPanel.tsx", import.meta.url),
+test("the product Info entry uses core mobile/desktop confirmation and clears stale scopes", () => {
+  const panel = readFileSync(
+    new URL("./TelemetryBindingPanel.tsx", import.meta.url), "utf8",
   );
-  const info = Deno.readTextFileSync(
-    new URL("./InfoSheet.tsx", import.meta.url),
+  const info = readFileSync(
+    new URL("./InfoSheet.tsx", import.meta.url), "utf8",
   );
   assert(info.includes("<TelemetryBindingPanel desktop={desktop} />"));
   const localRecovery = info.indexOf("<ProductSyncDataNotice />");

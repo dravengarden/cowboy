@@ -1,4 +1,5 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertThrows } from "@std/assert";
 import { createEditorExtensionRuntime } from "./runtime.ts";
 import {
   documentOutline,
@@ -28,7 +29,7 @@ function editor(kind: "document" | "session") {
   return port;
 }
 
-Deno.test("one extension runs through the same editor port in independent documents and sessions", async () => {
+test("one extension runs through the same editor port in independent documents and sessions", async () => {
   for (const kind of ["document", "session"] as const) {
     const port = editor(kind);
     const runtime = createEditorExtensionRuntime(port);
@@ -48,7 +49,7 @@ Deno.test("one extension runs through the same editor port in independent docume
   }
 });
 
-Deno.test("failed activation unwinds all resources; disabled plugins lose their editor authority", () => {
+test("failed activation unwinds all resources; disabled plugins lose their editor authority", () => {
   const port = editor("document");
   const runtime = createEditorExtensionRuntime(port);
   const calls: number[] = [];
@@ -90,7 +91,7 @@ Deno.test("failed activation unwinds all resources; disabled plugins lose their 
   assertThrows(() => runtime.activate(extension));
 });
 
-Deno.test("Markdown outline ignores fenced examples and template selection is literal", () => {
+test("Markdown outline ignores fenced examples and template selection is literal", () => {
   assertEquals(
     documentOutline("# One\n```md\n# Not a heading\n```\n## 中文\n").map((
       row,

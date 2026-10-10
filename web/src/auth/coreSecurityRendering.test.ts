@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ProductLoginPage } from "./ProductLoginPage.tsx";
@@ -40,14 +41,14 @@ function render(
   }
 }
 
-Deno.test("password form renders synchronously with no Plugin inventory", () => {
+test("password form renders synchronously with no Plugin inventory", () => {
   const html = render();
   assert(html.includes('name="username"'));
   assert(html.includes('name="password"'));
   assert(html.includes("Password"));
 });
 
-Deno.test("setup and sole-account creation cannot be replaced by the default SSO Plugin", () => {
+test("setup and sole-account creation cannot be replaced by the default SSO Plugin", () => {
   for (const passwordEnabled of [false, true]) {
     const policy = {
       setupRequired: true,
@@ -66,7 +67,7 @@ Deno.test("setup and sole-account creation cannot be replaced by the default SSO
   }
 });
 
-Deno.test("Plugin labels and fields cannot alter a local password form", () => {
+test("Plugin labels and fields cannot alter a local password form", () => {
   const html = render({
     hostPlugins: [{
       id: "password",
@@ -79,7 +80,7 @@ Deno.test("Plugin labels and fields cannot alter a local password form", () => {
   assertEquals(html.includes("untrusted-"), false);
 });
 
-Deno.test("ordinary disabled local authentication never renders a password fallback", () => {
+test("ordinary disabled local authentication never renders a password fallback", () => {
   for (const providers of [[], [sso]]) {
     const html = render({
       passwordEnabled: false,

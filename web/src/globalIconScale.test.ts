@@ -1,19 +1,21 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const themeSource = await Deno.readTextFile(
-  new URL("./theme.ts", import.meta.url),
+const themeSource = await readFile(
+  new URL("./theme.ts", import.meta.url), "utf8",
 );
-const frontendDesign = await Deno.readTextFile(
-  new URL("../../docs/architecture/09-frontend.md", import.meta.url),
+const frontendDesign = await readFile(
+  new URL("../../docs/architecture/09-frontend.md", import.meta.url), "utf8",
 );
-const providerSurfaceSource = await Deno.readTextFile(
-  new URL("./ProviderSurface.tsx", import.meta.url),
+const providerSurfaceSource = await readFile(
+  new URL("./ProviderSurface.tsx", import.meta.url), "utf8",
 );
-const providerManagementSource = await Deno.readTextFile(
-  new URL("./ProviderManagement.tsx", import.meta.url),
+const providerManagementSource = await readFile(
+  new URL("./ProviderManagement.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("functional Button icons follow Cowboy's global font scale", () => {
+test("functional Button icons follow Cowboy's global font scale", () => {
   assertEquals(
     themeSource.includes(
       '"& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)"',
@@ -29,7 +31,7 @@ Deno.test("functional Button icons follow Cowboy's global font scale", () => {
   );
 });
 
-Deno.test("Provider management marks and labels follow Cowboy's global font scale", () => {
+test("Provider management marks and labels follow Cowboy's global font scale", () => {
   assertEquals(
     providerSurfaceSource.includes(
       "? `calc(${size}px * var(--cowboy-font-scale, 1))`",

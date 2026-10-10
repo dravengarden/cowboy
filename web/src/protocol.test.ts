@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { isPureTerminalOutputDelta } from "./protocol.ts";
 
-Deno.test("pure terminal output deltas are transient transcript telemetry", () => {
+test("pure terminal output deltas are transient transcript telemetry", () => {
   assertEquals(
     isPureTerminalOutputDelta({
       sessionUpdate: "tool_call_update",

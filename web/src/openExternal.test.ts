@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
@@ -17,7 +18,7 @@ import {
   shouldRouteExternalClick,
 } from "./openExternal";
 
-Deno.test("external links allow explicit network and contact protocols", () => {
+test("external links allow explicit network and contact protocols", () => {
   for (
     const url of [
       "https://example.com/docs?q=1",
@@ -32,7 +33,7 @@ Deno.test("external links allow explicit network and contact protocols", () => {
   }
 });
 
-Deno.test("native Passkey browser returns its terminal callback without a suspended WebSocket", async () => {
+test("native Passkey browser returns its terminal callback without a suspended WebSocket", async () => {
   let opened = "";
   const root = globalThis as typeof globalThis & {
     __cowboyOpenPasskeyBrowser?: (url: string) => Promise<unknown>;
@@ -58,14 +59,14 @@ Deno.test("native Passkey browser returns its terminal callback without a suspen
   }
 });
 
-Deno.test("missing native Passkey browser falls back without opening a page", async () => {
+test("missing native Passkey browser falls back without opening a page", async () => {
   assertEquals(
     await openPasskeyAuthenticationUrl("https://example.com/passkey.html"),
     "unavailable",
   );
 });
 
-Deno.test("aborting a native Passkey browser closes the system session", async () => {
+test("aborting a native Passkey browser closes the system session", async () => {
   let closes = 0;
   const root = globalThis as typeof globalThis & {
     __cowboyOpenPasskeyBrowser?: () => Promise<unknown>;
@@ -91,7 +92,7 @@ Deno.test("aborting a native Passkey browser closes the system session", async (
   }
 });
 
-Deno.test("returning to Cowboy settles a suspended native Passkey browser reply", async () => {
+test("returning to Cowboy settles a suspended native Passkey browser reply", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyOpenPasskeyBrowser?: () => Promise<unknown>;
     __cowboyPasskeyBrowserBridgeVersion?: number;
@@ -110,7 +111,7 @@ Deno.test("returning to Cowboy settles a suspended native Passkey browser reply"
   }
 });
 
-Deno.test("external links reject executable and local protocols", () => {
+test("external links reject executable and local protocols", () => {
   for (
     const url of [
       "javascript:alert(1)",
@@ -125,7 +126,7 @@ Deno.test("external links reject executable and local protocols", () => {
   }
 });
 
-Deno.test("external links reject relative and malformed values", () => {
+test("external links reject relative and malformed values", () => {
   for (const url of ["/relative", "notes/chapter-1", "not a URL", "http://["]) {
     if (safeExternalUrl(url) !== null) {
       throw new Error(`expected invalid external URL: ${url}`);
@@ -133,7 +134,7 @@ Deno.test("external links reject relative and malformed values", () => {
   }
 });
 
-Deno.test("Provider authentication accepts web URLs only", () => {
+test("Provider authentication accepts web URLs only", () => {
   if (safeAuthenticationUrl("https://example.com/login") === null) {
     throw new Error("expected HTTPS authentication URL");
   }
@@ -144,7 +145,7 @@ Deno.test("Provider authentication accepts web URLs only", () => {
   }
 });
 
-Deno.test("Provider authentication prefers and closes the native Safari sheet", () => {
+test("Provider authentication prefers and closes the native Safari sheet", () => {
   let opened = "";
   let closes = 0;
   const root = globalThis as typeof globalThis & {
@@ -171,7 +172,7 @@ Deno.test("Provider authentication prefers and closes the native Safari sheet", 
   }
 });
 
-Deno.test("bridge v2 confirms that UIKit presented the authentication sheet", async () => {
+test("bridge v2 confirms that UIKit presented the authentication sheet", async () => {
   let opened = "";
   const root = globalThis as typeof globalThis & {
     __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
@@ -196,7 +197,7 @@ Deno.test("bridge v2 confirms that UIKit presented the authentication sheet", as
   }
 });
 
-Deno.test("bridge v2 rejects a silently failed UIKit presentation", async () => {
+test("bridge v2 rejects a silently failed UIKit presentation", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
     __cowboyAuthenticationBrowserBridgeVersion?: number;
@@ -223,7 +224,7 @@ Deno.test("bridge v2 rejects a silently failed UIKit presentation", async () => 
 });
 
 for (const bridge of ["opener", "core", "internals"] as const) {
-  Deno.test(`Desktop authentication awaits ${bridge} and propagates launch failures`, async () => {
+  test(`Desktop authentication awaits ${bridge} and propagates launch failures`, async () => {
     const root = globalThis as typeof globalThis & {
       __TAURI__?: {
         opener?: { openUrl: (url: string) => Promise<void> };
@@ -311,7 +312,7 @@ for (const bridge of ["opener", "core", "internals"] as const) {
   });
 }
 
-Deno.test("Tauri fallback passes open_url its url argument", () => {
+test("Tauri fallback passes open_url its url argument", () => {
   let command = "";
   let args: Record<string, unknown> = {};
   const root = globalThis as typeof globalThis & {
@@ -349,7 +350,7 @@ Deno.test("Tauri fallback passes open_url its url argument", () => {
   }
 });
 
-Deno.test("Tauri v2 internals open native-shell links with the URL argument", () => {
+test("Tauri v2 internals open native-shell links with the URL argument", () => {
   let command = "";
   let args: Record<string, unknown> = {};
   const root = globalThis as typeof globalThis & {
@@ -385,7 +386,7 @@ Deno.test("Tauri v2 internals open native-shell links with the URL argument", ()
   }
 });
 
-Deno.test("only unmodified native primary clicks override anchor navigation", () => {
+test("only unmodified native primary clicks override anchor navigation", () => {
   const root = globalThis as typeof globalThis & {
     __TAURI_INTERNALS__?: { invoke: () => Promise<unknown> };
   };
@@ -413,7 +414,7 @@ Deno.test("only unmodified native primary clicks override anchor navigation", ()
   }
 });
 
-Deno.test("authentication links route through an iOS sheet when available", () => {
+test("authentication links route through an iOS sheet when available", () => {
   const root = globalThis as typeof globalThis & {
     __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
   };

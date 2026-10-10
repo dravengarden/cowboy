@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "./protocol";
 import {
   mergeSessionOverview,
@@ -32,7 +34,7 @@ function rowMap(
   );
 }
 
-Deno.test("remote overview separates AI runtime from target and uses the target worktree", () => {
+test("remote overview separates AI runtime from target and uses the target worktree", () => {
   const payload = info({
     machine_id: "ovh",
     cwd: "/runtime",
@@ -57,7 +59,7 @@ Deno.test("remote overview separates AI runtime from target and uses the target 
   assertEquals(invalid.Worktree, "Execution environment unavailable");
 });
 
-Deno.test("session overview fills identity workspace activity and id", () => {
+test("session overview fills identity workspace activity and id", () => {
   const rows = rowMap(info({
     machine_id: "hawk",
     origin: "web",
@@ -91,7 +93,7 @@ Deno.test("session overview fills identity workspace activity and id", () => {
   assertEquals(rows["Next draft"], undefined);
 });
 
-Deno.test("session overview keeps a single directory when checkout is the cwd", () => {
+test("session overview keeps a single directory when checkout is the cwd", () => {
   const rows = rowMap(info({
     workspace_source_path: "/tmp/worktree/sess-1",
   }));
@@ -104,7 +106,7 @@ Deno.test("session overview keeps a single directory when checkout is the cwd", 
   assertEquals(rows.Context, "Not reported");
 });
 
-Deno.test("session overview status reports lifecycle and manual queue pause", () => {
+test("session overview status reports lifecycle and manual queue pause", () => {
   assertEquals(sessionOverviewStatus(info()), "Running…");
   assertEquals(
     sessionOverviewStatus(info({ paused: true })),
@@ -119,20 +121,20 @@ Deno.test("session overview status reports lifecycle and manual queue pause", ()
   );
 });
 
-Deno.test("system sessions get an explicit kind row", () => {
+test("system sessions get an explicit kind row", () => {
   const rows = rowMap(info({ system: true, status: "running" }));
   assertEquals(rows.Kind, "System");
   assertEquals(rows.Status, "Live");
 });
 
-Deno.test("next scheduled draft uses the compact Chinese fire label", () => {
+test("next scheduled draft uses the compact Chinese fire label", () => {
   const now = new Date(2026, 7, 20, 19, 15).getTime();
   const fire = new Date(2026, 7, 20, 20, 0).getTime();
   const rows = rowMap(info({ next_schedule_ms: fire }), now);
   assertEquals(rows["Next draft"], "今天 20:00 · 45 分钟后");
 });
 
-Deno.test("merge keeps HTTP counts and takes live status context", () => {
+test("merge keeps HTTP counts and takes live status context", () => {
   const live: SessionMeta = {
     id: "sess-1",
     provider: "codex",
@@ -156,11 +158,11 @@ Deno.test("merge keeps HTTP counts and takes live status context", () => {
   assertEquals(merged.context_used, 80);
 });
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("session info surfaces render the shared overview sections", () => {
+test("session info surfaces render the shared overview sections", () => {
   assertEquals(appSource.includes("sessionOverviewSections("), true);
   assertEquals(appSource.includes("mergeSessionOverview("), true);
   assertEquals(

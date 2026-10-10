@@ -4790,10 +4790,10 @@ mod tests {
         assert_eq!(
             validate_execution_env(vec![
                 "COLUMBUS_WORKTREE_ROOT".to_owned(),
-                "DENO_DIR".to_owned()
+                "BUN_INSTALL_CACHE_DIR".to_owned()
             ])
             .unwrap(),
-            ["COLUMBUS_WORKTREE_ROOT", "DENO_DIR"]
+            ["COLUMBUS_WORKTREE_ROOT", "BUN_INSTALL_CACHE_DIR"]
         );
         for name in [
             "PATH",
@@ -4802,7 +4802,7 @@ mod tests {
             "OPENAI_API_KEY",
             "GITHUB_TOKEN",
             "LD_PRELOAD",
-            "deno_dir",
+            "bun_install_cache_dir",
             "",
         ] {
             assert!(
@@ -4811,7 +4811,11 @@ mod tests {
             );
         }
         assert!(
-            validate_execution_env(vec!["DENO_DIR".to_owned(), "DENO_DIR".to_owned()]).is_err()
+            validate_execution_env(vec![
+                "BUN_INSTALL_CACHE_DIR".to_owned(),
+                "BUN_INSTALL_CACHE_DIR".to_owned()
+            ])
+            .is_err()
         );
         let too_many = (0..=crate::execution_target_environment::MAX
             - crate::execution_target_environment::BASE.len())

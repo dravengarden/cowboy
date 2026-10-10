@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
   cleanTelemetryAttributes,
   cleanTelemetryMessage,
@@ -7,7 +8,7 @@ import {
   TelemetryQueue,
 } from "./telemetryQueue.ts";
 
-Deno.test("incident-only floods bound both count and bytes, including in-flight batches", () => {
+test("incident-only floods bound both count and bytes, including in-flight batches", () => {
   const queue = new TelemetryQueue();
   for (let i = 0; i < 500; i++) {
     queue.capture(
@@ -30,7 +31,7 @@ Deno.test("incident-only floods bound both count and bytes, including in-flight 
   assert(queue.dropped > 0);
 });
 
-Deno.test("retries retain exact bytes and captured context; later mutations cannot relabel events", () => {
+test("retries retain exact bytes and captured context; later mutations cannot relabel events", () => {
   const queue = new TelemetryQueue();
   const context = { session_id: "first" };
   const value = { message: "original" };
@@ -52,7 +53,7 @@ Deno.test("retries retain exact bytes and captured context; later mutations cann
   );
 });
 
-Deno.test("permanent rejection, exhausted retry and sign-out cannot resurrect poison batches", () => {
+test("permanent rejection, exhausted retry and sign-out cannot resurrect poison batches", () => {
   for (const status of [400, 401, 403, 404, 413, 422]) {
     assertEquals(retryTelemetryStatus(status), false);
   }
@@ -73,7 +74,7 @@ Deno.test("permanent rejection, exhausted retry and sign-out cannot resurrect po
   assertEquals(queue.size, 0);
 });
 
-Deno.test("UTF-8 batches and privacy filters preserve valid text without credentials", () => {
+test("UTF-8 batches and privacy filters preserve valid text without credentials", () => {
   const message = cleanTelemetryMessage(
     'Authorization: Bearer super-secret, password="two words" https://user:pass@example.test/x?token=private#hash',
   );

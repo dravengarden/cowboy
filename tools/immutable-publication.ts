@@ -1,4 +1,7 @@
 /** Create-only publication: the hard link is the atomic commit point. */
+import { randomUUID } from "node:crypto";
+import { Command } from "./lib/command.ts";
+import { chmod, copyFile, link, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 export async function copyImmutable(
   source: string,
   destination: string,
@@ -7,7 +10,7 @@ export async function copyImmutable(
   await requireRegularFile(source);
   const expected = await sha256(source);
   await publish(destination, mode, async (temporary) => {
-    await Deno.copyFile(source, temporary);
+    await copyFile(source, temporary);
     if (await sha256(temporary) !== expected) {
       throw new Error(`publication source changed: ${source}`);
     }
@@ -20,8 +23,8 @@ export async function copyImmutableText(
   mode = 0o644,
 ): Promise<void> {
   await publish(destination, mode, async (temporary) => {
-    await Deno.writeTextFile(temporary, value);
-  }, async () => await Deno.readTextFile(destination) === value);
+    await writeFile(temporary, value);
+  }, async () => await readFile(destination, "utf8") === value);
 }
 
 async function publish(
@@ -42,40 +45,38 @@ async function publish(
     }
   };
   const directory = destination.slice(0, destination.lastIndexOf("/"));
-  await Deno.mkdir(directory, { recursive: true });
+  await mkdir(directory, { recursive: true });
   if (await exists(destination)) {
     await verifyExisting();
     return;
   }
-  const temporary = await Deno.makeTempFile({
-    dir: directory,
-    prefix: ".cowboy-publication-",
-  });
+  const temporary = `${directory}/.cowboy-publication-${randomUUID()}`;
+  await writeFile(temporary, "", { flag: "wx", mode: 0o600 });
   try {
     await prepare(temporary);
-    await Deno.chmod(temporary, mode);
+    await chmod(temporary, mode);
     try {
       // rename replaces an existing destination on POSIX. link never does.
-      await Deno.link(temporary, destination);
+      await link(temporary, destination);
     } catch (error) {
-      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+      if (!((error as { code?: string }).code === "EEXIST")) throw error;
       await verifyExisting();
     }
   } finally {
-    await Deno.remove(temporary);
+    await rm(temporary);
   }
 }
 
 async function requireRegularFile(path: string): Promise<void> {
-  const info = await Deno.lstat(path);
-  if (!info.isFile || info.isSymlink) {
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error(`immutable publication requires a regular file: ${path}`);
   }
 }
 
 export async function sha256(path: string): Promise<string> {
   await requireRegularFile(path);
-  const output = await new Deno.Command("sha256sum", {
+  const output = await new Command("sha256sum", {
     args: [path],
     clearEnv: true,
   }).output();
@@ -86,10 +87,10 @@ export async function sha256(path: string): Promise<string> {
 
 export async function exists(path: string): Promise<boolean> {
   try {
-    await Deno.lstat(path);
+    await lstat(path);
     return true;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if ((error as { code?: string }).code === "ENOENT") return false;
     throw error;
   }
 }

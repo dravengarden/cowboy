@@ -1,27 +1,29 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { mobileSpatialDrawerShadow } from "./mobileDrawerDepth.ts";
 
-const drawerSource = await Deno.readTextFile(
-  new URL("./mobileSpatialDrawer.ts", import.meta.url),
+const drawerSource = await readFile(
+  new URL("./mobileSpatialDrawer.ts", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const productShellSource = await Deno.readTextFile(
-  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url),
+const productShellSource = await readFile(
+  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url), "utf8",
 );
-const reviewDrawerSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url),
+const reviewDrawerSource = await readFile(
+  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("dispose keeps seam shadow while a drawer is still translated", () => {
+test("dispose keeps seam shadow while a drawer is still translated", () => {
   assert(
     drawerSource.includes("shouldKeepDrawerDepth(getOpen(), currentOffset)"),
   );
   assert(drawerSource.includes("data-mobile-drawer-progress"));
 });
 
-Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () => {
+test("mobile drawer keeps clipping and shadows off the heavy surface", () => {
   assertEquals(drawerSource.includes("surface.style.boxShadow"), false);
   assertEquals(drawerSource.includes("surface.style.borderRadius"), false);
   assertEquals(drawerSource.includes("applyCardChrome"), false);
@@ -69,7 +71,7 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(widthAt >= 0 && translateAt > widthAt);
 });
 
-Deno.test("spatial drawer swipe dismisses the software keyboard on claim", () => {
+test("spatial drawer swipe dismisses the software keyboard on claim", () => {
   assert(drawerSource.includes("dismissMobileSoftwareKeyboardForSwipe"));
   const lockAt = drawerSource.indexOf("gesture.locked = true");
   const renderAt = drawerSource.indexOf("render(offset, true)");
@@ -87,7 +89,7 @@ Deno.test("spatial drawer swipe dismisses the software keyboard on claim", () =>
   assert(settleStart >= 0 && settleOpen > settleStart);
 });
 
-Deno.test("finger swipe fires a navigation haptic at the commit threshold", () => {
+test("finger swipe fires a navigation haptic at the commit threshold", () => {
   assertEquals(drawerSource.includes("prepareNavigationHaptic()"), true);
   assertEquals(drawerSource.includes("navigationHaptic()"), true);
   assertEquals(drawerSource.includes("thresholdHaptic"), true);
@@ -98,12 +100,12 @@ Deno.test("finger swipe fires a navigation haptic at the commit threshold", () =
   );
 });
 
-Deno.test("drawer join is a hard paper|page edge", () => {
+test("drawer join is a hard paper|page edge", () => {
   assertEquals(mobileSpatialDrawerShadow("left"), "none");
   assertEquals(mobileSpatialDrawerShadow("right"), "none");
 });
 
-Deno.test("Agent drawer publishes pager ownership synchronously", () => {
+test("Agent drawer publishes pager ownership synchronously", () => {
   const bindingStart = appSource.indexOf(
     "const binding = bindMobileSpatialDrawer({",
   );
@@ -133,7 +135,7 @@ Deno.test("Agent drawer publishes pager ownership synchronously", () => {
   assert(appSource.includes("settleMobileDrawerRef.current(false);"));
 });
 
-Deno.test("interrupted drawer settle restores rest state instead of leaking open", () => {
+test("interrupted drawer settle restores rest state instead of leaking open", () => {
   assert(drawerSource.includes("restoreInterruptedSettle"));
   assert(drawerSource.includes("pendingSettle"));
   assert(drawerSource.includes("currentOffset > width / 2"));
@@ -152,7 +154,7 @@ Deno.test("interrupted drawer settle restores rest state instead of leaking open
   assert(unlockedEnd >= 0 && unlockedRestore > unlockedEnd);
 });
 
-Deno.test("settled drawers retain declarative depth and pager ownership", () => {
+test("settled drawers retain declarative depth and pager ownership", () => {
   assert(appSource.includes(
     'data-mobile-drawer-presented={mobile && drawerOpen ? "true" : undefined}',
   ));
@@ -196,7 +198,7 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
   );
 });
 
-Deno.test("drawer and pager settle a stream whose start node was re-rendered", () => {
+test("drawer and pager settle a stream whose start node was re-rendered", () => {
   for (const source of [drawerSource, productShellSource]) {
     assert(source.includes("followDetachedTouchStream(event.target, {"));
     assert(source.includes("move: onTouchMove,"));
@@ -209,7 +211,7 @@ Deno.test("drawer and pager settle a stream whose start node was re-rendered", (
   }
 });
 
-Deno.test("a second contact cannot restart or strand a claimed drawer swipe", () => {
+test("a second contact cannot restart or strand a claimed drawer swipe", () => {
   const start = drawerSource.slice(
     drawerSource.indexOf("const onTouchStart = (event: TouchEvent): void => {"),
   );

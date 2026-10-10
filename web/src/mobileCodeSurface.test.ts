@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   bindCodeViewerSwipeFreeze,
   createMobileCodeScrollIdleReporter,
@@ -22,7 +23,7 @@ function fakeView() {
   };
 }
 
-Deno.test("wrap-on rest layer stays visible and does not snapshot", () => {
+test("wrap-on rest layer stays visible and does not snapshot", () => {
   assertEquals(mobileCodeRestLayerSx.overflow, "hidden");
   assertEquals(
     Object.prototype.hasOwnProperty.call(mobileCodeRestLayerSx, "visibility"),
@@ -37,7 +38,7 @@ Deno.test("wrap-on rest layer stays visible and does not snapshot", () => {
   );
 });
 
-Deno.test("claimed swipe flattens live code into one filter texture", () => {
+test("claimed swipe flattens live code into one filter texture", () => {
   assertEquals(
     mobileCodeSwipeFlattenSx["& [data-mobile-code-layer]"].filter,
     "opacity(0.999)",
@@ -51,7 +52,7 @@ Deno.test("claimed swipe flattens live code into one filter texture", () => {
   );
 });
 
-Deno.test("visible-line reporting trails continuous native scroll", () => {
+test("visible-line reporting trails continuous native scroll", () => {
   const timers = new Map<number, ManualTimer>();
   let nextTimer = 0;
   const reports: number[] = [];
@@ -86,7 +87,7 @@ Deno.test("visible-line reporting trails continuous native scroll", () => {
   assertEquals(reports, [48]);
 });
 
-Deno.test("code swipe freeze is reference-counted and skips after release", () => {
+test("code swipe freeze is reference-counted and skips after release", () => {
   const disposeFirst = bindCodeViewerSwipeFreeze(fakeView(), () => false);
   const disposeSecond = bindCodeViewerSwipeFreeze(fakeView(), () => false);
   assertEquals(isMobileCodeSwipeFrozen(), false);
@@ -98,7 +99,7 @@ Deno.test("code swipe freeze is reference-counted and skips after release", () =
   disposeSecond();
 });
 
-Deno.test("a late-mounted editor freezes when a swipe is already claimed", () => {
+test("a late-mounted editor freezes when a swipe is already claimed", () => {
   assert(
     swipeOwnsCodeSurface((selector) =>
       selector.includes("data-mobile-product-moving") ? {} : null

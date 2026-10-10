@@ -1,10 +1,11 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   assertMacShortcutAllowed,
   macShortcutConflict,
 } from "./macShortcutPolicy.ts";
 
-Deno.test("macOS destructive and system shortcuts are rejected", () => {
+test("macOS destructive and system shortcuts are rejected", () => {
   for (
     const shortcut of [
       "Mod+Q",
@@ -31,7 +32,7 @@ Deno.test("macOS destructive and system shortcuts are rejected", () => {
   }
 });
 
-Deno.test("common Command shortcuts require matching product semantics", () => {
+test("common Command shortcuts require matching product semantics", () => {
   assertEquals(macShortcutConflict("composer.saveDraft", "Mod+S"), null);
   assertEquals(macShortcutConflict("topbar.stop", "Mod+."), null);
   assertEquals(macShortcutConflict("workspace.prefix", "Mod+K"), null);
@@ -41,7 +42,7 @@ Deno.test("common Command shortcuts require matching product semantics", () => {
   assertThrows(() => assertMacShortcutAllowed("settings.open", "Mod+,"));
 });
 
-Deno.test("macOS direct and fallback workspace chords are safe", () => {
+test("macOS direct and fallback workspace chords are safe", () => {
   for (
     const [commandId, shortcut] of [
       ["commandPalette.open", "Mod+Shift+P"],
@@ -56,7 +57,7 @@ Deno.test("macOS direct and fallback workspace chords are safe", () => {
   assertThrows(() => assertMacShortcutAllowed("prompt.focusQueue", "Q"));
 });
 
-Deno.test("transactional edits and independent documents own native Save", () => {
+test("transactional edits and independent documents own native Save", () => {
   for (
     const id of [
       "pendingEdit.queued.done",

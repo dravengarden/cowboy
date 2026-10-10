@@ -634,7 +634,7 @@ Ordered by user-visible value; each phase ships independently.
 
 ## Acceptance
 
-Deterministic Deno tests cover status derivation, scheduler ordering and
+Deterministic Bun tests cover status derivation, scheduler ordering and
 preemption, replica write guards and eviction, delivery metadata across a
 simulated reload, and the conflict table outcomes as reducer cases. The
 pinned-Firefox conformance runner adds one suite: load online, populate the

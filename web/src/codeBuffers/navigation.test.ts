@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { type CapturedContent } from "./content.ts";
 import { fixture, ID, opened, wire } from "./fixture.ts";
 import { BufferClientError } from "./protocol.ts";
@@ -11,7 +12,7 @@ import {
 } from "./navigationFixture.ts";
 import type { NavigationHandle } from "./navigationProjection.ts";
 
-Deno.test("navigation requires an original Open intent and authentic captured content before dispatch", async () => {
+test("navigation requires an original Open intent and authentic captured content before dispatch", async () => {
   const f = fixture(), captured = await content();
   await assertRejects(
     () => f.owner.prepareNavigation(captured, golden.position, "definition"),
@@ -50,7 +51,7 @@ Deno.test("navigation requires an original Open intent and authentic captured co
   assertEquals(g.calls.length, 2);
 });
 
-Deno.test("navigation preparation is inert; exact path-free Execute is single-use and fences its source", async () => {
+test("navigation preparation is inert; exact path-free Execute is single-use and fences its source", async () => {
   const f = await preparedNavigation();
   assertEquals(f.calls[2]!.url, `/api/code/buffers/${ID}/navigations`);
   assertEquals(JSON.parse(f.calls[2]!.init.body as string), {
@@ -111,7 +112,7 @@ Deno.test("navigation preparation is inert; exact path-free Execute is single-us
   await assertRejects(() => f.operation.observe(), BufferClientError, "state");
 });
 
-Deno.test("observer cancellation drains preparation into the original owner without Execute or hidden cleanup", async () => {
+test("observer cancellation drains preparation into the original owner without Execute or hidden cleanup", async () => {
   const f = await opened(), observer = new AbortController();
   const task = f.owner.prepareNavigation(
     await content(),
@@ -134,7 +135,7 @@ Deno.test("observer cancellation drains preparation into the original owner with
   assertEquals(f.owner.navigation(), undefined);
 });
 
-Deno.test("cancelled Execute preserves one acquisition and its late targets while source close stays retained", async () => {
+test("cancelled Execute preserves one acquisition and its late targets while source close stays retained", async () => {
   const f = await preparedNavigation(), observer = new AbortController();
   const execute = f.operation.execute(observer.signal);
   observer.abort();
@@ -148,7 +149,7 @@ Deno.test("cancelled Execute preserves one acquisition and its late targets whil
   assertEquals(f.calls.length, 4);
 });
 
-Deno.test("lost Execute is original-group query-only; confirmed unknown cannot expire or pretend released", async () => {
+test("lost Execute is original-group query-only; confirmed unknown cannot expire or pretend released", async () => {
   const f = await preparedNavigation();
   const execute = f.operation.execute();
   f.calls[3]!.result.reject(new Error("private response must not escape"));
@@ -175,7 +176,7 @@ Deno.test("lost Execute is original-group query-only; confirmed unknown cannot e
   );
 });
 
-Deno.test("a refused Execute can end only with inert Service expiry, not an automatic retry", async () => {
+test("a refused Execute can end only with inert Service expiry, not an automatic retry", async () => {
   const f = await preparedNavigation();
   const execute = f.operation.execute();
   f.reply(3, {}, 409);
@@ -187,7 +188,7 @@ Deno.test("a refused Execute can end only with inert Service expiry, not an auto
   assert(!f.owner.view().fresh);
 });
 
-Deno.test("Execute 202 is not queued or rearmed; only explicit original Query follows", async () => {
+test("Execute 202 is not queued or rearmed; only explicit original Query follows", async () => {
   const f = await preparedNavigation();
   const execute = f.operation.execute();
   f.reply(3, navigationWire("prepared", true), 202);
@@ -200,7 +201,7 @@ Deno.test("Execute 202 is not queued or rearmed; only explicit original Query fo
   await query;
 });
 
-Deno.test("lost Release is query-only even after retained acknowledgement; targets cannot change or regress", async () => {
+test("lost Release is query-only even after retained acknowledgement; targets cannot change or regress", async () => {
   const f = await preparedNavigation();
   const execute = f.operation.execute();
   f.reply(3, navigationWire("retained"));
@@ -233,7 +234,7 @@ Deno.test("lost Release is query-only even after retained acknowledgement; targe
   );
 });
 
-Deno.test("Release 202 before admission allows a separate release only after fresh observation", async () => {
+test("Release 202 before admission allows a separate release only after fresh observation", async () => {
   const f = await preparedNavigation();
   const release = f.operation.release();
   f.reply(3, navigationWire("prepared", true), 202);
@@ -250,7 +251,7 @@ Deno.test("Release 202 before admission allows a separate release only after fre
   assertEquals(f.calls.length, 6);
 });
 
-Deno.test("pending admitted Release never rearms; cancelled observer preserves final retirement", async () => {
+test("pending admitted Release never rearms; cancelled observer preserves final retirement", async () => {
   const f = await preparedNavigation(), observer = new AbortController();
   const release = f.operation.release(observer.signal);
   observer.abort();
@@ -272,7 +273,7 @@ Deno.test("pending admitted Release never rearms; cancelled observer preserves f
   );
 });
 
-Deno.test("navigation projection cannot import handles or execute; context loss redacts recovery labels", async () => {
+test("navigation projection cannot import handles or execute; context loss redacts recovery labels", async () => {
   const f = await preparedNavigation(), g = await preparedNavigation();
   await assertRejects(
     () => f.source.inspect(g.row.handle),
@@ -305,7 +306,7 @@ Deno.test("navigation projection cannot import handles or execute; context loss 
   assertEquals(f.calls.length, 4);
 });
 
-Deno.test("unsupported or malformed preparation never falls back to a generic path operation", async () => {
+test("unsupported or malformed preparation never falls back to a generic path operation", async () => {
   for (
     const [value, status] of [[{}, 501], [
       { ...navigationWire(), native: {} },
@@ -326,7 +327,7 @@ Deno.test("unsupported or malformed preparation never falls back to a generic pa
   }
 });
 
-Deno.test("ended observers and an in-progress source cleanup cannot admit navigation actions", async () => {
+test("ended observers and an in-progress source cleanup cannot admit navigation actions", async () => {
   const f = await preparedNavigation(), observer = new AbortController();
   observer.abort();
   for (

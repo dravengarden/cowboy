@@ -1,23 +1,25 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { desktopImeKeyIsReserved } from "./imeShortcutPolicy.ts";
 
-const appSource = await Deno.readTextFile(
-  new URL("../../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../../App.tsx", import.meta.url), "utf8",
 );
-const hostSource = await Deno.readTextFile(
-  new URL("./DesktopCommandHost.tsx", import.meta.url),
+const hostSource = await readFile(
+  new URL("./DesktopCommandHost.tsx", import.meta.url), "utf8",
 );
-const providerSource = await Deno.readTextFile(
-  new URL("./DesktopCommandProvider.tsx", import.meta.url),
+const providerSource = await readFile(
+  new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
-const topBarSource = await Deno.readTextFile(
-  new URL("../DesktopTopBarControls.tsx", import.meta.url),
+const topBarSource = await readFile(
+  new URL("../DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const transcriptSource = await Deno.readTextFile(
-  new URL("../../Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("../../Transcript.tsx", import.meta.url), "utf8",
 );
-const exploreSource = await Deno.readTextFile(
-  new URL("../../explore/ExploreSurface.tsx", import.meta.url),
+const exploreSource = await readFile(
+  new URL("../../explore/ExploreSurface.tsx", import.meta.url), "utf8",
 );
 
 function key(
@@ -31,7 +33,7 @@ function key(
   };
 }
 
-Deno.test("Desktop reserves every native IME key outside the Vim Normal sink", () => {
+test("Desktop reserves every native IME key outside the Vim Normal sink", () => {
   assertEquals(
     desktopImeKeyIsReserved(key({ isComposing: true }), false, false),
     true,
@@ -51,7 +53,7 @@ Deno.test("Desktop reserves every native IME key outside the Vim Normal sink", (
   assertEquals(desktopImeKeyIsReserved(key(), false, false), false);
 });
 
-Deno.test("a real composition suspends even the Vim Normal command sink", () => {
+test("a real composition suspends even the Vim Normal command sink", () => {
   assertEquals(
     desktopImeKeyIsReserved(key({ key: "Process" }), true, false),
     false,
@@ -59,7 +61,7 @@ Deno.test("a real composition suspends even the Vim Normal command sink", () => 
   assertEquals(desktopImeKeyIsReserved(key(), true, true), true);
 });
 
-Deno.test("every Desktop shortcut owner checks the shared IME boundary", () => {
+test("every Desktop shortcut owner checks the shared IME boundary", () => {
   for (
     const [name, source, minimum] of [
       ["session surfaces", appSource, 3],

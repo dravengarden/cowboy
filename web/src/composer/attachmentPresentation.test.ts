@@ -1,15 +1,17 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { Attachment } from "../attachments.ts";
 import { attachmentTrayForSurface } from "./attachmentPresentation.ts";
 
-const composerSource = await Deno.readTextFile(
-  new URL("../Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("../Composer.tsx", import.meta.url), "utf8",
 );
-const inlineImagesSource = await Deno.readTextFile(
-  new URL("../inlineImages.ts", import.meta.url),
+const inlineImagesSource = await readFile(
+  new URL("../inlineImages.ts", import.meta.url), "utf8",
 );
-const messagePreviewSource = await Deno.readTextFile(
-  new URL("../MessagePreview.tsx", import.meta.url),
+const messagePreviewSource = await readFile(
+  new URL("../MessagePreview.tsx", import.meta.url), "utf8",
 );
 
 function attachment(id: string, isImage: boolean, previewUrl = "data:image/png;base64,c2hvdA=="): Attachment {
@@ -25,7 +27,7 @@ function attachment(id: string, isImage: boolean, previewUrl = "data:image/png;b
   };
 }
 
-Deno.test("compact composer keeps token-backed images inline", () => {
+test("compact composer keeps token-backed images inline", () => {
   const placed = attachment("placed", true);
   const staged = attachment("staged", true);
   const file = attachment("file", false);
@@ -38,7 +40,7 @@ Deno.test("compact composer keeps token-backed images inline", () => {
   );
 });
 
-Deno.test("token-backed images with no loadable preview stay in the tray", () => {
+test("token-backed images with no loadable preview stay in the tray", () => {
   const placed = attachment("placed", true, "");
   const staged = attachment("staged", true);
   assertEquals(
@@ -50,7 +52,7 @@ Deno.test("token-backed images with no loadable preview stay in the tray", () =>
   );
 });
 
-Deno.test("fullscreen keeps only images without CM inline tokens in its tray", () => {
+test("fullscreen keeps only images without CM inline tokens in its tray", () => {
   const placed = attachment("placed", true);
   const staged = attachment("staged", true);
   const file = attachment("file", false);
@@ -63,7 +65,7 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
   );
 });
 
-Deno.test("inline-image Preview dismisses the software keyboard before the lightbox", () => {
+test("inline-image Preview dismisses the software keyboard before the lightbox", () => {
   const previewStart = composerSource.indexOf(
     "const previewSelectedImage = useCallback",
   );
@@ -78,7 +80,7 @@ Deno.test("inline-image Preview dismisses the software keyboard before the light
   assertEquals(preview.includes("openLightbox([att], 0)"), true);
 });
 
-Deno.test("inline-image actions commit reliable touch pointerup without blurring the editor", () => {
+test("inline-image actions commit reliable touch pointerup without blurring the editor", () => {
   assertEquals(
     composerSource.includes(
       "const imageDeleteTap = useReliableTouchTap<HTMLButtonElement>(",
@@ -113,12 +115,12 @@ Deno.test("inline-image actions commit reliable touch pointerup without blurring
   assertEquals(imageActions.includes("event.preventDefault();\n                  imageDeleteTap.onPointerDown"), false);
 });
 
-Deno.test("pending cards preview token-backed images inline instead of a second chip", () => {
+test("pending cards preview token-backed images inline instead of a second chip", () => {
   assertEquals(composerSource.includes("attachmentTrayForSurface(seedAttachments, seedText)"), true);
   assertEquals(composerSource.includes("<MessagePreview text={seedText} attachments={seedAttachments} />"), true);
 });
 
-Deno.test("pending inline images open the lightbox instead of starting an edit", () => {
+test("pending inline images open the lightbox instead of starting an edit", () => {
   assertEquals(
     messagePreviewSource.includes(
       '"& .cm-inline-image": { pointerEvents: "auto", cursor: "pointer" }',
@@ -146,7 +148,7 @@ Deno.test("pending inline images open the lightbox instead of starting an edit",
   );
 });
 
-Deno.test("pending edit surfaces retain previews for attachments without inline tokens", () => {
+test("pending edit surfaces retain previews for attachments without inline tokens", () => {
   assertEquals(
     composerSource.includes(
       "promoteUnplacedImageTokens(message.text, message.attachments)",
@@ -177,7 +179,7 @@ Deno.test("pending edit surfaces retain previews for attachments without inline 
   );
 });
 
-Deno.test("attachment-only pending rows retain a full content edit target", () => {
+test("attachment-only pending rows retain a full content edit target", () => {
   assertEquals(
     composerSource.includes('data-pending-content-action="attachment-preview"'),
     true,

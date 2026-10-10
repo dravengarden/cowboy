@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   AuthApiError,
   type DeviceAuthorizationInfo,
@@ -83,7 +84,7 @@ function fixture() {
   };
 }
 
-Deno.test("missing device links never inspect or authorize", async () => {
+test("missing device links never inspect or authorize", async () => {
   const test = fixture();
   test.dependencies.inspect = () => {
     throw new Error("must not inspect");
@@ -95,7 +96,7 @@ Deno.test("missing device links never inspect or authorize", async () => {
   assertEquals(test.approvals(), 0);
 });
 
-Deno.test("approval resumes after primary login and reaches the completed surface", async () => {
+test("approval resumes after primary login and reaches the completed surface", async () => {
   const test = fixture();
   let fresh = false;
   let attempts = 0;
@@ -125,7 +126,7 @@ Deno.test("approval resumes after primary login and reaches the completed surfac
   assertEquals(test.cleared, [request]);
 });
 
-Deno.test("explicit sign-in rechecks the same request without approving it", async () => {
+test("explicit sign-in rechecks the same request without approving it", async () => {
   const test = fixture();
   let signIns = 0;
   await signInForDeviceAuthorization(
@@ -143,7 +144,7 @@ Deno.test("explicit sign-in rechecks the same request without approving it", asy
   assertEquals(test.denials(), 0);
 });
 
-Deno.test("sign-in cannot revive an expired link or inspect a replacement link", async () => {
+test("sign-in cannot revive an expired link or inspect a replacement link", async () => {
   const test = fixture();
   await test.flow.inspect();
   await signInForDeviceAuthorization(
@@ -166,7 +167,7 @@ Deno.test("sign-in cannot revive an expired link or inspect a replacement link",
   assertEquals(inspections, 0);
 });
 
-Deno.test("cancelled explicit sign-in does not inspect or authorize", async () => {
+test("cancelled explicit sign-in does not inspect or authorize", async () => {
   const test = fixture();
   await test.flow.inspect();
   let cancelled = false;
@@ -188,7 +189,7 @@ Deno.test("cancelled explicit sign-in does not inspect or authorize", async () =
   assertEquals(test.cleared.length, 0);
 });
 
-Deno.test("expired server requests are terminal and never expose raw error text", async () => {
+test("expired server requests are terminal and never expose raw error text", async () => {
   const test = fixture();
   let inspections = 0;
   test.dependencies.inspect = () => {
@@ -205,7 +206,7 @@ Deno.test("expired server requests are terminal and never expose raw error text"
   assertEquals(test.approvals(), 0);
 });
 
-Deno.test("transport and temporary HTTP failures preserve the link for explicit read-only retry", async () => {
+test("transport and temporary HTTP failures preserve the link for explicit read-only retry", async () => {
   for (
     const reason of [
       new TypeError("offline"),
@@ -235,7 +236,7 @@ Deno.test("transport and temporary HTTP failures preserve the link for explicit 
   }
 });
 
-Deno.test("countdown uses the absolute deadline, including background-tab time", async () => {
+test("countdown uses the absolute deadline, including background-tab time", async () => {
   const test = fixture();
   await test.flow.inspect();
   assertEquals(
@@ -259,7 +260,7 @@ Deno.test("countdown uses the absolute deadline, including background-tab time",
   assertEquals(test.cleared.length, 1);
 });
 
-Deno.test("clicking after a suspended timer's deadline cannot approve", async () => {
+test("clicking after a suspended timer's deadline cannot approve", async () => {
   const test = fixture();
   await test.flow.inspect();
   test.advance(310_000);
@@ -268,7 +269,7 @@ Deno.test("clicking after a suspended timer's deadline cannot approve", async ()
   assertEquals(test.approvals(), 0);
 });
 
-Deno.test("requests already expired at inspection never expose pending actions", async () => {
+test("requests already expired at inspection never expose pending actions", async () => {
   const test = fixture();
   test.advance(300_001);
   await test.flow.inspect();
@@ -276,7 +277,7 @@ Deno.test("requests already expired at inspection never expose pending actions",
   assertEquals(test.cleared.length, 1);
 });
 
-Deno.test("approval rechecks expiry after recent-auth interaction", async () => {
+test("approval rechecks expiry after recent-auth interaction", async () => {
   const test = fixture();
   await test.flow.inspect();
   test.dependencies.authorize = (operation) => {
@@ -288,7 +289,7 @@ Deno.test("approval rechecks expiry after recent-auth interaction", async () => 
   assertEquals(test.approvals(), 0);
 });
 
-Deno.test("cancelled recent authentication keeps the pending request and explains cancellation", async () => {
+test("cancelled recent authentication keeps the pending request and explains cancellation", async () => {
   const test = fixture();
   await test.flow.inspect();
   test.dependencies.authorize = () =>
@@ -301,7 +302,7 @@ Deno.test("cancelled recent authentication keeps the pending request and explain
   assertEquals(test.cleared.length, 0);
 });
 
-Deno.test("a successful in-flight approval wins over the elapsed local countdown", async () => {
+test("a successful in-flight approval wins over the elapsed local countdown", async () => {
   const test = fixture();
   const response = Promise.withResolvers<unknown>();
   let approvals = 0;
@@ -323,7 +324,7 @@ Deno.test("a successful in-flight approval wins over the elapsed local countdown
   assertEquals(test.cleared.length, 1);
 });
 
-Deno.test("failed approval can be checked again without automatically approving", async () => {
+test("failed approval can be checked again without automatically approving", async () => {
   const test = fixture();
   test.dependencies.approve = () =>
     Promise.reject(new TypeError("connection reset"));
@@ -337,7 +338,7 @@ Deno.test("failed approval can be checked again without automatically approving"
   assertEquals(test.flow.getSnapshot().error, null);
 });
 
-Deno.test("completed or denied inspection remains terminal after the deadline", async () => {
+test("completed or denied inspection remains terminal after the deadline", async () => {
   for (const status of ["approved", "denied"] as const) {
     const test = fixture();
     test.dependencies.inspect = () => Promise.resolve({ ...info, status });
@@ -351,7 +352,7 @@ Deno.test("completed or denied inspection remains terminal after the deadline", 
   }
 });
 
-Deno.test("cleanup and StrictMode restart fence stale inspection failures", async () => {
+test("cleanup and StrictMode restart fence stale inspection failures", async () => {
   const test = fixture();
   const previous = Promise.withResolvers<DeviceAuthorizationInfo>();
   const signals: AbortSignal[] = [];
@@ -370,7 +371,7 @@ Deno.test("cleanup and StrictMode restart fence stale inspection failures", asyn
   assertEquals(test.cleared.length, 0);
 });
 
-Deno.test("late approval from a replaced link cannot clear its successor", async () => {
+test("late approval from a replaced link cannot clear its successor", async () => {
   const test = fixture();
   const pending = Promise.withResolvers<unknown>();
   test.dependencies.approve = () => pending.promise;
@@ -382,7 +383,7 @@ Deno.test("late approval from a replaced link cannot clear its successor", async
   assertEquals(test.cleared.length, 0);
 });
 
-Deno.test("an inspection response for another request is never actionable", async () => {
+test("an inspection response for another request is never actionable", async () => {
   const test = fixture();
   test.dependencies.inspect = () =>
     Promise.resolve({ ...info, request_id: another.request_id });
@@ -393,7 +394,7 @@ Deno.test("an inspection response for another request is never actionable", asyn
   assertEquals(test.approvals(), 0);
 });
 
-Deno.test("fresh same-tab links replace old capabilities and are removed from the URL", () => {
+test("fresh same-tab links replace old capabilities and are removed from the URL", () => {
   const storage = storageFixture();
   const replaced: (string | URL | null | undefined)[] = [];
   const history = {
@@ -423,7 +424,7 @@ Deno.test("fresh same-tab links replace old capabilities and are removed from th
   assertEquals(storedDeviceAuthorization(storage), null);
 });
 
-Deno.test("invalid fresh links never fall back to a previous request", () => {
+test("invalid fresh links never fall back to a previous request", () => {
   const storage = storageFixture();
   storage.setItem(DEVICE_AUTH_STORAGE_KEY, JSON.stringify(request));
   captureDeviceAuthorizationFromLocation(

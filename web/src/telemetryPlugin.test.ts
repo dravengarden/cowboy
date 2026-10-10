@@ -1,4 +1,6 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   genericPluginCompatibilityProblem,
   type PluginContractInventory,
@@ -7,7 +9,7 @@ import {
   validateTelemetryBackendContract,
 } from "@cowboy/provider-ui";
 
-Deno.test("telemetry payloads are closed and never acquire Agent runtime or credentials", () => {
+test("telemetry payloads are closed and never acquire Agent runtime or credentials", () => {
   const value: TelemetryBackendContract = {
     schema_version: 1,
     id: "victoria",
@@ -69,7 +71,7 @@ Deno.test("telemetry payloads are closed and never acquire Agent runtime or cred
   );
 });
 
-Deno.test("telemetry installation requires attested SDK 1.7 and its declared platform", () => {
+test("telemetry installation requires attested SDK 1.7 and its declared platform", () => {
   const inventory: PluginContractInventory = {
     plugin_sdk_version: "1.7.0",
     min_manifest_schema: 1,
@@ -148,13 +150,13 @@ Deno.test("telemetry installation requires attested SDK 1.7 and its declared pla
   );
 });
 
-Deno.test("OTLP schema two adds traces without accepting URLs, legacy encodings or secrets", () => {
+test("OTLP schema two adds traces without accepting URLs, legacy encodings or secrets", () => {
   const value = JSON.parse(
-    Deno.readTextFileSync(
+    readFileSync(
       new URL(
         "../../examples/telemetry/victoria/telemetry.json",
         import.meta.url,
-      ),
+      ), "utf8",
     ),
   );
   assertEquals(validateTelemetryBackendContract(value).schema_version, 2);

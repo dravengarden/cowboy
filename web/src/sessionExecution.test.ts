@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   sessionExecution,
   sessionMachinePresentation,
@@ -13,7 +14,7 @@ const session: SessionMeta = {
   title: "task",
   status: "starting",
 };
-Deno.test("execution details keep runtime and target distinct through preparation and failure", () => {
+test("execution details keep runtime and target distinct through preparation and failure", () => {
   assertEquals(sessionExecution(session), {
     state: "local",
     machineId: "ovh",
@@ -55,7 +56,7 @@ Deno.test("execution details keep runtime and target distinct through preparatio
   }
 });
 
-Deno.test("machine badges distinguish native remote targets without guessing legacy paths", () => {
+test("machine badges distinguish native remote targets without guessing legacy paths", () => {
   const binding = {
     schema: 1,
     runtime: { machine_id: "ovh", cwd: "/runtime" },
@@ -112,7 +113,7 @@ Deno.test("machine badges distinguish native remote targets without guessing leg
   );
 });
 
-Deno.test("remote route remains visible when executor validation fails", () => {
+test("remote route remains visible when executor validation fails", () => {
   const binding = {
     schema: 1,
     runtime: { machine_id: "ovh", cwd: "/previous-runtime" },

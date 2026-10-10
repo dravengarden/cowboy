@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { revisionMatches } from "./reviewProgress.ts";
 
-Deno.test("reviewed state requires the exact diff revision", () => {
+test("reviewed state requires the exact diff revision", () => {
   const progress = { "unstaged\u0000src/a.ts": "revision-a" };
   assertEquals(
     revisionMatches(progress, "unstaged\u0000src/a.ts", "revision-a"),

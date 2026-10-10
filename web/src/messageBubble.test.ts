@@ -1,10 +1,12 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   messageBubbleBorderRadius,
   messageBubbleLayoutSx,
 } from "./messageBubble.ts";
 
-Deno.test("only the speaker-side bottom corner is the small radius", () => {
+test("only the speaker-side bottom corner is the small radius", () => {
   assertEquals(
     messageBubbleBorderRadius("user"),
     "18px 18px 6px 18px",
@@ -15,7 +17,7 @@ Deno.test("only the speaker-side bottom corner is the small radius", () => {
   );
 });
 
-Deno.test("long replies use the column; short sends stay compact", () => {
+test("long replies use the column; short sends stay compact", () => {
   const user = messageBubbleLayoutSx("user");
   const assistant = messageBubbleLayoutSx("assistant");
   assertEquals(user.width, "fit-content");
@@ -25,9 +27,9 @@ Deno.test("long replies use the column; short sends stay compact", () => {
   assertEquals(assistant.alignSelf, "stretch");
 });
 
-Deno.test("confirmed and optimistic bubbles share the chat radius", async () => {
-  const transcript = await Deno.readTextFile(
-    new URL("./Transcript.tsx", import.meta.url),
+test("confirmed and optimistic bubbles share the chat radius", async () => {
+  const transcript = await readFile(
+    new URL("./Transcript.tsx", import.meta.url), "utf8",
   );
   const bubbleStart = transcript.indexOf("function OptimisticUserBubble(");
   const messageStart = transcript.indexOf("function MessageBubble(");
@@ -44,12 +46,12 @@ Deno.test("confirmed and optimistic bubbles share the chat radius", async () => 
   assertEquals(confirmed.includes('maxWidth: { xs: "88%"'), false);
 });
 
-Deno.test("a sent screenshot or file does not stretch the user bubble", async () => {
-  const transcript = await Deno.readTextFile(
-    new URL("./Transcript.tsx", import.meta.url),
+test("a sent screenshot or file does not stretch the user bubble", async () => {
+  const transcript = await readFile(
+    new URL("./Transcript.tsx", import.meta.url), "utf8",
   );
-  const chip = await Deno.readTextFile(
-    new URL("./TranscriptFileChip.tsx", import.meta.url),
+  const chip = await readFile(
+    new URL("./TranscriptFileChip.tsx", import.meta.url), "utf8",
   );
   // A percentage max-width is ignored while a fit-content bubble sizes itself;
   // the cap must be the pixel constant, on the element the bubble measures.

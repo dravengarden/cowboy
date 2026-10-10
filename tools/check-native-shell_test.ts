@@ -1,4 +1,18 @@
-import { resolve } from "node:path";
+import { Command } from "./lib/command.ts";
+import { tmpdir } from "node:os";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { test } from "bun:test";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyNativeShell } from "./check-native-shell.ts";
 
@@ -16,17 +30,17 @@ async function rejects(run: () => Promise<unknown>, message: string) {
   throw new Error("expected rejection: " + message);
 }
 async function copyTree(from: string, to: string) {
-  await Deno.mkdir(to, { recursive: true });
-  for await (const entry of Deno.readDir(from)) {
+  await mkdir(to, { recursive: true });
+  for (const entry of await readdir(from, { withFileTypes: true })) {
     if (entry.name === "gen" || entry.name === "target") continue;
     const source = resolve(from, entry.name);
     const target = resolve(to, entry.name);
-    if (entry.isDirectory) await copyTree(source, target);
-    else await Deno.copyFile(source, target);
+    if (entry.isDirectory()) await copyTree(source, target);
+    else await copyFile(source, target);
   }
 }
 async function fixture(run: (base: string) => Promise<void>) {
-  const base = await Deno.makeTempDir({ prefix: "cowboy-native-source-" });
+  const base = await mkdtemp(join(tmpdir(), "cowboy-native-source-"));
   try {
     await copyTree(
       resolve(root, "apps/native-shell"),
@@ -34,7 +48,7 @@ async function fixture(run: (base: string) => Promise<void>) {
     );
     await run(base);
   } finally {
-    await Deno.remove(base, { recursive: true });
+    await rm(base, { recursive: true });
   }
 }
 async function change(
@@ -44,12 +58,12 @@ async function change(
   after: string,
 ) {
   const file = resolve(base, "apps/native-shell", path);
-  const text = await Deno.readTextFile(file);
+  const text = await readFile(file, "utf8");
   assert(text.includes(before), "fixture mismatch: " + path);
-  await Deno.writeTextFile(file, text.replace(before, after));
+  await writeFile(file, text.replace(before, after));
 }
 
-Deno.test("complete native shell is owned by this checkout", () =>
+test("complete native shell is owned by this checkout", () =>
   verifyNativeShell(root));
 for (
   const [name, path, before, after, message] of [
@@ -167,47 +181,47 @@ for (
     ],
   ]
 ) {
-  Deno.test("rejects " + name, () =>
+  test("rejects " + name, () =>
     fixture(async (base) => {
       await change(base, path, before, after);
       await rejects(() => verifyNativeShell(base), message);
     }));
 }
-Deno.test("rejects borrowed native symlinks without modifying the source", () =>
+test("rejects borrowed native symlinks without modifying the source", () =>
   fixture(async (base) => {
     const link = resolve(base, "apps/native-shell/apple/borrowed");
-    await Deno.symlink(resolve(root, "apps/native-shell/apple/Sources"), link);
+    await symlink(resolve(root, "apps/native-shell/apple/Sources"), link);
     await rejects(() => verifyNativeShell(base), "native source symlink");
-    assert((await Deno.lstat(link)).isSymlink, "validator must be read-only");
+    assert((await lstat(link)).isSymbolicLink(), "validator must be read-only");
   }));
 
-Deno.test("SSH transport preserves paths and JavaScript without a personal plugin", async () => {
-  const base = await Deno.makeTempDir({ prefix: "cowboy-native-ssh-" });
+test("SSH transport preserves paths and JavaScript without a personal plugin", async () => {
+  const base = await mkdtemp(join(tmpdir(), "cowboy-native-ssh-"));
   try {
     const bin = resolve(base, "bin");
     const remote = resolve(base, "worktree ' ; $(printf unsafe)");
-    await Deno.mkdir(bin);
-    await Deno.mkdir(resolve(remote, "tools"), { recursive: true });
+    await mkdir(bin);
+    await mkdir(resolve(remote, "tools"), { recursive: true });
     // No networking. Execute the actual quoted remote shell body locally.
-    await Deno.writeTextFile(
+    await writeFile(
       resolve(bin, "ssh"),
       '#!/usr/bin/env bash\nexec /bin/sh -c "${!#}"\n',
       { mode: 0o755 },
     );
-    await Deno.writeTextFile(resolve(bin, "git"), "#!/bin/sh\npwd -P\n", {
+    await writeFile(resolve(bin, "git"), "#!/bin/sh\npwd -P\n", {
       mode: 0o755,
     });
-    await Deno.writeTextFile(
+    await writeFile(
       resolve(remote, "tools/cowboysim.sh"),
       '#!/bin/bash\nprintf "%s\\0" "$@"\n',
     );
     const payload =
       "document.querySelector('[data-x=\"a\"]'); $(exit 42)\n'quoted' & |";
-    const result = await new Deno.Command("bash", {
+    const result = await new Command("bash", {
       args: [resolve(root, "tools/cowboysim-remote.sh"), "eval", payload],
       clearEnv: true,
       env: {
-        PATH: bin + ":" + Deno.env.get("PATH"),
+        PATH: bin + ":" + process.env["PATH"],
         COWBOY_SIM_REMOTE_WORKTREE: remote,
       },
       stdout: "piped",
@@ -219,15 +233,15 @@ Deno.test("SSH transport preserves paths and JavaScript without a personal plugi
       "SSH changed payload",
     );
   } finally {
-    await Deno.remove(base, { recursive: true });
+    await rm(base, { recursive: true });
   }
 });
 
-Deno.test("simulator control fails before touching an implicitly selected device", async () => {
-  const result = await new Deno.Command("bash", {
+test("simulator control fails before touching an implicitly selected device", async () => {
+  const result = await new Command("bash", {
     args: [resolve(root, "tools/cowboysim.sh"), "launch"],
     clearEnv: true,
-    env: { PATH: Deno.env.get("PATH") ?? "" },
+    env: { PATH: process.env["PATH"] ?? "" },
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -240,9 +254,10 @@ Deno.test("simulator control fails before touching an implicitly selected device
   );
 });
 
-Deno.test("native build is locked, fresh and build-only", async () => {
-  const builder = await Deno.readTextFile(
+test("native build is locked, fresh and build-only", async () => {
+  const builder = await readFile(
     resolve(root, "tools/build-native-shell.sh"),
+    "utf8",
   );
   for (
     const contract of [
@@ -278,11 +293,12 @@ Deno.test("native build is locked, fresh and build-only", async () => {
       "native build imports unsafe legacy behavior: " + unsafe,
     );
   }
-  const swift = await Deno.readTextFile(
+  const swift = await readFile(
     resolve(
       root,
       "apps/native-shell/apple/Sources/cowboy-app/CowboyDevBridge.swift",
     ),
+    "utf8",
   );
   for (
     const contract of [
@@ -300,9 +316,10 @@ Deno.test("native build is locked, fresh and build-only", async () => {
   }
 });
 
-Deno.test("bundled Settings opener uses the actual URL argument and a closed scope", async () => {
-  const loader = await Deno.readTextFile(
+test("bundled Settings opener uses the actual URL argument and a closed scope", async () => {
+  const loader = await readFile(
     resolve(root, "apps/native-shell/loader/index.html"),
+    "utf8",
   );
   const start = loader.indexOf("async function openSettings()");
   const end = loader.indexOf('document.getElementById("open-settings")', start);
@@ -338,8 +355,9 @@ Deno.test("bundled Settings opener uses the actual URL argument and a closed sco
   );
   assert(called, "loader did not invoke Settings opener");
   const local = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       resolve(root, "apps/native-shell/tauri/capabilities/default.json"),
+      "utf8",
     ),
   );
   assert(
@@ -350,8 +368,9 @@ Deno.test("bundled Settings opener uses the actual URL argument and a closed sco
     "loader opener scope must be app-settings only",
   );
   const remote = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       resolve(root, "apps/native-shell/tauri/capabilities/remote-haptics.json"),
+      "utf8",
     ),
   );
   assert(

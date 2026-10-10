@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
 import { migrateThemeDefaultToSystem } from "./themeDefault.ts";
 
@@ -10,7 +11,7 @@ function storage(entries: readonly (readonly [string, string])[]): Storage {
   } as Storage;
 }
 
-Deno.test("legacy seeded light theme migrates to the system default once", () => {
+test("legacy seeded light theme migrates to the system default once", () => {
   const target = storage([["cowboy-theme-mode", "light"]]);
 
   migrateThemeDefaultToSystem(target);
@@ -22,7 +23,7 @@ Deno.test("legacy seeded light theme migrates to the system default once", () =>
   assertEquals(target.getItem("cowboy-theme-mode"), "light");
 });
 
-Deno.test("theme default migration preserves dark and existing system choices", () => {
+test("theme default migration preserves dark and existing system choices", () => {
   for (const choice of ["dark", "system"] as const) {
     const target = storage([["cowboy-theme-mode", choice]]);
     migrateThemeDefaultToSystem(target);

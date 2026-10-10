@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { CodeDocumentSymbol } from "./codeApi.ts";
 import {
   activeOutlineRow,
@@ -25,7 +26,7 @@ const symbol = (
   children,
 });
 
-Deno.test("outline preserves hierarchy and supports contextual search", () => {
+test("outline preserves hierarchy and supports contextual search", () => {
   const rows = flattenOutline([
     symbol("Judge", 22, 0, 20, [symbol("complete", 5, 5, 10)]),
     symbol("output_schema", 11, 22, 30),
@@ -42,14 +43,14 @@ Deno.test("outline preserves hierarchy and supports contextual search", () => {
   assertEquals(symbolKindLabel(11), "fn");
 });
 
-Deno.test("outline selects the deepest symbol containing the reading line", () => {
+test("outline selects the deepest symbol containing the reading line", () => {
   const rows = flattenOutline([
     symbol("Judge", 22, 0, 20, [symbol("complete", 5, 5, 10)]),
   ]);
   assertEquals(activeOutlineRow(rows, 8)?.symbol.name, "complete");
 });
 
-Deno.test("outline symbol categories provide stable visual groups", () => {
+test("outline symbol categories provide stable visual groups", () => {
   assertEquals(outlineSymbolCategory(1), "module");
   assertEquals(outlineSymbolCategory(22), "type");
   assertEquals(outlineSymbolCategory(11), "function");

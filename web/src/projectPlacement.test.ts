@@ -1,9 +1,10 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { projectChoices, type ProjectPolicies } from "./projectPlacement.ts";
 import type { MachineSummary } from "./protocol.ts";
 import { workspaceBranch, workspaceTree } from "./workspaceHierarchy.ts";
 
-Deno.test("projects use Machine and stable project IDs, independent of slash labels and paths", () => {
+test("projects use Machine and stable project IDs, independent of slash labels and paths", () => {
   const machine = (id: string, name: string): MachineSummary => ({
     id,
     display_name: name,

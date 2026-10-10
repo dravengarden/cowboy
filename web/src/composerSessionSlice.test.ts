@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   composerSessionSlice,
   sameComposerSessionSlice,
@@ -26,7 +27,7 @@ const other: SessionMeta = {
   status: "running",
 };
 
-Deno.test("composer session slice ignores invisible session-list churn", () => {
+test("composer session slice ignores invisible session-list churn", () => {
   const before = composerSessionSlice([active, other], active.id);
   const after = composerSessionSlice([
     {
@@ -45,7 +46,7 @@ Deno.test("composer session slice ignores invisible session-list churn", () => {
   }]);
 });
 
-Deno.test("composer session slice reacts to every visible composer field", () => {
+test("composer session slice reacts to every visible composer field", () => {
   const initial = composerSessionSlice([active, other], active.id);
   const changes: SessionMeta[][] = [
     [{ ...active, provider: "claude-code" }, other],
@@ -69,7 +70,7 @@ Deno.test("composer session slice reacts to every visible composer field", () =>
   }
 });
 
-Deno.test("composer sheet session ignores metadata it does not render", () => {
+test("composer sheet session ignores metadata it does not render", () => {
   assert(sameComposerSheetSession(active, {
     ...active,
     usage: { used: 10, size: 100, raw: null, observed_at_ms: 2 },
@@ -83,7 +84,7 @@ Deno.test("composer sheet session ignores metadata it does not render", () => {
   assert(!sameComposerSheetSession(active, { ...active, status: "running" }));
 });
 
-Deno.test("session sheet rerenders for a new or scheduled Provider update", () => {
+test("session sheet rerenders for a new or scheduled Provider update", () => {
   const offer = { version: "1.1.0", digest: "next" };
   const offered = { ...active, provider_update_available: offer };
   assertEquals(sameComposerSheetSession(active, offered), false);

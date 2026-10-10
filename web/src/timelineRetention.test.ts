@@ -1,4 +1,5 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import { latestAvailableCommands } from "./agentCommands";
 import { derive, latestPendingPermission, latestPlan, linkTimeline } from "./derive";
 import type { Envelope } from "./protocol";
@@ -14,7 +15,7 @@ const update = (seq: number, sessionUpdate: string, extra = {}): Envelope => ({
   update: { sessionUpdate, ...extra },
 });
 
-Deno.test("retention preserves stateful UI checkpoints outside the render tail", () => {
+test("retention preserves stateful UI checkpoints outside the render tail", () => {
   const timeline: Envelope[] = [
     update(1, "available_commands_update", {
       availableCommands: [{ name: "compact", description: "Compact" }],
@@ -39,7 +40,7 @@ Deno.test("retention preserves stateful UI checkpoints outside the render tail",
   assertEquals(retained.events.slice(-3).map((event) => event.seq), [9, 10, 11]);
 });
 
-Deno.test("retention keeps the marker that supersedes an older plan", () => {
+test("retention keeps the marker that supersedes an older plan", () => {
   const timeline: Envelope[] = [
     update(1, "plan", { entries: [{ content: "Old", status: "completed" }] }),
     update(2, "user_message_chunk"),
@@ -50,7 +51,7 @@ Deno.test("retention keeps the marker that supersedes an older plan", () => {
   assertEquals(plan?.supersededByUserTurn, true);
 });
 
-Deno.test("retention shares unchanged render rows across a history trim", () => {
+test("retention shares unchanged render rows across a history trim", () => {
   const timeline = Array.from({ length: 8 }, (_, index) =>
     update(index + 1, index % 2 === 0 ? "user_message_chunk" : "agent_message_chunk", {
       content: { type: "text", text: `message ${index}` },
@@ -66,7 +67,7 @@ Deno.test("retention shares unchanged render rows across a history trim", () => 
   }
 });
 
-Deno.test("retention sizes a tool-heavy event tail by visible rows", () => {
+test("retention sizes a tool-heavy event tail by visible rows", () => {
   const calls = Array.from({ length: 80 }, (_, index) =>
     update(index + 1, "tool_call", {
       toolCallId: `tool-${index}`,

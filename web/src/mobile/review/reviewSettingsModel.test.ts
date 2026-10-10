@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   DEFAULT_REVIEW_SETTINGS,
   loadReviewSettings,
@@ -8,7 +9,7 @@ import {
   REVIEW_CODE_FONT_DEFAULT_GENERATION,
 } from "./reviewSettingsModel.ts";
 
-Deno.test("review code font defaults to a compact 8px", () => {
+test("review code font defaults to a compact 8px", () => {
   assertEquals(DEFAULT_REVIEW_SETTINGS.codeFontSize, 8);
   assertEquals(normalizeReviewSettings({}).codeFontSize, 8);
   assertEquals(normalizeReviewSettings({ codeFontSize: 14 }).codeFontSize, 14);
@@ -31,7 +32,7 @@ Deno.test("review code font defaults to a compact 8px", () => {
   );
 });
 
-Deno.test("review settings retain code-review-specific choices", () => {
+test("review settings retain code-review-specific choices", () => {
   assertEquals(
     normalizeReviewSettings({
       codeFontSize: 16,
@@ -56,7 +57,7 @@ Deno.test("review settings retain code-review-specific choices", () => {
   );
 });
 
-Deno.test("Markdown preview scrolls code and tables sideways by default", () => {
+test("Markdown preview scrolls code and tables sideways by default", () => {
   assertEquals(DEFAULT_REVIEW_SETTINGS.markdownSoftWrap, false);
   // Stored settings from before the preference existed keep the default.
   assertEquals(
@@ -70,14 +71,14 @@ Deno.test("Markdown preview scrolls code and tables sideways by default", () => 
   );
 });
 
-Deno.test("review settings accept compact code font sizes", () => {
+test("review settings accept compact code font sizes", () => {
   assertEquals(normalizeReviewSettings({ codeFontSize: 6 }).codeFontSize, 6);
   assertEquals(normalizeReviewSettings({ codeFontSize: 7 }).codeFontSize, 7);
   assertEquals(normalizeReviewSettings({ codeFontSize: 8 }).codeFontSize, 8);
   assertEquals(normalizeReviewSettings({ codeFontSize: 10 }).codeFontSize, 10);
 });
 
-Deno.test("review settings reject stale or malformed values", () => {
+test("review settings reject stale or malformed values", () => {
   assertEquals(
     normalizeReviewSettings({
       // Theme and ordinary app typography belong to Agent settings. Code font

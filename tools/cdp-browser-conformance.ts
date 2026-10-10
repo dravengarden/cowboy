@@ -1,14 +1,18 @@
 /** Run an existing browser conformance fixture in an already running Chrome
  * over a loopback DevTools endpoint; isolation is described in cdp-fixture.ts.
  *
- * Usage: deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 \
- *   --allow-env tools/cdp-browser-conformance.ts http://127.0.0.1:9223 <suite> [light|dark]
+ * Usage: bun tools/cdp-browser-conformance.ts http://127.0.0.1:9223 <suite> [light|dark]
  */
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { Command } from "./lib/command.ts";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { openFixturePage } from "./cdp-fixture.ts";
 
-const endpoint = Deno.args[0] ?? "";
-const suite = Deno.args[1] ?? "desktop-composer";
-const themeMode = Deno.args[2] ?? "light";
+const endpoint = process.argv.slice(2)[0] ?? "";
+const suite = process.argv.slice(2)[1] ?? "desktop-composer";
+const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "desktop-composer": ["runDesktopComposerBrowserConformance", 12],
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
@@ -32,9 +36,10 @@ const [entry, expectedTests] = selected;
 // authors use (see idb-browser-conformance.ts).
 const files: Record<string, { type: string; body: Uint8Array }> = {};
 if (suite === "draft-documents") {
-  const packed = await Deno.makeTempFile({ suffix: ".cowboy-plugin" });
+  const packed = join(tmpdir(), `cowboy-${randomUUID()}.cowboy-plugin`);
+  await writeFile(packed, "", { flag: "wx", mode: 0o600 });
   try {
-    const pack = await new Deno.Command(Deno.execPath(), {
+    const pack = await new Command(process.execPath, {
       args: [
         "run",
         "--allow-read",
@@ -49,10 +54,10 @@ if (suite === "draft-documents") {
     if (!pack.success) throw new Error("editor plugin pack failed");
     files["/editor-plugin.cowboy-plugin"] = {
       type: "application/json",
-      body: await Deno.readFile(packed),
+      body: await readFile(packed),
     };
   } finally {
-    await Deno.remove(packed);
+    await rm(packed);
   }
 }
 

@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import type { ClientSnapshot, LocalPersistence } from "@cowboy/state-sync";
 import { createDraftRepository } from "./repository.ts";
 import {
@@ -155,7 +156,7 @@ async function settle(check: () => boolean): Promise<void> {
   throw new Error("Draft owner did not settle");
 }
 
-Deno.test("storage failure never sends authored content", async () => {
+test("storage failure never sends authored content", async () => {
   const f = fixture();
   const repository = f.create();
   f.block();
@@ -167,7 +168,7 @@ Deno.test("storage failure never sends authored content", async () => {
   await repository.dispose().catch(() => undefined);
 });
 
-Deno.test("offline create and edits survive reload and replay exactly once", async () => {
+test("offline create and edits survive reload and replay exactly once", async () => {
   const f = fixture();
   f.offline(true);
   const first = f.create();
@@ -191,7 +192,7 @@ Deno.test("offline create and edits survive reload and replay exactly once", asy
   await second.dispose();
 });
 
-Deno.test("an ancestor-less competing write is kept as a copy and never blocks the document", async () => {
+test("an ancestor-less competing write is kept as a copy and never blocks the document", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "base");
@@ -228,7 +229,7 @@ Deno.test("an ancestor-less competing write is kept as a copy and never blocks t
   await first.dispose();
 });
 
-Deno.test("an ancestor-less write merges through the server's recovery history", async () => {
+test("an ancestor-less write merges through the server's recovery history", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "alpha beta");
@@ -251,7 +252,7 @@ Deno.test("an ancestor-less write merges through the server's recovery history",
   await first.dispose();
 });
 
-Deno.test("a write refused by a newer server text merges both edits and resends", async () => {
+test("a write refused by a newer server text merges both edits and resends", async () => {
   const f = fixture();
   const phone = f.create();
   const id = await phone.create(
@@ -293,7 +294,7 @@ Deno.test("a write refused by a newer server text merges both edits and resends"
   await phone.dispose();
 });
 
-Deno.test("an editor writing against stale content merges with the newer replica", async () => {
+test("an editor writing against stale content merges with the newer replica", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "alpha beta");
@@ -315,7 +316,7 @@ Deno.test("an editor writing against stale content merges with the newer replica
   await first.dispose();
 });
 
-Deno.test("a refused rename is reapplied over the newer metadata", async () => {
+test("a refused rename is reapplied over the newer metadata", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Old", null, "document", "body");
@@ -335,7 +336,7 @@ Deno.test("a refused rename is reapplied over the newer metadata", async () => {
   await first.dispose();
 });
 
-Deno.test("a pushed revision refreshes only an open document that lacks it", async () => {
+test("a pushed revision refreshes only an open document that lacks it", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "body");
@@ -374,7 +375,7 @@ Deno.test("a pushed revision refreshes only an open document that lacks it", asy
   await first.dispose();
 });
 
-Deno.test("merging a refused write never shows an older text than the local one", async () => {
+test("merging a refused write never shows an older text than the local one", async () => {
   const f = fixture();
   const phone = f.create();
   const id = await phone.create("Draft", null, "document", "one\ntwo\n");
@@ -399,7 +400,7 @@ Deno.test("merging a refused write never shows an older text than the local one"
   await phone.dispose();
 });
 
-Deno.test("a write authored while a refused write is merged survives", async () => {
+test("a write authored while a refused write is merged survives", async () => {
   const f = fixture();
   const phone = f.create();
   const id = await phone.create("Draft", null, "document", "one\ntwo\n");
@@ -437,7 +438,7 @@ Deno.test("a write authored while a refused write is merged survives", async () 
   await phone.dispose();
 });
 
-Deno.test("a gateway reply without JSON keeps the write queued instead of failing it", async () => {
+test("a gateway reply without JSON keeps the write queued instead of failing it", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "base");
@@ -455,7 +456,7 @@ Deno.test("a gateway reply without JSON keeps the write queued instead of failin
   await first.dispose();
 });
 
-Deno.test("a write the server rejects does not block the corrected text", async () => {
+test("a write the server rejects does not block the corrected text", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "base");
@@ -481,7 +482,7 @@ Deno.test("a write the server rejects does not block the corrected text", async 
   await first.dispose();
 });
 
-Deno.test("writes queued offline fold behind the one already dispatched", async () => {
+test("writes queued offline fold behind the one already dispatched", async () => {
   const f = fixture();
   const first = f.create();
   await first.start();
@@ -512,7 +513,7 @@ Deno.test("writes queued offline fold behind the one already dispatched", async 
   await first.dispose();
 });
 
-Deno.test("a write whose reply was lost is retried, not merged with its own text", async () => {
+test("a write whose reply was lost is retried, not merged with its own text", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "a");
@@ -522,16 +523,19 @@ Deno.test("a write whose reply was lost is retried, not merged with its own text
   await owner.change({ type: "write", body: "a b", attachments: [] });
   await settle(() => owner.get().phase === "local");
   assertEquals(f.server.get(id)?.body, "a b");
-  for (const body of ["a b c", "a b c d"]) {
-    await owner.change({ type: "write", body, attachments: [] });
-  }
+  // Issue both writes before either can be dispatched: whether a write that
+  // has already left folds with a later one depends on the runtime's task
+  // ordering, which is not what this test is about.
+  await Promise.all(["a b c", "a b c d"].map((body) =>
+    owner.change({ type: "write", body, attachments: [] })
+  ));
   await settle(() => owner.get().phase === "saved");
   assertEquals(f.server.get(id)?.body, "a b c d");
   assertEquals(f.server.get(id)?.body_revision, 3);
   await first.dispose();
 });
 
-Deno.test("two devices editing through outages converge without losing a word", async () => {
+test("two devices editing through outages converge without losing a word", async () => {
   for (let seed = 1; seed <= 60; seed++) {
     let state = seed;
     const random = (bound: number): number => {
@@ -605,7 +609,7 @@ Deno.test("two devices editing through outages converge without losing a word", 
   }
 });
 
-Deno.test("a rejected write does not hold back a rename, and stays reported", async () => {
+test("a rejected write does not hold back a rename, and stays reported", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Draft", null, "document", "base");
@@ -634,7 +638,7 @@ Deno.test("a rejected write does not hold back a rename, and stays reported", as
   await first.dispose();
 });
 
-Deno.test("a rename queued offline outranks a newer cached index entry", async () => {
+test("a rename queued offline outranks a newer cached index entry", async () => {
   const f = fixture();
   const first = f.create();
   const id = await first.create("Old", null, "document", "body");

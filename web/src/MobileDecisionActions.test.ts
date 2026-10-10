@@ -1,16 +1,18 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const source = await Deno.readTextFile(
-  new URL("./MobileDecisionActions.tsx", import.meta.url),
+const source = await readFile(
+  new URL("./MobileDecisionActions.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const mobileProductShellSource = await Deno.readTextFile(
-  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url),
+const mobileProductShellSource = await readFile(
+  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("mobile decisions use a shared labeled action footer", () => {
+test("mobile decisions use a shared labeled action footer", () => {
   assertEquals(source.includes("export function MobileDecisionActions("), true);
   assertEquals(source.includes("data-mobile-decision-actions"), true);
   assertEquals(source.includes("data-mobile-decision-footer-shelf"), true);
@@ -22,7 +24,7 @@ Deno.test("mobile decisions use a shared labeled action footer", () => {
   assertEquals(source.includes("createPortal"), false);
 });
 
-Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
+test("mobile new session uses labeled Cancel and Create actions", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
@@ -54,9 +56,9 @@ Deno.test("mobile new session uses labeled Cancel and Create actions", () => {
   );
 });
 
-Deno.test("session title editing uses labeled Cancel and Save actions", async () => {
-  const composerSource = await Deno.readTextFile(
-    new URL("./Composer.tsx", import.meta.url),
+test("session title editing uses labeled Cancel and Save actions", async () => {
+  const composerSource = await readFile(
+    new URL("./Composer.tsx", import.meta.url), "utf8",
   );
   const settings = composerSource.slice(
     composerSource.indexOf("function ComposerSheet("),

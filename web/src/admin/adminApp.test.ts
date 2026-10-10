@@ -1,11 +1,13 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 
 const appUrl = new URL("./AdminApp.tsx", import.meta.url);
 const apiUrl = new URL("./adminApi.ts", import.meta.url);
 const swUrl = new URL("../../public/sw.js", import.meta.url);
 
-Deno.test("first-run admin sends the operator to product setup on /", async () => {
-  const source = await Deno.readTextFile(appUrl);
+test("first-run admin sends the operator to product setup on /", async () => {
+  const source = await readFile(appUrl, "utf8");
   assertStringIncludes(source, "Open Cowboy");
   assertStringIncludes(source, "Open / to enter the setup code");
   assertStringIncludes(source, "the only account");
@@ -16,8 +18,8 @@ Deno.test("first-run admin sends the operator to product setup on /", async () =
   assertEquals(source.includes("Create owner"), false);
 });
 
-Deno.test("admin app exposes the operator surfaces", async () => {
-  const source = await Deno.readTextFile(appUrl);
+test("admin app exposes the operator surfaces", async () => {
+  const source = await readFile(appUrl, "utf8");
   for (
     const path of [
       "/admin",
@@ -33,8 +35,8 @@ Deno.test("admin app exposes the operator surfaces", async () => {
   }
 });
 
-Deno.test("accounts page is single-user and has no invite or extra-user chrome", async () => {
-  const source = await Deno.readTextFile(appUrl);
+test("accounts page is single-user and has no invite or extra-user chrome", async () => {
+  const source = await readFile(appUrl, "utf8");
   const normalized = source.replaceAll(/\s+/g, " ");
   assertStringIncludes(source, "This instance is single-user");
   assertStringIncludes(normalized, "created on / during first-run");
@@ -51,8 +53,8 @@ Deno.test("accounts page is single-user and has no invite or extra-user chrome",
   assertEquals(/\bmode\s*=\s*["']lan["']/.test(source), false);
 });
 
-Deno.test("adminApi still lists the fail-closed extra-user routes", async () => {
-  const source = await Deno.readTextFile(apiUrl);
+test("adminApi still lists the fail-closed extra-user routes", async () => {
+  const source = await readFile(apiUrl, "utf8");
   assertStringIncludes(source, "productUsers");
   assertStringIncludes(source, '"/api/admin/users"');
   assertStringIncludes(source, "/api/admin/auth/setup");
@@ -64,8 +66,8 @@ Deno.test("adminApi still lists the fail-closed extra-user routes", async () => 
   assertEquals(/\bmode\s*=\s*["']lan["']/.test(source), false);
 });
 
-Deno.test("service worker never stores admin navigations as the PWA shell", async () => {
-  const source = await Deno.readTextFile(swUrl);
+test("service worker never stores admin navigations as the PWA shell", async () => {
+  const source = await readFile(swUrl, "utf8");
   assertStringIncludes(source, 'url.pathname === "/admin"');
   assertStringIncludes(source, 'url.pathname.startsWith("/admin/")');
   assertStringIncludes(source, 'url.pathname === "/admin.html"');

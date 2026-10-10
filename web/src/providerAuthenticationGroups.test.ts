@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
 
-Deno.test("credential families remain one group when a future Provider joins", () => {
+test("credential families remain one group when a future Provider joins", () => {
   const groups = groupProviderAuthentications([
     {
       provider_id: "claude-deepseek",

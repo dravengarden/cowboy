@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   documentRefreshDecision,
   lineAnchorTarget,
@@ -6,7 +7,7 @@ import {
   textAnchorIndex,
 } from "./documentRefreshModel.ts";
 
-Deno.test("a worktree change to another file never refreshes the open document", () => {
+test("a worktree change to another file never refreshes the open document", () => {
   for (const reading of [true, false]) {
     assertEquals(
       documentRefreshDecision({
@@ -23,7 +24,7 @@ Deno.test("a worktree change to another file never refreshes the open document",
   }
 });
 
-Deno.test("a changed document prompts only while it is being read", () => {
+test("a changed document prompts only while it is being read", () => {
   const changed = {
     currentRevision: "r1",
     nextRevision: "r2",
@@ -51,7 +52,7 @@ Deno.test("a changed document prompts only while it is being read", () => {
   );
 });
 
-Deno.test("a result without a revision is compared by its text", () => {
+test("a result without a revision is compared by its text", () => {
   const base = {
     currentRevision: undefined,
     nextRevision: undefined,
@@ -69,7 +70,7 @@ Deno.test("a result without a revision is compared by its text", () => {
   );
 });
 
-Deno.test("text anchors keep their ordinal among repeated blocks", () => {
+test("text anchors keep their ordinal among repeated blocks", () => {
   const texts = ["Intro", "Note", "Body", "Note", "Tail"];
   assertEquals(textAnchorIndex(texts, { text: "Note", occurrence: 1 }), 3);
   // Content inserted above the anchor shifts its index, not its identity.
@@ -89,7 +90,7 @@ Deno.test("text anchors keep their ordinal among repeated blocks", () => {
   assertEquals(normalizedAnchorText("  a\n  b\t c "), "a b c");
 });
 
-Deno.test("line anchors follow moved content and clamp otherwise", () => {
+test("line anchors follow moved content and clamp otherwise", () => {
   const lines = ["a", "b", "inserted", "inserted", "target", "c"];
   const text = (line: number): string => lines[line - 1]!;
   assertEquals(

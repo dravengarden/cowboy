@@ -1,8 +1,9 @@
-import { assertEquals, assertNotEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertNotEquals } from "@std/assert";
 import { providerVisual } from "./providerVisual.ts";
 import { applyVisualHostPlugins } from "./visualHostMap.ts";
 
-Deno.test("catalog-unavailable Providers use theme-safe generic visuals", () => {
+test("catalog-unavailable Providers use theme-safe generic visuals", () => {
   const dark = providerVisual("future-agent", "dark");
   const light = providerVisual("future-agent", "light");
   assertEquals(dark.primary, "#A9B4C7");
@@ -11,7 +12,7 @@ Deno.test("catalog-unavailable Providers use theme-safe generic visuals", () => 
   assertNotEquals(dark.primary, light.primary);
 });
 
-Deno.test("runtime host Providers keep distinct readable accents", () => {
+test("runtime host Providers keep distinct readable accents", () => {
   const hosts = [
     {
       id: "future-a",

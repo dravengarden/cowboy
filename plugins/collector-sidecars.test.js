@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import claudeCodeHost from "./claude-code/host.json" with { type: "json" };
 import { accountView, KNOWN_PLANS } from "./claude-code/collector/index.js";
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
@@ -24,7 +25,7 @@ function equal(actual, expected, message) {
 for (
   const [provider, readLines] of [["Codex", codexLines], ["Grok", grokLines]]
 ) {
-  Deno.test(`${provider} collector reads fragmented UTF-8 JSON RPC without nonstandard stream globals`, async () => {
+  test(`${provider} collector reads fragmented UTF-8 JSON RPC without nonstandard stream globals`, async () => {
     const bytes = new TextEncoder().encode(
       '{"id":1,"result":"中文"}\r\n{"id":2}\n{"id":3}',
     );
@@ -44,7 +45,7 @@ for (
   });
 }
 
-Deno.test("Codex reset selection is deterministic and ignores unavailable credits", () => {
+test("Codex reset selection is deterministic and ignores unavailable credits", () => {
   equal(
     nearestCodexCredit({
       rateLimitResetCredits: {
@@ -60,7 +61,7 @@ Deno.test("Codex reset selection is deterministic and ignores unavailable credit
   );
 });
 
-Deno.test("DeepSeek collector groups shared account fingerprints without duplicating lanes", () => {
+test("DeepSeek collector groups shared account fingerprints without duplicating lanes", () => {
   equal(
     group([
       {
@@ -92,7 +93,7 @@ Deno.test("DeepSeek collector groups shared account fingerprints without duplica
   );
 });
 
-Deno.test("DeepSeek exact sidecar targets bind by lane id rather than URL order", () => {
+test("DeepSeek exact sidecar targets bind by lane id rather than URL order", () => {
   equal(
     collectorTargets(
       JSON.stringify([
@@ -111,7 +112,7 @@ Deno.test("DeepSeek exact sidecar targets bind by lane id rather than URL order"
   );
 });
 
-Deno.test("Grok collector extracts OIDC credentials and highest active plan", () => {
+test("Grok collector extracts OIDC credentials and highest active plan", () => {
   equal(
     credentialFromJson({
       profile: { auth_mode: "oidc", key: " token ", user_id: " user " },
@@ -140,7 +141,7 @@ Deno.test("Grok collector extracts OIDC credentials and highest active plan", ()
   );
 });
 
-Deno.test("Grok reset selection and protobuf string encoding stay deterministic", () => {
+test("Grok reset selection and protobuf string encoding stay deterministic", () => {
   equal(
     nearestGrokCredit([
       { id: "later", expiresAt: 20 },
@@ -156,7 +157,7 @@ Deno.test("Grok reset selection and protobuf string encoding stay deterministic"
   );
 });
 
-Deno.test("Anthropic collector projects only renderable account fields", () => {
+test("Anthropic collector projects only renderable account fields", () => {
   equal(
     accountView({
       subscriptionType: "max",
@@ -189,7 +190,7 @@ Deno.test("Anthropic collector projects only renderable account fields", () => {
   equal(accountView({ subscriptionType: "   " }), {}, "blank Anthropic plan");
 });
 
-Deno.test("Anthropic exposes no reset capability to collect", () => {
+test("Anthropic exposes no reset capability to collect", () => {
   const usage = claudeCodeHost.usage;
   equal(usage.reset, undefined, "Anthropic reset verb");
   equal(usage.reset_argv, undefined, "Anthropic reset argv");

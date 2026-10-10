@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { connectionNotice } from "./connectionNotice.ts";
 import type { SyncStatus } from "../syncStatus.ts";
 
@@ -14,7 +15,7 @@ function status(overrides: Partial<SyncStatus>): SyncStatus {
   };
 }
 
-Deno.test("an unanswered server names the thing to check and when it retries", () => {
+test("an unanswered server names the thing to check and when it retries", () => {
   const notice = connectionNotice(
     status({
       phase: "unreachable",
@@ -37,7 +38,7 @@ Deno.test("an unanswered server names the thing to check and when it retries", (
   });
 });
 
-Deno.test("a device without network points at its own network", () => {
+test("a device without network points at its own network", () => {
   const notice = connectionNotice(status({ phase: "offline" }), "offline", now);
   assertEquals(notice?.title, "Offline");
   assertEquals(
@@ -50,7 +51,7 @@ Deno.test("a device without network points at its own network", () => {
   );
 });
 
-Deno.test("blips, live sessions and decision phases leave the strip empty", () => {
+test("blips, live sessions and decision phases leave the strip empty", () => {
   // Not yet past the presentation debounce.
   assertEquals(
     connectionNotice(status({ phase: "unreachable" }), null, now),
@@ -73,7 +74,7 @@ Deno.test("blips, live sessions and decision phases leave the strip empty", () =
   );
 });
 
-Deno.test("recovery flashes a quiet confirmation without actions", () => {
+test("recovery flashes a quiet confirmation without actions", () => {
   assertEquals(connectionNotice(status({ phase: "live" }), "recovered", now), {
     tone: "success",
     title: "Reconnected",

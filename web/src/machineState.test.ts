@@ -1,4 +1,5 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import { applyOccupancyHostPlugins } from "./occupancyHostMap.ts";
 import {
   acceptsMachineSnapshot,
@@ -62,7 +63,7 @@ function session(
   };
 }
 
-Deno.test("Machine occupancy follows the pushed session lifecycle", () => {
+test("Machine occupancy follows the pushed session lifecycle", () => {
   const projected = projectMachineOccupancy([machine()], [session("busy")]);
   assertEquals(projected[0]?.active_sessions, 1);
   assertEquals(projected[0]?.schedulable, false);
@@ -72,7 +73,7 @@ Deno.test("Machine occupancy follows the pushed session lifecycle", () => {
   );
 });
 
-Deno.test("AI Machines without projects retain runtime capacity and its admission limits", () => {
+test("AI Machines without projects retain runtime capacity and its admission limits", () => {
   const runtime: MachineSummary = {
     ...machine(),
     id: "ovh",
@@ -105,7 +106,7 @@ Deno.test("AI Machines without projects retain runtime capacity and its admissio
   }
 });
 
-Deno.test("Machine snapshots reject stale live frames but accept reconnect resyncs", () => {
+test("Machine snapshots reject stale live frames but accept reconnect resyncs", () => {
   assertEquals(acceptsMachineSnapshot(0, false, 0, false), true);
   assertEquals(acceptsMachineSnapshot(8, true, 7, false), false);
   assertEquals(acceptsMachineSnapshot(8, true, 8, false), false);
@@ -113,14 +114,14 @@ Deno.test("Machine snapshots reject stale live frames but accept reconnect resyn
   assertEquals(acceptsMachineSnapshot(8, true, 0, true), true);
 });
 
-Deno.test("exited sessions release capacity without churning an unchanged snapshot", () => {
+test("exited sessions release capacity without churning an unchanged snapshot", () => {
   const source = machine();
   const unchanged = projectMachineOccupancy([source], [session("exited")]);
   assertStrictEquals(unchanged[0], source);
   assertEquals(unchanged[0]?.schedulable, true);
 });
 
-Deno.test("Machine occupancy groups sessions once and keeps Provider aliases isolated", () => {
+test("Machine occupancy groups sessions once and keeps Provider aliases isolated", () => {
   const falcon: MachineSummary = {
     ...machine(),
     id: "falcon",
@@ -149,7 +150,7 @@ Deno.test("Machine occupancy groups sessions once and keeps Provider aliases iso
   assertEquals(projected[1]?.components[1]?.active_leases, 2);
 });
 
-Deno.test("Machine occupancy follows plugin adapter slots when overlaid", () => {
+test("Machine occupancy follows plugin adapter slots when overlaid", () => {
   try {
     applyOccupancyHostPlugins([
       { id: "future-claude", adapter_slot: "claude" },
@@ -176,7 +177,7 @@ Deno.test("Machine occupancy follows plugin adapter slots when overlaid", () => 
   }
 });
 
-Deno.test("Machine occupancy stays pinned to each session's exact host generation", () => {
+test("Machine occupancy stays pinned to each session's exact host generation", () => {
   const oldDigest = `sha256:${"a".repeat(64)}`;
   const currentDigest = `sha256:${"b".repeat(64)}`;
   try {

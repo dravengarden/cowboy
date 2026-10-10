@@ -1,4 +1,5 @@
 // Test-only inputs. The checked-in fixture is not runtime authorization data.
+import { readFile } from "node:fs/promises";
 import type { CompositionCheckCode } from "./composition-check.ts";
 
 interface Edit {
@@ -14,8 +15,8 @@ interface Vector {
   readonly error?: CompositionCheckCode;
 }
 const fixture = JSON.parse(
-  await Deno.readTextFile(
-    new URL("../tests/fixtures/composition-v1.json", import.meta.url),
+  await readFile(
+    new URL("../tests/fixtures/composition-v1.json", import.meta.url), "utf8",
   ),
 ) as { base: unknown; vectors: Vector[] };
 

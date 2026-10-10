@@ -1,31 +1,33 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const sheetSource = await Deno.readTextFile(
-  new URL("./Sheet.tsx", import.meta.url),
+const sheetSource = await readFile(
+  new URL("./Sheet.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const reloadSource = await Deno.readTextFile(
-  new URL("./SessionReloadDialog.tsx", import.meta.url),
+const reloadSource = await readFile(
+  new URL("./SessionReloadDialog.tsx", import.meta.url), "utf8",
 );
-const fullscreenSource = await Deno.readTextFile(
-  new URL("./FullscreenComposer.tsx", import.meta.url),
+const fullscreenSource = await readFile(
+  new URL("./FullscreenComposer.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const infoSource = await Deno.readTextFile(
-  new URL("./InfoSheet.tsx", import.meta.url),
+const infoSource = await readFile(
+  new URL("./InfoSheet.tsx", import.meta.url), "utf8",
 );
-const providerSource = await Deno.readTextFile(
-  new URL("./ProviderManagement.tsx", import.meta.url),
+const providerSource = await readFile(
+  new URL("./ProviderManagement.tsx", import.meta.url), "utf8",
 );
-const desktopTopBarSource = await Deno.readTextFile(
-  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
+const desktopTopBarSource = await readFile(
+  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", () => {
+test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", () => {
   assert(sheetSource.includes("export function ConfirmSheet("));
   assert(sheetSource.includes("export function useConfirmSheetSurface("));
   assert(
@@ -40,7 +42,7 @@ Deno.test("ConfirmSheet forces the compact Obsidian card on mobile and tablet", 
   );
 });
 
-Deno.test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog", () => {
+test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog", () => {
   const phoneFacing = [
     composerSource,
     reloadSource,
@@ -65,7 +67,7 @@ Deno.test("phone-facing confirmation prompts use ConfirmSheet, not a raw Dialog"
   assert(providerSource.includes("Uninstall ${"));
 });
 
-Deno.test("desktop-owned session confirms stay centered dialogs", () => {
+test("desktop-owned session confirms stay centered dialogs", () => {
   assert(
     desktopTopBarSource.includes(
       "<DialogTitle>Clear conversation?</DialogTitle>",

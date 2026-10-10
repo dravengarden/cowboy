@@ -1,29 +1,31 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { drawerProgressAttribute } from "./mobileDrawerMotion.ts";
 
-const drawerSource = await Deno.readTextFile(
-  new URL("./mobileSpatialDrawer.ts", import.meta.url),
+const drawerSource = await readFile(
+  new URL("./mobileSpatialDrawer.ts", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const productShellSource = await Deno.readTextFile(
-  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url),
+const productShellSource = await readFile(
+  new URL("./mobile/shell/MobileProductShell.tsx", import.meta.url), "utf8",
 );
-const reviewDrawerSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url),
+const reviewDrawerSource = await readFile(
+  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url), "utf8",
 );
-const motionSource = await Deno.readTextFile(
-  new URL("./mobilePresentationMotion.ts", import.meta.url),
+const motionSource = await readFile(
+  new URL("./mobilePresentationMotion.ts", import.meta.url), "utf8",
 );
-const spatialContract = await Deno.readTextFile(
-  new URL("../../docs/mobile-spatial-presentation.md", import.meta.url),
+const spatialContract = await readFile(
+  new URL("../../docs/mobile-spatial-presentation.md", import.meta.url), "utf8",
 );
-const webAgents = await Deno.readTextFile(
-  new URL("../AGENTS.md", import.meta.url),
+const webAgents = await readFile(
+  new URL("../AGENTS.md", import.meta.url), "utf8",
 );
 
-Deno.test("drawer progress only publishes coarse ownership values", () => {
+test("drawer progress only publishes coarse ownership values", () => {
   assertEquals(drawerProgressAttribute(0), null);
   assertEquals(drawerProgressAttribute(0.02), null);
   assertEquals(drawerProgressAttribute(0.021), "1");
@@ -31,7 +33,7 @@ Deno.test("drawer progress only publishes coarse ownership values", () => {
   assertEquals(drawerProgressAttribute(1), "1");
 });
 
-Deno.test("drawer render stays on a transform-only compositor path", () => {
+test("drawer render stays on a transform-only compositor path", () => {
   assertEquals(drawerSource.includes("drawer.style.opacity"), false);
   assertEquals(
     drawerSource.includes('willChange = "transform, opacity"'),
@@ -47,7 +49,7 @@ Deno.test("drawer render stays on a transform-only compositor path", () => {
   assert(drawerSource.includes("dim.style.opacity"));
 });
 
-Deno.test("gesture roots flatten overflow tiles without a universal selector", () => {
+test("gesture roots flatten overflow tiles without a universal selector", () => {
   assertEquals(
     appSource.includes("&[data-mobile-drawer-moving='true'] *"),
     false,
@@ -156,7 +158,7 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assertEquals(presented.includes("mobileCompositorFlattenSx"), false);
 });
 
-Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
+test("jank-free swipe is a core Mobile requirement, not polish", () => {
   assert(spatialContract.includes("core product requirement"));
   assert(spatialContract.includes("Swipe must not jank"));
   assert(spatialContract.includes("code pane must not flash"));
@@ -173,7 +175,7 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
   );
 });
 
-Deno.test("product pager first tracking frames only write transform", () => {
+test("product pager first tracking frames only write transform", () => {
   const lock = productShellSource.indexOf("gesture.locked = true");
   const firstRender = productShellSource.indexOf("pagerOffset(", lock);
   const movingAfterLock = productShellSource.indexOf(
@@ -185,7 +187,7 @@ Deno.test("product pager first tracking frames only write transform", () => {
   assertEquals(movingAfterLock, -1);
 });
 
-Deno.test("settled product pages do not keep a permanent will-change layer", () => {
+test("settled product pages do not keep a permanent will-change layer", () => {
   assertEquals(productShellSource.includes('willChange: "transform"'), false);
   assertEquals(
     reviewDrawerSource.includes('willChange: "transform, opacity"'),

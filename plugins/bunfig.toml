@@ -1,0 +1,4 @@
+# Collector tests load the collectors through the host's own prelude, the
+# API a signed collector sees at run time.
+[test]
+preload = ["../src/plugin_process/prelude.js"]

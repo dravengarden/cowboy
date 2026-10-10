@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PluginSlot } from "./PluginSlot.tsx";
@@ -47,7 +48,7 @@ function replace(rows: unknown): void {
   webPluginHosts.commitRead(webPluginHosts.beginRead("catalog"), rows);
 }
 
-Deno.test("core slot static rendering follows observations and never performs an implicit fetch", () => {
+test("core slot static rendering follows observations and never performs an implicit fetch", () => {
   const previous = globalThis.fetch;
   let fetches = 0;
   globalThis.fetch = () => {
@@ -70,7 +71,7 @@ Deno.test("core slot static rendering follows observations and never performs an
   }
 });
 
-Deno.test("exact or incomplete selection cannot render the default release", () => {
+test("exact or incomplete selection cannot render the default release", () => {
   webPluginHosts.reset();
   try {
     replace([host()]);
@@ -89,7 +90,7 @@ Deno.test("exact or incomplete selection cannot render the default release", () 
   }
 });
 
-Deno.test("static rendering borrows a snapshot without acquiring a live subscription", () => {
+test("static rendering borrows a snapshot without acquiring a live subscription", () => {
   const subscribe = webPluginHosts.subscribe;
   let registrations = 0;
   webPluginHosts.subscribe = (callback) => {

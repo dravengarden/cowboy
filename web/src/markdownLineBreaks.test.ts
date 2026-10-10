@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import remarkLineBreakTags from "./markdownLineBreaks.ts";
 
-Deno.test("a <br> tag in a table cell becomes a hard break", () => {
+test("a <br> tag in a table cell becomes a hard break", () => {
   const cell = {
     type: "tableCell",
     children: [
@@ -24,7 +25,7 @@ Deno.test("a <br> tag in a table cell becomes a hard break", () => {
   ]);
 });
 
-Deno.test("other raw HTML stays escaped text", () => {
+test("other raw HTML stays escaped text", () => {
   const html = { type: "html", value: "<script>x</script>" };
   const tree = {
     type: "root",

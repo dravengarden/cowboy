@@ -1,17 +1,19 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const runtimeBuilder = await Deno.readTextFile(
-  new URL("../components/provider-runtime/build.ts", import.meta.url),
+const runtimeBuilder = await readFile(
+  new URL("../components/provider-runtime/build.ts", import.meta.url), "utf8",
 );
-const runtimeLockChecker = await Deno.readTextFile(
-  new URL("../components/provider-runtime/check.ts", import.meta.url),
+const runtimeLockChecker = await readFile(
+  new URL("../components/provider-runtime/check.ts", import.meta.url), "utf8",
 );
 
 for (const provider of ["claude-deepseek", "codex-deepseek"]) {
-  Deno.test(`${provider} publishes Linux x86_64 and macOS arm64 runtimes`, async () => {
+  test(`${provider} publishes Linux x86_64 and macOS arm64 runtimes`, async () => {
     const manifest = JSON.parse(
-      await Deno.readTextFile(
-        new URL(`../plugins/${provider}/provider.json`, import.meta.url),
+      await readFile(
+        new URL(`../plugins/${provider}/provider.json`, import.meta.url), "utf8",
       ),
     ) as {
       runtime: {
@@ -27,7 +29,7 @@ for (const provider of ["claude-deepseek", "codex-deepseek"]) {
   });
 }
 
-Deno.test("static Go gateways map typed Provider targets to Go targets", () => {
+test("static Go gateways map typed Provider targets to Go targets", () => {
   assertEquals(runtimeBuilder.includes('? "linux"'), true);
   assertEquals(runtimeBuilder.includes('? "darwin"'), true);
   assertEquals(runtimeBuilder.includes("`GOOS=${goOperatingSystem}`"), true);

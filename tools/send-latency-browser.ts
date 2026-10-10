@@ -1,6 +1,11 @@
 // Run in the pinned Nix shell and a private loopback network namespace.
 // Arguments: pinned Firefox executable, one or more built fixture directories.
-const [browser, ...args] = Deno.args;
+import { serveFixture, type FixtureSocket } from "./lib/http-server.ts";
+import { Command, type ChildProcess } from "./lib/command.ts";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+const [browser, ...args] = process.argv.slice(2);
 const chromium = browser?.endsWith("/bin/chromium");
 const queued = args.includes("--queued");
 const metadata = args.includes("--metadata");
@@ -76,10 +81,10 @@ const cases = bundles.flatMap((bundle) =>
     .map((scenario) => ({ bundle, scenario }))
 );
 for (const { bundle, scenario } of cases) {
-  const temporary = await Deno.makeTempDir({ prefix: "cowboy-send-latency-" });
-  let child: Deno.ChildProcess | undefined;
+  const temporary = await mkdtemp(join(tmpdir(), "cowboy-send-latency-"));
+  let child: ChildProcess | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
-  const sockets = new Set<WebSocket>();
+  const sockets = new Set<FixtureSocket>();
   const report = Promise.withResolvers<unknown>();
   let bootstraps = 0;
   let discoveries = 0;
@@ -117,10 +122,9 @@ for (const { bundle, scenario } of cases) {
     cmid: "draft-creation",
     content: [image, { type: "text", text: "image draft caption" }, image],
   };
-  const script = await Deno.readTextFile(`${bundle}/fixture.js`);
-  const server = Deno.serve(
-    { hostname: "127.0.0.1", port: 0, onListen() {} },
-    async (request) => {
+  const script = await readFile(`${bundle}/fixture.js`, "utf8");
+  const server = serveFixture(
+    async ({ request, accept }) => {
       const url = new URL(request.url);
 
       if (url.pathname === "/fixture.js") {
@@ -131,7 +135,7 @@ for (const { bundle, scenario } of cases) {
       if (/^\/[a-zA-Z0-9_-]+\.js$/.test(url.pathname)) {
         try {
           return new Response(
-            await Deno.readTextFile(`${bundle}${url.pathname}`),
+            await readFile(`${bundle}${url.pathname}`, "utf8"),
             {
               headers: { "Content-Type": "text/javascript" },
             },
@@ -191,8 +195,7 @@ for (const { bundle, scenario } of cases) {
         if (url.searchParams.get("dataset") !== datasetId) {
           return new Response("mismatch", { status: 409 });
         }
-        const { socket, response } = Deno.upgradeWebSocket(
-          request,
+        const { socket, response } = accept(
           scenario === "missing-protocol" ? {} : { protocol: "cowboy-sync-v1" },
         );
         sockets.add(socket);
@@ -450,9 +453,9 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
   );
   try {
     const profile = `${temporary}/profile`;
-    await Deno.mkdir(profile);
+    await mkdir(profile);
 
-    child = new Deno.Command(browser, {
+    child = new Command(browser, {
       args: chromium
         ? [
           "--headless",
@@ -464,7 +467,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
           "--disable-component-update",
           "--remote-debugging-port=0",
           `--user-data-dir=${profile}`,
-          `http://127.0.0.1:${server.addr.port}/?scenario=${scenario}`,
+          `http://127.0.0.1:${server.port}/?scenario=${scenario}`,
         ]
         : [
           "--headless",
@@ -472,7 +475,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
           "--new-instance",
           "--profile",
           profile,
-          `http://127.0.0.1:${server.addr.port}/?scenario=${scenario}`,
+          `http://127.0.0.1:${server.port}/?scenario=${scenario}`,
         ],
       clearEnv: true,
       env: {
@@ -557,7 +560,7 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
     if (chromium && child) {
       try {
         const [port, path] =
-          (await Deno.readTextFile(`${temporary}/profile/DevToolsActivePort`))
+          (await readFile(`${temporary}/profile/DevToolsActivePort`, "utf8"))
             .trim().split("\n");
         const debuggerSocket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
         await new Promise<void>((resolve) => {
@@ -582,6 +585,6 @@ await fetch('/report', { method: 'POST', body: JSON.stringify(result) });
     } catch { /* The browser may have exited. */ }
     await child?.status;
     await server.shutdown();
-    await Deno.remove(temporary, { recursive: true });
+    await rm(temporary, { recursive: true });
   }
 }

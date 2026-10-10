@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import type { Envelope } from "./protocol.ts";
 import { replicaTailConflicts, trimReplicaTail } from "./replicaTail.ts";
 
@@ -20,7 +21,7 @@ function tool(seq: number, toolCallId: string): Envelope {
   };
 }
 
-Deno.test("trimReplicaTail keeps the newest events within both bounds", () => {
+test("trimReplicaTail keeps the newest events within both bounds", () => {
   const events = [chunk(1), chunk(2), chunk(3), chunk(4)];
   assertEquals(trimReplicaTail(events, { maxEvents: 2 }).map((e) => e.seq), [3, 4]);
   const big = chunk(2, "y".repeat(500));
@@ -31,7 +32,7 @@ Deno.test("trimReplicaTail keeps the newest events within both bounds", () => {
   assertEquals(trimReplicaTail([big], { maxBytes: 100 }), []);
 });
 
-Deno.test("replicaTailConflicts detects a restarted transcript epoch", () => {
+test("replicaTailConflicts detects a restarted transcript epoch", () => {
   const cached = [chunk(10), chunk(11), tool(12, "a")];
   assert(!replicaTailConflicts(cached, [chunk(11), tool(12, "a"), chunk(13)]));
   assert(!replicaTailConflicts(cached, [chunk(40), chunk(41)]));

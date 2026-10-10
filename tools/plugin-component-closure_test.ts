@@ -1,4 +1,6 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert@1.0.19";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   type ComponentRelease,
   dependencyClosure,
@@ -70,7 +72,7 @@ function bump(release: ComponentRelease, id: string): void {
   component.digest = digest("3");
 }
 
-Deno.test("new Plugins require an explicit additive migration without rebinding old releases", () => {
+test("new Plugins require an explicit additive migration without rebinding old releases", () => {
   const releases = history();
   const next = append(releases);
   next.plugins.github = "0.1.0";
@@ -95,9 +97,9 @@ Deno.test("new Plugins require an explicit additive migration without rebinding 
   assertThrows(() => validateReleaseHistory(releases));
 });
 
-Deno.test("schema-2 release history is unchanged by the schema-3 migration", async () => {
+test("schema-2 release history is unchanged by the schema-3 migration", async () => {
   const registry = JSON.parse(
-    await Deno.readTextFile("components/registry.json"),
+    await readFile("components/registry.json", "utf8"),
   ) as { releases: ComponentRelease[] };
   const historical = registry.releases.filter((release) =>
     release.closure === undefined
@@ -115,7 +117,7 @@ Deno.test("schema-2 release history is unchanged by the schema-3 migration", asy
   );
 });
 
-Deno.test("closure migration requires a separate unchanged baseline and preserves legacy policy", () => {
+test("closure migration requires a separate unchanged baseline and preserves legacy policy", () => {
   const releases = history();
   validateReleaseHistory(releases);
   bump(releases[1]!, "store");
@@ -133,7 +135,7 @@ Deno.test("closure migration requires a separate unchanged baseline and preserve
   );
 });
 
-Deno.test("unrelated Web component changes require their package closure, not Plugin churn", () => {
+test("unrelated Web component changes require their package closure, not Plugin churn", () => {
   const releases = history();
   const next = append(releases);
   for (const id of ["store", "sync", "idb"]) bump(next, id);
@@ -161,7 +163,7 @@ function addAuthoring(next: ComponentRelease): void {
   next.component_additions = ["cowboy.authoring"];
 }
 
-Deno.test("explicit additive component migration preserves every existing Plugin identity", () => {
+test("explicit additive component migration preserves every existing Plugin identity", () => {
   const releases = history();
   const next = append(releases);
   addAuthoring(next);
@@ -182,7 +184,7 @@ for (
     "legacy",
   ] as const
 ) {
-  Deno.test(`additive component migration rejects ${invalid}`, () => {
+  test(`additive component migration rejects ${invalid}`, () => {
     const releases = history();
     const next = append(releases);
     addAuthoring(next);
@@ -208,7 +210,7 @@ for (
   });
 }
 
-Deno.test("new component edges still require existing consumers and Plugins to version", () => {
+test("new component edges still require existing consumers and Plugins to version", () => {
   const releases = history();
   const next = append(releases);
   addAuthoring(next);
@@ -235,7 +237,7 @@ Deno.test("new component edges still require existing consumers and Plugins to v
   validateReleaseHistory(releases);
 });
 
-Deno.test("transitive package consumers must version even without direct source edits", () => {
+test("transitive package consumers must version even without direct source edits", () => {
   const releases = history();
   bump(append(releases), "store");
   assertThrows(
@@ -251,7 +253,7 @@ Deno.test("transitive package consumers must version even without direct source 
   );
 });
 
-Deno.test("direct and transitive Plugin inputs cannot be hidden behind old release labels", () => {
+test("direct and transitive Plugin inputs cannot be hidden behind old release labels", () => {
   for (const id of ["sdk", "provider"]) {
     const releases = history();
     const next = append(releases);
@@ -276,7 +278,7 @@ Deno.test("direct and transitive Plugin inputs cannot be hidden behind old relea
   }
 });
 
-Deno.test("Plugin source-only changes and relabels require new identities", () => {
+test("Plugin source-only changes and relabels require new identities", () => {
   for (const mutation of ["source", "binding"] as const) {
     const releases = history();
     const next = append(releases);
@@ -293,7 +295,7 @@ Deno.test("Plugin source-only changes and relabels require new identities", () =
   }
 });
 
-Deno.test("a codec/package source change cannot retain the same component version", () => {
+test("a codec/package source change cannot retain the same component version", () => {
   const releases = history();
   append(releases).components[2]!.digest = digest("6");
   assertThrows(
@@ -303,7 +305,7 @@ Deno.test("a codec/package source change cannot retain the same component versio
   );
 });
 
-Deno.test("closure rejects missing, duplicated, unknown, and cyclic nodes", () => {
+test("closure rejects missing, duplicated, unknown, and cyclic nodes", () => {
   assertEquals(dependencyClosure(["a"], { a: ["b"], b: ["c"], c: [] }), [
     "a",
     "b",
@@ -333,7 +335,7 @@ Deno.test("closure rejects missing, duplicated, unknown, and cyclic nodes", () =
   );
 });
 
-Deno.test("binding rejects dangling release, duplicate pins, stale pins and missing components", () => {
+test("binding rejects dangling release, duplicate pins, stale pins and missing components", () => {
   const releases = history();
   const original = releases[1]!.closure!.plugins.codex!;
   assertThrows(
@@ -374,7 +376,7 @@ Deno.test("binding rejects dangling release, duplicate pins, stale pins and miss
   );
 });
 
-Deno.test("package metadata cannot mask stale, range or unregistered internal pins", () => {
+test("package metadata cannot mask stale, range or unregistered internal pins", () => {
   const components = history()[0]!.components;
   assertEquals(
     resolvePackagePins("consumer", {
@@ -403,7 +405,7 @@ Deno.test("package metadata cannot mask stale, range or unregistered internal pi
   );
 });
 
-Deno.test("closure snapshots cannot silently remove a Plugin or regress versions", () => {
+test("closure snapshots cannot silently remove a Plugin or regress versions", () => {
   const releases = history();
   const next = append(releases);
   delete next.closure!.plugins.zed;

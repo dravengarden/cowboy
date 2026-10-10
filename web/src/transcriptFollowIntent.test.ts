@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   keyLeavesLatest,
   keyMovesTranscriptViewport,
@@ -7,7 +8,7 @@ import {
   wheelLeavesLatest,
 } from "./transcriptFollowIntent.ts";
 
-Deno.test("wheel follow intent detaches only while scrolling away from latest", () => {
+test("wheel follow intent detaches only while scrolling away from latest", () => {
   assertEquals(wheelLeavesLatest(-1), true);
   assertEquals(wheelLeavesLatest(-120), true);
   assertEquals(wheelLeavesLatest(0), false);
@@ -15,7 +16,7 @@ Deno.test("wheel follow intent detaches only while scrolling away from latest", 
   assertEquals(wheelLeavesLatest(120), false);
 });
 
-Deno.test("keyboard follow intent preserves following for bottom-bound commands", () => {
+test("keyboard follow intent preserves following for bottom-bound commands", () => {
   for (const key of ["ArrowUp", "PageUp", "Home"]) {
     assertEquals(keyLeavesLatest({ key, shiftKey: false }), true, key);
   }
@@ -27,7 +28,7 @@ Deno.test("keyboard follow intent preserves following for bottom-bound commands"
   assertEquals(keyLeavesLatest({ key: " ", shiftKey: false }), false);
 });
 
-Deno.test("keyboard viewport motion is armed in both directions", () => {
+test("keyboard viewport motion is armed in both directions", () => {
   for (const key of [
     "ArrowUp",
     "ArrowDown",
@@ -44,7 +45,7 @@ Deno.test("keyboard viewport motion is armed in both directions", () => {
   }
 });
 
-Deno.test("layout-compensating scroll does not claim reader ownership", () => {
+test("layout-compensating scroll does not claim reader ownership", () => {
   const layoutCompensation = {
     nativeScrollActive: false,
     touchActive: false,
@@ -72,7 +73,7 @@ Deno.test("layout-compensating scroll does not claim reader ownership", () => {
   }
 });
 
-Deno.test("detached anchor yields to active native scrolling on both products", () => {
+test("detached anchor yields to active native scrolling on both products", () => {
   assertEquals(shouldRestoreDetachedAnchor(true, true), false);
   assertEquals(shouldRestoreDetachedAnchor(true, false), true);
   assertEquals(shouldRestoreDetachedAnchor(false, true), false);

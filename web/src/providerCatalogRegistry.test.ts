@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { providerUiManifestFixture } from "./providerUiContract.fixture.ts";
 import {
   loadProviderCatalog,
@@ -58,7 +59,7 @@ async function settle(): Promise<void> {
   }
 }
 
-Deno.test("a Provider release installed after the Catalog read refreshes the Catalog once", async () => {
+test("a Provider release installed after the Catalog read refreshes the Catalog once", async () => {
   const previous = globalThis.fetch;
   const old = entry("3.19.5", digest("a"));
   const fresh = entry("3.19.6", digest("b"));
@@ -98,7 +99,7 @@ Deno.test("a Provider release installed after the Catalog read refreshes the Cat
   }
 });
 
-Deno.test("an identity the Service Catalog still lacks is not re-read on every snapshot", async () => {
+test("an identity the Service Catalog still lacks is not re-read on every snapshot", async () => {
   const previous = globalThis.fetch;
   let reads = 0;
   resetProviderCatalog();
@@ -124,7 +125,7 @@ Deno.test("an identity the Service Catalog still lacks is not re-read on every s
   }
 });
 
-Deno.test("a snapshot during an in-flight read is judged against that read", async () => {
+test("a snapshot during an in-flight read is judged against that read", async () => {
   const previous = globalThis.fetch;
   const fresh = entry("3.19.6", digest("b"));
   let reads = 0;
@@ -165,7 +166,7 @@ Deno.test("a snapshot during an in-flight read is judged against that read", asy
   }
 });
 
-Deno.test("a tab that has not read the Catalog does not read it for inventory", async () => {
+test("a tab that has not read the Catalog does not read it for inventory", async () => {
   const previous = globalThis.fetch;
   let reads = 0;
   resetProviderCatalog();

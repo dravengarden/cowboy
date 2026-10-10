@@ -1,26 +1,30 @@
 # cowboy — build + quality tasks. Run `just` to list.
 
+# The remaining Deno commands predate the root Bun workspace: keep Deno from
+# adopting its package.json and node_modules. Delete with nix/deno.nix.
+export DENO_NO_PACKAGE_JSON := "1"
+
 default:
     @just --list
 
 toolchain-check: worktree-deps-check
     required="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cowboy") | .rust_version')"; actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; test "$required" = "$actual" || { echo "rust-version $required does not match pinned rustc $actual" >&2; exit 1; }
-    actual="$(deno --version | awk 'NR == 1 { print $2 }')"; test "$actual" = "$COWBOY_DENO_VERSION" || { echo "Deno $actual does not match pinned Deno $COWBOY_DENO_VERSION" >&2; exit 1; }
+    actual="$(bun --version)"; test "$actual" = "$COWBOY_BUN_VERSION" || { echo "Bun $actual does not match pinned Bun $COWBOY_BUN_VERSION" >&2; exit 1; }
     actual="$(node --version)"; test "$actual" = "v$COWBOY_NODE_VERSION" || { echo "Node $actual does not match pinned Node $COWBOY_NODE_VERSION" >&2; exit 1; }
 
-# Reject dependency views borrowed from another checkout. Deno's global cache
-# may be shared, but node_modules and file: package links belong to this tree.
+# Reject dependency views borrowed from another checkout. Bun's global cache
+# may be shared, but node_modules and workspace links belong to this tree.
 worktree-deps-check:
-    deno check tools/check-worktree-dependencies.ts tools/check-worktree-dependencies_test.ts
-    deno test --allow-read --allow-write tools/check-worktree-dependencies_test.ts
-    deno run --allow-read tools/check-worktree-dependencies.ts
+    bun run typecheck
+    bun test ./tools/check-worktree-dependencies_test.ts
+    bun tools/check-worktree-dependencies.ts
 
-# Install a checkout-local frontend dependency view. DENO_DIR may be shared
-# across worktrees; web/node_modules itself must never be shared or symlinked.
+# Install a checkout-local dependency view. Bun's install cache may be shared
+# across worktrees; node_modules itself must never be shared or symlinked.
 install:
-    deno run --allow-read --allow-write=web tools/check-worktree-dependencies.ts --repair-borrowed-state
-    cd web && deno install --frozen
-    deno run --allow-read tools/check-worktree-dependencies.ts --require-installed
+    bun tools/check-worktree-dependencies.ts --repair-borrowed-state
+    bun install --frozen-lockfile
+    bun tools/check-worktree-dependencies.ts --require-installed
 
 # Run the daemon in the foreground (dev). Pair with `just dev-web` for HMR.
 # Default SQLite so /admin can create a product user; override with
@@ -33,11 +37,11 @@ dev *ARGS:
 
 # Frontend dev server (Vite), proxying /ws + /healthz to a running daemon.
 dev-web:
-    cd web && deno task dev
+    cd web && bun run dev
 
 # Build the independently deployed frontend bundle.
 build-web:
-    cd web && deno task build
+    cd web && bun run build
 
 # Optional real IndexedDB gate. Build .#cowboy-idb-test-browser and pass its
 # absolute /bin/firefox; never use an authenticated/system browser profile.
@@ -57,12 +61,12 @@ desktop-browser-gate CDP_ENDPOINT="http://127.0.0.1:9222" OUT="/tmp/cowboy-deskt
         for theme in light dark; do
           echo "== $(basename "$browser") $suite $theme"
           unshare --user --map-current-user --keep-caps --net bash -euc \
-            'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" "$2" "$3"' \
+            'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" "$2" "$3"' \
             conformance "$browser" "$suite" "$theme" </dev/null | grep -E '"ok"|"browser"'
         done
       done
     done
-    if deno eval "await fetch('{{CDP_ENDPOINT}}/json/version')" >/dev/null 2>&1; then
+    if bun -e "await fetch('{{CDP_ENDPOINT}}/json/version')" >/dev/null 2>&1; then
       just desktop-keyboard-acceptance "{{CDP_ENDPOINT}}" "{{OUT}}"
       echo "screenshots: {{OUT}}"
     else
@@ -74,18 +78,18 @@ desktop-browser-gate CDP_ENDPOINT="http://127.0.0.1:9222" OUT="/tmp/cowboy-deskt
 # endpoint (hawk chrome-debug :9222, or the macbook-air bridge :9223) inside a
 # disposable browser context; see tools/cdp-fixture.ts.
 cdp-browser-conformance ENDPOINT SUITE THEME="light":
-    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-browser-conformance.ts "{{ENDPOINT}}" "{{SUITE}}" "{{THEME}}"
+    bun tools/cdp-browser-conformance.ts "{{ENDPOINT}}" "{{SUITE}}" "{{THEME}}"
 
 # Trusted-input Desktop keyboard acceptance with screenshots (leader, labels,
 # dialog leader, Vim/IME ownership, the Draft page) in a running Chrome, then
 # the shortcut audit: every visible control must show a keyboard slot.
 desktop-keyboard-acceptance ENDPOINT OUT:
-    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}"
-    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" draft
-    deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 --allow-env tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
+    bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}"
+    bun tools/cdp-keyboard-acceptance.ts "{{ENDPOINT}}" "{{OUT}}" draft
+    bun tools/cdp-shortcut-audit.ts "{{ENDPOINT}}" "{{OUT}}"
 
 idb-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
 
 # Real browser signatures, HTTPS, WSS and durable device identity. No real account.
 device-browser-conformance BROWSER TEST_BINARY CERTUTIL:
@@ -93,15 +97,15 @@ device-browser-conformance BROWSER TEST_BINARY CERTUTIL:
 
 # Same native engine with independent Worker owners and abrupt termination.
 idb-outbox-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" idb-outbox' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" idb-outbox' conformance "{{BROWSER}}"
 
 # Real core lifecycle history UI, synthetic evidence only; never a live account.
 plugin-lifecycle-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" plugin-lifecycle' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" plugin-lifecycle' conformance "{{BROWSER}}"
 
 # Mobile-width About recovery, real IndexedDB with 376 synthetic older records.
 settings-recovery-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" settings-recovery' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" settings-recovery' conformance "{{BROWSER}}"
 
 # Disposable authenticated HTTP + WebSocket handshakes against exact releases.
 product-sync-controller-conformance MATRIX RECEIPT:
@@ -110,54 +114,54 @@ product-sync-controller-conformance MATRIX RECEIPT:
 
 # Same isolated browser runner, real React development StrictMode + MUI.
 provider-ui-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" provider-ui' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" provider-ui' conformance "{{BROWSER}}"
 
 # Core Service sign-in and Machine confirmation owners, with fake HTTP effects.
 provider-management-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" provider-management' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" provider-management' conformance "{{BROWSER}}"
 
 # Core buffer owner: real development StrictMode, no Review/native activation.
 code-buffer-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" code-buffers' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" code-buffers' conformance "{{BROWSER}}"
 
 # Actual product identity/dataset lifetimes with synthetic HTTP, no login/Plugin.
 code-buffer-context-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" code-buffer-context' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" code-buffer-context' conformance "{{BROWSER}}"
 
 # Core Settings cleanup projection, original owners and synthetic HTTP only.
 code-buffer-cleanup-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" code-buffer-cleanup' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" code-buffer-cleanup' conformance "{{BROWSER}}"
 
 # Original synchronization confirmation/uncertainty UI; no production account.
 code-buffer-sync-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" code-buffer-sync' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" code-buffer-sync' conformance "{{BROWSER}}"
 
 # Actual Review owner hook / content and Outline consumers, isolated fixture HTTP.
 review-code-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-code' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-code' conformance "{{BROWSER}}"
 
 # Actual Review DocumentView refresh/scroll anchoring, isolated fixture HTTP.
 review-document-refresh-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-document-refresh' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-document-refresh' conformance "{{BROWSER}}"
 
 # Actual diff projection/owner/status/CodeMirror integration; no real account.
 review-diff-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-diff' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-diff' conformance "{{BROWSER}}"
 
 # Actual Review destination + independent target view + passive navigation recovery.
 review-destination-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-destination' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-destination' conformance "{{BROWSER}}"
 
 # Actual Git review recovery after an unavailable Machine; no real account.
 review-recovery-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-recovery' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" review-recovery' conformance "{{BROWSER}}"
 
 workspace-extensions-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" workspace-extensions' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" workspace-extensions' conformance "{{BROWSER}}"
 
 idb-conformance-check:
-    deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
-    deno check tools/idb-browser-conformance.ts tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
+    dprint check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs tools/cdp-fixture.ts tools/cdp-browser-conformance.ts tools/cdp-keyboard-acceptance.ts
+    bun run typecheck
 
 # Retain an actual product-store bundle before and after a latency change.
 send-latency-bundle OUTPUT:
@@ -165,21 +169,21 @@ send-latency-bundle OUTPUT:
 
 # Controlled discovery/handshake/echo delays, actual Firefox IndexedDB and WS.
 send-latency-browser BROWSER BEFORE AFTER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" "$3"' latency "{{BROWSER}}" "{{BEFORE}}" "{{AFTER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/send-latency-browser.ts "$1" "$2" "$3"' latency "{{BROWSER}}" "{{BEFORE}}" "{{AFTER}}"
 
 # Admission failures must retain authored data and permanently fence replacements.
 send-admission-browser BROWSER BUNDLE:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" --safety' admission "{{BROWSER}}" "{{BUNDLE}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/send-latency-browser.ts "$1" "$2" --safety' admission "{{BROWSER}}" "{{BUNDLE}}"
 
 # Build the public Cowboy product website from the first-party Plugin manifests.
 build-site:
-    deno run --allow-read --allow-write=site-dist site/build.ts --out site-dist
+    bun site/build.ts --out site-dist
 
 # Keep the published ecosystem synchronized with the real Plugin Catalog inputs.
 site-check:
-    deno fmt --check site/build.ts site/build_test.ts site/site.js
-    deno check site/build.ts site/build_test.ts site/site.js
-    deno test --allow-read --allow-write site/build_test.ts
+    dprint check site/build.ts site/build_test.ts site/site.js
+    bun run typecheck
+    bun test ./site/build_test.ts
     just build-site
 
 # Rebuild the project-owned browser bridge around mvdan/sh's core parser.
@@ -212,12 +216,12 @@ native-plugin-conformance:
 
 # Source/dependency and keyboard checks also run on Linux in the pinned shell.
 native-shell-check:
-    deno fmt --check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
-    deno check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
-    deno test --allow-read --allow-write --allow-run --allow-env=PATH tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
+    dprint check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
+    bun run typecheck
+    bun test ./tools/check-native-shell_test.ts ./tools/native-shell-probe_test.ts
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
     python3 -m unittest discover -s tools -p 'native_swift_rs_compat_test.py'
-    deno run --allow-read tools/check-native-shell.ts
+    bun tools/check-native-shell.ts
     bash -n tools/build-native-shell.sh tools/sign-android-apk.sh tools/cowboysim.sh tools/cowboysim-remote.sh
     bash tools/check-keyboard-geometry.sh
     cargo metadata --locked --no-deps --format-version 1 --manifest-path apps/native-shell/tauri/Cargo.toml >/dev/null
@@ -248,24 +252,27 @@ component-package-check:
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
 plugin-check: component-package-check
-    deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/usage.test.js
-    deno check tools/check-plugin-components.ts plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/claude-code/collector/index.js
+    dprint check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/usage.test.js
+    bun run typecheck
+    # Release-pinned sources still run on Deno; see AGENTS.md § Toolchain.
+    deno check plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/claude-code/collector/index.js
     deno test --no-check --allow-read components/plugin-api/*.test.ts
     deno test components/state-store/*.test.ts
-    deno test --allow-read tools/check-plugin-components_test.ts tools/plugin-component-closure_test.ts
-    deno test --allow-read --allow-write --allow-run tools/plugin-source-digest_test.ts
-    deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
+    bun test ./tools/check-plugin-components_test.ts ./tools/plugin-component-closure_test.ts
+    bun test ./tools/plugin-source-digest_test.ts
+    cd plugins && bun test ./collector-sidecars.test.js
+    deno test plugins/claude-deepseek/pricing.test.js
     deno test --allow-read --allow-write --allow-run --allow-env plugins/claude-code/usage.test.js
-    deno run --allow-read --allow-run tools/check-plugin-components.ts
-    deno fmt --check tools/worker-registry-input.ts tools/worker-registry-input_test.ts
-    deno test --allow-read --allow-write --allow-run tools/worker-registry-input_test.ts
-    deno run --allow-read tools/worker-registry-input.ts
+    bun tools/check-plugin-components.ts
+    dprint check tools/worker-registry-input.ts tools/worker-registry-input_test.ts
+    bun test ./tools/worker-registry-input_test.ts
+    bun tools/worker-registry-input.ts
 
 plugin-build PLUGIN:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
-    deno run --allow-read --allow-run tools/check-plugin-components.ts
+    bun tools/check-plugin-components.ts
     test -f "plugins/{{PLUGIN}}/plugin.json"
     mkdir -p "dist/plugins/{{PLUGIN}}"
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
@@ -287,7 +294,7 @@ example-auth-bundle PLUGIN:
 # Pack an editor plugin directory (manifest.json + main.js) into one
 # installable .cowboy-plugin file; see docs/editor-plugins.md.
 editor-plugin-pack DIR OUT:
-    deno run --allow-read --allow-write="{{OUT}}" tools/editor-plugin-pack.ts "{{DIR}}" "{{OUT}}"
+    bun tools/editor-plugin-pack.ts "{{DIR}}" "{{OUT}}"
 
 example-auth-build-all:
     #!/usr/bin/env bash
@@ -348,7 +355,7 @@ plugin-isolation-check PLUGIN="codex":
 agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
+    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
 
 # No Service credentials or inference: copy an existing rollout into a private
 # home and exercise the real packaged ACP launch in a network namespace.
@@ -403,7 +410,7 @@ plugin-verify PLUGIN PUBLIC_KEY:
 
 plugin-publish PLUGIN CATALOG PUBLIC_KEY:
     just plugin-verify "{{PLUGIN}}" "{{PUBLIC_KEY}}"
-    deno run --allow-read --allow-write="{{CATALOG}}" --allow-run=sha256sum tools/publish-plugin-release.ts "{{PLUGIN}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
+    bun tools/publish-plugin-release.ts "{{PLUGIN}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
 
 # Exact Linux adapter/server bytes; never install or update a Machine here.
 zed-plugin-runtime-build ARTIFACT_BASE:
@@ -461,8 +468,8 @@ execution-claude-agent-research KEEPER CLAUDE CLAUDE_SHA EXECUTOR EXECUTOR_SHA R
 
 # Includes two real 35-second observations of executor process retention/expiry.
 execution-lifetime-conformance CLI VERSION SHA256 RECEIPT:
-    deno check tools/execution_environment_lifetime_probe.ts
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-all tools/execution_environment_lifetime_probe.ts "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
+    bun run typecheck
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/execution_environment_lifetime_probe.ts "$@"' conformance --native-cli "{{CLI}}" --version "{{VERSION}}" --sha256 "{{SHA256}}" --receipt "{{RECEIPT}}"
 
 # Real detached target keeper; its control clients all disconnect for 35 seconds.
 execution-keeper-conformance KEEPER CLI VERSION SHA256 RECEIPT:
@@ -553,7 +560,7 @@ telemetry-victoria-conformance MATRIX DATABASES RECEIPT:
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.
 provider-release-coverage CATALOG:
-    deno run --allow-read --allow-run=sha256sum tools/check-provider-release-coverage.ts "{{CATALOG}}"
+    bun tools/check-provider-release-coverage.ts "{{CATALOG}}"
 
 # Cheap Remote Claude feedback before building an upstream upgrade candidate.
 claude-remote-check:
@@ -562,9 +569,11 @@ claude-remote-check:
     cp components/provider-runtime/packages/claude-agent-acp/package{,-lock}.json dist/claude-source-tests/
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
-    deno fmt --check plugins/claude-code/runtime
-    deno fmt --check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
+    dprint check "plugins/claude-code/runtime/**/*.{ts,js,mjs}"
+    # Release-pinned sources still run on Deno; see AGENTS.md § Toolchain.
     deno check plugins/claude-code/runtime/build.ts
+    dprint check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
+    bun run typecheck
     python3 -m unittest discover -s tools -p remote_impact_test.py
 
 # Cross-language package/linker conformance. This is also the Agent Plugin
@@ -572,15 +581,16 @@ claude-remote-check:
 provider-check: claude-remote-check plugin-check
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
-    deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/source.json
-    deno check plugins/codex/runtime/build.ts
-    deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/check-provider-release-coverage.ts tools/check-provider-release-coverage_test.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
-    deno test --allow-read --allow-write --allow-run=sha256sum tools/check-provider-release-coverage_test.ts
-    deno test --allow-read tools/provider-runtime-platforms_test.ts
-    deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
-    deno test --allow-read .agents/skills/release-cowboy-plugin/scripts/converge-machine_test.ts
-    deno test tools/plugin-publication-receipt_test.ts
-    deno test --allow-read --allow-write --allow-run=sha256sum tools/immutable-publication_test.ts
+    dprint check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/source.json
+    bun run typecheck
+    # Release-pinned sources still run on Deno; see AGENTS.md § Toolchain.
+    deno check plugins/codex/runtime/build.ts components/provider-runtime/build.ts components/provider-runtime/check.ts
+    bun test ./tools/check-provider-release-coverage_test.ts
+    bun test ./tools/provider-runtime-platforms_test.ts
+    bun test ./.agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
+    bun test ./.agents/skills/release-cowboy-plugin/scripts/converge-machine_test.ts
+    bun test ./tools/plugin-publication-receipt_test.ts
+    bun test ./tools/immutable-publication_test.ts
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py
     python3 -m unittest discover -s tools -p plugin_generation_failure_isolation_test.py
     python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
@@ -591,25 +601,25 @@ provider-check: claude-remote-check plugin-check
     just example-auth-build-all
     just example-telemetry-bundle victoria
     for manifest in plugins/*/plugin.json; do plugin="${manifest#plugins/}"; just plugin-isolation-check "${plugin%/plugin.json}"; done
-    cd web && deno task typecheck
+    cd web && bun run typecheck
     deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
-    deno fmt --check tools/check-provider-ui-execution.ts
-    deno run --config web/deno.json --sloppy-imports --allow-read tools/check-provider-ui-execution.ts dist/plugins/*/*.cowboy-plugin
-    cd web && deno test --allow-read src/providerSdk.test.ts
+    dprint check tools/check-provider-ui-execution.ts
+    bun tools/check-provider-ui-execution.ts dist/plugins/*/*.cowboy-plugin
+    cd web && bun test ./src/providerSdk.test.ts
 
 # Quality gates.
 composition-generate:
-    deno run --allow-read --allow-write=src/composition,contracts --allow-run tools/generate-composition-contract.ts --write
+    bun tools/generate-composition-contract.ts --write
 
 composition-check:
-    deno fmt --check tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts tools/composition-link-conformance.ts contracts
-    deno check tools/generate-composition-contract.ts tools/composition-link-conformance.ts
-    deno test --allow-read --allow-write --allow-run tools/generate-composition-contract_test.ts
-    deno run --allow-read --allow-run tools/generate-composition-contract.ts
-    deno test --allow-read contracts/composition.test.ts contracts/composition-check.test.ts
+    dprint check tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts tools/composition-link-conformance.ts contracts
+    bun run typecheck
+    bun test ./tools/generate-composition-contract_test.ts
+    bun tools/generate-composition-contract.ts
+    bun test ./contracts/composition.test.ts ./contracts/composition-check.test.ts
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
     cargo build --locked --bin cowboy
-    deno run --allow-read --allow-write --allow-run="$(realpath target/debug/cowboy)" tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"
+    bun tools/composition-link-conformance.ts "$(realpath target/debug/cowboy)"
 
 fmt:
     cargo fmt --check
@@ -623,7 +633,7 @@ fmt-write:
 lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
     cd plugins/zed/adapter && cargo clippy --all-targets --locked -- -D warnings
-    cd web && deno task lint
+    cd web && bun run lint
 
 dependencies:
     #!/usr/bin/env bash
@@ -646,7 +656,7 @@ dependencies:
     (cd plugins/zed/adapter && cargo deny check && cargo machete --with-metadata)
 
 typecheck:
-    cd web && deno task typecheck
+    cd web && bun run typecheck
 
 # Keep independently packaged feature slices honest. An all-features build can
 # hide accidental dependencies on modules that are absent from these releases.
@@ -663,7 +673,7 @@ test:
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host --lib
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
-    cd web && deno task test
+    cd web && bun run test
 
 # Ignored PostgreSQL tests each get a fresh database in a private, temporary
 # cluster. Never consumes a caller-provided database URL or starts a TCP listener.
@@ -711,7 +721,7 @@ test-fast:
 
 # Compact-control-plane memory fixture against a local SQLite Durable Object.
 do-memory-mock:
-    deno run --allow-read tools/do-memory-mock/mock.ts
+    bun tools/do-memory-mock/mock.ts
     bash tools/do-memory-mock/run.sh deploy --dry-run --outdir /tmp/cowboy-do-memory-mock
 
 # Generate a real Hub compact fixture and POST it into local wrangler SQLite.
@@ -748,11 +758,11 @@ cache-clean:
 
 # Actual cover/footer DOM with overlay and resized keyboard geometry.
 sheet-keyboard-browser-conformance BROWSER:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" sheet-keyboard' conformance "{{BROWSER}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/idb-browser-conformance.ts "$1" sheet-keyboard' conformance "{{BROWSER}}"
 
 # Actual cached transcript recovery after failed/malformed bootstrap responses.
 transcript-recovery-browser BROWSER BUNDLE:
-    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" --transcript-recovery' recovery "{{BROWSER}}" "{{BUNDLE}}"
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/send-latency-browser.ts "$1" "$2" --transcript-recovery' recovery "{{BROWSER}}" "{{BUNDLE}}"
 
 # Real local presentation before slow restoration/save, and receipt/echo gaps.
 # Pass a pinned Firefox or Chromium executable; no normal browser profile.
@@ -770,5 +780,5 @@ local-presentation-browser-conformance BROWSER:
     for suite in local queued metadata; do
       bundle=local
       if [ "$suite" = metadata ]; then bundle=metadata; fi
-      unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" "$3"' conformance "{{BROWSER}}" "$fixture/$bundle" "--$suite"
+      unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec bun tools/send-latency-browser.ts "$1" "$2" "$3"' conformance "{{BROWSER}}" "$fixture/$bundle" "--$suite"
     done

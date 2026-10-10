@@ -1,10 +1,11 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   type ExploreSessionState,
   exploreStateAfterContextClear,
 } from "./contextClear.ts";
 
-Deno.test("context clear drops deleted page identities but preserves Page mode", () => {
+test("context clear drops deleted page identities but preserves Page mode", () => {
   const previous: ExploreSessionState = {
     projection: "explore",
     pageId: "old-question",
@@ -31,7 +32,7 @@ Deno.test("context clear drops deleted page identities but preserves Page mode",
   });
 });
 
-Deno.test("context clear keeps History mode selected", () => {
+test("context clear keeps History mode selected", () => {
   const previous: ExploreSessionState = {
     projection: "history",
     pageId: "old-question",

@@ -1,16 +1,18 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const textareaSource = await Deno.readTextFile(
-  new URL("../ComposerTextarea.tsx", import.meta.url),
+const textareaSource = await readFile(
+  new URL("../ComposerTextarea.tsx", import.meta.url), "utf8",
 );
-const editorSource = await Deno.readTextFile(
-  new URL("../ComposerEditor.tsx", import.meta.url),
+const editorSource = await readFile(
+  new URL("../ComposerEditor.tsx", import.meta.url), "utf8",
 );
-const platformSource = await Deno.readTextFile(
-  new URL("./PlatformComposerEditor.tsx", import.meta.url),
+const platformSource = await readFile(
+  new URL("./PlatformComposerEditor.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("native textarea keeps React rerenders from replacing iOS selection", () => {
+test("native textarea keeps React rerenders from replacing iOS selection", () => {
   assertEquals(textareaSource.includes('<TextField'), false);
   assertEquals(textareaSource.includes('component="textarea"'), true);
   assertEquals(textareaSource.includes('rows={1}'), true);
@@ -45,7 +47,7 @@ Deno.test("native textarea keeps React rerenders from replacing iOS selection", 
   );
 });
 
-Deno.test("touch host swap waits out the iOS compositionend hold", () => {
+test("touch host swap waits out the iOS compositionend hold", () => {
   assertEquals(platformSource.includes("IME_COMPOSITION_END_HOLD_MS"), true);
   assertEquals(platformSource.includes("imeOwnsEditable"), true);
   assertEquals(
@@ -54,7 +56,7 @@ Deno.test("touch host swap waits out the iOS compositionend hold", () => {
   );
 });
 
-Deno.test("CM6 backspace is keymap-only and never steals IME composition deletes", () => {
+test("CM6 backspace is keymap-only and never steals IME composition deletes", () => {
   // CM6 replays a parked iOS soft-keyboard key into the keymap itself. A
   // beforeinput delete channel made that replay a second Backspace (#12).
   assertEquals(editorSource.includes('"deleteContentBackward"'), false);
@@ -65,7 +67,7 @@ Deno.test("CM6 backspace is keymap-only and never steals IME composition deletes
   );
 });
 
-Deno.test("ordinary native input bypasses MUI trailing-newline selection rewrites", () => {
+test("ordinary native input bypasses MUI trailing-newline selection rewrites", () => {
   const inputStart = textareaSource.indexOf('defaultValue={value}');
   const inputEnd = textareaSource.indexOf('onSelect=', inputStart);
   const ordinaryInput = textareaSource.slice(inputStart, inputEnd);
@@ -75,7 +77,7 @@ Deno.test("ordinary native input bypasses MUI trailing-newline selection rewrite
   assertEquals(ordinaryInput.includes("TextareaAutosize"), false);
 });
 
-Deno.test("native textarea and CM6 expose the same logical selection handoff", () => {
+test("native textarea and CM6 expose the same logical selection handoff", () => {
   assertEquals(textareaSource.includes("getValue: (): string =>"), true);
   assertEquals(textareaSource.includes("getSelection: ()"), true);
   assertEquals(

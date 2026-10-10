@@ -1,31 +1,32 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   durableDeliveryAttempt,
   sendAfterDurableSnapshot,
   shouldUseTranscriptDelivery,
 } from "./durableDelivery.ts";
 
-Deno.test("disconnected durable delivery waits for reconnect instead of failing", () => {
+test("disconnected durable delivery waits for reconnect instead of failing", () => {
   assertEquals(durableDeliveryAttempt(false), {
     status: "pending",
     armConfirmationTimeout: false,
   });
 });
 
-Deno.test("connected durable delivery starts its confirmation timeout", () => {
+test("connected durable delivery starts its confirmation timeout", () => {
   assertEquals(durableDeliveryAttempt(true), {
     status: "sending",
     armConfirmationTimeout: true,
   });
 });
 
-Deno.test("an idle prompt stays in the conversation through a reconnect window", () => {
+test("an idle prompt stays in the conversation through a reconnect window", () => {
   assertEquals(shouldUseTranscriptDelivery(true, true), true);
   assertEquals(shouldUseTranscriptDelivery(false, true), false);
   assertEquals(shouldUseTranscriptDelivery(true, false), false);
 });
 
-Deno.test("a dependent send waits for its latest durable snapshot", async () => {
+test("a dependent send waits for its latest durable snapshot", async () => {
   const barrier = Promise.withResolvers<void>();
   let sent = 0;
   const sending = sendAfterDurableSnapshot({
@@ -39,7 +40,7 @@ Deno.test("a dependent send waits for its latest durable snapshot", async () => 
   assertEquals(sent, 1);
 });
 
-Deno.test("discard during the source-ack commit prevents the pending send", async () => {
+test("discard during the source-ack commit prevents the pending send", async () => {
   const barrier = Promise.withResolvers<void>();
   let pending = [{ id: "send-draft" }];
   let sent = false;
@@ -53,7 +54,7 @@ Deno.test("discard during the source-ack commit prevents the pending send", asyn
   assertEquals(sent, false);
 });
 
-Deno.test("a failed source-ack commit never sends the dependent activation", async () => {
+test("a failed source-ack commit never sends the dependent activation", async () => {
   let sent = false;
   const result = await sendAfterDurableSnapshot({
     flush: () => Promise.reject(new Error("disk unavailable")),

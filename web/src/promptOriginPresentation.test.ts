@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   agentOriginDisplayName,
   agentOriginSourceLabel,
@@ -6,7 +7,7 @@ import {
   originProviderId,
 } from "./promptOriginPresentation";
 
-Deno.test("runtime notes resolve through Catalog identity with an opaque fallback", () => {
+test("runtime notes resolve through Catalog identity with an opaque fallback", () => {
   assertEquals(agentOriginDisplayName("grok"), "grok");
   assertEquals(agentOriginDisplayName("claude-code"), "claude-code");
   assertEquals(
@@ -19,7 +20,7 @@ Deno.test("runtime notes resolve through Catalog identity with an opaque fallbac
   );
 });
 
-Deno.test("Cowboy notes keep the existing resume and schedule captions", () => {
+test("Cowboy notes keep the existing resume and schedule captions", () => {
   assertEquals(
     cowboyOriginCaption({ actor: "cowboy", source: "auto-resume" }),
     "Auto-resumed the interrupted turn",

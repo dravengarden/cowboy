@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   decodeLifecycleHistory,
   lifecycleEntryKey,
@@ -11,7 +12,7 @@ import {
 } from "./pluginLifecycle.ts";
 import { lifecycleFixture } from "./pluginLifecycle.fixture.ts";
 
-Deno.test("completed removal evidence retains failure history without claiming a replay", () => {
+test("completed removal evidence retains failure history without claiming a replay", () => {
   const value = lifecycleFixture();
   const row = value.entries[1];
   const entry = {
@@ -46,7 +47,7 @@ Deno.test("completed removal evidence retains failure history without claiming a
   );
 });
 
-Deno.test("lifecycle projection preserves domain identity, private-free recovery and immutable evidence", () => {
+test("lifecycle projection preserves domain identity, private-free recovery and immutable evidence", () => {
   const value = lifecycleFixture();
   const history = decodeLifecycleHistory(value, "hawk", "victoria");
   assertEquals(history.entries.map(lifecycleEntryKey), [
@@ -68,7 +69,7 @@ Deno.test("lifecycle projection preserves domain identity, private-free recovery
   assertEquals(history.entries[0].operation.plugin_version, "1.1.0");
 });
 
-Deno.test("lifecycle evidence fails closed on authority, new fields, wrong target and duplicate domain IDs", () => {
+test("lifecycle evidence fails closed on authority, new fields, wrong target and duplicate domain IDs", () => {
   const fixture = lifecycleFixture();
   const decode = (value: unknown) =>
     decodeLifecycleHistory(value, "hawk", "victoria");
@@ -104,7 +105,7 @@ Deno.test("lifecycle evidence fails closed on authority, new fields, wrong targe
   assertThrows(() => decodeLifecycleHistory(fixture, "../hawk", "victoria"));
 });
 
-Deno.test("independent resolution must match proven pre-effect interruption and never claim restoration", () => {
+test("independent resolution must match proven pre-effect interruption and never claim restoration", () => {
   const value = lifecycleFixture();
   const row = value.entries[1];
   const decode = (entry: unknown) =>
@@ -143,7 +144,7 @@ Deno.test("independent resolution must match proven pre-effect interruption and 
   decode({ ...row, resolution: null }); // absence is not fabricated recovery
 });
 
-Deno.test("unified history reuses the strict Machine receipt/Service-phase decoder", () => {
+test("unified history reuses the strict Machine receipt/Service-phase decoder", () => {
   const value = lifecycleFixture();
   const row = value.entries[0];
   for (
@@ -172,7 +173,7 @@ Deno.test("unified history reuses the strict Machine receipt/Service-phase decod
   }
 });
 
-Deno.test("loading lifecycle evidence is bounded no-store GET only and preserves caller cancellation", async () => {
+test("loading lifecycle evidence is bounded no-store GET only and preserves caller cancellation", async () => {
   const previous = globalThis.fetch;
   const calls: RequestInit[] = [];
   let response = Response.json(lifecycleFixture());

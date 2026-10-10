@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import { deferred } from "../../codeBuffers/fixture.ts";
 import { BufferClientError } from "../../codeBuffers/protocol.ts";
 import {
@@ -37,7 +38,7 @@ function source(pages: Page[]) {
   return { port, calls };
 }
 
-Deno.test("diff source assembles bounded original-revision pages before LF normalization", async () => {
+test("diff source assembles bounded original-revision pages before LF normalization", async () => {
   const text = "a\r\nb🙂\r\n";
   const size = new TextEncoder().encode(text).length;
   const f = source([
@@ -50,7 +51,7 @@ Deno.test("diff source assembles bounded original-revision pages before LF norma
   );
   assertEquals(f.calls, [undefined, "next"]);
 });
-Deno.test("diff source freezes target and port before discovery and does not acquire a buffer", async () => {
+test("diff source freezes target and port before discovery and does not acquire a buffer", async () => {
   const ready = deferred<void>();
   const input = { ...target }, seen: unknown[] = [];
   const port: ReviewDiffSource = {
@@ -69,7 +70,7 @@ Deno.test("diff source freezes target and port before discovery and does not acq
   assertEquals(await pending, "done\n");
   assertEquals(seen, [target]);
 });
-Deno.test("diff source refuses changed revision, path, size and repeated cursors without restart", async () => {
+test("diff source refuses changed revision, path, size and repeated cursors without restart", async () => {
   for (
     const next of [
       { ...page("b", undefined, 2), revision: "changed" },
@@ -95,7 +96,7 @@ Deno.test("diff source refuses changed revision, path, size and repeated cursors
     assertEquals(f.calls, [undefined, "next"]);
   }
 });
-Deno.test("diff source refuses truncation, limits, invalid UTF-8 length and malformed paging", async () => {
+test("diff source refuses truncation, limits, invalid UTF-8 length and malformed paging", async () => {
   for (
     const value of [
       { ...page("a"), truncated: true },
@@ -119,7 +120,7 @@ Deno.test("diff source refuses truncation, limits, invalid UTF-8 length and malf
     assertEquals(f.calls, [undefined]);
   }
 });
-Deno.test("diff source has a finite page budget even when cursors keep changing", async () => {
+test("diff source has a finite page budget even when cursors keep changing", async () => {
   const f = source(
     Array.from({ length: 33 }, (_, n) => page("a", `next-${n}`, 100)),
   );
@@ -129,7 +130,7 @@ Deno.test("diff source has a finite page budget even when cursors keep changing"
   );
   assertEquals(f.calls.length, 32);
 });
-Deno.test("an abandoned diff detaches from a late file read and cannot fetch another page", async () => {
+test("an abandoned diff detaches from a late file read and cannot fetch another page", async () => {
   const reply = deferred<Page>(), observer = new AbortController();
   const f = source([]);
   f.port.read = (_target, cursor) => {
@@ -146,7 +147,7 @@ Deno.test("an abandoned diff detaches from a late file read and cannot fetch ano
   await Promise.resolve();
   assertEquals(f.calls, [undefined]);
 });
-Deno.test("core identity loss during discovery prevents file I/O with replacement authority", async () => {
+test("core identity loss during discovery prevents file I/O with replacement authority", async () => {
   const context = new AbortController(), ready = deferred<void>();
   let reads = 0;
   const pending = readReviewDiffSource(
@@ -167,7 +168,7 @@ Deno.test("core identity loss during discovery prevents file I/O with replacemen
   await Promise.resolve();
   assertEquals(reads, 0);
 });
-Deno.test("failed file observation is not retried and nullable terminal cursors are accepted", async () => {
+test("failed file observation is not retried and nullable terminal cursors are accepted", async () => {
   const f = source([]);
   f.port.read = (_target, cursor) => {
     f.calls.push(cursor);

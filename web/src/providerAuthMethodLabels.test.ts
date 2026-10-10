@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
 for (
   const [provider, expectedLabel] of [
@@ -7,10 +9,10 @@ for (
     ["grok", "Grok subscription"],
   ] as const
 ) {
-  Deno.test(`${provider} account auth names the subscription product`, async () => {
+  test(`${provider} account auth names the subscription product`, async () => {
     const manifest = JSON.parse(
-      await Deno.readTextFile(
-        new URL(`../../plugins/${provider}/provider.json`, import.meta.url),
+      await readFile(
+        new URL(`../../plugins/${provider}/provider.json`, import.meta.url), "utf8",
       ),
     ) as { authentication: { methods: Array<{ flow: string; label: string }> } };
     const account = manifest.authentication.methods.find((method) =>

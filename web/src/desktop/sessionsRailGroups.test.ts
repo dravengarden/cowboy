@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { SessionMeta, Status } from "../protocol.ts";
 import type { SessionFoldersValue } from "../sessionFolders.ts";
 import { buildSessionTree } from "../sessionTree.ts";
@@ -44,7 +45,7 @@ function shape(groups: ReturnType<typeof sessionsRailGroups>) {
   }));
 }
 
-Deno.test("top-level folders and unfiled sessions become rail groups", () => {
+test("top-level folders and unfiled sessions become rail groups", () => {
   const rows = buildSessionTree(sessions, value, new Set()).rows;
   assertEquals(shape(sessionsRailGroups(rows, "s2")), [
     {
@@ -66,14 +67,14 @@ Deno.test("top-level folders and unfiled sessions become rail groups", () => {
   ]);
 });
 
-Deno.test("group activity counts every descendant", () => {
+test("group activity counts every descendant", () => {
   const rows = buildSessionTree(sessions, value, new Set()).rows;
   const [suger, , unfiled] = sessionsRailGroups(rows, null);
   assertEquals(suger?.activity, { working: 1, attention: 1, live: 0 });
   assertEquals(unfiled?.activity, { working: 1, attention: 0, live: 1 });
 });
 
-Deno.test("without folders the single group is simply Sessions", () => {
+test("without folders the single group is simply Sessions", () => {
   const rows =
     buildSessionTree(sessions, { folders: [], placement: {} }, new Set()).rows;
   const groups = sessionsRailGroups(rows, "s4");
@@ -83,7 +84,7 @@ Deno.test("without folders the single group is simply Sessions", () => {
   ]]);
 });
 
-Deno.test("collapsed rail retains Draft-only folders and current Draft", () => {
+test("collapsed rail retains Draft-only folders and current Draft", () => {
   const draft = {
     id: "note",
     kind: "document" as const,

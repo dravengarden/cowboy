@@ -1,15 +1,17 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   adjacentControlCenterTab,
   CONTROL_CENTER_TABS,
   controlCenterTabForShortcut,
 } from "./controlCenterTabs.ts";
 
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("control center numeric shortcuts select one stable tab", () => {
+test("control center numeric shortcuts select one stable tab", () => {
   assertEquals(
     CONTROL_CENTER_TABS.map(({ value, shortcut }) => [shortcut, value]),
     [
@@ -28,7 +30,7 @@ Deno.test("control center numeric shortcuts select one stable tab", () => {
   assertEquals(controlCenterTabForShortcut("x"), null);
 });
 
-Deno.test("control center bracket navigation wraps across tabs", () => {
+test("control center bracket navigation wraps across tabs", () => {
   assertEquals(adjacentControlCenterTab("settings", -1), "account");
   assertEquals(adjacentControlCenterTab("settings", 1), "notifications");
   assertEquals(adjacentControlCenterTab("logs", 1), "account");
@@ -36,7 +38,7 @@ Deno.test("control center bracket navigation wraps across tabs", () => {
   assertEquals(adjacentControlCenterTab("account", -1), "logs");
 });
 
-Deno.test("desktop control center keeps one stable semantic tab panel", () => {
+test("desktop control center keeps one stable semantic tab panel", () => {
   assertEquals(appSource.includes("<SegmentedTabs"), true);
   assertEquals(appSource.includes("onChange={changeTab}"), true);
   assertEquals(
@@ -71,7 +73,7 @@ Deno.test("desktop control center keeps one stable semantic tab panel", () => {
   assertEquals(appSource.includes("{tabContentReady && ("), false);
 });
 
-Deno.test("control center tab bar stays sticky on desktop", () => {
+test("control center tab bar stays sticky on desktop", () => {
   assertEquals(
     appSource.includes('position: desktop ? "sticky" : "static"'),
     false,
@@ -103,7 +105,7 @@ function panelSequence(start: string, end: string): string[] {
     .map((match) => match[1]);
 }
 
-Deno.test("desktop Account tab renders the mobile account route's panels", () => {
+test("desktop Account tab renders the mobile account route's panels", () => {
   const desktop = panelSequence(
     "function DesktopAccountTabContent(): React.JSX.Element {",
     "\n}",
@@ -121,7 +123,7 @@ Deno.test("desktop Account tab renders the mobile account route's panels", () =>
   assertEquals(desktop, mobile);
 });
 
-Deno.test("desktop control center routes the account tab to that content", () => {
+test("desktop control center routes the account tab to that content", () => {
   assertEquals(
     appSource.includes(
       'renderedTab === "account" ? <DesktopAccountTabContent />',

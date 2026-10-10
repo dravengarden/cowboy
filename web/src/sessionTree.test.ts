@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { SessionMeta, Status } from "./protocol";
 import { type SessionFoldersValue } from "./sessionFolders";
 import {
@@ -87,7 +89,7 @@ function shape(rows: ReturnType<typeof buildSessionTree>["rows"]): string[] {
   );
 }
 
-Deno.test("folders precede sessions, keep display order, and aggregate status", () => {
+test("folders precede sessions, keep display order, and aggregate status", () => {
   const tree = buildSessionTree(sessions, value, new Set());
   assertEquals(shape(tree.rows), [
     "f-cowboy(3,busy)",
@@ -106,7 +108,7 @@ Deno.test("folders precede sessions, keep display order, and aggregate status", 
   assertEquals(tree.folderOf.get("s2"), null);
 });
 
-Deno.test("collapsed folders hide their rows but keep their counts", () => {
+test("collapsed folders hide their rows but keep their counts", () => {
   const tree = buildSessionTree(sessions, value, new Set(["f-cowboy"]));
   assertEquals(shape(tree.rows), [
     "f-cowboy+(3,busy)",
@@ -120,7 +122,7 @@ Deno.test("collapsed folders hide their rows but keep their counts", () => {
   assertEquals(foldersRevealing(tree, value, "s2"), []);
 });
 
-Deno.test("a parent cycle is cut at the root instead of looping", () => {
+test("a parent cycle is cut at the root instead of looping", () => {
   const cyclic: SessionFoldersValue = {
     folders: [
       { id: "f-a", name: "A", parent: "f-b", position: 0, project: null },
@@ -138,7 +140,7 @@ Deno.test("a parent cycle is cut at the root instead of looping", () => {
   ]);
 });
 
-Deno.test("a malformed synced order degrades to no explicit order", () => {
+test("a malformed synced order degrades to no explicit order", () => {
   const order = ["session:s2", "session:s1"];
   assertEquals(syncedKeyList(order) === order, true);
   assertEquals(syncedKeyList({ owner: ["session:s1"] }), []);
@@ -157,14 +159,14 @@ Deno.test("a malformed synced order degrades to no explicit order", () => {
   assertEquals(shape(tree.rows), ["s1", "s2"]);
 });
 
-Deno.test("status priority prefers what needs attention", () => {
+test("status priority prefers what needs attention", () => {
   assertEquals(mostUrgentStatus(["running", "exited"]), "running");
   assertEquals(mostUrgentStatus(["running", "crashed", "busy"]), "busy");
   assertEquals(mostUrgentStatus(["exited", "interrupted"]), "interrupted");
   assertEquals(mostUrgentStatus([]), null);
 });
 
-Deno.test("a drop lands in the container of the row above", () => {
+test("a drop lands in the container of the row above", () => {
   const rows = buildSessionTree(sessions, value, new Set(["f-garden"])).rows
     .filter((row) => row.kind !== "session" || row.session.id !== "s2");
   assertEquals(dropTargetFolder(rows, 0), null);
@@ -180,7 +182,7 @@ Deno.test("a drop lands in the container of the row above", () => {
   assertEquals(dropTargetFolder(rows, garden + 2), null);
 });
 
-Deno.test("row keys and the moved key are recovered from a reordered key list", () => {
+test("row keys and the moved key are recovered from a reordered key list", () => {
   const rows = buildSessionTree(sessions, value, new Set()).rows;
   const keys = rows.map(sessionTreeRowKey);
   assertEquals(keys.slice(0, 3), ["folder:f-cowboy", "folder:f-ime", "s4"]);
@@ -192,7 +194,7 @@ Deno.test("row keys and the moved key are recovered from a reordered key list", 
   assertEquals(movedRowKey(["a", "b"], ["a", "b"]), null);
 });
 
-Deno.test("Desktop and the Mobile drawer render one session direction", () => {
+test("Desktop and the Mobile drawer render one session direction", () => {
   const order = ["s1", "s2", "s3"];
   // Newest (last in the synced `"order"` array) reads first on both surfaces.
   assertEquals(displayedSessionOrder(order), ["s3", "s2", "s1"]);
@@ -203,9 +205,9 @@ Deno.test("Desktop and the Mobile drawer render one session direction", () => {
   assertEquals(order, ["s1", "s2", "s3"]);
 });
 
-Deno.test("the list component takes its direction from one shared helper", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./App.tsx", import.meta.url),
+test("the list component takes its direction from one shared helper", async () => {
+  const source = await readFile(
+    new URL("./App.tsx", import.meta.url), "utf8",
   );
   // A per-surface direction is what put the same session at opposite ends of
   // Desktop and Mobile; both call sites must stay on `displayedSessionOrder`.
@@ -217,7 +219,7 @@ Deno.test("the list component takes its direction from one shared helper", async
   assertEquals(source.includes("reorderSessions(displayedSessionOrder("), true);
 });
 
-Deno.test("folders count working, attention and live agents separately", () => {
+test("folders count working, attention and live agents separately", () => {
   const tree = buildSessionTree(sessions, value, new Set());
   const cowboy = tree.rows[0];
   assertEquals(cowboy?.kind === "folder" ? cowboy.activity : null, {
@@ -238,7 +240,7 @@ Deno.test("folders count working, attention and live agents separately", () => {
   );
 });
 
-Deno.test("an expanded empty folder owns one empty body row", () => {
+test("an expanded empty folder owns one empty body row", () => {
   const rows = buildSessionTree(sessions, value, new Set()).rows;
   const index = rows.findIndex((row) => row.kind === "empty");
   assertEquals(sessionTreeRowKey(rows[index]!), "empty:f-orphan");
@@ -249,7 +251,7 @@ Deno.test("an expanded empty folder owns one empty body row", () => {
   assertEquals(dropTargetFolder(without, index + 1), "f-orphan");
 });
 
-Deno.test("a drag projects its container from slot bounds and horizontal intent", () => {
+test("a drag projects its container from slot bounds and horizontal intent", () => {
   // Rows with s2 (root, depth 0) picked up.
   const rows = buildSessionTree(sessions, value, new Set(["f-garden"])).rows
     .filter((row) => row.kind !== "session" || row.session.id !== "s2");
@@ -295,7 +297,7 @@ Deno.test("a drag projects its container from slot bounds and horizontal intent"
   assertEquals(rowInsideFolder(rows[5]!, "f-cowboy", value), false);
 });
 
-Deno.test("explicit left drag can leave a branch without finding its last row", () => {
+test("explicit left drag can leave a branch without finding its last row", () => {
   const rows = buildSessionTree(sessions, value, new Set()).rows;
   const index = rows.findIndex((row) =>
     row.kind === "session" && row.session.id === "s4"
@@ -323,7 +325,7 @@ Deno.test("explicit left drag can leave a branch without finding its last row", 
   });
 });
 
-Deno.test("Draft and Session share directories and explicit order without Machine activity", () => {
+test("Draft and Session share directories and explicit order without Machine activity", () => {
   const draft = {
     id: "note",
     kind: "document" as const,
@@ -367,7 +369,7 @@ Deno.test("Draft and Session share directories and explicit order without Machin
   assertEquals(orphan.rows.map(sessionTreeRowKey), ["draft:note"]);
 });
 
-Deno.test("the fold button focuses the current session, then expands everything", () => {
+test("the fold button focuses the current session, then expands everything", () => {
   const all = new Set(value.folders.map((folder) => folder.id));
   const open = buildSessionTree(sessions, value, new Set());
   assertEquals(foldersOffSessionPath(open, value, "s4"), [
@@ -394,7 +396,7 @@ Deno.test("the fold button focuses the current session, then expands everything"
   assertEquals(sessionFoldAction(open, value, all, null, false), "expand");
 });
 
-Deno.test("the fold button only locates when nothing can fold away", () => {
+test("the fold button only locates when nothing can fold away", () => {
   const flat: SessionFoldersValue = { folders: [], placement: {} };
   const tree = buildSessionTree(sessions, flat, new Set());
   assertEquals(sessionFoldAction(tree, flat, new Set(), "s2", true), "locate");

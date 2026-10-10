@@ -1,13 +1,15 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const source = await Deno.readTextFile(
-  new URL("./SessionFolderUi.tsx", import.meta.url),
+const source = await readFile(
+  new URL("./SessionFolderUi.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("folder sheets mount beside the session shells, not inline and not on body", () => {
+test("folder sheets mount beside the session shells, not inline and not on body", () => {
   // SessionList renders inside the drawer: a transformed, overflow-hidden
   // layer stacked under the page peek. An inline fixed sheet is laid out
   // against that layer, clipped to the drawer width and covered by the page
@@ -50,7 +52,7 @@ Deno.test("folder sheets mount beside the session shells, not inline and not on 
   ) assert(body.includes(shell));
 });
 
-Deno.test("the folder name prompt keeps a two-button action row", () => {
+test("the folder name prompt keeps a two-button action row", () => {
   // A third action squeezed Create off a phone-width sheet; the organizer
   // lives under the field instead.
   const shell = source.slice(

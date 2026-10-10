@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   projectedDiffPoint,
   projectReviewDiff,
@@ -10,7 +11,7 @@ const patch =
   "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,3 @@\n first\n-old\n+a🙂z\n+last\n";
 const source = "first\na🙂z\nlast\n";
 
-Deno.test("owned diff captures complete source and maps only matching new-side UTF-16", () => {
+test("owned diff captures complete source and maps only matching new-side UTF-16", () => {
   const proof = projectReviewDiff(patch, source);
   assert(proof);
   assertEquals(proof.source, source);
@@ -20,7 +21,7 @@ Deno.test("owned diff captures complete source and maps only matching new-side U
   assertEquals(projectedDiffPoint(proof, 6, 4), { row: 1, column: 3 });
   assertEquals(projectedDiffPoint(proof, 7, 5), { row: 2, column: 4 });
 });
-Deno.test("owned diff cannot map old lines, metadata, out-of-range or split surrogates", () => {
+test("owned diff cannot map old lines, metadata, out-of-range or split surrogates", () => {
   const proof = projectReviewDiff(patch, source)!;
   for (
     const [row, column] of [
@@ -49,7 +50,7 @@ Deno.test("owned diff cannot map old lines, metadata, out-of-range or split surr
     null,
   );
 });
-Deno.test("a stale untouched new-side row refuses the entire patch, not just that row", () => {
+test("a stale untouched new-side row refuses the entire patch, not just that row", () => {
   assertEquals(
     projectReviewDiff(patch, source.replace("last", "else")),
     undefined,
@@ -60,7 +61,7 @@ Deno.test("a stale untouched new-side row refuses the entire patch, not just tha
     undefined,
   );
 });
-Deno.test("multiple separated hunks capture hidden current text without claiming old Git identity", () => {
+test("multiple separated hunks capture hidden current text without claiming old Git identity", () => {
   const patch =
     "@@ -1 +1 @@\n-old\n+first\n@@ -3 +3 @@ function\n-end\n+last\n";
   const proof = projectReviewDiff(
@@ -70,7 +71,7 @@ Deno.test("multiple separated hunks capture hidden current text without claiming
   assert(proof);
   assertEquals(projectedDiffPoint(proof, 5, 2), { row: 2, column: 1 });
 });
-Deno.test("new files, deletions and hunk suffixes that resemble metadata are parsed by counts", () => {
+test("new files, deletions and hunk suffixes that resemble metadata are parsed by counts", () => {
   assert(
     projectReviewDiff(
       "@@ -0,0 +1,2 @@\n+++value\n+---value\n",
@@ -80,7 +81,7 @@ Deno.test("new files, deletions and hunk suffixes that resemble metadata are par
   assert(projectReviewDiff("@@ -1,2 +1 @@\n-old\n same\n", "same\n"));
   assertEquals(projectReviewDiff("@@ -1 +0,0 @@\n-old\n", ""), undefined);
 });
-Deno.test("malformed, overlapping, excess and incomplete hunk ranges cannot authorize positions", () => {
+test("malformed, overlapping, excess and incomplete hunk ranges cannot authorize positions", () => {
   for (
     const invalid of [
       patch.replace("-1,2", "-1,3"),
@@ -98,7 +99,7 @@ Deno.test("malformed, overlapping, excess and incomplete hunk ranges cannot auth
     ]
   ) assertEquals(projectReviewDiff(invalid, source), undefined, invalid);
 });
-Deno.test("EOF newline identity is required and old-side markers never certify new content", () => {
+test("EOF newline identity is required and old-side markers never certify new content", () => {
   const noNewline = "@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n";
   assert(projectReviewDiff(noNewline, "new"));
   assertEquals(projectReviewDiff(noNewline, "new\n"), undefined);
@@ -126,7 +127,7 @@ Deno.test("EOF newline identity is required and old-side markers never certify n
     undefined,
   );
 });
-Deno.test("partial EOF, multiple files and unsupported binary/conflict formats are refused", () => {
+test("partial EOF, multiple files and unsupported binary/conflict formats are refused", () => {
   for (
     const invalid of [
       "diff --cc a.ts\n@@@ -1,1 -1,1 +1,1 @@@\n+new\n",
@@ -137,7 +138,7 @@ Deno.test("partial EOF, multiple files and unsupported binary/conflict formats a
     ]
   ) assertEquals(projectReviewDiff(invalid, source), undefined);
 });
-Deno.test("LF normalization is explicit and shared; BOM and NUL are not removed", () => {
+test("LF normalization is explicit and shared; BOM and NUL are not removed", () => {
   const raw = "@@ -0,0 +1 @@\r\n+\ufeffa\0\r\n";
   assertEquals(projectReviewDiff(raw, "\ufeffa\0\r\n"), undefined);
   assert(
@@ -148,7 +149,7 @@ Deno.test("LF normalization is explicit and shared; BOM and NUL are not removed"
   );
   assertEquals(projectReviewDiff(reviewDisplayText(raw), "a\0\n"), undefined);
 });
-Deno.test("projection bounds precede line allocation and malformed Unicode cannot be captured", () => {
+test("projection bounds precede line allocation and malformed Unicode cannot be captured", () => {
   assertEquals(
     projectReviewDiff(patch, "x".repeat(4 * 1024 * 1024 + 1)),
     undefined,

@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   captureContent,
   type CapturedContent,
@@ -14,15 +16,15 @@ import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { ID, opened, readWire, wire } from "./fixture.ts";
 
 const contract = JSON.parse(
-  Deno.readTextFileSync(
+  readFileSync(
     new URL(
       "../../../plugins/zed/adapter/fixtures/content.json",
       import.meta.url,
-    ),
+    ), "utf8",
   ),
 );
 
-Deno.test("content snapshot hashes exact complete UTF-8 and matches Rust/native Unicode fixture", async () => {
+test("content snapshot hashes exact complete UTF-8 and matches Rust/native Unicode fixture", async () => {
   const snapshot = await captureContent(contract.text);
   const request = contentRequest(snapshot, {
     kind: "hover",
@@ -68,7 +70,7 @@ Deno.test("content snapshot hashes exact complete UTF-8 and matches Rust/native 
   assert(accented.content.sha256 !== combining.content.sha256);
 });
 
-Deno.test("content positions are exact UTF-16 and snapshots cannot be supplied as JSON", async () => {
+test("content positions are exact UTF-16 and snapshots cannot be supplied as JSON", async () => {
   const snapshot = await captureContent(contract.text);
   for (
     const position of [{ row: 0, column: 2 }, { row: 0, column: 5 }, {
@@ -98,7 +100,7 @@ Deno.test("content positions are exact UTF-16 and snapshots cannot be supplied a
   );
 });
 
-Deno.test("content codec rejects different content, owners, kinds, extra fields and oversized hover", async () => {
+test("content codec rejects different content, owners, kinds, extra fields and oversized hover", async () => {
   const request = contentRequest(await captureContent(contract.text), {
     kind: "hover",
     position: { row: 0, column: 3 },
@@ -129,7 +131,7 @@ Deno.test("content codec rejects different content, owners, kinds, extra fields 
   }
 });
 
-Deno.test("content owner captures query, retains mismatch and makes no automatic reload or reopen", async () => {
+test("content owner captures query, retains mismatch and makes no automatic reload or reopen", async () => {
   const f = await opened();
   const snapshot = await captureContent(contract.text);
   const query = { kind: "hover" as const, position: { row: 0, column: 3 } };
@@ -155,7 +157,7 @@ Deno.test("content owner captures query, retains mismatch and makes no automatic
   assertEquals((await close).kind, "released");
 });
 
-Deno.test("ending a displayed snapshot discards its result but drains the original read before cleanup", async () => {
+test("ending a displayed snapshot discards its result but drains the original read before cleanup", async () => {
   const f = await opened();
   const view = new AbortController();
   const read = f.owner.readContent(await captureContent(contract.text), {
@@ -178,7 +180,7 @@ Deno.test("ending a displayed snapshot discards its result but drains the origin
   assertEquals((await close).kind, "released");
 });
 
-Deno.test("content reads cannot adopt ended authority or downgrade an old host", async () => {
+test("content reads cannot adopt ended authority or downgrade an old host", async () => {
   const f = await opened();
   const snapshot = await captureContent(contract.text);
   const read = f.owner.readContent(snapshot, { kind: "language" });

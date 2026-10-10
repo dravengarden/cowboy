@@ -1,12 +1,13 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
 import { vimEscapeBelongsToApp } from "./vimEscapeOwnership.ts";
 
-Deno.test("Cowboy owns Escape directly when Vim is disabled", () => {
+test("Cowboy owns Escape directly when Vim is disabled", () => {
   assertEquals(vimEscapeBelongsToApp(false, undefined), true);
 });
 
-Deno.test("only plain Vim Normal mode delegates Escape to Cowboy", () => {
+test("only plain Vim Normal mode delegates Escape to Cowboy", () => {
   assertEquals(vimEscapeBelongsToApp(true, {}), true);
   assertEquals(vimEscapeBelongsToApp(true, { insertMode: true }), false);
   assertEquals(vimEscapeBelongsToApp(true, { visualMode: true }), false);
@@ -20,6 +21,6 @@ Deno.test("only plain Vim Normal mode delegates Escape to Cowboy", () => {
   );
 });
 
-Deno.test("Vim keeps Escape while its runtime is still attaching", () => {
+test("Vim keeps Escape while its runtime is still attaching", () => {
   assertEquals(vimEscapeBelongsToApp(true, undefined), false);
 });

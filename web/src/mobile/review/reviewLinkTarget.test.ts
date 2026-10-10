@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   headingSlug,
   resolveReviewLink,
@@ -7,7 +9,7 @@ import {
 
 const DOC = "docs/marketplace-service/zh/00-orientation.md";
 
-Deno.test("a sibling link resolves inside the doc's own directory", () => {
+test("a sibling link resolves inside the doc's own directory", () => {
   assertEquals(resolveReviewLink(DOC, "01-business-primer.md"), {
     kind: "file",
     path: "docs/marketplace-service/zh/01-business-primer.md",
@@ -27,7 +29,7 @@ Deno.test("a sibling link resolves inside the doc's own directory", () => {
   });
 });
 
-Deno.test("anything that owns its own navigation stays external", () => {
+test("anything that owns its own navigation stays external", () => {
   for (
     const href of [
       "https://doc.suger.io",
@@ -44,7 +46,7 @@ Deno.test("anything that owns its own navigation stays external", () => {
   }
 });
 
-Deno.test("a link out of the workspace is refused, not clamped", () => {
+test("a link out of the workspace is refused, not clamped", () => {
   // Climbing past the root would otherwise silently open a sibling of the
   // workspace — a worse answer than not navigating.
   assertEquals(resolveReviewLink("a/b.md", "../../../etc/passwd"), {
@@ -56,7 +58,7 @@ Deno.test("a link out of the workspace is refused, not clamped", () => {
   assertEquals(resolveReviewLink(DOC, "#"), { kind: "unsupported" });
 });
 
-Deno.test("fragments choose between an anchor, a line, and a path", () => {
+test("fragments choose between an anchor, a line, and a path", () => {
   assertEquals(resolveReviewLink(DOC, "#只有-30-分钟的话"), {
     kind: "anchor",
     hash: "只有-30-分钟的话",
@@ -89,7 +91,7 @@ Deno.test("fragments choose between an anchor, a line, and a path", () => {
   });
 });
 
-Deno.test("percent escapes and forge query hints are handled", () => {
+test("percent escapes and forge query hints are handled", () => {
   assertEquals(resolveReviewLink(DOC, "my%20notes.md"), {
     kind: "file",
     path: "docs/marketplace-service/zh/my notes.md",
@@ -109,7 +111,7 @@ Deno.test("percent escapes and forge query hints are handled", () => {
   });
 });
 
-Deno.test("heading slugs survive punctuation and Chinese headings", () => {
+test("heading slugs survive punctuation and Chinese headings", () => {
   assertEquals(headingSlug("Reading order"), "reading-order");
   assertEquals(headingSlug("只有 30 分钟的话"), "只有-30-分钟的话");
   assertEquals(
@@ -119,17 +121,17 @@ Deno.test("heading slugs survive punctuation and Chinese headings", () => {
   assertEquals(headingSlug("  Spaced  Out  "), "spaced-out");
 });
 
-const reviewApp = await Deno.readTextFile(
-  new URL("./ReviewApp.tsx", import.meta.url),
+const reviewApp = await readFile(
+  new URL("./ReviewApp.tsx", import.meta.url), "utf8",
 );
-const markdown = await Deno.readTextFile(
-  new URL("../../Markdown.tsx", import.meta.url),
+const markdown = await readFile(
+  new URL("../../Markdown.tsx", import.meta.url), "utf8",
 );
-const markdownImpl = await Deno.readTextFile(
-  new URL("../../MarkdownImpl.tsx", import.meta.url),
+const markdownImpl = await readFile(
+  new URL("../../MarkdownImpl.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("a doc link and a symbol jump share one history", () => {
+test("a doc link and a symbol jump share one history", () => {
   const follow = reviewApp.slice(
     reviewApp.indexOf("const followMarkdownLink"),
     reviewApp.indexOf("const navigateBack"),
@@ -150,7 +152,7 @@ Deno.test("a doc link and a symbol jump share one history", () => {
   assert(reviewApp.includes("previewAnchor={previewAnchor}"));
 });
 
-Deno.test("the renderer lets a host claim a link, and heads have slugs", () => {
+test("the renderer lets a host claim a link, and heads have slugs", () => {
   assert(markdown.includes("onLinkClick"));
   const anchor = markdownImpl.slice(
     markdownImpl.indexOf("a({ children, href })"),
@@ -167,7 +169,7 @@ Deno.test("the renderer lets a host claim a link, and heads have slugs", () => {
   assert(markdownImpl.includes('h1: makeHeading("1.35em", 1.3, "h1")'));
 });
 
-Deno.test("the anchor scroll is measured, never scrollIntoView", () => {
+test("the anchor scroll is measured, never scrollIntoView", () => {
   const effect = reviewApp.slice(
     reviewApp.indexOf("const appliedAnchor = useRef(0)"),
   );
@@ -181,7 +183,7 @@ Deno.test("the anchor scroll is measured, never scrollIntoView", () => {
   assert(block.includes("appliedAnchor.current = previewAnchor.id"));
 });
 
-Deno.test("a Review render never remounts the rendered Markdown under a finger", () => {
+test("a Review render never remounts the rendered Markdown under a finger", () => {
   // A fresh link callback busts the Markdown memo; fresh renderer functions
   // are new element types. Either remounts the node a drawer swipe started on,
   // and iOS then never delivers that swipe's touchend to the drawer.

@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readdirSync, readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   applyOccupancyHostPlugins,
   occupancyProviderIds,
@@ -6,17 +8,17 @@ import {
 
 function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
   const root = new URL("../../plugins/", import.meta.url);
-  return [...Deno.readDirSync(root)]
-    .filter((entry) => entry.isDirectory)
+  return [...readdirSync(root, { withFileTypes: true })]
+    .filter((entry) => entry.isDirectory())
     .sort((left, right) => left.name.localeCompare(right.name))
     .flatMap((entry) => {
       try {
         const host = JSON.parse(
-          Deno.readTextFileSync(new URL(`${entry.name}/host.json`, root)),
+          readFileSync(new URL(`${entry.name}/host.json`, root), "utf8"),
         ) as Record<string, unknown>;
         return [{ id: entry.name, ...host }];
       } catch (reason) {
-        if (reason instanceof Deno.errors.NotFound) return [];
+        if ((reason as { code?: string }).code === "ENOENT") return [];
         throw reason;
       }
     });
@@ -25,9 +27,9 @@ function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
 const FIRST_PARTY_HOSTS = firstPartyHosts();
 applyOccupancyHostPlugins(FIRST_PARTY_HOSTS);
 
-Deno.test("adapter occupancy has no source-compiled first-party inventory", () => {
-  const source = Deno.readTextFileSync(
-    new URL("./occupancyHostMap.ts", import.meta.url),
+test("adapter occupancy has no source-compiled first-party inventory", () => {
+  const source = readFileSync(
+    new URL("./occupancyHostMap.ts", import.meta.url), "utf8",
   );
   assertEquals(source.includes("bundledHostPlugins"), false);
   assertEquals(source.includes("FALLBACK_ADAPTER_ALIASES"), false);
@@ -35,7 +37,7 @@ Deno.test("adapter occupancy has no source-compiled first-party inventory", () =
   assert(FIRST_PARTY_HOSTS.length > 0);
 });
 
-Deno.test("adapter slots include the slot id and first-party aliases", () => {
+test("adapter slots include the slot id and first-party aliases", () => {
   assertEquals(occupancyProviderIds("claude"), [
     "claude",
     "claude-code",
@@ -44,7 +46,7 @@ Deno.test("adapter slots include the slot id and first-party aliases", () => {
   assertEquals(occupancyProviderIds("codex"), ["codex", "codex-deepseek"]);
 });
 
-Deno.test("activated host inventory replaces adapter-slot occupancy", () => {
+test("activated host inventory replaces adapter-slot occupancy", () => {
   try {
     applyOccupancyHostPlugins([
       { id: "custom-claude", adapter_slot: "claude" },

@@ -2,7 +2,9 @@
 // inline loader and this module still agree (docs/offline-first-sync.md
 // §Boot presentation). The capture itself needs a live document and is
 // verified in the browser.
-import { assert, assertEquals, assertFalse } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals, assertFalse } from "@std/assert";
 import {
   BOOT_SNAPSHOT_CACHE,
   BOOT_SNAPSHOT_HINT_KEY,
@@ -18,19 +20,19 @@ import {
   strippedAttribute,
 } from "./bootSnapshot.ts";
 
-Deno.test("a selector list splits only on its top-level commas", () => {
+test("a selector list splits only on its top-level commas", () => {
   assertEquals(splitSelectorList(".a, .b > .c"), [".a", ".b > .c"]);
   assertEquals(splitSelectorList(":is(.a, .b) .c"), [":is(.a, .b) .c"]);
   assertEquals(splitSelectorList("[title='a,b'], .c"), ["[title='a,b']", ".c"]);
 });
 
-Deno.test("classTokens reads every class a selector names", () => {
+test("classTokens reads every class a selector names", () => {
   assertEquals(classTokens(".css-1ab .css-2cd:hover"), ["css-1ab", "css-2cd"]);
   assertEquals(classTokens("div[data-x='.y']"), ["y"]); // harmless over-read
   assertEquals(classTokens("html"), []);
 });
 
-Deno.test("a rule survives only when some alternative can still match", () => {
+test("a rule survives only when some alternative can still match", () => {
   const used = new Set(["css-a", "css-b"]);
   // Global rules always survive: they carry the reset and the type styles.
   assert(keepStyleRule("html, body", used));
@@ -46,7 +48,7 @@ Deno.test("a rule survives only when some alternative can still match", () => {
   assertFalse(keepStyleRule(".css-missing:not(.css-other)", used));
 });
 
-Deno.test("document-level selectors are retargeted at the shadow host", () => {
+test("document-level selectors are retargeted at the shadow host", () => {
   assertEquals(scopedSelector(":root"), ":host");
   assertEquals(scopedSelector("html, body"), ":host, :host");
   assertEquals(scopedSelector("body .css-a"), ":host .css-a");
@@ -58,7 +60,7 @@ Deno.test("document-level selectors are retargeted at the shadow host", () => {
   assertEquals(scopedSelector(".css-a"), ".css-a");
 });
 
-Deno.test("only presentation-critical html declarations are restorable", () => {
+test("only presentation-critical html declarations are restorable", () => {
   // Every `rem` in the snapshot depends on the global font scale.
   assert(restorableHtmlStyle("font-size"));
   assert(restorableHtmlStyle("background-color"));
@@ -69,7 +71,7 @@ Deno.test("only presentation-critical html declarations are restorable", () => {
   assertFalse(restorableHtmlStyle("--other-app"));
 });
 
-Deno.test("a static copy carries no script surface", () => {
+test("a static copy carries no script surface", () => {
   assert(strippedAttribute("onclick", "run()"));
   assert(strippedAttribute("ONCLICK", "run()"));
   assert(strippedAttribute("href", " javascript:run()"));
@@ -82,7 +84,7 @@ Deno.test("a static copy carries no script surface", () => {
   assertFalse(strippedAttribute("href", "/sessions/1"));
 });
 
-Deno.test("only boxes wholly off the viewport are dropped", () => {
+test("only boxes wholly off the viewport are dropped", () => {
   const box = (top: number, bottom: number) => ({ left: 0, right: 390, top, bottom });
   assertFalse(outsideViewport(box(0, 100), 390, 844));
   assertFalse(outsideViewport(box(800, 900), 390, 844)); // straddles the fold
@@ -91,8 +93,8 @@ Deno.test("only boxes wholly off the viewport are dropped", () => {
   assert(outsideViewport(box(2000, 2100), 390, 844));
 });
 
-Deno.test("index.html's inline loader and this module agree", async () => {
-  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+test("index.html's inline loader and this module agree", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_CACHE)), BOOT_SNAPSHOT_CACHE);
   assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_URL)), BOOT_SNAPSHOT_URL);
   assert(html.includes(JSON.stringify(BOOT_THEME_KEY)), BOOT_THEME_KEY);
@@ -137,9 +139,9 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   assert(/BOOT_FONT_WAIT_MS = \d+/.test(html), "with a bounded wait");
 });
 
-Deno.test("the static boot shell and BootSkeleton render the same markup", async () => {
-  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
-  const skeleton = await Deno.readTextFile(new URL("./BootSkeleton.tsx", import.meta.url));
+test("the static boot shell and BootSkeleton render the same markup", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const skeleton = await readFile(new URL("./BootSkeleton.tsx", import.meta.url), "utf8");
   // Both must paint one shape, or the document's first frame would jump when
   // React takes over.
   for (const name of ["boot-shell", "boot-rail", "boot-main", "boot-feed", "boot-card", "boot-own", "boot-composer", "boot-tools", "boot-nav", "boot-gap", "boot-dot", "boot-bar"]) {
@@ -151,11 +153,11 @@ Deno.test("the static boot shell and BootSkeleton render the same markup", async
   assertEquals(count(html, 'class="boot-card'), count(skeleton, 'className="boot-card'));
 });
 
-Deno.test("snapshot handover retains font rules until the live lazy CSS arrives", async () => {
-  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+test("snapshot handover retains font rules until the live lazy CSS arrives", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assert(html.includes('fonts.id = "boot-snapshot-fonts"'));
   assertFalse(html.includes('document.getElementById("boot-snapshot-fonts")?.remove()'));
-  const reading = await Deno.readTextFile(new URL("./readingSettings.ts", import.meta.url));
+  const reading = await readFile(new URL("./readingSettings.ts", import.meta.url), "utf8");
   const faces = reading.slice(reading.indexOf("export function useReadingFontFaces"));
   assert(faces.includes("useLayoutEffect"), "font family must be selected before first paint");
 });

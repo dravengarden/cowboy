@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import type { ClientSnapshot, Mutation } from "@cowboy/state-sync";
 import { replicatedStore } from "@cowboy/state-sync";
 import { createIdbPersistenceOwner } from "../../components/state-sync-idb/index.ts";
@@ -9,9 +11,9 @@ import { createSyncShutdown } from "./syncShutdown.ts";
  *  outbox rejects a `save` issued while its own read is still in flight (or has
  *  not started) with `outbox_loading`, and a send tapped moments after a reload
  *  then fails instead of being saved — the draft ▶ path shipped that way. */
-Deno.test("no durable write runs before its outbox baseline is adopted", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./store.ts", import.meta.url),
+test("no durable write runs before its outbox baseline is adopted", async () => {
+  const source = await readFile(
+    new URL("./store.ts", import.meta.url), "utf8",
   );
   const starts = [...source.matchAll(/^(?:export )?(?:async )?function \w+/gm)]
     .map((match) => match.index ?? 0);
@@ -59,9 +61,9 @@ Deno.test("no durable write runs before its outbox baseline is adopted", async (
 
 /** The restore is memoized per session, so the write barrier above waits for
  *  exactly the work lazy creation started instead of racing a second one. */
-Deno.test("queue restore keeps held decisions ahead of the outbox replay", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./store.ts", import.meta.url),
+test("queue restore keeps held decisions ahead of the outbox replay", async () => {
+  const source = await readFile(
+    new URL("./store.ts", import.meta.url), "utf8",
   );
   const restore = source.slice(
     source.indexOf("function restoreQueue("),
@@ -81,7 +83,7 @@ Deno.test("queue restore keeps held decisions ahead of the outbox replay", async
 /** The barrier `durableQueue` applies, exercised against the real outbox: the
  *  same tap that the component rejects mid-read is saved once the store adopted
  *  its baseline first. (`idbOutbox.test.ts` owns the rejecting half.) */
-Deno.test("a send tapped while the queue is still restoring is saved, not rejected", async () => {
+test("a send tapped while the queue is still restoring is saved, not rejected", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = true;
   factory.data.set("queue", {

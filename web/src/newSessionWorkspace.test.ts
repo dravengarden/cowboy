@@ -1,19 +1,21 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace.ts";
 import { resolveActiveSession } from "./sessionSelection.ts";
 import type { SessionMeta } from "./protocol.ts";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const transcriptSource = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("mobile new session actions stay in the non-overlay sheet footer", () => {
+test("mobile new session actions stay in the non-overlay sheet footer", () => {
   const dialog = appSource.slice(
     appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
@@ -29,7 +31,7 @@ Deno.test("mobile new session actions stay in the non-overlay sheet footer", () 
   assertEquals(dialog.includes('title="Create"'), true);
 });
 
-Deno.test("new session navigation precedes Machine preparation completion", () => {
+test("new session navigation precedes Machine preparation completion", () => {
   const created = appSource.indexOf("onCreated={(session, folder): void => {");
   const active = appSource.indexOf("setActiveId(session.id);", created);
   const settle = appSource.indexOf(
@@ -93,7 +95,7 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
   );
 });
 
-Deno.test("new session stays selected before the sessions broadcast arrives", () => {
+test("new session stays selected before the sessions broadcast arrives", () => {
   const existing: SessionMeta = {
     id: "existing",
     provider: "codex",
@@ -116,7 +118,7 @@ Deno.test("new session stays selected before the sessions broadcast arrives", ()
   );
 });
 
-Deno.test("new sessions respect Machine workspace ordering", () => {
+test("new sessions respect Machine workspace ordering", () => {
   const choices = [
     {
       value: "cowboy",
@@ -129,7 +131,7 @@ Deno.test("new sessions respect Machine workspace ordering", () => {
   assertEquals(defaultNewSessionWorkspace(choices)?.value, "cowboy");
 });
 
-Deno.test("new session workspace falls back to the first available choice", () => {
+test("new session workspace falls back to the first available choice", () => {
   const choices = [
     { value: "remote-root", label: "Remote", help: "/srv/work" },
     { value: "other", label: "Other", help: "/srv/other" },

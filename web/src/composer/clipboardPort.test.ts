@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   createClipboardPort,
   hasNativeClipboardBridge,
   webClipboardPort,
 } from "./clipboardPort.ts";
 
-Deno.test("clipboard port picks native only when a pasteboard bridge exists", () => {
+test("clipboard port picks native only when a pasteboard bridge exists", () => {
   assertEquals(hasNativeClipboardBridge({}), false);
   assertEquals(
     hasNativeClipboardBridge({ __cowboyReadClipboard: () => Promise.resolve("") }),
@@ -14,7 +15,7 @@ Deno.test("clipboard port picks native only when a pasteboard bridge exists", ()
   assertEquals(createClipboardPort().surface, "web");
 });
 
-Deno.test("web clipboard port offers Paste without probing the pasteboard", async () => {
+test("web clipboard port offers Paste without probing the pasteboard", async () => {
   const previous = globalThis.navigator;
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,

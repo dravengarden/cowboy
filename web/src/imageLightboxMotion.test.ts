@@ -1,4 +1,5 @@
-import { assert, assertAlmostEquals, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
 import {
   constrainPanAxis,
   FLICK_MIN_VELOCITY,
@@ -9,7 +10,7 @@ import {
   trackPanVelocity,
 } from "../../components/app-shell/image-lightbox-motion.ts";
 
-Deno.test("an axis with no overflow is rigid, not elastic", () => {
+test("an axis with no overflow is rigid, not elastic", () => {
   // A wide, short diagram cannot move vertically. Letting it drift at the
   // elastic rate made every horizontal pan wander off-axis and spring back,
   // which is exactly the surface losing the finger.
@@ -18,7 +19,7 @@ Deno.test("an axis with no overflow is rigid, not elastic", () => {
   assertEquals(constrainPanAxis(120, 0, false), 0);
 });
 
-Deno.test("a held overshoot resists, a settled one clamps", () => {
+test("a held overshoot resists, a settled one clamps", () => {
   assertEquals(constrainPanAxis(40, 100, true), 40);
   assertEquals(
     constrainPanAxis(150, 100, true),
@@ -32,7 +33,7 @@ Deno.test("a held overshoot resists, a settled one clamps", () => {
   assertEquals(constrainPanAxis(-150, 100, false), -100);
 });
 
-Deno.test("velocity smooths across samples instead of trusting one", () => {
+test("velocity smooths across samples instead of trusting one", () => {
   // One jittery sample must not decide a throw; a sustained drag converges on
   // the speed the finger is actually holding.
   assertAlmostEquals(trackPanVelocity(0, 16, 16), 0.35);
@@ -45,7 +46,7 @@ Deno.test("velocity smooths across samples instead of trusting one", () => {
   assert(Number.isFinite(trackPanVelocity(0, 20, 0)));
 });
 
-Deno.test("a lift without a throw carries no coast", () => {
+test("a lift without a throw carries no coast", () => {
   const still = projectFlick(
     { x: 0, y: 0 },
     { x: FLICK_MIN_VELOCITY / 2, y: 0 },
@@ -57,7 +58,7 @@ Deno.test("a lift without a throw carries no coast", () => {
   assertEquals(pinned, null);
 });
 
-Deno.test("a flick coasts forward and stops at the bound", () => {
+test("a flick coasts forward and stops at the bound", () => {
   const free = projectFlick({ x: 0, y: 0 }, { x: -1.5, y: 0 }, { x: 4000, y: 0 });
   assert(free !== null);
   assert(free.x < -300, `expected a real coast, got ${free.x}`);
@@ -71,7 +72,7 @@ Deno.test("a flick coasts forward and stops at the bound", () => {
   assert(clipped.durationMs < free.durationMs);
 });
 
-Deno.test("the coast leaves at the speed the finger did", () => {
+test("the coast leaves at the speed the finger did", () => {
   // cubic-bezier(0.32, 0.72, 0, 1) starts at 2.25x its mean speed, so matching
   // distance / (speed * 0.45) to the duration hands the compositor a curve that
   // begins exactly where the drag stopped. Without that continuity the figure
@@ -82,7 +83,7 @@ Deno.test("the coast leaves at the speed the finger did", () => {
   assertAlmostEquals(meanSpeed / 0.5, 0.45, 0.02);
 });
 
-Deno.test("an unreachable fit-size swipe resists instead of sliding away", () => {
+test("an unreachable fit-size swipe resists instead of sliding away", () => {
   assert(NO_DESTINATION_RESISTANCE > 0 && NO_DESTINATION_RESISTANCE < 1);
   assert(SWIPE_COMMIT_VELOCITY > FLICK_MIN_VELOCITY);
 });

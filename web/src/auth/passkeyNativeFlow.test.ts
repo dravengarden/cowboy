@@ -1,11 +1,12 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import { authApi } from "./authApi.ts";
 import { registerPasskey, verifyPasskey } from "./passkeyFlow.ts";
 import { currentPasskeyTransports } from "./passkeyTransport.ts";
 import { NativePasskeyBridgeError } from "../coreNativeBridge.ts";
 
 for (const action of ["register", "assert"] as const) {
-  Deno.test(`${action} never starts external fallback after an ambiguous native effect`, async () => {
+  test(`${action} never starts external fallback after an ambiguous native effect`, async () => {
     const priorApi = { ...authApi };
     let nativeCalls = 0;
     let externalStarts = 0;

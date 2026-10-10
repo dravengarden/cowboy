@@ -1,11 +1,16 @@
 /** Invoked by the loopback-only just recipe, with a pinned browser executable.
  * No normal browser profile, auth, environment or product endpoint is used.
  */
-const browser = Deno.args[0];
+import { type FixtureServer, serveFixture } from "./lib/http-server.ts";
+import { type ChildProcess, Command } from "./lib/command.ts";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+const browser = process.argv.slice(2)[0];
 const chromium = browser?.endsWith("/bin/chromium");
 // Closed fixture selector; this runner never opens the deployed application.
-const suite = Deno.args[1] ?? "idb";
-const themeMode = Deno.args[2] ?? "light";
+const suite = process.argv.slice(2)[1] ?? "idb";
+const themeMode = process.argv.slice(2)[2] ?? "light";
 if (themeMode !== "light" && themeMode !== "dark") {
   throw new Error("unknown theme mode");
 }
@@ -85,25 +90,25 @@ if (
     "pass an absolute pinned /nix/store browser /bin/firefox or /bin/chromium path",
   );
 }
-const temporary = await Deno.makeTempDir({ prefix: "cowboy-idb-browser-" });
-let child: Deno.ChildProcess | undefined;
-let server: Deno.HttpServer<Deno.NetAddr> | undefined;
+const temporary = await mkdtemp(join(tmpdir(), "cowboy-idb-browser-"));
+let child: ChildProcess | undefined;
+let server: FixtureServer | undefined;
 let deadline: ReturnType<typeof setTimeout> | undefined;
 try {
   const bundle = `${temporary}/fixture.js`;
-  const built = await new Deno.Command("node", {
+  const built = await new Command("node", {
     args: ["tools/idb-browser-bundle.mjs", temporary, suite],
     stdout: "null",
     stderr: "inherit",
   }).output();
   if (!built.success) throw new Error("browser fixture bundle failed");
-  const script = await Deno.readTextFile(bundle);
+  const script = await readFile(bundle, "utf8");
   // The Draft suite installs the example editor plugin from a file packed by
   // the same tool authors use, so packaging is part of the acceptance.
   let editorPlugin: string | null = null;
   if (suite === "draft-documents") {
     const packed = `${temporary}/text-tools.cowboy-plugin`;
-    const pack = await new Deno.Command(Deno.execPath(), {
+    const pack = await new Command(process.execPath, {
       args: [
         "run",
         "--allow-read",
@@ -116,7 +121,7 @@ try {
       stderr: "inherit",
     }).output();
     if (!pack.success) throw new Error("editor plugin pack failed");
-    editorPlugin = await Deno.readTextFile(packed);
+    editorPlugin = await readFile(packed, "utf8");
   }
   const digest = Array.from(
     new Uint8Array(
@@ -125,12 +130,11 @@ try {
   )
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
   const profile = `${temporary}/profile`;
-  await Deno.mkdir(profile);
+  await mkdir(profile);
   const token = crypto.randomUUID();
   const report = Promise.withResolvers<unknown>();
-  server = Deno.serve(
-    { hostname: "127.0.0.1", port: 0, onListen: () => {} },
-    async (request) => {
+  server = serveFixture(
+    async ({ request }) => {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/fixture.js") {
         return new Response(script, {
@@ -198,7 +202,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     XDG_DATA_HOME: `${temporary}/data`,
     XDG_RUNTIME_DIR: temporary,
   };
-  const version = await new Deno.Command(browser, {
+  const version = await new Command(browser, {
     args: ["--version"],
     clearEnv: true,
     env: environment,
@@ -206,7 +210,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     stderr: "null",
   }).output();
   if (!version.success) throw new Error("browser version probe failed");
-  child = new Deno.Command(browser, {
+  child = new Command(browser, {
     args: chromium
       ? [
         "--headless",
@@ -221,7 +225,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         "--disable-component-update",
         "--remote-debugging-port=0",
         `--user-data-dir=${profile}`,
-        `http://127.0.0.1:${server.addr.port}/${token}`,
+        `http://127.0.0.1:${server.port}/${token}`,
       ]
       : [
         "--headless",
@@ -229,7 +233,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         "--new-instance",
         "--profile",
         profile,
-        `http://127.0.0.1:${server.addr.port}/${token}`,
+        `http://127.0.0.1:${server.port}/${token}`,
       ],
     clearEnv: true,
     env: environment,
@@ -313,7 +317,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   if (chromium && child) {
     try {
       const [port, path] =
-        (await Deno.readTextFile(`${temporary}/profile/DevToolsActivePort`))
+        (await readFile(`${temporary}/profile/DevToolsActivePort`, "utf8"))
           .trim().split("\n");
       const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
       await new Promise<void>((resolve) => {
@@ -338,5 +342,5 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   }
   await server?.shutdown();
   // Only the exact directory exclusively created by this runner.
-  await Deno.remove(temporary, { recursive: true });
+  await rm(temporary, { recursive: true });
 }

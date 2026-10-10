@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { ConfigOption } from "./protocol.ts";
 import { configOptionsMatchChanges } from "./configOptionMutation.ts";
 
@@ -14,7 +15,7 @@ const options: ConfigOption[] = [{
   options: [],
 }];
 
-Deno.test("config acknowledgement requires every requested value", () => {
+test("config acknowledgement requires every requested value", () => {
   assertEquals(
     configOptionsMatchChanges(options, [
       { configId: "model", value: "gpt-5.6-sol" },

@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   createProductSyncDatabase,
   decodeSyncDataset,
@@ -34,7 +35,7 @@ function snapshot(id: string) {
   };
 }
 
-Deno.test("dataset codec rejects claims for another principal/schema and freezes exact data", () => {
+test("dataset codec rejects claims for another principal/schema and freezes exact data", () => {
   const input = descriptor();
   const result = decodeSyncDataset(input, "user-a");
   assert(Object.isFrozen(result));
@@ -58,7 +59,7 @@ Deno.test("dataset codec rejects claims for another principal/schema and freezes
   assertThrows(() => decodeSyncDataset(input, "user-a\0"));
 });
 
-Deno.test("stable user identity supersedes account labels and never falls back after adoption", () => {
+test("stable user identity supersedes account labels and never falls back after adoption", () => {
   const current = { account: "same-label", user_id: "user-a" };
   assert(
     sameProductPrincipal(current, { account: "renamed", user_id: "user-a" }),
@@ -74,7 +75,7 @@ Deno.test("stable user identity supersedes account labels and never falls back a
   assert(sameProductPrincipal({ account: "legacy" }, { account: "legacy" }));
 });
 
-Deno.test("dataset owners isolate Service/user/session/state while retaining unowned legacy bytes", async () => {
+test("dataset owners isolate Service/user/session/state while retaining unowned legacy bytes", async () => {
   const factory = new FakeIndexedDb();
   const legacy = snapshot("unowned-do-not-send");
   factory.data.set("cowboy:sync:queue:session-a", legacy);
@@ -122,7 +123,7 @@ Deno.test("dataset owners isolate Service/user/session/state while retaining uno
   assertEquals(factory.data.size, 2);
 });
 
-Deno.test("dataset handles require exact load adoption and do not revive after principal ABA", async () => {
+test("dataset handles require exact load adoption and do not revive after principal ABA", async () => {
   const factory = new FakeIndexedDb();
   let principal = "user-a";
   const owner = createProductSyncDatabase(
@@ -153,7 +154,7 @@ Deno.test("dataset handles require exact load adoption and do not revive after p
   await owner.dispose();
 });
 
-Deno.test("discovery is coalesced and can retry only before owning a dataset", async () => {
+test("discovery is coalesced and can retry only before owning a dataset", async () => {
   const factory = new FakeIndexedDb();
   let calls = 0;
   const owner = createProductSyncDatabase(() => "user-a", async () => {
@@ -171,7 +172,7 @@ Deno.test("discovery is coalesced and can retry only before owning a dataset", a
   await owner.dispose();
 });
 
-Deno.test("reconnect verifies the original Service and cannot follow a replaced dataset or ABA", async () => {
+test("reconnect verifies the original Service and cannot follow a replaced dataset or ABA", async () => {
   const factory = new FakeIndexedDb();
   let remote = descriptor();
   let unavailable = false;
@@ -193,7 +194,7 @@ Deno.test("reconnect verifies the original Service and cannot follow a replaced 
   await owner.dispose();
 });
 
-Deno.test("a remembered dataset opens local data without discovery and is forgotten when replaced", async () => {
+test("a remembered dataset opens local data without discovery and is forgotten when replaced", async () => {
   const data = new Map<string, string>();
   const datasetCache = localStorageDatasetCache(() => ({
     getItem: (key) => data.get(key) ?? null,
@@ -235,7 +236,7 @@ Deno.test("a remembered dataset opens local data without discovery and is forgot
   assertEquals(datasetCache.read("user-a"), undefined);
 });
 
-Deno.test("the folders service scope is a closed key beside title and order", async () => {
+test("the folders service scope is a closed key beside title and order", async () => {
   const factory = new FakeIndexedDb();
   const owner = createProductSyncDatabase(
     () => "user-a",
@@ -256,7 +257,7 @@ Deno.test("the folders service scope is a closed key beside title and order", as
   await owner.dispose();
 });
 
-Deno.test("owned dataset inspection fails closed and runtime scopes cannot create arbitrary keys", async () => {
+test("owned dataset inspection fails closed and runtime scopes cannot create arbitrary keys", async () => {
   const owner = createProductSyncDatabase(
     () => "user-a",
     async () => descriptor(),
@@ -284,7 +285,7 @@ Deno.test("owned dataset inspection fails closed and runtime scopes cannot creat
   await owner.dispose();
 });
 
-Deno.test("closed or changed discovery cannot create a late database connection", async () => {
+test("closed or changed discovery cannot create a late database connection", async () => {
   for (const change of ["dispose", "principal"] as const) {
     const factory = new FakeIndexedDb();
     let release!: (value: SyncDataset) => void;
@@ -309,7 +310,7 @@ Deno.test("closed or changed discovery cannot create a late database connection"
   }
 });
 
-Deno.test("legacy recovery is bounded read-only export, never importing into an owned dataset", async () => {
+test("legacy recovery is bounded read-only export, never importing into an owned dataset", async () => {
   const factory = new FakeIndexedDb();
   const key = "cowboy:sync:queue:session-old";
   const value = snapshot("old-pending");
@@ -344,7 +345,7 @@ Deno.test("legacy recovery is bounded read-only export, never importing into an 
   await owner.dispose();
 });
 
-Deno.test("dataset discovery checks HTTP status, bounded body, encoding and exact principal", async () => {
+test("dataset discovery checks HTTP status, bounded body, encoding and exact principal", async () => {
   const original = globalThis.fetch;
   let response = new Response(JSON.stringify(descriptor()), {
     headers: { "content-type": "application/json" },
@@ -387,7 +388,7 @@ Deno.test("dataset discovery checks HTTP status, bounded body, encoding and exac
   }
 });
 
-Deno.test("a retained record is discarded only by exact key, never an owned one", async () => {
+test("a retained record is discarded only by exact key, never an owned one", async () => {
   const factory = new FakeIndexedDb();
   factory.data.set("cowboy:sync:queue:session-a", { pending: ["draft"] });
   factory.data.set("cowboy:sync:service:title", { titles: {} });
@@ -419,7 +420,7 @@ Deno.test("a retained record is discarded only by exact key, never an owned one"
   await db.dispose();
 });
 
-Deno.test("discarding a retained record does not resurrect it for a later reader", async () => {
+test("discarding a retained record does not resurrect it for a later reader", async () => {
   const factory = new FakeIndexedDb();
   factory.data.set("cowboy:sync:queue:session-a", { pending: ["draft"] });
   const db = createProductSyncDatabase(

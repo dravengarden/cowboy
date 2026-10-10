@@ -37,7 +37,7 @@ case "$native_platform" in
 esac
 test -z "$(git status --porcelain)" || { echo "Native builds require clean, committed source" >&2; exit 1; }
 native_revision="$(git rev-parse HEAD)"
-deno run --allow-read tools/check-native-shell.ts
+bun tools/check-native-shell.ts
 native_rust="$(python3 -c 'import json; print(json.load(open("apps/native-shell/toolchain.json"))["rust"])')"
 native_cli="$(python3 -c 'import json; print(json.load(open("apps/native-shell/toolchain.json"))["tauriCli"])')"
 case "$native_platform" in android*)

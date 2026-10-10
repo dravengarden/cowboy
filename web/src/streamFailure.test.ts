@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { derive, linkTimeline } from "./derive";
 import { prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import type { AcpUpdate, Envelope } from "./protocol";
@@ -41,7 +42,7 @@ const fixture: Envelope[] = [
   text(4, message),
 ];
 
-Deno.test("partial stream failure keeps completed work and one actionable diagnostic", () => {
+test("partial stream failure keeps completed work and one actionable diagnostic", () => {
   const timeline = [...fixture, end(5, `error: ${detail}`), {
     session_id: "stream-fixture",
     seq: 6,
@@ -74,7 +75,7 @@ Deno.test("partial stream failure keeps completed work and one actionable diagno
   assertEquals(unfinished?.kind === "tool" && unfinished.status, "pending");
 });
 
-Deno.test("legacy RPC error plus crashed lifecycle folds into the same failure", () => {
+test("legacy RPC error plus crashed lifecycle folds into the same failure", () => {
   const items = derive([...fixture, end(5, `error: ${detail}`), {
     session_id: "stream-fixture",
     seq: 6,
@@ -88,7 +89,7 @@ Deno.test("legacy RPC error plus crashed lifecycle folds into the same failure",
   assertEquals(error?.kind === "lifecycle" && error.turnFailure, true);
 });
 
-Deno.test("error coalescing preserves earlier prose and requires a real structured failure", () => {
+test("error coalescing preserves earlier prose and requires a real structured failure", () => {
   const items = derive([
     text(1, "Saved progress. ", "answer"),
     text(2, message),
@@ -117,7 +118,7 @@ Deno.test("error coalescing preserves earlier prose and requires a real structur
   assertEquals(unstructured.length, 2);
 });
 
-Deno.test("cancel and process loss never infer tool success; a late result remains authoritative", () => {
+test("cancel and process loss never infer tool success; a late result remains authoritative", () => {
   for (
     const terminal of [end(5, "Cancelled"), {
       session_id: "stream-fixture",
@@ -146,7 +147,7 @@ Deno.test("cancel and process loss never infer tool success; a late result remai
   }
 });
 
-Deno.test("error metadata remains diagnostic data and malformed metadata stays visible", () => {
+test("error metadata remains diagnostic data and malformed metadata stays visible", () => {
   assertEquals(rpcErrorKind(detail), "server_error");
   assertEquals(rpcErrorKind(`${message}: {"errorKind": false}`), null);
   assertEquals(rpcErrorKind(`${message}: {"errorKind": "server_error"`), null);
@@ -156,7 +157,7 @@ Deno.test("error metadata remains diagnostic data and malformed metadata stays v
   );
 });
 
-Deno.test("bare transport errors cannot settle a pending tool as successful", () => {
+test("bare transport errors cannot settle a pending tool as successful", () => {
   for (const stopReason of ["Error", "error:"]) {
     const timeline: Envelope[] = [
       ...fixture.slice(0, 3),
@@ -180,7 +181,7 @@ Deno.test("bare transport errors cannot settle a pending tool as successful", ()
   }
 });
 
-Deno.test("model refusal interrupts pending tools without offering transport continuation", () => {
+test("model refusal interrupts pending tools without offering transport continuation", () => {
   for (const reason of ["Refusal", "refusal"]) {
     const diagnostic = "API Error: safeguards flagged this message. Details: [reasoning_extraction]";
     const items = derive([

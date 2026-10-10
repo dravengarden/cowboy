@@ -1,19 +1,21 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const textareaSource = await Deno.readTextFile(
-  new URL("./ComposerTextarea.tsx", import.meta.url),
+const textareaSource = await readFile(
+  new URL("./ComposerTextarea.tsx", import.meta.url), "utf8",
 );
-const clipboardSource = await Deno.readTextFile(
-  new URL("./clipboard.ts", import.meta.url),
+const clipboardSource = await readFile(
+  new URL("./clipboard.ts", import.meta.url), "utf8",
 );
-const nativeShellSource = await Deno.readTextFile(
-  new URL("./nativeShell.ts", import.meta.url),
+const nativeShellSource = await readFile(
+  new URL("./nativeShell.ts", import.meta.url), "utf8",
 );
-const formatActionsSource = await Deno.readTextFile(
-  new URL("./MobileComposerFormatActions.tsx", import.meta.url),
+const formatActionsSource = await readFile(
+  new URL("./MobileComposerFormatActions.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("mobile paste stays on UIKit's native edit-menu path", () => {
+test("mobile paste stays on UIKit's native edit-menu path", () => {
   assertEquals(textareaSource.includes("onPaste={(e)"), true);
   assertEquals(textareaSource.includes('addEventListener("touchstart"'), false);
   assertEquals(textareaSource.includes("navigator.clipboard"), false);
@@ -22,7 +24,7 @@ Deno.test("mobile paste stays on UIKit's native edit-menu path", () => {
   assertEquals(clipboardSource.includes("readComposerClipboard"), false);
 });
 
-Deno.test("explicit dock paste uses the platform clipboard port", () => {
+test("explicit dock paste uses the platform clipboard port", () => {
   assertEquals(
     nativeShellSource.includes("__cowboyClipboardImageStatus"),
     true,

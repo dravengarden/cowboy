@@ -1,4 +1,6 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import type { Envelope } from "../protocol";
 import type { ExploreSessionState } from "./contextClear";
 import {
@@ -53,7 +55,7 @@ function state(patch: Partial<ExploreSessionState> = {}): ExploreSessionState {
   };
 }
 
-Deno.test("a local send starts a separate question page without any server event", () => {
+test("a local send starts a separate question page without any server event", () => {
   const before = projectQuestionPages(history, []);
   const after = projectQuestionPages(history, [pending]);
   assertEquals(before.pages.length, 1);
@@ -66,7 +68,7 @@ Deno.test("a local send starts a separate question page without any server event
   assertEquals(history.length, 3);
 });
 
-Deno.test("a 51-page stale index immediately shows 52/52 and survives confirmation", () => {
+test("a 51-page stale index immediately shows 52/52 and survives confirmation", () => {
   const index = [{ id: "10", title: "Previous question", ordinal: 51 }];
   const local = projectQuestionPages(history, [pending]);
   const directory = mergeQuestionPageDirectory(index, local.pages, 51);
@@ -89,7 +91,7 @@ Deno.test("a 51-page stale index immediately shows 52/52 and survives confirmati
   assertEquals(confirmedDirectory.at(-1)?.id, "20");
 });
 
-Deno.test("an echo and its pending outbox twin produce exactly one page", () => {
+test("an echo and its pending outbox twin produce exactly one page", () => {
   const projected = projectQuestionPages([
     ...history,
     prompt(20, pending.text, pending.cmid),
@@ -105,7 +107,7 @@ Deno.test("an echo and its pending outbox twin produce exactly one page", () => 
   assertEquals(selected.pageLoadingId, null);
 });
 
-Deno.test("identical question text is never used to reconcile different sends", () => {
+test("identical question text is never used to reconcile different sends", () => {
   const other = { ...pending, id: "opt-local-2", cmid: "local-2" };
   const projected = projectQuestionPages([
     ...history,
@@ -118,7 +120,7 @@ Deno.test("identical question text is never used to reconcile different sends", 
   ]);
 });
 
-Deno.test("delivery phases retain one local page and do not repeat the navigation intent", () => {
+test("delivery phases retain one local page and do not repeat the navigation intent", () => {
   for (const status of ["committing", "pending", "failed"]) {
     const message = { ...pending, status };
     const projected = projectQuestionPages(history, [message]);
@@ -130,7 +132,7 @@ Deno.test("delivery phases retain one local page and do not repeat the navigatio
   }
 });
 
-Deno.test("failure recovery or queue rerouting removes only the vanished local selection", () => {
+test("failure recovery or queue rerouting removes only the vanished local selection", () => {
   const next = reconcileOptimisticPageState(
     state({
       pageId: localId,
@@ -145,7 +147,7 @@ Deno.test("failure recovery or queue rerouting removes only the vanished local s
   assertEquals(projectQuestionPages(history, []).pages.length, 1);
 });
 
-Deno.test("confirmation does not steal a reader's older-page selection", () => {
+test("confirmation does not steal a reader's older-page selection", () => {
   const previous = state({ pageId: "10" });
   assertStrictEquals(
     reconcileOptimisticPageState(
@@ -157,7 +159,7 @@ Deno.test("confirmation does not steal a reader's older-page selection", () => {
   );
 });
 
-Deno.test("an unconfirmed local page stays selected across a retry", () => {
+test("an unconfirmed local page stays selected across a retry", () => {
   const previous = state({ pageId: localId });
   assertStrictEquals(
     reconcileOptimisticPageState(previous, new Map(), new Set(["10", localId])),
@@ -165,7 +167,7 @@ Deno.test("an unconfirmed local page stays selected across a retry", () => {
   );
 });
 
-Deno.test("continuation grouping migrates from the local cmid to the durable page", () => {
+test("continuation grouping migrates from the local cmid to the durable page", () => {
   const previous = state({ pageParents: { [localId]: "10" } });
   const projected = projectQuestionPages([
     ...history,
@@ -188,7 +190,7 @@ Deno.test("continuation grouping migrates from the local cmid to the durable pag
   );
 });
 
-Deno.test("a pending continuation retains its target and known IDs when an echo lands", () => {
+test("a pending continuation retains its target and known IDs when an echo lands", () => {
   const previous = state({
     pendingFollowUp: { targetPageId: localId, knownPageIds: ["10", localId] },
   });
@@ -203,7 +205,7 @@ Deno.test("a pending continuation retains its target and known IDs when an echo 
   });
 });
 
-Deno.test("out-of-order confirmation cannot replace a newer local selection", () => {
+test("out-of-order confirmation cannot replace a newer local selection", () => {
   const later = { ...pending, cmid: "local-2" };
   const laterId = optimisticQuestionKey(later);
   const projected = projectQuestionPages([
@@ -218,7 +220,7 @@ Deno.test("out-of-order confirmation cannot replace a newer local selection", ()
   assertEquals(next.pageId, laterId);
 });
 
-Deno.test("attachment-only sends create a page and compaction commands do not", () => {
+test("attachment-only sends create a page and compaction commands do not", () => {
   const attachment = projectQuestionPages(history, [{ ...pending, text: "" }]);
   assertEquals(attachment.pages.length, 2);
   assertEquals(attachment.pages.at(-1)?.title, "Page 2");
@@ -236,12 +238,12 @@ Deno.test("attachment-only sends create a page and compaction commands do not", 
   }
 });
 
-Deno.test("page roots and delivery bubbles use one shared optimistic key", async () => {
-  const transcript = await Deno.readTextFile(
-    new URL("../Transcript.tsx", import.meta.url),
+test("page roots and delivery bubbles use one shared optimistic key", async () => {
+  const transcript = await readFile(
+    new URL("../Transcript.tsx", import.meta.url), "utf8",
   );
-  const store = await Deno.readTextFile(
-    new URL("../store.ts", import.meta.url),
+  const store = await readFile(
+    new URL("../store.ts", import.meta.url), "utf8",
   );
   assertEquals(
     transcript.includes("visibleItemKeys.has(optimisticQuestionKey(message))"),
@@ -265,9 +267,9 @@ Deno.test("page roots and delivery bubbles use one shared optimistic key", async
   );
 });
 
-Deno.test("discarding a durable chat send also removes its local page overlay", async () => {
-  const store = await Deno.readTextFile(
-    new URL("../store.ts", import.meta.url),
+test("discarding a durable chat send also removes its local page overlay", async () => {
+  const store = await readFile(
+    new URL("../store.ts", import.meta.url), "utf8",
   );
   const start = store.indexOf("export async function discardMessage(");
   const end = store.indexOf("function optimisticMessage(", start);

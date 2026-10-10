@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fetchAuthStatus } from "../auth/authApi.ts";
 import {
   loadProviderCatalog,
@@ -57,7 +58,7 @@ function clean(): void {
   resetProviderCatalog();
 }
 
-Deno.test("the Web root explicitly owns and releases its single session-end listener", () => {
+test("the Web root explicitly owns and releases its single session-end listener", () => {
   const target = new EventTarget();
   let resets = 0;
   const dispose = ownPluginHostLifecycle(target, () => resets++);
@@ -70,7 +71,7 @@ Deno.test("the Web root explicitly owns and releases its single session-end list
   assertEquals(resets, 2);
 });
 
-Deno.test("Catalog validates the envelope before changing any presentation projection", async () => {
+test("Catalog validates the envelope before changing any presentation projection", async () => {
   const previous = globalThis.fetch;
   clean();
   try {
@@ -106,7 +107,7 @@ Deno.test("Catalog validates the envelope before changing any presentation proje
   }
 });
 
-Deno.test("session end clears all Web observations; a late Catalog response cannot restore them", async () => {
+test("session end clears all Web observations; a late Catalog response cannot restore them", async () => {
   const previous = globalThis.fetch;
   const target = new EventTarget();
   const dispose = ownPluginHostLifecycle(target);
@@ -142,7 +143,7 @@ Deno.test("session end clears all Web observations; a late Catalog response cann
   }
 });
 
-Deno.test("an old Catalog finally cannot clear a new session's pending read", async () => {
+test("an old Catalog finally cannot clear a new session's pending read", async () => {
   const previous = globalThis.fetch;
   clean();
   const old = Promise.withResolvers<Response>();
@@ -174,7 +175,7 @@ Deno.test("an old Catalog finally cannot clear a new session's pending read", as
   }
 });
 
-Deno.test("Catalog subscriptions own their registrations even with the same callback", async () => {
+test("Catalog subscriptions own their registrations even with the same callback", async () => {
   const previous = globalThis.fetch;
   clean();
   let calls = 0;
@@ -196,7 +197,7 @@ Deno.test("Catalog subscriptions own their registrations even with the same call
   }
 });
 
-Deno.test("auth observations reject old responses and do not resurrect hosts across session end", async () => {
+test("auth observations reject old responses and do not resurrect hosts across session end", async () => {
   const previous = globalThis.fetch;
   clean();
   const old = Promise.withResolvers<Response>();
@@ -236,7 +237,7 @@ Deno.test("auth observations reject old responses and do not resurrect hosts acr
   }
 });
 
-Deno.test("invalid auth status never installs its host rows; explicit empty inventory removes old rows", async () => {
+test("invalid auth status never installs its host rows; explicit empty inventory removes old rows", async () => {
   const previous = globalThis.fetch;
   clean();
   try {

@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { resolvePasskeyTransports } from "./passkeyTransport";
 
-Deno.test("PWA uses the origin-bound browser WebAuthn ceremony", () => {
+test("PWA uses the origin-bound browser WebAuthn ceremony", () => {
   assertEquals(resolvePasskeyTransports({
     embeddedNativeShell: false,
     nativeBridgeAvailable: false,
@@ -10,7 +11,7 @@ Deno.test("PWA uses the origin-bound browser WebAuthn ceremony", () => {
   }), ["browser"]);
 });
 
-Deno.test("SideStore shell uses native Passkeys only when signed capability exists", () => {
+test("SideStore shell uses native Passkeys only when signed capability exists", () => {
   assertEquals(resolvePasskeyTransports({
     embeddedNativeShell: true,
     nativeBridgeAvailable: true,
@@ -25,7 +26,7 @@ Deno.test("SideStore shell uses native Passkeys only when signed capability exis
   }), ["external"]);
 });
 
-Deno.test("macOS shell tries WebAuthn before its system-browser fallback", () => {
+test("macOS shell tries WebAuthn before its system-browser fallback", () => {
   assertEquals(resolvePasskeyTransports({
     embeddedNativeShell: false,
     nativeBridgeAvailable: false,
@@ -34,7 +35,7 @@ Deno.test("macOS shell tries WebAuthn before its system-browser fallback", () =>
   }), ["browser", "external"]);
 });
 
-Deno.test("a broken native shell does not claim Passkey support", () => {
+test("a broken native shell does not claim Passkey support", () => {
   assertEquals(resolvePasskeyTransports({
     embeddedNativeShell: true,
     nativeBridgeAvailable: false,

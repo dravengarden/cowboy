@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { resolveImmutableReceipt } from "./plugin-publication-receipt.ts";
 import {
   copyImmutable,
@@ -29,9 +30,9 @@ interface PluginRelease {
   }>;
 }
 
-const pluginId = Deno.args[0] ?? "";
-const catalogRoot = Deno.args[1] ?? "";
-const publicKeyPath = Deno.args[2] ?? "";
+const pluginId = process.argv.slice(2)[0] ?? "";
+const catalogRoot = process.argv.slice(2)[1] ?? "";
+const publicKeyPath = process.argv.slice(2)[2] ?? "";
 if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pluginId)) {
   throw new Error("Plugin id must use lowercase kebab-case");
 }
@@ -43,7 +44,7 @@ const sourceRoot = `dist/plugins/${pluginId}`;
 const packagePath = `${sourceRoot}/${pluginId}.cowboy-plugin`;
 const releasePath = `${sourceRoot}/${pluginId}.release.json`;
 const release = JSON.parse(
-  await Deno.readTextFile(releasePath),
+  await readFile(releasePath, "utf8"),
 ) as PluginRelease;
 if (
   release.plugin_id !== pluginId ||
@@ -80,7 +81,7 @@ if (release.host_bundle_digest !== undefined) {
   throw new Error("Plugin host bundle is not bound by the signed release");
 }
 
-const publicKey = (await Deno.readTextFile(publicKeyPath)).trim();
+const publicKey = (await readFile(publicKeyPath, "utf8")).trim();
 if (
   !publicKey.startsWith("ssh-ed25519 ") || publicKey.includes("PRIVATE KEY")
 ) {
@@ -155,7 +156,7 @@ const receiptIdentity = {
 };
 const receiptPath = `${catalogRoot}/receipts/${catalogStem}.json`;
 const existingReceipt = await exists(receiptPath)
-  ? await Deno.readTextFile(receiptPath)
+  ? await readFile(receiptPath, "utf8")
   : undefined;
 const { receipt, text: receiptText } = resolveImmutableReceipt(
   receiptIdentity,

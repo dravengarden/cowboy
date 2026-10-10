@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   adminPasswordAcceptable,
   assessAdminPassword,
   looksLikePasswordManagerSecret,
 } from "./passwordStrength.ts";
 
-Deno.test("123123 is immediately too weak", () => {
+test("123123 is immediately too weak", () => {
   const assessed = assessAdminPassword("123123", "draven");
   assertEquals(assessed.level, "weak");
   assertEquals(assessed.label, "Too weak");
@@ -16,7 +17,7 @@ Deno.test("123123 is immediately too weak", () => {
   assertEquals(assessed.checks.digit, true);
 });
 
-Deno.test("Chrome and Apple generated secrets are accepted", () => {
+test("Chrome and Apple generated secrets are accepted", () => {
   assertEquals(looksLikePasswordManagerSecret("xidneh-bintun-zygfew"), true);
   assertEquals(adminPasswordAcceptable("xidneh-bintun-zygfew", "draven"), true);
   assertEquals(adminPasswordAcceptable("kL9mNp2qRs4tUv7", "draven"), true);

@@ -1,4 +1,6 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   assertCoreNativePasskey,
   createCoreNativePasskey,
@@ -69,7 +71,7 @@ async function withPort(
   }
 }
 
-Deno.test("core native Passkeys accept exactly the installed v1 ABI", async () => {
+test("core native Passkeys accept exactly the installed v1 ABI", async () => {
   let calls = 0;
   await withPort(async () => {
     calls += 1;
@@ -92,7 +94,7 @@ Deno.test("core native Passkeys accept exactly the installed v1 ABI", async () =
   });
 });
 
-Deno.test("core native registration and assertion have distinct owned result shapes", async () => {
+test("core native registration and assertion have distinct owned result shapes", async () => {
   const calls: unknown[] = [];
   await withPort(async (request) => {
     calls.push(request);
@@ -110,7 +112,7 @@ Deno.test("core native registration and assertion have distinct owned result sha
   });
 });
 
-Deno.test("core native decoding rejects malformed input before dispatch without coercion", async () => {
+test("core native decoding rejects malformed input before dispatch without coercion", async () => {
   let calls = 0;
   await withPort(async () => {
     calls += 1;
@@ -146,7 +148,7 @@ Deno.test("core native decoding rejects malformed input before dispatch without 
   });
 });
 
-Deno.test("core native replies cannot mix success with a fallback error or smuggle fields", async () => {
+test("core native replies cannot mix success with a fallback error or smuggle fields", async () => {
   const malformed: unknown[] = [
     null,
     [],
@@ -209,7 +211,7 @@ Deno.test("core native replies cannot mix success with a fallback error or smugg
   }
 });
 
-Deno.test("native assertion cannot accept registration fields or malformed user handles", async () => {
+test("native assertion cannot accept registration fields or malformed user handles", async () => {
   const base = success("assert").credential as Record<string, unknown>;
   const response = base.response as Record<string, unknown>;
   for (
@@ -250,7 +252,7 @@ Deno.test("native assertion cannot accept registration fields or malformed user 
   });
 });
 
-Deno.test("only explicit native unavailability may fall back and error text is not reflected", async () => {
+test("only explicit native unavailability may fall back and error text is not reflected", async () => {
   for (
     const code of [
       "not_configured",
@@ -281,7 +283,7 @@ Deno.test("only explicit native unavailability may fall back and error text is n
   }
 });
 
-Deno.test("a lost native result never authorizes a second ceremony automatically", async () => {
+test("a lost native result never authorizes a second ceremony automatically", async () => {
   let calls = 0;
   await withPort(async () => {
     calls += 1;
@@ -298,7 +300,7 @@ Deno.test("a lost native result never authorizes a second ceremony automatically
   });
 });
 
-Deno.test("core native ceremonies serialize and release their scope after completion", async () => {
+test("core native ceremonies serialize and release their scope after completion", async () => {
   let finish!: (reply: unknown) => void;
   let calls = 0;
   const pending = new Promise<unknown>((resolve) => {
@@ -329,7 +331,7 @@ Deno.test("core native ceremonies serialize and release their scope after comple
   });
 });
 
-Deno.test("a late reply cannot cross a replaced native port", async () => {
+test("a late reply cannot cross a replaced native port", async () => {
   let finish!: (reply: unknown) => void;
   const pending = new Promise<unknown>((resolve) => {
     finish = resolve;
@@ -349,7 +351,7 @@ Deno.test("a late reply cannot cross a replaced native port", async () => {
   });
 });
 
-Deno.test("capability responses have a separate closed no-effect shape", async () => {
+test("capability responses have a separate closed no-effect shape", async () => {
   for (
     const reply of [[], success("create"), { ok: true, available: "true" }, {
       ok: true,
@@ -363,9 +365,9 @@ Deno.test("capability responses have a separate closed no-effect shape", async (
   }
 });
 
-Deno.test("core native calls do not depend on or fetch Plugin authority", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./coreNativeBridge.ts", import.meta.url),
+test("core native calls do not depend on or fetch Plugin authority", async () => {
+  const source = await readFile(
+    new URL("./coreNativeBridge.ts", import.meta.url), "utf8",
   );
   for (
     const forbidden of [

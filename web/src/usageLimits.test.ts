@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readdirSync, readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { quotaView } from "../../plugins/claude-code/collector/usage.js";
 import {
   acceptedScheduleTime,
@@ -24,17 +26,17 @@ import { usageErrorAuth } from "./usageHostMap.ts";
 
 function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
   const root = new URL("../../plugins/", import.meta.url);
-  return [...Deno.readDirSync(root)]
-    .filter((entry) => entry.isDirectory)
+  return [...readdirSync(root, { withFileTypes: true })]
+    .filter((entry) => entry.isDirectory())
     .sort((left, right) => left.name.localeCompare(right.name))
     .flatMap((entry) => {
       try {
         const host = JSON.parse(
-          Deno.readTextFileSync(new URL(`${entry.name}/host.json`, root)),
+          readFileSync(new URL(`${entry.name}/host.json`, root), "utf8"),
         ) as Record<string, unknown>;
         return [{ id: entry.name, ...host }];
       } catch (reason) {
-        if (reason instanceof Deno.errors.NotFound) return [];
+        if ((reason as { code?: string }).code === "ENOENT") return [];
         throw reason;
       }
     });
@@ -43,7 +45,7 @@ function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
 const FIRST_PARTY_HOSTS = firstPartyHosts();
 applyUsageHostPlugins(FIRST_PARTY_HOSTS);
 
-Deno.test("native Claude quota renders account and model progress without inventing missing limits", () => {
+test("native Claude quota renders account and model progress without inventing missing limits", () => {
   const usage = {
     provider: "anthropic",
     status: "available",
@@ -94,7 +96,7 @@ Deno.test("native Claude quota renders account and model progress without invent
   );
 });
 
-Deno.test("exhausted account quota expires at reset and ignores model-only windows", () => {
+test("exhausted account quota expires at reset and ignores model-only windows", () => {
   const reset = Date.parse("2026-09-19T06:10:00Z");
   const usage = {
     provider: "anthropic",
@@ -125,7 +127,7 @@ Deno.test("exhausted account quota expires at reset and ignores model-only windo
   assertEquals(exhaustedAccountUsageLimits(usage, reset), []);
 });
 
-Deno.test("usage plugin ids map account providers onto agent plugins", () => {
+test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("openai"), "codex");
   assertEquals(usagePluginId("xai"), "grok");
   assertEquals(usagePluginId("anthropic"), "claude-code");
@@ -134,7 +136,7 @@ Deno.test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("future-b"), "future-b");
 });
 
-Deno.test("activated host inventory replaces usage account mapping", () => {
+test("activated host inventory replaces usage account mapping", () => {
   try {
     applyUsageHostPlugins([
       { id: "custom-grok", usage: { account: "xai" } },
@@ -148,7 +150,7 @@ Deno.test("activated host inventory replaces usage account mapping", () => {
   assertEquals(usagePluginId("xai"), "grok");
 });
 
-Deno.test("usage cards keep first-party product order and unknown cards stable", () => {
+test("usage cards keep first-party product order and unknown cards stable", () => {
   const snapshot = {
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -195,13 +197,13 @@ Deno.test("usage cards keep first-party product order and unknown cards stable",
   );
 });
 
-Deno.test("account provider labels stay catalog-backed and pass unknown ids through", () => {
+test("account provider labels stay catalog-backed and pass unknown ids through", () => {
   assertEquals(accountProviderLabel("xai"), "xAI");
   assertEquals(accountProviderLabel("openai"), "OpenAI");
   assertEquals(accountProviderLabel("future-labs"), "future-labs");
 });
 
-Deno.test("account manage links are published only for known accounts", () => {
+test("account manage links are published only for known accounts", () => {
   assertEquals(
     accountManageUrl("anthropic"),
     "https://claude.ai/settings/usage",
@@ -210,7 +212,7 @@ Deno.test("account manage links are published only for known accounts", () => {
   assertEquals(accountManageUrl("future-labs"), undefined);
 });
 
-Deno.test("datetime picker ignores iOS current-minute provisional values", () => {
+test("datetime picker ignores iOS current-minute provisional values", () => {
   const now = new Date("2026-07-20T10:59:30").getTime();
   assertEquals(acceptedScheduleTime("2026-07-20T10:59", now), "");
   assertEquals(acceptedScheduleTime("2026-07-20T11:00", now), "");
@@ -221,7 +223,7 @@ Deno.test("datetime picker ignores iOS current-minute provisional values", () =>
   assertEquals(acceptedScheduleTime("", now), "");
 });
 
-Deno.test("scheduled reset countdown stays concise", () => {
+test("scheduled reset countdown stays concise", () => {
   const now = new Date("2026-07-20T18:50:00").getTime();
   assertEquals(
     scheduledResetCountdown(new Date("2026-07-20T19:20:00").getTime(), now),
@@ -234,7 +236,7 @@ Deno.test("scheduled reset countdown stays concise", () => {
   assertEquals(scheduledResetCountdown(now - 1, now), "Due now");
 });
 
-Deno.test("usage limits preserve provider buckets and sort by window", () => {
+test("usage limits preserve provider buckets and sort by window", () => {
   const limits = usageLimits({
     provider: "openai",
     status: "available",
@@ -272,7 +274,7 @@ Deno.test("usage limits preserve provider buckets and sort by window", () => {
   );
 });
 
-Deno.test("Claude ACP rate-limit events become account limit rows", () => {
+test("Claude ACP rate-limit events become account limit rows", () => {
   assertEquals(
     usageLimits({
       provider: "anthropic",
@@ -298,7 +300,7 @@ Deno.test("Claude ACP rate-limit events become account limit rows", () => {
   );
 });
 
-Deno.test("Grok billing becomes the shared subscription credit window", () => {
+test("Grok billing becomes the shared subscription credit window", () => {
   assertEquals(
     usageLimits({
       provider: "xai",
@@ -325,7 +327,7 @@ Deno.test("Grok billing becomes the shared subscription credit window", () => {
   );
 });
 
-Deno.test("Grok unified billing treats an omitted zero percent as unused", () => {
+test("Grok unified billing treats an omitted zero percent as unused", () => {
   assertEquals(
     usageLimits({
       provider: "xai",
@@ -353,7 +355,7 @@ Deno.test("Grok unified billing treats an omitted zero percent as unused", () =>
   );
 });
 
-Deno.test("legacy Grok billing auth JSON becomes an actionable sign-in message", () => {
+test("legacy Grok billing auth JSON becomes an actionable sign-in message", () => {
   const usage = {
     provider: "xai",
     status: "unavailable",
@@ -367,7 +369,7 @@ Deno.test("legacy Grok billing auth JSON becomes an actionable sign-in message",
   assertEquals(message.includes("{"), false);
 });
 
-Deno.test("legacy Grok transient RPC errors use generic safe copy", () => {
+test("legacy Grok transient RPC errors use generic safe copy", () => {
   const message = providerUsageErrorMessage({
     provider: "xai",
     status: "unavailable",
@@ -383,7 +385,7 @@ Deno.test("legacy Grok transient RPC errors use generic safe copy", () => {
   assertEquals(message.includes("{"), false);
 });
 
-Deno.test("legacy OpenAI RPC errors never leak through the usage UI", () => {
+test("legacy OpenAI RPC errors never leak through the usage UI", () => {
   const usage = {
     provider: "openai",
     status: "unavailable",
@@ -400,7 +402,7 @@ Deno.test("legacy OpenAI RPC errors never leak through the usage UI", () => {
   assertEquals(message.includes("{"), false);
 });
 
-Deno.test("usage slot context is host-owned presentation for plugin UI", () => {
+test("usage slot context is host-owned presentation for plugin UI", () => {
   const usage = {
     provider: "xai",
     status: "available",
@@ -441,7 +443,7 @@ Deno.test("usage slot context is host-owned presentation for plugin UI", () => {
   );
 });
 
-Deno.test("stale provider metadata has one compact cross-surface label", () => {
+test("stale provider metadata has one compact cross-surface label", () => {
   assertEquals(
     providerUsageRefreshLabel({
       provider: "openai",
@@ -459,7 +461,7 @@ Deno.test("stale provider metadata has one compact cross-surface label", () => {
   );
 });
 
-Deno.test("desktop summary excludes model buckets and keeps provider account order", () => {
+test("desktop summary excludes model buckets and keeps provider account order", () => {
   const usage = {
     provider: "openai",
     status: "available",
@@ -485,7 +487,7 @@ Deno.test("desktop summary excludes model buckets and keeps provider account ord
   );
 });
 
-Deno.test("desktop summary tolerates a missing Codex 5h bucket", () => {
+test("desktop summary tolerates a missing Codex 5h bucket", () => {
   const usage = {
     provider: "openai",
     status: "available",
@@ -502,7 +504,7 @@ Deno.test("desktop summary tolerates a missing Codex 5h bucket", () => {
   ]);
 });
 
-Deno.test("Provider-declared account identities resolve to usage cards", () => {
+test("Provider-declared account identities resolve to usage cards", () => {
   const snapshot = {
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -554,7 +556,7 @@ Deno.test("Provider-declared account identities resolve to usage cards", () => {
   assertEquals(providerUsage(snapshot, "catalog-unavailable"), undefined);
 });
 
-Deno.test("only the earliest-expiring available reset is actionable", () => {
+test("only the earliest-expiring available reset is actionable", () => {
   const usage = {
     provider: "codex",
     status: "available",
@@ -573,7 +575,7 @@ Deno.test("only the earliest-expiring available reset is actionable", () => {
   assertEquals(nearestAvailableResetCredit(usage)?.id, "nearest");
 });
 
-Deno.test("xAI reset actions use their own provider schedule", () => {
+test("xAI reset actions use their own provider schedule", () => {
   const usage = {
     provider: "xai",
     status: "available",

@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import { vimCommandKey } from "./vimCommandKey";
 
 function key(code: string, init: Partial<KeyboardEvent> = {}): KeyboardEvent {
   return { code, ...init } as KeyboardEvent;
 }
 
-Deno.test("physical v and V stay stable under an IME input source", () => {
+test("physical v and V stay stable under an IME input source", () => {
   if (vimCommandKey(key("KeyV", { key: "Process" })) !== "v") {
     throw new Error("physical v was not preserved");
   }
@@ -13,7 +14,7 @@ Deno.test("physical v and V stay stable under an IME input source", () => {
   }
 });
 
-Deno.test("every physical Vim letter stays stable under an IME input source", () => {
+test("every physical Vim letter stays stable under an IME input source", () => {
   for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
     const code = `Key${letter}`;
     const lower = letter.toLowerCase();
@@ -32,7 +33,7 @@ Deno.test("every physical Vim letter stays stable under an IME input source", ()
   }
 });
 
-Deno.test("every physical Vim punctuation key stays stable under an IME input source", () => {
+test("every physical Vim punctuation key stays stable under an IME input source", () => {
   const expected = new Map([
     ["Backquote", "`"],
     ["Backslash", "\\"],
@@ -53,7 +54,7 @@ Deno.test("every physical Vim punctuation key stays stable under an IME input so
   }
 });
 
-Deno.test("all standard Vim visual exits reach codemirror-vim", () => {
+test("all standard Vim visual exits reach codemirror-vim", () => {
   const exits = [
     vimCommandKey(key("Escape")),
     vimCommandKey(key("BracketLeft", { ctrlKey: true })),
@@ -65,7 +66,7 @@ Deno.test("all standard Vim visual exits reach codemirror-vim", () => {
   }
 });
 
-Deno.test("navigation and control commands use Vim tokens", () => {
+test("navigation and control commands use Vim tokens", () => {
   const commands = [
     vimCommandKey(key("ArrowLeft")),
     vimCommandKey(key("Home")),
@@ -97,7 +98,7 @@ Deno.test("navigation and control commands use Vim tokens", () => {
   }
 });
 
-Deno.test("desktop and browser shortcuts are not captured", () => {
+test("desktop and browser shortcuts are not captured", () => {
   if (vimCommandKey(key("KeyV", { metaKey: true })) !== null) {
     throw new Error("Command-V must remain native paste");
   }

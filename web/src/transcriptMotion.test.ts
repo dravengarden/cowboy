@@ -1,17 +1,19 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { transcriptRowContainment } from "./transcriptMotion.ts";
 
-const transcriptSource = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
-const providerTranscriptSource = await Deno.readTextFile(
-  new URL("./ProviderTranscript.tsx", import.meta.url),
+const providerTranscriptSource = await readFile(
+  new URL("./ProviderTranscript.tsx", import.meta.url), "utf8",
 );
-const markdownSource = await Deno.readTextFile(
-  new URL("./MarkdownImpl.tsx", import.meta.url),
+const markdownSource = await readFile(
+  new URL("./MarkdownImpl.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("thinking activity renders the exact Provider loading surface", () => {
+test("thinking activity renders the exact Provider loading surface", () => {
   const component = transcriptSource.match(
     /function ThinkingIndicator[\s\S]*?(?=\n\/\/ Blinking text caret)/,
   )?.[0];
@@ -31,7 +33,7 @@ Deno.test("thinking activity renders the exact Provider loading surface", () => 
   );
 });
 
-Deno.test("thinking activity has no Provider identity branches", () => {
+test("thinking activity has no Provider identity branches", () => {
   assertEquals(transcriptSource.includes("function ClaudeThinking"), false);
   assertEquals(transcriptSource.includes("function CodexThinking"), false);
   assertEquals(transcriptSource.includes("function GrokThinking"), false);
@@ -41,13 +43,13 @@ Deno.test("thinking activity has no Provider identity branches", () => {
   }
 });
 
-Deno.test("followed live tails recycle older rows into a height spacer", () => {
+test("followed live tails recycle older rows into a height spacer", () => {
   assert(transcriptSource.includes("data-transcript-recycled-spacer"));
   assert(transcriptSource.includes("shouldWindowLiveTranscript"));
   assert(transcriptSource.includes("recycledTranscriptHeight"));
 });
 
-Deno.test("live-tail bookkeeping never synchronously measures a long Markdown row", () => {
+test("live-tail bookkeeping never synchronously measures a long Markdown row", () => {
   assert(transcriptSource.includes("new ResizeObserver((entries) =>"));
   assert(
     transcriptSource.includes(
@@ -62,7 +64,7 @@ Deno.test("live-tail bookkeeping never synchronously measures a long Markdown ro
   );
 });
 
-Deno.test("repeated Markdown copy controls do not create backdrop blur layers", () => {
+test("repeated Markdown copy controls do not create backdrop blur layers", () => {
   const codeBlock = markdownSource.match(
     /function CodeBlock[\s\S]*?(?=\nclass MarkdownCodeBoundary)/,
   )?.[0];
@@ -72,7 +74,7 @@ Deno.test("repeated Markdown copy controls do not create backdrop blur layers", 
   assertEquals(codeBlock.includes("WebkitBackdropFilter"), false);
 });
 
-Deno.test("a streamed code block keeps one copy control until its fence closes", () => {
+test("a streamed code block keeps one copy control until its fence closes", () => {
   // Keying the block by its content remounted the copy button on every chunk:
   // it flickered and a click (down and up on one element) never landed.
   assertEquals(markdownSource.includes("key={`${lang}:${text}`}"), false);
@@ -86,7 +88,7 @@ Deno.test("a streamed code block keeps one copy control until its fence closes",
   );
 });
 
-Deno.test("drawer swipe does not React-render on transcript finger-down", () => {
+test("drawer swipe does not React-render on transcript finger-down", () => {
   assert(transcriptSource.includes("renderPausedRef.current = true"));
   assert(
     transcriptSource.includes(
@@ -111,7 +113,7 @@ Deno.test("drawer swipe does not React-render on transcript finger-down", () => 
   assert(detachInTouchStart === -1 || detachInTouchStart > touchStartEnd);
 });
 
-Deno.test("the growing row stays in the scroller paint flow", () => {
+test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");
   assertEquals(transcriptRowContainment(false, true), "layout");
@@ -123,7 +125,7 @@ Deno.test("the growing row stays in the scroller paint flow", () => {
   );
 });
 
-Deno.test("restored visible scrollback resumes for each advanced cursor", () => {
+test("restored visible scrollback resumes for each advanced cursor", () => {
   assert(
     transcriptSource.includes("shouldPrefetchVisibleScrollbackBoundary({"),
   );

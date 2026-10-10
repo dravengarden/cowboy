@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { decodeNavigation } from "./navigationProtocol.ts";
 import { golden } from "./destinationFixture.ts";
@@ -18,7 +19,7 @@ const decode = (value: unknown, requested = new Set([0])) =>
     requested,
   );
 
-Deno.test("actual Service destination wire is frozen, closed and accepted only for requested targets", () => {
+test("actual Service destination wire is frozen, closed and accepted only for requested targets", () => {
   const value = decode(golden);
   assertEquals(value, golden);
   assert(
@@ -37,7 +38,7 @@ Deno.test("actual Service destination wire is frozen, closed and accepted only f
   }
 });
 
-Deno.test("destination observations reject extra fields, foreign/duplicate IDs, nonascending and unsolicited indices", () => {
+test("destination observations reject extra fields, foreign/duplicate IDs, nonascending and unsolicited indices", () => {
   const entry = golden.destinations[0]!;
   const bad = [
     { ...entry, destination: -1 },

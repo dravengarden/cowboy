@@ -247,7 +247,7 @@ For first-party Providers, start with the read-only authoritative registry
 audit from the repository root in its pinned shell:
 
 ```bash
-nix develop -c deno run --allow-read --allow-net \
+nix develop -c bun \
   .agents/skills/release-cowboy-plugin/scripts/audit-dependencies.ts <plugin-id>
 ```
 

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { GitCommitSummary } from "./codeApi.ts";
 import {
   historyPageCursor,
@@ -14,7 +15,7 @@ const commit = (oid: string): GitCommitSummary => ({
   decorations: [],
 });
 
-Deno.test("history pages append unseen commits and stop on a repeated page", () => {
+test("history pages append unseen commits and stop on a repeated page", () => {
   const first = mergeHistoryPage([], [commit("a"), commit("b")], true);
   assertEquals(first.commits.map((row) => row.oid), ["a", "b"]);
   assertEquals(first.truncated, true);

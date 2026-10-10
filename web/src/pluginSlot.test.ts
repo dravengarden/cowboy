@@ -1,13 +1,16 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const passwordHost = await Deno.readTextFile(
-  new URL("../../examples/authentication/password/host.json", import.meta.url),
+const passwordHost = await readFile(
+  new URL("../../examples/authentication/password/host.json", import.meta.url), "utf8",
 );
-const login = await Deno.readTextFile(
-  new URL("./auth/ProductLoginPage.tsx", import.meta.url),
+const login = await readFile(
+  new URL("./auth/ProductLoginPage.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("only external login methods mount through an isolated plugin slot", () => {
+test("only external login methods mount through an isolated plugin slot", () => {
   assert(login.includes('from "../pluginHost/PluginSlot"'));
   assert(login.includes('slot="login.method"'));
   assert(login.includes("<PluginSlot"));
@@ -36,11 +39,11 @@ Deno.test("only external login methods mount through an isolated plugin slot", (
   assertEquals(passwordHost.includes("ui/index.js"), false);
 });
 
-const providerManagement = await Deno.readTextFile(
-  new URL("./ProviderManagement.tsx", import.meta.url),
+const providerManagement = await readFile(
+  new URL("./ProviderManagement.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("provider lifecycle surfaces mount through plugin slots", () => {
+test("provider lifecycle surfaces mount through plugin slots", () => {
   assert(providerManagement.includes('from "./pluginHost"'));
   assert(providerManagement.includes("lifecycleSlotInput(slot"));
   assert(providerManagement.includes("context={{"));
@@ -51,29 +54,29 @@ Deno.test("provider lifecycle surfaces mount through plugin slots", () => {
   assert(providerManagement.includes("ProviderManagementCard"));
 });
 
-const infoSheet = await Deno.readTextFile(
-  new URL("./InfoSheet.tsx", import.meta.url),
+const infoSheet = await readFile(
+  new URL("./InfoSheet.tsx", import.meta.url), "utf8",
 );
-const desktopUsage = await Deno.readTextFile(
-  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
+const desktopUsage = await readFile(
+  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const sessionSettings = await Deno.readTextFile(
-  new URL("./sessionSettingsPresentation.ts", import.meta.url),
+const sessionSettings = await readFile(
+  new URL("./sessionSettingsPresentation.ts", import.meta.url), "utf8",
 );
-const usageWidget = await Deno.readTextFile(
-  new URL("./usageWidget.ts", import.meta.url),
+const usageWidget = await readFile(
+  new URL("./usageWidget.ts", import.meta.url), "utf8",
 );
-const usageLimitsSource = await Deno.readTextFile(
-  new URL("./usageLimits.ts", import.meta.url),
+const usageLimitsSource = await readFile(
+  new URL("./usageLimits.ts", import.meta.url), "utf8",
 );
-const claudeCodeHost = await Deno.readTextFile(
-  new URL("../../plugins/claude-code/host.json", import.meta.url),
+const claudeCodeHost = await readFile(
+  new URL("../../plugins/claude-code/host.json", import.meta.url), "utf8",
 );
-const machineState = await Deno.readTextFile(
-  new URL("./machineState.ts", import.meta.url),
+const machineState = await readFile(
+  new URL("./machineState.ts", import.meta.url), "utf8",
 );
 
-Deno.test("provider usage cards mount through plugin slots", () => {
+test("provider usage cards mount through plugin slots", () => {
   assert(infoSheet.includes('slot="provider.usage"'));
   assert(infoSheet.includes("usagePluginId(usage.provider)"));
   assert(infoSheet.includes("context={usageContext}"));
@@ -134,12 +137,12 @@ Deno.test("provider usage cards mount through plugin slots", () => {
   assert(machineState.includes("providerOccupancySlot"));
   assert(machineState.includes("session.provider_generation_digest"));
   assertEquals(machineState.includes('slot === "claude"'), false);
-  const diagnosticLogs = Deno.readTextFileSync(
-    new URL("./diagnosticLogs.ts", import.meta.url),
+  const diagnosticLogs = readFileSync(
+    new URL("./diagnosticLogs.ts", import.meta.url), "utf8",
   );
   assertEquals(diagnosticLogs.includes('["codex", "claude"]'), false);
-  const usageLogs = Deno.readTextFileSync(
-    new URL("./UsageLogs.tsx", import.meta.url),
+  const usageLogs = readFileSync(
+    new URL("./UsageLogs.tsx", import.meta.url), "utf8",
   );
   assertEquals(usageLogs.includes('id: "codex", label: "Codex"'), false);
   assert(
@@ -155,20 +158,20 @@ Deno.test("provider usage cards mount through plugin slots", () => {
   );
 });
 
-const pluginHost = await Deno.readTextFile(
-  new URL("./pluginHost.ts", import.meta.url),
+const pluginHost = await readFile(
+  new URL("./pluginHost.ts", import.meta.url), "utf8",
 );
-const pluginApi = await Deno.readTextFile(
-  new URL("../../components/plugin-api/types.ts", import.meta.url),
+const pluginApi = await readFile(
+  new URL("../../components/plugin-api/types.ts", import.meta.url), "utf8",
 );
-const appleNativeBridge = await Deno.readTextFile(
+const appleNativeBridge = await readFile(
   new URL(
     "../../apps/native-shell/apple/Sources/cowboy-app/CowboyPasskeyBridge.mm",
     import.meta.url,
-  ),
+  ), "utf8",
 );
 
-Deno.test("host kit exposes only closed Cowboy-owned renderers", () => {
+test("host kit exposes only closed Cowboy-owned renderers", () => {
   assert(pluginHost.includes("ProviderUsage"));
   assert(pluginHost.includes("ProviderSurface"));
   assertEquals(pluginHost.includes("ProductPasskeysPanel"), false);
@@ -193,10 +196,10 @@ Deno.test("host kit exposes only closed Cowboy-owned renderers", () => {
 });
 
 for (const id of ["grok", "codex", "claude-code", "gemini"]) {
-  const host = await Deno.readTextFile(
-    new URL(`../../plugins/${id}/host.json`, import.meta.url),
+  const host = await readFile(
+    new URL(`../../plugins/${id}/host.json`, import.meta.url), "utf8",
   );
-  Deno.test(`${id} selects closed provider renderers with data`, () => {
+  test(`${id} selects closed provider renderers with data`, () => {
     assert(host.includes('"provider.usage": "provider-usage-v1"'));
     assert(host.includes('"provider.setup": "provider-surface-v1"'));
     assert(host.includes('"provider.settings": "provider-surface-v1"'));
@@ -204,10 +207,10 @@ for (const id of ["grok", "codex", "claude-code", "gemini"]) {
   });
 }
 
-const claudeDeepseekHost = await Deno.readTextFile(
-  new URL("../../plugins/claude-deepseek/host.json", import.meta.url),
+const claudeDeepseekHost = await readFile(
+  new URL("../../plugins/claude-deepseek/host.json", import.meta.url), "utf8",
 );
-Deno.test("activity usage is a closed core renderer selected by host data", () => {
+test("activity usage is a closed core renderer selected by host data", () => {
   assert(
     claudeDeepseekHost.includes(
       '"provider.usage": "provider-usage-activity-v1"',
@@ -217,10 +220,10 @@ Deno.test("activity usage is a closed core renderer selected by host data", () =
   assert(pluginHost.includes("ProviderUsageActivity"));
 });
 
-const passkeyHost = await Deno.readTextFile(
-  new URL("../../examples/authentication/passkey/host.json", import.meta.url),
+const passkeyHost = await readFile(
+  new URL("../../examples/authentication/passkey/host.json", import.meta.url), "utf8",
 );
-Deno.test("retained passkey packages stay readable without owning core account UI", () => {
+test("retained passkey packages stay readable without owning core account UI", () => {
   assert(passkeyHost.includes('"account.panel": "account-passkeys-v1"'));
   assertEquals(pluginHost.includes("ProductPasskeysPanel"), false);
   assertEquals(pluginHost.includes('case "account.panel"'), false);
@@ -228,10 +231,10 @@ Deno.test("retained passkey packages stay readable without owning core account U
 });
 
 for (const id of ["google", "apple", "cloudflare-email"]) {
-  const host = await Deno.readTextFile(
-    new URL(`../../examples/authentication/${id}/host.json`, import.meta.url),
+  const host = await readFile(
+    new URL(`../../examples/authentication/${id}/host.json`, import.meta.url), "utf8",
   );
-  Deno.test(`${id} login method selects the closed OIDC renderer`, () => {
+  test(`${id} login method selects the closed OIDC renderer`, () => {
     assert(host.includes('"login.method": "login-oidc-v1"'));
     assertEquals(host.includes("ui/index.js"), false);
   });

@@ -1,10 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Machine component health stays a compact chip on touch layouts", () => {
+test("Machine component health stays a compact chip on touch layouts", () => {
   const start = appSource.indexOf("{componentSections.map((section)");
   const end = appSource.indexOf("{componentErrors[npmUpdateKey]", start);
   const componentRow = appSource.slice(start, end);

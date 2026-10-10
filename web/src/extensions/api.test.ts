@@ -1,4 +1,5 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert@1.0.19";
+import { test } from "bun:test";
+import { assertEquals, assertThrows } from "@std/assert";
 import { decodeExtensionResponse, resourceQuery } from "./api.ts";
 
 const item = {
@@ -11,7 +12,7 @@ const item = {
   updatedAt: null,
   metadata: [],
 };
-Deno.test("extension responses reject executable links, unbounded collections and unknown failures", () => {
+test("extension responses reject executable links, unbounded collections and unknown failures", () => {
   assertEquals(decodeExtensionResponse({ type: "detail", item }), {
     type: "detail",
     item,
@@ -41,7 +42,7 @@ Deno.test("extension responses reject executable links, unbounded collections an
     decodeExtensionResponse({ type: "unavailable", code: "raw_cli_stderr" })
   );
 });
-Deno.test("resource requests carry exact installation identity and escaped selections", () => {
+test("resource requests carry exact installation identity and escaped selections", () => {
   const identity = {
     pluginId: "fixture",
     pluginVersion: "1.0.0",

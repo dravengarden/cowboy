@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   appendUnique,
   deliveryConfirmations,
@@ -14,7 +15,7 @@ const draft = { id: "d1", text: "parked", cmid: "c-draft" };
 const queued = { id: "q1", text: "next", cmid: "c-queue" };
 const presented = { id: "opt-c-act", text: "parked", cmid: "c-act", origin: "draft" as const };
 
-Deno.test("creation acknowledgements cannot retire an outstanding queued send", () => {
+test("creation acknowledgements cannot retire an outstanding queued send", () => {
   for (const name of ["sendQueued", "forceQueued"]) {
     const pending = [{ id: "send-op", name, args: { id: queued.id, row: queued } }];
     const base = { ...emptyQueueValue(), queue: [queued] };
@@ -29,14 +30,14 @@ Deno.test("creation acknowledgements cannot retire an outstanding queued send", 
   }
 });
 
-Deno.test("queue mutators never duplicate a row that is already present", () => {
+test("queue mutators never duplicate a row that is already present", () => {
   const once = appendUnique([draft], draft);
   assertEquals(once.length, 1);
   assertEquals(appendUnique([draft], { id: "d2", text: "other", cmid: "c-draft" }).length, 1);
   assertEquals(removeById([draft, queued], "missing"), [draft, queued]);
 });
 
-Deno.test("activating a draft lands it in the queue immediately", () => {
+test("activating a draft lands it in the queue immediately", () => {
   const next = queueMutators.activateDraft(
     { queue: [queued], drafts: [draft], inFlight: [] },
     { id: "d1", row: presented },
@@ -45,7 +46,7 @@ Deno.test("activating a draft lands it in the queue immediately", () => {
   assertEquals(next.queue.map((row) => row.id), ["q1", "opt-c-act"]);
 });
 
-Deno.test("activating a draft onto the transcript only hides the draft", () => {
+test("activating a draft onto the transcript only hides the draft", () => {
   const next = queueMutators.activateDraft(
     { queue: [], drafts: [draft], inFlight: [] },
     { id: "d1" },
@@ -55,7 +56,7 @@ Deno.test("activating a draft onto the transcript only hides the draft", () => {
   assertEquals(next.inFlight, []);
 });
 
-Deno.test("sending an unconfirmed draft keeps its source hidden after the server assigns an id", () => {
+test("sending an unconfirmed draft keeps its source hidden after the server assigns an id", () => {
   const args = { id: "opt-c-draft", sourceCmid: draft.cmid, row: presented };
   const local = { ...draft, id: args.id };
   const initial = queueMutators.activateDraft(
@@ -69,7 +70,7 @@ Deno.test("sending an unconfirmed draft keeps its source hidden after the server
   assertEquals(acknowledged.queue, [presented]);
 });
 
-Deno.test("a draft send cannot settle before its pending source is created", () => {
+test("a draft send cannot settle before its pending source is created", () => {
   const activation = {
     id: "activate-op",
     name: "activateDraft",
@@ -84,7 +85,7 @@ Deno.test("a draft send cannot settle before its pending source is created", () 
   assertEquals(settledTransitionIds([activation], emptyQueueValue()), [activation.id]);
 });
 
-Deno.test("a draft send retains its transcript bubble in the durable outbox view", () => {
+test("a draft send retains its transcript bubble in the durable outbox view", () => {
   const next = queueMutators.activateDraft(
     { ...emptyQueueValue(), drafts: [draft] },
     { id: draft.id, row: presented, destination: "transcript" as const },
@@ -94,7 +95,7 @@ Deno.test("a draft send retains its transcript bubble in the durable outbox view
   assertEquals(next.inFlight, [presented]);
 });
 
-Deno.test("a pending edit does not turn a server-backed draft into a new local source", () => {
+test("a pending edit does not turn a server-backed draft into a new local source", () => {
   const editing = { ...draft, status: "sending" as const };
   const args = { id: editing.id, row: presented, destination: "transcript" as const };
   assertEquals(draftActivationSourceId(args, []), editing.id);
@@ -104,7 +105,7 @@ Deno.test("a pending edit does not turn a server-backed draft into a new local s
   );
 });
 
-Deno.test("send waits for a pending return-to-drafts move before settling", () => {
+test("send waits for a pending return-to-drafts move before settling", () => {
   const returning = { id: "return-op", name: "returnQueuedToDraft", args: { id: queued.id, row: queued } };
   const activation = { id: "activate-op", name: "activateDraft", args: { id: queued.id, row: presented } };
   assertEquals(
@@ -126,7 +127,7 @@ Deno.test("send waits for a pending return-to-drafts move before settling", () =
   );
 });
 
-Deno.test("sending or force-pushing a queued row parks it in-flight", () => {
+test("sending or force-pushing a queued row parks it in-flight", () => {
   const sent = queueMutators.sendQueued(
     { queue: [queued], drafts: [], inFlight: [] },
     { id: "q1", row: { ...queued, id: "opt-send" } },
@@ -140,7 +141,7 @@ Deno.test("sending or force-pushing a queued row parks it in-flight", () => {
   assertEquals(forced.inFlight.length, 1);
 });
 
-Deno.test("a direct prompt is retained in-flight until its user echo confirms it", () => {
+test("a direct prompt is retained in-flight until its user echo confirms it", () => {
   const submitted = queueMutators.submitPrompt(emptyQueueValue(), {
     row: presented,
   });
@@ -153,7 +154,7 @@ Deno.test("a direct prompt is retained in-flight until its user echo confirms it
   );
 });
 
-Deno.test("returning a queued row restores it as a draft without duplicating", () => {
+test("returning a queued row restores it as a draft without duplicating", () => {
   const next = queueMutators.returnQueuedToDraft(
     { queue: [queued], drafts: [], inFlight: [] },
     { id: "q1", row: { ...queued, origin: "queue" } },
@@ -166,7 +167,7 @@ Deno.test("returning a queued row restores it as a draft without duplicating", (
   );
 });
 
-Deno.test("a transition is settled once the source id is gone from the server lists", () => {
+test("a transition is settled once the source id is gone from the server lists", () => {
   assertEquals(
     settledTransitionIds(
       [{ id: "op-1", name: "activateDraft", args: { id: "d1" } }],
@@ -190,7 +191,7 @@ Deno.test("a transition is settled once the source id is gone from the server li
   );
 });
 
-Deno.test("pending edits rebase locally and settle only on matching server content", () => {
+test("pending edits rebase locally and settle only on matching server content", () => {
   const edited = { ...draft, text: "recovered edit" };
   const optimistic = queueMutators.editDraft(
     { ...emptyQueueValue(), drafts: [draft] },
@@ -218,7 +219,7 @@ Deno.test("pending edits rebase locally and settle only on matching server conte
   );
 });
 
-Deno.test("reschedule stays pending until the authoritative schedule matches", () => {
+test("reschedule stays pending until the authoritative schedule matches", () => {
   const original = { ...draft, schedule: { fire_at_ms: 10, delivery: "back" } };
   const rescheduled = {
     ...original,
@@ -245,7 +246,7 @@ Deno.test("reschedule stays pending until the authoritative schedule matches", (
   );
 });
 
-Deno.test("remove stays pending until the authoritative row is absent", () => {
+test("remove stays pending until the authoritative row is absent", () => {
   const removed = queueMutators.removeDraft(
     { ...emptyQueueValue(), drafts: [draft] },
     { id: draft.id },
@@ -263,7 +264,7 @@ Deno.test("remove stays pending until the authoritative row is absent", () => {
   assertEquals(settledTransitionIds(pending, emptyQueueValue()), ["remove-op"]);
 });
 
-Deno.test("unschedule stays pending until the authoritative schedule is absent", () => {
+test("unschedule stays pending until the authoritative schedule is absent", () => {
   const scheduled = {
     ...draft,
     schedule: { fire_at_ms: 20, delivery: "back" },
@@ -292,7 +293,7 @@ Deno.test("unschedule stays pending until the authoritative schedule is absent",
   );
 });
 
-Deno.test("an explicit send targets the server row even while an edit annotates it", () => {
+test("an explicit send targets the server row even while an edit annotates it", () => {
   // A pending editQueue paints "sending" on a row the daemon already holds.
   // Re-adding it under a new cmid would dispatch a copy and leave it queued.
   const edited = { ...queued, status: "sending" as const };

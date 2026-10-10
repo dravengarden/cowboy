@@ -1,8 +1,10 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const source = await Deno.readTextFile(new URL("./PromptOriginNote.tsx", import.meta.url));
+const source = await readFile(new URL("./PromptOriginNote.tsx", import.meta.url), "utf8");
 
-Deno.test("agent runtime notes sit on the left with the provider mark", () => {
+test("agent runtime notes sit on the left with the provider mark", () => {
   assertEquals(source.includes('alignSelf: "stretch"'), true);
   assertEquals(source.includes("borderRadius: 1"), true);
   assertEquals(source.includes("<ProviderIcon"), true);

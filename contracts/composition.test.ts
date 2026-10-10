@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   CONTRACT_FINGERPRINT,
   decodeComposition,
@@ -7,12 +9,12 @@ import {
 import { strictJson } from "./strict-json.ts";
 
 const fixture = JSON.parse(
-  await Deno.readTextFile(
-    new URL("../tests/fixtures/composition-v1.json", import.meta.url),
+  await readFile(
+    new URL("../tests/fixtures/composition-v1.json", import.meta.url), "utf8",
   ),
 );
 for (const vector of fixture.vectors) {
-  Deno.test(`composition codec: ${vector.name}`, () => {
+  test(`composition codec: ${vector.name}`, () => {
     const proposal = structuredClone(fixture.base);
     for (const edit of vector.edits ?? []) {
       const path = edit.path.slice(1).split("/");
@@ -37,7 +39,7 @@ for (const vector of fixture.vectors) {
   });
 }
 
-Deno.test("generated identities cannot be substituted at compile time", () => {
+test("generated identities cannot be substituted at compile time", () => {
   const proposal = decodeComposition(JSON.stringify(fixture.base));
   const acceptScope = (_id: ScopeId): void => {};
   acceptScope(proposal.nodes[0].scope);
@@ -50,7 +52,7 @@ Deno.test("generated identities cannot be substituted at compile time", () => {
   }
 });
 
-Deno.test("strict JSON rejects byte/depth budgets and handles prototype keys as data", () => {
+test("strict JSON rejects byte/depth budgets and handles prototype keys as data", () => {
   for (const input of [" ".repeat(MAX_BYTES + 1), '"\ud800"', "1e400"]) {
     let failed = false;
     try {

@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   loadSessionReloadPlan,
   reloadSession,
@@ -6,7 +7,7 @@ import {
   setAutomaticProviderUpdates,
 } from "./sessionReload.ts";
 
-Deno.test("session reload posts to the encoded session endpoint", async () => {
+test("session reload posts to the encoded session endpoint", async () => {
   let request: { input: string; init: RequestInit } | undefined;
   const fetcher: SessionReloadFetch = (input, init) => {
     request = { input, init };
@@ -19,7 +20,7 @@ Deno.test("session reload posts to the encoded session endpoint", async () => {
   assertEquals(request?.init.method, "POST");
 });
 
-Deno.test("session reload carries explicit active-turn confirmation", async () => {
+test("session reload carries explicit active-turn confirmation", async () => {
   let request: { input: string; init: RequestInit } | undefined;
   const fetcher: SessionReloadFetch = (input, init) => {
     request = { input, init };
@@ -35,7 +36,7 @@ Deno.test("session reload carries explicit active-turn confirmation", async () =
   assertEquals(request?.init.method, "POST");
 });
 
-Deno.test("session reload surfaces the backend rejection detail", async () => {
+test("session reload surfaces the backend rejection detail", async () => {
   const fetcher: SessionReloadFetch = () =>
     Promise.resolve(
       new Response("session workspace is still being prepared", {
@@ -50,7 +51,7 @@ Deno.test("session reload surfaces the backend rejection detail", async () => {
   );
 });
 
-Deno.test("new Provider reload binds confirmation to the planned exact digest", async () => {
+test("new Provider reload binds confirmation to the planned exact digest", async () => {
   let request = "";
   await reloadSession(
     "s",
@@ -66,7 +67,7 @@ Deno.test("new Provider reload binds confirmation to the planned exact digest", 
   );
 });
 
-Deno.test("reload plan reads installed version without mutating the session", async () => {
+test("reload plan reads installed version without mutating the session", async () => {
   const plan = {
     current_version: "1.1.2",
     target_version: "3.1.8",
@@ -84,7 +85,7 @@ Deno.test("reload plan reads installed version without mutating the session", as
   );
 });
 
-Deno.test("reload plan fails closed for old controllers and missing target identity", async () => {
+test("reload plan fails closed for old controllers and missing target identity", async () => {
   await assertRejects(
     () =>
       loadSessionReloadPlan(
@@ -105,7 +106,7 @@ Deno.test("reload plan fails closed for old controllers and missing target ident
   );
 });
 
-Deno.test("automatic update policy saves independently from reloading a busy session", async () => {
+test("automatic update policy saves independently from reloading a busy session", async () => {
   const requests: { input: string; init: RequestInit }[] = [];
   const fetcher: SessionReloadFetch = (input, init) => {
     requests.push({ input, init });

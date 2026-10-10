@@ -1,12 +1,14 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { captureContent, capturedIdentity } from "./content.ts";
 import { ID, opened, wire } from "./fixture.ts";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { readCompleteText, textIdentity } from "./text.ts";
 
 const contract = JSON.parse(
-  Deno.readTextFileSync(
-    new URL("../../../plugins/zed/adapter/fixtures/text.json", import.meta.url),
+  readFileSync(
+    new URL("../../../plugins/zed/adapter/fixtures/text.json", import.meta.url), "utf8",
   ),
 );
 const identity = async (text: string) =>
@@ -30,7 +32,7 @@ function page(
   };
 }
 
-Deno.test("complete native text matches shared wire and yields a genuine content capture", async () => {
+test("complete native text matches shared wire and yields a genuine content capture", async () => {
   const f = await opened();
   const expected = { ...contract.request.content };
   const read = f.owner.readText(expected);
@@ -45,7 +47,7 @@ Deno.test("complete native text matches shared wire and yields a genuine content
   assert(f.owner.view().fresh);
 });
 
-Deno.test("native text pages keep one owner busy and verify complete Unicode bytes", async () => {
+test("native text pages keep one owner busy and verify complete Unicode bytes", async () => {
   const f = await opened();
   const first = "x".repeat(65_535), last = "🙂\0\n";
   const content = await identity(first + last);
@@ -69,7 +71,7 @@ Deno.test("native text pages keep one owner busy and verify complete Unicode byt
   assertEquals(result.content.text, first + last);
 });
 
-Deno.test("empty and maximum native text are bounded complete observations", async () => {
+test("empty and maximum native text are bounded complete observations", async () => {
   for (const full of ["", "\0".repeat(4 * 1024 * 1024)]) {
     const content = await identity(full);
     let count = 0;
@@ -97,7 +99,7 @@ Deno.test("empty and maximum native text are bounded complete observations", asy
   }
 });
 
-Deno.test("partial, foreign, stale and corrupt text never becomes complete or retries", async () => {
+test("partial, foreign, stale and corrupt text never becomes complete or retries", async () => {
   const first = "x".repeat(65_536), last = "🙂\n";
   const content = await identity(first + last);
   for (
@@ -136,7 +138,7 @@ Deno.test("partial, foreign, stale and corrupt text never becomes complete or re
   }
 });
 
-Deno.test("cancelled text drains only the admitted page before original cleanup", async () => {
+test("cancelled text drains only the admitted page before original cleanup", async () => {
   const f = await opened();
   const view = new AbortController();
   const content = await identity("x".repeat(65_537));
@@ -155,7 +157,7 @@ Deno.test("cancelled text drains only the admitted page before original cleanup"
   assertEquals((await close).kind, "released");
 });
 
-Deno.test("authority loss, old hosts and invalid identities cannot fall back or renew", async () => {
+test("authority loss, old hosts and invalid identities cannot fall back or renew", async () => {
   const f = await opened();
   const expected = textIdentity(contract.request.content);
   await assertRejects(
@@ -181,7 +183,7 @@ Deno.test("authority loss, old hosts and invalid identities cannot fall back or 
   assertEquals(g.calls.length, 3);
 });
 
-Deno.test("short or missing pages, unexpected fields and initial stale are protocol failures", async () => {
+test("short or missing pages, unexpected fields and initial stale are protocol failures", async () => {
   const content = await identity("x".repeat(65_537));
   const missing = page(content, 0, "x".repeat(65_536), 65_536);
   for (

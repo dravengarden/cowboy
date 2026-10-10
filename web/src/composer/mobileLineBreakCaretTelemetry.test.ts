@@ -1,17 +1,19 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   isMobileCaretGeometryInput,
   isMobileLineBreakInput,
 } from "./mobileLineBreakCaretTelemetry";
 
-const editorSource = await Deno.readTextFile(
-  new URL("../ComposerEditor.tsx", import.meta.url),
+const editorSource = await readFile(
+  new URL("../ComposerEditor.tsx", import.meta.url), "utf8",
 );
-const imageSource = await Deno.readTextFile(
-  new URL("../inlineImages.ts", import.meta.url),
+const imageSource = await readFile(
+  new URL("../inlineImages.ts", import.meta.url), "utf8",
 );
 
-Deno.test("mobile caret telemetry is reserved for native line-break input", () => {
+test("mobile caret telemetry is reserved for native line-break input", () => {
   assertEquals(isMobileLineBreakInput("insertLineBreak"), true);
   assertEquals(isMobileLineBreakInput("insertParagraph"), true);
   assertEquals(isMobileLineBreakInput("insertText"), false);
@@ -20,7 +22,7 @@ Deno.test("mobile caret telemetry is reserved for native line-break input", () =
   assertEquals(isMobileCaretGeometryInput("insertText"), false);
 });
 
-Deno.test("touch keeps hanging image widgets without a presentation branch", () => {
+test("touch keeps hanging image widgets without a presentation branch", () => {
   assertEquals(editorSource.includes("inlineImagePresentation"), false);
   assertEquals(editorSource.includes("touchInlineImageField"), false);
   assertEquals(

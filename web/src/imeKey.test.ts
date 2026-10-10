@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   IME_COMPOSITION_END_HOLD_MS,
   imeOwnsEditable,
@@ -7,7 +8,7 @@ import {
   isImeProtectedInput,
 } from "./imeKey.ts";
 
-Deno.test("IME keyboard events include active and legacy WebKit composition", () => {
+test("IME keyboard events include active and legacy WebKit composition", () => {
   assertEquals(
     isImeKeyEvent({ isComposing: true, key: "Enter", keyCode: 13 }),
     true,
@@ -30,7 +31,7 @@ Deno.test("IME keyboard events include active and legacy WebKit composition", ()
   );
 });
 
-Deno.test("IME beforeinput types are the candidate-confirm family", () => {
+test("IME beforeinput types are the candidate-confirm family", () => {
   assertEquals(isImeInputType("insertCompositionText"), true);
   assertEquals(isImeInputType("insertFromComposition"), true);
   assertEquals(isImeInputType("insertReplacementText"), true);
@@ -42,7 +43,7 @@ Deno.test("IME beforeinput types are the candidate-confirm family", () => {
   assertEquals(isImeInputType(undefined), false);
 });
 
-Deno.test("iOS IME backspace stays protected while composing", () => {
+test("iOS IME backspace stays protected while composing", () => {
   assertEquals(
     isImeProtectedInput({
       inputType: "deleteContentBackward",
@@ -66,7 +67,7 @@ Deno.test("iOS IME backspace stays protected while composing", () => {
   );
 });
 
-Deno.test("iOS Pinyin compositionend still owns the editable until start or hold", () => {
+test("iOS Pinyin compositionend still owns the editable until start or hold", () => {
   assertEquals(IME_COMPOSITION_END_HOLD_MS, 50);
   assertEquals(imeOwnsEditable(true, 0, 1_000), true);
   assertEquals(imeOwnsEditable(false, 0, 1_000), false);

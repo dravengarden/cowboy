@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   applyMarkdownEdit,
   continueMarkdownList,
@@ -70,7 +71,7 @@ function assertSortedChanges(edit: MarkdownEdit, length: number): void {
 }
 
 function table(name: string, command: Command, cases: [string, string | null][]): void {
-  Deno.test(name, () => {
+  test(name, () => {
     for (const [input, expected] of cases) {
       assertEquals(run(command, input), expected, `input: ${JSON.stringify(input)}`);
     }
@@ -146,7 +147,7 @@ table("Enter inside a fenced code block only indents", continueMarkdownList, [
   ["    ```\n- a|", "    ```\n- a\n- |"],
 ]);
 
-Deno.test("Enter keeps Obsidian's replace-previous-character change shape", () => {
+test("Enter keeps Obsidian's replace-previous-character change shape", () => {
   assertEquals(continueMarkdownList("- foo", { anchor: 5, head: 5 }), {
     changes: [{ from: 4, to: 5, insert: "o\n- " }],
     selection: { anchor: 8, head: 8 },
@@ -434,7 +435,7 @@ table("outdent lines with a space unit", (doc, sel) => outdentLines(doc, sel, " 
 // applyMarkdownEdit
 // ---------------------------------------------------------------------------
 
-Deno.test("applyMarkdownEdit applies original-coordinate changes", () => {
+test("applyMarkdownEdit applies original-coordinate changes", () => {
   const selection = { anchor: 0, head: 0 };
   assertEquals(applyMarkdownEdit("abc", { changes: [], selection }), "abc");
   assertEquals(
@@ -461,7 +462,7 @@ Deno.test("applyMarkdownEdit applies original-coordinate changes", () => {
   );
 });
 
-Deno.test("returned edits round-trip through applyMarkdownEdit", () => {
+test("returned edits round-trip through applyMarkdownEdit", () => {
   const doc = "- [ ] one\n- two\n\n> three";
   const sel = { anchor: 0, head: doc.length };
   for (const command of [toggleBulletList, toggleNumberedList, toggleChecklist, toggleBlockquote]) {

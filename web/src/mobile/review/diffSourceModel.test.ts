@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   diffPointToNewFile,
   diffSourceProjection,
@@ -16,7 +17,7 @@ const DIFF = [
   " }",
 ].join("\n");
 
-Deno.test("diff source projection preserves offsets and hides metadata", () => {
+test("diff source projection preserves offsets and hides metadata", () => {
   const projected = diffSourceProjection(DIFF);
   assertEquals(projected.length, DIFF.length);
   assertEquals(
@@ -26,14 +27,14 @@ Deno.test("diff source projection preserves offsets and hides metadata", () => {
   assertEquals(projected.split("\n")[6], " new_call();");
 });
 
-Deno.test("diff points map added and context lines to the working tree", () => {
+test("diff points map added and context lines to the working tree", () => {
   assertEquals(diffPointToNewFile(DIFF, 4, 4), { row: 19, column: 3 });
   assertEquals(diffPointToNewFile(DIFF, 6, 5), { row: 20, column: 4 });
   assertEquals(diffPointToNewFile(DIFF, 7, 3), { row: 21, column: 2 });
   assertEquals(diffPointToNewFile(DIFF, 8, 2), { row: 22, column: 1 });
 });
 
-Deno.test("diff points reject deleted lines and metadata", () => {
+test("diff points reject deleted lines and metadata", () => {
   assertEquals(diffPointToNewFile(DIFF, 0, 4), null);
   assertEquals(diffPointToNewFile(DIFF, 3, 4), null);
   assertEquals(diffPointToNewFile(DIFF, 5, 4), null);

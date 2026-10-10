@@ -1,4 +1,5 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import {
   attachmentDisplayParts,
   type Attachment,
@@ -14,7 +15,7 @@ import {
   stripImageTokens,
 } from "./attachments.ts";
 
-Deno.test("native clipboard placeholders reserve image ids without fake bytes", () => {
+test("native clipboard placeholders reserve image ids without fake bytes", () => {
   const pending = pendingClipboardImageAttachment(1, "clipboard-two");
   assertEquals(pending, {
     id: "clipboard-two",
@@ -26,7 +27,7 @@ Deno.test("native clipboard placeholders reserve image ids without fake bytes", 
   });
 });
 
-Deno.test("clipboard files include iOS item-only images without duplicates", () => {
+test("clipboard files include iOS item-only images without duplicates", () => {
   const direct = new File(["direct"], "direct.png", { type: "image/png" });
   const itemOnly = new File(["item"], "item.png", { type: "image/png" });
   const clipboard = {
@@ -40,7 +41,7 @@ Deno.test("clipboard files include iOS item-only images without duplicates", () 
   assertEquals(clipboardFiles(clipboard), [direct, itemOnly]);
 });
 
-Deno.test("clipboard files dedupe Chromium's distinct wrappers", () => {
+test("clipboard files dedupe Chromium's distinct wrappers", () => {
   const direct = new File(["same bytes"], "image.png", {
     type: "image/png",
     lastModified: 123,
@@ -57,7 +58,7 @@ Deno.test("clipboard files dedupe Chromium's distinct wrappers", () => {
   assertEquals(clipboardFiles(clipboard), [direct]);
 });
 
-Deno.test("clipboard files dedupe parallel Chromium wrappers with divergent metadata", () => {
+test("clipboard files dedupe parallel Chromium wrappers with divergent metadata", () => {
   const direct = new File(["same bytes"], "Screenshot 2026-08-20.png", {
     type: "image/png",
     lastModified: 123,
@@ -74,7 +75,7 @@ Deno.test("clipboard files dedupe parallel Chromium wrappers with divergent meta
   assertEquals(clipboardFiles(clipboard), [direct]);
 });
 
-Deno.test("clipboard files preserve multiple equal-metadata files", () => {
+test("clipboard files preserve multiple equal-metadata files", () => {
   const file = (): File =>
     new File(["same bytes"], "image.png", {
       type: "image/png",
@@ -102,7 +103,7 @@ function attachment(id: string, isImage: boolean): Attachment {
   };
 }
 
-Deno.test("settling one image paste batch preserves newer pending images", () => {
+test("settling one image paste batch preserves newer pending images", () => {
   const firstPending = { ...attachment("first", true), pending: true };
   const secondPending = { ...attachment("second", true), pending: true };
   const firstCompleted = attachment("first", true);
@@ -118,7 +119,7 @@ Deno.test("settling one image paste batch preserves newer pending images", () =>
   );
 });
 
-Deno.test("deleted inline tokens remove only their image attachments", () => {
+test("deleted inline tokens remove only their image attachments", () => {
   const inline = attachment("inline", true);
   const gallery = attachment("gallery", true);
   const file = attachment("file", false);
@@ -130,7 +131,7 @@ Deno.test("deleted inline tokens remove only their image attachments", () => {
   );
 });
 
-Deno.test("undo restores deleted image bytes from the inline registry cache", () => {
+test("undo restores deleted image bytes from the inline registry cache", () => {
   const inline = attachment("inline", true);
   const token = "![shot](cowboy-att:inline)";
 
@@ -147,7 +148,7 @@ Deno.test("undo restores deleted image bytes from the inline registry cache", ()
   );
 });
 
-Deno.test("an image attachment remains while any matching token remains", () => {
+test("an image attachment remains while any matching token remains", () => {
   const inline = attachment("inline", true);
   const previous = "![one](cowboy-att:inline)\n![two](cowboy-att:inline)";
   const next = "![two](cowboy-att:inline)";
@@ -159,7 +160,7 @@ Deno.test("an image attachment remains while any matching token remains", () => 
   );
 });
 
-Deno.test("ordinary text input preserves attachment state identity", () => {
+test("ordinary text input preserves attachment state identity", () => {
   const attachments = [attachment("file", false)];
   assertStrictEquals(
     reconcileDeletedInlineImages("hello", "hello!", attachments),
@@ -167,7 +168,7 @@ Deno.test("ordinary text input preserves attachment state identity", () => {
   );
 });
 
-Deno.test("legacy unplaced images regain deterministic inline positions", () => {
+test("legacy unplaced images regain deterministic inline positions", () => {
   const placed = attachment("placed", true);
   const legacy = attachment("legacy", true);
   const file = attachment("notes", false);
@@ -181,7 +182,7 @@ Deno.test("legacy unplaced images regain deterministic inline positions", () => 
   );
 });
 
-Deno.test("local message display keeps image bytes at their inline position", () => {
+test("local message display keeps image bytes at their inline position", () => {
   const image = attachment("shot", true);
   image.previewUrl = "data:image/png;base64,c2hvdA==";
   const file = attachment("notes", false);
@@ -200,7 +201,7 @@ Deno.test("local message display keeps image bytes at their inline position", ()
   );
 });
 
-Deno.test("stripImageTokens hides cowboy-att source even after a prior global scan", () => {
+test("stripImageTokens hides cowboy-att source even after a prior global scan", () => {
   const token =
     "![pasted-image-1.png](cowboy-att:att-f6da137a-d97f-4f24-bcfd-36945ab21a3d)";
   IMG_TOKEN_RE.lastIndex = token.length;
@@ -210,7 +211,7 @@ Deno.test("stripImageTokens hides cowboy-att source even after a prior global sc
   );
 });
 
-Deno.test("empty and cowboy-att preview URLs are not loadable", () => {
+test("empty and cowboy-att preview URLs are not loadable", () => {
   assertEquals(isLoadablePreviewUrl(undefined), false);
   assertEquals(isLoadablePreviewUrl(""), false);
   assertEquals(isLoadablePreviewUrl("cowboy-att:att-1"), false);
@@ -220,7 +221,7 @@ Deno.test("empty and cowboy-att preview URLs are not loadable", () => {
   assertEquals(isLoadablePreviewUrl("/api/artifacts/ab.jpg"), true);
 });
 
-Deno.test("history-externalized image blocks keep the artifact URL", () => {
+test("history-externalized image blocks keep the artifact URL", () => {
   assertEquals(
     imageBlockPreviewUrl(
       { type: "image", url: "/api/artifacts/ab.jpg", mimeType: "image/jpeg" },
@@ -243,7 +244,7 @@ Deno.test("history-externalized image blocks keep the artifact URL", () => {
   assertEquals(restored[0]?.previewUrl, "/api/artifacts/ab.jpg");
 });
 
-Deno.test("local attachment-only messages render the attachment, not fallback text", () => {
+test("local attachment-only messages render the attachment, not fallback text", () => {
   const image = attachment("shot", true);
   image.previewUrl = "data:image/png;base64,c2hvdA==";
 

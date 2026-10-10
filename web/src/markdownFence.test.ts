@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { fencedCodeIsOpen } from "./markdownFence.ts";
 
-Deno.test("a fence is open until a matching closing fence arrives", () => {
+test("a fence is open until a matching closing fence arrives", () => {
   assertEquals(fencedCodeIsOpen("```"), true);
   assertEquals(fencedCodeIsOpen("```text\nhalf a line"), true);
   assertEquals(fencedCodeIsOpen("```text\nline\n``"), true);
@@ -9,13 +10,13 @@ Deno.test("a fence is open until a matching closing fence arrives", () => {
   assertEquals(fencedCodeIsOpen("```text\nline\n```  "), false);
 });
 
-Deno.test("only a same-character fence at least as long closes the block", () => {
+test("only a same-character fence at least as long closes the block", () => {
   assertEquals(fencedCodeIsOpen("````md\n```\ninner\n```"), true);
   assertEquals(fencedCodeIsOpen("````md\n```\ninner\n```\n````"), false);
   assertEquals(fencedCodeIsOpen("~~~\ncode\n```"), true);
   assertEquals(fencedCodeIsOpen("~~~\ncode\n~~~"), false);
 });
 
-Deno.test("an indented code block is never open", () => {
+test("an indented code block is never open", () => {
   assertEquals(fencedCodeIsOpen("    indented code"), false);
 });

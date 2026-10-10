@@ -1,6 +1,7 @@
+import { test } from "bun:test";
 import { unifiedDiff } from "./diff";
 
-Deno.test("unified diff keeps exact small edits", () => {
+test("unified diff keeps exact small edits", () => {
   const result = unifiedDiff("one\ntwo\nthree", "one\nchanged\nthree");
   if (result.added !== 1 || result.removed !== 1) throw new Error("incorrect edit counts");
   if (!result.text.includes("-two") || !result.text.includes("+changed")) {
@@ -8,7 +9,7 @@ Deno.test("unified diff keeps exact small edits", () => {
   }
 });
 
-Deno.test("whole-file edit trims unchanged edges before diffing", () => {
+test("whole-file edit trims unchanged edges before diffing", () => {
   const oldLines = Array.from({ length: 11_000 }, (_, index) => `line ${index}`);
   const newLines = [...oldLines];
   newLines[5_500] = "line changed";

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   activityAvailableAgents,
   activityCacheProtectionStats,
@@ -18,17 +19,17 @@ import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts
 
 applyUsageHostPlugins(testFirstPartyHostPlugins());
 
-Deno.test("DeepSeek cache protection uses the shared 64K minimum", () => {
+test("DeepSeek cache protection uses the shared 64K minimum", () => {
   assertEquals(usageCacheMinHitTokens(), 64_000);
   assertEquals(usageCacheMinHitLabel(), "64K");
 });
 
-Deno.test("DeepSeek cache protection exposes the eight-hour base interval", () => {
+test("DeepSeek cache protection exposes the eight-hour base interval", () => {
   assertEquals(usageCacheIntervalMs(), 28_800_000);
   assertEquals(usageCacheIntervalLabel(), "8h");
 });
 
-Deno.test("DeepSeek agent capability follows the full retained telemetry window", () => {
+test("DeepSeek agent capability follows the full retained telemetry window", () => {
   assertEquals(
     activityAvailableAgents({
       availableAgents: ["codex", "claude", "claude", "invalid"],
@@ -39,7 +40,7 @@ Deno.test("DeepSeek agent capability follows the full retained telemetry window"
   assertEquals(activityAvailableAgents(undefined), []);
 });
 
-Deno.test("DeepSeek runtime lanes remain visible when a bounded window is empty", () => {
+test("DeepSeek runtime lanes remain visible when a bounded window is empty", () => {
   assertEquals(
     activityVisibleAgents(["claude", "codex"], [], ["claude"]),
     ["codex", "claude"],
@@ -54,7 +55,7 @@ Deno.test("DeepSeek runtime lanes remain visible when a bounded window is empty"
   );
 });
 
-Deno.test("DeepSeek cache rate uses only verified token observations", () => {
+test("DeepSeek cache rate uses only verified token observations", () => {
   const stats = activityCacheStats({
     requests: 12,
     cacheHitTokens: 900,
@@ -72,7 +73,7 @@ Deno.test("DeepSeek cache rate uses only verified token observations", () => {
   assertEquals(stats.coldRequests, 1);
 });
 
-Deno.test("DeepSeek cache rate stays unknown without cache fields", () => {
+test("DeepSeek cache rate stays unknown without cache fields", () => {
   const stats = activityCacheStats({
     cacheObservations: 0,
     absentCacheObservations: 4,
@@ -82,7 +83,7 @@ Deno.test("DeepSeek cache rate stays unknown without cache fields", () => {
   assertEquals(stats.coverageRate, 0);
 });
 
-Deno.test("DeepSeek cache protection separates verified outcomes from all attempts", () => {
+test("DeepSeek cache protection separates verified outcomes from all attempts", () => {
   const stats = activityCacheProtectionStats({
     cacheKeepaliveRequests: 6,
     cacheKeepaliveHits: 2,
@@ -100,7 +101,7 @@ Deno.test("DeepSeek cache protection separates verified outcomes from all attemp
   assertEquals(activityCacheProtectionStats({}).verifiedHitRate, undefined);
 });
 
-Deno.test("percentLabel renders two decimals", () => {
+test("percentLabel renders two decimals", () => {
   assertEquals(percentLabel(87.346), "87.35%");
   assertEquals(percentLabel(0), "0.00%");
   assertEquals(percentLabel(100), "100.00%");
@@ -108,7 +109,7 @@ Deno.test("percentLabel renders two decimals", () => {
   assertEquals(percentLabel(undefined), "—");
 });
 
-Deno.test("activityCostStats parses backend valuation without double-counting reasoning", () => {
+test("activityCostStats parses backend valuation without double-counting reasoning", () => {
   const stats = activityCostStats({
     requests: 10,
     usageObservedRequests: 10,
@@ -134,7 +135,7 @@ Deno.test("activityCostStats parses backend valuation without double-counting re
   assertEquals(stats?.reasoningTokens, 10_000);
 });
 
-Deno.test("activityCostStats degrades to zero without tokens and stays unknown without totals", () => {
+test("activityCostStats degrades to zero without tokens and stays unknown without totals", () => {
   const empty = activityCostStats({ requests: 0, estimatedCost: 0 });
   assertEquals(empty?.estimatedCost, 0);
   assertEquals(empty?.costPerRequest, 0);

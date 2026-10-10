@@ -1,9 +1,11 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-Deno.test("mobile Settings uses an index and one lightweight detail route", () => {
+test("mobile Settings uses an index and one lightweight detail route", () => {
   assert(appSource.includes("function MobileSettingsRoute"));
   assert(appSource.includes("initialMobileSettingsSection"));
   assert(appSource.includes('return focus === "code" ? "code" : null'));
@@ -63,7 +65,7 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes('data-settings-section="code"'));
 });
 
-Deno.test("mobile Account keeps its independent cards visibly separated", () => {
+test("mobile Account keeps its independent cards visibly separated", () => {
   const routeStart = appSource.indexOf(
     '<MobileSettingsRoute\n                    id="account"',
   );

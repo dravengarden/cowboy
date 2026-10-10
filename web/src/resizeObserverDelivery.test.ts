@@ -1,13 +1,15 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./ComposerTextarea.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./ComposerTextarea.tsx", import.meta.url), "utf8",
 );
-const geometrySource = await Deno.readTextFile(
-  new URL("./floatingComposerGeometry.ts", import.meta.url),
+const geometrySource = await readFile(
+  new URL("./floatingComposerGeometry.ts", import.meta.url), "utf8",
 );
 
-Deno.test("composer defers ResizeObserver layout work to an animation frame", () => {
+test("composer defers ResizeObserver layout work to an animation frame", () => {
   assert(composerSource.includes("new ResizeObserver(() =>"));
   assert(composerSource.includes("globalThis.requestAnimationFrame(() =>"));
   assertEquals(
@@ -16,7 +18,7 @@ Deno.test("composer defers ResizeObserver layout work to an animation frame", ()
   );
 });
 
-Deno.test("floating geometry coalesces ResizeObserver delivery outside the callback", () => {
+test("floating geometry coalesces ResizeObserver delivery outside the callback", () => {
   assert(
     geometrySource.includes("new ResizeObserver(queueMeasurementFrame)"),
   );

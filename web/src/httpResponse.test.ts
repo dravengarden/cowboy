@@ -1,7 +1,8 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import { expectHttpOk } from "./httpResponse.ts";
 
-Deno.test("HTTP failures keep the action, status and plaintext server reason", async () => {
+test("HTTP failures keep the action, status and plaintext server reason", async () => {
   const error = await assertRejects(
     () =>
       expectHttpOk(
@@ -24,7 +25,7 @@ for (
     "Refresh is unavailable",
   ]
 ) {
-  Deno.test(`HTTP errors extract structured explanation: ${JSON.stringify(body)}`, async () => {
+  test(`HTTP errors extract structured explanation: ${JSON.stringify(body)}`, async () => {
     const error = await assertRejects(
       () =>
         expectHttpOk(
@@ -39,7 +40,7 @@ for (
   });
 }
 
-Deno.test("empty, unrecognized JSON and proxy HTML errors still identify the operation", async () => {
+test("empty, unrecognized JSON and proxy HTML errors still identify the operation", async () => {
   for (
     const body of [
       "",
@@ -67,7 +68,7 @@ Deno.test("empty, unrecognized JSON and proxy HTML errors still identify the ope
   );
 });
 
-Deno.test("failed error-body reads keep the status and cancellation stays cancellation", async () => {
+test("failed error-body reads keep the status and cancellation stays cancellation", async () => {
   const brokenBody = new ReadableStream({
     start(controller) {
       controller.error(new Error("lost body"));
@@ -98,7 +99,7 @@ Deno.test("failed error-body reads keep the status and cancellation stays cancel
   assertEquals(error, aborted);
 });
 
-Deno.test("successful HTTP checks leave the body readable", async () => {
+test("successful HTTP checks leave the body readable", async () => {
   const response = Response.json({ providers: [] });
   await expectHttpOk(response, "Could not load usage");
   assertEquals(await response.json(), { providers: [] });

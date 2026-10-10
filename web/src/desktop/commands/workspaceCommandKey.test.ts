@@ -1,7 +1,8 @@
+import { test } from "bun:test";
 import { strict as assert } from "node:assert";
 import { workspaceCommandKey } from "./workspaceCommandKey";
 
-Deno.test("workspace Vim motions use physical keys under an IME input source", () => {
+test("workspace Vim motions use physical keys under an IME input source", () => {
   assert.equal(
     workspaceCommandKey({ code: "KeyJ", key: "Process", shiftKey: false }),
     "j",
@@ -12,7 +13,7 @@ Deno.test("workspace Vim motions use physical keys under an IME input source", (
   );
 });
 
-Deno.test("every workspace letter shortcut uses physical identity under an IME", () => {
+test("every workspace letter shortcut uses physical identity under an IME", () => {
   for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
     assert.equal(
       workspaceCommandKey({
@@ -33,7 +34,7 @@ Deno.test("every workspace letter shortcut uses physical identity under an IME",
   }
 });
 
-Deno.test("workspace Vim motions preserve shifted G and native non-letter keys", () => {
+test("workspace Vim motions preserve shifted G and native non-letter keys", () => {
   assert.equal(
     workspaceCommandKey({ code: "KeyG", key: "Process", shiftKey: true }),
     "G",
@@ -56,14 +57,14 @@ Deno.test("workspace Vim motions preserve shifted G and native non-letter keys",
   );
 });
 
-Deno.test("workspace Resize-mode command uses the physical backslash key", () => {
+test("workspace Resize-mode command uses the physical backslash key", () => {
   assert.equal(
     workspaceCommandKey({ code: "Backslash", key: "Process", shiftKey: false }),
     "\\",
   );
 });
 
-Deno.test("workspace discovery commands use physical shifted punctuation", () => {
+test("workspace discovery commands use physical shifted punctuation", () => {
   assert.equal(
     workspaceCommandKey({ code: "Semicolon", key: "Process", shiftKey: true }),
     ":",
@@ -74,7 +75,7 @@ Deno.test("workspace discovery commands use physical shifted punctuation", () =>
   );
 });
 
-Deno.test("workspace resize commands use physical angle-bracket keys", () => {
+test("workspace resize commands use physical angle-bracket keys", () => {
   assert.equal(
     workspaceCommandKey({ code: "Comma", key: "Process", shiftKey: true }),
     "<",

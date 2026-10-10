@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   HUMAN_COMPOSER_ORIGIN,
   isAgentReviewTaskPrompt,
@@ -20,7 +21,7 @@ Then update the review_file:
 
 You may set wontfix with a technical explanation, or needs-user-input if the user must decide.`;
 
-Deno.test("internal runtime prompts are not human text", () => {
+test("internal runtime prompts are not human text", () => {
   assertEquals(
     isInternalRuntimePrompt(
       "<system-reminder>Background task completed.</system-reminder>",
@@ -37,7 +38,7 @@ Deno.test("internal runtime prompts are not human text", () => {
   );
 });
 
-Deno.test("resolvePromptOrigin prefers the persisted source object", () => {
+test("resolvePromptOrigin prefers the persisted source object", () => {
   assertEquals(
     resolvePromptOrigin(
       {
@@ -72,7 +73,7 @@ Deno.test("resolvePromptOrigin prefers the persisted source object", () => {
   );
 });
 
-Deno.test("runtime presentation hides reminder markup from the title", () => {
+test("runtime presentation hides reminder markup from the title", () => {
   const presented = runtimePromptPresentation(
     '<system-reminder>Background task "find" completed (exit code: 0).\nCommand: find /tmp</system-reminder>',
     { actor: "agent", source: "runtime", provider: "grok" },
@@ -82,7 +83,7 @@ Deno.test("runtime presentation hides reminder markup from the title", () => {
   assertEquals(presented.raw?.includes("<system-reminder>"), false);
 });
 
-Deno.test("agent review follow-ups collapse to a note instead of a human bubble", () => {
+test("agent review follow-ups collapse to a note instead of a human bubble", () => {
   const presented = runtimePromptPresentation(
     AGENT_REVIEW_FOLLOW_UP,
     { actor: "agent", source: "review", provider: "future-agent" },

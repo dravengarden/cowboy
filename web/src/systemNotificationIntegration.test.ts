@@ -1,11 +1,13 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const serviceWorker = await Deno.readTextFile(new URL("../public/sw.js", import.meta.url));
-const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
-const settings = await Deno.readTextFile(new URL("./NotificationSettings.tsx", import.meta.url));
-const server = await Deno.readTextFile(new URL("../../src/server.rs", import.meta.url));
+const serviceWorker = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
+const settings = await readFile(new URL("./NotificationSettings.tsx", import.meta.url), "utf8");
+const server = await readFile(new URL("../../src/server.rs", import.meta.url), "utf8");
 
-Deno.test("service worker owns Apple push display and bounded session navigation", () => {
+test("service worker owns Apple push display and bounded session navigation", () => {
   assert(serviceWorker.includes('self.addEventListener("push"'));
   assert(serviceWorker.includes("validNotificationMessage(message)"));
   assert(serviceWorker.includes('self.addEventListener("notificationclick"'));
@@ -13,7 +15,7 @@ Deno.test("service worker owns Apple push display and bounded session navigation
   assert(serviceWorker.includes("client.navigate(target)"));
 });
 
-Deno.test("controller, not a visible page or Hermes, delivers session events", () => {
+test("controller, not a visible page or Hermes, delivers session events", () => {
   assert(server.includes("run_web_push_notifications("));
   assert(server.includes("NotificationCategory::Permission"));
   assertEquals(server.includes("NotificationCategory::Completed"), false);
@@ -23,7 +25,7 @@ Deno.test("controller, not a visible page or Hermes, delivers session events", (
   assertEquals(store.includes("presentSessionNotification"), false);
 });
 
-Deno.test("mobile notification status clears the page divider and keeps its controls top-aligned", () => {
+test("mobile notification status clears the page divider and keeps its controls top-aligned", () => {
   assert(settings.includes('pt: { xs: 1.5, md: 0 }'));
   assert(settings.includes('alignItems="flex-start"'));
   assert(settings.includes("flexShrink: 0"));

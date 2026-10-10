@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import type { ProductCache, ProductCacheScope } from "./productSyncDatabase.ts";
 import type { Envelope, SessionMeta } from "./protocol.ts";
 import {
@@ -62,7 +63,7 @@ const event = (seq: number): Envelope => ({
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-Deno.test("decoders reject malformed cache records instead of painting them", () => {
+test("decoders reject malformed cache records instead of painting them", () => {
   assertEquals(decodeReplicaSessions(null), null);
   assertEquals(decodeReplicaSessions({ receivedAt: 1, sessions: [{ id: "x" }] }), null);
   assertEquals(decodeReplicaSessions({ receivedAt: 1, sessions: [meta("a")] })?.sessions.length, 1);
@@ -74,7 +75,7 @@ Deno.test("decoders reject malformed cache records instead of painting them", ()
   assertEquals(decodeReplicaDelivery({ held: ["a"] }), { held: ["a"] });
 });
 
-Deno.test("replica coalesces bursts into one write and lands immediate checkpoints", async () => {
+test("replica coalesces bursts into one write and lands immediate checkpoints", async () => {
   const db = memoryDatabase();
   let clock = 1000;
   const replica = createReplica(db, { now: () => clock, debounceMs: 1, maxWaitMs: 10 });
@@ -100,7 +101,7 @@ Deno.test("replica coalesces bursts into one write and lands immediate checkpoin
   assertEquals(db.saves, 2);
 });
 
-Deno.test("replica retains only listed sessions and forgets everything on discardAll", async () => {
+test("replica retains only listed sessions and forgets everything on discardAll", async () => {
   const db = memoryDatabase();
   const replica = createReplica(db, { debounceMs: 1, maxWaitMs: 5 });
   await replica.session("a").saveDelivery({ held: ["m1"] });
@@ -121,7 +122,7 @@ Deno.test("replica retains only listed sessions and forgets everything on discar
   assertEquals(db.data.size, 0);
 });
 
-Deno.test("replica seal drops pending producers without writing", async () => {
+test("replica seal drops pending producers without writing", async () => {
   const db = memoryDatabase();
   const replica = createReplica(db, { debounceMs: 50, maxWaitMs: 100 });
   replica.recordSessions([meta("a")]);

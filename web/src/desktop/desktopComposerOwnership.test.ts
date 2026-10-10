@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   desktopComposerOwnsWorkspace,
   desktopDefaultRegionForPane,
@@ -6,7 +8,7 @@ import {
   desktopVimSinkShouldHandleKeys,
 } from "./desktopComposerOwnership.ts";
 
-Deno.test("a Vim sink owns keys only while its containing region is focused", () => {
+test("a Vim sink owns keys only while its containing region is focused", () => {
   assertEquals(desktopComposerOwnsWorkspace("prompt.composer"), true);
   assertEquals(desktopComposerOwnsWorkspace("conversation.transcript"), false);
   assertEquals(
@@ -60,15 +62,15 @@ Deno.test("a Vim sink owns keys only while its containing region is focused", ()
   );
 });
 
-Deno.test("workspace capture blocks a stale Prompt sink after Conversation is highlighted", async () => {
-  const provider = await Deno.readTextFile(
-    new URL("./commands/DesktopCommandProvider.tsx", import.meta.url),
+test("workspace capture blocks a stale Prompt sink after Conversation is highlighted", async () => {
+  const provider = await readFile(
+    new URL("./commands/DesktopCommandProvider.tsx", import.meta.url), "utf8",
   );
-  const controller = await Deno.readTextFile(
-    new URL("./DesktopWorkspaceController.tsx", import.meta.url),
+  const controller = await readFile(
+    new URL("./DesktopWorkspaceController.tsx", import.meta.url), "utf8",
   );
-  const vim = await Deno.readTextFile(
-    new URL("./vim/imeAutoInsertVim.ts", import.meta.url),
+  const vim = await readFile(
+    new URL("./vim/imeAutoInsertVim.ts", import.meta.url), "utf8",
   );
   assertEquals(provider.includes("desktopShouldBlockStaleVimSink("), true);
   assertEquals(provider.includes("!textEditorOwnsKey && !event.metaKey && !event.altKey"), true);
@@ -80,16 +82,16 @@ Deno.test("workspace capture blocks a stale Prompt sink after Conversation is hi
   assertEquals(vim.includes("ownsFocus && this.cm &&"), true);
 });
 
-Deno.test("pointerdown on a Conversation tab leaves the Sessions region", async () => {
-  const ownership = await Deno.readTextFile(
-    new URL("./desktopComposerOwnership.ts", import.meta.url),
+test("pointerdown on a Conversation tab leaves the Sessions region", async () => {
+  const ownership = await readFile(
+    new URL("./desktopComposerOwnership.ts", import.meta.url), "utf8",
   );
   assertEquals(ownership.includes("export function desktopPointerLeftRegion("), true);
   assertEquals(ownership.includes('active.closest("[data-desktop-region]")'), true);
   assertEquals(ownership.includes("return !owned.contains(target);"), true);
 });
 
-Deno.test("Conversation chrome without a nested region still owns the transcript", () => {
+test("Conversation chrome without a nested region still owns the transcript", () => {
   assertEquals(
     desktopDefaultRegionForPane("conversation"),
     "conversation.transcript",

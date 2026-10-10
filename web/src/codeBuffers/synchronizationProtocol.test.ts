@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { decodeSynchronization } from "./synchronizationProtocol.ts";
 import { appliedState, golden, syncWire } from "./synchronizationFixture.ts";
@@ -12,7 +13,7 @@ const id = decodeResourceId(golden.resourceId);
 const decode = (value: unknown, status = 200) =>
   decodeSynchronization(value, status, id, golden.content);
 
-Deno.test("Service synchronization fixture matches a real captured UTF-8 digest and freezes complete evidence", async () => {
+test("Service synchronization fixture matches a real captured UTF-8 digest and freezes complete evidence", async () => {
   assertEquals(capturedIdentity(await content()), golden.content);
   const result = decode(golden);
   assertEquals(result, golden);
@@ -27,7 +28,7 @@ Deno.test("Service synchronization fixture matches a real captured UTF-8 digest 
   );
 });
 
-Deno.test("synchronization codec rejects wrong domains, unknown fields, owners, content, versions and inconsistent status", () => {
+test("synchronization codec rejects wrong domains, unknown fields, owners, content, versions and inconsistent status", () => {
   const bad: unknown[] = [
     null,
     [],
@@ -87,7 +88,7 @@ Deno.test("synchronization codec rejects wrong domains, unknown fields, owners, 
   );
 });
 
-Deno.test("native pending and Service pending are independent, closed observations", () => {
+test("native pending and Service pending are independent, closed observations", () => {
   for (
     const kind of [
       "prepared",
@@ -114,7 +115,7 @@ Deno.test("native pending and Service pending are independent, closed observatio
   assertEquals(decode(syncWire(appliedState)).state, appliedState);
 });
 
-Deno.test("actual Service budget fixture has no partial result, retry permission or foreign identity", () => {
+test("actual Service budget fixture has no partial result, retry permission or foreign identity", () => {
   assertEquals(decode(budget), budget);
   for (const field of ["content", "version", "retryAfter", "partial"]) {
     assertThrows(

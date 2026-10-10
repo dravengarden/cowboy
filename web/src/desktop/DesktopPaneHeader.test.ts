@@ -1,10 +1,12 @@
-import { assert } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 
-const workspaceSource = await Deno.readTextFile(
-  new URL("./DesktopWorkspace.tsx", import.meta.url),
+const workspaceSource = await readFile(
+  new URL("./DesktopWorkspace.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Desktop pane actions scroll horizontally instead of shrinking controls", () => {
+test("Desktop pane actions scroll horizontally instead of shrinking controls", () => {
   assert(
     /lineHeight: 1,\s+flexShrink: 0,/u.test(workspaceSource),
   );

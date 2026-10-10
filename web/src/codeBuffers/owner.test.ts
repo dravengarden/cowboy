@@ -1,14 +1,15 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import { fixture, ID, opened, OTHER, readWire, wire } from "./fixture.ts";
 import { createOwnedCodeBuffers } from "./owner.ts";
 
-Deno.test("owner captures the target once and subsequent requests use only the original id", async () => {
+test("owner captures the target once and subsequent requests use only the original id", async () => {
   const f = await opened();
   const read = f.owner.read("symbols");
   f.reply(2, readWire("symbols"));
@@ -53,7 +54,7 @@ Deno.test("owner captures the target once and subsequent requests use only the o
   assertEquals(f.calls.length, 4);
 });
 
-Deno.test("lost open is observed, never resent, even when native evidence is prepared again", async () => {
+test("lost open is observed, never resent, even when native evidence is prepared again", async () => {
   const f = fixture();
   const prepare = f.owner.prepare();
   f.reply(0, wire("prepared"));
@@ -78,7 +79,7 @@ Deno.test("lost open is observed, never resent, even when native evidence is pre
   ]);
 });
 
-Deno.test("cancelled prepare observer retains the continuation and can close its late reservation", async () => {
+test("cancelled prepare observer retains the continuation and can close its late reservation", async () => {
   const f = fixture(), observer = new AbortController();
   const result = f.owner.prepare(observer.signal);
   observer.abort();
@@ -92,7 +93,7 @@ Deno.test("cancelled prepare observer retains the continuation and can close its
   assertEquals(f.calls.map(({ init }) => init.method), ["POST", "DELETE"]);
 });
 
-Deno.test("closing during open drains it before original-id cleanup and does not open again", async () => {
+test("closing during open drains it before original-id cleanup and does not open again", async () => {
   const f = fixture();
   const prepared = f.owner.prepare();
   f.reply(0, wire("prepared"));
@@ -108,7 +109,7 @@ Deno.test("closing during open drains it before original-id cleanup and does not
   assertEquals((await close).kind, "released");
 });
 
-Deno.test("cancelled read observer cannot drop the borrow or publish a late result", async () => {
+test("cancelled read observer cannot drop the borrow or publish a late result", async () => {
   const f = await opened(), observer = new AbortController();
   const result = f.owner.read("language", observer.signal);
   observer.abort();
@@ -126,7 +127,7 @@ Deno.test("cancelled read observer cannot drop the borrow or publish a late resu
   assertEquals((await close).kind, "released");
 });
 
-Deno.test("a view closing during a read suppresses success without cancelling server cleanup", async () => {
+test("a view closing during a read suppresses success without cancelling server cleanup", async () => {
   const f = await opened();
   const read = f.owner.read("symbols");
   const rejected = assertRejects(() => read, BufferClientError, "cancelled");
@@ -140,7 +141,7 @@ Deno.test("a view closing during a read suppresses success without cancelling se
   await close;
 });
 
-Deno.test("pending DELETE is not queued: explicit next close observes before another DELETE", async () => {
+test("pending DELETE is not queued: explicit next close observes before another DELETE", async () => {
   const f = await opened();
   const close = f.owner.close();
   await f.advance(3);
@@ -159,7 +160,7 @@ Deno.test("pending DELETE is not queued: explicit next close observes before ano
   assertEquals((await next).kind, "released");
 });
 
-Deno.test("an ambiguous DELETE never rearms, even when a later query reports open", async () => {
+test("an ambiguous DELETE never rearms, even when a later query reports open", async () => {
   const f = await opened();
   const close = f.owner.close();
   await f.advance(3);
@@ -182,7 +183,7 @@ Deno.test("an ambiguous DELETE never rearms, even when a later query reports ope
   );
 });
 
-Deno.test("404 and pending/unknown observations preserve the original owner without cleanup effects", async () => {
+test("404 and pending/unknown observations preserve the original owner without cleanup effects", async () => {
   const f = await opened();
   const query = f.owner.observe();
   f.reply(2, {}, 404);
@@ -203,7 +204,7 @@ Deno.test("404 and pending/unknown observations preserve the original owner with
   );
 });
 
-Deno.test("authority lifetime abort fences reads, cleanup and reservation without adopting new cookies", async () => {
+test("authority lifetime abort fences reads, cleanup and reservation without adopting new cookies", async () => {
   const f = await opened();
   const read = f.owner.read("symbols");
   const rejected = assertRejects(() => read, BufferClientError, "context_lost");
@@ -222,7 +223,7 @@ Deno.test("authority lifetime abort fences reads, cleanup and reservation withou
   assertEquals(f.registry.retained(), [f.owner]);
 });
 
-Deno.test("malformed or mismatched successful responses never authorize another operation", async () => {
+test("malformed or mismatched successful responses never authorize another operation", async () => {
   for (
     const value of [wire("open"), wire("prepared", ID, true), {
       ...wire("prepared"),
@@ -245,7 +246,7 @@ Deno.test("malformed or mismatched successful responses never authorize another 
   assertEquals(f.owner.view().resourceId, ID);
 });
 
-Deno.test("unknown host is not a fallback, retry or successful cleanup", async () => {
+test("unknown host is not a fallback, retry or successful cleanup", async () => {
   const f = fixture();
   const prepare = f.owner.prepare();
   f.reply(0, {}, 501);
@@ -255,7 +256,7 @@ Deno.test("unknown host is not a fallback, retry or successful cleanup", async (
   assertEquals(f.calls.length, 1);
 });
 
-Deno.test("capacity never evicts active or unknown owners and released slots can be reused", async () => {
+test("capacity never evicts active or unknown owners and released slots can be reused", async () => {
   const f = fixture();
   const others = Array.from(
     { length: 63 },
@@ -273,7 +274,7 @@ Deno.test("capacity never evicts active or unknown owners and released slots can
   assert(Object.isFrozen(f.registry.retained()));
 });
 
-Deno.test("concurrent calls are rejected before transport; an already aborted observer starts nothing", async () => {
+test("concurrent calls are rejected before transport; an already aborted observer starts nothing", async () => {
   const f = fixture();
   const abort = AbortSignal.abort();
   await assertRejects(
@@ -298,7 +299,7 @@ Deno.test("concurrent calls are rejected before transport; an already aborted ob
   assertEquals(f.calls.length, 2);
 });
 
-Deno.test("mutable caller options cannot rebind the authority lifetime or prepared target", async () => {
+test("mutable caller options cannot rebind the authority lifetime or prepared target", async () => {
   const context = new AbortController();
   const captured: string[] = [];
   const options = {
@@ -328,7 +329,7 @@ Deno.test("mutable caller options cannot rebind the authority lifetime or prepar
   assertEquals(captured.length, 1);
 });
 
-Deno.test("pending open cannot be replayed or read before a fresh original-id observation", async () => {
+test("pending open cannot be replayed or read before a fresh original-id observation", async () => {
   const f = fixture();
   const prepare = f.owner.prepare();
   f.reply(0, wire("prepared"));
@@ -358,7 +359,7 @@ Deno.test("pending open cannot be replayed or read before a fresh original-id ob
   ]);
 });
 
-Deno.test("authority loss during effect-free prepare cannot authorize a late open", async () => {
+test("authority loss during effect-free prepare cannot authorize a late open", async () => {
   const f = fixture();
   const prepare = f.owner.prepare();
   const rejected = assertRejects(

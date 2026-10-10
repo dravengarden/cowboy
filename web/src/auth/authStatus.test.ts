@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   classifyAuthStatus,
   classifyMeHandshake,
@@ -26,7 +27,7 @@ const tokenOpen = {
   accepts_registration: true,
 };
 
-Deno.test("200 with me mounts the product apps and may open /ws", () => {
+test("200 with me mounts the product apps and may open /ws", () => {
   const decision = classifyAuthStatus({
     kind: "ok",
     httpStatus: 200,
@@ -41,7 +42,7 @@ Deno.test("200 with me mounts the product apps and may open /ws", () => {
   assertEquals(isLoginDecision(decision), false);
 });
 
-Deno.test("200 without me is login and must not open /ws", () => {
+test("200 without me is login and must not open /ws", () => {
   const decision = classifyAuthStatus({
     kind: "ok",
     httpStatus: 200,
@@ -53,7 +54,7 @@ Deno.test("200 without me is login and must not open /ws", () => {
   assertEquals(isLoginDecision(decision), true);
 });
 
-Deno.test("404 and 501 are activating, never login-forever", () => {
+test("404 and 501 are activating, never login-forever", () => {
   for (const httpStatus of [404, 501] as const) {
     const decision = classifyAuthStatus({
       kind: "unsupported",
@@ -66,7 +67,7 @@ Deno.test("404 and 501 are activating, never login-forever", () => {
   }
 });
 
-Deno.test("network and 5xx retry without clearing login state", () => {
+test("network and 5xx retry without clearing login state", () => {
   assertEquals(classifyAuthStatus({ kind: "network" }).view, "retry");
   assertEquals(
     classifyAuthStatus({ kind: "unavailable", httpStatus: 503 }).view,
@@ -78,7 +79,7 @@ Deno.test("network and 5xx retry without clearing login state", () => {
   );
 });
 
-Deno.test("register chrome follows accepts_registration and token mode", () => {
+test("register chrome follows accepts_registration and token mode", () => {
   assertEquals(showRegistration(closed), false);
   assertEquals(showRegistrationToken(closed), false);
   assertEquals(showRegistration(tokenOpen), true);
@@ -93,7 +94,7 @@ Deno.test("register chrome follows accepts_registration and token mode", () => {
   );
 });
 
-Deno.test("status retry backoff matches the connection banner", () => {
+test("status retry backoff matches the connection banner", () => {
   assertEquals(nextAuthStatusBackoffMs(1), 1000);
   assertEquals(nextAuthStatusBackoffMs(2), 2000);
   assertEquals(nextAuthStatusBackoffMs(3), 4000);
@@ -102,7 +103,7 @@ Deno.test("status retry backoff matches the connection banner", () => {
   assertEquals(nextAuthStatusBackoffMs(8), 15000);
 });
 
-Deno.test("me handshake reconnects on 200, logs out on 401/403, keeps cookie otherwise", () => {
+test("me handshake reconnects on 200, logs out on 401/403, keeps cookie otherwise", () => {
   assertEquals(classifyMeHandshake(200), "reconnect");
   assertEquals(classifyMeHandshake(401), "logout");
   assertEquals(classifyMeHandshake(403), "logout");
@@ -114,7 +115,7 @@ Deno.test("me handshake reconnects on 200, logs out on 401/403, keeps cookie oth
   assertEquals(isAuthLostCloseCode(1006), false);
 });
 
-Deno.test("a ready session ignores outages and only tears down on 200 auth change", () => {
+test("a ready session ignores outages and only tears down on 200 auth change", () => {
   const me = { account: "draven", role: "operator" as const };
   assertEquals(
     nextReadyStatusAction(me, classifyAuthStatus({ kind: "network" })),
@@ -156,7 +157,7 @@ Deno.test("a ready session ignores outages and only tears down on 200 auth chang
   );
 });
 
-Deno.test("a same-label replacement principal tears down but a rename retains the same dataset", () => {
+test("a same-label replacement principal tears down but a rename retains the same dataset", () => {
   const me = { account: "label", user_id: "user-a", role: "operator" as const };
   for (
     const replacement of [
@@ -183,7 +184,7 @@ Deno.test("a same-label replacement principal tears down but a rename retains th
   );
 });
 
-Deno.test("logout deletes only HISTORY_CACHE generations", async () => {
+test("logout deletes only HISTORY_CACHE generations", async () => {
   assertEquals(historyCacheName("cowboy-v1405"), "cowboy-v1405-history");
   const deleted: string[] = [];
   await deleteProductHistoryCache({

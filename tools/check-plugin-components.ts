@@ -1,3 +1,6 @@
+import { Command } from "./lib/command.ts";
+import { readdirSync, statSync } from "node:fs";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import {
   assert,
   assertSameSet,
@@ -66,13 +69,13 @@ export async function checkRepository(): Promise<void> {
   assert(registry.releases.length > 0, "component registry has no releases");
 
   const active = registry.releases.at(-1)!;
-  if (Deno.args.includes("--print-closure")) {
+  if (process.argv.slice(2).includes("--print-closure")) {
     console.log(
       JSON.stringify(
         await repositoryClosure(
           active.components,
-          [...Deno.readDirSync("plugins")].filter((entry) =>
-            entry.isDirectory && exists(`plugins/${entry.name}/plugin.json`)
+          [...readdirSync("plugins", { withFileTypes: true })].filter((entry) =>
+            entry.isDirectory() && exists(`plugins/${entry.name}/plugin.json`)
           ).map((entry) => entry.name).sort(),
         ),
         null,
@@ -81,7 +84,7 @@ export async function checkRepository(): Promise<void> {
     );
     return;
   }
-  if (Deno.args.includes("--print-digests")) {
+  if (process.argv.slice(2).includes("--print-digests")) {
     for (const component of active.components) {
       console.log(`${component.id} ${await sourceDigest(component.sources)}`);
     }
@@ -101,8 +104,8 @@ export async function checkRepository(): Promise<void> {
   const activeComponents = new Map(
     active.components.map((component) => [component.id, component]),
   );
-  const distributableManifests = [...Deno.readDirSync("components")]
-    .filter((entry) => entry.isDirectory)
+  const distributableManifests = [...readdirSync("components", { withFileTypes: true })]
+    .filter((entry) => entry.isDirectory())
     .flatMap((entry) =>
       ["package.json", "Cargo.toml"]
         .map((manifest) => `components/${entry.name}/${manifest}`)
@@ -142,9 +145,9 @@ export async function checkRepository(): Promise<void> {
     );
   }
 
-  const pluginEntries = [...Deno.readDirSync("plugins")]
+  const pluginEntries = [...readdirSync("plugins", { withFileTypes: true })]
     .filter((entry) =>
-      entry.isDirectory && exists(`plugins/${entry.name}/plugin.json`)
+      entry.isDirectory() && exists(`plugins/${entry.name}/plugin.json`)
     )
     .map((entry) => entry.name)
     .sort();
@@ -248,8 +251,8 @@ export async function checkRepository(): Promise<void> {
       // A Rust adapter is an optional private implementation, not a named
       // Plugin identity or the only language an external engine can use.
       const cargoPath = `plugins/${pluginId}/adapter/Cargo.toml`;
-      const cargo = await Deno.readTextFile(cargoPath).catch((error) => {
-        if (error instanceof Deno.errors.NotFound) return undefined;
+      const cargo = await readFile(cargoPath, "utf8").catch((error) => {
+        if ((error as { code?: string }).code === "ENOENT") return undefined;
         throw error;
       });
       if (cargo !== undefined) {
@@ -316,11 +319,11 @@ export async function filesDigest(sourceFiles: string[]): Promise<string> {
   let length = 0;
   for (const file of files) {
     assert(
-      (await Deno.lstat(file)).isFile,
+      (await lstat(file)).isFile(),
       `${file}: release input must be a regular file`,
     );
     const path = new TextEncoder().encode(`${file}\0`);
-    const body = await Deno.readFile(file);
+    const body = await readFile(file);
     const end = new Uint8Array([0]);
     chunks.push(path, body, end);
     length += path.length + body.length + end.length;
@@ -345,7 +348,7 @@ export async function repositorySourceFiles(
   root: string,
   cwd?: string,
 ): Promise<string[]> {
-  const result = await new Deno.Command("git", {
+  const result = await new Command("git", {
     args: [
       "ls-files",
       "--cached",
@@ -440,7 +443,7 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
     );
     return;
   }
-  const cargo = await Deno.readTextFile(descriptor.manifest);
+  const cargo = await readFile(descriptor.manifest, "utf8");
   const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
   assert(
     packageBlock.includes(`name = "${descriptor.name}"`),
@@ -461,7 +464,7 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
 async function cargoPackageDependencies(): Promise<
   Map<string, Array<{ name: string; req: string; path?: string }>>
 > {
-  const result = await new Deno.Command("cargo", {
+  const result = await new Command("cargo", {
     args: [
       "metadata",
       "--offline",
@@ -617,7 +620,7 @@ async function validateNpmSourceClosure(
   if (!ownedFiles) await collectFiles(packageRoot, files);
   const imports = /(?:from\s*|import\s*(?:\(\s*)?)["']([^"']+)["']/g;
   for (const file of files.filter((path) => /\.[cm]?tsx?$/.test(path))) {
-    const source = await Deno.readTextFile(file);
+    const source = await readFile(file, "utf8");
     for (const match of source.matchAll(imports)) {
       const specifier = match[1]!;
       if (specifier.startsWith(".")) {
@@ -654,17 +657,20 @@ function confined(root: string, path: string): boolean {
 }
 
 async function collectFiles(path: string, files: string[]): Promise<void> {
-  const stat = await Deno.lstat(path);
-  assert(!stat.isSymlink, `${path}: symlink is not a release source`);
-  if (stat.isFile) {
+  const stat = await lstat(path);
+  assert(!stat.isSymbolicLink(), `${path}: symlink is not a release source`);
+  if (stat.isFile()) {
     files.push(path);
     return;
   }
   assert(
-    stat.isDirectory,
+    stat.isDirectory(),
     `${path}: component source must be a file or directory`,
   );
-  for await (const entry of Deno.readDir(path)) {
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    // A workspace member's dependency links are install output: ignored by
+    // Git, never packed by npm and absent from the source digest.
+    if (entry.name === "node_modules") continue;
     await collectFiles(`${path}/${entry.name}`, files);
   }
 }
@@ -682,15 +688,15 @@ function assertUnique(values: string[], label: string): void {
 
 function exists(path: string): boolean {
   try {
-    return Deno.statSync(path).isFile || Deno.statSync(path).isDirectory;
+    return statSync(path).isFile() || statSync(path).isDirectory();
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if ((error as { code?: string }).code === "ENOENT") return false;
     throw error;
   }
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(path)) as T;
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 import { dirname, relative, resolve } from "node:path";

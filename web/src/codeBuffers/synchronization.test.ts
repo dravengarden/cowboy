@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { captureContent, type CapturedContent } from "./content.ts";
 import { fixture, ID, opened, readWire, wire } from "./fixture.ts";
 import { BufferClientError } from "./protocol.ts";
@@ -18,7 +19,7 @@ import {
 import type { SynchronizationConfirmation } from "./synchronization.ts";
 import type { SynchronizationHandle } from "./synchronizationProjection.ts";
 
-Deno.test("synchronization requires the original opened owner and an authentic LF capture", async () => {
+test("synchronization requires the original opened owner and an authentic LF capture", async () => {
   const f = fixture();
   const captured = await content();
   await assertRejects(
@@ -55,7 +56,7 @@ Deno.test("synchronization requires the original opened owner and an authentic L
   assertEquals(open.calls.length, 2);
 });
 
-Deno.test("preparation and previews never Apply; confirmation uses one exact path-free continuation", async () => {
+test("preparation and previews never Apply; confirmation uses one exact path-free continuation", async () => {
   const f = await preparedSync();
   assertEquals(f.calls[2]!.url, `/api/code/buffers/${ID}/synchronizations`);
   assertEquals(JSON.parse(f.calls[2]!.init.body as string), {
@@ -97,7 +98,7 @@ Deno.test("preparation and previews never Apply; confirmation uses one exact pat
   assertEquals((await closing).kind, "released");
 });
 
-Deno.test("unknown Apply fences buffer reads, close and retirement; late prepared/retired cannot erase uncertainty", async () => {
+test("unknown Apply fences buffer reads, close and retirement; late prepared/retired cannot erase uncertainty", async () => {
   const f = await preparedSync();
   const applied = f.operation.confirm(f.operation.preview("apply"));
   f.calls[3]!.result.reject(new Error("private-body-secret"));
@@ -125,7 +126,7 @@ Deno.test("unknown Apply fences buffer reads, close and retirement; late prepare
   assertEquals(f.calls.filter(({ init }) => init.method === "PUT").length, 2); // buffer Open + one Apply
 });
 
-Deno.test("pending native evidence and Service 202 never rearm Apply or imply cleanup", async () => {
+test("pending native evidence and Service 202 never rearm Apply or imply cleanup", async () => {
   for (
     const [state, pending] of [[{ kind: "pending" }, false], [{
       kind: "unknown",
@@ -141,7 +142,7 @@ Deno.test("pending native evidence and Service 202 never rearm Apply or imply cl
   }
 });
 
-Deno.test("lost budget refusal stays query-only until exact evidence and explicit retirement", async () => {
+test("lost budget refusal stays query-only until exact evidence and explicit retirement", async () => {
   const f = await preparedSync();
   const applying = f.operation.confirm(f.operation.preview("apply"));
   f.calls[3]!.result.reject(new Error("lost budget reply"));
@@ -167,7 +168,7 @@ Deno.test("lost budget refusal stays query-only until exact evidence and explici
   );
 });
 
-Deno.test("only Service expiry proves a failed Apply remained inert", async () => {
+test("only Service expiry proves a failed Apply remained inert", async () => {
   const f = await preparedSync();
   const applying = f.operation.confirm(f.operation.preview("apply"));
   f.reply(3, {}, 409);
@@ -180,7 +181,7 @@ Deno.test("only Service expiry proves a failed Apply remained inert", async () =
   assertEquals(f.calls.length, 5);
 });
 
-Deno.test("terminal evidence cannot regress, change refusal or rewrite its exact native version", async () => {
+test("terminal evidence cannot regress, change refusal or rewrite its exact native version", async () => {
   for (
     const state of [
       appliedState,
@@ -214,7 +215,7 @@ Deno.test("terminal evidence cannot regress, change refusal or rewrite its exact
   }
 });
 
-Deno.test("view close during preparation drains only preparation and forbids a later Apply", async () => {
+test("view close during preparation drains only preparation and forbids a later Apply", async () => {
   const f = await opened(), observer = new AbortController();
   const preparing = f.owner.prepareSynchronization(
     await content(),
@@ -231,7 +232,7 @@ Deno.test("view close during preparation drains only preparation and forbids a l
   assert(!f.calls[2]!.init.signal!.aborted);
 });
 
-Deno.test("unmounting an Apply observer preserves exclusion and its late exact outcome", async () => {
+test("unmounting an Apply observer preserves exclusion and its late exact outcome", async () => {
   const f = await preparedSync(), observer = new AbortController();
   const applying = f.operation.confirm(
     f.operation.preview("apply"),
@@ -248,7 +249,7 @@ Deno.test("unmounting an Apply observer preserves exclusion and its late exact o
   assert(!f.operation.view().canApply);
 });
 
-Deno.test("a detached retirement observer cannot cancel ownership or repeat the DELETE", async () => {
+test("a detached retirement observer cannot cancel ownership or repeat the DELETE", async () => {
   const f = await preparedSync(), observer = new AbortController();
   const token = f.operation.preview("retire");
   const retiring = f.operation.confirm(token, observer.signal);
@@ -270,7 +271,7 @@ Deno.test("a detached retirement observer cannot cancel ownership or repeat the 
   assertEquals(f.source.get().rows, []);
 });
 
-Deno.test("lost retirement is original-operation query-only even after a terminal observation", async () => {
+test("lost retirement is original-operation query-only even after a terminal observation", async () => {
   const f = await preparedSync();
   const applying = f.operation.confirm(f.operation.preview("apply"));
   f.reply(3, syncWire(appliedState));
@@ -293,7 +294,7 @@ Deno.test("lost retirement is original-operation query-only even after a termina
   );
 });
 
-Deno.test("only a valid 202 no-admission retirement permits a new explicit confirmation", async () => {
+test("only a valid 202 no-admission retirement permits a new explicit confirmation", async () => {
   const f = await preparedSync();
   const token = f.operation.preview("retire");
   const retiring = f.operation.confirm(token);
@@ -310,7 +311,7 @@ Deno.test("only a valid 202 no-admission retirement permits a new explicit confi
   assertEquals(f.owner.synchronization(), undefined);
 });
 
-Deno.test("foreign and serialized confirmation handles cannot execute; any intervening query invalidates preview", async () => {
+test("foreign and serialized confirmation handles cannot execute; any intervening query invalidates preview", async () => {
   const f = await preparedSync(), other = await preparedSync();
   const token = f.source.preview(f.row.handle, "apply");
   assertThrows(
@@ -343,7 +344,7 @@ Deno.test("foreign and serialized confirmation handles cannot execute; any inter
   assert(!f.operation.isCurrent(current));
 });
 
-Deno.test("same-resource replacement does not revive an old synchronization or confirmation", async () => {
+test("same-resource replacement does not revive an old synchronization or confirmation", async () => {
   const f = await preparedSync();
   const apply = f.operation.preview("apply");
   const retiring = f.operation.confirm(f.operation.preview("retire"));
@@ -369,7 +370,7 @@ Deno.test("same-resource replacement does not revive an old synchronization or c
   assertEquals(f.calls.length, 6);
 });
 
-Deno.test("authority loss synchronously fences every action and redacts cached UI evidence", async () => {
+test("authority loss synchronously fences every action and redacts cached UI evidence", async () => {
   const f = await preparedSync();
   const before = f.source.get();
   assertEquals(f.source.get(), before);
@@ -402,7 +403,7 @@ Deno.test("authority loss synchronously fences every action and redacts cached U
   assertEquals(f.calls.length, 3);
 });
 
-Deno.test("read and synchronization admission share one synchronous owner fence", async () => {
+test("read and synchronization admission share one synchronous owner fence", async () => {
   const f = await opened();
   const captured = await content();
   const reading = f.owner.read("symbols");
@@ -426,7 +427,7 @@ Deno.test("read and synchronization admission share one synchronous owner fence"
   assertEquals(f.calls.length, 4);
 });
 
-Deno.test("failed or unsupported effect-free preparation never supplies an Apply operation or fallback", async () => {
+test("failed or unsupported effect-free preparation never supplies an Apply operation or fallback", async () => {
   for (const status of [401, 409, 501]) {
     const f = await opened();
     const preparing = f.owner.prepareSynchronization(await content());
@@ -438,7 +439,7 @@ Deno.test("failed or unsupported effect-free preparation never supplies an Apply
   }
 });
 
-Deno.test("aborted observers cannot admit preparation or consume a preview", async () => {
+test("aborted observers cannot admit preparation or consume a preview", async () => {
   const f = await preparedSync(), observer = new AbortController();
   observer.abort();
   const token = f.operation.preview("apply");
@@ -463,7 +464,7 @@ Deno.test("aborted observers cannot admit preparation or consume a preview", asy
   assertEquals(empty.calls.length, 2);
 });
 
-Deno.test("projection subscriptions are local, coalesced and cannot re-enter a partially admitted operation", async () => {
+test("projection subscriptions are local, coalesced and cannot re-enter a partially admitted operation", async () => {
   const f = await preparedSync();
   let calls = 0;
   const stop = f.source.subscribe(() => {

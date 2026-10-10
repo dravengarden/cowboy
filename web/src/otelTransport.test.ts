@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { OTLP_MAX_BODY, OtlpTransport } from "./otelTransport.ts";
 
 const success = () =>
@@ -6,7 +7,7 @@ const success = () =>
     headers: { "content-type": "application/x-protobuf" },
   });
 
-Deno.test("OTLP retry preserves protobuf bytes and batch identity", async () => {
+test("OTLP retry preserves protobuf bytes and batch identity", async () => {
   let now = 1000;
   const sent: Array<{ url: string; body: number[] }> = [];
   const transport = new OtlpTransport(
@@ -34,7 +35,7 @@ Deno.test("OTLP retry preserves protobuf bytes and batch identity", async () => 
   assertEquals(transport.pendingItems, 0);
 });
 
-Deno.test("OTLP flush deadline aborts a stalled request and retries the same batch", async () => {
+test("OTLP flush deadline aborts a stalled request and retries the same batch", async () => {
   let now = 1000;
   let startFlush = false;
   const sent: Array<{ url: string; body: number[] }> = [];
@@ -77,7 +78,7 @@ Deno.test("OTLP flush deadline aborts a stalled request and retries the same bat
   assertEquals(transport.pendingItems, 0);
 });
 
-Deno.test("OTLP partial success, malformed 200 and permanent 400 never retry", async () => {
+test("OTLP partial success, malformed 200 and permanent 400 never retry", async () => {
   for (
     const response of [
       // ExportLogsServiceResponse.partial_success.rejected_log_records = 1.
@@ -107,7 +108,7 @@ Deno.test("OTLP partial success, malformed 200 and permanent 400 never retry", a
   }
 });
 
-Deno.test("OTLP retry queue, exit beacon budget and expiry are bounded", () => {
+test("OTLP retry queue, exit beacon budget and expiry are bounded", () => {
   let now = 1000;
   const transport = new OtlpTransport(undefined, () => now);
   for (let i = 0; i < 500; i++) {
@@ -129,7 +130,7 @@ Deno.test("OTLP retry queue, exit beacon budget and expiry are bounded", () => {
   assertEquals(transport.pendingBytes, 0);
 });
 
-Deno.test("OTLP sign-out aborts and late failures cannot resurrect another account's work", async () => {
+test("OTLP sign-out aborts and late failures cannot resurrect another account's work", async () => {
   let reject!: (e: Error) => void;
   const transport = new OtlpTransport(() =>
     new Promise((_resolve, fail) => {

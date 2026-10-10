@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readdirSync, readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   applyVisualHostPlugins,
   providerSurfaceColor,
@@ -6,17 +8,17 @@ import {
 
 function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
   const root = new URL("../../plugins/", import.meta.url);
-  return [...Deno.readDirSync(root)]
-    .filter((entry) => entry.isDirectory)
+  return [...readdirSync(root, { withFileTypes: true })]
+    .filter((entry) => entry.isDirectory())
     .sort((left, right) => left.name.localeCompare(right.name))
     .flatMap((entry) => {
       try {
         const host = JSON.parse(
-          Deno.readTextFileSync(new URL(`${entry.name}/host.json`, root)),
+          readFileSync(new URL(`${entry.name}/host.json`, root), "utf8"),
         ) as Record<string, unknown>;
         return [{ id: entry.name, ...host }];
       } catch (reason) {
-        if (reason instanceof Deno.errors.NotFound) return [];
+        if ((reason as { code?: string }).code === "ENOENT") return [];
         throw reason;
       }
     });
@@ -25,9 +27,9 @@ function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
 const FIRST_PARTY_HOSTS = firstPartyHosts();
 applyVisualHostPlugins(FIRST_PARTY_HOSTS);
 
-Deno.test("Provider colors have no source-compiled first-party inventory", () => {
-  const source = Deno.readTextFileSync(
-    new URL("./visualHostMap.ts", import.meta.url),
+test("Provider colors have no source-compiled first-party inventory", () => {
+  const source = readFileSync(
+    new URL("./visualHostMap.ts", import.meta.url), "utf8",
   );
   assertEquals(source.includes("bundledHostPlugins"), false);
   assertEquals(source.includes("#E08A6A"), false);
@@ -37,7 +39,7 @@ Deno.test("Provider colors have no source-compiled first-party inventory", () =>
   assertEquals(providerSurfaceColor("claude-code")?.dark.primary, "#E08A6A");
 });
 
-Deno.test("activated host inventory replaces Provider surface colors", () => {
+test("activated host inventory replaces Provider surface colors", () => {
   try {
     applyVisualHostPlugins([{
       id: "grok",
@@ -54,7 +56,7 @@ Deno.test("activated host inventory replaces Provider surface colors", () => {
   assertEquals(providerSurfaceColor("grok")?.dark.primary, "#E8E4DC");
 });
 
-Deno.test("Provider colors resolve the exact release before the default", () => {
+test("Provider colors resolve the exact release before the default", () => {
   const oldDigest = `sha256:${"a".repeat(64)}`;
   const currentDigest = `sha256:${"b".repeat(64)}`;
   try {

@@ -1,3 +1,5 @@
+import { readdirSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 interface ExactDependency {
   id: string;
   version: string;
@@ -39,7 +41,7 @@ interface NpmMetadata {
 if (import.meta.main) await main();
 
 async function main(): Promise<void> {
-  const requested = Deno.args[0] ?? "all";
+  const requested = process.argv.slice(2)[0] ?? "all";
   if (requested !== "all" && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(requested)) {
     throw new Error("Provider id must use lowercase kebab-case");
   }
@@ -53,7 +55,7 @@ async function main(): Promise<void> {
   for (const providerId of providerIds) {
     const path = new URL(`${providerId}/provider.json`, providersRoot);
     const source = JSON.parse(
-      await Deno.readTextFile(path),
+      await readFile(path, "utf8"),
     ) as ProviderSource;
     if (source.id !== providerId) {
       throw new Error(`Provider directory identity mismatch: ${providerId}`);
@@ -115,13 +117,13 @@ async function main(): Promise<void> {
     null,
     2,
   ));
-  if (rows.some((row) => row.status === "integrity_mismatch")) Deno.exit(2);
+  if (rows.some((row) => row.status === "integrity_mismatch")) process.exit(2);
 }
 
 export function discoverProviderIds(providersRoot: URL): string[] {
-  return [...Deno.readDirSync(providersRoot)]
+  return [...readdirSync(providersRoot, { withFileTypes: true })]
     .filter((entry) =>
-      entry.isDirectory &&
+      entry.isDirectory() &&
       isFile(new URL(`${entry.name}/provider.json`, providersRoot))
     )
     .map((entry) => entry.name)
@@ -130,9 +132,9 @@ export function discoverProviderIds(providersRoot: URL): string[] {
 
 function isFile(path: URL): boolean {
   try {
-    return Deno.statSync(path).isFile;
+    return statSync(path).isFile();
   } catch (cause) {
-    if (cause instanceof Deno.errors.NotFound) return false;
+    if ((cause as { code?: string }).code === "ENOENT") return false;
     throw cause;
   }
 }

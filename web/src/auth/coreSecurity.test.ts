@@ -1,11 +1,13 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   corePasskeysEnabled,
   corePasswordMode,
   passwordLoginFields,
 } from "./coreSecurity.ts";
 
-Deno.test("local bootstrap is independent from Catalog and the ordinary login method", () => {
+test("local bootstrap is independent from Catalog and the ordinary login method", () => {
   for (const passwordEnabled of [false, true]) {
     for (const selectedMethod of ["password", "cardea", "missing", ""]) {
       assertEquals(
@@ -30,7 +32,7 @@ Deno.test("local bootstrap is independent from Catalog and the ordinary login me
   }
 });
 
-Deno.test("a disabled, foreign or stale local login selection cannot submit a password", () => {
+test("a disabled, foreign or stale local login selection cannot submit a password", () => {
   for (const selectedMethod of ["password", "cardea", "missing", ""]) {
     for (const setupPending of [false, true]) {
       assertEquals(
@@ -55,7 +57,7 @@ Deno.test("a disabled, foreign or stale local login selection cannot submit a pa
   }
 });
 
-Deno.test("local security presentation uses core copy and explicit Service policy", () => {
+test("local security presentation uses core copy and explicit Service policy", () => {
   const fields = passwordLoginFields();
   assertEquals(fields, {
     account: "Account",
@@ -70,9 +72,9 @@ Deno.test("local security presentation uses core copy and explicit Service polic
   assertEquals(corePasskeysEnabled({ enabled: true }), true);
 });
 
-Deno.test("core account security is not mounted by a Plugin slot or native claim", async () => {
-  const panel = await Deno.readTextFile(
-    new URL("./ProductAccountSecurity.tsx", import.meta.url),
+test("core account security is not mounted by a Plugin slot or native claim", async () => {
+  const panel = await readFile(
+    new URL("./ProductAccountSecurity.tsx", import.meta.url), "utf8",
   );
   assert(panel.includes("corePasskeysEnabled(passkeys)"));
   assert(panel.includes("<ProductPasskeysPanel />"));
@@ -86,8 +88,8 @@ Deno.test("core account security is not mounted by a Plugin slot or native claim
   ) {
     assertEquals(panel.includes(forbidden), false, forbidden);
   }
-  const host = await Deno.readTextFile(
-    new URL("../pluginHost.ts", import.meta.url),
+  const host = await readFile(
+    new URL("../pluginHost.ts", import.meta.url), "utf8",
   );
   assertEquals(host.includes('"login-password-v1"'), false);
   assertEquals(host.includes('"account-passkeys-v1"'), false);
@@ -96,8 +98,8 @@ Deno.test("core account security is not mounted by a Plugin slot or native claim
     host.includes('contextRecord(context)?.kind !== "password"'),
     false,
   );
-  const login = await Deno.readTextFile(
-    new URL("./ProductLoginPage.tsx", import.meta.url),
+  const login = await readFile(
+    new URL("./ProductLoginPage.tsx", import.meta.url), "utf8",
   );
   assert(login.includes("busy || passwordMode === null"));
   assert(login.includes('loginContext?.kind === "password"'));

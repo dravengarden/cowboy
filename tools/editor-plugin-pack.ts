@@ -3,9 +3,10 @@
  * package this tool writes is exactly what Settings → Editor extensions →
  * Install plugin accepts.
  *
- *   deno run --allow-read --allow-write tools/editor-plugin-pack.ts \
+ *   bun tools/editor-plugin-pack.ts \
  *     examples/editor-plugins/text-tools text-tools-1.0.0.cowboy-plugin
  */
+import { readFile, writeFile } from "node:fs/promises";
 import {
   EDITOR_PLUGIN_PACKAGE_FORMAT,
   editorPluginDigest,
@@ -14,19 +15,19 @@ import {
   parseEditorPluginPackage,
 } from "../web/src/editorPlugins/manifest.ts";
 
-const [directory, output] = Deno.args;
+const [directory, output] = process.argv.slice(2);
 if (!directory || !output) {
   console.error(
     "usage: editor-plugin-pack.ts <plugin-directory> <output.cowboy-plugin>",
   );
-  Deno.exit(2);
+  process.exit(2);
 }
 const manifest = parseEditorPluginManifest(
-  JSON.parse(await Deno.readTextFile(`${directory}/manifest.json`)),
+  JSON.parse(await readFile(`${directory}/manifest.json`, "utf8")),
 );
 const incompatible = editorPluginIncompatibility(manifest);
 if (incompatible) throw new Error(`manifest ${incompatible}`);
-const main = await Deno.readTextFile(`${directory}/main.js`);
+const main = await readFile(`${directory}/main.js`, "utf8");
 // Fail at pack time on syntax errors instead of at install time.
 new Function("definePlugin", main);
 const text = `${
@@ -42,7 +43,7 @@ const text = `${
   )
 }\n`;
 const verified = await parseEditorPluginPackage(text);
-await Deno.writeTextFile(output, text);
+await writeFile(output, text);
 console.log(JSON.stringify({
   id: verified.manifest.id,
   version: verified.manifest.version,

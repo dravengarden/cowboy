@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   AuthApiError,
   nativeOidcCancelPath,
@@ -25,7 +26,7 @@ const cardea: ProductOidcProvider = {
   start_url: "/api/auth/oidc/start",
 };
 
-Deno.test("native OIDC start exposes only independent PKCE challenges", async () => {
+test("native OIDC start exposes only independent PKCE challenges", async () => {
   const [code, handoff] = await Promise.all([
     newPkceBinding(),
     newPkceBinding(),
@@ -48,7 +49,7 @@ Deno.test("native OIDC start exposes only independent PKCE challenges", async ()
   assert(code.verifier !== handoff.verifier);
 });
 
-Deno.test("native OIDC polling preserves legacy and generic provider routes", () => {
+test("native OIDC polling preserves legacy and generic provider routes", () => {
   assertEquals(nativeOidcPollPath(cardea), "/api/auth/oidc/native/poll");
   assertEquals(nativeOidcEventsPath(cardea), "/api/auth/oidc/native/events");
   assertEquals(nativeOidcCancelPath(cardea), "/api/auth/oidc/native/cancel");
@@ -78,7 +79,7 @@ Deno.test("native OIDC polling preserves legacy and generic provider routes", ()
   );
 });
 
-Deno.test("native OIDC WebSocket URL contains no PKCE proof", () => {
+test("native OIDC WebSocket URL contains no PKCE proof", () => {
   const url = new URL(nativeOidcEventsUrl("https://cowboy.example", cardea));
   assertEquals(url.href, "wss://cowboy.example/api/auth/oidc/native/events");
   assertEquals(url.search, "");
@@ -86,7 +87,7 @@ Deno.test("native OIDC WebSocket URL contains no PKCE proof", () => {
   assertEquals(url.password, "");
 });
 
-Deno.test("native OIDC follows the authentication browser bridge, not the iOS keyboard flag", () => {
+test("native OIDC follows the authentication browser bridge, not the iOS keyboard flag", () => {
   const root = globalThis as typeof globalThis & {
     __cowboyNativeShell?: boolean;
     __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
@@ -106,7 +107,7 @@ Deno.test("native OIDC follows the authentication browser bridge, not the iOS ke
   }
 });
 
-Deno.test("closing the native browser cancels the local OIDC handoff", async () => {
+test("closing the native browser cancels the local OIDC handoff", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyNativeShell?: boolean;
     __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
@@ -177,7 +178,7 @@ Deno.test("closing the native browser cancels the local OIDC handoff", async () 
 });
 
 for (const transport of ["mobile", "desktop"] as const) {
-  Deno.test(`${transport} OIDC waits on push and exchanges cookies exactly once`, async () => {
+  test(`${transport} OIDC waits on push and exchanges cookies exactly once`, async () => {
     const root = globalThis as typeof globalThis & {
       __TAURI_INTERNALS__?: {
         invoke: (
@@ -331,7 +332,7 @@ for (const transport of ["mobile", "desktop"] as const) {
   });
 }
 
-Deno.test("browser OIDC opens synchronously and preserves the pending SPA action", async () => {
+test("browser OIDC opens synchronously and preserves the pending SPA action", async () => {
   const previousFetch = globalThis.fetch;
   const previousLocation = Object.getOwnPropertyDescriptor(
     globalThis,
@@ -446,7 +447,7 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
   }
 });
 
-Deno.test("a sign-in window the engine refuses to close returns to Cowboy", async () => {
+test("a sign-in window the engine refuses to close returns to Cowboy", async () => {
   const previousFetch = globalThis.fetch;
   const previousLocation = Object.getOwnPropertyDescriptor(
     globalThis,
@@ -548,7 +549,7 @@ Deno.test("a sign-in window the engine refuses to close returns to Cowboy", asyn
   }
 });
 
-Deno.test("a blocked sign-in window leaves the redirect fallback available", async () => {
+test("a blocked sign-in window leaves the redirect fallback available", async () => {
   const previousFetch = globalThis.fetch;
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousOpen = Object.getOwnPropertyDescriptor(globalThis, "open");

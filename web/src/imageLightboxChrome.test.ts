@@ -1,19 +1,21 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const lightboxSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/image-lightbox.tsx", import.meta.url),
+const lightboxSource = await readFile(
+  new URL("../../components/app-shell/image-lightbox.tsx", import.meta.url), "utf8",
 );
-const gestureSource = await Deno.readTextFile(
+const gestureSource = await readFile(
   new URL(
     "../../components/app-shell/image-lightbox-gestures.ts",
     import.meta.url,
-  ),
+  ), "utf8",
 );
-const detentSheetSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/detent-sheet.tsx", import.meta.url),
+const detentSheetSource = await readFile(
+  new URL("../../components/app-shell/detent-sheet.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("the baked pan layer scales the plate's padding with it", () => {
+test("the baked pan layer scales the plate's padding with it", () => {
   // The plate's padding lives inside the element's border box, so a transform
   // scales it with the artwork. Baking the scale into width/height while the
   // padding stayed at its CSS size widened the content box, and the diagram
@@ -40,7 +42,7 @@ Deno.test("the baked pan layer scales the plate's padding with it", () => {
   assert(gestureSource.includes(") / bakedScale.current"));
 });
 
-Deno.test("swapping the layer's layout commits before an animated transform", () => {
+test("swapping the layer's layout commits before an animated transform", () => {
   // A transition starts from the previous style recalculation's value. Baking
   // (or unbaking) the layout and starting an animated transform in the same
   // task made the browser interpolate the OLD transform against the NEW layout:
@@ -74,7 +76,7 @@ Deno.test("swapping the layer's layout commits before an animated transform", ()
   assert(reset.indexOf("unbakeScale();") < reset.indexOf('img.style.width = ""'));
 });
 
-Deno.test("a fullscreen preview takes the standalone status bar with it", () => {
+test("a fullscreen preview takes the standalone status bar with it", () => {
   // The iOS standalone status bar sits above the web view, so the backdrop
   // cannot cover it and a light app keeps a bright band over the near-black
   // preview. theme-color alone does not reach it on an iPhone: that strip is
@@ -116,7 +118,7 @@ Deno.test("a fullscreen preview takes the standalone status bar with it", () => 
   assertEquals(/style\.overflow\s*=/u.test(lightboxSource), false);
 });
 
-Deno.test("a released pan coasts instead of stopping dead", () => {
+test("a released pan coasts instead of stopping dead", () => {
   // A zoomed figure that halts the instant the finger lifts reads as the
   // surface letting go of the hand. Every release at zoom hands its smoothed
   // speed to one compositor transition; a lift with no throw still settles the
@@ -138,7 +140,7 @@ Deno.test("a released pan coasts instead of stopping dead", () => {
   assertEquals(/requestAnimationFrame/u.test(gestureSource), false);
 });
 
-Deno.test("a finger landing mid-settle takes the figure where it is", () => {
+test("a finger landing mid-settle takes the figure where it is", () => {
   // The transition owns the painted transform while `tf` already holds its
   // destination, so a pan started during a coast would jump to the target.
   const down = gestureSource.slice(
@@ -159,7 +161,7 @@ Deno.test("a finger landing mid-settle takes the figure where it is", () => {
   assert(stop.includes("tf.current.scale = clamp(matrix.m11 * bakedScale.current)"));
 });
 
-Deno.test("a settle at zoom keeps the pan layer promoted", () => {
+test("a settle at zoom keeps the pan layer promoted", () => {
   // Demoting the layer on the frame a release animation starts makes iOS
   // rebuild it mid-transition — the hitch at the end of every pan. Every
   // animated paint taken while zoomed passes the pan-layer flag.

@@ -1,4 +1,5 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import type { Envelope } from "./protocol.ts";
 import {
   dropEventsBefore,
@@ -19,7 +20,7 @@ function message(seq: number, text: string): Envelope {
   };
 }
 
-Deno.test("canonical history repairs an equal-sequence live message", () => {
+test("canonical history repairs an equal-sequence live message", () => {
   const prefix = message(1, "question");
   const replayCorrupted = message(2, "answer answer");
   const canonical = message(2, "answer");
@@ -36,7 +37,7 @@ Deno.test("canonical history repairs an equal-sequence live message", () => {
   assertStrictEquals(merged[2], suffix);
 });
 
-Deno.test("reconnect snapshot that overlaps the kept prefix needs no gap fill", () => {
+test("reconnect snapshot that overlaps the kept prefix needs no gap fill", () => {
   assertEquals(
     snapshotJoinGap(
       [message(1, "old"), message(80, "recent")],
@@ -46,7 +47,7 @@ Deno.test("reconnect snapshot that overlaps the kept prefix needs no gap fill", 
   );
 });
 
-Deno.test("a reconnect tail that does not overlap the kept prefix is a middle hole", () => {
+test("a reconnect tail that does not overlap the kept prefix is a middle hole", () => {
   const prefix = message(5249, "answer");
   const tail = message(5953, "read");
   assertEquals(
@@ -57,7 +58,7 @@ Deno.test("a reconnect tail that does not overlap the kept prefix is a middle ho
   assertEquals(merged.map((event) => event.seq), [5249, 5953]);
 });
 
-Deno.test("an empty or older incoming window is not a join hole", () => {
+test("an empty or older incoming window is not a join hole", () => {
   assertEquals(snapshotJoinGap([], [message(10, "tail")]), null);
   assertEquals(snapshotJoinGap([message(10, "kept")], []), null);
   assertEquals(
@@ -69,7 +70,7 @@ Deno.test("an empty or older incoming window is not a join hole", () => {
   );
 });
 
-Deno.test("the newest clear boundary in a run is found from the tail", () => {
+test("the newest clear boundary in a run is found from the tail", () => {
   const cleared = (seq: number): Envelope => ({
     session_id: "session",
     seq,
@@ -90,7 +91,7 @@ Deno.test("the newest clear boundary in a run is found from the tail", () => {
   );
 });
 
-Deno.test("dropping rows before a boundary keeps identity when nothing is older", () => {
+test("dropping rows before a boundary keeps identity when nothing is older", () => {
   const run = [message(4, "kept"), message(5, "tail")];
   assertStrictEquals(dropEventsBefore(run, 4), run);
   assertStrictEquals(dropEventsBefore(run, 1), run);

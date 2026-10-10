@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { BufferClientError } from "./protocol.ts";
 import { ID, OTHER, wire } from "./fixture.ts";
 import { NAV_ID, navigationWire } from "./navigationFixture.ts";
@@ -11,7 +12,7 @@ import {
 } from "./destinationFixture.ts";
 import type { NavigationTarget } from "./navigationDestinations.ts";
 
-Deno.test("original navigation target owns a bounded ordinary reservation before exactly one path-free handoff", async () => {
+test("original navigation target owns a bounded ordinary reservation before exactly one path-free handoff", async () => {
   const f = await retainedNavigation();
   assert(Object.isFrozen(f.target) && Object.isFrozen(f.operation.targets()));
   assert(f.operation.view().canPrepareDestination);
@@ -41,7 +42,7 @@ Deno.test("original navigation target owns a bounded ordinary reservation before
   assertEquals(f.calls.length, 5);
 });
 
-Deno.test("explicitly opened destination survives parent release and reads only original native text", async () => {
+test("explicitly opened destination survives parent release and reads only original native text", async () => {
   const f = await handedOff();
   const open = f.child.open();
   f.reply(5, wire("open", OTHER));
@@ -72,7 +73,7 @@ Deno.test("explicitly opened destination survives parent release and reads only 
   assertEquals(f.registry.retained(), []);
 });
 
-Deno.test("cancelled handoff keeps its late ID, even after both views close, without implicit Open", async () => {
+test("cancelled handoff keeps its late ID, even after both views close, without implicit Open", async () => {
   const f = await retainedNavigation(), observer = new AbortController();
   const preparing = f.operation.prepareDestination(f.target, observer.signal);
   const child = f.operation.destination(f.target)!;
@@ -98,7 +99,7 @@ Deno.test("cancelled handoff keeps its late ID, even after both views close, wit
   assert(!f.registry.retained().includes(child));
 });
 
-Deno.test("lost handoff never retries or frees capacity on local close; original group Query adopts the same slot", async () => {
+test("lost handoff never retries or frees capacity on local close; original group Query adopts the same slot", async () => {
   const f = await retainedNavigation();
   const preparing = f.operation.prepareDestination(f.target);
   f.calls[4]!.result.reject(new Error("private reply lost"));
@@ -122,7 +123,7 @@ Deno.test("lost handoff never retries or frees capacity on local close; original
   );
 });
 
-Deno.test("202 missing/Pending/Unknown handoff remains query-only until actual inert expiry", async () => {
+test("202 missing/Pending/Unknown handoff remains query-only until actual inert expiry", async () => {
   for (
     const receipt of [
       navigationWire("retained", true),
@@ -153,7 +154,7 @@ Deno.test("202 missing/Pending/Unknown handoff remains query-only until actual i
   }
 });
 
-Deno.test("absent handoff after explicit refusal remains inert until parent release, never path fallback", async () => {
+test("absent handoff after explicit refusal remains inert until parent release, never path fallback", async () => {
   const f = await retainedNavigation();
   const preparing = f.operation.prepareDestination(f.target);
   f.reply(4, {}, 501);
@@ -175,7 +176,7 @@ Deno.test("absent handoff after explicit refusal remains inert until parent rele
   assertEquals(f.registry.retained(), [f.owner]);
 });
 
-Deno.test("foreign, cloned, replaced and cancelled targets cannot reserve or dispatch", async () => {
+test("foreign, cloned, replaced and cancelled targets cannot reserve or dispatch", async () => {
   const f = await retainedNavigation(), g = await retainedNavigation();
   for (
     const target of [g.target, structuredClone(f.target), {
@@ -205,7 +206,7 @@ Deno.test("foreign, cloned, replaced and cancelled targets cannot reserve or dis
   );
 });
 
-Deno.test("parent Released response recovers a lost original child without replacing its local owner", async () => {
+test("parent Released response recovers a lost original child without replacing its local owner", async () => {
   const f = await retainedNavigation();
   const preparing = f.operation.prepareDestination(f.target);
   f.calls[4]!.result.reject(new Error("lost"));
@@ -227,7 +228,7 @@ Deno.test("parent Released response recovers a lost original child without repla
   assertEquals(f.calls.length, 8);
 });
 
-Deno.test("prepared destination identity and Unknown cannot regress; failed receipt adopts no replacement", async () => {
+test("prepared destination identity and Unknown cannot regress; failed receipt adopts no replacement", async () => {
   const f = await handedOff();
   for (
     const value of [
@@ -270,7 +271,7 @@ Deno.test("prepared destination identity and Unknown cannot regress; failed rece
   }
 });
 
-Deno.test("ended core identity retains unresolved destination capacity and redacts its cleanup label", async () => {
+test("ended core identity retains unresolved destination capacity and redacts its cleanup label", async () => {
   const f = await retainedNavigation();
   const preparing = f.operation.prepareDestination(f.target);
   const child = f.operation.destination(f.target)!;
@@ -291,7 +292,7 @@ Deno.test("ended core identity retains unresolved destination capacity and redac
   assertEquals(f.calls.length, 5);
 });
 
-Deno.test("invalid destination receipt cannot rearm a 202 group Release", async () => {
+test("invalid destination receipt cannot rearm a 202 group Release", async () => {
   const f = await handedOff();
   const release = f.operation.release();
   f.reply(5, destinationWire("unknown", true), 202);
@@ -307,7 +308,7 @@ Deno.test("invalid destination receipt cannot rearm a 202 group Release", async 
   );
 });
 
-Deno.test("ordinary capacity includes pending destination slots and is not evicted for a second request", async () => {
+test("ordinary capacity includes pending destination slots and is not evicted for a second request", async () => {
   const f = await retainedNavigation();
   const reserves = Array.from(
     { length: 63 },
@@ -334,7 +335,7 @@ Deno.test("ordinary capacity includes pending destination slots and is not evict
   assertEquals(f.registry.retained().length, 63);
 });
 
-Deno.test("every destination is preflighted before any adoption; a sibling's ordinary ID cannot be imported", async () => {
+test("every destination is preflighted before any adoption; a sibling's ordinary ID cannot be imported", async () => {
   const locations = [golden.locations[0]!, {
     ...golden.locations[0]!,
     path: "sibling.rs",

@@ -1,4 +1,6 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   assertChromeShortcutAllowed,
   chromeShortcutConflict,
@@ -10,11 +12,11 @@ import {
   desktopWorkspacePrefix,
 } from "./workspaceShortcuts.ts";
 
-const providerSource = await Deno.readTextFile(
-  new URL("./DesktopCommandProvider.tsx", import.meta.url),
+const providerSource = await readFile(
+  new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Chrome tab, window, address, and numbered-tab chords are rejected", () => {
+test("Chrome tab, window, address, and numbered-tab chords are rejected", () => {
   for (
     const shortcut of [
       "Mod+N",
@@ -43,7 +45,7 @@ Deno.test("Chrome tab, window, address, and numbered-tab chords are rejected", (
   }
 });
 
-Deno.test("workspace prefix follows Chrome's platform-specific K behavior", () => {
+test("workspace prefix follows Chrome's platform-specific K behavior", () => {
   assertEquals(desktopWorkspacePrefix(true), "Mod+K");
   assertEquals(desktopWorkspacePrefix(false), "Alt+K");
   assertEquals(chromeShortcutConflict("workspace.prefix", "Mod+K", true), null);
@@ -56,7 +58,7 @@ Deno.test("workspace prefix follows Chrome's platform-specific K behavior", () =
   );
 });
 
-Deno.test("native save is the only registered semantic Chrome override", () => {
+test("native save is the only registered semantic Chrome override", () => {
   assertEquals(
     chromeShortcutConflict("composer.saveDraft", "Mod+S", true),
     null,
@@ -66,13 +68,13 @@ Deno.test("native save is the only registered semantic Chrome override", () => {
   assertThrows(() => assertChromeShortcutAllowed("unrelated", "Mod+J", true));
 });
 
-Deno.test("direct product chords remain browser-safe", () => {
+test("direct product chords remain browser-safe", () => {
   for (const shortcut of ["Mod+Shift+P", "Mod+/", "Mod+."]) {
     assertEquals(chromeShortcutConflict("test.command", shortcut, true), null);
   }
 });
 
-Deno.test("workspace navigation has no global bare-letter shortcut", () => {
+test("workspace navigation has no global bare-letter shortcut", () => {
   assertEquals(Object.keys(DESKTOP_WORKSPACE_COMMANDS).sort(), [
     " ",
     ",",
@@ -114,7 +116,7 @@ Deno.test("workspace navigation has no global bare-letter shortcut", () => {
   }
 });
 
-Deno.test("every registered Desktop command passes browser and product policy", () => {
+test("every registered Desktop command passes browser and product policy", () => {
   assert(
     providerSource.includes(
       "assertChromeShortcutAllowed(command.id, command.shortcut, isMac)",
@@ -124,7 +126,7 @@ Deno.test("every registered Desktop command passes browser and product policy", 
   assert(providerSource.includes("matchesDesktopWorkspacePrefix(event)"));
 });
 
-Deno.test("intentional Chrome overrides are limited to reader Vim motions", () => {
+test("intentional Chrome overrides are limited to reader Vim motions", () => {
   assertEquals(INTENTIONAL_CHROME_VIM_OVERRIDES, [
     "Ctrl+D",
     "Ctrl+U",
@@ -137,7 +139,7 @@ Deno.test("intentional Chrome overrides are limited to reader Vim motions", () =
   ]);
 });
 
-Deno.test("transactional edits and independent documents own native Save", () => {
+test("transactional edits and independent documents own native Save", () => {
   for (
     const id of [
       "pendingEdit.queued.done",

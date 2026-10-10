@@ -1,14 +1,16 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { dataTransferCarriesFiles } from "./composerFileDrop.ts";
 
-const composer = await Deno.readTextFile(
-  new URL("../Composer.tsx", import.meta.url),
+const composer = await readFile(
+  new URL("../Composer.tsx", import.meta.url), "utf8",
 );
-const editor = await Deno.readTextFile(
-  new URL("../ComposerEditor.tsx", import.meta.url),
+const editor = await readFile(
+  new URL("../ComposerEditor.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("only an OS file drag is a composer attachment drop", () => {
+test("only an OS file drag is a composer attachment drop", () => {
   assertEquals(dataTransferCarriesFiles({ types: ["Files"] }), true);
   assertEquals(
     dataTransferCarriesFiles({ types: ["text/uri-list", "Files"] }),
@@ -19,7 +21,7 @@ Deno.test("only an OS file drag is a composer attachment drop", () => {
   assertEquals(dataTransferCarriesFiles(null), false);
 });
 
-Deno.test("desktop composer card and editor both attach dropped files", () => {
+test("desktop composer card and editor both attach dropped files", () => {
   assert(composer.includes("useComposerFileDrop(\n    !touchInput,"));
   assert(composer.includes("addFiles(files, { preserveFocus: true })"));
   assert(composer.includes("{...fileDrop.handlers}"));

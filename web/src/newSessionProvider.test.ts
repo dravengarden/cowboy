@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { defaultNewSessionProvider } from "./newSessionProvider.ts";
 
-Deno.test("new sessions prefer standard Claude Code when it is available", () => {
+test("new sessions prefer standard Claude Code when it is available", () => {
   assertEquals(
     defaultNewSessionProvider([
       "claude-deepseek",
@@ -13,7 +14,7 @@ Deno.test("new sessions prefer standard Claude Code when it is available", () =>
   );
 });
 
-Deno.test("new sessions fall back to standard Codex without Claude Code", () => {
+test("new sessions fall back to standard Codex without Claude Code", () => {
   assertEquals(
     defaultNewSessionProvider([
       "claude-deepseek",
@@ -24,7 +25,7 @@ Deno.test("new sessions fall back to standard Codex without Claude Code", () => 
   );
 });
 
-Deno.test("new sessions fall back to Machine inventory order without a standard Provider", () => {
+test("new sessions fall back to Machine inventory order without a standard Provider", () => {
   assertEquals(
     defaultNewSessionProvider(["claude-deepseek", "grok"]),
     "claude-deepseek",

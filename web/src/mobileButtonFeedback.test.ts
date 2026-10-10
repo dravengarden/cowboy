@@ -1,24 +1,26 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   COARSE_POINTER_ROOT_CLASS,
   prefersCoarsePointer,
   syncCoarsePointerRootClass,
 } from "./platform.ts";
 
-const themeSource = await Deno.readTextFile(
-  new URL("./theme.ts", import.meta.url),
+const themeSource = await readFile(
+  new URL("./theme.ts", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const indexSource = await Deno.readTextFile(
-  new URL("../index.html", import.meta.url),
+const indexSource = await readFile(
+  new URL("../index.html", import.meta.url), "utf8",
 );
 
-Deno.test("touch icon buttons release synthetic hover and focus paint", () => {
+test("touch icon buttons release synthetic hover and focus paint", () => {
   assertEquals(
     themeSource.includes(
       '"@media (hover: none), (pointer: coarse), (any-pointer: coarse)"',
@@ -63,7 +65,7 @@ Deno.test("touch icon buttons release synthetic hover and focus paint", () => {
   assertEquals(themeSource.includes("WebkitTapHighlightColor: \"transparent\""), true);
 });
 
-Deno.test("session sheet trigger releases synthetic hover like other navbar icons", () => {
+test("session sheet trigger releases synthetic hover like other navbar icons", () => {
   assertEquals(
     composerSource.includes(
       "&[data-touch-activated='true']:hover, &[data-touch-activated='true'].Mui-focusVisible",
@@ -74,7 +76,7 @@ Deno.test("session sheet trigger releases synthetic hover like other navbar icon
   assertEquals(indexSource.includes("-webkit-tap-highlight-color: transparent"), true);
 });
 
-Deno.test("coarse pointer includes a finger even when iOS later reports hover", () => {
+test("coarse pointer includes a finger even when iOS later reports hover", () => {
   assertEquals(
     prefersCoarsePointer({ maxTouchPoints: 0, anyPointerCoarse: false }),
     false,
@@ -89,7 +91,7 @@ Deno.test("coarse pointer includes a finger even when iOS later reports hover", 
   );
 });
 
-Deno.test("coarse pointer class is pinned on the document root", () => {
+test("coarse pointer class is pinned on the document root", () => {
   const classes = new Set<string>();
   const coarse = syncCoarsePointerRootClass({
     documentElement: {

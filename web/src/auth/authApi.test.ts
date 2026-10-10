@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   authApi,
   AuthApiError,
@@ -16,7 +17,7 @@ type FetchArgs = {
   init?: RequestInit;
 };
 
-Deno.test("product auth exposes immutable user identity and malformed identity never becomes logout", () => {
+test("product auth exposes immutable user identity and malformed identity never becomes logout", () => {
   const me = { account: "label", role: "viewer", user_id: "user-a" };
   assertEquals(productMeFromJson(me)?.user_id, "user-a");
   const registration = {
@@ -56,7 +57,7 @@ function withFetch(
   };
 }
 
-Deno.test("auth status fetch is same-origin and cache-free", async () => {
+test("auth status fetch is same-origin and cache-free", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
@@ -86,7 +87,7 @@ Deno.test("auth status fetch is same-origin and cache-free", async () => {
   }
 });
 
-Deno.test("auth login and register POST JSON with credentials", async () => {
+test("auth login and register POST JSON with credentials", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {
     calls.push(args);
@@ -163,7 +164,7 @@ Deno.test("auth login and register POST JSON with credentials", async () => {
   }
 });
 
-Deno.test("signed auth UI transport is confined to JSON auth protocol paths", async () => {
+test("signed auth UI transport is confined to JSON auth protocol paths", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
@@ -195,7 +196,7 @@ Deno.test("signed auth UI transport is confined to JSON auth protocol paths", as
   }
 });
 
-Deno.test("auth API surfaces HTTP error text", async () => {
+test("auth API surfaces HTTP error text", async () => {
   const restore = withFetch(() =>
     new Response("invalid credentials", { status: 401 })
   );
@@ -211,7 +212,7 @@ Deno.test("auth API surfaces HTTP error text", async () => {
   }
 });
 
-Deno.test("auth API surfaces structured safe errors", async () => {
+test("auth API surfaces structured safe errors", async () => {
   const restore = withFetch(() =>
     new Response(
       JSON.stringify({
@@ -234,7 +235,7 @@ Deno.test("auth API surfaces structured safe errors", async () => {
   }
 });
 
-Deno.test("session freshness errors preserve the required ceremony without a message field", async () => {
+test("session freshness errors preserve the required ceremony without a message field", async () => {
   for (const kind of ["primary", "passkey", "unknown"] as const) {
     const restore = withFetch(() =>
       new Response(
@@ -262,7 +263,7 @@ Deno.test("session freshness errors preserve the required ceremony without a mes
   }
 });
 
-Deno.test("external Passkey handoff keeps the verifier in the signed-in client", async () => {
+test("external Passkey handoff keeps the verifier in the signed-in client", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {
     calls.push(args);
@@ -300,7 +301,7 @@ Deno.test("external Passkey handoff keeps the verifier in the signed-in client",
   }
 });
 
-Deno.test("external Passkey finalize forwards the transaction deadline signal", async () => {
+test("external Passkey finalize forwards the transaction deadline signal", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
@@ -319,7 +320,7 @@ Deno.test("external Passkey finalize forwards the transaction deadline signal", 
   }
 });
 
-Deno.test("native OIDC poll keeps both raw bindings in a same-origin body", async () => {
+test("native OIDC poll keeps both raw bindings in a same-origin body", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
@@ -360,7 +361,7 @@ Deno.test("native OIDC poll keeps both raw bindings in a same-origin body", asyn
   }
 });
 
-Deno.test("native OIDC cancellation is same-origin and keeps proofs out of the URL", async () => {
+test("native OIDC cancellation is same-origin and keeps proofs out of the URL", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
@@ -397,7 +398,7 @@ Deno.test("native OIDC cancellation is same-origin and keeps proofs out of the U
   }
 });
 
-Deno.test("status 404 and 501 are unsupported, not login", async () => {
+test("status 404 and 501 are unsupported, not login", async () => {
   for (const status of [404, 501] as const) {
     const restore = withFetch(() => new Response("not found", { status }));
     try {
@@ -411,7 +412,7 @@ Deno.test("status 404 and 501 are unsupported, not login", async () => {
   }
 });
 
-Deno.test("status network and 5xx stay unavailable", async () => {
+test("status network and 5xx stay unavailable", async () => {
   const restoreNetwork = withFetch(() => {
     throw new TypeError("Failed to fetch");
   });
@@ -431,7 +432,7 @@ Deno.test("status network and 5xx stay unavailable", async () => {
   }
 });
 
-Deno.test("legacy token CRUD remains same-origin and never sends the hash", async () => {
+test("legacy token CRUD remains same-origin and never sends the hash", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {
     calls.push(args);
@@ -485,7 +486,7 @@ Deno.test("legacy token CRUD remains same-origin and never sends the hash", asyn
   }
 });
 
-Deno.test("device authorization keeps the capability off authenticated requests", async () => {
+test("device authorization keeps the capability off authenticated requests", async () => {
   const calls: FetchArgs[] = [];
   const inspection = new AbortController();
   const request = {
@@ -551,7 +552,7 @@ Deno.test("device authorization keeps the capability off authenticated requests"
   }
 });
 
-Deno.test("logout is a same-origin POST", async () => {
+test("logout is a same-origin POST", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
@@ -575,7 +576,7 @@ Deno.test("logout is a same-origin POST", async () => {
   }
 });
 
-Deno.test("session capacity inventory and reclaim requests preserve fencing", async () => {
+test("session capacity inventory and reclaim requests preserve fencing", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {
     calls.push(args);
@@ -634,7 +635,7 @@ Deno.test("session capacity inventory and reclaim requests preserve fencing", as
   }
 });
 
-Deno.test("auth status JSON requires the public registration shape", () => {
+test("auth status JSON requires the public registration shape", () => {
   assertEquals(authStatusFromJson({}), undefined);
   assertEquals(authStatusFromJson("<!doctype html>"), undefined);
   assertEquals(
@@ -672,7 +673,7 @@ Deno.test("auth status JSON requires the public registration shape", () => {
   );
 });
 
-Deno.test("auth status accepts pinned provider routes and server Passkey policy", () => {
+test("auth status accepts pinned provider routes and server Passkey policy", () => {
   assertEquals(
     authStatusFromJson({
       registration: {
@@ -803,7 +804,7 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
   );
 });
 
-Deno.test("auth status defaults Cardea first and rejects incomplete method orders", () => {
+test("auth status defaults Cardea first and rejects incomplete method orders", () => {
   const base = {
     registration: {
       enabled: false,
@@ -846,7 +847,7 @@ Deno.test("auth status defaults Cardea first and rejects incomplete method order
   );
 });
 
-Deno.test("auth status keeps login host plugin labels", () => {
+test("auth status keeps login host plugin labels", () => {
   const status = authStatusFromJson({
     registration: {
       enabled: false,
@@ -884,7 +885,7 @@ Deno.test("auth status keeps login host plugin labels", () => {
   ]);
 });
 
-Deno.test("200 HTML or shapeless JSON is activating, not login", async () => {
+test("200 HTML or shapeless JSON is activating, not login", async () => {
   assertEquals(isHtmlContentType("text/html; charset=utf-8"), true);
   const restoreHtml = withFetch(() =>
     new Response("<!doctype html><title>Cowboy</title>", {

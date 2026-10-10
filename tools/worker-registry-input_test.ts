@@ -1,8 +1,15 @@
+import { Command } from "./lib/command.ts";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
-  assertEquals,
-  assertNotEquals,
-  assertThrows,
-} from "jsr:@std/assert@1.0.19";
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { test } from "bun:test";
+import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
 import {
   workerRegistryInput,
   workerRegistryProjection,
@@ -45,7 +52,7 @@ function fixture() {
 
 const encode = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 
-Deno.test("unconsumed shell-only releases retain exact historical worker registry bytes", async () => {
+test("unconsumed shell-only releases retain exact historical worker registry bytes", async () => {
   const registry = fixture();
   const baseline = {
     ...registry,
@@ -71,7 +78,7 @@ Deno.test("unconsumed shell-only releases retain exact historical worker registr
   );
 });
 
-Deno.test("worker components, Plugin sources, pins and graph changes retain the latest input", async () => {
+test("worker components, Plugin sources, pins and graph changes retain the latest input", async () => {
   for (
     const change of [
       "sdk",
@@ -127,7 +134,7 @@ Deno.test("worker components, Plugin sources, pins and graph changes retain the 
   }
 });
 
-Deno.test("inactive or empty registries cannot produce a worker input", () => {
+test("inactive or empty registries cannot produce a worker input", () => {
   const registry = fixture();
   registry.active_release = "unknown";
   assertThrows(() => workerRegistryProjection(encode(registry)));
@@ -135,36 +142,36 @@ Deno.test("inactive or empty registries cannot produce a worker input", () => {
   assertThrows(() => workerRegistryProjection(encode(registry)));
 });
 
-Deno.test("repository derived input matches the actual append-only component registry", async () => {
+test("repository derived input matches the actual append-only component registry", async () => {
   const expected = await workerRegistryInput(
-    Deno.readTextFileSync("components/registry.json"),
+    readFileSync("components/registry.json", "utf8"),
   );
   assertEquals(
-    JSON.parse(Deno.readTextFileSync("components/worker-registry-input.json")),
+    JSON.parse(readFileSync("components/worker-registry-input.json", "utf8")),
     expected,
   );
 });
 
-Deno.test("the build checker refuses stale or manually pinned inputs without writes", async () => {
-  const root = Deno.makeTempDirSync();
+test("the build checker refuses stale or manually pinned inputs without writes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cowboy-"));
   const script =
     new URL("./worker-registry-input.ts", import.meta.url).pathname;
   try {
-    Deno.mkdirSync(`${root}/components`);
+    mkdirSync(`${root}/components`);
     const registry = fixture();
     const source = encode(registry);
-    Deno.writeTextFileSync(`${root}/components/registry.json`, source);
+    writeFileSync(`${root}/components/registry.json`, source);
     const expected = await workerRegistryInput(source);
     const path = `${root}/components/worker-registry-input.json`;
     const check = () =>
-      new Deno.Command(Deno.execPath(), {
-        args: ["run", "--no-config", "--allow-read", script],
+      new Command(process.execPath, {
+        args: [script],
         cwd: root,
         clearEnv: true,
         stdout: "piped",
         stderr: "piped",
       }).output();
-    Deno.writeTextFileSync(path, encode(expected));
+    writeFileSync(path, encode(expected));
     assertEquals((await check()).success, true);
     for (
       const invalid of [
@@ -174,7 +181,7 @@ Deno.test("the build checker refuses stale or manually pinned inputs without wri
       ]
     ) {
       const retained = encode(invalid);
-      Deno.writeTextFileSync(path, retained);
+      writeFileSync(path, retained);
       const result = await check();
       assertEquals(result.success, false);
       assertEquals(
@@ -183,21 +190,21 @@ Deno.test("the build checker refuses stale or manually pinned inputs without wri
         ),
         true,
       );
-      assertEquals(Deno.readTextFileSync(path), retained);
+      assertEquals(readFileSync(path, "utf8"), retained);
       assertEquals(
-        Deno.readTextFileSync(`${root}/components/registry.json`),
+        readFileSync(`${root}/components/registry.json`, "utf8"),
         source,
       );
     }
-    Deno.writeTextFileSync(path, encode(expected));
+    writeFileSync(path, encode(expected));
     registry.releases[1]!.components[1]!.digest = "changed-sdk";
-    Deno.writeTextFileSync(
+    writeFileSync(
       `${root}/components/registry.json`,
       encode(registry),
     );
     assertEquals((await check()).success, false);
-    assertEquals(Deno.readTextFileSync(path), encode(expected));
+    assertEquals(readFileSync(path, "utf8"), encode(expected));
   } finally {
-    Deno.removeSync(root, { recursive: true });
+    rmSync(root, { recursive: true });
   }
 });

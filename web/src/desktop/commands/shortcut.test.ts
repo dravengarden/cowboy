@@ -1,7 +1,8 @@
-import { assert, assertEquals, assertFalse } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertFalse } from "@std/assert";
 import { matchesShortcut, parseShortcut } from "./shortcut";
 
-Deno.test("shortcut parser normalizes a desktop chord", () => {
+test("shortcut parser normalizes a desktop chord", () => {
   assertEquals(parseShortcut("Mod+Shift+P"), {
     key: "p",
     mod: true,
@@ -11,7 +12,7 @@ Deno.test("shortcut parser normalizes a desktop chord", () => {
   });
 });
 
-Deno.test("Ctrl remains Control on every desktop platform", () => {
+test("Ctrl remains Control on every desktop platform", () => {
   const stroke = parseShortcut("Ctrl+4");
   assertEquals(stroke, {
     key: "4",
@@ -38,7 +39,7 @@ Deno.test("Ctrl remains Control on every desktop platform", () => {
   }, true));
 });
 
-Deno.test("Mod maps to Command on macOS and Control elsewhere", () => {
+test("Mod maps to Command on macOS and Control elsewhere", () => {
   const stroke = parseShortcut("Mod+K");
   assert(matchesShortcut(stroke, {
     key: "k",
@@ -63,7 +64,7 @@ Deno.test("Mod maps to Command on macOS and Control elsewhere", () => {
   }, true));
 });
 
-Deno.test("numbered session shortcuts preserve digit identity", () => {
+test("numbered session shortcuts preserve digit identity", () => {
   const first = parseShortcut("Mod+1");
   const tenth = parseShortcut("Mod+0");
   assert(matchesShortcut(first, {
@@ -90,7 +91,7 @@ Deno.test("numbered session shortcuts preserve digit identity", () => {
   }, true));
 });
 
-Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
+test("Alt shortcuts use physical keys under macOS Option input", () => {
   assert(matchesShortcut(parseShortcut("Alt+2"), {
     key: "™",
     code: "Digit2",
@@ -134,7 +135,7 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
   }, true));
 });
 
-Deno.test("bare backslash enters Resize mode under an IME", () => {
+test("bare backslash enters Resize mode under an IME", () => {
   assert(matchesShortcut(parseShortcut("\\"), {
     key: "Process",
     code: "Backslash",
@@ -145,7 +146,7 @@ Deno.test("bare backslash enters Resize mode under an IME", () => {
   }, true, true));
 });
 
-Deno.test("bare product letters ignore Shift; modified chords do not", () => {
+test("bare product letters ignore Shift; modified chords do not", () => {
   const follow = parseShortcut("F");
   const shiftedF = {
     key: "F",
@@ -183,7 +184,7 @@ Deno.test("bare product letters ignore Shift; modified chords do not", () => {
   }, true));
 });
 
-Deno.test("bare contextual shortcuts use physical keys only when explicitly safe", () => {
+test("bare contextual shortcuts use physical keys only when explicitly safe", () => {
   const shortcut = parseShortcut("P");
   const imeKey = {
     key: "Process",
@@ -197,7 +198,7 @@ Deno.test("bare contextual shortcuts use physical keys only when explicitly safe
   assert(matchesShortcut(shortcut, imeKey, true, true));
 });
 
-Deno.test("bare product punctuation accepts the Shift used to produce its symbol", () => {
+test("bare product punctuation accepts the Shift used to produce its symbol", () => {
   assert(matchesShortcut(parseShortcut(":"), {
     key: ":",
     code: "Semicolon",

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { resolveImmutableReceipt } from "./plugin-publication-receipt.ts";
 
 const identity = {
@@ -12,7 +13,7 @@ const identity = {
   published_urls: ["https://cowboy.example/plugin-artifacts/digest/codex"],
 };
 
-Deno.test("publication receipt retries preserve the original timestamp", () => {
+test("publication receipt retries preserve the original timestamp", () => {
   const first = resolveImmutableReceipt(
     identity,
     undefined,
@@ -31,7 +32,7 @@ Deno.test("publication receipt retries preserve the original timestamp", () => {
   }
 });
 
-Deno.test("publication receipt retries reject changed release identity", () => {
+test("publication receipt retries reject changed release identity", () => {
   const first = resolveImmutableReceipt(identity, undefined);
   let rejected = false;
   try {
@@ -45,7 +46,7 @@ Deno.test("publication receipt retries reject changed release identity", () => {
   if (!rejected) throw new Error("changed release identity was accepted");
 });
 
-Deno.test("publication receipt retries reject invalid timestamps", () => {
+test("publication receipt retries reject invalid timestamps", () => {
   const first = resolveImmutableReceipt(identity, undefined);
   const invalid = first.text.replace(first.receipt.published_at, "not-a-date");
   let rejected = false;

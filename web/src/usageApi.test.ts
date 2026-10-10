@@ -1,4 +1,6 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import type { ProviderUiManifest } from "@cowboy/provider-ui";
 import { providerUiManifestFixture } from "./providerUiContract.fixture.ts";
 import {
@@ -19,7 +21,7 @@ import {
   startUsageRefresh,
 } from "./usageApi.ts";
 
-Deno.test("usage placement pins an account and can restore automatic routing", async () => {
+test("usage placement pins an account and can restore automatic routing", async () => {
   const original = globalThis.fetch;
   const requests: { url: string; method: string; body: unknown }[] = [];
   globalThis.fetch = (input, options) => {
@@ -86,7 +88,7 @@ function usageSnapshot(account: string): UsageSnapshot {
   };
 }
 
-Deno.test("session refresh and displayed usage share the declared account identity", async () => {
+test("session refresh and displayed usage share the declared account identity", async () => {
   const providers = [
     "codex",
     "claude-code",
@@ -97,8 +99,8 @@ Deno.test("session refresh and displayed usage share the declared account identi
   ];
   const manifests = providers.map((id) => {
     const declared = JSON.parse(
-      Deno.readTextFileSync(
-        new URL(`../../plugins/${id}/provider.json`, import.meta.url),
+      readFileSync(
+        new URL(`../../plugins/${id}/provider.json`, import.meta.url), "utf8",
       ),
     );
     const manifest = providerUiManifestFixture();
@@ -166,7 +168,7 @@ Deno.test("session refresh and displayed usage share the declared account identi
   }
 });
 
-Deno.test("session refresh remains pinned to its exact contract and never guesses an account", async () => {
+test("session refresh remains pinned to its exact contract and never guesses an account", async () => {
   const installed = providerUiManifestFixture();
   installed.id = "example";
   installed.host.account_usage = { provider: "original-account" };
@@ -221,7 +223,7 @@ Deno.test("session refresh remains pinned to its exact contract and never guesse
   }
 });
 
-Deno.test("global usage refresh and cancellable reads retain their HTTP semantics", async () => {
+test("global usage refresh and cancellable reads retain their HTTP semantics", async () => {
   const previousFetch = globalThis.fetch;
   const controller = new AbortController();
   const requests: Array<[string, string, AbortSignal | null | undefined]> = [];
@@ -254,7 +256,7 @@ Deno.test("global usage refresh and cancellable reads retain their HTTP semantic
   }
 });
 
-Deno.test("a started refresh returns at once and lets the Controller own progress", async () => {
+test("a started refresh returns at once and lets the Controller own progress", async () => {
   const previousFetch = globalThis.fetch;
   const requests: Array<[string, string]> = [];
   globalThis.fetch = (input, init) => {

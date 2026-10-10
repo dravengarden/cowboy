@@ -1,8 +1,10 @@
-import { assert } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 
-const source = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+const source = await readFile(new URL("./store.ts", import.meta.url), "utf8");
 
-Deno.test("a synced rename adopts its outbox baseline before the durable write", () => {
+test("a synced rename adopts its outbox baseline before the durable write", () => {
   const register = source.indexOf("function registerSync<");
   const mutate = source.indexOf("mutate: (name, args): void => {", register);
   const durable = source.indexOf("store.mutateDurably(name, args, id)", mutate);
@@ -13,7 +15,7 @@ Deno.test("a synced rename adopts its outbox baseline before the durable write",
   assert(barrier.includes("store.hydrate()"));
 });
 
-Deno.test("local sync storage failures name the state and the storage code", () => {
+test("local sync storage failures name the state and the storage code", () => {
   const report = source.indexOf("function reportSyncStorageFailure(");
   assert(report >= 0);
   const body = source.slice(report, source.indexOf("\n}", report));

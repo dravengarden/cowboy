@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { Attachment } from "./attachments.ts";
 import {
   claimOrphanedPendingEdits,
@@ -21,7 +22,7 @@ function imageAttachment(id: string, pending = false): Attachment {
   };
 }
 
-Deno.test("pending row edit survives local flush and restores by target id", () => {
+test("pending row edit survives local flush and restores by target id", () => {
   const sessionId = "pending-edit-reload";
   const id = "draft-1";
   const attachment = imageAttachment("image-1");
@@ -44,7 +45,7 @@ Deno.test("pending row edit survives local flush and restores by target id", () 
   clearPendingEdit(sessionId, "draft", id);
 });
 
-Deno.test("already committed recovery retires instead of reopening the editor", () => {
+test("already committed recovery retires instead of reopening the editor", () => {
   const sessionId = "pending-edit-committed";
   const id = "queued-1";
   setPendingEdit({
@@ -64,7 +65,7 @@ Deno.test("already committed recovery retires instead of reopening the editor", 
   assertEquals(getPendingEdit(sessionId, "queued", id), null);
 });
 
-Deno.test("unencoded paste placeholders never become broken recovered images", () => {
+test("unencoded paste placeholders never become broken recovered images", () => {
   const sessionId = "pending-edit-paste";
   const id = "draft-paste";
   setPendingEdit({
@@ -85,7 +86,7 @@ Deno.test("unencoded paste placeholders never become broken recovered images", (
   clearPendingEdit(sessionId, "draft", id);
 });
 
-Deno.test("an edit whose server row drained is claimed once for parked-draft recovery", () => {
+test("an edit whose server row drained is claimed once for parked-draft recovery", () => {
   const sessionId = "pending-edit-orphan";
   const id = "queued-gone";
   setPendingEdit({

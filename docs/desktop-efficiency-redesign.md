@@ -310,7 +310,7 @@ responsive conditionals.
 
 Each phase must pass:
 
-- TypeScript, Oxlint, Deno tests, and production build.
+- TypeScript, Oxlint, Bun tests, and production build.
 - Desktop Chrome checks at 1100, 1440, 1728, and ultrawide sizes.
 - Keyboard-only scripted workflows for session selection, pane focus, command
   execution, prompt editing/sending, transcript search, and cancel/escape.

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   findChar,
   normalClamp,
@@ -13,7 +14,7 @@ import {
 
 const text = "foo.bar  baz";
 
-Deno.test("word motions split words from punctuation; W/B/E by blanks", () => {
+test("word motions split words from punctuation; W/B/E by blanks", () => {
   assertEquals(wordForward(text, 0), 3);
   assertEquals(wordForward(text, 3), 4);
   assertEquals(wordForward(text, 0, true), 9);
@@ -23,7 +24,7 @@ Deno.test("word motions split words from punctuation; W/B/E by blanks", () => {
   assertEquals(wordEnd(text, 0, true), 6);
 });
 
-Deno.test("f/t find within the line", () => {
+test("f/t find within the line", () => {
   assertEquals(findChar(text, 0, "f", "b"), 4);
   assertEquals(findChar(text, 0, "t", "b"), 3);
   assertEquals(findChar(text, 11, "F", "b"), 9);
@@ -31,7 +32,7 @@ Deno.test("f/t find within the line", () => {
   assertEquals(findChar(text, 0, "f", "q"), null);
 });
 
-Deno.test("operators follow Vim's inclusive rules", () => {
+test("operators follow Vim's inclusive rules", () => {
   assertEquals(operatorRange(text, 0, "w", 3, "d"), { from: 0, to: 3 });
   assertEquals(operatorRange(text, 0, "e", 2, "d"), { from: 0, to: 3 });
   // cw changes to the end of the word, not into the blanks after it.
@@ -39,7 +40,7 @@ Deno.test("operators follow Vim's inclusive rules", () => {
   assertEquals(operatorRange(text, 4, "$", 11, "d"), { from: 4, to: 12 });
 });
 
-Deno.test("Normal cursor and textarea lines", () => {
+test("Normal cursor and textarea lines", () => {
   assertEquals(normalClamp("abc", 3), 2);
   assertEquals(normalClamp("", 0), 0);
   assertEquals(verticalMove("ab\ncdef", 1, 1), 4);

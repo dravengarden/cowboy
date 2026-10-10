@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { createPrefetchRunner, prefetchCandidates } from "./hydrationScheduler.ts";
 import type { Status } from "./protocol.ts";
 
@@ -6,7 +7,7 @@ function session(id: string, status: Status = "running"): { id: string; status: 
   return { id, status };
 }
 
-Deno.test("busy sessions come first, then the MRU newest first, without the active or hydrated ones", () => {
+test("busy sessions come first, then the MRU newest first, without the active or hydrated ones", () => {
   assertEquals(
     prefetchCandidates({
       sessions: [
@@ -25,7 +26,7 @@ Deno.test("busy sessions come first, then the MRU newest first, without the acti
   );
 });
 
-Deno.test("candidates are capped and never name a session the Hub no longer lists", () => {
+test("candidates are capped and never name a session the Hub no longer lists", () => {
   assertEquals(
     prefetchCandidates({
       sessions: [session("a"), session("b"), session("c")],
@@ -48,7 +49,7 @@ Deno.test("candidates are capped and never name a session the Hub no longer list
   );
 });
 
-Deno.test("the runner bounds concurrency, dedupes in-flight work and preempts on cancel", async () => {
+test("the runner bounds concurrency, dedupes in-flight work and preempts on cancel", async () => {
   const started: string[] = [];
   const aborted: string[] = [];
   const resolvers = new Map<string, () => void>();

@@ -1,5 +1,9 @@
 // Development gate: compare the actual Rust CLI and TS linker on identical
 // bounded, synthetic input. No Catalog, auth, Machine, network or live state.
+import { Command, type CommandOutput } from "./lib/command.ts";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import {
   checkComposition,
   type CheckedStructure,
@@ -8,13 +12,11 @@ import {
 } from "../contracts/composition-check.ts";
 import { linkVectors } from "../contracts/composition.fixtures.ts";
 
-if (Deno.args.length !== 1) {
+if (process.argv.slice(2).length !== 1) {
   throw new Error("expected the freshly built Cowboy CLI path");
 }
-const executable = await Deno.realPath(Deno.args[0]);
-const directory = await Deno.makeTempDir({
-  prefix: "cowboy-composition-links-",
-});
+const executable = await realpath(process.argv.slice(2)[0]);
+const directory = await mkdtemp(join(tmpdir(), "cowboy-composition-links-"));
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const vectors = linkVectors();
 let accepted = 0;
@@ -22,12 +24,12 @@ let refused = 0;
 try {
   for (const vector of vectors) {
     const path = `${directory}/proposal.json`;
-    await Deno.writeTextFile(path, vector.raw, { mode: 0o600 });
+    await writeFile(path, vector.raw, { mode: 0o600 });
     const cancellation = new AbortController();
     const timeout = setTimeout(() => cancellation.abort(), 5_000);
-    let result: Deno.CommandOutput;
+    let result: CommandOutput;
     try {
-      result = await new Deno.Command(executable, {
+      result = await new Command(executable, {
         args: ["composition", "check", path],
         clearEnv: true,
         stdin: "null",
@@ -74,7 +76,7 @@ try {
   }
 } finally {
   // Only this gate's freshly allocated, private fixture directory is removed.
-  await Deno.remove(directory, { recursive: true });
+  await rm(directory, { recursive: true });
 }
 console.log(
   JSON.stringify({

@@ -1,19 +1,21 @@
-import { assert } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 
-const modalSource = await Deno.readTextFile(
-  new URL("./DesktopModal.tsx", import.meta.url),
+const modalSource = await readFile(
+  new URL("./DesktopModal.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
-const mainSource = await Deno.readTextFile(
-  new URL("../main.tsx", import.meta.url),
+const mainSource = await readFile(
+  new URL("../main.tsx", import.meta.url), "utf8",
 );
-const desktopAppSource = await Deno.readTextFile(
-  new URL("./DesktopApp.tsx", import.meta.url),
+const desktopAppSource = await readFile(
+  new URL("./DesktopApp.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("DesktopModal owns shortcuts across its complete dialog root", () => {
+test("DesktopModal owns shortcuts across its complete dialog root", () => {
   assert(
     modalSource.includes(
       "onShortcutKeyDown?: KeyboardEventHandler<HTMLDivElement>",
@@ -23,7 +25,7 @@ Deno.test("DesktopModal owns shortcuts across its complete dialog root", () => {
   assert(modalSource.includes("root: { onKeyDown: onShortcutKeyDown }"));
 });
 
-Deno.test("desktop Session actions use the modal-wide shortcut scope", () => {
+test("desktop Session actions use the modal-wide shortcut scope", () => {
   const start = appSource.indexOf('title="Session"');
   const end = appSource.indexOf("</DesktopModalShell>", start);
   const sessionModal = appSource.slice(start, end);
@@ -38,7 +40,7 @@ Deno.test("desktop Session actions use the modal-wide shortcut scope", () => {
   );
 });
 
-Deno.test("Desktop owns the native Escape guard instead of the shared app root", () => {
+test("Desktop owns the native Escape guard instead of the shared app root", () => {
   assert(!mainSource.includes("claimModalEscape"));
   assert(!mainSource.includes('addEventListener("keydown"'));
   assert(desktopAppSource.includes("installDesktopNativeEscapeGuard"));

@@ -1,23 +1,25 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   appSettingsFromEvent,
   OPEN_APP_SETTINGS_EVENT,
 } from "./appSettings.ts";
 
-const reviewAppSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewApp.tsx", import.meta.url),
+const reviewAppSource = await readFile(
+  new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
 );
-const reviewSettingsSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewSettings.tsx", import.meta.url),
+const reviewSettingsSource = await readFile(
+  new URL("./mobile/review/ReviewSettings.tsx", import.meta.url), "utf8",
 );
-const fileTreeSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url),
+const fileTreeSource = await readFile(
+  new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Code settings open on the Code section and Agent settings stay on Agent", () => {
+test("Code settings open on the Code section and Agent settings stay on Agent", () => {
   const event = new CustomEvent(OPEN_APP_SETTINGS_EVENT, {
     detail: { section: "code" },
   });
@@ -33,7 +35,7 @@ Deno.test("Code settings open on the Code section and Agent settings stay on Age
   assert(appSource.includes("portal"));
 });
 
-Deno.test("desktop settings use compact section tabs and expose product sign out", () => {
+test("desktop settings use compact section tabs and expose product sign out", () => {
   const settings = appSource.slice(
     appSource.indexOf("function DesktopSettingsContent("),
     appSource.indexOf("function machineComponentName("),
@@ -49,7 +51,7 @@ Deno.test("desktop settings use compact section tabs and expose product sign out
   assert(settings.includes("<SegmentedTabs"));
 });
 
-Deno.test("Machine mutations use correlated Controller receipts instead of polling event history", () => {
+test("Machine mutations use correlated Controller receipts instead of polling event history", () => {
   const machines = appSource.slice(
     appSource.indexOf("function MachinesContent("),
     appSource.indexOf("function isSettingsEditableTarget("),
@@ -68,7 +70,7 @@ Deno.test("Machine mutations use correlated Controller receipts instead of polli
   assertEquals(machines.includes("request_id"), false);
 });
 
-Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
+test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(reviewAppSource.includes('data-mobile-open-agent="true"'));
   assert(reviewAppSource.includes('aria-label="Open Agent"'));
   assert(reviewAppSource.includes('openMobileProduct("agent")'));
@@ -167,7 +169,7 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
   assert(fileTreeSource.includes('openAppSettings({ section: "code" })'));
 });
 
-Deno.test("Context tabs use the shared segmented tabs", () => {
+test("Context tabs use the shared segmented tabs", () => {
   const tabs = reviewAppSource.slice(
     reviewAppSource.indexOf("data-mobile-context-tabs"),
     reviewAppSource.indexOf(

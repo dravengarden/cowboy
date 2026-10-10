@@ -1,11 +1,12 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import {
   productSessionAlertHost,
   setProductSessionAlertHost,
   subscribeProductSessionAlertHost,
 } from "./productSessionAlertHost.ts";
 
-Deno.test("desktop session alert host publishes only real mount changes", () => {
+test("desktop session alert host publishes only real mount changes", () => {
   const first = {} as HTMLElement;
   let updates = 0;
   const unsubscribe = subscribeProductSessionAlertHost(() => updates++);

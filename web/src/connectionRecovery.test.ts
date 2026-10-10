@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   checkReconnectAdmission,
   ForegroundProbe,
@@ -7,7 +8,7 @@ import {
   shouldStartImmediateReconnect,
 } from "./connectionRecovery.ts";
 
-Deno.test("an admitted socket retries without waiting on unavailable HTTP probes", async () => {
+test("an admitted socket retries without waiting on unavailable HTTP probes", async () => {
   const calls: string[] = [];
   const hung = new Promise<never>(() => {});
   const decision = await checkReconnectAdmission(true, {
@@ -25,7 +26,7 @@ Deno.test("an admitted socket retries without waiting on unavailable HTTP probes
   assertEquals(calls, []);
 });
 
-Deno.test("failed admission checks HTTP concurrently and preserves authentication loss", async () => {
+test("failed admission checks HTTP concurrently and preserves authentication loss", async () => {
   let finishDataset!: () => void;
   let finishAuth!: (result: "logout") => void;
   const calls: string[] = [];
@@ -50,7 +51,7 @@ Deno.test("failed admission checks HTTP concurrently and preserves authenticatio
   assertEquals(await decision, "logout");
 });
 
-Deno.test("failed admission fences a changed dataset even with a valid cookie", async () => {
+test("failed admission fences a changed dataset even with a valid cookie", async () => {
   const changed = new Error("dataset replaced");
   assertEquals(
     await checkReconnectAdmission(false, {
@@ -62,7 +63,7 @@ Deno.test("failed admission fences a changed dataset even with a valid cookie", 
   );
 });
 
-Deno.test("temporary HTTP failures keep the session and retry failed admission", async () => {
+test("temporary HTTP failures keep the session and retry failed admission", async () => {
   for (
     const auth of [
       () => Promise.resolve("keep" as const),
@@ -80,7 +81,7 @@ Deno.test("temporary HTTP failures keep the session and retry failed admission",
   }
 });
 
-Deno.test("foreground recovery preserves an in-flight replacement", () => {
+test("foreground recovery preserves an in-flight replacement", () => {
   assertEquals(shouldReconnectOnForeground(undefined, 0, 30_000), true);
   assertEquals(shouldReconnectOnForeground(0, 0, 30_000), false);
   assertEquals(shouldReconnectOnForeground(2, 0, 30_000), true);
@@ -89,12 +90,12 @@ Deno.test("foreground recovery preserves an in-flight replacement", () => {
   assertEquals(shouldStartImmediateReconnect(1), true);
 });
 
-Deno.test("foreground recovery preserves a fresh open socket", () => {
+test("foreground recovery preserves a fresh open socket", () => {
   assertEquals(shouldReconnectOnForeground(1, 29_999, 30_000), false);
   assertEquals(shouldReconnectOnForeground(1, 30_001, 30_000), true);
 });
 
-Deno.test("Apple touch foreground recovery checks a ready socket and preserves bootstrap", () => {
+test("Apple touch foreground recovery checks a ready socket and preserves bootstrap", () => {
   assertEquals(shouldReconnectOnForeground(1, 0, 30_000, true), true);
   assertEquals(shouldReconnectOnForeground(0, 0, 30_000, true), false);
   assertEquals(shouldReconnectOnForeground(1, 0, 30_000, true, false), false);
@@ -130,7 +131,7 @@ function probeHarness(): {
   };
 }
 
-Deno.test("foreground probe coalesces repeated triggers and requires its own reply", () => {
+test("foreground probe coalesces repeated triggers and requires its own reply", () => {
   const { probe, expire, pending } = probeHarness();
   const sent: number[] = [];
   let retries = 0;
@@ -151,7 +152,7 @@ Deno.test("foreground probe coalesces repeated triggers and requires its own rep
   assertEquals(retries, 1);
 });
 
-Deno.test("closing or hiding cancels a foreground probe; send failure recovers immediately", () => {
+test("closing or hiding cancels a foreground probe; send failure recovers immediately", () => {
   const { probe, expire, pending } = probeHarness();
   let retries = 0;
   probe.start(() => {}, () => retries++);
@@ -163,7 +164,7 @@ Deno.test("closing or hiding cancels a foreground probe; send failure recovers i
   assertEquals(pending(), 0);
 });
 
-Deno.test("Apple touch WebView detection covers iPhone and desktop-UA iPad", () => {
+test("Apple touch WebView detection covers iPhone and desktop-UA iPad", () => {
   assertEquals(
     isAppleTouchWebView(
       "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",

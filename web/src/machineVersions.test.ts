@@ -1,11 +1,13 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   machineConvergencePresentation,
   machineSupersessionPresentation,
   machineVersionPresentation,
 } from "./machineVersions.ts";
 
-Deno.test("Machine version rows distinguish health from release freshness", () => {
+test("Machine version rows distinguish health from release freshness", () => {
   assertEquals(
     machineVersionPresentation("0.145.0", "active", {
       latest_version: "0.146.0",
@@ -36,7 +38,7 @@ Deno.test("Machine version rows distinguish health from release freshness", () =
   );
 });
 
-Deno.test("unknown release state never claims a component is current", () => {
+test("unknown release state never claims a component is current", () => {
   assertEquals(machineVersionPresentation("1.13.0", "active"), {
     version: "Installed 1.13.0",
     status: "active",
@@ -44,7 +46,7 @@ Deno.test("unknown release state never claims a component is current", () => {
   });
 });
 
-Deno.test("automatic convergence says what the Controller is doing", () => {
+test("automatic convergence says what the Controller is doing", () => {
   const id = { kind: "zed_server", slot: "zed" };
   assertEquals(
     machineConvergencePresentation({ id, state: "pending" }, 0).status,
@@ -84,8 +86,8 @@ Deno.test("automatic convergence says what the Controller is doing", () => {
   );
 });
 
-Deno.test("a converging component offers no action that would race the Controller", async () => {
-  const app = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
+test("a converging component offers no action that would race the Controller", async () => {
+  const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
   // Draining and blocked keep the per-component action: both are exactly where
   // a person still decides.
   const guard = app.indexOf("const converging = convergence !== undefined &&");
@@ -95,12 +97,12 @@ Deno.test("a converging component offers no action that would race the Controlle
   assertEquals(app.includes("{componentPending && !converging && ("), true);
 });
 
-Deno.test("a Plugin-served slot offers no legacy update to press", async () => {
+test("a Plugin-served slot offers no legacy update to press", async () => {
   const presentation = machineSupersessionPresentation("claude-code");
   assertEquals(presentation.status, "Served by claude-code");
   assertEquals(presentation.tone, "default");
 
-  const app = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
+  const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
   // The npm action is the unpinned `@latest` path; it must not be offered for a
   // slot an installed Plugin already serves from its pinned generation.
   assertEquals(
@@ -109,9 +111,9 @@ Deno.test("a Plugin-served slot offers no legacy update to press", async () => {
   );
 });
 
-Deno.test("a Service-managed Machine offers no Plugin lifecycle action", async () => {
-  const management = await Deno.readTextFile(
-    new URL("./ProviderManagement.tsx", import.meta.url),
+test("a Service-managed Machine offers no Plugin lifecycle action", async () => {
+  const management = await readFile(
+    new URL("./ProviderManagement.tsx", import.meta.url), "utf8",
   );
   // Blocking the capability removes the button entirely (ProviderSurface
   // renders nothing for a blocked action), so a managed Machine cannot be

@@ -1,18 +1,20 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   OPEN_SESSION_SETTINGS_EVENT,
   openSessionSettings,
   sessionSettingsFocusFromEvent,
 } from "./sessionSettingsOpen.ts";
 
-const transcriptSource = await Deno.readTextFile(
-  new URL("Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("Transcript.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("Composer.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("empty-state chips open the session settings switcher", () => {
+test("empty-state chips open the session settings switcher", () => {
   assertEquals(
     transcriptSource.includes('data-conversation-empty-settings'),
     true,
@@ -31,7 +33,7 @@ Deno.test("empty-state chips open the session settings switcher", () => {
   );
 });
 
-Deno.test("session settings open events keep an explicit focus", () => {
+test("session settings open events keep an explicit focus", () => {
   assertEquals(
     sessionSettingsFocusFromEvent(
       new CustomEvent(OPEN_SESSION_SETTINGS_EVENT, { detail: { focus: "agent" } }),

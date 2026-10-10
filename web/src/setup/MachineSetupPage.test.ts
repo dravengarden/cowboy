@@ -1,8 +1,10 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-Deno.test("setup page never asks for a machine id", async () => {
-  const source = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("setup page never asks for a machine id", async () => {
+  const source = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
   assertEquals(source.includes("Machine id"), false);
   assertEquals(source.includes("machine_id: id"), false);
@@ -13,9 +15,9 @@ Deno.test("setup page never asks for a machine id", async () => {
   assert(source.includes("JSON.stringify(name ? { display_name: name } : {})"));
 });
 
-Deno.test("setup page explains foreground and background registration", async () => {
-  const source = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("setup page explains foreground and background registration", async () => {
+  const source = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
   assert(source.includes("Runs in this terminal. Keep it open"));
   assert(source.includes("per-user background service"));
@@ -26,21 +28,21 @@ Deno.test("setup page explains foreground and background registration", async ()
   assert(source.includes("{label} · Coming soon"));
 });
 
-Deno.test("setup page centers against the dynamic viewport", async () => {
-  const page = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("setup page centers against the dynamic viewport", async () => {
+  const page = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
-  const gate = await Deno.readTextFile(
-    new URL("MachineSetupGate.tsx", import.meta.url),
+  const gate = await readFile(
+    new URL("MachineSetupGate.tsx", import.meta.url), "utf8",
   );
   assert(page.includes('minHeight: "100dvh"'));
   assert(page.includes('justifyContent: "center"'));
   assert(gate.includes('minHeight: "100dvh"'));
 });
 
-Deno.test("setup settings include theme, typeface, size, passkeys, and sign out", async () => {
-  const source = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("setup settings include theme, typeface, size, passkeys, and sign out", async () => {
+  const source = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
   assert(source.includes("FONT_PRESETS"));
   assert(source.includes("FONT_SCALE_PRESETS"));
@@ -53,9 +55,9 @@ Deno.test("setup settings include theme, typeface, size, passkeys, and sign out"
   assertEquals(source.includes("<Drawer"), false);
 });
 
-Deno.test("product sign out keeps destructive action styling", async () => {
-  const source = await Deno.readTextFile(
-    new URL("../auth/ProductAccountMenu.tsx", import.meta.url),
+test("product sign out keeps destructive action styling", async () => {
+  const source = await readFile(
+    new URL("../auth/ProductAccountMenu.tsx", import.meta.url), "utf8",
   );
   assert(source.includes('color="error"'));
   assert(source.includes('variant="outlined"'));
@@ -63,9 +65,9 @@ Deno.test("product sign out keeps destructive action styling", async () => {
   assertEquals(source.includes('color="inherit"'), false);
 });
 
-Deno.test("enrollment expiry is live and offers a fresh code", async () => {
-  const source = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("enrollment expiry is live and offers a fresh code", async () => {
+  const source = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
   assert(source.includes("expires_at_ms"));
   assert(source.includes("remainingSeconds"));
@@ -75,9 +77,9 @@ Deno.test("enrollment expiry is live and offers a fresh code", async () => {
   assertEquals(source.includes("fetchSetupMachines"), false);
 });
 
-Deno.test("issued enrollment can be discarded before returning to details", async () => {
-  const source = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("issued enrollment can be discarded before returning to details", async () => {
+  const source = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
   assert(source.includes('method: "DELETE"'));
   assert(source.includes("body: JSON.stringify({ token })"));
@@ -85,9 +87,9 @@ Deno.test("issued enrollment can be discarded before returning to details", asyn
   assert(source.includes("Discard this code and edit the computer name."));
 });
 
-Deno.test("enrollment token is masked by default with an explicit reveal control", async () => {
-  const source = await Deno.readTextFile(
-    new URL("MachineSetupPage.tsx", import.meta.url),
+test("enrollment token is masked by default with an explicit reveal control", async () => {
+  const source = await readFile(
+    new URL("MachineSetupPage.tsx", import.meta.url), "utf8",
   );
   assert(source.includes("maskSecret(value)"));
   assert(source.includes('"*".repeat(value.length - visible)'));

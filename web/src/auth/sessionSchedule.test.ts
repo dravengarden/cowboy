@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { ProductMe } from "./authApi.ts";
 import { sessionAlertState, sessionCountdownLabel } from "./sessionSchedule.ts";
 
@@ -14,7 +15,7 @@ const base: ProductMe = {
   session_idle_due_at_ms: 60_000,
 };
 
-Deno.test("session schedule warns for the earliest proof and makes primary login authoritative when due", () => {
+test("session schedule warns for the earliest proof and makes primary login authoritative when due", () => {
   assertEquals(sessionAlertState(base, 45_000), {
     kind: "passkey",
     phase: "warning",
@@ -28,7 +29,7 @@ Deno.test("session schedule warns for the earliest proof and makes primary login
   });
 });
 
-Deno.test("session schedule falls back to full login when an idle session has no Passkey", () => {
+test("session schedule falls back to full login when an idle session has no Passkey", () => {
   assertEquals(
     sessionAlertState({
       ...base,
@@ -40,7 +41,7 @@ Deno.test("session schedule falls back to full login when an idle session has no
   );
 });
 
-Deno.test("session schedule formats a compact, stable countdown", () => {
+test("session schedule formats a compact, stable countdown", () => {
   assertEquals(sessionCountdownLabel(3_661_000), "1h 2m");
   assertEquals(sessionCountdownLabel(86_399_001), "24h");
   assertEquals(sessionCountdownLabel(65_000), "1m 05s");

@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   installPluginRuntimeHosts,
   PLUGIN_SLOT_IDS,
@@ -62,7 +63,7 @@ function replace(
   }
 }
 
-Deno.test("core retains the current wire slot vocabulary, not the SDK runtime", () => {
+test("core retains the current wire slot vocabulary, not the SDK runtime", () => {
   assertEquals(HOST_SLOT_IDS, PLUGIN_SLOT_IDS);
   const core = createPluginHostInventory();
   installPluginRuntimeHosts([host()], true);
@@ -73,7 +74,7 @@ Deno.test("core retains the current wire slot vocabulary, not the SDK runtime", 
   core.dispose();
 });
 
-Deno.test("host identities reject partial pins, trailing newlines and invalid versions", () => {
+test("host identities reject partial pins, trailing newlines and invalid versions", () => {
   for (
     const value of ["example\n", "Example", "../example", "", "x".repeat(65)]
   ) assertEquals(isPluginIdentifier(value), false);
@@ -89,7 +90,7 @@ Deno.test("host identities reject partial pins, trailing newlines and invalid ve
   assertEquals(pluginHostRelease(undefined, undefined), { kind: "default" });
 });
 
-Deno.test("host decoding is closed, precise, and never dispatches a native claim", () => {
+test("host decoding is closed, precise, and never dispatches a native claim", () => {
   const core = createPluginHostInventory();
   const invalid = [
     host({ generation: "latest" }),
@@ -141,7 +142,7 @@ Deno.test("host decoding is closed, precise, and never dispatches a native claim
   core.dispose();
 });
 
-Deno.test("exact generations coexist; replacements revoke mounted selections without fallback", () => {
+test("exact generations coexist; replacements revoke mounted selections without fallback", () => {
   const core = createPluginHostInventory();
   const old = exact("1.0.0", "a", { default_for_id: false });
   const current = exact("2.0.0", "b", {
@@ -172,7 +173,7 @@ Deno.test("exact generations coexist; replacements revoke mounted selections wit
   core.dispose();
 });
 
-Deno.test("duplicate and ambiguous defaults fail closed in every host projection", () => {
+test("duplicate and ambiguous defaults fail closed in every host projection", () => {
   const core = createPluginHostInventory();
   const old = exact();
   assertEquals(replace(core, [old, old, old]), []);
@@ -195,7 +196,7 @@ Deno.test("duplicate and ambiguous defaults fail closed in every host projection
   core.dispose();
 });
 
-Deno.test("authentication and Catalog own independent complete observations", () => {
+test("authentication and Catalog own independent complete observations", () => {
   const core = createPluginHostInventory();
   replace(core, [host(), auth()]);
   assertEquals(core.resolve("identity-source", "login.method").kind, "pending");
@@ -210,7 +211,7 @@ Deno.test("authentication and Catalog own independent complete observations", ()
   core.dispose();
 });
 
-Deno.test("host snapshots are detached and frozen; invalid envelopes retain the last observation", () => {
+test("host snapshots are detached and frozen; invalid envelopes retain the last observation", () => {
   const core = createPluginHostInventory();
   const raw = host({ visual: { light: { primary: "#000000" } } });
   const rows = replace(core, [raw])!;
@@ -243,7 +244,7 @@ Deno.test("host snapshots are detached and frozen; invalid envelopes retain the 
   core.dispose();
 });
 
-Deno.test("read observations are owner-bound, single-use, and newest-request fenced", () => {
+test("read observations are owner-bound, single-use, and newest-request fenced", () => {
   const core = createPluginHostInventory();
   const other = createPluginHostInventory();
   const first = core.beginRead("catalog");
@@ -263,7 +264,7 @@ Deno.test("read observations are owner-bound, single-use, and newest-request fen
   other.dispose();
 });
 
-Deno.test("subscriptions have independent ownership and idempotent disposal", () => {
+test("subscriptions have independent ownership and idempotent disposal", () => {
   const core = createPluginHostInventory();
   const other = createPluginHostInventory();
   let calls = 0;
@@ -286,7 +287,7 @@ Deno.test("subscriptions have independent ownership and idempotent disposal", ()
   other.dispose();
 });
 
-Deno.test("reset aborts only observations and refuses late response resurrection", () => {
+test("reset aborts only observations and refuses late response resurrection", () => {
   const core = createPluginHostInventory();
   const catalog = core.beginRead("catalog");
   const authentication = core.beginRead("authentication");
@@ -311,7 +312,7 @@ Deno.test("reset aborts only observations and refuses late response resurrection
   assertThrows(() => core.beginRead("catalog"), Error);
 });
 
-Deno.test("reentrant resets cannot publish a stale decoded or notified observation", () => {
+test("reentrant resets cannot publish a stale decoded or notified observation", () => {
   const core = createPluginHostInventory();
   const first = core.beginRead("catalog");
   const malicious = host();
@@ -330,7 +331,7 @@ Deno.test("reentrant resets cannot publish a stale decoded or notified observati
   core.dispose();
 });
 
-Deno.test("a released or throwing observer cannot obstruct another observer", () => {
+test("a released or throwing observer cannot obstruct another observer", () => {
   const core = createPluginHostInventory();
   const warn = console.warn;
   let warnings = 0;

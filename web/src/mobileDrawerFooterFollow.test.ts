@@ -1,16 +1,18 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const reviewDrawerSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url),
+const reviewDrawerSource = await readFile(
+  new URL("./mobile/review/ReviewDrawerShell.tsx", import.meta.url), "utf8",
 );
-const backdropDismissSource = await Deno.readTextFile(
-  new URL("./useBackdropDismiss.ts", import.meta.url),
+const backdropDismissSource = await readFile(
+  new URL("./useBackdropDismiss.ts", import.meta.url), "utf8",
 );
 
-Deno.test("mobile drawer translates an in-flow page that owns the footer", () => {
+test("mobile drawer translates an in-flow page that owns the footer", () => {
   assert(appSource.includes("mobilePageRef.current ?? mobileLayerRef.current"));
   assert(
     appSource.includes(
@@ -109,7 +111,7 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
   );
 });
 
-Deno.test("mobile Settings lives on the Sessions island and Code takes the old slot", () => {
+test("mobile Settings lives on the Sessions island and Code takes the old slot", () => {
   assert(appSource.includes('key: "settings"'));
   assert(appSource.includes('label: "Settings"'));
   assert(appSource.includes("onOpenSettings={mobile"));

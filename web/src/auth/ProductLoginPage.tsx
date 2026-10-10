@@ -9,7 +9,7 @@ import {
 import { alpha } from "@mui/material/styles";
 import ArrowForwardRounded from "@mui/icons-material/ArrowForwardRounded";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { assessAdminPassword } from "../admin/passwordStrength";
+import { assessAdminPassword } from "../admin/passwordStrength.ts";
 import {
   authApi,
   type AuthHostPlugin,

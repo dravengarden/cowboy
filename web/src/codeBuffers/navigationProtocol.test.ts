@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { captureContent, type CapturedContent } from "./content.ts";
 import { BufferClientError, decodeResourceId } from "./protocol.ts";
 import {
@@ -18,7 +19,7 @@ const request = {
 const decode = (value: unknown, status = 200) =>
   decodeNavigation(value, status, source, request);
 
-Deno.test("navigation decodes the actual shared Service wire and freezes all evidence", () => {
+test("navigation decodes the actual shared Service wire and freezes all evidence", () => {
   const value = decode(golden);
   assertEquals(value, golden);
   assert(
@@ -52,7 +53,7 @@ Deno.test("navigation decodes the actual shared Service wire and freezes all evi
   }
 });
 
-Deno.test("navigation requests require genuine complete LF capture and exact UTF-16 boundary", async () => {
+test("navigation requests require genuine complete LF capture and exact UTF-16 boundary", async () => {
   const captured = await content();
   assertEquals(
     navigationRequest(captured, golden.position, "definition"),
@@ -100,7 +101,7 @@ Deno.test("navigation requests require genuine complete LF capture and exact UTF
   );
 });
 
-Deno.test("navigation rejects foreign identity, open fields, invalid phases and unsolicited destination IDs", () => {
+test("navigation rejects foreign identity, open fields, invalid phases and unsolicited destination IDs", () => {
   for (
     const value of [
       { ...golden, privateNative: {} },
@@ -152,7 +153,7 @@ Deno.test("navigation rejects foreign identity, open fields, invalid phases and 
   );
 });
 
-Deno.test("navigation bounds and validates every target without interpreting display paths as ownership", () => {
+test("navigation bounds and validates every target without interpreting display paths as ownership", () => {
   const location = golden.locations[0]!;
   const badLocations = [
     ...[

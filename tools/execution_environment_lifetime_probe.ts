@@ -4,6 +4,11 @@
  * model credentials. This tests upstream behavior, not a Cowboy execution grant.
  */
 
+import { createServer, type AddressInfo } from "node:net";
+import { Command, type ChildProcess } from "./lib/command.ts";
+import { join } from "node:path";
+import { networkInterfaces, tmpdir } from "node:os";
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 function require(condition: unknown, detail: string): asserts condition {
@@ -13,17 +18,25 @@ function require(condition: unknown, detail: string): asserts condition {
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 // Native JSON-RPC is inspected at each use; this fixture does not define its SDK.
-// deno-lint-ignore no-explicit-any
 type RecordValue = Record<string, any>;
 const FRAME_LIMIT = 4 * 1024 * 1024;
 
-async function stop(process: Deno.ChildProcess) {
+/** A loopback port that was free a moment ago; the server binds it next. */
+async function unusedLoopbackPort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const { port } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
+async function stop(child: ChildProcess) {
   try {
-    process.kill("SIGTERM");
+    child.kill("SIGTERM");
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    if (!((error as { code?: string }).code === "ENOENT")) throw error;
   }
-  await process.status;
+  await child.status;
 }
 
 class Connection {
@@ -136,7 +149,7 @@ class Connection {
 
 async function main() {
   const { values } = parseArgs({
-    args: Deno.args,
+    args: process.argv.slice(2),
     options: {
       "native-cli": { type: "string" },
       version: { type: "string" },
@@ -156,39 +169,39 @@ async function main() {
     "receipt must be absolute",
   );
   try {
-    await Deno.lstat(receipt);
+    await lstat(receipt);
     throw new Error("receipt already exists");
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    if (!((error as { code?: string }).code === "ENOENT")) throw error;
   }
   require(
-    await Deno.readLink("/proc/self/ns/net") !==
-      await Deno.readLink("/proc/1/ns/net"),
+    await readlink("/proc/self/ns/net") !==
+      await readlink("/proc/1/ns/net"),
     "run inside a fresh network namespace",
   );
   const interfaces = [
-    ...new Set(Deno.networkInterfaces().map((entry) => entry.name)),
+    ...new Set(Object.keys(networkInterfaces())),
   ];
   require(
     interfaces.length === 1 && interfaces[0] === "lo",
     "only loopback may exist",
   );
-  const bytes = await Deno.readFile(binary);
+  const bytes = await readFile(binary);
   const digest = Array.from(
     new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
   )
     .map((value) => value.toString(16).padStart(2, "0")).join("");
   require(digest === values.sha256, "native CLI digest differs");
-  const root = await Deno.makeTempDir({ prefix: "cowboy-executor-lifetime-" });
+  const root = await mkdtemp(join(tmpdir(), "cowboy-executor-lifetime-"));
   const target = `${root}/target`;
-  await Deno.mkdir(target);
-  await Deno.mkdir(`${root}/home`);
+  await mkdir(target);
+  await mkdir(`${root}/home`);
   const environment = {
     HOME: `${root}/home`,
     CODEX_HOME: `${root}/home/.codex`,
     PATH: "/run/current-system/sw/bin",
   };
-  const version = await new Deno.Command(binary, {
+  const version = await new Command(binary, {
     args: ["--version"],
     clearEnv: true,
     env: environment,
@@ -202,10 +215,8 @@ async function main() {
         `codex-cli ${values.version}`,
     "native version differs",
   );
-  const port = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const url = `ws://127.0.0.1:${(port.addr as Deno.NetAddr).port}`;
-  port.close();
-  const process = new Deno.Command(binary, {
+  const url = `ws://127.0.0.1:${await unusedLoopbackPort()}`;
+  const server = new Command(binary, {
     args: ["exec-server", "--listen", url],
     clearEnv: true,
     env: environment,
@@ -259,7 +270,7 @@ async function main() {
       argv: ["/run/current-system/sw/bin/false"],
     }, true);
     require(
-      await Deno.readTextFile(`${target}/starts`) === "once\n",
+      await readFile(`${target}/starts`, "utf8") === "once\n",
       "duplicate process start executed",
     );
     checks.push("duplicate_and_changed_process_id_refuse_reexecution");
@@ -295,9 +306,9 @@ async function main() {
       clientName: "expired-fixture",
       resumeSessionId: sessionId,
     }, true);
-    const pid = (await Deno.readTextFile(`${target}/process.pid`)).trim();
+    const pid = (await readFile(`${target}/process.pid`, "utf8")).trim();
     require(/^[1-9][0-9]{0,9}$/.test(pid), "invalid fixture process identity");
-    const alive = await new Deno.Command("/run/current-system/sw/bin/kill", {
+    const alive = await new Command("/run/current-system/sw/bin/kill", {
       args: ["-0", pid],
       clearEnv: true,
       env: environment,
@@ -306,14 +317,14 @@ async function main() {
     }).output();
     require(!alive.success, "expired executor session retained a live process");
     require(
-      await Deno.readTextFile(`${target}/starts`) === "once\n",
+      await readFile(`${target}/starts`, "utf8") === "once\n",
       "reconnect replayed the start",
     );
     checks.push("long_detach_expires_session_and_stops_process_without_replay");
   } finally {
     await connection?.close();
-    await stop(process);
-    await Deno.remove(root, { recursive: true });
+    await stop(server);
+    await rm(root, { recursive: true });
     cleaned = true;
   }
   const result = {
@@ -333,8 +344,8 @@ async function main() {
     proves_file_write_idempotency: false,
     proves_subscription: false,
   };
-  await Deno.writeTextFile(receipt, `${JSON.stringify(result, null, 2)}\n`, {
-    createNew: true,
+  await writeFile(receipt, `${JSON.stringify(result, null, 2)}\n`, {
+    flag: "wx",
     mode: 0o600,
   });
   console.log(

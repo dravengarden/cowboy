@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { needsMachineSetup, parseSetupMachines } from "./machineReady.ts";
 
-Deno.test("setup continues until a remote machine is enrolled", () => {
+test("setup continues until a remote machine is enrolled", () => {
   assertEquals(needsMachineSetup([]), true);
   assertEquals(
     needsMachineSetup([{
@@ -33,7 +34,7 @@ Deno.test("setup continues until a remote machine is enrolled", () => {
   );
 });
 
-Deno.test("machine list parser keeps enrollment fields", () => {
+test("machine list parser keeps enrollment fields", () => {
   const machines = parseSetupMachines([
     { id: "testdev", display_name: "Test", local: false, schedulable: false, fingerprint: "SHA256:x" },
     { nope: true },

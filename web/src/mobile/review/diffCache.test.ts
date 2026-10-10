@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   diffCacheSizeForTest,
   invalidateDiffCache,
   loadCodeDiff,
 } from "./diffCache.ts";
 
-Deno.test("diff cache deduplicates adjacent prefetch and foreground loads", async () => {
+test("diff cache deduplicates adjacent prefetch and foreground loads", async () => {
   const originalFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (() => {

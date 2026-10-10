@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { CodeChange } from "./codeApi.ts";
 import {
   groupGitChanges,
@@ -19,7 +20,7 @@ function change(
   };
 }
 
-Deno.test("git review groups conflicts and duplicates partial changes by intent", () => {
+test("git review groups conflicts and duplicates partial changes by intent", () => {
   const sections = groupGitChanges([
     change("conflict.ts", {
       status: "conflicted",
@@ -48,7 +49,7 @@ Deno.test("git review groups conflicts and duplicates partial changes by intent"
   );
 });
 
-Deno.test("git review window preserves section order and intent", () => {
+test("git review window preserves section order and intent", () => {
   const sections = groupGitChanges([
     change("conflict.ts", { status: "conflicted" }),
     change("first.ts"),
@@ -72,7 +73,7 @@ Deno.test("git review window preserves section order and intent", () => {
   assertEquals(reviewQueue(sections).length, 5);
 });
 
-Deno.test("branch comparison creates one merge-base review queue", () => {
+test("branch comparison creates one merge-base review queue", () => {
   const sections = groupGitChanges(
     [
       change("committed.ts", { staged: false, unstaged: false }),

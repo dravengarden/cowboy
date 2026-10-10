@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { Attachment } from "../attachments.ts";
 import {
   DRAFT_ATTACHMENT_BYTES,
@@ -40,7 +41,7 @@ function entry(
   };
 }
 
-Deno.test("attachments fit up to the server's count and size", () => {
+test("attachments fit up to the server's count and size", () => {
   assertEquals(draftAttachmentsFit([]), true);
   assertEquals(draftAttachmentsFit([file("a", 1024)]), true);
   assertEquals(draftAttachmentsFit([file("a", DRAFT_ATTACHMENT_BYTES)]), false);
@@ -59,7 +60,7 @@ Deno.test("attachments fit up to the server's count and size", () => {
   assertEquals(draftAttachmentsFit(many), false);
 });
 
-Deno.test("only a live document in a vanished directory is missing one", () => {
+test("only a live document in a vanished directory is missing one", () => {
   const directories = new Set(["shared"]);
   assertEquals(draftMissingDirectory([entry("top", null)], directories), false);
   assertEquals(

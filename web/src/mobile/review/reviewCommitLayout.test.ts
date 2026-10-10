@@ -1,19 +1,21 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./ReviewApp.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./ReviewApp.tsx", import.meta.url), "utf8",
 );
-const repositorySource = await Deno.readTextFile(
-  new URL("./ReviewRepository.tsx", import.meta.url),
+const repositorySource = await readFile(
+  new URL("./ReviewRepository.tsx", import.meta.url), "utf8",
 );
-const commitSource = await Deno.readTextFile(
-  new URL("./ReviewCommit.tsx", import.meta.url),
+const commitSource = await readFile(
+  new URL("./ReviewCommit.tsx", import.meta.url), "utf8",
 );
-const codeViewerSource = await Deno.readTextFile(
-  new URL("./CodeViewer.tsx", import.meta.url),
+const codeViewerSource = await readFile(
+  new URL("./CodeViewer.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("repository history pages older commits instead of a 128-commit wall", () => {
+test("repository history pages older commits instead of a 128-commit wall", () => {
   if (repositorySource.includes("Showing the newest 128 commits")) {
     throw new Error(
       "History should lazy-load instead of advertising a hard cap",
@@ -24,7 +26,7 @@ Deno.test("repository history pages older commits instead of a 128-commit wall",
   }
 });
 
-Deno.test("a commit patch has no inner back chrome and lists files in the strip", () => {
+test("a commit patch has no inner back chrome and lists files in the strip", () => {
   if (commitSource.includes("Back to commit files")) {
     throw new Error("Commit patch should not add a second back control");
   }
@@ -36,14 +38,14 @@ Deno.test("a commit patch has no inner back chrome and lists files in the strip"
   }
 });
 
-Deno.test("repository history opens commit content on the main review surface", () => {
+test("repository history opens commit content on the main review surface", () => {
   assertStringIncludes(repositorySource, "onOpenCommit(commit);");
   assertStringIncludes(repositorySource, "onClose();");
   assertStringIncludes(appSource, "<ReviewCommit");
   assertStringIncludes(appSource, 'mode === "git" && commitTarget');
 });
 
-Deno.test("repository tabs use the shared segmented tabs", () => {
+test("repository tabs use the shared segmented tabs", () => {
   // SegmentedTabs.test.ts pins the iOS selected-pill invariants.
   const start = repositorySource.indexOf("<SegmentedTabs");
   const tabs = repositorySource.slice(
@@ -55,14 +57,14 @@ Deno.test("repository tabs use the shared segmented tabs", () => {
   assertEquals(repositorySource.includes('role="tab"'), false);
 });
 
-Deno.test("repository header uses a machine chip and stable project path", () => {
+test("repository header uses a machine chip and stable project path", () => {
   assertStringIncludes(repositorySource, "label={machineLabel}");
   assertStringIncludes(repositorySource, "data-repository-project-path");
   assertStringIncludes(appSource, "{ projectPath: currentProjectPath }");
   assertStringIncludes(appSource, "currentRegisteredWorkspace?.canonical_path");
 });
 
-Deno.test("repository footer keeps Settings and close in one capsule", () => {
+test("repository footer keeps Settings and close in one capsule", () => {
   assertStringIncludes(repositorySource, 'key: "settings"');
   assertStringIncludes(repositorySource, 'key: "close"');
   assertStringIncludes(repositorySource, 'justifyContent: "flex-start"');
@@ -71,7 +73,7 @@ Deno.test("repository footer keeps Settings and close in one capsule", () => {
   }
 });
 
-Deno.test("commit patches are not rendered inside the repository drawer", () => {
+test("commit patches are not rendered inside the repository drawer", () => {
   assertStringIncludes(commitSource, "data-review-commit-patch");
   assertStringIncludes(commitSource, 'component="main"');
   if (repositorySource.includes("fetchGitCommitDiff")) {
@@ -79,7 +81,7 @@ Deno.test("commit patches are not rendered inside the repository drawer", () => 
   }
 });
 
-Deno.test("review tabs retain independent fail-safe scroll surfaces", () => {
+test("review tabs retain independent fail-safe scroll surfaces", () => {
   assertStringIncludes(appSource, "tabScrollPositions");
   assertStringIncludes(appSource, "outerScrollKey");
   assertStringIncludes(appSource, "editorScrollKey");
@@ -89,7 +91,7 @@ Deno.test("review tabs retain independent fail-safe scroll surfaces", () => {
   assertStringIncludes(commitSource, 'data-mobile-overflow-layer="true"');
 });
 
-Deno.test("tab close confirmation uses the medium Cowboy corner radius", () => {
+test("tab close confirmation uses the medium Cowboy corner radius", () => {
   const content = appSource.indexOf("data-review-tab-close-confirm");
   const start = appSource.lastIndexOf("<Popover", content);
   const end = appSource.indexOf("</Popover>", content);

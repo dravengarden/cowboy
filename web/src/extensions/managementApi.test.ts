@@ -1,10 +1,11 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.19";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   changeExtensionInstallation,
   extensionManagementJson,
 } from "./managementApi.ts";
 
-Deno.test("extension lifecycle accepts empty successful acknowledgments", async () => {
+test("extension lifecycle accepts empty successful acknowledgments", async () => {
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (_input, init) => {
@@ -22,7 +23,7 @@ Deno.test("extension lifecycle accepts empty successful acknowledgments", async 
   }
 });
 
-Deno.test("extension management preserves JSON plans and never retries an uncertain effect", async () => {
+test("extension management preserves JSON plans and never retries an uncertain effect", async () => {
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = () => {

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   DEFAULT_PASSKEY_REAUTH_INTERVAL_MS,
   normalizePasskeyReauthInterval,
@@ -8,7 +9,7 @@ import {
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
 
-Deno.test("Passkey verification intervals use the short closed schedule", () => {
+test("Passkey verification intervals use the short closed schedule", () => {
   assertEquals(
     PASSKEY_REAUTH_INTERVALS.map((option) => option.value),
     [1, 2, 3, 4, 6, 12].map((hours) => hours * HOUR_MS).concat([
@@ -24,7 +25,7 @@ Deno.test("Passkey verification intervals use the short closed schedule", () => 
   );
 });
 
-Deno.test("retired Passkey intervals migrate to stricter supported values", () => {
+test("retired Passkey intervals migrate to stricter supported values", () => {
   assertEquals(
     normalizePasskeyReauthInterval(8 * HOUR_MS, 3 * DAY_MS),
     6 * HOUR_MS,

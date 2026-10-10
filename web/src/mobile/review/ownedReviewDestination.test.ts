@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { captureContent, capturedIdentity } from "../../codeBuffers/content.ts";
 import {
   golden,
@@ -29,7 +30,7 @@ async function reading() {
   return { ...f, reader, started };
 }
 
-Deno.test("Review destination validates hash and both actual UTF-16 endpoints without clamping", async () => {
+test("Review destination validates hash and both actual UTF-16 endpoints without clamping", async () => {
   const content = await captureContent("a🙂z\nlast\n");
   const location = {
     path: "a.rs",
@@ -81,7 +82,7 @@ Deno.test("Review destination validates hash and both actual UTF-16 endpoints wi
   );
 });
 
-Deno.test("Review target renders only complete native capture and survives independent group release", async () => {
+test("Review target renders only complete native capture and survives independent group release", async () => {
   const f = await reading();
   assertEquals(f.reader.view().displayed, undefined);
   f.reply(6, targetText());
@@ -100,7 +101,7 @@ Deno.test("Review target renders only complete native capture and survives indep
   f.context.abort();
 });
 
-Deno.test("Review destination cannot steal a reserved child even from a preconstructed second consumer", async () => {
+test("Review destination cannot steal a reserved child even from a preconstructed second consumer", async () => {
   const f = await retainedNavigation();
   const first = createReviewDestination(f.operation, f.target);
   const second = createReviewDestination(f.operation, f.target);
@@ -129,7 +130,7 @@ Deno.test("Review destination cannot steal a reserved child even from a preconst
   f.context.abort();
 });
 
-Deno.test("Review close during handoff fences late Open and retains original cleanup", async () => {
+test("Review close during handoff fences late Open and retains original cleanup", async () => {
   const f = await retainedNavigation();
   const reader = createReviewDestination(f.operation, f.target);
   const started = reader.start();
@@ -153,7 +154,7 @@ Deno.test("Review close during handoff fences late Open and retains original cle
   f.context.abort();
 });
 
-Deno.test("Review lost handoff checks original group, then requires separate Open", async () => {
+test("Review lost handoff checks original group, then requires separate Open", async () => {
   const f = await retainedNavigation();
   const reader = createReviewDestination(f.operation, f.target);
   const started = reader.start();
@@ -179,7 +180,7 @@ Deno.test("Review lost handoff checks original group, then requires separate Ope
 });
 
 for (const outcome of ["lost", "pending"] as const) {
-  Deno.test(`Review ${outcome} target Open is one-use; Query never auto-reads or reopens`, async () => {
+  test(`Review ${outcome} target Open is one-use; Query never auto-reads or reopens`, async () => {
     const f = await retainedNavigation();
     const reader = createReviewDestination(f.operation, f.target);
     const started = reader.start();
@@ -207,7 +208,7 @@ for (const outcome of ["lost", "pending"] as const) {
   });
 }
 
-Deno.test("Review mismatch never displays a partial target or falls back to a path", async () => {
+test("Review mismatch never displays a partial target or falls back to a path", async () => {
   const f = await reading();
   const value = targetText();
   f.reply(6, {
@@ -222,7 +223,7 @@ Deno.test("Review mismatch never displays a partial target or falls back to a pa
   await f.reader.close();
 });
 
-Deno.test("Review false native text hash cannot become displayed target evidence", async () => {
+test("Review false native text hash cannot become displayed target evidence", async () => {
   const f = await reading();
   const value = targetText();
   f.reply(6, {
@@ -238,7 +239,7 @@ Deno.test("Review false native text hash cannot become displayed target evidence
   await f.reader.close();
 });
 
-Deno.test("Review close during text read drains cleanup but never discloses late text", async () => {
+test("Review close during text read drains cleanup but never discloses late text", async () => {
   const f = await reading();
   const cancelled = assertRejects(
     () => f.started,
@@ -258,7 +259,7 @@ Deno.test("Review close during text read drains cleanup but never discloses late
   f.context.abort();
 });
 
-Deno.test("Review ending core access synchronously hides verified target text", async () => {
+test("Review ending core access synchronously hides verified target text", async () => {
   const f = await reading();
   f.reply(6, targetText());
   await f.started;

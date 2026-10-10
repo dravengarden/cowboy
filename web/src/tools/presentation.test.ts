@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   mcpIdentity,
   providerName,
@@ -12,11 +13,11 @@ function assertEquals(actual: unknown, expected: unknown): void {
   if (actual !== expected) throw new Error(`Expected ${String(expected)}, got ${String(actual)}`);
 }
 
-Deno.test("tool presentation uses catalog-backed Provider identity with a safe fallback", () => {
+test("tool presentation uses catalog-backed Provider identity with a safe fallback", () => {
   assertEquals(providerName("future-agent"), "future-agent");
 });
 
-Deno.test("MCP identity normalizes Codex fields and Claude tool names", () => {
+test("MCP identity normalizes Codex fields and Claude tool names", () => {
   assertEquals(
     JSON.stringify(mcpIdentity("", {
       server: "chrome-devtools",
@@ -38,7 +39,7 @@ Deno.test("MCP identity normalizes Codex fields and Claude tool names", () => {
   }), "codex · MCP · chrome-devtools");
 });
 
-Deno.test("tool headings adapt Codex and Claude execute variants", () => {
+test("tool headings adapt Codex and Claude execute variants", () => {
   assertEquals(toolHeading({
     provider: "codex",
     toolName: "",
@@ -56,7 +57,7 @@ Deno.test("tool headings adapt Codex and Claude execute variants", () => {
   assertEquals(toolTypeName("claude-code", "Bash", "execute"), "Bash");
 });
 
-Deno.test("search headings do not repeat the full query", () => {
+test("search headings do not repeat the full query", () => {
   assertEquals(toolHeading({
     provider: "codex",
     toolName: "",
@@ -71,7 +72,7 @@ Deno.test("search headings do not repeat the full query", () => {
   assertEquals(toolUsesRawOnly({ kind: "execute", title: "Search local files" }), false);
 });
 
-Deno.test("tool copy uses command input and normalized output", () => {
+test("tool copy uses command input and normalized output", () => {
   assertEquals(toolCopyText({
     title: "fallback",
     rawInput: { command: "just check", description: "Verify" },
@@ -79,7 +80,7 @@ Deno.test("tool copy uses command input and normalized output", () => {
   }), "just check\n\nok");
 });
 
-Deno.test("tool copy selects an MCP query as its primary content", () => {
+test("tool copy selects an MCP query as its primary content", () => {
   assertEquals(toolCopyText({
     title: "mcp.openaiDeveloperDocs.search_openai_docs",
     rawInput: { server: "openaiDeveloperDocs", tool: "search_openai_docs", arguments: { query: "ACP SDK" } },
@@ -87,7 +88,7 @@ Deno.test("tool copy selects an MCP query as its primary content", () => {
   }), "ACP SDK\n\nresult");
 });
 
-Deno.test("tool copy preserves edit diff evidence", () => {
+test("tool copy preserves edit diff evidence", () => {
   assertEquals(toolCopyText({
     title: "Editing files",
     rawInput: {},

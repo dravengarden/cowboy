@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "./protocol";
 import {
   sessionDisplayDirectory,
@@ -18,7 +19,7 @@ function session(overrides: Partial<SessionMeta> = {}): SessionMeta {
   };
 }
 
-Deno.test("session project prefers persisted workspace display name", () => {
+test("session project prefers persisted workspace display name", () => {
   assertEquals(
     sessionProjectLabel(session({
       workspace_id: "cowboy",
@@ -29,7 +30,7 @@ Deno.test("session project prefers persisted workspace display name", () => {
   );
 });
 
-Deno.test("session list uses project identity across machine worktrees", () => {
+test("session list uses project identity across machine worktrees", () => {
   assertEquals(
     sessionListProjectLabel(session({
       workspace_name: "Cowboy",
@@ -43,7 +44,7 @@ Deno.test("session list uses project identity across machine worktrees", () => {
   );
 });
 
-Deno.test("legacy session list context is compact and does not expose generated task ids", () => {
+test("legacy session list context is compact and does not expose generated task ids", () => {
   for (const name of ["columbus", "suger"]) {
     assertEquals(
       sessionListProjectLabel(session({ cwd: `/home/draven/${name}/` })),
@@ -62,7 +63,7 @@ Deno.test("legacy session list context is compact and does not expose generated 
   );
 });
 
-Deno.test("session project survives an isolated session cwd", () => {
+test("session project survives an isolated session cwd", () => {
   assertEquals(
     sessionProjectLabel(session({
       workspace_id: "blackpearl",
@@ -72,7 +73,7 @@ Deno.test("session project survives an isolated session cwd", () => {
   );
 });
 
-Deno.test("session project preserves legacy stable-checkout fallback", () => {
+test("session project preserves legacy stable-checkout fallback", () => {
   assertEquals(
     sessionProjectLabel(session({
       cwd: "/home/draven/columbus/projects/carrack/main",
@@ -82,7 +83,7 @@ Deno.test("session project preserves legacy stable-checkout fallback", () => {
   assertEquals(sessionProjectLabel(session()), null);
 });
 
-Deno.test("session list shows the selected source directory instead of its worktree", () => {
+test("session list shows the selected source directory instead of its worktree", () => {
   assertEquals(
     sessionDisplayDirectory(session({
       workspace_source_path: "/home/draven/columbus/projects/cowboy",
@@ -93,7 +94,7 @@ Deno.test("session list shows the selected source directory instead of its workt
   assertEquals(sessionDisplayDirectory(session()), "/tmp/worktree/sess-1");
 });
 
-Deno.test("repository project path never falls back to the session worktree", () => {
+test("repository project path never falls back to the session worktree", () => {
   const isolated = session({
     workspace_source_path: "/home/draven/columbus/projects/cowboy",
     cwd: "/home/draven/.local/state/cowboy-machine/worktrees/sess-1",

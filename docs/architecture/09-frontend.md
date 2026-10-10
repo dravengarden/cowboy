@@ -1,6 +1,6 @@
 # Frontend
 
-The frontend is a **React + MUI + CodeMirror 6** PWA, built with **Deno + Vite**
+The frontend is a **React + MUI + CodeMirror 6** PWA, built with **Bun + Vite**
 as an independently replaceable web release. Axum reads it from `--web-root` at
 request time. "Desktop" and "phone" are the **same app at different widths**,
 not separate builds. A Tauri native shell wraps the same bundle for desktop/iOS
@@ -292,5 +292,5 @@ contract and requires a SideStore release plus physical-device acceptance.
 ## A house rule worth knowing
 
 `web/src/App.tsx` is a **4-space-indent outlier** (the rest of `src/` is 2-space)
-and must never be run through `deno fmt` — it would reflow ~3700 lines. The web
-quality gate is `deno check` + `oxlint`, never a repo-wide format.
+and must never be run through `dprint fmt` — it would reflow ~3700 lines. The web
+quality gate is `tsc` + `oxlint` + `bun test`, never a repo-wide format.

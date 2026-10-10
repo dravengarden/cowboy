@@ -1,15 +1,17 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { matchesShortcut, parseShortcut } from "./shortcut.ts";
 import { workspaceCommandKey } from "./workspaceCommandKey.ts";
 
-const providerSource = await Deno.readTextFile(
-  new URL("./DesktopCommandProvider.tsx", import.meta.url),
+const providerSource = await readFile(
+  new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
-const hostSource = await Deno.readTextFile(
-  new URL("./DesktopCommandHost.tsx", import.meta.url),
+const hostSource = await readFile(
+  new URL("./DesktopCommandHost.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("bare F is a physical f, so Follow cannot look up a shifted F", () => {
+test("bare F is a physical f, so Follow cannot look up a shifted F", () => {
   assertEquals(
     workspaceCommandKey({ code: "KeyF", key: "f", shiftKey: false }),
     "f",
@@ -23,7 +25,7 @@ Deno.test("bare F is a physical f, so Follow cannot look up a shifted F", () => 
   assertEquals(providerSource.includes('f: "toggle-following"'), false);
 });
 
-Deno.test("Follow is also a conversation command so F works without the scroller map", () => {
+test("Follow is also a conversation command so F works without the scroller map", () => {
   assert(hostSource.includes('id: "conversation.toggleFollow"'));
   assert(hostSource.includes('shortcut: "F"'));
   assert(

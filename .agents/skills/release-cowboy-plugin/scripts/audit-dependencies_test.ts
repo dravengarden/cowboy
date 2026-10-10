@@ -1,21 +1,25 @@
-import { assertEquals } from "jsr:@std/assert";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { discoverProviderIds } from "./audit-dependencies.ts";
 
-Deno.test("all audit discovers only directories with Provider manifests", async () => {
-  const root = await Deno.makeTempDir({ prefix: "cowboy-provider-audit-" });
+test("all audit discovers only directories with Provider manifests", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowboy-provider-audit-"));
   try {
     for (const name of ["grok", "claude-code", "runtime-packages"]) {
-      await Deno.mkdir(`${root}/${name}`);
+      await mkdir(`${root}/${name}`);
     }
-    await Deno.writeTextFile(`${root}/grok/provider.json`, "{}");
-    await Deno.writeTextFile(`${root}/claude-code/provider.json`, "{}");
-    await Deno.writeTextFile(`${root}/README.md`, "not a Provider");
+    await writeFile(`${root}/grok/provider.json`, "{}");
+    await writeFile(`${root}/claude-code/provider.json`, "{}");
+    await writeFile(`${root}/README.md`, "not a Provider");
 
     assertEquals(discoverProviderIds(new URL(`file://${root}/`)), [
       "claude-code",
       "grok",
     ]);
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await rm(root, { recursive: true });
   }
 });

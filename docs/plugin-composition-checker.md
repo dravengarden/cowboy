@@ -89,7 +89,7 @@ this gate does not contact a Machine or open production state.
 The TS result carries a module-private nominal brand and is deeply frozen.
 Serialized reports lose that brand, fail proposal decoding and cannot obtain
 execution authority. Hashing uses native Web Crypto SHA-256 in a secure browser
-context or Deno; the module imports no filesystem, framework or transport API.
+context or Bun; the module imports no filesystem, framework or transport API.
 No Plugin SDK, signed package or wire fingerprint changes in this addition.
 
 Contract fingerprint v1 hashes `cowboy.closed-contract.v1\n` followed by compact

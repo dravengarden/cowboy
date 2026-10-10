@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   beginConversationClear,
   conversationClearEnterMs,
@@ -6,14 +8,14 @@ import {
   subscribeConversationClear,
 } from "./conversationClearance.ts";
 
-const storeSource = await Deno.readTextFile(
-  new URL("./store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("./store.ts", import.meta.url), "utf8",
 );
-const transcriptSource = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Clear starts a page transition before the transcript is replaced", () => {
+test("Clear starts a page transition before the transcript is replaced", () => {
   const seen: string[] = [];
   const stop = subscribeConversationClear((sessionId) => {
     seen.push(sessionId);

@@ -1,3 +1,5 @@
+import { Command } from "./lib/command.ts";
+import { lstat, readdir, readFile } from "node:fs/promises";
 interface PluginManifest {
   id: string;
   version: string;
@@ -87,8 +89,8 @@ async function providerRequirements(
   pluginRoot: string,
 ): Promise<PluginManifest[]> {
   const requirements: PluginManifest[] = [];
-  for await (const entry of Deno.readDir(pluginRoot)) {
-    if (!entry.isDirectory) continue;
+  for (const entry of await readdir(pluginRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
     const path = join(pluginRoot, entry.name, "plugin.json");
     if (!await exists(path)) continue;
     const manifest = await readJson<PluginManifest>(path);
@@ -101,8 +103,8 @@ async function catalogReleases(
   catalogRoot: string,
 ): Promise<Array<{ path: string; release: PluginRelease }>> {
   const releases: Array<{ path: string; release: PluginRelease }> = [];
-  for await (const entry of Deno.readDir(catalogRoot)) {
-    if (!entry.isFile || !entry.name.endsWith(".release.json")) continue;
+  for (const entry of await readdir(catalogRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".release.json")) continue;
     const path = join(catalogRoot, entry.name);
     releases.push({ path, release: await readJson<PluginRelease>(path) });
   }
@@ -169,7 +171,7 @@ async function validatePublishedRelease(
   );
   assert(await exists(publisherKey), "trusted publisher key is missing");
   assert(
-    (await Deno.readTextFile(publisherKey)).trim().startsWith("ssh-ed25519 "),
+    (await readFile(publisherKey, "utf8")).trim().startsWith("ssh-ed25519 "),
     "trusted publisher key is not Ed25519",
   );
   const receiptPath = join(
@@ -228,7 +230,7 @@ async function validateFileDigest(
   path: string,
   expected: string,
 ): Promise<void> {
-  const output = await new Deno.Command("sha256sum", {
+  const output = await new Command("sha256sum", {
     args: ["--", path],
     clearEnv: true,
     stdout: "piped",
@@ -255,15 +257,15 @@ function digestValue(value: string): string {
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(path)) as T;
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 async function exists(path: string): Promise<boolean> {
   try {
-    await Deno.lstat(path);
+    await lstat(path);
     return true;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if ((error as { code?: string }).code === "ENOENT") return false;
     throw error;
   }
 }
@@ -279,8 +281,8 @@ function assert(condition: boolean, message: string): asserts condition {
 }
 
 if (import.meta.main) {
-  const catalogRoot = Deno.args[0] ?? "";
-  const pluginRoot = Deno.args[1] ?? "plugins";
+  const catalogRoot = process.argv.slice(2)[0] ?? "";
+  const pluginRoot = process.argv.slice(2)[1] ?? "plugins";
   if (!catalogRoot.startsWith("/")) {
     throw new Error("Catalog root must be absolute");
   }

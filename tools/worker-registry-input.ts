@@ -1,6 +1,7 @@
 // Derive the component-registry input that can affect detached workers.
 // A tail changing only the unconsumed Web app shell is not a worker rollout.
 
+import { readFileSync, writeFileSync } from "node:fs";
 interface Release extends Record<string, unknown> {
   version: string;
   components: Array<{ id: string; [key: string]: unknown }>;
@@ -114,17 +115,19 @@ export async function workerRegistryInput(source: string) {
 if (import.meta.main) {
   const expected = JSON.stringify(
     await workerRegistryInput(
-      Deno.readTextFileSync("components/registry.json"),
+      readFileSync("components/registry.json", "utf8"),
     ),
     null,
     2,
   ) + "\n";
   const path = "components/worker-registry-input.json";
-  if (Deno.args.length === 1 && Deno.args[0] === "--write") {
-    Deno.writeTextFileSync(path, expected);
-  } else if (Deno.args.length !== 0) {
+  if (
+    process.argv.slice(2).length === 1 && process.argv.slice(2)[0] === "--write"
+  ) {
+    writeFileSync(path, expected);
+  } else if (process.argv.slice(2).length !== 0) {
     throw new Error("usage: worker-registry-input.ts [--write]");
-  } else if (Deno.readTextFileSync(path) !== expected) {
+  } else if (readFileSync(path, "utf8") !== expected) {
     throw new Error(
       "worker registry input is stale; regenerate the derived input before building",
     );

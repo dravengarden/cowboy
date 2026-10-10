@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   languageFromFirstLine,
   languageFromPath,
   normalizeSyntaxLanguage,
 } from "./syntaxLanguages";
 
-Deno.test("file language routing covers mainstream and extensionless files", () => {
+test("file language routing covers mainstream and extensionless files", () => {
   assertEquals(languageFromPath("/repo/src/main.go"), "go");
   assertEquals(languageFromPath("C:\\repo\\Program.cs"), "csharp");
   assertEquals(languageFromPath("/repo/Dockerfile.dev"), "docker");
@@ -14,7 +15,7 @@ Deno.test("file language routing covers mainstream and extensionless files", () 
   assertEquals(languageFromPath("/repo/module.tf?raw=1"), "hcl");
 });
 
-Deno.test("language routing normalizes aliases and safely leaves unknown files plain", () => {
+test("language routing normalizes aliases and safely leaves unknown files plain", () => {
   assertEquals(normalizeSyntaxLanguage("language-js"), "javascript");
   assertEquals(normalizeSyntaxLanguage("jq"), "jq");
   assertEquals(normalizeSyntaxLanguage("AWK"), "awk");
@@ -26,7 +27,7 @@ Deno.test("language routing normalizes aliases and safely leaves unknown files p
   assertEquals(languageFromPath("/repo/archive.unknown"), "");
 });
 
-Deno.test("Zed first-line routing recognizes its built-in matchers", () => {
+test("Zed first-line routing recognizes its built-in matchers", () => {
   assertEquals(
     languageFromFirstLine("#!/usr/bin/env bash\nprintf '%s\\n' ok\n"),
     "bash",

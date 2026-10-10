@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   MOBILE_OPEN_PRODUCT_EVENT,
   mobileProductFromEvent,
@@ -13,24 +15,24 @@ import {
 } from "./appPagerMotion.ts";
 import { obsidianDrawerAbandonsToScroll } from "../obsidianDrawerGesture.ts";
 
-const pagerSource = await Deno.readTextFile(
-  new URL("./shell/MobileProductShell.tsx", import.meta.url),
+const pagerSource = await readFile(
+  new URL("./shell/MobileProductShell.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("pager prediction removes one-frame lag without escaping the rail", () => {
+test("pager prediction removes one-frame lag without escaping the rail", () => {
   assertEquals(predictPagerOffset(-120, -0.5, 16, 390), -128);
   assertEquals(predictPagerOffset(-380, -2, 24, 390), -390);
   assertEquals(predictPagerOffset(-8, 2, 24, 390), 0);
 });
 
-Deno.test("Agent left swipe and Review right swipe are the only app transitions", () => {
+test("Agent left swipe and Review right swipe are the only app transitions", () => {
   assertEquals(pagerDirectionAllowed("agent", -40), true);
   assertEquals(pagerDirectionAllowed("agent", 40), false);
   assertEquals(pagerDirectionAllowed("review", 40), true);
   assertEquals(pagerDirectionAllowed("review", -40), false);
 });
 
-Deno.test("pager motion follows the finger and clamps at both products", () => {
+test("pager motion follows the finger and clamps at both products", () => {
   assertEquals(pagerOffset("agent", -120, 390), -120);
   assertEquals(pagerOffset("agent", -500, 390), -390);
   assertEquals(pagerOffset("review", 120, 390), -270);
@@ -39,7 +41,7 @@ Deno.test("pager motion follows the finger and clamps at both products", () => {
   assertEquals(pagerTargetOffset("review", 390), -390);
 });
 
-Deno.test("interactive content and open spatial drawers keep their gesture", () => {
+test("interactive content and open spatial drawers keep their gesture", () => {
   assertEquals(shouldReservePagerStart(false), true);
   assertEquals(shouldReservePagerStart(true), false);
   // Agent's left drawer closes leftward and Review's right drawer closes
@@ -49,12 +51,12 @@ Deno.test("interactive content and open spatial drawers keep their gesture", () 
   assertEquals(shouldReservePagerStart(true, true), false);
 });
 
-Deno.test("product transitions are symmetric", () => {
+test("product transitions are symmetric", () => {
   assertEquals(nextMobileProduct("agent"), "review");
   assertEquals(nextMobileProduct("review"), "agent");
 });
 
-Deno.test("an explicit Code tap asks the pager to settle without stealing swipe", () => {
+test("an explicit Code tap asks the pager to settle without stealing swipe", () => {
   const event = new CustomEvent(MOBILE_OPEN_PRODUCT_EVENT, {
     detail: { product: "review" },
   });
@@ -69,14 +71,14 @@ Deno.test("an explicit Code tap asks the pager to settle without stealing swipe"
   assert(pagerSource.includes('draftActiveRef.current && next !== "agent"'));
 });
 
-Deno.test("product pager paints the touch sample without a frame of lag", () => {
+test("product pager paints the touch sample without a frame of lag", () => {
   assertEquals(pagerSource.includes("scheduleRender"), false);
   assertEquals(pagerSource.includes("predictPagerOffset"), false);
   assert(pagerSource.includes("MOBILE_DRAWER_SETTLE_EASING"));
   assert(pagerSource.includes("pagerOffset(gesture.product, deltaX, gesture.width)"));
 });
 
-Deno.test("product pages keep an opaque backing store during the pager transform", () => {
+test("product pages keep an opaque backing store during the pager transform", () => {
   const agent = pagerSource.slice(
     pagerSource.indexOf("ref={agentPageRef}"),
     pagerSource.indexOf("ref={reviewPageRef}"),
@@ -88,7 +90,7 @@ Deno.test("product pages keep an opaque backing store during the pager transform
   assert(review.includes('overflow: "hidden"'));
 });
 
-Deno.test("Agent to Code pager swipe dismisses the software keyboard on claim", () => {
+test("Agent to Code pager swipe dismisses the software keyboard on claim", () => {
   assert(pagerSource.includes("dismissMobileSoftwareKeyboardForSwipe"));
   const lockAt = pagerSource.indexOf("gesture.locked = true");
   const renderAt = pagerSource.indexOf(
@@ -106,7 +108,7 @@ Deno.test("Agent to Code pager swipe dismisses the software keyboard on claim", 
   assert(pagerSource.includes('if (next === "review") dismissMobileSoftwareKeyboardForSwipe()'));
 });
 
-Deno.test("vertical transcript pans release horizontal recognizers", () => {
+test("vertical transcript pans release horizontal recognizers", () => {
   assertEquals(obsidianDrawerAbandonsToScroll(10, 11), true);
   assertEquals(obsidianDrawerAbandonsToScroll(7, 13), true);
   assertEquals(obsidianDrawerAbandonsToScroll(30, 8), false);
@@ -122,7 +124,7 @@ Deno.test("vertical transcript pans release horizontal recognizers", () => {
   );
 });
 
-Deno.test("an extra finger cannot restart a claimed pager swipe", () => {
+test("an extra finger cannot restart a claimed pager swipe", () => {
   assertEquals(pagerIgnoresAdditionalTouch(true, 2), true);
   assertEquals(pagerIgnoresAdditionalTouch(true, 1), false);
   // An unclaimed start is still free to re-arm on the newest contact.
@@ -138,7 +140,7 @@ Deno.test("an extra finger cannot restart a claimed pager swipe", () => {
   );
 });
 
-Deno.test("a pager offset between products is a wedge that the next touch lands", () => {
+test("a pager offset between products is a wedge that the next touch lands", () => {
   assertEquals(pagerOffsetIsWedged(0, "agent", 390), false);
   assertEquals(pagerOffsetIsWedged(-390, "review", 390), false);
   assertEquals(pagerOffsetIsWedged(-48, "agent", 390), true);

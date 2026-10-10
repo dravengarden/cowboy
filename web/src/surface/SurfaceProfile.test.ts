@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { classifySurface } from "./profile";
 
-Deno.test("desktop host stays desktop with touch capability", () => {
+test("desktop host stays desktop with touch capability", () => {
   assertEquals(
     classifySurface({
       finePointer: true,
@@ -14,7 +15,7 @@ Deno.test("desktop host stays desktop with touch capability", () => {
   );
 });
 
-Deno.test("iPad with a trackpad remains a touch tablet", () => {
+test("iPad with a trackpad remains a touch tablet", () => {
   assertEquals(
     classifySurface({
       finePointer: true,
@@ -33,7 +34,7 @@ Deno.test("iPad with a trackpad remains a touch tablet", () => {
   );
 });
 
-Deno.test("narrow touch surface is mobile", () => {
+test("narrow touch surface is mobile", () => {
   assertEquals(
     classifySurface({
       finePointer: false,

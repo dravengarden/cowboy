@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { workspaceBranch, workspaceTree } from "./workspaceHierarchy";
 
-Deno.test("hierarchy preserves selectable parents and opaque duplicate identities", () => {
+test("hierarchy preserves selectable parents and opaque duplicate identities", () => {
   const root = workspaceTree([
     { value: "a", label: "hawk/columbus", help: "/root/a" },
     { value: "b", label: "hawk/columbus/cowboy", help: "/root/b" },

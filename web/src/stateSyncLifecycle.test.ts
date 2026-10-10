@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import {
   assertEquals,
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { ScopeClosedError } from "@cowboy/state-store/scope";
 import {
   type ClientSnapshot,
@@ -39,7 +40,7 @@ const snapshot = (id = "old"): ClientSnapshot<number> => ({
   pending: [{ id, client: "previous", name: "add", args: 2 }],
 });
 
-Deno.test("sync close drains admitted persistence but never sends after the owner is gone", async () => {
+test("sync close drains admitted persistence but never sends after the owner is gone", async () => {
   const saving = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const backend = memory<ClientSnapshot<number>>();
@@ -91,7 +92,7 @@ Deno.test("sync close drains admitted persistence but never sends after the owne
   await replacement.dispose();
 });
 
-Deno.test("closing an unchanged unhydrated client never overwrites a durable outbox", async () => {
+test("closing an unchanged unhydrated client never overwrites a durable outbox", async () => {
   const backend = memory(snapshot());
   const client = createClient({
     initial: { version: 0, value: 0 },
@@ -107,7 +108,7 @@ Deno.test("closing an unchanged unhydrated client never overwrites a durable out
   await assertRejects(() => client.flush(), ScopeClosedError);
 });
 
-Deno.test("reconnect and reentrant observers cannot send an optimistic row before its durability barrier", async () => {
+test("reconnect and reentrant observers cannot send an optimistic row before its durability barrier", async () => {
   const writing = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const sent: Mutation[] = [];
@@ -136,7 +137,7 @@ Deno.test("reconnect and reentrant observers cannot send an optimistic row befor
   await store.dispose();
 });
 
-Deno.test("single-flight cache identity is installed before a reentrant backend starts", async () => {
+test("single-flight cache identity is installed before a reentrant backend starts", async () => {
   let nested: Promise<void> | undefined;
   const client = createClient({
     initial: { version: 0, value: 0 },
@@ -156,7 +157,7 @@ Deno.test("single-flight cache identity is installed before a reentrant backend 
   await client.dispose();
 });
 
-Deno.test("sync hydration is single-flight and a late cache cannot publish after close", async () => {
+test("sync hydration is single-flight and a late cache cannot publish after close", async () => {
   const loading = Promise.withResolvers<ClientSnapshot<number> | null>();
   const started = Promise.withResolvers<void>();
   let reads = 0;
@@ -189,7 +190,7 @@ Deno.test("sync hydration is single-flight and a late cache cannot publish after
   assertEquals(backend.saved, []);
 });
 
-Deno.test("durable-confirm failure does not resurrect a concurrently acknowledged mutation", async () => {
+test("durable-confirm failure does not resurrect a concurrently acknowledged mutation", async () => {
   const failed = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const backend = memory(snapshot());
@@ -222,7 +223,7 @@ Deno.test("durable-confirm failure does not resurrect a concurrently acknowledge
   assertEquals(backend.current()?.pending, []);
 });
 
-Deno.test("close drains a failed durable confirmation and persists its restored obligation", async () => {
+test("close drains a failed durable confirmation and persists its restored obligation", async () => {
   const failed = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const backend = memory(snapshot());
@@ -254,7 +255,7 @@ Deno.test("close drains a failed durable confirmation and persists its restored 
   assertEquals(backend.current()?.pending.map((m) => m.id), ["old"]);
 });
 
-Deno.test("a successful durable confirmation cannot reappear through pending hydration", async () => {
+test("a successful durable confirmation cannot reappear through pending hydration", async () => {
   const loading = Promise.withResolvers<ClientSnapshot<number> | null>();
   const started = Promise.withResolvers<void>();
   const writing = Promise.withResolvers<void>();
@@ -286,7 +287,7 @@ Deno.test("a successful durable confirmation cannot reappear through pending hyd
   assertEquals(backend.current()?.pending, []);
 });
 
-Deno.test("replicated subscriptions are independent and observer failure cannot suppress committed delivery", async () => {
+test("replicated subscriptions are independent and observer failure cannot suppress committed delivery", async () => {
   const sent: Mutation[] = [];
   const store = replicatedStore({
     initial: 0,
@@ -314,7 +315,7 @@ Deno.test("replicated subscriptions are independent and observer failure cannot 
   assertThrows(() => store.subscribe(callback), ScopeClosedError);
 });
 
-Deno.test("reentrant close fences synchronous sends and a resend batch", async () => {
+test("reentrant close fences synchronous sends and a resend batch", async () => {
   const backend = memory<ClientSnapshot<number>>();
   const sent: Mutation[] = [];
   const store = replicatedStore({
@@ -349,7 +350,7 @@ Deno.test("reentrant close fences synchronous sends and a resend batch", async (
   assertEquals(sent.length, 3);
 });
 
-Deno.test("failed final persistence remains needs_reconcile with a stable failure promise", async () => {
+test("failed final persistence remains needs_reconcile with a stable failure promise", async () => {
   const client = createClient({
     initial: { version: 0, value: 0 },
     clientId: "one",
@@ -371,7 +372,7 @@ Deno.test("failed final persistence remains needs_reconcile with a stable failur
   });
 });
 
-Deno.test("a throwing mutator cannot leave a ghost in the pending outbox", async () => {
+test("a throwing mutator cannot leave a ghost in the pending outbox", async () => {
   const client = createClient({
     initial: { version: 0, value: 0 },
     clientId: "one",
@@ -386,7 +387,7 @@ Deno.test("a throwing mutator cannot leave a ghost in the pending outbox", async
   await client.dispose();
 });
 
-Deno.test("mirror connect is idempotent and disconnect fences late loads and retired callbacks", async () => {
+test("mirror connect is idempotent and disconnect fences late loads and retired callbacks", async () => {
   const firstLoad = Promise.withResolvers<number | null>();
   const callbacks: Array<(value: number) => void> = [];
   let loads = 0;
@@ -422,7 +423,7 @@ Deno.test("mirror connect is idempotent and disconnect fences late loads and ret
   assertEquals(stops, 1);
 });
 
-Deno.test("mirror releases an unsubscribe returned after synchronous disconnect during subscribe", async () => {
+test("mirror releases an unsubscribe returned after synchronous disconnect during subscribe", async () => {
   let stops = 0;
   const store = mirroredStore({
     initial: 0,
@@ -447,7 +448,7 @@ Deno.test("mirror releases an unsubscribe returned after synchronous disconnect 
   assertEquals(store.lifecycle.resources, 0);
 });
 
-Deno.test("mirror dispose cancels only unsubmitted remote timers and flushes its local value", async () => {
+test("mirror dispose cancels only unsubmitted remote timers and flushes its local value", async () => {
   const local = memory<number>();
   const remote = memory<number>();
   const store = mirroredStore({
@@ -467,7 +468,7 @@ Deno.test("mirror dispose cancels only unsubmitted remote timers and flushes its
   assertThrows(() => store.connect(), ScopeClosedError);
 });
 
-Deno.test("mirror writes serialize and disposal drains already-submitted remote effects", async () => {
+test("mirror writes serialize and disposal drains already-submitted remote effects", async () => {
   const first = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const writes: number[] = [];
@@ -495,7 +496,7 @@ Deno.test("mirror writes serialize and disposal drains already-submitted remote 
   assertEquals(writes, [1, 2]);
 });
 
-Deno.test("mirror late hydration cannot undo a local edit or a new remote observation", async () => {
+test("mirror late hydration cannot undo a local edit or a new remote observation", async () => {
   for (const change of ["set", "connect"] as const) {
     const loading = Promise.withResolvers<number | null>();
     const started = Promise.withResolvers<void>();
@@ -522,7 +523,7 @@ Deno.test("mirror late hydration cannot undo a local edit or a new remote observ
   }
 });
 
-Deno.test("mirror cleanup failure is visible without closing an unrelated instance", async () => {
+test("mirror cleanup failure is visible without closing an unrelated instance", async () => {
   const remote = {
     load: () => Promise.resolve(null),
     save: () => Promise.resolve(),
@@ -547,7 +548,7 @@ Deno.test("mirror cleanup failure is visible without closing an unrelated instan
   await other.dispose();
 });
 
-Deno.test("mirror diagnostics cannot break rejection handling or successful disposal", async () => {
+test("mirror diagnostics cannot break rejection handling or successful disposal", async () => {
   const store = mirroredStore({
     initial: 0,
     remote: {
@@ -564,7 +565,7 @@ Deno.test("mirror diagnostics cannot break rejection handling or successful disp
   assertEquals(store.lifecycle.phase, "disposed");
 });
 
-Deno.test("seeded lossy/reordered sync converges and each retired client reaches zero ownership", async () => {
+test("seeded lossy/reordered sync converges and each retired client reaches zero ownership", async () => {
   for (let seed = 1; seed <= 20; seed++) {
     let state = seed;
     const random = (n: number): number => {

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   checkComposition,
   type CheckedStructure,
@@ -7,7 +8,7 @@ import { decodeComposition } from "./composition.generated.ts";
 import { baseInput, linkVectors } from "./composition.fixtures.ts";
 
 for (const vector of linkVectors()) {
-  Deno.test(`composition links: ${vector.name}`, async () => {
+  test(`composition links: ${vector.name}`, async () => {
     try {
       const report = await checkComposition(vector.raw);
       if (vector.error) throw new Error(`expected ${vector.error}`);
@@ -26,7 +27,7 @@ for (const vector of linkVectors()) {
   });
 }
 
-Deno.test("link report identity ignores declaration and JSON property order", async () => {
+test("link report identity ignores declaration and JSON property order", async () => {
   const raw = baseInput();
   const original = await checkComposition(raw);
   const proposal = decodeComposition(raw);
@@ -67,7 +68,7 @@ Deno.test("link report identity ignores declaration and JSON property order", as
   }
 });
 
-Deno.test("checked reports are frozen diagnostics, not decodable grants", async () => {
+test("checked reports are frozen diagnostics, not decodable grants", async () => {
   const report = await checkComposition(baseInput());
   for (
     const value of [
@@ -119,7 +120,7 @@ Deno.test("checked reports are frozen diagnostics, not decodable grants", async 
   void types;
 });
 
-Deno.test("link errors contain closed codes only", async () => {
+test("link errors contain closed codes only", async () => {
   try {
     await checkComposition('{"secret":"synthetic-private-token"}');
     throw new Error("invalid input accepted");

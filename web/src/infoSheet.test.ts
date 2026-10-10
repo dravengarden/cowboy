@@ -1,22 +1,24 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const infoSheetSource = await Deno.readTextFile(
-  new URL("./InfoSheet.tsx", import.meta.url),
+const infoSheetSource = await readFile(
+  new URL("./InfoSheet.tsx", import.meta.url), "utf8",
 );
-const detailsSource = await Deno.readTextFile(
-  new URL("./ProviderUsageActivityDetails.tsx", import.meta.url),
+const detailsSource = await readFile(
+  new URL("./ProviderUsageActivityDetails.tsx", import.meta.url), "utf8",
 );
-const timeRangeSource = await Deno.readTextFile(
-  new URL("./ObservabilityFilters.tsx", import.meta.url),
+const timeRangeSource = await readFile(
+  new URL("./ObservabilityFilters.tsx", import.meta.url), "utf8",
 );
-const usageLogsSource = await Deno.readTextFile(
-  new URL("./UsageLogs.tsx", import.meta.url),
+const usageLogsSource = await readFile(
+  new URL("./UsageLogs.tsx", import.meta.url), "utf8",
 );
-const sheetSource = await Deno.readTextFile(
-  new URL("./Sheet.tsx", import.meta.url),
+const sheetSource = await readFile(
+  new URL("./Sheet.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("closed activity renderer exposes windows and key diagnostics", () => {
+test("closed activity renderer exposes windows and key diagnostics", () => {
   assertEquals(
     detailsSource.includes("function ProviderUsageActivityDetails"),
     true,
@@ -30,7 +32,7 @@ Deno.test("closed activity renderer exposes windows and key diagnostics", () => 
   assertEquals(detailsSource.includes("DeepSeek"), false);
 });
 
-Deno.test("nested observability sheets portal their scrims above the iOS safe area", () => {
+test("nested observability sheets portal their scrims above the iOS safe area", () => {
   assertEquals(sheetSource.includes("createPortal(sheet"), true);
   assertEquals(
     timeRangeSource.includes('portal\n        title="Time range"'),
@@ -42,13 +44,13 @@ Deno.test("nested observability sheets portal their scrims above the iOS safe ar
   );
 });
 
-Deno.test("desktop Info uses independent columns and compact metric tiles", () => {
+test("desktop Info uses independent columns and compact metric tiles", () => {
   assertEquals(infoSheetSource.includes('gridRow: "1 / span 4"'), false);
   assertEquals(infoSheetSource.includes("repeat(2, minmax(0, 1fr))"), true);
   assertEquals(infoSheetSource.includes('bgcolor: "action.hover"'), true);
 });
 
-Deno.test("activity usage controls stay readable on tablet and desktop widths", () => {
+test("activity usage controls stay readable on tablet and desktop widths", () => {
   assertEquals(
     detailsSource.includes('xs: "repeat(2, minmax(0, 1fr))"'),
     true,
@@ -59,7 +61,7 @@ Deno.test("activity usage controls stay readable on tablet and desktop widths", 
   );
 });
 
-Deno.test("diagnostic detail uses compact scan lines instead of nested field cards", () => {
+test("diagnostic detail uses compact scan lines instead of nested field cards", () => {
   assertEquals(
     usageLogsSource.includes(
       '"minmax(96px, 0.36fr) minmax(0, 1fr) 24px"',

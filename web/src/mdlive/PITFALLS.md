@@ -203,7 +203,7 @@ here says otherwise.
    / `cycleHeading` set no `selection`, so CM maps the caret to line start.
    **Fix:** explicitly move the caret by ±marker length. Status: **fixed (v163).**
 
-8. **`buildDenoViteApp` deps-FOD DNS fails when adding CM6 deps.** Build with
+8. **`buildBunViteApp` deps-FOD DNS fails when adding CM6 deps.** Build with
    `nix build .#cowboy-web --option sandbox false` to capture the new `depsHash`.
    (See the columbus memory `deno-vite-fod-dns-sandbox`.)
 

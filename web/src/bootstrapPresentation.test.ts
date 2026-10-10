@@ -1,8 +1,9 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { createBootstrapPresentation } from "./bootstrapPresentation.ts";
 
 type Frame = { type: string; value?: string };
-Deno.test("initial and reconnect layouts publish one complete baseline", async () => {
+test("initial and reconnect layouts publish one complete baseline", async () => {
   for (const initial of ["cached screen", "live screen"]) {
     const applied: Frame[] = [];
     let screen = initial;
@@ -26,7 +27,7 @@ Deno.test("initial and reconnect layouts publish one complete baseline", async (
   }
 });
 
-Deno.test("admission controls bypass the baseline and a failed socket drops its buffer", () => {
+test("admission controls bypass the baseline and a failed socket drops its buffer", () => {
   const applied: Frame[] = [];
   const apply = (frame: Frame): void => { applied.push(frame); };
   const failed = createBootstrapPresentation(apply);

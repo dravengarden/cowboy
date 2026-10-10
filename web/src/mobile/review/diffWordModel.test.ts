@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { changedWordRange } from "./diffWordModel.ts";
 
-Deno.test("word diff isolates the changed middle of a replacement", () => {
+test("word diff isolates the changed middle of a replacement", () => {
   assertEquals(
     changedWordRange("const timeout = 30;", "const timeout = 60;"),
     {
@@ -13,7 +14,7 @@ Deno.test("word diff isolates the changed middle of a replacement", () => {
   );
 });
 
-Deno.test("word diff skips unchanged and pathologically large lines", () => {
+test("word diff skips unchanged and pathologically large lines", () => {
   assertEquals(changedWordRange("same", "same"), undefined);
   assertEquals(changedWordRange("a".repeat(4_001), "b"), undefined);
 });

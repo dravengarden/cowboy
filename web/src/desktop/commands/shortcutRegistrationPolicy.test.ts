@@ -1,7 +1,8 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import { shortcutRegistrationConflict } from "./shortcutRegistrationPolicy.ts";
 
-Deno.test("global bare product letters are forbidden", () => {
+test("global bare product letters are forbidden", () => {
   assertStringIncludes(
     shortcutRegistrationConflict({ id: "global", shortcut: "S" }, []) ?? "",
     "global bare product letter",
@@ -16,7 +17,7 @@ Deno.test("global bare product letters are forbidden", () => {
   );
 });
 
-Deno.test("overlapping direct shortcuts cannot shadow each other", () => {
+test("overlapping direct shortcuts cannot shadow each other", () => {
   const global = { id: "global", shortcut: "Mod+." };
   assertStringIncludes(
     shortcutRegistrationConflict(
@@ -34,7 +35,7 @@ Deno.test("overlapping direct shortcuts cannot shadow each other", () => {
   );
 });
 
-Deno.test("a prefix continuation has only one command meaning", () => {
+test("a prefix continuation has only one command meaning", () => {
   const existing = { id: "sessions", sequence: ["Mod+K", "S"] };
   assertStringIncludes(
     shortcutRegistrationConflict(
@@ -52,7 +53,7 @@ Deno.test("a prefix continuation has only one command meaning", () => {
   );
 });
 
-Deno.test("scoped editors may share one leader meaning in disjoint regions", () => {
+test("scoped editors may share one leader meaning in disjoint regions", () => {
   assertEquals(
     shortcutRegistrationConflict(
       { id: "queued.slash", sequence: ["Mod+K", "/"], regions: ["prompt.queued"] },
@@ -69,7 +70,7 @@ Deno.test("scoped editors may share one leader meaning in disjoint regions", () 
   );
 });
 
-Deno.test("Session and Draft surfaces may reuse a leader key", () => {
+test("Session and Draft surfaces may reuse a leader key", () => {
   const schedule = {
     id: "composer.schedule",
     sequence: ["Mod+K", "H"],

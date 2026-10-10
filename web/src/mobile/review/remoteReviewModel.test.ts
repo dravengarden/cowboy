@@ -1,4 +1,5 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert@1.0.19";
+import { test } from "bun:test";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   decodeRemoteReview,
   pullNumber,
@@ -29,7 +30,7 @@ const fixture = () => ({
   }],
 });
 
-Deno.test("PR input binds a number to the selected repository without accepting arbitrary URLs", () => {
+test("PR input binds a number to the selected repository without accepting arbitrary URLs", () => {
   assertEquals(pullNumber(" 12 ", remote), "12");
   assertEquals(
     pullNumber("https://github.com/owner/repo/pull/12#discussion", remote),
@@ -51,7 +52,7 @@ Deno.test("PR input binds a number to the selected repository without accepting 
   }
 });
 
-Deno.test("remote response refuses executable links, unbounded patches and invalid revisions", () => {
+test("remote response refuses executable links, unbounded patches and invalid revisions", () => {
   assertEquals(decodeRemoteReview(fixture()), fixture());
   for (
     const change of [
@@ -68,7 +69,7 @@ Deno.test("remote response refuses executable links, unbounded patches and inval
   }
 });
 
-Deno.test("pages cannot cross PR, repository, base/head revision or file-count boundaries", () => {
+test("pages cannot cross PR, repository, base/head revision or file-count boundaries", () => {
   const first = decodeRemoteReview(fixture());
   for (
     const change of [{ repositoryId: "124" }, { number: "13" }, {

@@ -1,13 +1,15 @@
-import { assert, assertStringIncludes } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertStringIncludes } from "@std/assert";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const composerSurfaceSource = await Deno.readTextFile(
-  new URL("./mobileComposerSurface.ts", import.meta.url),
+const composerSurfaceSource = await readFile(
+  new URL("./mobileComposerSurface.ts", import.meta.url), "utf8",
 );
 
-Deno.test("draft move snackbar consumes the active light or dark theme", () => {
+test("draft move snackbar consumes the active light or dark theme", () => {
   assertStringIncludes(composerSource, 'color: "text.primary"');
   assert(
     composerSurfaceSource.includes("return theme.palette.background.paper;"),

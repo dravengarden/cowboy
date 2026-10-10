@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { RenderItem } from "../derive";
 import { toolRuns } from "./runs";
 
@@ -15,7 +16,7 @@ function mcp(key: string, server: string, tool: string): RenderItem {
   };
 }
 
-Deno.test("continuous calls to one MCP server form a run across thought rows", () => {
+test("continuous calls to one MCP server form a run across thought rows", () => {
   const items: RenderItem[] = [
     mcp("1", "chrome-devtools", "navigate_page"),
     { kind: "thought", key: "2", sections: ["Inspecting page"] },
@@ -27,7 +28,7 @@ Deno.test("continuous calls to one MCP server form a run across thought rows", (
   ]);
 });
 
-Deno.test("messages, ordinary tools, and another MCP server end a run", () => {
+test("messages, ordinary tools, and another MCP server end a run", () => {
   const ordinary: RenderItem = {
     kind: "tool",
     key: "4",

@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   pendingEditLiveText,
   pendingPanelDisclosureDecision,
   pendingRowVisibleText,
 } from "./pendingEditLifecycle.ts";
 
-Deno.test("pending panel disclosure expands and collapses outside editing", () => {
+test("pending panel disclosure expands and collapses outside editing", () => {
   assertEquals(
     pendingPanelDisclosureDecision({
       collapsed: true,
@@ -24,7 +25,7 @@ Deno.test("pending panel disclosure expands and collapses outside editing", () =
   );
 });
 
-Deno.test("pending panel disclosure never hides an unresolved edit", () => {
+test("pending panel disclosure never hides an unresolved edit", () => {
   assertEquals(
     pendingPanelDisclosureDecision({
       collapsed: false,
@@ -43,7 +44,7 @@ Deno.test("pending panel disclosure never hides an unresolved edit", () => {
   );
 });
 
-Deno.test("editing wins over a stale persisted collapsed preference", () => {
+test("editing wins over a stale persisted collapsed preference", () => {
   assertEquals(
     pendingPanelDisclosureDecision({
       collapsed: true,
@@ -62,7 +63,7 @@ Deno.test("editing wins over a stale persisted collapsed preference", () => {
   );
 });
 
-Deno.test("keyboard dismiss persists the live editor, not a stale empty mirror", () => {
+test("keyboard dismiss persists the live editor, not a stale empty mirror", () => {
   assertEquals(
     pendingEditLiveText("typed in the textarea", ""),
     "typed in the textarea",

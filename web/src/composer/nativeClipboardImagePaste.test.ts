@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { Attachment } from "../attachments.ts";
 import {
   nativeClipboardPlaceholderCount,
   runNativeClipboardImagePaste,
 } from "./nativeClipboardImagePaste.ts";
 
-Deno.test("native clipboard paste stages the selected range before reading bytes", async () => {
+test("native clipboard paste stages the selected range before reading bytes", async () => {
   const sequence: string[] = [];
   let releaseRead: ((files: File[]) => void) | undefined;
   const read = new Promise<File[]>((resolve) => {
@@ -48,7 +49,7 @@ Deno.test("native clipboard paste stages the selected range before reading bytes
   assertEquals(completed[0]?.pending, undefined);
 });
 
-Deno.test("native clipboard placeholder count is bounded and never zero", () => {
+test("native clipboard placeholder count is bounded and never zero", () => {
   assertEquals(nativeClipboardPlaceholderCount(0), 1);
   assertEquals(nativeClipboardPlaceholderCount(Number.NaN), 1);
   assertEquals(nativeClipboardPlaceholderCount(3), 3);

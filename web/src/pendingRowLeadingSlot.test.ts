@@ -1,18 +1,20 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   mobileComposerIdleEditorMinHeight,
   mobileComposerPanelHeaderMinHeight,
   mobilePendingRowMinHeight,
 } from "./mobileComposerPrimitives.ts";
 
-const source = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const source = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
 const start = source.indexOf("{sortable.order.map((id) => {");
 const end = source.indexOf("<Box sx={{ flex: 1, minWidth: 0 }}>", start);
 const leading = source.slice(start, end);
 
-Deno.test("pending rows keep only the reorder grip in their leading slot", () => {
+test("pending rows keep only the reorder grip in their leading slot", () => {
   assert(start >= 0);
   assert(end > start);
   assert(
@@ -32,7 +34,7 @@ Deno.test("pending rows keep only the reorder grip in their leading slot", () =>
   assertEquals(leading.includes("<DesktopListJumpKeycap"), false);
 });
 
-Deno.test("empty draft and queue cards match the compact composer card height", () => {
+test("empty draft and queue cards match the compact composer card height", () => {
   assertEquals(
     mobilePendingRowMinHeight,
     mobileComposerIdleEditorMinHeight + mobileComposerPanelHeaderMinHeight,
@@ -43,7 +45,7 @@ Deno.test("empty draft and queue cards match the compact composer card height", 
   assertEquals(source.includes("minHeight: 38"), false);
 });
 
-Deno.test("pending row no longer gives the ordinal its own leading column", () => {
+test("pending row no longer gives the ordinal its own leading column", () => {
   assertEquals(
     leading.includes(
       'alignSelf: "stretch",\n                          pt: 0.75',

@@ -1,4 +1,5 @@
-import { assert } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 import {
   agentLabel,
   type AgentTools,
@@ -20,7 +21,7 @@ const defaults: AgentTools = {
   },
 };
 
-Deno.test("a session stores only what differs from its agent defaults", () => {
+test("a session stores only what differs from its agent defaults", () => {
   assert(!overridden(overrideFor(defaults, defaults)));
   const next: AgentTools = {
     ...defaults,
@@ -41,7 +42,7 @@ Deno.test("a session stores only what differs from its agent defaults", () => {
   assert(override.calls?.default === undefined);
 });
 
-Deno.test("removing an agent keeps order and drops a default naming it", () => {
+test("removing an agent keeps order and drops a default naming it", () => {
   const targets = withTarget(defaults.calls.targets, "claude-code", false);
   assert(targets.length === 1 && targets[0]?.agent === "codex");
   const restored = withTarget(targets, "claude-code", true);
@@ -58,7 +59,7 @@ Deno.test("removing an agent keeps order and drops a default naming it", () => {
   );
 });
 
-Deno.test("agents are named as users know them", () => {
+test("agents are named as users know them", () => {
   assert(agentLabel("codex") === "Codex");
   assert(agentLabel("claude-code") === "Claude");
   assert(agentLabel("claude-deepseek") === "Claude Deepseek");

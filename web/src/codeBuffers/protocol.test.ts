@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import golden from "../../../contracts/code-buffer-client.fixture.json" with {
   type: "json",
 };
@@ -10,7 +11,7 @@ import {
 } from "./protocol.ts";
 import { ID, OTHER, readWire, wire } from "./fixture.ts";
 
-Deno.test("browser accepts the exact nonempty Rust HTTP fixture and recursively freezes observations", () => {
+test("browser accepts the exact nonempty Rust HTTP fixture and recursively freezes observations", () => {
   assertEquals(decodeSnapshot(golden.prepared, 200), golden.prepared);
   const id = decodeResourceId(ID);
   const language = decodeObservation(golden.language, id, "language");
@@ -22,7 +23,7 @@ Deno.test("browser accepts the exact nonempty Rust HTTP fixture and recursively 
   assert(Object.isFrozen(language.openedVersion[0]));
 });
 
-Deno.test("snapshot codec rejects shape, identity, version and status/pending substitutions", () => {
+test("snapshot codec rejects shape, identity, version and status/pending substitutions", () => {
   const cases: [unknown, number][] = [
     [wire("open"), 202],
     [wire("open", ID, true), 200],
@@ -47,7 +48,7 @@ Deno.test("snapshot codec rejects shape, identity, version and status/pending su
   }
 });
 
-Deno.test("language observations enforce exact tags, owners, bounded vectors and all nested fields", () => {
+test("language observations enforce exact tags, owners, bounded vectors and all nested fields", () => {
   const reject = (mutate: (value: typeof golden.language) => void) => {
     const value = structuredClone(golden.language);
     mutate(value);
@@ -129,7 +130,7 @@ Deno.test("language observations enforce exact tags, owners, bounded vectors and
   );
 });
 
-Deno.test("symbol observations bound total descendants, depth, integer kinds and selection ranges", () => {
+test("symbol observations bound total descendants, depth, integer kinds and selection ranges", () => {
   const symbol = golden.symbols.result.symbols[0]!;
   type Node = Omit<typeof symbol, "children"> & { children: Node[] };
   const node = (): Node => structuredClone(symbol);

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { strict as assert } from "node:assert";
 import {
   callsOverview,
@@ -39,7 +40,7 @@ function call(
   };
 }
 
-Deno.test("managed children are recognised only from their exact binding", () => {
+test("managed children are recognised only from their exact binding", () => {
   const child = {
     id: "child",
     execution_binding: {
@@ -70,7 +71,7 @@ Deno.test("managed children are recognised only from their exact binding", () =>
   assert.ok(isManagedChild(split));
 });
 
-Deno.test("execution status, verdicts and findings stay separate facts", () => {
+test("execution status, verdicts and findings stay separate facts", () => {
   const completed = call("completed", {
     verdict: "needs-attention",
     finding_count: 2,
@@ -93,7 +94,7 @@ Deno.test("execution status, verdicts and findings stay separate facts", () => {
   assert.equal(callTitle(completed), "security · round 2");
 });
 
-Deno.test("review findings use the common structured shape only", () => {
+test("review findings use the common structured shape only", () => {
   const findings = reviewFindings({
     verdict: "needs-attention",
     findings: [{

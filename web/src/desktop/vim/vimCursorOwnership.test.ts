@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
 import {
   syncVimCursorOwnership,
@@ -16,7 +18,7 @@ class FakeClassList {
   }
 }
 
-Deno.test("Insert owns the native caret independently of browser focus", () => {
+test("Insert owns the native caret independently of browser focus", () => {
   const classList = new FakeClassList();
   const root = { classList };
 
@@ -27,12 +29,12 @@ Deno.test("Insert owns the native caret independently of browser focus", () => {
   assertEquals(classList.values.has(VIM_NATIVE_CARET_CLASS), false);
 });
 
-Deno.test("the Vim runtime and theme consume the explicit cursor owner", async () => {
-  const runtimeSource = await Deno.readTextFile(
-    new URL("./imeAutoInsertVim.ts", import.meta.url),
+test("the Vim runtime and theme consume the explicit cursor owner", async () => {
+  const runtimeSource = await readFile(
+    new URL("./imeAutoInsertVim.ts", import.meta.url), "utf8",
   );
-  const themeSource = await Deno.readTextFile(
-    new URL("../../cmTheme.ts", import.meta.url),
+  const themeSource = await readFile(
+    new URL("../../cmTheme.ts", import.meta.url), "utf8",
   );
 
   assertEquals(runtimeSource.includes("syncVimCursorOwnership("), true);

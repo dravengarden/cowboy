@@ -1,22 +1,24 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const dialogSource = await Deno.readTextFile(
-  new URL("./SessionReloadDialog.tsx", import.meta.url),
+const dialogSource = await readFile(
+  new URL("./SessionReloadDialog.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("desktop session dialog exposes confirmed runtime reload", () => {
+test("desktop session dialog exposes confirmed runtime reload", () => {
   assert(appSource.includes('data-session-shortcut="l"'));
   assert(appSource.includes("onRequestReload(menuAnchor.row)"));
   assert(appSource.includes("<SessionReloadDialog"));
 });
 
-Deno.test("mobile reload is a labeled session action behind the shared confirmation", () => {
+test("mobile reload is a labeled session action behind the shared confirmation", () => {
   assert(
     composerSource.includes(
       'aria-label="reload session from session settings"',
@@ -33,7 +35,7 @@ Deno.test("mobile reload is a labeled session action behind the shared confirmat
   assertEquals(composerSource.includes("reloadSession(session.id)"), false);
 });
 
-Deno.test("desktop reload confirmation names every preserved session state", () => {
+test("desktop reload confirmation names every preserved session state", () => {
   for (const phrase of [
     "Conversation history",
     "session ID",
@@ -54,7 +56,7 @@ Deno.test("desktop reload confirmation names every preserved session state", () 
   );
 });
 
-Deno.test("mobile Provider update is badged on Options and offered in the session sheet", () => {
+test("mobile Provider update is badged on Options and offered in the session sheet", () => {
   assert(composerSource.includes("data-provider-update-badge"));
   assert(
     composerSource.includes(
@@ -66,6 +68,6 @@ Deno.test("mobile Provider update is badged on Options and offered in the sessio
   );
 });
 
-Deno.test("session rows show a passive Provider update badge beside placement", () => {
+test("session rows show a passive Provider update badge beside placement", () => {
   assert(appSource.includes("<SessionUpdateBadge session={s} />"));
 });

@@ -1,9 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assertEquals,
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import type { ClientSnapshot, Mutation } from "@cowboy/state-sync";
 import { replicatedStore } from "@cowboy/state-sync";
 import { ScopeClosedError } from "@cowboy/state-store/scope";
@@ -30,7 +32,7 @@ function ids(value: ClientSnapshot<unknown>): string[] {
   return value.pending.map((m) => m.id);
 }
 
-Deno.test("outbox delta retains unseen peer additions and removes only observed ids", () => {
+test("outbox delta retains unseen peer additions and removes only observed ids", () => {
   assertEquals(ids(mergeOutbox(snapshot(), snapshot("b"), snapshot("a"))), [
     "a",
     "b",
@@ -42,7 +44,7 @@ Deno.test("outbox delta retains unseen peer additions and removes only observed 
   assertEquals(ids(mergeOutbox(null, snapshot(), snapshot("a"))), ["a"]);
 });
 
-Deno.test("outbox peer confirmations cannot be resurrected by stale saves or disposal", () => {
+test("outbox peer confirmations cannot be resurrected by stale saves or disposal", () => {
   let stored = snapshot("a", "b");
   stored = mergeOutbox(snapshot("a", "b"), snapshot("b"), stored);
   stored = mergeOutbox(snapshot("a"), snapshot("a", "c"), stored);
@@ -51,7 +53,7 @@ Deno.test("outbox peer confirmations cannot be resurrected by stale saves or dis
   assertEquals(ids(stored), ["b", "c"]);
 });
 
-Deno.test("outbox reorders observed mutations while preserving peer ordering", () => {
+test("outbox reorders observed mutations while preserving peer ordering", () => {
   assertEquals(
     ids(
       mergeOutbox(
@@ -64,7 +66,7 @@ Deno.test("outbox reorders observed mutations while preserving peer ordering", (
   );
 });
 
-Deno.test("outbox identity rejects same-id changed client, name or arguments", () => {
+test("outbox identity rejects same-id changed client, name or arguments", () => {
   for (
     const changed of [
       { ...mutation("a"), client: "other" },
@@ -91,7 +93,7 @@ Deno.test("outbox identity rejects same-id changed client, name or arguments", (
   }
 });
 
-Deno.test("outbox identity canonicalizes JSON key order without a lossy hash", () => {
+test("outbox identity canonicalizes JSON key order without a lossy hash", () => {
   const before = {
     ...snapshot(),
     pending: [mutation("a", { x: 1, y: [2, 3] })],
@@ -100,7 +102,7 @@ Deno.test("outbox identity canonicalizes JSON key order without a lossy hash", (
   assertEquals(ids(mergeOutbox(before, next, before)), ["a"]);
 });
 
-Deno.test("outbox decoder rejects corrupt envelopes, duplicate ids and non-JSON identities", () => {
+test("outbox decoder rejects corrupt envelopes, duplicate ids and non-JSON identities", () => {
   const cyclic: unknown[] = [];
   cyclic.push(cyclic);
   for (
@@ -132,7 +134,7 @@ Deno.test("outbox decoder rejects corrupt envelopes, duplicate ids and non-JSON 
   }
 });
 
-Deno.test("outbox base preserves newer cache and an observed forced version reset", () => {
+test("outbox base preserves newer cache and an observed forced version reset", () => {
   const versioned = (version: number): ClientSnapshot<number> => ({
     base: { version, value: version },
     pending: [],
@@ -147,7 +149,7 @@ Deno.test("outbox base preserves newer cache and an observed forced version rese
   );
 });
 
-Deno.test("seeded independent outbox writers preserve the union minus observed acknowledgements", () => {
+test("seeded independent outbox writers preserve the union minus observed acknowledgements", () => {
   let seed = 17;
   const random = (bound: number): number => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -187,7 +189,7 @@ Deno.test("seeded independent outbox writers preserve the union minus observed a
   }
 });
 
-Deno.test("replicated hydration hands off observed data before reentrant persistence", async () => {
+test("replicated hydration hands off observed data before reentrant persistence", async () => {
   const factory = new FakeIndexedDb();
   factory.data.set("queue", snapshot("a"));
   const owner = createIdbPersistenceOwner({ factory });
@@ -213,7 +215,7 @@ Deno.test("replicated hydration hands off observed data before reentrant persist
   await createSyncShutdown(owner)([client]);
 });
 
-Deno.test("replicated late hydration rejects an unobserved snapshot without sending or deleting", async () => {
+test("replicated late hydration rejects an unobserved snapshot without sending or deleting", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   factory.data.set("queue", snapshot("a"));
@@ -245,7 +247,7 @@ Deno.test("replicated late hydration rejects an unobserved snapshot without send
   assertEquals(factory.data.get("queue"), snapshot("a"));
 });
 
-Deno.test("outbox serializes same-handle saves, clones admitted bytes and preserves v1 shape", async () => {
+test("outbox serializes same-handle saves, clones admitted bytes and preserves v1 shape", async () => {
   const factory = new FakeIndexedDb();
   const owner = createIdbPersistenceOwner({ factory });
   const outbox = owner.outbox<number>("queue");
@@ -270,7 +272,7 @@ Deno.test("outbox serializes same-handle saves, clones admitted bytes and preser
   assertThrows(() => outbox.save(snapshot()), ScopeClosedError);
 });
 
-Deno.test("outbox load is one-shot with a private baseline; duplicate/mixed borrowing fails", async () => {
+test("outbox load is one-shot with a private baseline; duplicate/mixed borrowing fails", async () => {
   const factory = new FakeIndexedDb();
   factory.data.set("queue", snapshot("a"));
   const owner = createIdbPersistenceOwner({ factory });
@@ -315,7 +317,7 @@ Deno.test("outbox load is one-shot with a private baseline; duplicate/mixed borr
   await owner.dispose();
 });
 
-Deno.test("outbox loading rejects blind save; corrupt or unavailable reads fence future writes", async () => {
+test("outbox loading rejects blind save; corrupt or unavailable reads fence future writes", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   factory.data.set("queue", snapshot("a"));
@@ -354,7 +356,7 @@ Deno.test("outbox loading rejects blind save; corrupt or unavailable reads fence
   await disabled.dispose();
 });
 
-Deno.test("outbox get/put share a terminal lease; abort does not advance the delta baseline", async () => {
+test("outbox get/put share a terminal lease; abort does not advance the delta baseline", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const owner = createIdbPersistenceOwner({ factory });
@@ -381,7 +383,7 @@ Deno.test("outbox get/put share a terminal lease; abort does not advance the del
   assertEquals(tx.requests.map((request) => request.listenerCount), [0, 0]);
 });
 
-Deno.test("outbox merge rejection aborts without put and permanently fences only that record", async () => {
+test("outbox merge rejection aborts without put and permanently fences only that record", async () => {
   const factory = new FakeIndexedDb();
   factory.data.set("queue", snapshot("a"));
   const owner = createIdbPersistenceOwner({ factory });
@@ -402,7 +404,7 @@ Deno.test("outbox merge rejection aborts without put and permanently fences only
   await owner.dispose();
 });
 
-Deno.test("replicated client conflict never sends and keeps the original outbox intact", async () => {
+test("replicated client conflict never sends and keeps the original outbox intact", async () => {
   const factory = new FakeIndexedDb();
   factory.data.set("queue", snapshot("a"));
   const owner = createIdbPersistenceOwner({ factory });
@@ -431,9 +433,9 @@ Deno.test("replicated client conflict never sends and keeps the original outbox 
   assertEquals(owner.lifecycle.phase, "disposed");
 });
 
-Deno.test("product uses mutation-delta persistence for all replicated state, with no blind saves", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./store.ts", import.meta.url),
+test("product uses mutation-delta persistence for all replicated state, with no blind saves", async () => {
+  const source = await readFile(
+    new URL("./store.ts", import.meta.url), "utf8",
   );
   assertEquals(source.match(/syncDatabase\.outbox</g)?.length, 2);
   assertEquals(source.includes("syncDatabase.persistence"), false);

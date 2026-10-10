@@ -1,4 +1,6 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import type { EditorPort } from "../editorExtensions/contract.ts";
 import {
   EDITOR_PLUGIN_API,
@@ -158,7 +160,7 @@ const SORT = `definePlugin({
   },
 });`;
 
-Deno.test("manifest validation is closed and versioned", async () => {
+test("manifest validation is closed and versioned", async () => {
   parseEditorPluginManifest(manifest());
   for (
     const bad of [
@@ -184,7 +186,7 @@ Deno.test("manifest validation is closed and versioned", async () => {
   await assertRejects(() => parseEditorPluginPackage(JSON.stringify(tampered)));
 });
 
-Deno.test("install runs commands, panels and data through version-bound edits", async () => {
+test("install runs commands, panels and data through version-bound edits", async () => {
   const store = memory();
   const plugins = host(store);
   const plan = await plugins.inspect(await pack(manifest(), SORT));
@@ -212,7 +214,7 @@ Deno.test("install runs commands, panels and data through version-bound edits", 
   await plugins.dispose();
 });
 
-Deno.test("edits are refused without permission, after typing or with an IME", async () => {
+test("edits are refused without permission, after typing or with an IME", async () => {
   const plugins = host();
   const readOnly = `definePlugin({ onload(ctx) {
     ctx.addCommand({ id: "w", title: "Write", async run(editor) { await editor.replaceSelection("x"); } });
@@ -255,7 +257,7 @@ Deno.test("edits are refused without permission, after typing or with an IME", a
   await second.dispose();
 });
 
-Deno.test("invocation tokens expire when the command settles", async () => {
+test("invocation tokens expire when the command settles", async () => {
   const leaky = `let saved; definePlugin({ onload(ctx) {
     ctx.addCommand({ id: "keep", title: "Keep", run(editor) { saved = editor; } });
     ctx.addCommand({ id: "use", title: "Use", async run() { ctx.notice(String(await saved.replaceSelection("late"))); } });
@@ -271,7 +273,7 @@ Deno.test("invocation tokens expire when the command settles", async () => {
   await plugins.dispose();
 });
 
-Deno.test("a failing upgrade rolls back and other plugins keep running", async () => {
+test("a failing upgrade rolls back and other plugins keep running", async () => {
   const store = memory();
   const plugins = host(store);
   await plugins.install(await plugins.inspect(await pack(manifest(), SORT)));
@@ -302,7 +304,7 @@ Deno.test("a failing upgrade rolls back and other plugins keep running", async (
   await plugins.dispose();
 });
 
-Deno.test("an unresponsive plugin is stopped and stays off after reload", async () => {
+test("an unresponsive plugin is stopped and stays off after reload", async () => {
   const store = memory();
   const plugins = host(store);
   const hang = `definePlugin({ onload(ctx) {
@@ -324,7 +326,7 @@ Deno.test("an unresponsive plugin is stopped and stays off after reload", async 
   await reloaded.dispose();
 });
 
-Deno.test("disable, settings and uninstall clean up everything", async () => {
+test("disable, settings and uninstall clean up everything", async () => {
   const store = memory();
   const plugins = host(store);
   const settingsPlugin = `definePlugin({ onload(ctx) {
@@ -354,7 +356,7 @@ Deno.test("disable, settings and uninstall clean up everything", async () => {
   await plugins.dispose();
 });
 
-Deno.test("a failed save leaves the installed state unchanged", async () => {
+test("a failed save leaves the installed state unchanged", async () => {
   const store = memory();
   const plugins = host(store);
   store.failNextSave();
@@ -365,11 +367,11 @@ Deno.test("a failed save leaves the installed state unchanged", async () => {
   await plugins.dispose();
 });
 
-Deno.test("the example package installs and sorts with its settings", async () => {
+test("the example package installs and sorts with its settings", async () => {
   const m = parseEditorPluginManifest(
-    JSON.parse(await Deno.readTextFile(new URL("manifest.json", exampleDir))),
+    JSON.parse(await readFile(new URL("manifest.json", exampleDir), "utf8")),
   );
-  const main = await Deno.readTextFile(new URL("main.js", exampleDir));
+  const main = await readFile(new URL("main.js", exampleDir), "utf8");
   const plugins = host();
   await plugins.install(await plugins.inspect(await pack(m, main)));
   const view = plugins.getSnapshot().plugins[0]!;

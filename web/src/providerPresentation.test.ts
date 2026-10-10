@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   providerName,
   providerPresentation,
   providerSelectionName,
 } from "./providerPresentation";
 
-Deno.test("unknown Providers degrade without an identity table", () => {
+test("unknown Providers degrade without an identity table", () => {
   const unknown = providerPresentation("future-agent");
   assertEquals(unknown, {
     agent: "future-agent",
@@ -16,6 +17,6 @@ Deno.test("unknown Providers degrade without an identity table", () => {
   assertEquals(providerSelectionName("future-agent"), "future-agent");
 });
 
-Deno.test("empty Provider identity has an accessible generic fallback", () => {
+test("empty Provider identity has an accessible generic fallback", () => {
   assertEquals(providerName(""), "Agent");
 });

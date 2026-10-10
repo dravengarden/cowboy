@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   closeCodeBuffer,
   fetchCodeFilePage,
@@ -14,7 +15,7 @@ import {
   shouldCloseUnavailableSource,
 } from "./codeApi.ts";
 
-Deno.test("git history pages pass the after cursor", async () => {
+test("git history pages pass the after cursor", async () => {
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -43,7 +44,7 @@ Deno.test("git history pages pass the after cursor", async () => {
   }
 });
 
-Deno.test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
+test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; cache?: RequestCache }> = [];
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
@@ -79,7 +80,7 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
   }
 });
 
-Deno.test("outline stays inside the stable Code data plane", async () => {
+test("outline stays inside the stable Code data plane", async () => {
   const original = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -103,7 +104,7 @@ Deno.test("outline stays inside the stable Code data plane", async () => {
   }
 });
 
-Deno.test("navigation hides Zed buffer identities behind Code paths", async () => {
+test("navigation hides Zed buffer identities behind Code paths", async () => {
   const original = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -133,7 +134,7 @@ Deno.test("navigation hides Zed buffer identities behind Code paths", async () =
   }
 });
 
-Deno.test("language intelligence stays inside the stable Code data plane", async () => {
+test("language intelligence stays inside the stable Code data plane", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -163,7 +164,7 @@ Deno.test("language intelligence stays inside the stable Code data plane", async
   }
 });
 
-Deno.test("hover queries use stable UTF-16 Code coordinates", async () => {
+test("hover queries use stable UTF-16 Code coordinates", async () => {
   const original = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -188,7 +189,7 @@ Deno.test("hover queries use stable UTF-16 Code coordinates", async () => {
   }
 });
 
-Deno.test("search stays inside the stable Code data plane", async () => {
+test("search stays inside the stable Code data plane", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -211,7 +212,7 @@ Deno.test("search stays inside the stable Code data plane", async () => {
   }
 });
 
-Deno.test("manifest stays inside the stable Code data plane", async () => {
+test("manifest stays inside the stable Code data plane", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -238,7 +239,7 @@ Deno.test("manifest stays inside the stable Code data plane", async () => {
   }
 });
 
-Deno.test("file continuation keeps the path and opaque cursor together", async () => {
+test("file continuation keeps the path and opaque cursor together", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -272,7 +273,7 @@ Deno.test("file continuation keeps the path and opaque cursor together", async (
   }
 });
 
-Deno.test("buffer leases use an idempotent stable Code contract", async () => {
+test("buffer leases use an idempotent stable Code contract", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; method?: string; body?: string }> = [];
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
@@ -312,7 +313,7 @@ Deno.test("buffer leases use an idempotent stable Code contract", async () => {
   }
 });
 
-Deno.test("Code API retries only transient failures", () => {
+test("Code API retries only transient failures", () => {
   for (const status of [undefined, 304, 409, 410, 502, 503, 504]) {
     assertEquals(isTransientCodeApiStatus(status), true);
   }
@@ -321,7 +322,7 @@ Deno.test("Code API retries only transient failures", () => {
   }
 });
 
-Deno.test("missing source files close stale tabs without hiding missing diffs", () => {
+test("missing source files close stale tabs without hiding missing diffs", () => {
   assertEquals(shouldCloseUnavailableSource("source", 404), true);
   assertEquals(shouldCloseUnavailableSource("source", 415), false);
   assertEquals(shouldCloseUnavailableSource("diff", 404), false);

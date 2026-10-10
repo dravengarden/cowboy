@@ -1,3 +1,15 @@
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assertPublicSiteContent,
   buildSite,
@@ -21,7 +33,7 @@ function assertEquals<T>(actual: T, expected: T, message: string): void {
   }
 }
 
-Deno.test("website catalog follows every first-party Plugin manifest", async () => {
+test("website catalog follows every first-party Plugin manifest", async () => {
   const plugins = await loadSitePlugins(ROOT);
   const manifests: Array<{
     id: string;
@@ -31,16 +43,19 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
   }> = [];
 
   for (const source of ["plugins", "examples/telemetry"]) {
-    for await (const entry of Deno.readDir(`${ROOT}/${source}`)) {
-      if (!entry.isDirectory) continue;
+    for (
+      const entry of await readdir(`${ROOT}/${source}`, { withFileTypes: true })
+    ) {
+      if (!entry.isDirectory()) continue;
       try {
         manifests.push(JSON.parse(
-          await Deno.readTextFile(
+          await readFile(
             `${ROOT}/${source}/${entry.name}/plugin.json`,
+            "utf8",
           ),
         ));
       } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) throw error;
+        if (!((error as { code?: string }).code === "ENOENT")) throw error;
       }
     }
   }
@@ -109,7 +124,7 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
   }
 });
 
-Deno.test("website telemetry has its own category and canonical source link", async () => {
+test("website telemetry has its own category and canonical source link", async () => {
   const plugin = (await loadSitePlugins(ROOT)).find((plugin) =>
     plugin.id === "victoria"
   );
@@ -150,8 +165,8 @@ Deno.test("website telemetry has its own category and canonical source link", as
   }
 });
 
-Deno.test("website explains telemetry activation, routing, and privacy", async () => {
-  const html = await Deno.readTextFile(`${ROOT}/site/index.html`);
+test("website explains telemetry activation, routing, and privacy", async () => {
+  const html = await readFile(`${ROOT}/site/index.html`, "utf8");
   const start = html.indexOf('<aside class="telemetry-guide');
   assert(start >= 0, "telemetry has a discoverable explanation");
   const guide = html.slice(start, html.indexOf("</aside>", start));
@@ -180,11 +195,12 @@ Deno.test("website explains telemetry activation, routing, and privacy", async (
   }
 });
 
-Deno.test("linked Victoria guide uses the real generic installation route", async () => {
-  const guide = await Deno.readTextFile(
+test("linked Victoria guide uses the real generic installation route", async () => {
+  const guide = await readFile(
     `${ROOT}/examples/telemetry/victoria/README.md`,
+    "utf8",
   );
-  const server = await Deno.readTextFile(`${ROOT}/src/server.rs`);
+  const server = await readFile(`${ROOT}/src/server.rs`, "utf8");
   assert(
     guide.includes("POST /api/machines/{machine_id}/plugins/victoria`"),
     "document the implemented installation route",
@@ -206,30 +222,29 @@ Deno.test("linked Victoria guide uses the real generic installation route", asyn
 });
 
 for (const failure of ["duplicate", "unknown kind"] as const) {
-  Deno.test(`website catalog rejects ${failure} across source roots`, async () => {
-    const temporary = await Deno.makeTempDir({
-      prefix: "cowboy-site-catalog-",
-    });
+  test(`website catalog rejects ${failure} across source roots`, async () => {
+    const temporary = await mkdtemp(join(tmpdir(), "cowboy-site-catalog-"));
     try {
-      await Deno.mkdir(`${temporary}/plugins/zed`, { recursive: true });
-      await Deno.mkdir(`${temporary}/examples/telemetry/victoria`, {
+      await mkdir(`${temporary}/plugins/zed`, { recursive: true });
+      await mkdir(`${temporary}/examples/telemetry/victoria`, {
         recursive: true,
       });
       const zed = JSON.parse(
-        await Deno.readTextFile(`${ROOT}/plugins/zed/plugin.json`),
+        await readFile(`${ROOT}/plugins/zed/plugin.json`, "utf8"),
       );
       const victoria = JSON.parse(
-        await Deno.readTextFile(
+        await readFile(
           `${ROOT}/examples/telemetry/victoria/plugin.json`,
+          "utf8",
         ),
       );
       if (failure === "duplicate") victoria.id = zed.id;
       else victoria.kind = "future_kind";
-      await Deno.writeTextFile(
+      await writeFile(
         `${temporary}/plugins/zed/plugin.json`,
         JSON.stringify(zed),
       );
-      await Deno.writeTextFile(
+      await writeFile(
         `${temporary}/examples/telemetry/victoria/plugin.json`,
         JSON.stringify(victoria),
       );
@@ -245,14 +260,15 @@ for (const failure of ["duplicate", "unknown kind"] as const) {
       }
       assert(rejected, `${failure} must not produce a misleading catalog`);
     } finally {
-      await Deno.remove(temporary, { recursive: true });
+      await rm(temporary, { recursive: true });
     }
   });
 }
 
-Deno.test("website deployment watches telemetry Plugin updates", async () => {
-  const workflow = await Deno.readTextFile(
+test("website deployment watches telemetry Plugin updates", async () => {
+  const workflow = await readFile(
     `${ROOT}/.github/workflows/website.yml`,
+    "utf8",
   );
   for (
     const source of [
@@ -269,7 +285,7 @@ Deno.test("website deployment watches telemetry Plugin updates", async () => {
   }
 });
 
-Deno.test("website Plugin cards escape manifest presentation text", () => {
+test("website Plugin cards escape manifest presentation text", () => {
   const plugin: SitePlugin = {
     id: "sample",
     version: "1.0.0",
@@ -305,7 +321,7 @@ Deno.test("website Plugin cards escape manifest presentation text", () => {
   );
 });
 
-Deno.test("website privacy guard rejects deployment-specific content", () => {
+test("website privacy guard rejects deployment-specific content", () => {
   for (
     const sample of [
       "/home/example/project",
@@ -329,12 +345,13 @@ Deno.test("website privacy guard rejects deployment-specific content", () => {
   );
 });
 
-Deno.test("repository landing pages use only privacy-safe product artwork", async () => {
-  const readme = await Deno.readTextFile(ROOT + "/README.md");
-  const readmeZhCn = await Deno.readTextFile(ROOT + "/README.zh-CN.md");
-  const contributing = await Deno.readTextFile(ROOT + "/CONTRIBUTING.md");
-  const architecture = await Deno.readTextFile(
+test("repository landing pages use only privacy-safe product artwork", async () => {
+  const readme = await readFile(ROOT + "/README.md", "utf8");
+  const readmeZhCn = await readFile(ROOT + "/README.zh-CN.md", "utf8");
+  const contributing = await readFile(ROOT + "/CONTRIBUTING.md", "utf8");
+  const architecture = await readFile(
     ROOT + "/docs/architecture/multi-machine.svg",
+    "utf8",
   );
 
   assertPublicSiteContent("README.md", readme);
@@ -428,22 +445,19 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   );
 });
 
-Deno.test("website build produces a complete self-contained Pages artifact", async () => {
-  const temporary = await Deno.makeTempDir({
-    dir: ROOT,
-    prefix: ".cowboy-site-test-",
-  });
+test("website build produces a complete self-contained Pages artifact", async () => {
+  const temporary = await mkdtemp(join(ROOT, ".cowboy-site-test-"));
   const output = `${temporary}/site-dist`;
 
   try {
     await buildSite(ROOT, output);
-    const html = await Deno.readTextFile(`${output}/index.html`);
-    const notFound = await Deno.readTextFile(`${output}/404.html`);
+    const html = await readFile(`${output}/index.html`, "utf8");
+    const notFound = await readFile(`${output}/404.html`, "utf8");
     const catalog = JSON.parse(
-      await Deno.readTextFile(`${output}/plugins.json`),
+      await readFile(`${output}/plugins.json`, "utf8"),
     ) as Array<{ id: string; kind: string; source_url: string }>;
-    const styles = await Deno.readTextFile(`${output}/styles.css`);
-    const script = await Deno.readTextFile(`${output}/site.js`);
+    const styles = await readFile(`${output}/styles.css`, "utf8");
+    const script = await readFile(`${output}/site.js`, "utf8");
 
     assertEquals(
       notFound,
@@ -760,8 +774,8 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         "cowboy-mobile-light.webp",
       ]
     ) {
-      const stat = await Deno.stat(`${output}/assets/${asset}`);
-      assert(stat.size < 100_000, `${asset} should remain lightweight`);
+      const info = await stat(`${output}/assets/${asset}`);
+      assert(info.size < 100_000, `${asset} should remain lightweight`);
     }
 
     for (const plugin of catalog) {
@@ -780,15 +794,15 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const reference = match[1];
       if (/^(?:https?:|mailto:)/u.test(reference)) continue;
       const path = reference.replace(/^\.\//u, "");
-      const stat = await Deno.stat(`${output}/${path}`);
-      assert(stat.isFile, `${reference} should resolve to a built file`);
+      const info = await stat(`${output}/${path}`);
+      assert(info.isFile(), `${reference} should resolve to a built file`);
     }
   } finally {
-    await Deno.remove(temporary, { recursive: true });
+    await rm(temporary, { recursive: true });
   }
 });
 
-Deno.test("website build cannot remove a directory outside the repository", async () => {
+test("website build cannot remove a directory outside the repository", async () => {
   let rejected = false;
 
   try {

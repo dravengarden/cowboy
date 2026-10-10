@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   haptic,
   notificationHaptic,
@@ -8,7 +9,7 @@ import {
 const pause = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 60));
 
-Deno.test("a shell haptic bridge replaces the Tauri plugin waveforms", async () => {
+test("a shell haptic bridge replaces the Tauri plugin waveforms", async () => {
   const root = globalThis as Record<string, unknown>;
   const kinds: string[] = [];
   const invoked: string[] = [];
@@ -36,7 +37,7 @@ Deno.test("a shell haptic bridge replaces the Tauri plugin waveforms", async () 
   }
 });
 
-Deno.test("a declined shell haptic falls back to the Tauri plugin", async () => {
+test("a declined shell haptic falls back to the Tauri plugin", async () => {
   const root = globalThis as Record<string, unknown>;
   const invoked: string[] = [];
   await pause();

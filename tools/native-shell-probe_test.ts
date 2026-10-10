@@ -1,5 +1,8 @@
-const source = await Deno.readTextFile(
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+const source = await readFile(
   new URL("./native-shell-probe.js", import.meta.url),
+  "utf8",
 );
 const probe = new Function(
   "window",
@@ -136,7 +139,7 @@ function fixture() {
   return { context, browser, run, invocations, requests };
 }
 
-Deno.test("basic shell probe does not claim a remote page or request authentication", async () => {
+test("basic shell probe does not claim a remote page or request authentication", async () => {
   const test = fixture();
   test.context.origin = "tauri://localhost";
   const report = await test.run(false);
@@ -147,7 +150,7 @@ Deno.test("basic shell probe does not claim a remote page or request authenticat
   assert(test.requests.length === 0, "unexpected network call");
 });
 
-Deno.test("remote probe exercises positive IPC and checks only public logged-out status", async () => {
+test("remote probe exercises positive IPC and checks only public logged-out status", async () => {
   const test = fixture();
   const report = await test.run(true);
   assert(
@@ -162,7 +165,7 @@ Deno.test("remote probe exercises positive IPC and checks only public logged-out
   );
 });
 
-Deno.test("local loader, foreign origin and wrong port cannot pass remote acceptance", async () => {
+test("local loader, foreign origin and wrong port cannot pass remote acceptance", async () => {
   for (
     const origin of [
       "tauri://localhost",
@@ -180,7 +183,7 @@ Deno.test("local loader, foreign origin and wrong port cannot pass remote accept
   }
 });
 
-Deno.test("remote navigation alone cannot pass without rendered login UI", async () => {
+test("remote navigation alone cannot pass without rendered login UI", async () => {
   for (
     const change of [{ ready: "loading" }, { heading: "Cowboy" }, {
       headingHeight: 0,
@@ -196,7 +199,7 @@ Deno.test("remote navigation alone cannot pass without rendered login UI", async
   }
 });
 
-Deno.test("remote probe rejects an authenticated or auth-disabled server response", async () => {
+test("remote probe rejects an authenticated or auth-disabled server response", async () => {
   const test = fixture();
   test.context.auth.me = {
     account: "fixture",
@@ -206,7 +209,7 @@ Deno.test("remote probe rejects an authenticated or auth-disabled server respons
   await rejects(() => test.run(true), "remote remains logged out");
 });
 
-Deno.test("HTML, unsuccessful or incompatible status responses are not login acceptance", async () => {
+test("HTML, unsuccessful or incompatible status responses are not login acceptance", async () => {
   for (
     const change of [{ contentType: "text/html" }, { httpStatus: 503 }, {
       auth: {},
@@ -221,25 +224,25 @@ Deno.test("HTML, unsuccessful or incompatible status responses are not login acc
   }
 });
 
-Deno.test("a globally injected but unauthorized remote IPC bridge is rejected", async () => {
+test("a globally injected but unauthorized remote IPC bridge is rejected", async () => {
   const test = fixture();
   test.context.haptics = false;
   await rejects(() => test.run(true), "haptics not allowed");
 });
 
-Deno.test("remote settings access cannot inherit the local loader permission", async () => {
+test("remote settings access cannot inherit the local loader permission", async () => {
   const test = fixture();
   test.context.allowSettings = true;
   await rejects(() => test.run(true), "remote cannot open app settings");
 });
 
-Deno.test("missing opener plugin is not mistaken for a valid scope rejection", async () => {
+test("missing opener plugin is not mistaken for a valid scope rejection", async () => {
   const test = fixture();
   test.context.missingOpener = true;
   await rejects(() => test.run(true), "opener rejects local files");
 });
 
-Deno.test("ordinary remote WebKit cannot masquerade as the native shell", async () => {
+test("ordinary remote WebKit cannot masquerade as the native shell", async () => {
   const test = fixture();
   test.browser.__cowboyNativeShell = false;
   await rejects(() => test.run(true), "native keyboard shell");

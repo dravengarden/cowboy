@@ -1,10 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { ProviderCatalogResponse } from "@cowboy/provider-ui";
 import type { SessionMeta } from "./protocol.ts";
 import { sessionProviderAuthShortcut } from "./providerAuthShortcut.ts";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
 
 const session: SessionMeta = {
@@ -50,7 +52,7 @@ function catalog(
   } as unknown as ProviderCatalogResponse;
 }
 
-Deno.test("missing Provider auth replaces the downstream startup crash with a sign-in shortcut", () => {
+test("missing Provider auth replaces the downstream startup crash with a sign-in shortcut", () => {
   assertEquals(
     sessionProviderAuthShortcut(
       {
@@ -68,7 +70,7 @@ Deno.test("missing Provider auth replaces the downstream startup crash with a si
   );
 });
 
-Deno.test("API-key Providers get typed recovery copy", () => {
+test("API-key Providers get typed recovery copy", () => {
   assertEquals(
     sessionProviderAuthShortcut(
       { sessionId: session.id, message: "Authentication required" },
@@ -83,7 +85,7 @@ Deno.test("API-key Providers get typed recovery copy", () => {
   );
 });
 
-Deno.test("ready or already-authenticating Providers do not start duplicate recovery", () => {
+test("ready or already-authenticating Providers do not start duplicate recovery", () => {
   for (const state of ["ready", "authenticating"] as const) {
     assertEquals(
       sessionProviderAuthShortcut(
@@ -96,7 +98,7 @@ Deno.test("ready or already-authenticating Providers do not start duplicate reco
   }
 });
 
-Deno.test("unrecognized failures keep their original detail beside the shortcut", () => {
+test("unrecognized failures keep their original detail beside the shortcut", () => {
   assertEquals(
     sessionProviderAuthShortcut(
       { sessionId: session.id, message: "workspace is unavailable" },
@@ -107,7 +109,7 @@ Deno.test("unrecognized failures keep their original detail beside the shortcut"
   );
 });
 
-Deno.test("the error snackbar opens the focused Provider sign-in flow", () => {
+test("the error snackbar opens the focused Provider sign-in flow", () => {
   assertEquals(appSource.includes("sessionProviderAuthShortcut("), true);
   assertEquals(
     appSource.includes('openSettings("providers", undefined, {'),

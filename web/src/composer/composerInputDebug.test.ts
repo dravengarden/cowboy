@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   composerEnterPath,
   composerSoftwareKeyboardOpen,
@@ -8,11 +10,11 @@ import {
   textareaLineMetrics,
 } from "./composerInputDebugPolicy";
 
-const source = await Deno.readTextFile(
-  new URL("./composerInputDebug.ts", import.meta.url),
+const source = await readFile(
+  new URL("./composerInputDebug.ts", import.meta.url), "utf8",
 );
 
-Deno.test("composer debug keys never include typed characters", () => {
+test("composer debug keys never include typed characters", () => {
   assertEquals(safeComposerDebugKey("Enter"), "Enter");
   assertEquals(safeComposerDebugKey("Backspace"), "Backspace");
   assertEquals(safeComposerDebugKey("a"), "char");
@@ -20,7 +22,7 @@ Deno.test("composer debug keys never include typed characters", () => {
   assertEquals(safeComposerDebugKey("Dead"), "other");
 });
 
-Deno.test("composer debug sampling is off until enabled and then rate limited", () => {
+test("composer debug sampling is off until enabled and then rate limited", () => {
   const rate = emptyComposerInputDebugRate();
   assertEquals(shouldSampleComposerInputDebug(false, 1_000, rate).sample, false);
   let accepted = 0;
@@ -34,7 +36,7 @@ Deno.test("composer debug sampling is off until enabled and then rate limited", 
   assertEquals(dropped, 16);
 });
 
-Deno.test("textarea debug metrics keep lengths and drop document text", () => {
+test("textarea debug metrics keep lengths and drop document text", () => {
   const value = "secret prompt ![img](cowboy-att:abc)\nnext";
   const metrics = textareaLineMetrics(value, 6);
   assertEquals(metrics.line, 1);
@@ -42,7 +44,7 @@ Deno.test("textarea debug metrics keep lengths and drop document text", () => {
   assertEquals(metrics.lineLength, 36);
 });
 
-Deno.test("composer input debug never writes the native selection", () => {
+test("composer input debug never writes the native selection", () => {
   assertEquals(source.includes("setSelectionRange"), false);
   assertEquals(source.includes("removeAllRanges"), false);
   assertEquals(source.includes("addRange"), false);
@@ -52,7 +54,7 @@ Deno.test("composer input debug never writes the native selection", () => {
   assertEquals(source.includes("input?.inputType ?? keyEvent?.key"), false);
 });
 
-Deno.test("debug mode labels software-keyboard Return separately from HID Enter", () => {
+test("debug mode labels software-keyboard Return separately from HID Enter", () => {
   assertEquals(composerSoftwareKeyboardOpen(500, 852), true);
   assertEquals(composerSoftwareKeyboardOpen(852, 852), false);
   assertEquals(composerEnterPath("insertLineBreak", "", false), "software");
@@ -61,8 +63,8 @@ Deno.test("debug mode labels software-keyboard Return separately from HID Enter"
   assertEquals(composerEnterPath("insertText", "char", true), "unknown");
 });
 
-Deno.test("desktop and mobile settings expose the same debug mode toggle", async () => {
-  const app = await Deno.readTextFile(new URL("../App.tsx", import.meta.url));
+test("desktop and mobile settings expose the same debug mode toggle", async () => {
+  const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
   assertEquals(app.includes('label="Debug mode"'), true);
   assertEquals(app.includes('ariaLabel="Toggle composer debug mode"'), true);
   assertEquals(app.includes('"aria-label": "Composer debug mode"'), true);

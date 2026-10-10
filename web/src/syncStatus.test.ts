@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import {
   attentionCount,
   deriveSyncPhase,
@@ -27,7 +28,7 @@ const base: SyncStatusInput = {
   updateReady: false,
 };
 
-Deno.test("deriveSyncPhase orders fences, auth, liveness, capacity and outages", () => {
+test("deriveSyncPhase orders fences, auth, liveness, capacity and outages", () => {
   assertEquals(deriveSyncPhase(base), "live");
   assertEquals(deriveSyncPhase({ ...base, silenceMs: 31_000 }), "degraded");
   assertEquals(deriveSyncPhase({ ...base, fenced: true }), "fenced");
@@ -52,7 +53,7 @@ Deno.test("deriveSyncPhase orders fences, auth, liveness, capacity and outages",
   assertEquals(deriveSyncPhase({ ...base, capacity: "waiting" }), "live");
 });
 
-Deno.test("deriveSyncStatus keeps `since` across same-phase updates and preserves identity", () => {
+test("deriveSyncStatus keeps `since` across same-phase updates and preserves identity", () => {
   const first = deriveSyncStatus({ ...base, connected: false, socket: "connecting", attempts: 1 }, undefined, 1000);
   assertEquals(first.phase, "connecting");
   assertEquals(first.since, 1000);
@@ -75,7 +76,7 @@ Deno.test("deriveSyncStatus keeps `since` across same-phase updates and preserve
   assertEquals(live.retryAt, undefined);
 });
 
-Deno.test("labels are compact and count what matters", () => {
+test("labels are compact and count what matters", () => {
   const now = 10_000;
   const offline = deriveSyncStatus(
     { ...base, connected: false, socket: "none", online: false, outbox: { pending: 2, held: 0, sessions: ["a"] } },
@@ -111,7 +112,7 @@ Deno.test("labels are compact and count what matters", () => {
   assertEquals(relativeAge(undefined, now), null);
 });
 
-Deno.test("presentedSyncPhase debounces blips and flashes recovery once", () => {
+test("presentedSyncPhase debounces blips and flashes recovery once", () => {
   const start = 1000;
   const connecting = deriveSyncStatus(
     { ...base, connected: false, socket: "connecting", attempts: 1 },
@@ -135,7 +136,7 @@ Deno.test("presentedSyncPhase debounces blips and flashes recovery once", () => 
   assertEquals(presentedSyncPhase(held, null, undefined, start + 9000), "live");
 });
 
-Deno.test("attention counts held rows outside the opened session that were not dismissed", () => {
+test("attention counts held rows outside the opened session that were not dismissed", () => {
   const sessions = [
     { id: "a", ids: ["m1", "m2"] },
     { id: "b", ids: ["m3"] },
@@ -147,7 +148,7 @@ Deno.test("attention counts held rows outside the opened session that were not d
   assertEquals(attentionCount([], "a", new Set()), 0);
 });
 
-Deno.test("withHeld keeps identity when the held count is unchanged", () => {
+test("withHeld keeps identity when the held count is unchanged", () => {
   const status = deriveSyncStatus(base, undefined, 1_000);
   assertStrictEquals(withHeld(status, status.outbox.held), status);
   const adjusted = withHeld(status, 2);
@@ -155,7 +156,7 @@ Deno.test("withHeld keeps identity when the held count is unchanged", () => {
   assertEquals(adjusted.phase, status.phase);
 });
 
-Deno.test("an unanswered server is named apart from a device without network", () => {
+test("an unanswered server is named apart from a device without network", () => {
   const now = 10_000;
   const unreachable = deriveSyncStatus(
     {

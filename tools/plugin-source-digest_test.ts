@@ -1,18 +1,23 @@
+import { Command } from "./lib/command.ts";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assertEquals,
   assertNotEquals,
   assertRejects,
-} from "jsr:@std/assert@1.0.19";
+} from "@std/assert";
 import {
   filesDigest,
   repositorySourceFiles,
 } from "./check-plugin-components.ts";
 
-Deno.test("Plugin source fingerprints exclude build caches but include new and changed source", async () => {
-  const root = await Deno.makeTempDir({ prefix: "cowboy-plugin-source-test-" });
+test("Plugin source fingerprints exclude build caches but include new and changed source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowboy-plugin-source-test-"));
   try {
     const git = async (...args: string[]) => {
-      const output = await new Deno.Command("git", {
+      const output = await new Command("git", {
         args,
         cwd: root,
         stdout: "piped",
@@ -25,14 +30,14 @@ Deno.test("Plugin source fingerprints exclude build caches but include new and c
       );
     };
     await git("init", "--quiet");
-    await Deno.mkdir(`${root}/plugin/adapter/target`, { recursive: true });
-    await Deno.writeTextFile(`${root}/.gitignore`, "target/\n");
-    await Deno.writeTextFile(`${root}/plugin/plugin.json`, '{"id":"test"}');
+    await mkdir(`${root}/plugin/adapter/target`, { recursive: true });
+    await writeFile(`${root}/.gitignore`, "target/\n");
+    await writeFile(`${root}/plugin/plugin.json`, '{"id":"test"}');
     await git("add", ".gitignore", "plugin/plugin.json");
     const before = await filesDigest(
       await repositorySourceFiles("plugin", root),
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${root}/plugin/adapter/target/cache`,
       "generated output",
     );
@@ -40,7 +45,7 @@ Deno.test("Plugin source fingerprints exclude build caches but include new and c
       await filesDigest(await repositorySourceFiles("plugin", root)),
       before,
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${root}/plugin/new.ts`,
       "export const value = 1;",
     );
@@ -53,7 +58,7 @@ Deno.test("Plugin source fingerprints exclude build caches but include new and c
       await filesDigest(await repositorySourceFiles("plugin", root)),
       withNew,
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${root}/plugin/new.ts`,
       "export const value = 2;",
     );
@@ -61,7 +66,7 @@ Deno.test("Plugin source fingerprints exclude build caches but include new and c
       await filesDigest(await repositorySourceFiles("plugin", root)),
       withNew,
     );
-    await Deno.symlink(`${root}/plugin/new.ts`, `${root}/plugin/alias.ts`);
+    await symlink(`${root}/plugin/new.ts`, `${root}/plugin/alias.ts`);
     await assertRejects(
       () => filesDigest([`${root}/plugin/alias.ts`]),
       Error,
@@ -73,6 +78,6 @@ Deno.test("Plugin source fingerprints exclude build caches but include new and c
       "no release sources",
     );
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await rm(root, { recursive: true });
   }
 });

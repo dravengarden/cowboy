@@ -1,31 +1,33 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const provider = await Deno.readTextFile(
-  new URL("./DesktopCommandProvider.tsx", import.meta.url),
+const provider = await readFile(
+  new URL("./DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
-const host = await Deno.readTextFile(
-  new URL("./DesktopCommandHost.tsx", import.meta.url),
+const host = await readFile(
+  new URL("./DesktopCommandHost.tsx", import.meta.url), "utf8",
 );
-const composerBindings = await Deno.readTextFile(
-  new URL("./DesktopComposerShortcuts.tsx", import.meta.url),
+const composerBindings = await readFile(
+  new URL("./DesktopComposerShortcuts.tsx", import.meta.url), "utf8",
 );
-const pendingBindings = await Deno.readTextFile(
-  new URL("./DesktopPendingEditShortcuts.tsx", import.meta.url),
+const pendingBindings = await readFile(
+  new URL("./DesktopPendingEditShortcuts.tsx", import.meta.url), "utf8",
 );
-const composer = await Deno.readTextFile(
-  new URL("../../Composer.tsx", import.meta.url),
+const composer = await readFile(
+  new URL("../../Composer.tsx", import.meta.url), "utf8",
 );
-const topbar = await Deno.readTextFile(
-  new URL("../DesktopTopBarControls.tsx", import.meta.url),
+const topbar = await readFile(
+  new URL("../DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const workspaceController = await Deno.readTextFile(
-  new URL("../DesktopWorkspaceController.tsx", import.meta.url),
+const workspaceController = await readFile(
+  new URL("../DesktopWorkspaceController.tsx", import.meta.url), "utf8",
 );
-const vimRuntime = await Deno.readTextFile(
-  new URL("../vim/imeAutoInsertVim.ts", import.meta.url),
+const vimRuntime = await readFile(
+  new URL("../vim/imeAutoInsertVim.ts", import.meta.url), "utf8",
 );
 
-Deno.test("workspace prefix has priority after IME and exclusive overlays", () => {
+test("workspace prefix has priority after IME and exclusive overlays", () => {
   const arbitration = provider.indexOf("desktopWorkspaceSequenceOwnsKey(");
   const ime = provider.indexOf("desktopImeOwnsKey(event)");
   const overlay = provider.indexOf("if (desktopOverlayOwnsShortcuts(document)) {");
@@ -48,7 +50,7 @@ Deno.test("workspace prefix has priority after IME and exclusive overlays", () =
   assert(prefix < direct);
 });
 
-Deno.test("claimed workspace strokes stop same-node Vim listeners immediately", () => {
+test("claimed workspace strokes stop same-node Vim listeners immediately", () => {
   const prefix = provider.indexOf("if (matchesDesktopWorkspacePrefix(event))");
   const continuation = provider.indexOf(
     "if (leaderArmed.current) {",
@@ -68,7 +70,7 @@ Deno.test("claimed workspace strokes stop same-node Vim listeners immediately", 
   );
 });
 
-Deno.test("workspace destinations are sequences rather than direct bare keys", () => {
+test("workspace destinations are sequences rather than direct bare keys", () => {
   for (
     const key of [
       "focusSessions",
@@ -89,7 +91,7 @@ Deno.test("workspace destinations are sequences rather than direct bare keys", (
   assertEquals(host.includes('id: "conversation.focusTranscript"'), false);
 });
 
-Deno.test("low-frequency Option letter bindings are palette-only", () => {
+test("low-frequency Option letter bindings are palette-only", () => {
   for (
     const shortcut of [
       "Alt+/",
@@ -111,7 +113,7 @@ Deno.test("low-frequency Option letter bindings are palette-only", () => {
   assert(composerBindings.includes("DESKTOP_SHORTCUTS.saveDraft"));
 });
 
-Deno.test("Stop is global Mod-period and Escape no longer arms navigation", () => {
+test("Stop is global Mod-period and Escape no longer arms navigation", () => {
   const start = topbar.indexOf('id: "topbar.stop"');
   const stop = topbar.slice(start, topbar.indexOf("], []);", start));
   assert(stop.includes("shortcut: DESKTOP_SHORTCUTS.stop"));
@@ -121,7 +123,7 @@ Deno.test("Stop is global Mod-period and Escape no longer arms navigation", () =
   assertEquals(composer.includes("cowboy:desktop-workspace-command"), false);
 });
 
-Deno.test("returning to Prompt preserves Vim mode and caret", () => {
+test("returning to Prompt preserves Vim mode and caret", () => {
   assert(workspaceController.includes("composer ?? composerCommandSink"));
   assert(vimRuntime.includes('closest("[data-desktop-region]") !== null'));
   assert(vimRuntime.includes("Workspace-prefix navigation is focus movement"));

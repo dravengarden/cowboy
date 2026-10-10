@@ -8,8 +8,8 @@ frontend, broker, and session-runtime update frequency independent.
 
 ```mermaid
 flowchart TB
-    SRC["web/src + deno.lock"] --> DEPS["deps FOD<br/>(vendored npm cache)"]
-    DEPS --> WEB["cowboy-web<br/>buildDenoViteApp → dist"]
+    SRC["web/src + bun.lock"] --> DEPS["deps FOD<br/>(installed node_modules)"]
+    DEPS --> WEB["cowboy-web<br/>buildBunViteApp → dist"]
     RS["Rust source<br/>(web excluded)"] --> BIN["cowboy + worker<br/>buildRustPackage"]
     MS["Machine source subset"] --> MH["cowboy-machine<br/>no-default-features"]
     WEB --> LINK["atomic /run/cowboy-web symlink"]
@@ -19,11 +19,12 @@ flowchart TB
     style MH fill:#fef9c3,stroke:#ca8a04
 ```
 
-- **`cowboy-web`** uses Cowboy's local `nix/deno-vite-app.nix` builder — a
-  deps-only FOD (vendored npm cache, keyed by `depsHash`) plus a normal offline
-  build. UI and state components are publishable source packages under
-  `components/` and are linked through `web/package.json`. Refresh `depsHash`
-  only when `web/deno.lock` or `web/package.json` change.
+- **`cowboy-web`** uses Cowboy's local `nix/bun-vite-app.nix` builder — a
+  deps-only FOD (installed `node_modules`, keyed by `depsHash`) plus a normal
+  offline build. UI and state components are publishable source packages under
+  `components/`; they and `web` are members of the root Bun workspace and are
+  linked as `workspace:*` dependencies. Refresh `depsHash` only when `bun.lock`
+  or a workspace `package.json` changes.
 - **`cowboy`** is a `buildRustPackage` whose source filter excludes frontend
   files except the TypeScript protocol fixture used by Rust contract tests.
   It pins crates via **`cargoHash` / `fetchCargoVendor`** (not
@@ -49,7 +50,7 @@ The `justfile` is the task surface (run inside `nix develop`):
 | `just dev-web` | Vite dev server with HMR, proxying `/ws` + `/healthz` to the daemon |
 | `just build-web` | build the SPA bundle |
 | `just build` | `build-web` then `cargo build --release --locked` |
-| `just check` | `fmt` + `lint` (clippy `-D warnings` + deno lint) + `typecheck` |
+| `just check` | `fmt` + `lint` (clippy `-D warnings` + oxlint) + `typecheck` |
 
 Local Rust builds use Cargo incremental compilation. `just build-cached`
 explicitly disables incremental compilation and enables sccache for measured
@@ -58,17 +59,16 @@ clean-rebuild experiments at a stable target path. On 2026-07-18, a full
 the cleared same-path target took 16.41s with 282 Rust cache hits. The hermetic
 `nix build` uses Nix's own Cargo dependency caching instead.
 
-Deno's global cache (`DENO_DIR`) is safe to share between same-user worktrees,
-but every worktree owns its real `web/node_modules` directory and its `file:`
-links back into that worktree's `components/`. `just install` rejects a
+Bun's install cache is safe to share between same-user worktrees, but every
+worktree owns its real `node_modules` directories and its workspace links back
+into that worktree's `components/`. `just install` rejects a
 checkout-level `node_modules` symlink during checks; the install path removes
 only that borrowed link, leaves its target untouched, and creates a local
 dependency view. It then verifies every local package link after installation.
 The same preflight rejects and the install path removes the obsolete,
 gitignored `web/src/_shell` link left by the retired cross-repository UI seam.
-Deno 2.9.5 is pinned because it includes the upstream hardlink-overwrite
-repair needed before a same-filesystem cache can populate worktrees with clone
-or hardlink fallbacks.
+Bun is pinned in `nix/bun.nix`; `just toolchain-check` rejects any other
+version.
 
 ## CLI / daemon flags
 

@@ -1,11 +1,13 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { machineCommandResultPresentation } from "./machineCommandResult.ts";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Machine command results never expose peer diagnostics", () => {
+test("Machine command results never expose peer diagnostics", () => {
   assertEquals(machineCommandResultPresentation(true), {
     severity: "success",
     message: "Command accepted",
@@ -17,7 +19,7 @@ Deno.test("Machine command results never expose peer diagnostics", () => {
   });
 });
 
-Deno.test("Machine command feedback is scoped to the current action and expires", () => {
+test("Machine command feedback is scoped to the current action and expires", () => {
   assertEquals(appSource.includes("commandFeedbackTimers"), true);
   assertEquals(appSource.includes("showCommandFeedback(machineId"), true);
   assertEquals(appSource.includes("}, 4_500);"), true);

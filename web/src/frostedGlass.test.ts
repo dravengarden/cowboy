@@ -1,43 +1,45 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   FROSTED_PILL_DROP_SHADOW_GEOMETRY,
   TURN_STATUS_PILL_MIN_HEIGHT,
 } from "./floatingOverlayPolicy";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const composerSurfaceSource = await Deno.readTextFile(
-  new URL("./mobileComposerSurface.ts", import.meta.url),
+const composerSurfaceSource = await readFile(
+  new URL("./mobileComposerSurface.ts", import.meta.url), "utf8",
 );
-const transcriptSource = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
-const providerTranscriptSource = await Deno.readTextFile(
-  new URL("./ProviderTranscript.tsx", import.meta.url),
+const providerTranscriptSource = await readFile(
+  new URL("./ProviderTranscript.tsx", import.meta.url), "utf8",
 );
-const exploreSurfaceSource = await Deno.readTextFile(
-  new URL("./explore/ExploreSurface.tsx", import.meta.url),
+const exploreSurfaceSource = await readFile(
+  new URL("./explore/ExploreSurface.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const frostedGlassSource = await Deno.readTextFile(
-  new URL("./frostedGlass.ts", import.meta.url),
+const frostedGlassSource = await readFile(
+  new URL("./frostedGlass.ts", import.meta.url), "utf8",
 );
-const geometrySource = await Deno.readTextFile(
-  new URL("./floatingComposerGeometry.ts", import.meta.url),
+const geometrySource = await readFile(
+  new URL("./floatingComposerGeometry.ts", import.meta.url), "utf8",
 );
-const turnStatusSource = await Deno.readTextFile(
-  new URL("./TurnStatusOverlay.tsx", import.meta.url),
-);
-
-const permissionSource = await Deno.readTextFile(
-  new URL("./PermissionOverlay.tsx", import.meta.url),
+const turnStatusSource = await readFile(
+  new URL("./TurnStatusOverlay.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("floating composer stack has one border-box geometry owner", () => {
+const permissionSource = await readFile(
+  new URL("./PermissionOverlay.tsx", import.meta.url), "utf8",
+);
+
+test("floating composer stack has one border-box geometry owner", () => {
   assertEquals(
     transcriptSource.includes('pb: bottomInset ?? "12px"'),
     true,
@@ -62,11 +64,11 @@ Deno.test("floating composer stack has one border-box geometry owner", () => {
   assertEquals(permissionSource.includes('position: "relative"'), true);
 });
 
-Deno.test("frosted pill elevation stays close to the floating surface", () => {
+test("frosted pill elevation stays close to the floating surface", () => {
   assertEquals(FROSTED_PILL_DROP_SHADOW_GEOMETRY, "0 5px 16px -10px");
 });
 
-Deno.test("permission actions follow the global reading font scale", () => {
+test("permission actions follow the global reading font scale", () => {
   assertEquals(permissionSource.includes('fontSize: "1rem"'), true);
   assertEquals(permissionSource.includes('fontSize: "0.875rem"'), true);
   assertEquals(
@@ -75,7 +77,7 @@ Deno.test("permission actions follow the global reading font scale", () => {
   );
 });
 
-Deno.test("a context reset becomes a full conversation start until new content", () => {
+test("a context reset becomes a full conversation start until new content", () => {
   assertEquals(
     transcriptSource.includes("data-transcript-context-boundary"),
     true,
@@ -96,7 +98,7 @@ Deno.test("a context reset becomes a full conversation start until new content",
   assertEquals(transcriptSource.includes("Conversation cleared\n"), false);
 });
 
-Deno.test("the Explore page dock yields to the focused mobile composer", () => {
+test("the Explore page dock yields to the focused mobile composer", () => {
   assertEquals(
     exploreSurfaceSource.includes('data-mobile-page-dock="true"'),
     true,
@@ -116,7 +118,7 @@ Deno.test("the Explore page dock yields to the focused mobile composer", () => {
   );
 });
 
-Deno.test("transport state stays out of the transcript tail and judge UI stays retired", () => {
+test("transport state stays out of the transcript tail and judge UI stays retired", () => {
   assertEquals(TURN_STATUS_PILL_MIN_HEIGHT, 36);
   assertEquals(
     turnStatusSource.includes("TURN_STATUS_PILL_MIN_HEIGHT"),
@@ -147,7 +149,7 @@ Deno.test("transport state stays out of the transcript tail and judge UI stays r
   assertEquals(appSource.includes("judging={judging}"), false);
 });
 
-Deno.test("mobile composer chrome restores resting frost without a swipe filter", () => {
+test("mobile composer chrome restores resting frost without a swipe filter", () => {
   assertEquals(appSource.includes("frostedChrome"), true);
   assertEquals(appSource.includes("mobileFrostFollowRef"), true);
   assertEquals(
@@ -156,7 +158,7 @@ Deno.test("mobile composer chrome restores resting frost without a swipe filter"
   );
 });
 
-Deno.test("mobile status chrome stays subtle and adapts its tint to the theme", () => {
+test("mobile status chrome stays subtle and adapts its tint to the theme", () => {
   assertEquals(frostedGlassSource.includes("frostedStatusChrome"), true);
   assertEquals(
     appSource.includes(
@@ -178,7 +180,7 @@ Deno.test("mobile status chrome stays subtle and adapts its tint to the theme", 
   );
 });
 
-Deno.test("focused mobile composer owns a real frosted material", () => {
+test("focused mobile composer owns a real frosted material", () => {
   assertEquals(
     composerSurfaceSource.includes(
       "return theme.palette.background.paper;",
@@ -206,7 +208,7 @@ Deno.test("focused mobile composer owns a real frosted material", () => {
   assertEquals(composerSource.includes("mobileFocusedComposerFill"), true);
 });
 
-Deno.test("every Mobile transcript tail shares one external boundary gap", () => {
+test("every Mobile transcript tail shares one external boundary gap", () => {
   assertEquals(mobileTranscriptTailGap, 12);
   assertEquals(
     transcriptSource.includes(
@@ -224,7 +226,7 @@ Deno.test("every Mobile transcript tail shares one external boundary gap", () =>
   );
 });
 
-Deno.test("Provider thought shimmer crosses each glyph run once per cycle", () => {
+test("Provider thought shimmer crosses each glyph run once per cycle", () => {
   assertEquals(
     providerTranscriptSource.includes(
       "from { background-position: 100% 0; }",
@@ -245,7 +247,7 @@ Deno.test("Provider thought shimmer crosses each glyph run once per cycle", () =
   );
 });
 
-Deno.test("thought indicators align to the inherited first-line box", () => {
+test("thought indicators align to the inherited first-line box", () => {
   assertEquals(
     providerTranscriptSource.includes("data-thought-step-indicator-lane"),
     true,

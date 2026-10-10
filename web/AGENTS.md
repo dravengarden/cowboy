@@ -1,6 +1,6 @@
 # cowboy/web — agent notes
 
-The cowboy PWA frontend (React + MUI + CodeMirror 6, Deno + Vite). Read this
+The cowboy PWA frontend (React + MUI + CodeMirror 6, Bun + Vite). Read this
 before editing, then the topic docs it routes to.
 
 ## ⚠️ The markdown composer editor — read PITFALLS.md FIRST
@@ -38,7 +38,7 @@ routinely breaks another.
 
 ## Editing discipline (project-specific)
 
-- **NEVER `deno fmt` `src/App.tsx`** — it is a pre-existing 4-space outlier
+- **NEVER `dprint fmt` `src/App.tsx`** — it is a pre-existing 4-space outlier
   (rest of `src/` is 2-space); a format would wholesale-reflow ~3700 lines.
   Match 4-space when editing it.
 - App-shell primitives are Cowboy-owned under `src/components/app-shell`.
@@ -47,8 +47,10 @@ routinely breaks another.
 - Treat rich Markdown renderers as progressive enhancements. Preserve their
   source and route parse, render, or preview failures through the ordinary
   Markdown/code renderer; never replace readable source with broken media.
-- Quality gate before commit: `deno check` + `oxlint` (the cowboy web gate). Do
-  not run repo-wide `deno fmt`.
+- Quality gate before commit: `bun run typecheck` + `bun run lint` +
+  `bun run test` in `web/` (the cowboy web gate). Do not run a repo-wide
+  `dprint fmt`. Tests use `bun:test`; `test-preload.ts` supplies the browser
+  globals Bun lacks.
 - Browser UI conformance must use the real Cowboy theme through
   `src/browserProductTheme.tsx` (or `useThemeMode` when testing theme changes).
   Do not replace product overrides with a bare MUI `createTheme()` or copied
@@ -195,10 +197,11 @@ then the live app cross-fading in over it. Rules worth keeping:
 1. Bump `web/public/sw.js` → `const VERSION = "cowboy-vNN"` (the foreground
    update-check only fires when this string changes — it triggers the auto-reload
    onto the fresh bundle).
-2. `deno check` + `oxlint`, commit on the branch.
+2. `bun run typecheck` + `bun run lint`, commit on the branch.
 3. Build picks up new npm deps via a deps-FOD; if you ADDED deps, capture the new
    `depsHash` with `nix build .#cowboy-web --option sandbox false` (DNS fails
-   under the nix sandbox on hawk — see columbus memory `deno-vite-fod-dns-sandbox`).
+   under the nix sandbox on hawk — see columbus memory `deno-vite-fod-dns-sandbox`,
+   recorded for the previous builder).
 4. A web-only host switch atomically retargets `/run/cowboy-web`; it does not
    restart Cowboy, Machine, or session workers. Verify the new `/version` and
    `sw.js`; the PWA foreground update check performs the reload.

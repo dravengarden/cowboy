@@ -1,23 +1,25 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon.ts";
 
-const conversationControlsSource = await Deno.readTextFile(
-  new URL("./DesktopConversationControls.tsx", import.meta.url),
+const conversationControlsSource = await readFile(
+  new URL("./DesktopConversationControls.tsx", import.meta.url), "utf8",
 );
-const projectionToggleSource = await Deno.readTextFile(
-  new URL("../explore/ProjectionToggle.tsx", import.meta.url),
+const projectionToggleSource = await readFile(
+  new URL("../explore/ProjectionToggle.tsx", import.meta.url), "utf8",
 );
-const embeddedControlSource = await Deno.readTextFile(
-  new URL("./DesktopEmbeddedControl.ts", import.meta.url),
+const embeddedControlSource = await readFile(
+  new URL("./DesktopEmbeddedControl.ts", import.meta.url), "utf8",
 );
-const shortcutKeycapSource = await Deno.readTextFile(
-  new URL("../ShortcutKeycap.tsx", import.meta.url),
+const shortcutKeycapSource = await readFile(
+  new URL("../ShortcutKeycap.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("desktop embedded control icons follow the global root font size", () => {
+test("desktop embedded control icons follow the global root font size", () => {
   assertEquals(desktopEmbeddedControlIconSx(), {
     fontSize: "calc(20px * var(--cowboy-font-scale, 1))",
     width: "calc(20px * var(--cowboy-font-scale, 1))",
@@ -26,7 +28,7 @@ Deno.test("desktop embedded control icons follow the global root font size", () 
   });
 });
 
-Deno.test("desktop Follow delegates its glyph to the global font-scale primitive", () => {
+test("desktop Follow delegates its glyph to the global font-scale primitive", () => {
   assertEquals(
     conversationControlsSource.includes(
       "startIcon={<South sx={desktopEmbeddedControlIconSx()} />}",
@@ -39,7 +41,7 @@ Deno.test("desktop Follow delegates its glyph to the global font-scale primitive
   );
 });
 
-Deno.test("Conversation top-bar selection is not derived from shared shortcut availability", () => {
+test("Conversation top-bar selection is not derived from shared shortcut availability", () => {
   for (const source of [
     projectionToggleSource,
     conversationControlsSource,
@@ -60,7 +62,7 @@ Deno.test("Conversation top-bar selection is not derived from shared shortcut av
   assertEquals(conversationControlsSource.includes("accent={false}"), true);
 });
 
-Deno.test("idle Desktop controls use a neutral boundary", () => {
+test("idle Desktop controls use a neutral boundary", () => {
   assertEquals(embeddedControlSource.includes(": theme.palette.divider"), true);
   assertEquals(
     embeddedControlSource.includes("open ? 0.68 : active ? 0.5 : 0.3"),
@@ -68,15 +70,15 @@ Deno.test("idle Desktop controls use a neutral boundary", () => {
   );
 });
 
-Deno.test("Top Bar run configuration is the region's default keyboard target", async () => {
-  const topbar = await Deno.readTextFile(
-    new URL("./DesktopTopBarControls.tsx", import.meta.url),
+test("Top Bar run configuration is the region's default keyboard target", async () => {
+  const topbar = await readFile(
+    new URL("./DesktopTopBarControls.tsx", import.meta.url), "utf8",
   );
   assertEquals(topbar.includes('data-desktop-item="topbar-config"'), true);
   assertEquals(topbar.includes("data-desktop-focus-default"), true);
 });
 
-Deno.test("focused Topbar paints the region without selecting every inherit control", () => {
+test("focused Topbar paints the region without selecting every inherit control", () => {
   assertEquals(
     appSource.includes(
       '"& [data-desktop-region=\'topbar.controls\'][data-desktop-focused=\'true\']":',
@@ -97,7 +99,7 @@ Deno.test("focused Topbar paints the region without selecting every inherit cont
   );
 });
 
-Deno.test("desktop shortcut keycap geometry follows root font size", () => {
+test("desktop shortcut keycap geometry follows root font size", () => {
   assertEquals(
     shortcutKeycapSource.includes(
       '? (rendered.length > 2 ? "1.5rem" : "1.125rem")',

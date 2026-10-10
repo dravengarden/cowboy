@@ -1,9 +1,10 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { clientOtelFixture } from "./otelFixture.ts";
 import { createClientOtel } from "./otel.ts";
 import { OtlpTransport } from "./otelTransport.ts";
 
-Deno.test("official SDK emits protobuf logs, delta metrics and correlated spans without globals", async () => {
+test("official SDK emits protobuf logs, delta metrics and correlated spans without globals", async () => {
   const bodies = await clientOtelFixture();
   assertEquals(
     new Set(bodies.map((b) => b.signal)),
@@ -17,7 +18,7 @@ Deno.test("official SDK emits protobuf logs, delta metrics and correlated spans 
   }
 });
 
-Deno.test("unsampled traces do not suppress logs or metrics; stopping clears exports", async () => {
+test("unsampled traces do not suppress logs or metrics; stopping clears exports", async () => {
   const signals: string[] = [];
   const transport = new OtlpTransport((url) => {
     signals.push(String(url));

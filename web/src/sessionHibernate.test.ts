@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   hibernateAvailability,
   hibernateSession,
@@ -7,7 +8,7 @@ import {
 
 const ovh = { id: "ovh", capabilities: { hibernation: true } };
 
-Deno.test("hibernation is offered only for a live session on a capable Machine", () => {
+test("hibernation is offered only for a live session on a capable Machine", () => {
   assertEquals(hibernateAvailability({ status: "running", machine_id: "ovh" }, [ovh]), "ready");
   assertEquals(hibernateAvailability({ status: "busy", machine_id: "ovh" }, [ovh]), "busy");
   assertEquals(hibernateAvailability({ status: "exited", machine_id: "ovh" }, [ovh]), null);
@@ -23,7 +24,7 @@ Deno.test("hibernation is offered only for a live session on a capable Machine",
   );
 });
 
-Deno.test("hibernation posts to the encoded session endpoint", async () => {
+test("hibernation posts to the encoded session endpoint", async () => {
   let request: { input: string; init: RequestInit } | undefined;
   const fetcher: SessionHibernateFetch = (input, init) => {
     request = { input, init };
@@ -34,7 +35,7 @@ Deno.test("hibernation posts to the encoded session endpoint", async () => {
   assertEquals(request?.init.method, "POST");
 });
 
-Deno.test("a refused hibernation surfaces the Controller's reason", async () => {
+test("a refused hibernation surfaces the Controller's reason", async () => {
   const fetcher: SessionHibernateFetch = () =>
     Promise.resolve(
       new Response("wait for the current turn to finish before hibernating", {

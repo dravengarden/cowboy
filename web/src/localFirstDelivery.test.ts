@@ -1,4 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   canReturnFromPendingRow,
   COMMITTING_STALL_MS,
@@ -19,7 +20,7 @@ import {
   unconfirmedSendDisposition,
 } from "./localFirstDelivery.ts";
 
-Deno.test("failed sends return to the list they left", () => {
+test("failed sends return to the list they left", () => {
   assertEquals(homeForOrigin("composer"), "draft");
   assertEquals(homeForOrigin("draft"), "draft");
   assertEquals(homeForOrigin("queue"), "queue");
@@ -27,7 +28,7 @@ Deno.test("failed sends return to the list they left", () => {
   assertEquals(returnLabelForHome("queue"), "Return to queue");
 });
 
-Deno.test("a first offline attempt waits instead of failing", () => {
+test("a first offline attempt waits instead of failing", () => {
   assertEquals(firstDeliveryAttempt(false), {
     status: "pending",
     armConfirmationTimeout: false,
@@ -38,7 +39,7 @@ Deno.test("a first offline attempt waits instead of failing", () => {
   });
 });
 
-Deno.test("an explicit retry that still has no network becomes a failure", () => {
+test("an explicit retry that still has no network becomes a failure", () => {
   assertEquals(retryDeliveryAttempt(false), {
     status: "failed",
     armConfirmationTimeout: false,
@@ -49,7 +50,7 @@ Deno.test("an explicit retry that still has no network becomes a failure", () =>
   });
 });
 
-Deno.test("every unconfirmed phase has explicit chrome", () => {
+test("every unconfirmed phase has explicit chrome", () => {
   assertEquals(pendingSyncAppearance(undefined, false), "hidden");
   assertEquals(pendingSyncAppearance("committing", true), "saving");
   assertEquals(pendingSyncAppearance("committing", false), "saving");
@@ -60,14 +61,14 @@ Deno.test("every unconfirmed phase has explicit chrome", () => {
   assertEquals(pendingSyncAppearance("failed", true), "failed");
 });
 
-Deno.test("a connected row that never leaves the tab is given an escape", () => {
+test("a connected row that never leaves the tab is given an escape", () => {
   assertEquals(deliveryStallMs("pending", true), CONNECTED_PENDING_STALL_MS);
   // Waiting IS the contract while the socket is down; a deadline here would
   // call a healthy queued prompt a failure.
   assertEquals(deliveryStallMs("pending", false), null);
 });
 
-Deno.test("a durability barrier that never settles still releases the row", () => {
+test("a durability barrier that never settles still releases the row", () => {
   // IndexedDB has no timeout of its own: a `versionchange` blocked by another
   // tab leaves the write unresolved, and being offline changes nothing about a
   // local write.
@@ -75,7 +76,7 @@ Deno.test("a durability barrier that never settles still releases the row", () =
   assertEquals(deliveryStallMs("committing", false), COMMITTING_STALL_MS);
 });
 
-Deno.test("phases with another owner get no second deadline", () => {
+test("phases with another owner get no second deadline", () => {
   // The acknowledgement timeout owns `sending`, and `failed` already carries
   // Retry / Return / Discard.
   assertEquals(deliveryStallMs("sending", true), null);
@@ -84,24 +85,24 @@ Deno.test("phases with another owner get no second deadline", () => {
   assertEquals(deliveryStallMs(undefined, true), null);
 });
 
-Deno.test("the stall deadline outlasts an ordinary reconnect", () => {
+test("the stall deadline outlasts an ordinary reconnect", () => {
   // The reconnect replay is the primary recovery; the deadline only catches the
   // row that replay could not carry, so it must not preempt it.
   assert(CONNECTED_PENDING_STALL_MS > 10_000);
 });
 
-Deno.test("an explicit send paints loading as soon as the frame leaves", () => {
+test("an explicit send paints loading as soon as the frame leaves", () => {
   assertEquals(statusAfterExplicitSend(true), "sending");
   assertEquals(statusAfterExplicitSend(false), "pending");
 });
 
-Deno.test("idle prompts go to the transcript, online or not; everything else is durable queue", () => {
+test("idle prompts go to the transcript, online or not; everything else is durable queue", () => {
   assertEquals(destinationForPrompt(true, true), "transcript");
   assertEquals(destinationForPrompt(false, true), "queue");
   assertEquals(destinationForPrompt(true, false), "queue");
 });
 
-Deno.test("return is offered on queue cards and on drafts that came from the queue", () => {
+test("return is offered on queue cards and on drafts that came from the queue", () => {
   assertEquals(canReturnFromPendingRow("queued", "composer"), true);
   assertEquals(canReturnFromPendingRow("queued", "draft"), true);
   assertEquals(canReturnFromPendingRow("draft", "queue"), true);
@@ -109,7 +110,7 @@ Deno.test("return is offered on queue cards and on drafts that came from the que
   assertEquals(canReturnFromPendingRow("draft", "draft"), false);
 });
 
-Deno.test("a timed-out transcript prompt is parked in drafts, not held as an error", () => {
+test("a timed-out transcript prompt is parked in drafts, not held as an error", () => {
   for (const phase of ["sending", "pending", "failed"] as const) {
     assertEquals(
       unconfirmedSendDisposition({
@@ -122,7 +123,7 @@ Deno.test("a timed-out transcript prompt is parked in drafts, not held as an err
   }
 });
 
-Deno.test("refusals, wedged local writes, and queue work stay held", () => {
+test("refusals, wedged local writes, and queue work stay held", () => {
   assertEquals(
     unconfirmedSendDisposition({
       mutation: "submitPrompt",
@@ -159,12 +160,12 @@ Deno.test("refusals, wedged local writes, and queue work stay held", () => {
   }
 });
 
-Deno.test("parking one send twice reuses the same draft", () => {
+test("parking one send twice reuses the same draft", () => {
   assertEquals(recoveryDraftCmid("cmid-1"), "recovery-cmid-1");
   assertEquals(recoveryDraftCmid("cmid-1"), recoveryDraftCmid("cmid-1"));
 });
 
-Deno.test("a late echo retires only an untouched recovery draft", () => {
+test("a late echo retires only an untouched recovery draft", () => {
   const parked = { text: "iloader is ready", attachments: 0 };
   assert(
     lateEchoRetiresRecoveryDraft(parked, {
@@ -188,7 +189,7 @@ Deno.test("a late echo retires only an untouched recovery draft", () => {
   );
 });
 
-Deno.test("a delivery deadline waits out frozen, hidden, offline and resuming time", () => {
+test("a delivery deadline waits out frozen, hidden, offline and resuming time", () => {
   const settled = {
     armedAt: 0,
     delayMs: 60_000,
@@ -207,7 +208,7 @@ Deno.test("a delivery deadline waits out frozen, hidden, offline and resuming ti
   assertEquals(deliveryDeadlineDeferred({ ...settled, visibleSince: 55_000 }), true);
 });
 
-Deno.test("recovery drafts map back to the parked send and match its echo", () => {
+test("recovery drafts map back to the parked send and match its echo", () => {
   assertEquals(recoveredSendId(recoveryDraftCmid("cmid-1")), "cmid-1");
   assertEquals(recoveredSendId("cmid-1"), null);
   assertEquals(recoveredSendId("recovery-"), null);

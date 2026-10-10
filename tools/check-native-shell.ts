@@ -1,3 +1,4 @@
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,16 +8,19 @@ function requireValue(value: unknown, message: string): asserts value {
 
 // Read-only: never repair, unlink or copy a borrowed native project.
 export async function verifyNativeShell(repository: string): Promise<void> {
-  const root = await Deno.realPath(repository);
+  const root = await realpath(repository);
   const native = resolve(root, "apps/native-shell");
   requireValue(
-    await Deno.realPath(native) === native,
+    await realpath(native) === native,
     "native shell must be owned by this checkout, not a source symlink",
   );
   async function walk(path: string): Promise<void> {
-    for await (const entry of Deno.readDir(path)) {
-      requireValue(!entry.isSymlink, "native source symlink: " + entry.name);
-      if (entry.isDirectory) {
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      requireValue(
+        !entry.isSymbolicLink(),
+        "native source symlink: " + entry.name,
+      );
+      if (entry.isDirectory()) {
         // Cargo/Tauri outputs are never release inputs (Git archive stages only
         // tracked sources); refuse even output symlinks before skipping them.
         if (
@@ -28,7 +32,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     }
   }
   await walk(native);
-  const read = (path: string) => Deno.readTextFile(resolve(native, path));
+  const read = (path: string) => readFile(resolve(native, path), "utf8");
   const toolchain = JSON.parse(await read("toolchain.json"));
   const manifest = await read("tauri/Cargo.toml");
   const lock = await read("tauri/Cargo.lock");
@@ -152,7 +156,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       !isAbsolute(path) && !path.split(/[\\/]/).includes(".."),
       "external native icon path",
     );
-    await Deno.stat(resolve(native, "tauri", path));
+    await stat(resolve(native, "tauri", path));
   }
   for (
     const path of [

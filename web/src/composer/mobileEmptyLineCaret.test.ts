@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import {
   emptyLinePositionsAfterImages,
@@ -15,11 +17,11 @@ import {
   updateInsertedLineBreak,
 } from "./mobileEmptyLineCaret";
 
-const source = await Deno.readTextFile(
-  new URL("./mobileEmptyLineCaret.ts", import.meta.url),
+const source = await readFile(
+  new URL("./mobileEmptyLineCaret.ts", import.meta.url), "utf8",
 );
 
-Deno.test("image-adjacent empty lines do not mount a landing widget", () => {
+test("image-adjacent empty lines do not mount a landing widget", () => {
   const afterImage = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n",
     selection: { anchor: 28 },
@@ -54,7 +56,7 @@ Deno.test("image-adjacent empty lines do not mount a landing widget", () => {
   assertEquals(landingAnchorsForEmptyLinesAfterImages(noImage).size, 0);
 });
 
-Deno.test("two images do not expose landing widgets under thumbnails", () => {
+test("two images do not expose landing widgets under thumbnails", () => {
   const doc = "![a](cowboy-att:1)\n\n![b](cowboy-att:2)\n";
   const state = EditorState.create({ doc });
   const firstLanding = state.doc.line(2).from;
@@ -79,7 +81,7 @@ Deno.test("two images do not expose landing widgets under thumbnails", () => {
   );
 });
 
-Deno.test("image-adjacent Return only blocks the native break", () => {
+test("image-adjacent Return only blocks the native break", () => {
   const landing = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n ",
     selection: { anchor: 29 },
@@ -119,7 +121,7 @@ Deno.test("image-adjacent Return only blocks the native break", () => {
   );
 });
 
-Deno.test("landing remap is skipped when the caret is already in the widget", () => {
+test("landing remap is skipped when the caret is already in the widget", () => {
   const text = { nodeType: 3 } as Node;
   assertEquals(
     landingSelectionAlreadyPlaced(
@@ -157,7 +159,7 @@ Deno.test("landing remap is skipped when the caret is already in the widget", ()
   );
 });
 
-Deno.test("mobile caret repair requires a collapsed empty line", () => {
+test("mobile caret repair requires a collapsed empty line", () => {
   const emptyLine = EditorState.create({
     doc: "image\n\n",
     selection: { anchor: 7 },
@@ -177,7 +179,7 @@ Deno.test("mobile caret repair requires a collapsed empty line", () => {
   assertEquals(isMobileEmptyLineCaretState(range), false);
 });
 
-Deno.test("mobile caret landing anchor is document-neutral and not late-mounted", () => {
+test("mobile caret landing anchor is document-neutral and not late-mounted", () => {
   assertEquals(source.includes('anchor.textContent = "\\u200b"'), true);
   assertEquals(source.includes("selectionOnEmptyLineInImageChain"), true);
   assertEquals(source.includes("landing node onto the new line"), true);

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { DraftMetadata } from "../documents/model.ts";
 import type { SessionMeta } from "../protocol.ts";
 import {
@@ -22,7 +23,7 @@ const draft = (id: string, title: string, deleted = false): DraftMetadata => ({
   deleted,
 });
 
-Deno.test("a visit moves to the front without duplicates", () => {
+test("a visit moves to the front without duplicates", () => {
   let visits = withDesktopVisit([], "a", 1);
   visits = withDesktopVisit(visits, "b", 2);
   visits = withDesktopVisit(visits, "a", 3);
@@ -33,7 +34,7 @@ Deno.test("a visit moves to the front without duplicates", () => {
   assertEquals(visits.length, DESKTOP_VISIT_LIMIT);
 });
 
-Deno.test("Recent skips the current item and anything deleted", () => {
+test("Recent skips the current item and anything deleted", () => {
   const visits = [
     { key: "a", at: 5 },
     { key: "draft:d1", at: 4 },

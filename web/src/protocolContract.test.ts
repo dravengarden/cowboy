@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import type { Event } from "./protocol";
 
 // Field-level fixtures complement the Rust/TypeScript discriminant test. The
@@ -11,7 +12,7 @@ const EVENTS = [
   { kind: "turn_end", stop_reason: "end_turn" },
 ] satisfies Event[];
 
-Deno.test("event contract fixtures retain every field", () => {
+test("event contract fixtures retain every field", () => {
   if (EVENTS.length !== 5) throw new Error("event fixture count drifted");
   if (EVENTS[1].request_id !== "p1") throw new Error("permission field drifted");
 });

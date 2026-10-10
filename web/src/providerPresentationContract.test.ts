@@ -1,22 +1,24 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const managementSource = await Deno.readTextFile(
-  new URL("./ProviderManagement.tsx", import.meta.url),
+const managementSource = await readFile(
+  new URL("./ProviderManagement.tsx", import.meta.url), "utf8",
 );
-const authenticationOwnerSource = await Deno.readTextFile(
-  new URL("./providerAuthenticationOwner.ts", import.meta.url),
+const authenticationOwnerSource = await readFile(
+  new URL("./providerAuthenticationOwner.ts", import.meta.url), "utf8",
 );
-const surfaceSource = await Deno.readTextFile(
-  new URL("./ProviderSurface.tsx", import.meta.url),
+const surfaceSource = await readFile(
+  new URL("./ProviderSurface.tsx", import.meta.url), "utf8",
 );
-const transcriptPresentationSource = await Deno.readTextFile(
-  new URL("./ProviderTranscript.tsx", import.meta.url),
+const transcriptPresentationSource = await readFile(
+  new URL("./ProviderTranscript.tsx", import.meta.url), "utf8",
 );
-const grokProviderSource = await Deno.readTextFile(
-  new URL("../../plugins/grok/provider.json", import.meta.url),
+const grokProviderSource = await readFile(
+  new URL("../../plugins/grok/provider.json", import.meta.url), "utf8",
 );
 
-Deno.test("dedicated Provider pages list cards without a Hide summary", () => {
+test("dedicated Provider pages list cards without a Hide summary", () => {
   assertEquals(managementSource.includes("const [detailsOpen"), false);
   assertEquals(managementSource.includes('? "Hide"'), false);
   assertEquals(
@@ -27,7 +29,7 @@ Deno.test("dedicated Provider pages list cards without a Hide summary", () => {
   assertEquals(managementSource.includes("borderTop:"), false);
 });
 
-Deno.test("ready credentials progressively disclose destructive management actions", () => {
+test("ready credentials progressively disclose destructive management actions", () => {
   assertEquals(
     managementSource.includes('const readyCredential = scope === "service"'),
     true,
@@ -48,7 +50,7 @@ Deno.test("ready credentials progressively disclose destructive management actio
   );
 });
 
-Deno.test("Codex management identity uses the same authored mark as session chrome", () => {
+test("Codex management identity uses the same authored mark as session chrome", () => {
   assertEquals(
     managementSource.includes(
       'appearance={entry.provider_id === "codex"',
@@ -61,12 +63,12 @@ Deno.test("Codex management identity uses the same authored mark as session chro
   );
 });
 
-Deno.test("incompatible Provider lifecycle actions are omitted instead of looking actionable", () => {
+test("incompatible Provider lifecycle actions are omitted instead of looking actionable", () => {
   assertEquals(surfaceSource.includes("if (blocked) return null;"), true);
   assertEquals(surfaceSource.includes("disabled={busy || blocked"), false);
 });
 
-Deno.test("Machine compatibility renders once in the Cowboy warning shell", () => {
+test("Machine compatibility renders once in the Cowboy warning shell", () => {
   assertEquals(
     managementSource.includes(
       '(scope === "machine" ? releaseError : "")',
@@ -88,7 +90,7 @@ Deno.test("Machine compatibility renders once in the Cowboy warning shell", () =
   );
 });
 
-Deno.test("Provider management cards keep geometry in the Cowboy component library", () => {
+test("Provider management cards keep geometry in the Cowboy component library", () => {
   assertEquals(
     managementSource.includes("data-provider-management-identity"),
     true,
@@ -137,7 +139,7 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
   );
 });
 
-Deno.test("Provider authentication copy dispatches on typed presentation, not Provider id", () => {
+test("Provider authentication copy dispatches on typed presentation, not Provider id", () => {
   assertEquals(managementSource.includes('case "account"'), true);
   assertEquals(managementSource.includes('case "api_key"'), true);
   assertEquals(managementSource.includes('empty: "API key missing"'), true);
@@ -146,7 +148,7 @@ Deno.test("Provider authentication copy dispatches on typed presentation, not Pr
   }
 });
 
-Deno.test("Service authentication keeps Cowboy alive while Provider sign-in opens externally", () => {
+test("Service authentication keeps Cowboy alive while Provider sign-in opens externally", () => {
   assertEquals(
     managementSource.includes("providerAuthenticationExecutorEntry("),
     true,
@@ -179,7 +181,7 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
   assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);
 });
 
-Deno.test("device-code sign-in copies before opening and keeps a manual fallback", () => {
+test("device-code sign-in copies before opening and keeps a manual fallback", () => {
   const copyIndex = managementSource.indexOf("copyAuthenticationCode();");
   const openIndex = managementSource.indexOf(
     "openAuthenticationUrl(challenge.verification_url);",
@@ -201,7 +203,7 @@ Deno.test("device-code sign-in copies before opening and keeps a manual fallback
   );
 });
 
-Deno.test("Provider sign-in success and expiry leave no stale browser controls", () => {
+test("Provider sign-in success and expiry leave no stale browser controls", () => {
   assertEquals(
     authenticationOwnerSource.includes(
       "response.status === 404 || response.status === 410",
@@ -238,7 +240,7 @@ Deno.test("Provider sign-in success and expiry leave no stale browser controls",
   );
 });
 
-Deno.test("session settings embed one focused Service authentication card", () => {
+test("session settings embed one focused Service authentication card", () => {
   assertEquals(
     managementSource.includes("export function SessionProviderAccess"),
     true,
@@ -249,7 +251,7 @@ Deno.test("session settings embed one focused Service authentication card", () =
   assertEquals(managementSource.includes("embedded"), true);
 });
 
-Deno.test("Service credential management renders one card per typed authentication scope", () => {
+test("Service credential management renders one card per typed authentication scope", () => {
   assertEquals(
     managementSource.includes("groupProviderAuthentications(serviceEntries)"),
     true,
@@ -297,7 +299,7 @@ Deno.test("Service credential management renders one card per typed authenticati
   assertEquals(managementSource.includes("entries.slice(0, 4)"), false);
 });
 
-Deno.test("Machine credential status gives a typed Service-level recovery action", () => {
+test("Machine credential status gives a typed Service-level recovery action", () => {
   assertEquals(managementSource.includes('case "current"'), true);
   assertEquals(managementSource.includes('case "pending"'), true);
   assertEquals(
@@ -310,7 +312,7 @@ Deno.test("Machine credential status gives a typed Service-level recovery action
   );
 });
 
-Deno.test("Provider marks preserve host component classes and compact chip spacing", () => {
+test("Provider marks preserve host component classes and compact chip spacing", () => {
   assertEquals(surfaceSource.includes("className?: string | undefined;"), true);
   assertEquals(surfaceSource.includes("className={className}"), true);
   assertEquals(surfaceSource.includes("data-provider-mark-stack"), true);
@@ -334,7 +336,7 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   );
 });
 
-Deno.test("Provider authentication dialog keeps monochrome marks in the title color", () => {
+test("Provider authentication dialog keeps monochrome marks in the title color", () => {
   const titleStart = managementSource.indexOf(
     "data-provider-auth-dialog-title",
   );
@@ -349,7 +351,7 @@ Deno.test("Provider authentication dialog keeps monochrome marks in the title co
   assertEquals(titleSource.includes('monochromeColor="inherit"'), true);
 });
 
-Deno.test("Provider actions stay visually distinct from read-only chips", () => {
+test("Provider actions stay visually distinct from read-only chips", () => {
   assertEquals(
     managementSource.includes("data-provider-management-root"),
     true,
@@ -380,7 +382,7 @@ Deno.test("Provider actions stay visually distinct from read-only chips", () => 
   );
 });
 
-Deno.test("Provider vector marks preserve edge antialiasing inside compact chips", () => {
+test("Provider vector marks preserve edge antialiasing inside compact chips", () => {
   assertEquals(
     surfaceSource.includes(
       "height: scaledSize,\n          minWidth: scaledSize,",
@@ -389,7 +391,7 @@ Deno.test("Provider vector marks preserve edge antialiasing inside compact chips
   );
 });
 
-Deno.test("Provider activity renderer consumes only typed generic strategies", () => {
+test("Provider activity renderer consumes only typed generic strategies", () => {
   for (
     const strategy of [
       'case "progress_ring"',
@@ -413,7 +415,7 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
   }
 });
 
-Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
+test("terminal activity keeps its Provider-defined prompt geometry", () => {
   assertEquals(
     surfaceSource.includes("const ACTIVITY_TERMINAL_SIZE = 17"),
     true,
@@ -423,7 +425,7 @@ Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => 
   assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
 });
 
-Deno.test("Provider Transcript renderer consumes only closed presentation variants", () => {
+test("Provider Transcript renderer consumes only closed presentation variants", () => {
   for (
     const variant of [
       'case "timeline"',
@@ -469,7 +471,7 @@ Deno.test("Provider Transcript renderer consumes only closed presentation varian
   }
 });
 
-Deno.test("terminal thought rows use a composed icon instead of a raw prompt", () => {
+test("terminal thought rows use a composed icon instead of a raw prompt", () => {
   assertEquals(transcriptPresentationSource.includes("TerminalRounded"), true);
   assertEquals(transcriptPresentationSource.includes("CircularProgress"), true);
   assertEquals(
@@ -478,7 +480,7 @@ Deno.test("terminal thought rows use a composed icon instead of a raw prompt", (
   );
 });
 
-Deno.test("streaming thoughts show one active marker once a step exists", () => {
+test("streaming thoughts show one active marker once a step exists", () => {
   assertEquals(
     transcriptPresentationSource.includes(
       "streaming && visible.length === 0 && presentation.active_label",
@@ -487,7 +489,7 @@ Deno.test("streaming thoughts show one active marker once a step exists", () => 
   );
 });
 
-Deno.test("Provider UI v1 loading uses a compact neutral compatibility fallback", () => {
+test("Provider UI v1 loading uses a compact neutral compatibility fallback", () => {
   assertEquals(
     surfaceSource.includes(
       'slot === "loading" && manifest.ui.schema_version === 1',
@@ -498,7 +500,7 @@ Deno.test("Provider UI v1 loading uses a compact neutral compatibility fallback"
   assertEquals(surfaceSource.includes("const legacyResponsive"), true);
 });
 
-Deno.test("Provider activity keeps motion provider-authored and geometry renderer-owned", () => {
+test("Provider activity keeps motion provider-authored and geometry renderer-owned", () => {
   assertEquals(
     surfaceSource.includes(
       "data-provider-activity-indicator={node.indicator.kind}",

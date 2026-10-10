@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import { AuthApiError, type ProductMe } from "./authApi.ts";
 import {
   type RecentProductAuthOptions,
@@ -7,7 +8,7 @@ import {
 
 const verified: ProductMe = { account: "draven", role: "owner" };
 
-Deno.test("server session ceremony overrides recent-auth preference and preserves continuation", async () => {
+test("server session ceremony overrides recent-auth preference and preserves continuation", async () => {
   for (const kind of ["primary", "passkey"] as const) {
     let calls = 0;
     let received: RecentProductAuthOptions | undefined;
@@ -38,7 +39,7 @@ Deno.test("server session ceremony overrides recent-auth preference and preserve
   }
 });
 
-Deno.test("recent-auth retry verifies once and repeats the protected operation", async () => {
+test("recent-auth retry verifies once and repeats the protected operation", async () => {
   let operations = 0;
   let verifications = 0;
   let resumeLabel: string | undefined;
@@ -69,7 +70,7 @@ Deno.test("recent-auth retry verifies once and repeats the protected operation",
   assertEquals(resumeLabel, "Continue to Passkey");
 });
 
-Deno.test("recent-auth retry does not intercept unrelated failures", async () => {
+test("recent-auth retry does not intercept unrelated failures", async () => {
   let verifications = 0;
   await assertRejects(
     () =>
@@ -86,7 +87,7 @@ Deno.test("recent-auth retry does not intercept unrelated failures", async () =>
   assertEquals(verifications, 0);
 });
 
-Deno.test("recent-auth retry never repeats the operation when verification fails", async () => {
+test("recent-auth retry never repeats the operation when verification fails", async () => {
   let operations = 0;
   await assertRejects(
     () =>

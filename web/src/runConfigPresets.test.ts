@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { ProviderUiManifest } from "@cowboy/provider-ui";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 import {
@@ -49,7 +51,7 @@ const declared: DeclaredPreset[] = [{
   values: { model: "model-b", effort: "medium" },
 }];
 
-Deno.test("custom configuration remains visible without a matching preset", () => {
+test("custom configuration remains visible without a matching preset", () => {
   const custom = [
     {
       ...options[0],
@@ -70,10 +72,10 @@ Deno.test("custom configuration remains visible without a matching preset", () =
   assertEquals(runConfigCurrentTitle(undefined), "Current · Custom");
 });
 
-Deno.test("Codex recommends generation 6 models and defaults to Sol 6.1 Medium", async () => {
+test("Codex recommends generation 6 models and defaults to Sol 6.1 Medium", async () => {
   const provider = JSON.parse(
-    await Deno.readTextFile(
-      new URL("../../plugins/codex/provider.json", import.meta.url),
+    await readFile(
+      new URL("../../plugins/codex/provider.json", import.meta.url), "utf8",
     ),
   );
   const presets = provider.configuration_presets as DeclaredPreset[];
@@ -95,7 +97,7 @@ Deno.test("Codex recommends generation 6 models and defaults to Sol 6.1 Medium",
   );
 });
 
-Deno.test("signed Provider presets project without Provider identity branches", () => {
+test("signed Provider presets project without Provider identity branches", () => {
   const presets = supportedRunConfigPresets(declared, options);
   assertEquals(presets.map((preset) => [preset.id, preset.isDefault]), [
     ["recommended", true],
@@ -104,7 +106,7 @@ Deno.test("signed Provider presets project without Provider identity branches", 
   assertEquals(activeRunConfigPreset(presets, options)?.id, "recommended");
 });
 
-Deno.test("presets fail closed when the live Provider surface lacks a value", () => {
+test("presets fail closed when the live Provider surface lacks a value", () => {
   assertEquals(supportedRunConfigPresets(declared, options.slice(0, 1)), []);
   assertEquals(
     supportedRunConfigPresets([{
@@ -115,7 +117,7 @@ Deno.test("presets fail closed when the live Provider surface lacks a value", ()
   );
 });
 
-Deno.test("preset changes omit values the session already owns", () => {
+test("preset changes omit values the session already owns", () => {
   const presets = supportedRunConfigPresets(declared, options);
   assertEquals(runConfigPresetChanges(presets[0], options), []);
   assertEquals(runConfigPresetChanges(presets[1], options), [
@@ -124,7 +126,7 @@ Deno.test("preset changes omit values the session already owns", () => {
   ]);
 });
 
-Deno.test("another model's reasoning limits do not hide signed recommendations", () => {
+test("another model's reasoning limits do not hide signed recommendations", () => {
   const live: ConfigOption[] = [
     {
       ...selectOption("model", "spark", ["spark", "astra"]),
@@ -159,17 +161,17 @@ Deno.test("another model's reasoning limits do not hide signed recommendations",
   assertEquals(supportedRunConfigPresets([astra], live.slice(0, 1)), []);
 });
 
-const desktopSource = await Deno.readTextFile(
-  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
+const desktopSource = await readFile(
+  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const storeSource = await Deno.readTextFile(
-  new URL("./store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("./store.ts", import.meta.url), "utf8",
 );
 
-Deno.test("desktop and mobile expose presets with surface-native interactions", () => {
+test("desktop and mobile expose presets with surface-native interactions", () => {
   assertEquals(desktopSource.includes("data-config-preset={index}"), true);
   assertEquals(desktopSource.includes("presetShortcutLabel"), true);
   assertEquals(composerSource.includes("minHeight: 58"), true);
@@ -177,7 +179,7 @@ Deno.test("desktop and mobile expose presets with surface-native interactions", 
   assertEquals(composerSource.includes("setCustomizeAgent(false)"), true);
 });
 
-Deno.test("mobile current configuration is a disclosure, not a fake card", () => {
+test("mobile current configuration is a disclosure, not a fake card", () => {
   assertEquals(composerSource.includes("runConfigCurrentTitle("), true);
   assertEquals(
     composerSource.includes("Expand current agent configuration"),
@@ -190,7 +192,7 @@ Deno.test("mobile current configuration is a disclosure, not a fake card", () =>
   );
 });
 
-Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => {
+test("mobile preset progress is delayed, acknowledged, and bounded", () => {
   assertEquals(composerSource.includes("presetAction.run"), true);
   assertEquals(composerSource.includes("presetAction.progress"), true);
   assertEquals(composerSource.includes("setSessionConfigOptions"), true);
@@ -219,7 +221,7 @@ Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => 
   assertEquals(waitForState.includes("listeners.add(check)"), false);
 });
 
-Deno.test("a session adopts presets published after its installed generation", async () => {
+test("a session adopts presets published after its installed generation", async () => {
   // This is the sess-1789450485879 shape: the Machine runs claude-code 3.1.14,
   // which declared no presets, while the presets ship in a later published
   // generation. Pinning presentation to the installed package would leave the

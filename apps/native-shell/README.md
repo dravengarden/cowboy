@@ -33,7 +33,7 @@ On Linux, run `nix develop -c just native-shell-check` from the repository root.
 It checks source ownership, closed dependencies, lock pins, native capabilities,
 SSH quoting and keyboard geometry. It does not pretend to compile Apple's SDKs.
 
-Apple builds run on an arm64 Mac with Xcode selected and Deno, Python 3, Rustup,
+Apple builds run on an arm64 Mac with Xcode selected and Bun, Python 3, Rustup,
 Cargo, `cargo-tauri` and (for iOS) XcodeGen on PATH. Provision the versions in
 `toolchain.json` explicitly; the builder never installs missing tools:
 

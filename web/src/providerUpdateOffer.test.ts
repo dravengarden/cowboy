@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "./protocol";
 import {
   providerUpdateScheduleText,
@@ -18,7 +19,7 @@ const base: SessionMeta = {
   provider_update_available: offer,
 };
 
-Deno.test("offers only a different release outside updates and system sessions", () => {
+test("offers only a different release outside updates and system sessions", () => {
   assertEquals(sessionProviderUpdate(base), offer);
   assertEquals(sessionProviderUpdate(undefined), null);
   assertEquals(sessionProviderUpdate({ ...base, system: true }), null);
@@ -40,7 +41,7 @@ Deno.test("offers only a different release outside updates and system sessions",
   );
 });
 
-Deno.test("schedule text explains what happens without action", () => {
+test("schedule text explains what happens without action", () => {
   const now = 1_000_000;
   assertEquals(
     providerUpdateScheduleText({ ...offer, when_idle: true }, true, now),
@@ -69,7 +70,7 @@ Deno.test("schedule text explains what happens without action", () => {
   );
 });
 
-Deno.test("the one-shot request is a session policy write", async () => {
+test("the one-shot request is a session policy write", async () => {
   const calls: [string, RequestInit][] = [];
   await requestProviderUpdateWhenIdle("a/b", true, (input, init) => {
     calls.push([input, init]);

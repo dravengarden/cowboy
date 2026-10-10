@@ -1,13 +1,15 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const storeSource = await Deno.readTextFile(
-  new URL("./store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("./store.ts", import.meta.url), "utf8",
 );
 
-Deno.test("session delete waits for the authoritative list and has a timeout", () => {
+test("session delete waits for the authoritative list and has a timeout", () => {
   assert(storeSource.includes("export function deleteSession("));
   assert(storeSource.includes('type: "delete_session"'));
   assert(storeSource.includes("deletingSessionIds"));
@@ -17,7 +19,7 @@ Deno.test("session delete waits for the authoritative list and has a timeout", (
   assertEquals(storeSource.includes("sendWithAck("), true);
 });
 
-Deno.test("a deleting session row is busy, disabled, and shows delayed progress", () => {
+test("a deleting session row is busy, disabled, and shows delayed progress", () => {
   assert(appSource.includes("void deleteSession(pendingDelete.id)"));
   assertEquals(appSource.includes('type: "delete_session"'), false);
   assert(appSource.includes("data-session-deleting"));
@@ -27,7 +29,7 @@ Deno.test("a deleting session row is busy, disabled, and shows delayed progress"
   assert(appSource.includes("aria-busy={deleting || undefined}"));
 });
 
-Deno.test("a pending environment stop acknowledges deletion and keeps the row busy", () => {
+test("a pending environment stop acknowledges deletion and keeps the row busy", () => {
   assert(storeSource.includes("session.id === sessionId && !session.closing"));
   assert(storeSource.includes("reportRetainedClosures(msg.sessions)"));
   assert(appSource.includes("deletingSessionIds.has(s.id) || s.closing === true"));

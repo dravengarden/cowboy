@@ -1,4 +1,7 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   tickUpdateCountdown,
   updateAllowed,
@@ -12,27 +15,27 @@ import {
   updateShowsHairline,
 } from "../../components/app-shell/update-presentation.ts";
 
-const bannerSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/connection-banner.tsx", import.meta.url),
+const bannerSource = await readFile(
+  new URL("../../components/app-shell/connection-banner.tsx", import.meta.url), "utf8",
 );
-const mobileSource = await Deno.readTextFile(
-  new URL("./mobile/MobileConnectionBanner.tsx", import.meta.url),
+const mobileSource = await readFile(
+  new URL("./mobile/MobileConnectionBanner.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("busy work outranks every other reason to update", () => {
+test("busy work outranks every other reason to update", () => {
   const busy = { idle: false, visible: true, visibleForMs: 10 * 60_000 };
   assertEquals(updateAllowed(busy, 0), false);
   assertEquals(updateAllowed(busy, 60_000), false);
 });
 
-Deno.test("a surface without a dwell applies as soon as the user is idle", () => {
+test("a surface without a dwell applies as soon as the user is idle", () => {
   assertEquals(
     updateAllowed({ idle: true, visible: false, visibleForMs: 0 }, 0),
     true,
   );
 });
 
-Deno.test("a dwelling surface waits out its foreground minute", () => {
+test("a dwelling surface waits out its foreground minute", () => {
   const dwell = 60_000;
   assertEquals(
     updateAllowed({ idle: true, visible: true, visibleForMs: 59_999 }, dwell),
@@ -52,7 +55,7 @@ Deno.test("a dwelling surface waits out its foreground minute", () => {
   );
 });
 
-Deno.test("the countdown rewinds whole rather than freezing mid-count", () => {
+test("the countdown rewinds whole rather than freezing mid-count", () => {
   assertEquals(tickUpdateCountdown({ secs: 3, held: false }, true, 3), {
     secs: 2,
     held: false,
@@ -67,7 +70,7 @@ Deno.test("the countdown rewinds whole rather than freezing mid-count", () => {
   });
 });
 
-Deno.test("nothing replaces a running build before its replacement is here", () => {
+test("nothing replaces a running build before its replacement is here", () => {
   // Not even the press: the whole point of the control is that taking the
   // update is local and instant, which is only true once the bits are cached.
   assertEquals(
@@ -80,7 +83,7 @@ Deno.test("nothing replaces a running build before its replacement is here", () 
   );
 });
 
-Deno.test("a press outranks the idle gate the countdown answers to", () => {
+test("a press outranks the idle gate the countdown answers to", () => {
   // The gate protects someone who did not ask. This someone is looking at the
   // control they just pressed, so they do not wait out a countdown as well.
   assertEquals(
@@ -98,7 +101,7 @@ Deno.test("a press outranks the idle gate the countdown answers to", () => {
   );
 });
 
-Deno.test("a held countdown keeps re-arming its check", () => {
+test("a held countdown keeps re-arming its check", () => {
   // Rewinding to the same second leaves the effect's other dependencies
   // unchanged, so the timer is only rescheduled because `recheck` moves. Losing
   // it strands a busy page on the old build until it is reloaded by hand.
@@ -110,11 +113,11 @@ Deno.test("a held countdown keeps re-arming its check", () => {
   assert(hook.includes("    recheck,\n"));
 });
 
-Deno.test("a crash inside a swap goes backward, never forward", () => {
+test("a crash inside a swap goes backward, never forward", () => {
   // Forward recovery exists for a stale window asking for a chunk a deploy
   // removed. During an unsigned swap the deployed build is the thing that just
   // crashed, so forward lands on it again; backward is the build known to run.
-  const boundary = Deno.readTextFileSync(new URL("./AppErrorBoundary.tsx", import.meta.url));
+  const boundary = readFileSync(new URL("./AppErrorBoundary.tsx", import.meta.url), "utf8");
   assert(boundary.includes("rollbackToPreviousBuild"));
   assert(
     boundary.indexOf("updateSwapInFlight(globalThis.localStorage)") <
@@ -122,7 +125,7 @@ Deno.test("a crash inside a swap goes backward, never forward", () => {
   );
 });
 
-Deno.test("the download starts on detection, not on the idle gate", () => {
+test("the download starts on detection, not on the idle gate", () => {
   // What interrupts someone is the reload, never the download. Gating the
   // fetch on idleness would put the wait back where the user can feel it and
   // leave the control unable to promise an instant swap.
@@ -135,7 +138,7 @@ Deno.test("the download starts on detection, not on the idle gate", () => {
   assert(!effect.includes("updateAllowed"));
 });
 
-Deno.test("both surfaces update themselves, and both offer to be pressed", () => {
+test("both surfaces update themselves, and both offer to be pressed", () => {
   assert(bannerSource.includes("useAutoUpdate(store, {"));
   // Both surfaces use the same configured mode and countdown.
   assert(!bannerSource.includes("minVisibleMs: "));
@@ -150,14 +153,14 @@ Deno.test("both surfaces update themselves, and both offer to be pressed", () =>
   assert(bannerSource.includes('disabled={update.phase === "reloading"}'));
 });
 
-Deno.test("the page asks for progress rather than assuming it", () => {
+test("the page asks for progress rather than assuming it", () => {
   // The worker on the other end may predate progress entirely, and the worker
   // this page talks to has the previous build as its other caller. Opting in by
   // flag keeps both directions of that transition working.
   assert(bannerSource.includes(`{ type: "cowboy.refresh-shell", progress: true, retry }`));
 });
 
-Deno.test("all downloads stay a hairline until ready, regardless of update intent", () => {
+test("all downloads stay a hairline until ready, regardless of update intent", () => {
   // It is not news and it is not actionable: the bits arrive at the speed of
   // the network, and a slab of text the user can only watch is screen taken
   // for nothing.
@@ -168,7 +171,7 @@ Deno.test("all downloads stay a hairline until ready, regardless of update inten
   }
 });
 
-Deno.test("the hairline is translucent, and it is the same one element", () => {
+test("the hairline is translucent, and it is the same one element", () => {
   const seen: string[] = [];
   const line = updateHairlineSx((opacity) => {
     seen.push(String(opacity));
@@ -180,11 +183,11 @@ Deno.test("the hairline is translucent, and it is the same one element", () => {
   assertEquals(Object.keys(line).some((key) => key.includes("transform")), false);
 });
 
-Deno.test("a rollback notice is whole, not a progress bar that stopped", () => {
+test("a rollback notice is whole, not a progress bar that stopped", () => {
   assertEquals(updateFillShare("rejected", 0.3), 1);
 });
 
-Deno.test("a stalled download keeps the ground it took", () => {
+test("a stalled download keeps the ground it took", () => {
   assertEquals(updateFillShare("downloading", 0.4), 0.4);
   assertEquals(updateFillShare("failed", 0.4), 0.4);
   // Ready fills whole even where there was no progress to report: a page no
@@ -195,7 +198,7 @@ Deno.test("a stalled download keeps the ground it took", () => {
   assertEquals(updateFillShare("downloading", undefined), 0);
 });
 
-Deno.test("the bar never reads 100% before the bits are here", () => {
+test("the bar never reads 100% before the bits are here", () => {
   assertEquals(updatePercentLabel(0.999, false), "99%");
   assertEquals(updatePercentLabel(1, false), "99%");
   assertEquals(updatePercentLabel(1, true), "100%");
@@ -203,7 +206,7 @@ Deno.test("the bar never reads 100% before the bits are here", () => {
   assertEquals(updatePercentLabel(undefined, false), undefined);
 });
 
-Deno.test("the fill is one paint-only background, and it never sweeps a lie", () => {
+test("the fill is one paint-only background, and it never sweeps a lie", () => {
   const streamed = updateFillSx("#0288d1", "#01579b", 0.5, true);
   assertEquals(streamed.backgroundSize, "50% 100%");
   assertEquals(streamed.backgroundColor, "#01579b");
@@ -216,7 +219,7 @@ Deno.test("the fill is one paint-only background, and it never sweeps a lie", ()
   assertEquals(keys.some((key) => key.includes("transform") || key.includes("Shadow")), false);
 });
 
-Deno.test("the bar shows its press as a control, not as a sentence", () => {
+test("the bar shows its press as a control, not as a sentence", () => {
   // A full-width tinted slab at the top of the screen is what this app has
   // always used to *tell* the user something. An imperative sentence inside
   // one does not read as a button, so the verb leaves the sentence.

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   htmlIsOnlyImage,
   markdownLinkForPastedUrl,
@@ -10,11 +11,11 @@ function clipboard(data: Record<string, string>): Pick<DataTransfer, "getData"> 
   return { getData: (type: string): string => data[type] ?? "" };
 }
 
-Deno.test("clipboard text is normalized to the document line separator", () => {
+test("clipboard text is normalized to the document line separator", () => {
   assertEquals(normalizeClipboardText("a\r\nb\rc\n"), "a\nb\nc\n");
 });
 
-Deno.test("a copied picture's HTML does not beat its file", () => {
+test("a copied picture's HTML does not beat its file", () => {
   assertEquals(
     htmlIsOnlyImage(`<meta charset="utf-8"><img src="https://x/y.png" alt="y">`),
     true,
@@ -30,7 +31,7 @@ Deno.test("a copied picture's HTML does not beat its file", () => {
   );
 });
 
-Deno.test("office rich text beats the rendered table picture", () => {
+test("office rich text beats the rendered table picture", () => {
   assertEquals(
     pastedTextBeatsFiles(clipboard({
       "text/html": "<table><tr><td>1</td></tr></table>",
@@ -45,7 +46,7 @@ Deno.test("office rich text beats the rendered table picture", () => {
   );
 });
 
-Deno.test("a URL pasted over a single-line selection becomes a link", () => {
+test("a URL pasted over a single-line selection becomes a link", () => {
   assertEquals(
     markdownLinkForPastedUrl("docs", "https://example.com/a"),
     "[docs](https://example.com/a)",

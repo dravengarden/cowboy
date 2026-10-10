@@ -1,4 +1,6 @@
-import { assert, assertEquals, assertFalse } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals, assertFalse } from "@std/assert";
 import {
   type AnnouncementMemory,
   legacyRecordsAnnouncement,
@@ -20,7 +22,7 @@ function memory(): AnnouncementMemory & { store: Map<string, string> } {
 
 const KEYS = ["cowboy:sync:queue:session-a", "cowboy:sync:service:title"];
 
-Deno.test("a device is told once, and never again", () => {
+test("a device is told once, and never again", () => {
   const device = memory();
   assert(legacyRecordsAnnouncement(KEYS, device).announce);
   for (let reload = 0; reload < 20; reload += 1) {
@@ -33,7 +35,7 @@ Deno.test("a device is told once, and never again", () => {
 // The regression this file exists for: gating used to hash the retained SET, so
 // any drift in it re-announced. An iPad PWA reloads whenever iOS evicts the web
 // view, and a morning of reloads produced ~20 identical warnings.
-Deno.test("a changed retained set does not re-announce", () => {
+test("a changed retained set does not re-announce", () => {
   const device = memory();
   assert(
     legacyRecordsAnnouncement(["cowboy:sync:queue:session-a"], device).announce,
@@ -47,7 +49,7 @@ Deno.test("a changed retained set does not re-announce", () => {
   assertEquals(grown.count, 2);
 });
 
-Deno.test("an emptied set forgets, so a genuinely new one speaks once", () => {
+test("an emptied set forgets, so a genuinely new one speaks once", () => {
   const device = memory();
   assert(legacyRecordsAnnouncement(KEYS, device).announce);
   const empty = legacyRecordsAnnouncement([], device);
@@ -61,7 +63,7 @@ Deno.test("an emptied set forgets, so a genuinely new one speaks once", () => {
 // remember making is a warning it makes on EVERY load. The records stay listed
 // in Settings → Info either way, so silence is the lesser harm — and the
 // decision is reported to telemetry so it is never invisible.
-Deno.test("a device that cannot remember is not nagged", () => {
+test("a device that cannot remember is not nagged", () => {
   assertEquals(legacyRecordsAnnouncement(KEYS, null), {
     announce: false,
     reason: "unrecordable",
@@ -89,8 +91,8 @@ Deno.test("a device that cannot remember is not nagged", () => {
   );
 });
 
-Deno.test("every load reports its decision, warned or not", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("every load reports its decision, warned or not", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   const notice = store.slice(store.indexOf("syncDatabase.legacyRecords()"));
   assert(notice.includes('reportClientLog("info", "legacy_records_notice"'));
   assert(notice.includes("reason: announcement.reason"));
@@ -98,8 +100,8 @@ Deno.test("every load reports its decision, warned or not", async () => {
   assert(notice.includes("if (announcement.announce) {"));
 });
 
-Deno.test("inspection waits for an admitted socket and logs its cause", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("inspection waits for an admitted socket and logs its cause", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   // Dataset discovery before admission can fail transiently while an auth
   // cookie refreshes; that must not surface as a local data failure.
   const start = store.indexOf("function connect(): void {");

@@ -1,19 +1,21 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const composer = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composer = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const transcript = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcript = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
-const previewSource = await Deno.readTextFile(
-  new URL("./MessagePreview.tsx", import.meta.url),
+const previewSource = await readFile(
+  new URL("./MessagePreview.tsx", import.meta.url), "utf8",
 );
-const inlinePreviewSource = await Deno.readTextFile(
-  new URL("./mdlive/inline-preview.ts", import.meta.url),
+const inlinePreviewSource = await readFile(
+  new URL("./mdlive/inline-preview.ts", import.meta.url), "utf8",
 );
 
-Deno.test("optimistic draft cards strip image tokens instead of painting raw cowboy-att markdown", () => {
+test("optimistic draft cards strip image tokens instead of painting raw cowboy-att markdown", () => {
   const start = composer.indexOf("function OptimisticDraftRow(");
   const end = composer.indexOf("interface PendingEditController", start);
   assert(start >= 0 && end > start);
@@ -26,7 +28,7 @@ Deno.test("optimistic draft cards strip image tokens instead of painting raw cow
   assertEquals(body.includes('{message.text || "📎 attachment"}'), false);
 });
 
-Deno.test("pending rows show every delivery phase and failed rows offer return-to-home", () => {
+test("pending rows show every delivery phase and failed rows offer return-to-home", () => {
   const start = composer.indexOf("function OptimisticDraftRow(");
   const end = composer.indexOf("interface PendingEditController", start);
   const body = composer.slice(start, end);
@@ -46,7 +48,7 @@ Deno.test("pending rows show every delivery phase and failed rows offer return-t
   );
 });
 
-Deno.test("mobile pending delivery arrows survive a dropped iOS compatibility click", () => {
+test("mobile pending delivery arrows survive a dropped iOS compatibility click", () => {
   const start = composer.indexOf("function PendingRow(");
   const end = composer.indexOf("function StopConfirmDialog", start);
   assert(start >= 0 && end > start);
@@ -62,7 +64,7 @@ Deno.test("mobile pending delivery arrows survive a dropped iOS compatibility cl
   );
 });
 
-Deno.test("tool UI selection uses fill instead of purple leading rails", () => {
+test("tool UI selection uses fill instead of purple leading rails", () => {
   assertEquals(transcript.includes("borderLeft: 2"), false);
   assertEquals(transcript.includes("borderLeft: 3"), false);
   assertEquals(
@@ -73,7 +75,7 @@ Deno.test("tool UI selection uses fill instead of purple leading rails", () => {
   );
 });
 
-Deno.test("MessagePreview renders cowboy-att tokens as composer inline images", () => {
+test("MessagePreview renders cowboy-att tokens as composer inline images", () => {
   assert(previewSource.includes("inlineImageField"));
   assert(previewSource.includes("seedInlineAttachments(attachments)"));
   assertEquals(
@@ -82,11 +84,11 @@ Deno.test("MessagePreview renders cowboy-att tokens as composer inline images", 
   );
 });
 
-Deno.test("mdlive leaves cowboy-att images for the inline widget instead of hiding them", () => {
+test("mdlive leaves cowboy-att images for the inline widget instead of hiding them", () => {
   assert(inlinePreviewSource.includes("!imageText.includes('cowboy-att:')"));
 });
 
-Deno.test("confirmed user rows stay hidden while the optimistic image bubble is up", () => {
+test("confirmed user rows stay hidden while the optimistic image bubble is up", () => {
   assert(transcript.includes("optimisticCmids.has(item.cmid)"));
   assertEquals(transcript.includes("overlayHidesTailHumanKey"), false);
   assert(transcript.includes("applySendImagePreviews(chunks, cmid)"));
@@ -95,8 +97,8 @@ Deno.test("confirmed user rows stay hidden while the optimistic image bubble is 
   assert(transcript.includes("hasNewerLiveUserItem("));
 });
 
-Deno.test("an echoed transcript send retires once its turn starts working", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("an echoed transcript send retires once its turn starts working", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   const start = store.indexOf('case "event": {');
   const end = store.indexOf('case "config_options": {', start);
   assert(start >= 0 && end > start);
@@ -108,7 +110,7 @@ Deno.test("an echoed transcript send retires once its turn starts working", asyn
   assert(body.indexOf("setState({", retire) > retire);
 });
 
-Deno.test("failed transcript sends offer return to the list they left", () => {
+test("failed transcript sends offer return to the list they left", () => {
   const start = transcript.indexOf("function OptimisticUserBubble(");
   const end = transcript.indexOf("function MessageBubble(", start);
   assert(start >= 0 && end > start);
@@ -120,8 +122,8 @@ Deno.test("failed transcript sends offer return to the list they left", () => {
   assert(body.includes("Waiting for connection…"));
 });
 
-Deno.test("local content paints and reveals before the durable transport barrier resolves", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("local content paints and reveals before the durable transport barrier resolves", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   const addStart = store.indexOf("async function qAdd(");
   const addEnd = store.indexOf("export function retryQueued", addStart);
   const add = store.slice(addStart, addEnd);
@@ -180,8 +182,8 @@ Deno.test("local content paints and reveals before the durable transport barrier
   assert(sendQueued.includes("qStatus.delete(echoCmid)"));
 });
 
-Deno.test("unfocused pending draft activation actively recovers a missing server id", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("unfocused pending draft activation actively recovers a missing server id", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   const transport = store.slice(
     store.indexOf("function transmitQueueMutation("),
     store.indexOf("function qClient("),
@@ -206,7 +208,7 @@ Deno.test("unfocused pending draft activation actively recovers a missing server
   assert(discard.includes('qStatus.set(cmid, "failed")'));
 });
 
-Deno.test("pending preview Show more toggles on a stationary touch", () => {
+test("pending preview Show more toggles on a stationary touch", () => {
   assert(
     previewSource.includes(
       "const disclosureTap = useReliableTouchTap<HTMLButtonElement>(() =>",

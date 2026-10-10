@@ -1,22 +1,24 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const mermaidSource = await Deno.readTextFile(
-  new URL("./MermaidDiagram.tsx", import.meta.url),
+const mermaidSource = await readFile(
+  new URL("./MermaidDiagram.tsx", import.meta.url), "utf8",
 );
-const markdownSource = await Deno.readTextFile(
-  new URL("./MarkdownImpl.tsx", import.meta.url),
+const markdownSource = await readFile(
+  new URL("./MarkdownImpl.tsx", import.meta.url), "utf8",
 );
-const lightboxSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/image-lightbox.tsx", import.meta.url),
+const lightboxSource = await readFile(
+  new URL("../../components/app-shell/image-lightbox.tsx", import.meta.url), "utf8",
 );
-const gestureSource = await Deno.readTextFile(
+const gestureSource = await readFile(
   new URL(
     "../../components/app-shell/image-lightbox-gestures.ts",
     import.meta.url,
-  ),
+  ), "utf8",
 );
 
-Deno.test("Mermaid lightbox preserves HTML labels as inline SVG", () => {
+test("Mermaid lightbox preserves HTML labels as inline SVG", () => {
   assert(mermaidSource.includes('document.createElement("template")'));
   assertEquals(mermaidSource.includes("new DOMParser"), false);
   assertEquals(mermaidSource.includes("data:image/svg+xml"), false);
@@ -30,7 +32,7 @@ Deno.test("Mermaid lightbox preserves HTML labels as inline SVG", () => {
   assert(gestureSource.includes("HTMLImageElement | SVGSVGElement"));
 });
 
-Deno.test("a zoomed diagram survives the lightbox's centring flex row", () => {
+test("a zoomed diagram survives the lightbox's centring flex row", () => {
   // Zooming bakes the settled scale into the element's own width/height. An
   // inline SVG is not replaced content, so its automatic flex minimum is zero
   // and the centred item shrinks straight back to the viewport — the zoom
@@ -54,7 +56,7 @@ Deno.test("a zoomed diagram survives the lightbox's centring flex row", () => {
   assert(imgBlock.includes("flexShrink: 0"));
 });
 
-Deno.test("dark diagrams are legible inline and enlarged", () => {
+test("dark diagrams are legible inline and enlarged", () => {
   // Mermaid's stock dark palette is near-black on near-black. The overrides
   // lift node fills, borders, edges, and label text off the surface, and the
   // in-page figure gets the same plate the lightbox gives a self-themed image.
@@ -92,7 +94,7 @@ Deno.test("dark diagrams are legible inline and enlarged", () => {
   assert(lightboxSource.includes("const invertPlate = plate && !selfThemed && isDarkMode"));
 });
 
-Deno.test("Mermaid failures return to the ordinary Markdown code renderer", () => {
+test("Mermaid failures return to the ordinary Markdown code renderer", () => {
   assert(mermaidSource.includes("data-mermaid-source-fallback"));
   const branchStart = markdownSource.indexOf(
     'if (lang.toLowerCase() === "mermaid")',
@@ -104,7 +106,7 @@ Deno.test("Mermaid failures return to the ordinary Markdown code renderer", () =
   assert(mermaidBranch.includes("<CodeBlock"));
 });
 
-Deno.test("a failed Mermaid render does not leak its error art onto the page", () => {
+test("a failed Mermaid render does not leak its error art onto the page", () => {
   // Without suppressErrorRendering Mermaid renders its bomb "Syntax error in
   // text" diagram into a temp node under <body> before rejecting, so it shows
   // up below the app next to the Markdown source fallback.

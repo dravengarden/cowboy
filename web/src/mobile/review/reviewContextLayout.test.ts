@@ -1,16 +1,18 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 
-const source = await Deno.readTextFile(
-  new URL("./ReviewApp.tsx", import.meta.url),
+const source = await readFile(
+  new URL("./ReviewApp.tsx", import.meta.url), "utf8",
 );
-const treeSource = await Deno.readTextFile(
-  new URL("./ReviewFileTree.tsx", import.meta.url),
+const treeSource = await readFile(
+  new URL("./ReviewFileTree.tsx", import.meta.url), "utf8",
 );
-const storeSource = await Deno.readTextFile(
-  new URL("../../store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("../../store.ts", import.meta.url), "utf8",
 );
 
-Deno.test("review sheets portal off the product-pager containing block", () => {
+test("review sheets portal off the product-pager containing block", () => {
   const symbolsAt = source.indexOf("? `Symbols · ${inspectCandidates.length}`");
   assertEquals(symbolsAt >= 0, true);
   const symbolsSheet = source.slice(symbolsAt, symbolsAt + 240);
@@ -23,7 +25,7 @@ Deno.test("review sheets portal off the product-pager containing block", () => {
   assertStringIncludes(source.slice(contextAt, contextAt + 180), "portal");
 });
 
-Deno.test("symbol navigation disables actions without destinations", () => {
+test("symbol navigation disables actions without destinations", () => {
   for (
     const kind of [
       "definition",
@@ -43,7 +45,7 @@ Deno.test("symbol navigation disables actions without destinations", () => {
   assertStringIncludes(source, "data-navigation-status={availability}");
 });
 
-Deno.test("mobile symbol choices keep a stable correctable grid", () => {
+test("mobile symbol choices keep a stable correctable grid", () => {
   assertStringIncludes(source, "data-mobile-symbol-current");
   assertStringIncludes(source, "data-mobile-symbol-grid");
   assertStringIncludes(source, "data-mobile-symbol-choice");
@@ -71,7 +73,7 @@ Deno.test("mobile symbol choices keep a stable correctable grid", () => {
   );
 });
 
-Deno.test("session context leads with the active session without a history row", () => {
+test("session context leads with the active session without a history row", () => {
   assertEquals(source.includes("function ContextPreviousSessionRow"), false);
   assertEquals(source.includes('label = "Previous session"'), false);
   assertStringIncludes(
@@ -87,7 +89,7 @@ Deno.test("session context leads with the active session without a history row",
   assertStringIncludes(source, "session.id !== activeSessionId");
 });
 
-Deno.test("session context list consumes duplicate floating-footer clearance", () => {
+test("session context list consumes duplicate floating-footer clearance", () => {
   assertStringIncludes(
     source,
     '"calc(100dvh - 148px + 76px + env(safe-area-inset-bottom, 0px))"',
@@ -102,7 +104,7 @@ Deno.test("session context list consumes duplicate floating-footer clearance", (
   );
 });
 
-Deno.test("project targets do not inherit worktree-only labels", () => {
+test("project targets do not inherit worktree-only labels", () => {
   assertStringIncludes(
     source,
     'contextLabel={projectCodeContext ? "Project code" : "Worktree"}',
@@ -116,7 +118,7 @@ Deno.test("project targets do not inherit worktree-only labels", () => {
   assertStringIncludes(treeSource, "{contextLabel}");
 });
 
-Deno.test("registered project code does not enter the session review sync channel", () => {
+test("registered project code does not enter the session review sync channel", () => {
   assertStringIncludes(
     storeSource,
     'if (sessionId.startsWith("workspace::")) {',

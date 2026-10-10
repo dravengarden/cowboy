@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   isReviewMediaPath,
   reviewMediaUrl,
   reviewPreviewKind,
 } from "./reviewPreview.ts";
 
-Deno.test("review preview classifies images, svg, mermaid, and markdown", () => {
+test("review preview classifies images, svg, mermaid, and markdown", () => {
   assertEquals(reviewPreviewKind("logos/heimdall-logo-005.png"), "image");
   assertEquals(reviewPreviewKind("photo.JPEG"), "image");
   assertEquals(reviewPreviewKind("icon.SVG"), "svg");
@@ -15,7 +16,7 @@ Deno.test("review preview classifies images, svg, mermaid, and markdown", () => 
   assertEquals(reviewPreviewKind("src/main.rs"), "text");
 });
 
-Deno.test("review media URLs stay session-scoped and path-encoded", () => {
+test("review media URLs stay session-scoped and path-encoded", () => {
   assertEquals(isReviewMediaPath("shot.webp"), true);
   assertEquals(isReviewMediaPath("notes.md"), false);
   assertEquals(

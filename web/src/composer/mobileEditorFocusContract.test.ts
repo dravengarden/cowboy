@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   beginMobileEditorFocusTransfer,
   didMobileSoftwareKeyboardClose,
@@ -8,32 +10,32 @@ import {
 } from "./mobileComposerFocus.ts";
 import { mobileComposerStackGap } from "../mobileComposerPrimitives.ts";
 
-const composerSource = await Deno.readTextFile(
-  new URL("../Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("../Composer.tsx", import.meta.url), "utf8",
 );
-const textareaSource = await Deno.readTextFile(
-  new URL("../ComposerTextarea.tsx", import.meta.url),
+const textareaSource = await readFile(
+  new URL("../ComposerTextarea.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
-const fullscreenComposerSource = await Deno.readTextFile(
-  new URL("../FullscreenComposer.tsx", import.meta.url),
+const fullscreenComposerSource = await readFile(
+  new URL("../FullscreenComposer.tsx", import.meta.url), "utf8",
 );
-const platformEditorSource = await Deno.readTextFile(
-  new URL("./PlatformComposerEditor.tsx", import.meta.url),
+const platformEditorSource = await readFile(
+  new URL("./PlatformComposerEditor.tsx", import.meta.url), "utf8",
 );
-const accessoryDockSource = await Deno.readTextFile(
-  new URL("../MobileComposerAccessoryDock.tsx", import.meta.url),
+const accessoryDockSource = await readFile(
+  new URL("../MobileComposerAccessoryDock.tsx", import.meta.url), "utf8",
 );
-const formatActionsSource = await Deno.readTextFile(
-  new URL("../MobileComposerFormatActions.tsx", import.meta.url),
+const formatActionsSource = await readFile(
+  new URL("../MobileComposerFormatActions.tsx", import.meta.url), "utf8",
 );
-const editorSource = await Deno.readTextFile(
-  new URL("../ComposerEditor.tsx", import.meta.url),
+const editorSource = await readFile(
+  new URL("../ComposerEditor.tsx", import.meta.url), "utf8",
 );
-const composerFocusSource = await Deno.readTextFile(
-  new URL("./mobileComposerFocus.ts", import.meta.url),
+const composerFocusSource = await readFile(
+  new URL("./mobileComposerFocus.ts", import.meta.url), "utf8",
 );
 const codePointerDown = appSource.lastIndexOf(
   "openCodeTap.onPointerDown",
@@ -51,7 +53,7 @@ const mobileCodeSource = appSource.slice(
   mobileCodeEnd,
 );
 
-Deno.test("spatial swipe latches keyboard dismissal without waiting for settle", () => {
+test("spatial swipe latches keyboard dismissal without waiting for settle", () => {
   const helperStart = composerFocusSource.indexOf(
     "export function dismissMobileSoftwareKeyboardForSwipe",
   );
@@ -66,7 +68,7 @@ Deno.test("spatial swipe latches keyboard dismissal without waiting for settle",
   assertEquals(helper.includes("releaseMobileComposerFocus();"), true);
 });
 
-Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
+test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(
     composerSource.includes(
       "\"&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)\"",
@@ -82,7 +84,7 @@ Deno.test("mobile composer promotion requires a visible keyboard and real editor
   );
 });
 
-Deno.test("mobile keyboard keeps the writing material opaque across transient WebKit focus loss", () => {
+test("mobile keyboard keeps the writing material opaque across transient WebKit focus loss", () => {
   assertEquals(
     composerSource.includes(
       "\"&[data-mobile-keyboard-open='true']\": {\n              ...mobileFocusedComposerSurfaceSx",
@@ -91,7 +93,7 @@ Deno.test("mobile keyboard keeps the writing material opaque across transient We
   );
 });
 
-Deno.test("IME focus loss must not collapse the keyboard-up formatting row", () => {
+test("IME focus loss must not collapse the keyboard-up formatting row", () => {
   assertEquals(
     composerSource.includes(
       "\"&[data-mobile-keyboard-open='true'] [data-mobile-focus-format-row]\"",
@@ -106,7 +108,7 @@ Deno.test("IME focus loss must not collapse the keyboard-up formatting row", () 
   );
 });
 
-Deno.test("multi-image mobile composers scroll the focused caret above the keyboard", () => {
+test("multi-image mobile composers scroll the focused caret above the keyboard", () => {
   assertEquals(
     composerSource.includes('maxHeight: "min(42dvh, 22rem)"'),
     true,
@@ -162,7 +164,7 @@ Deno.test("multi-image mobile composers scroll the focused caret above the keybo
   );
 });
 
-Deno.test("native fullscreen keyboard spacing follows measured keyboard state", () => {
+test("native fullscreen keyboard spacing follows measured keyboard state", () => {
   assertEquals(
     fullscreenComposerSource.includes(
       "const keyboardOpen = useKeyboardOpen();",
@@ -187,7 +189,7 @@ Deno.test("native fullscreen keyboard spacing follows measured keyboard state", 
   );
 });
 
-Deno.test("mobile session navigation stays tappable after keyboard dismissal", () => {
+test("mobile session navigation stays tappable after keyboard dismissal", () => {
   assertEquals(
     appSource.includes(
       "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:focus-within) [data-mobile-session-nav='true']",
@@ -202,7 +204,7 @@ Deno.test("mobile session navigation stays tappable after keyboard dismissal", (
   );
 });
 
-Deno.test("mobile Code commits touch taps when Safari drops synthetic click", () => {
+test("mobile Code commits touch taps when Safari drops synthetic click", () => {
   assertEquals(
     mobileCodeStart >= 0 && mobileCodeEnd > mobileCodeStart,
     true,
@@ -218,7 +220,7 @@ Deno.test("mobile Code commits touch taps when Safari drops synthetic click", ()
   assertEquals(mobileCodeSource.includes("openCodeTap.onClick"), true);
 });
 
-Deno.test("mobile Code does not retain synthetic touch hover paint", () => {
+test("mobile Code does not retain synthetic touch hover paint", () => {
   assertEquals(
     mobileCodeSource.includes(
       'event.currentTarget.dataset.touchActivated = "true"',
@@ -245,7 +247,7 @@ Deno.test("mobile Code does not retain synthetic touch hover paint", () => {
   );
 });
 
-Deno.test("Machine npm updates survive a swallowed Safari click", () => {
+test("Machine npm updates survive a swallowed Safari click", () => {
   const updateButtonStart = appSource.indexOf(
     "function MachineNpmUpdateButton",
   );
@@ -266,7 +268,7 @@ Deno.test("Machine npm updates survive a swallowed Safari click", () => {
   assertEquals(updateButton.includes("{...updateTap}"), true);
 });
 
-Deno.test("mobile recommended presets survive a swallowed Safari click", () => {
+test("mobile recommended presets survive a swallowed Safari click", () => {
   const presetsStart = composerSource.indexOf(
     "function RecommendedRunConfigPresetButton",
   );
@@ -294,7 +296,7 @@ Deno.test("mobile recommended presets survive a swallowed Safari click", () => {
   assertEquals(presets.includes("borderRadius: 2,"), false);
 });
 
-Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
+test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
   assertEquals(
     composerSource.includes("...(desktop && column && {"),
     true,
@@ -315,7 +317,7 @@ Deno.test("mobile column and pending ownership cannot fill the viewport without 
   );
 });
 
-Deno.test("Plan plus Queue or Draft editing cannot promote mobile geometry after keyboard dismissal", () => {
+test("Plan plus Queue or Draft editing cannot promote mobile geometry after keyboard dismissal", () => {
   assertEquals(
     composerSource.includes("...(desktop && column && {"),
     true,
@@ -332,7 +334,7 @@ Deno.test("Plan plus Queue or Draft editing cannot promote mobile geometry after
   );
 });
 
-Deno.test("native textarea owns a content-sized mobile canvas", () => {
+test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(textareaSource.includes("data-mobile-native-editor"), true);
   assertEquals(
     composerSource.includes(
@@ -363,7 +365,7 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(textareaSource.includes("<TextField"), false);
 });
 
-Deno.test("mobile pending edit stays mounted when the keyboard never reports an open frame", () => {
+test("mobile pending edit stays mounted when the keyboard never reports an open frame", () => {
   assertEquals(
     composerSource.includes(
       "void persistEditRef.current().catch(() => undefined);",
@@ -397,7 +399,7 @@ Deno.test("mobile pending edit stays mounted when the keyboard never reports an 
   );
 });
 
-Deno.test("mobile pending editor survives the native long-press keyboard settle window", () => {
+test("mobile pending editor survives the native long-press keyboard settle window", () => {
   assertEquals(mobilePendingKeyboardCloseSettleMs, 550);
   assertEquals(
     composerSource.includes(
@@ -413,7 +415,7 @@ Deno.test("mobile pending editor survives the native long-press keyboard settle 
   );
 });
 
-Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissal", () => {
+test("fullscreen pending edit distinguishes collapse from keyboard dismissal", () => {
   assertEquals(
     composerSource.includes(
       'submitLabel={touchInput ? "Collapse editor" : "Save changes"}',
@@ -428,7 +430,7 @@ Deno.test("fullscreen pending edit distinguishes collapse from keyboard dismissa
   );
 });
 
-Deno.test("mobile compact and fullscreen handoffs preserve selection with one focus transfer", () => {
+test("mobile compact and fullscreen handoffs preserve selection with one focus transfer", () => {
   assertEquals(
     composerSource.includes(
       "const selection = editorRef.current?.getSelection();\n                    beginMobileEditorFocusTransfer();\n                    flushSync(() => setComposeFs(true));",
@@ -455,7 +457,7 @@ Deno.test("mobile compact and fullscreen handoffs preserve selection with one fo
   );
 });
 
-Deno.test("pending-row image paste stages synchronously before encoding", () => {
+test("pending-row image paste stages synchronously before encoding", () => {
   const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
   const pendingEnd = composerSource.indexOf(
     "// Secondary actions",
@@ -477,7 +479,7 @@ Deno.test("pending-row image paste stages synchronously before encoding", () => 
   assertEquals(pending.includes("!editAttachmentsPending"), true);
 });
 
-Deno.test("native image and text paste action is shared by every mobile editor surface", () => {
+test("native image and text paste action is shared by every mobile editor surface", () => {
   assertEquals(
     composerSource.match(/<MobileComposerFormatActions/g)?.length,
     2,
@@ -535,7 +537,7 @@ Deno.test("native image and text paste action is shared by every mobile editor s
   );
 });
 
-Deno.test("deleting the last inline image transfers CM6 focus to native text", () => {
+test("deleting the last inline image transfers CM6 focus to native text", () => {
   assertEquals(
     platformEditorSource.includes(
       "demotionSelectionRef.current = childEditorRef.current?.getSelection()",
@@ -572,7 +574,7 @@ Deno.test("deleting the last inline image transfers CM6 focus to native text", (
   );
 });
 
-Deno.test("fullscreen keeps view chrome fixed right and send with message actions", () => {
+test("fullscreen keeps view chrome fixed right and send with message actions", () => {
   assertEquals(
     fullscreenComposerSource.includes(
       'title={submitLabel}\n                color="primary"',
@@ -592,7 +594,7 @@ Deno.test("fullscreen keeps view chrome fixed right and send with message action
   assertEquals(accessoryDockSource.includes("primaryCompanion"), false);
 });
 
-Deno.test("fullscreen primary action survives a swallowed Safari click", () => {
+test("fullscreen primary action survives a swallowed Safari click", () => {
   const primaryStart = accessoryDockSource.indexOf(
     "aria-label={primaryLabel.toLowerCase()}",
   );
@@ -621,7 +623,7 @@ Deno.test("fullscreen primary action survives a swallowed Safari click", () => {
   assertEquals(primaryButton.includes("primaryTap.onClick"), true);
 });
 
-Deno.test("move-draft undo toast stays above the mobile bottom controls", () => {
+test("move-draft undo toast stays above the mobile bottom controls", () => {
   assertEquals(
     composerSource.includes(
       'anchorOrigin={{ vertical: "bottom", horizontal: "center" }}',
@@ -640,7 +642,7 @@ Deno.test("move-draft undo toast stays above the mobile bottom controls", () => 
   );
 });
 
-Deno.test("move-draft toast can open the destination session", () => {
+test("move-draft toast can open the destination session", () => {
   const toastStart = composerSource.indexOf(
     'message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}',
   );
@@ -655,9 +657,9 @@ Deno.test("move-draft toast can open the destination session", () => {
   assertEquals(toast.includes("Undo"), true);
 });
 
-Deno.test("move-draft destination is the shared Sessions tree on every surface", async () => {
-  const pickerSource = await Deno.readTextFile(
-    new URL("../DraftDestinationPicker.tsx", import.meta.url),
+test("move-draft destination is the shared Sessions tree on every surface", async () => {
+  const pickerSource = await readFile(
+    new URL("../DraftDestinationPicker.tsx", import.meta.url), "utf8",
   );
   const pickerStart = composerSource.indexOf("<DraftDestinationPicker");
   const picker = composerSource.slice(
@@ -680,7 +682,7 @@ Deno.test("move-draft destination is the shared Sessions tree on every surface",
   assertEquals(sheet.includes("listSx"), false);
 });
 
-Deno.test("fullscreen hide keyboard stays expanded and resumes at the document end", () => {
+test("fullscreen hide keyboard stays expanded and resumes at the document end", () => {
   assertEquals(
     fullscreenComposerSource.includes("if (showCollapse) onCollapse()"),
     false,
@@ -726,7 +728,7 @@ Deno.test("fullscreen hide keyboard stays expanded and resumes at the document e
   assertEquals(hideClick.includes("onCollapse()"), false);
 });
 
-Deno.test("every focused mobile editor uses two semantic bars with a fixed keyboard action", () => {
+test("every focused mobile editor uses two semantic bars with a fixed keyboard action", () => {
   assertEquals(
     accessoryDockSource.includes("data-mobile-composer-utility-actions"),
     true,
@@ -760,7 +762,7 @@ Deno.test("every focused mobile editor uses two semantic bars with a fixed keybo
   );
 });
 
-Deno.test("expanded mobile rails align while compact overlay stays undivided", () => {
+test("expanded mobile rails align while compact overlay stays undivided", () => {
   assertEquals(
     accessoryDockSource.match(/<MobileComposerFixedActionSlot region=/g)
       ?.length,
@@ -801,7 +803,7 @@ Deno.test("expanded mobile rails align while compact overlay stays undivided", (
   );
 });
 
-Deno.test("fullscreen delivery closes only after authoritative success", () => {
+test("fullscreen delivery closes only after authoritative success", () => {
   assertEquals(
     composerSource.includes(
       "submitWithFeedback(() => setComposeFs(false))",
@@ -822,7 +824,7 @@ Deno.test("fullscreen delivery closes only after authoritative success", () => {
   );
 });
 
-Deno.test("mobile composer keeps one boundary gap across focus transitions", () => {
+test("mobile composer keeps one boundary gap across focus transitions", () => {
   assertEquals(mobileComposerStackGap, 4);
   assertEquals(
     composerSource.includes(
@@ -861,7 +863,7 @@ Deno.test("mobile composer keeps one boundary gap across focus transitions", () 
   );
 });
 
-Deno.test("long touch prompts scroll inside the editor without hiding chrome", () => {
+test("long touch prompts scroll inside the editor without hiding chrome", () => {
   const actionRowStart = composerSource.indexOf("data-mobile-action-row={");
   const actionRowSource = composerSource.slice(
     actionRowStart,
@@ -901,7 +903,7 @@ Deno.test("long touch prompts scroll inside the editor without hiding chrome", (
   assertEquals(actionRowSource.includes("flexShrink: 0"), true);
 });
 
-Deno.test("cleared touch prompts fit the native textarea exactly on blur", () => {
+test("cleared touch prompts fit the native textarea exactly on blur", () => {
   const exactFitStart = textareaSource.indexOf(
     "const fitNativeTextareaExactly",
   );
@@ -927,7 +929,7 @@ Deno.test("cleared touch prompts fit the native textarea exactly on blur", () =>
   assertEquals(blurSource.includes("syncNativeScrollable(ta)"), true);
 });
 
-Deno.test("mobile keyboard focus presents one floating composer surface", () => {
+test("mobile keyboard focus presents one floating composer surface", () => {
   assertEquals(
     composerSource.includes("<span data-mobile-composer-clear>"),
     true,
@@ -1006,7 +1008,7 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
 });
 
-Deno.test("mobile pending editing keeps expansion and context delivery actions in the first dock", () => {
+test("mobile pending editing keeps expansion and context delivery actions in the first dock", () => {
   const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
   const pendingEnd = composerSource.indexOf(
     "// Secondary actions",
@@ -1054,7 +1056,7 @@ Deno.test("mobile pending editing keeps expansion and context delivery actions i
   );
 });
 
-Deno.test("pending Force push confirmation keeps the native editor and anchor mounted", () => {
+test("pending Force push confirmation keeps the native editor and anchor mounted", () => {
   const confirmationStart = composerSource.indexOf(
     'const forcePushConfirmation = kind === "queued"',
   );
@@ -1082,7 +1084,7 @@ Deno.test("pending Force push confirmation keeps the native editor and anchor mo
   );
 });
 
-Deno.test("main Force push confirmation preserves native keyboard focus", () => {
+test("main Force push confirmation preserves native keyboard focus", () => {
   const confirmationStart = composerSource.indexOf(
     "/* Force-push confirm — opened by a completed long-press on Queue.",
   );
@@ -1117,7 +1119,7 @@ Deno.test("main Force push confirmation preserves native keyboard focus", () => 
   assertEquals(trigger.includes("event.preventDefault()"), true);
 });
 
-Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
+test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => {
   const utilityStart = composerSource.indexOf(
     '<MobileComposerFixedActionSlot region="primary" overlay>',
   );
@@ -1168,7 +1170,7 @@ Deno.test("mobile keyboard dismissal belongs to the fixed lower editing rail", (
   );
 });
 
-Deno.test("mobile delivery taps preserve native editor focus until click", () => {
+test("mobile delivery taps preserve native editor focus until click", () => {
   const sendStart = composerSource.indexOf('aria-label="send"');
   const sendEnd = composerSource.indexOf("</IconButton>", sendStart);
   const sendButton = composerSource.slice(sendStart, sendEnd);
@@ -1192,7 +1194,7 @@ Deno.test("mobile delivery taps preserve native editor focus until click", () =>
   );
 });
 
-Deno.test("mobile send quarantines its compatibility click across action-row reflow", () => {
+test("mobile send quarantines its compatibility click across action-row reflow", () => {
   const sendTapStart = composerSource.indexOf(
     "const mobileActionClickGuard = useRetargetedTouchClickGuard",
   );
@@ -1227,7 +1229,7 @@ Deno.test("mobile send quarantines its compatibility click across action-row ref
   );
 });
 
-Deno.test("Page delivery closes only after the authoritative acknowledgement", () => {
+test("Page delivery closes only after the authoritative acknowledgement", () => {
   const submitStart = composerSource.indexOf("const submitWithFeedback");
   const submitEnd = composerSource.indexOf("const sendTap", submitStart);
   const submit = composerSource.slice(submitStart, submitEnd);
@@ -1247,7 +1249,7 @@ Deno.test("Page delivery closes only after the authoritative acknowledgement", (
   assertEquals(submit.slice(actionEnd).includes("onSubmitted?.();"), true);
 });
 
-Deno.test("mobile composer releases stale focus only after a visible keyboard closes", () => {
+test("mobile composer releases stale focus only after a visible keyboard closes", () => {
   assertEquals(didMobileSoftwareKeyboardClose(false, false), false);
   assertEquals(didMobileSoftwareKeyboardClose(false, true), false);
   assertEquals(didMobileSoftwareKeyboardClose(true, true), false);
@@ -1272,7 +1274,7 @@ Deno.test("mobile composer releases stale focus only after a visible keyboard cl
   assertEquals(isMobileEditorFocusTransferPending(), true);
 });
 
-Deno.test("clearing session context always ends the mobile input interaction", () => {
+test("clearing session context always ends the mobile input interaction", () => {
   assertEquals(
     composerSource.includes(
       "timelineState.contextClearedSeq <= previous.seq",
@@ -1299,7 +1301,7 @@ Deno.test("clearing session context always ends the mobile input interaction", (
   assertEquals(composerSource.includes("data-pending-edit-target"), true);
 });
 
-Deno.test("a context reset gate can only reopen from a new input interaction", () => {
+test("a context reset gate can only reopen from a new input interaction", () => {
   assertEquals(shouldPresentMobileKeyboardSurface(false, false, false), false);
   assertEquals(shouldPresentMobileKeyboardSurface(true, false, false), true);
   assertEquals(shouldPresentMobileKeyboardSurface(false, true, false), false);
@@ -1307,7 +1309,7 @@ Deno.test("a context reset gate can only reopen from a new input interaction", (
   assertEquals(shouldPresentMobileKeyboardSurface(true, false, true), false);
 });
 
-Deno.test("successful mobile delivery latches the compact surface closed until a new editor touch", () => {
+test("successful mobile delivery latches the compact surface closed until a new editor touch", () => {
   const dismissStart = composerSource.indexOf(
     "const dismissAfterMobileDelivery = useCallback",
   );
@@ -1332,7 +1334,7 @@ Deno.test("successful mobile delivery latches the compact surface closed until a
   );
 });
 
-Deno.test("queue and draft edit taps reopen the keyboard-up two-track chrome", () => {
+test("queue and draft edit taps reopen the keyboard-up two-track chrome", () => {
   const pendingStart = composerSource.indexOf("if (keyboardBoundEditing) {");
   const pendingEnd = composerSource.indexOf(
     "// Secondary actions",
@@ -1393,7 +1395,7 @@ Deno.test("queue and draft edit taps reopen the keyboard-up two-track chrome", (
   );
 });
 
-Deno.test("pending kebab menus pin to the tap instead of a live button node", () => {
+test("pending kebab menus pin to the tap instead of a live button node", () => {
   assertEquals(
     composerSource.includes('anchorReference="anchorPosition"'),
     true,
@@ -1405,7 +1407,7 @@ Deno.test("pending kebab menus pin to the tap instead of a live button node", ()
   );
 });
 
-Deno.test("clearing a pending edit removes the row instead of restoring it", () => {
+test("clearing a pending edit removes the row instead of restoring it", () => {
   assertEquals(composerSource.includes("function pendingContentCleared"), true);
   assertEquals(
     composerSource.includes(

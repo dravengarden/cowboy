@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   type ClientSnapshot,
   createArbiter,
@@ -39,7 +40,7 @@ function memoryPersistence<S>(): LocalPersistence<S> & { snapshot: () => S | nul
   };
 }
 
-Deno.test("offline durable send survives reload and resends the same cmid after reconnect", async () => {
+test("offline durable send survives reload and resends the same cmid after reconnect", async () => {
   const persistence = memoryPersistence<ClientSnapshot<QueueState>>();
   const sent: Mutation[] = [];
   let connected = false;
@@ -108,7 +109,7 @@ Deno.test("offline durable send survives reload and resends the same cmid after 
   assertEquals(sent.map((mutation) => mutation.id), ["cmid-1"]);
 });
 
-Deno.test("a transcript image prompt survives retry and reload until its user echo", async () => {
+test("a transcript image prompt survives retry and reload until its user echo", async () => {
   type Row = { id: string; text: string; cmid: string; attachments: readonly string[] };
   const persistence = memoryPersistence<ClientSnapshot<QueueValue<Row>>>();
   const row: Row = {
@@ -164,7 +165,7 @@ Deno.test("a transcript image prompt survives retry and reload until its user ec
   assertEquals(afterEchoReload.pending(), []);
 });
 
-Deno.test("durable mutation commits its outbox before transport delivery", async () => {
+test("durable mutation commits its outbox before transport delivery", async () => {
   let releaseSave: (() => void) | undefined;
   let noteSaveStarted: (() => void) | undefined;
   const saveStarted = new Promise<void>((resolve) => {
@@ -202,7 +203,7 @@ Deno.test("durable mutation commits its outbox before transport delivery", async
   assertEquals(sent, ["cmid-barrier"]);
 });
 
-Deno.test("late hydration preserves live authority and restores only unconfirmed outbox rows", async () => {
+test("late hydration preserves live authority and restores only unconfirmed outbox rows", async () => {
   let finishLoad: ((snapshot: ClientSnapshot<QueueState>) => void) | undefined;
   let persisted: ClientSnapshot<QueueState> | null = null;
   const persistence: LocalPersistence<ClientSnapshot<QueueState>> = {
@@ -268,7 +269,7 @@ Deno.test("late hydration preserves live authority and restores only unconfirmed
   assertEquals(sent, ["cmid-live"]);
 });
 
-Deno.test("failed durable mutation keeps the source editor authoritative", async () => {
+test("failed durable mutation keeps the source editor authoritative", async () => {
   const sent: string[] = [];
   const store = replicatedStore<QueueState, typeof queueMutators>({
     clientId: "failed-barrier",
@@ -293,7 +294,7 @@ Deno.test("failed durable mutation keeps the source editor authoritative", async
   assertEquals(store.get().rows, []);
 });
 
-Deno.test("failed durable discard restores the pending delivery", async () => {
+test("failed durable discard restores the pending delivery", async () => {
   let snapshot: ClientSnapshot<QueueState> | null = null;
   let rejectWrites = false;
   const persistence: LocalPersistence<ClientSnapshot<QueueState>> = {
@@ -338,7 +339,7 @@ Deno.test("failed durable discard restores the pending delivery", async () => {
 });
 
 for (const destination of ["queue", "transcript"] as const) {
-  Deno.test(`unconfirmed draft moves to ${destination} once across reload and late creation ack`, async () => {
+  test(`unconfirmed draft moves to ${destination} once across reload and late creation ack`, async () => {
     const row = {
       id: "opt-create-draft",
       cmid: "create-draft",
@@ -418,7 +419,7 @@ for (const destination of ["queue", "transcript"] as const) {
   });
 }
 
-Deno.test("failed durable draft activation retains its original text and attachments", async () => {
+test("failed durable draft activation retains its original text and attachments", async () => {
   const row = { id: "draft-source", cmid: "draft-create", text: "keep original", attachments: ["image-bytes"] };
   let rejectWrites = false;
   const sent: string[] = [];
@@ -444,7 +445,7 @@ Deno.test("failed durable draft activation retains its original text and attachm
   await store.flush();
 });
 
-Deno.test("a crash immediately after activation cannot replay its consumed draft creation", async () => {
+test("a crash immediately after activation cannot replay its consumed draft creation", async () => {
   const row = { id: "opt-created", cmid: "created", text: "send exactly once" };
   type Row = typeof row;
   const persistence = memoryPersistence<ClientSnapshot<QueueValue<Row>>>();
@@ -485,7 +486,7 @@ Deno.test("a crash immediately after activation cannot replay its consumed draft
   await reloaded.flush();
 });
 
-Deno.test("discard rollback after a skipped activation restores an explicitly retryable row", async () => {
+test("discard rollback after a skipped activation restores an explicitly retryable row", async () => {
   const firstWrite = Promise.withResolvers<void>();
   const writeStarted = Promise.withResolvers<void>();
   let racing = false;

@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { captureContent, capturedIdentity } from "../../codeBuffers/content.ts";
 import {
   deferred,
@@ -14,7 +15,7 @@ import { navigationWire } from "../../codeBuffers/navigationFixture.ts";
 const signal = () => new AbortController().signal;
 const text = await captureContent("a🙂z\n");
 
-Deno.test("Review source replacement during navigation Prepare revokes late Execute", async () => {
+test("Review source replacement during navigation Prepare revokes late Execute", async () => {
   const f = await prepare();
   const displayed = new AbortController();
   const preparing = f.reader.prepareNavigation(
@@ -73,7 +74,7 @@ async function finish(f: Awaited<ReturnType<typeof prepare>>, count: number) {
   assertEquals(f.registry.retained().length, 0);
 }
 
-Deno.test("Review selects before open and never downgrades an owned view", () => {
+test("Review selects before open and never downgrades an owned view", () => {
   assertEquals(reviewBufferMode(undefined, undefined), "legacy");
   assertEquals(reviewBufferMode(undefined, "owned"), "owned");
   for (const value of [null, false, "future", {}, "unavailable"]) {
@@ -83,7 +84,7 @@ Deno.test("Review selects before open and never downgrades an owned view", () =>
   assertEquals(reviewBufferMode("owned", "legacy"), "owned");
 });
 
-Deno.test("Review leaving before product discovery never reserves or opens", async () => {
+test("Review leaving before product discovery never reserves or opens", async () => {
   const f = fixture();
   await f.owner.close();
   const discovery = deferred<typeof f.registry>();
@@ -98,7 +99,7 @@ Deno.test("Review leaving before product discovery never reserves or opens", asy
   assertEquals(f.registry.retained().length, 0);
 });
 
-Deno.test("Review late preparation cleans up original ID without opening", async () => {
+test("Review late preparation cleans up original ID without opening", async () => {
   const f = fixture();
   await f.owner.close();
   const reader = createReviewBuffer({
@@ -114,7 +115,7 @@ Deno.test("Review late preparation cleans up original ID without opening", async
   assertEquals((await closed).kind, "released");
 });
 
-Deno.test("Review serializes language and Outline on one original buffer", async () => {
+test("Review serializes language and Outline on one original buffer", async () => {
   const f = await prepare();
   const language = f.reader.read(text, { kind: "language" }, signal());
   const outline = f.reader.read(text, { kind: "symbols" }, signal());
@@ -128,7 +129,7 @@ Deno.test("Review serializes language and Outline on one original buffer", async
   await finish(f, 4);
 });
 
-Deno.test("Review cancelled displayed text drains before reading replacement text", async () => {
+test("Review cancelled displayed text drains before reading replacement text", async () => {
   const f = await prepare();
   const old = new AbortController();
   const first = f.reader.read(text, { kind: "language" }, old.signal);
@@ -146,7 +147,7 @@ Deno.test("Review cancelled displayed text drains before reading replacement tex
   await finish(f, 4);
 });
 
-Deno.test("Review cancelled queued request never dispatches", async () => {
+test("Review cancelled queued request never dispatches", async () => {
   const f = await prepare();
   const first = f.reader.read(text, { kind: "language" }, signal());
   const observer = new AbortController();
@@ -160,7 +161,7 @@ Deno.test("Review cancelled queued request never dispatches", async () => {
   await finish(f, 3);
 });
 
-Deno.test("Review mismatch is not reload, reopen, empty success or legacy fallback", async () => {
+test("Review mismatch is not reload, reopen, empty success or legacy fallback", async () => {
   const f = await prepare();
   const read = f.reader.read(text, { kind: "language" }, signal());
   await f.advance(3);
@@ -174,7 +175,7 @@ Deno.test("Review mismatch is not reload, reopen, empty success or legacy fallba
   await finish(f, 3);
 });
 
-Deno.test("Review ambiguous open is never retried and cleanup queries the same ID", async () => {
+test("Review ambiguous open is never retried and cleanup queries the same ID", async () => {
   const f = fixture();
   await f.owner.close();
   const reader = createReviewBuffer({
@@ -201,7 +202,7 @@ Deno.test("Review ambiguous open is never retried and cleanup queries the same I
   assertEquals(f.registry.retained().length, 1);
 });
 
-Deno.test("Review leaving during a read fences new work and drains release", async () => {
+test("Review leaving during a read fences new work and drains release", async () => {
   const f = await prepare();
   const read = f.reader.read(text, { kind: "language" }, signal());
   const rejected = assertRejects(() => read, BufferClientError, "cancelled");
@@ -223,7 +224,7 @@ Deno.test("Review leaving during a read fences new work and drains release", asy
   assertEquals((await closed).kind, "released");
 });
 
-Deno.test("Review unsupported owned preparation does not invoke a legacy fallback", async () => {
+test("Review unsupported owned preparation does not invoke a legacy fallback", async () => {
   const f = fixture();
   await f.owner.close();
   const reader = createReviewBuffer({
@@ -238,7 +239,7 @@ Deno.test("Review unsupported owned preparation does not invoke a legacy fallbac
   assertEquals(f.calls.length, 1);
 });
 
-Deno.test("Review bounds its queue and captures hover positions before admission", async () => {
+test("Review bounds its queue and captures hover positions before admission", async () => {
   const f = await prepare();
   const observers = new AbortController();
   const first = f.reader.read(text, { kind: "language" }, signal());
@@ -279,7 +280,7 @@ Deno.test("Review bounds its queue and captures hover positions before admission
   await finish(f, 4);
 });
 
-Deno.test("Review abandoning text during synchronization preparation fences late Apply", async () => {
+test("Review abandoning text during synchronization preparation fences late Apply", async () => {
   const f = await prepare();
   const displayed = new AbortController();
   const preparing = f.reader.prepareRefresh(text, displayed.signal);
@@ -315,7 +316,7 @@ Deno.test("Review abandoning text during synchronization preparation fences late
 });
 
 for (const initial of ["lost", "pending"] as const) {
-  Deno.test(`Review explicit Check observes an initial ${initial} Open without replay`, async () => {
+  test(`Review explicit Check observes an initial ${initial} Open without replay`, async () => {
     const f = fixture();
     await f.owner.close();
     const reader = createReviewBuffer({

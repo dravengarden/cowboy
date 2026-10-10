@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   markTranscriptScrollActivity,
   resetTranscriptScrollActivityForTest,
   transcriptPresentationIntervalMs,
 } from "./transcriptRenderPacing.ts";
 
-Deno.test("transcript presentation yields more main-thread time during scrolling", () => {
+test("transcript presentation yields more main-thread time during scrolling", () => {
   resetTranscriptScrollActivityForTest();
   assertEquals(transcriptPresentationIntervalMs(1_000), 50);
 
@@ -15,7 +16,7 @@ Deno.test("transcript presentation yields more main-thread time during scrolling
   assertEquals(transcriptPresentationIntervalMs(1_240), 50);
 });
 
-Deno.test("later scroll activity extends the pacing window", () => {
+test("later scroll activity extends the pacing window", () => {
   resetTranscriptScrollActivityForTest();
   markTranscriptScrollActivity(2_000);
   markTranscriptScrollActivity(2_200);

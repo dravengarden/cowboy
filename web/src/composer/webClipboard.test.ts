@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { readWebClipboard, supportsWebClipboardRead } from "./webClipboard.ts";
 
-Deno.test("web clipboard read is offered when the browser exposes the API", () => {
+test("web clipboard read is offered when the browser exposes the API", () => {
   assertEquals(
     supportsWebClipboardRead({
       read: () => Promise.resolve([]),
@@ -18,7 +19,7 @@ Deno.test("web clipboard read is offered when the browser exposes the API", () =
   assertEquals(supportsWebClipboardRead(undefined), false);
 });
 
-Deno.test("web clipboard prefers image items and keeps accompanying text", async () => {
+test("web clipboard prefers image items and keeps accompanying text", async () => {
   const png = new Blob(["png"], { type: "image/png" });
   const text = new Blob(["hello"], { type: "text/plain" });
   const contents = await readWebClipboard({
@@ -37,7 +38,7 @@ Deno.test("web clipboard prefers image items and keeps accompanying text", async
   assertEquals(contents.text, "hello");
 });
 
-Deno.test("web clipboard falls back to readText when read() is rejected", async () => {
+test("web clipboard falls back to readText when read() is rejected", async () => {
   const contents = await readWebClipboard({
     read: () => Promise.reject(new Error("NotAllowedError")),
     readText: () => Promise.resolve("plain"),

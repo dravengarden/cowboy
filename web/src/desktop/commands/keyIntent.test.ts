@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { strict as assert } from "node:assert";
 import {
   desktopKeyIntent,
@@ -43,7 +44,7 @@ function key(
 
 const idle = { composing: false };
 
-Deno.test("composition owns every key, including modified chords and Esc", () => {
+test("composition owns every key, including modified chords and Esc", () => {
   for (const event of [
     key("KeyJ", { isComposing: true }),
     key("Escape", { key: "Escape", isComposing: true, target: INPUT() }),
@@ -57,7 +58,7 @@ Deno.test("composition owns every key, including modified chords and Esc", () =>
   );
 });
 
-Deno.test("text fields keep unmodified keys and IME markers", () => {
+test("text fields keep unmodified keys and IME markers", () => {
   assert.deepEqual(
     desktopKeyIntent(key("KeyJ", { target: INPUT() }), idle),
     { owner: "text", key: "j" },
@@ -75,7 +76,7 @@ Deno.test("text fields keep unmodified keys and IME markers", () => {
   );
 });
 
-Deno.test("idle CJK sources keep modified chords as physical commands", () => {
+test("idle CJK sources keep modified chords as physical commands", () => {
   assert.deepEqual(
     desktopKeyIntent(
       key("BracketLeft", {
@@ -90,7 +91,7 @@ Deno.test("idle CJK sources keep modified chords as physical commands", () => {
   );
 });
 
-Deno.test("non-editable chrome and the Vim sink resolve physical keys", () => {
+test("non-editable chrome and the Vim sink resolve physical keys", () => {
   for (const make of [BUTTON, VIM_SINK]) {
     assert.deepEqual(
       desktopKeyIntent(
@@ -106,7 +107,7 @@ Deno.test("non-editable chrome and the Vim sink resolve physical keys", () => {
   );
 });
 
-Deno.test("physical keys cover the number row without breaking shifted symbols", () => {
+test("physical keys cover the number row without breaking shifted symbols", () => {
   assert.equal(physicalCommandKey({ code: "Digit3", key: "3", shiftKey: false }), "3");
   assert.equal(physicalCommandKey({ code: "Numpad1", key: "1", shiftKey: false }), "1");
   assert.equal(physicalCommandKey({ code: "Digit1", key: "!", shiftKey: true }), "!");

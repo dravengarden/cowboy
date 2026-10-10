@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { presentHoverBlock } from "./symbolPresentation";
 
-Deno.test("symbol docs convert HTML breaks and hide rustdoc setup lines", () => {
+test("symbol docs convert HTML breaks and hide rustdoc setup lines", () => {
   const block = presentHoverBlock({
     markdown: true,
     text:
@@ -13,7 +14,7 @@ Deno.test("symbol docs convert HTML breaks and hide rustdoc setup lines", () => 
   );
 });
 
-Deno.test("symbol docs preserve headings outside Rust fences", () => {
+test("symbol docs preserve headings outside Rust fences", () => {
   const block = presentHoverBlock({
     markdown: true,
     text: "## Details\n\n```text\n# visible output\n```",

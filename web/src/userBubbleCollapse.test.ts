@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   USER_BUBBLE_COLLAPSE_BUFFER_PX,
   USER_BUBBLE_COLLAPSE_PX,
   userBubbleShouldClamp,
 } from "./userBubbleCollapse";
 
-Deno.test("user bubbles stay unclamped until they clear the collapse buffer", () => {
+test("user bubbles stay unclamped until they clear the collapse buffer", () => {
   const justOverCap = USER_BUBBLE_COLLAPSE_PX + 40;
   assertEquals(
     userBubbleShouldClamp({
@@ -27,7 +28,7 @@ Deno.test("user bubbles stay unclamped until they clear the collapse buffer", ()
   );
 });
 
-Deno.test("unmeasured bubbles clamp so long content cannot flash open", () => {
+test("unmeasured bubbles clamp so long content cannot flash open", () => {
   assertEquals(
     userBubbleShouldClamp({
       measured: false,
@@ -39,7 +40,7 @@ Deno.test("unmeasured bubbles clamp so long content cannot flash open", () => {
   );
 });
 
-Deno.test("expanded and image bubbles never clamp", () => {
+test("expanded and image bubbles never clamp", () => {
   assertEquals(
     userBubbleShouldClamp({
       measured: true,

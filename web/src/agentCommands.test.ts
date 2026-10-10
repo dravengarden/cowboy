@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   resolveCompactionAction,
   resolveSessionAction,
@@ -14,17 +15,17 @@ const compact = {
   fallback_command: "compact",
 };
 
-Deno.test("Provider-declared compaction discovers an advertised alias", () => {
+test("Provider-declared compaction discovers an advertised alias", () => {
   assertEquals(resolveCompactionAction(compact, commands("compress"))?.command, "/compress");
   assertEquals(resolveCompactionAction(compact, commands("SUMMARIZE"))?.command, "/SUMMARIZE");
 });
 
-Deno.test("Provider-declared compaction has an explicit cold-start fallback", () => {
+test("Provider-declared compaction has an explicit cold-start fallback", () => {
   assertEquals(resolveCompactionAction(compact, [])?.command, "/compact");
   assertEquals(resolveCompactionAction(undefined, []), null);
 });
 
-Deno.test("clear remains a Provider-independent Cowboy reset", () => {
+test("clear remains a Provider-independent Cowboy reset", () => {
   const action = resolveSessionAction("clear", "future-agent", []);
   assertEquals(action?.kind, "reset");
   assertEquals(action?.destructive, true);

@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   compareProviderVersions,
   evaluateExpression,
@@ -34,7 +35,7 @@ import {
   subscribeProviderCatalog,
 } from "./providerCatalogRegistry.ts";
 
-Deno.test("managed profiles require signed capability and validate every argument binding", () => {
+test("managed profiles require signed capability and validate every argument binding", () => {
   const candidate = manifest();
   candidate.sdk_version = PROVIDER_SDK_VERSION;
   candidate.runtime.managed_profiles = {
@@ -70,7 +71,7 @@ Deno.test("managed profiles require signed capability and validate every argumen
   }
 });
 
-Deno.test("execution contracts require an exact executor and a capable signed Provider", () => {
+test("execution contracts require an exact executor and a capable signed Provider", () => {
   const candidate = manifest();
   candidate.sdk_version = PROVIDER_SDK_VERSION;
   candidate.runtime.required_capabilities.push("provider.execution-jsonrpc.v1");
@@ -256,7 +257,7 @@ function uiManifest(full = manifest()): ProviderUiManifest {
   };
 }
 
-Deno.test("Provider SDK validates and executes linked typed logic", () => {
+test("Provider SDK validates and executes linked typed logic", () => {
   const fixture = manifest();
   validateProviderManifest(fixture);
   const result = transitionProvider(fixture, initialProviderState(fixture), {
@@ -267,7 +268,7 @@ Deno.test("Provider SDK validates and executes linked typed logic", () => {
   assertEquals(result.effect?.capability, "install_on_machine");
 });
 
-Deno.test("Provider SDK accepts a future account usage namespace", () => {
+test("Provider SDK accepts a future account usage namespace", () => {
   const future = manifest();
   future.host.account_usage = { provider: "future-cloud" };
   validateProviderManifest(future);
@@ -280,7 +281,7 @@ Deno.test("Provider SDK accepts a future account usage namespace", () => {
   );
 });
 
-Deno.test("Machine Plugin inventory projects only Agent capability entries", () => {
+test("Machine Plugin inventory projects only Agent capability entries", () => {
   const shared = {
     generation_digest: `sha256:${"4".repeat(64)}`,
     contract_fingerprint: `sha256:${"5".repeat(64)}`,
@@ -310,7 +311,7 @@ Deno.test("Machine Plugin inventory projects only Agent capability entries", () 
   }]);
 });
 
-Deno.test("Provider UI accepts only closed Service authentication presentations", () => {
+test("Provider UI accepts only closed Service authentication presentations", () => {
   const account = uiManifest();
   account.authentication.presentation = "account";
   validateProviderUiManifest(account);
@@ -342,7 +343,7 @@ Deno.test("Provider UI accepts only closed Service authentication presentations"
   );
 });
 
-Deno.test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
+test("Provider UI schema 2 accepts bounded gradient and activity IR", () => {
   const fixture = manifest();
   fixture.sdk_version = "3.0.0";
   fixture.ui.schema_version = 2;
@@ -373,7 +374,7 @@ Deno.test("Provider UI schema 2 accepts bounded gradient and activity IR", () =>
   validateProviderManifest(fixture);
 });
 
-Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", () => {
+test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", () => {
   const fixture = manifest();
   fixture.ui.surfaces.loading = {
     component: "activity",
@@ -420,7 +421,7 @@ Deno.test("Provider UI rejects v2 nodes in v1 and unknown future interfaces", ()
   );
 });
 
-Deno.test("Provider UI rejects unbounded activity motion before rendering", () => {
+test("Provider UI rejects unbounded activity motion before rendering", () => {
   const fixture = manifest();
   fixture.sdk_version = "3.0.0";
   fixture.ui.schema_version = 2;
@@ -441,7 +442,7 @@ Deno.test("Provider UI rejects unbounded activity motion before rendering", () =
   );
 });
 
-Deno.test("Provider host schema 2 accepts only bounded Transcript variants", () => {
+test("Provider host schema 2 accepts only bounded Transcript variants", () => {
   for (
     const variant of ["timeline", "workcell", "signal", "terminal"] as const
   ) {
@@ -514,7 +515,7 @@ Deno.test("Provider host schema 2 accepts only bounded Transcript variants", () 
   );
 });
 
-Deno.test("Provider SDK rejects assignment type drift before rendering", () => {
+test("Provider SDK rejects assignment type drift before rendering", () => {
   const fixture = manifest();
   fixture.logic.reducers[0]!.assignments[0]!.value = {
     source: "literal",
@@ -527,7 +528,7 @@ Deno.test("Provider SDK rejects assignment type drift before rendering", () => {
   );
 });
 
-Deno.test("Provider SDK host expressions are closed and deterministic", () => {
+test("Provider SDK host expressions are closed and deterministic", () => {
   const host: ProviderHostContext = {
     provider_version: "1.0.0",
     installation_state: "active",
@@ -564,7 +565,7 @@ Deno.test("Provider SDK host expressions are closed and deterministic", () => {
   );
 });
 
-Deno.test("Provider SDK validates closed signed tool presentation links", () => {
+test("Provider SDK validates closed signed tool presentation links", () => {
   const fixture = manifest();
   fixture.host.tool_presentations = [{
     tool_name: "FutureTodo",
@@ -582,7 +583,7 @@ Deno.test("Provider SDK validates closed signed tool presentation links", () => 
   );
 });
 
-Deno.test("Provider Catalog distinguishes typed unbound packages from installable releases", () => {
+test("Provider Catalog distinguishes typed unbound packages from installable releases", () => {
   const fixture = uiManifest();
   const catalog = {
     providers: [{
@@ -621,7 +622,7 @@ Deno.test("Provider Catalog distinguishes typed unbound packages from installabl
   );
 });
 
-Deno.test("Provider Catalog preserves presentation for historical SDK releases", () => {
+test("Provider Catalog preserves presentation for historical SDK releases", () => {
   const fixture = uiManifest();
   fixture.sdk_version = "2.4.0";
   const catalog = {
@@ -649,7 +650,7 @@ Deno.test("Provider Catalog preserves presentation for historical SDK releases",
   );
 });
 
-Deno.test("Provider Catalog accepts a first Service authentication in progress", () => {
+test("Provider Catalog accepts a first Service authentication in progress", () => {
   const fixture = manifest();
   const status = {
     provider_id: fixture.id,
@@ -680,7 +681,7 @@ Deno.test("Provider Catalog accepts a first Service authentication in progress",
   );
 });
 
-Deno.test("Provider Catalog validates exact temporary authentication executors", () => {
+test("Provider Catalog validates exact temporary authentication executors", () => {
   const executor = {
     provider_id: "codex",
     provider_version: "1.1.1",
@@ -703,7 +704,7 @@ Deno.test("Provider Catalog validates exact temporary authentication executors",
   );
 });
 
-Deno.test("Service authentication selects the newest exact active executor", () => {
+test("Service authentication selects the newest exact active executor", () => {
   const olderManifest = uiManifest();
   olderManifest.authentication.required = true;
   olderManifest.authentication.presentation = "account";
@@ -751,7 +752,7 @@ Deno.test("Service authentication selects the newest exact active executor", () 
   );
 });
 
-Deno.test("Machine Provider UI resolves the exact installed package", () => {
+test("Machine Provider UI resolves the exact installed package", () => {
   const firstManifest = uiManifest();
   const first: ProviderCatalogEntry = {
     provider_id: firstManifest.id,
@@ -914,7 +915,7 @@ Deno.test("Machine Provider UI resolves the exact installed package", () => {
   assertEquals(orphaned[0]?.latestEntry, undefined);
 });
 
-Deno.test("Machine Provider capabilities select the newest compatible release", () => {
+test("Machine Provider capabilities select the newest compatible release", () => {
   const legacyManifest = uiManifest();
   legacyManifest.host.schema_version = 1;
   const legacy: ProviderCatalogEntry = {
@@ -1043,7 +1044,7 @@ Deno.test("Machine Provider capabilities select the newest compatible release", 
   );
 });
 
-Deno.test("Machine Provider capability inventories reject unknown fields", () => {
+test("Machine Provider capability inventories reject unknown fields", () => {
   assertThrows(
     () =>
       validateProviderContractInventory({
@@ -1064,7 +1065,7 @@ Deno.test("Machine Provider capability inventories reject unknown fields", () =>
   );
 });
 
-Deno.test("generic Plugin capabilities reject a newer outer release before install", () => {
+test("generic Plugin capabilities reject a newer outer release before install", () => {
   const provider = uiManifest();
   const entry: ProviderCatalogEntry = {
     provider_id: provider.id,
@@ -1122,7 +1123,7 @@ Deno.test("generic Plugin capabilities reject a newer outer release before insta
   );
 });
 
-Deno.test("Provider SDK rejects unknown behavior profiles and unsafe retry rules", () => {
+test("Provider SDK rejects unknown behavior profiles and unsafe retry rules", () => {
   const unknown = manifest() as unknown as Record<string, unknown>;
   const runtime = unknown.runtime as Record<string, unknown>;
   const behavior = runtime.behavior as Record<string, unknown>;
@@ -1146,7 +1147,7 @@ Deno.test("Provider SDK rejects unknown behavior profiles and unsafe retry rules
   );
 });
 
-Deno.test("Provider SDK rejects runtime bindings that do not export their launch command", () => {
+test("Provider SDK rejects runtime bindings that do not export their launch command", () => {
   const fixture = manifest();
   fixture.runtime.platforms[0]!.private_components[0]!.command =
     "different-command";
@@ -1157,7 +1158,7 @@ Deno.test("Provider SDK rejects runtime bindings that do not export their launch
   );
 });
 
-Deno.test("Provider SDK keeps effects inside their typed lifecycle surfaces", () => {
+test("Provider SDK keeps effects inside their typed lifecycle surfaces", () => {
   const fixture = manifest();
   fixture.ui.surfaces.settings = {
     component: "button",
@@ -1172,7 +1173,7 @@ Deno.test("Provider SDK keeps effects inside their typed lifecycle surfaces", ()
   );
 });
 
-Deno.test("Provider SDK enforces semantic release identity and precedence", () => {
+test("Provider SDK enforces semantic release identity and precedence", () => {
   assertEquals(compareProviderVersions("1.0.0-rc.10", "1.0.0-rc.2"), 1);
   assertEquals(compareProviderVersions("1.0.0", "1.0.0-rc.10"), 1);
   const fixture = manifest();
@@ -1191,7 +1192,7 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
   );
 });
 
-Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
+test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
   const [major, minor, patch] = PROVIDER_SDK_VERSION.split(".").map(Number);
   newer.sdk_version = `${major}.${minor}.${patch! + 1}`;
@@ -1210,7 +1211,7 @@ Deno.test("Provider SDK rejects incompatible authoring SDK versions before rende
   );
 });
 
-Deno.test("Provider SDK links session sidecars, components, and auth projections", () => {
+test("Provider SDK links session sidecars, components, and auth projections", () => {
   const fixture = manifest();
   fixture.runtime.behavior.configuration = "openai_gateway_v1";
   fixture.runtime.required_capabilities.push("provider.gateway.v1");
@@ -1250,7 +1251,7 @@ Deno.test("Provider SDK links session sidecars, components, and auth projections
   );
 });
 
-Deno.test("Machine Provider inventory uses the exact Rust protocol state union", () => {
+test("Machine Provider inventory uses the exact Rust protocol state union", () => {
   const inventory = [{
     provider_id: "gemini",
     provider_version: "1.0.0",
@@ -1272,7 +1273,7 @@ Deno.test("Machine Provider inventory uses the exact Rust protocol state union",
   );
 });
 
-Deno.test("Catalog refresh publishes new recommendations without racing foreground requests", async () => {
+test("Catalog refresh publishes new recommendations without racing foreground requests", async () => {
   const previousFetch = globalThis.fetch;
   const olderManifest = uiManifest();
   const latestManifest = structuredClone(olderManifest);
@@ -1351,7 +1352,7 @@ Deno.test("Catalog refresh publishes new recommendations without racing foregrou
   }
 });
 
-Deno.test("a retained older-SDK generation still renders but never installs", () => {
+test("a retained older-SDK generation still renders but never installs", () => {
   // macbook-air ran claude-code 1.1.2, authored against Provider SDK 2.4.0.
   // Refusing to draw it turned the whole application into an error screen.
   const retained = uiManifest() as unknown as Record<string, unknown>;

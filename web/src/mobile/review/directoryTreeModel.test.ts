@@ -1,9 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertNotEquals,
   assertStringIncludes,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   belongsToDirectorySubtree,
   directoryListingContains,
@@ -12,7 +14,7 @@ import {
   directoryTreeCacheScope,
 } from "./directoryTreeModel.ts";
 
-Deno.test("directory cache follows a session workspace retarget", () => {
+test("directory cache follows a session workspace retarget", () => {
   const sourceScope = directoryTreeCacheScope(
     "sess-1",
     "/Users/example/project",
@@ -33,7 +35,7 @@ Deno.test("directory cache follows a session workspace retarget", () => {
   );
 });
 
-Deno.test("failed directory reconciliation targets its direct parent", () => {
+test("failed directory reconciliation targets its direct parent", () => {
   assertEquals(directoryParentPath("cmd"), "");
   assertEquals(
     directoryParentPath("service/workflow/nodes"),
@@ -70,19 +72,19 @@ Deno.test("failed directory reconciliation targets its direct parent", () => {
   );
 });
 
-Deno.test("stale directory cleanup is limited to the failed subtree", () => {
+test("stale directory cleanup is limited to the failed subtree", () => {
   assert(belongsToDirectorySubtree("cmd", "cmd"));
   assert(belongsToDirectorySubtree("cmd/server/main.go", "cmd"));
   assertEquals(belongsToDirectorySubtree("command", "cmd"), false);
   assertEquals(belongsToDirectorySubtree("service/cmd", "cmd"), false);
 });
 
-Deno.test("review tree wires workspace identity and stale-folder recovery", async () => {
-  const treeSource = await Deno.readTextFile(
-    new URL("./ReviewFileTree.tsx", import.meta.url),
+test("review tree wires workspace identity and stale-folder recovery", async () => {
+  const treeSource = await readFile(
+    new URL("./ReviewFileTree.tsx", import.meta.url), "utf8",
   );
-  const appSource = await Deno.readTextFile(
-    new URL("./ReviewApp.tsx", import.meta.url),
+  const appSource = await readFile(
+    new URL("./ReviewApp.tsx", import.meta.url), "utf8",
   );
 
   assertStringIncludes(

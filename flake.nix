@@ -27,11 +27,15 @@
         cargo = rustToolchain;
         rustc = rustToolchain;
       };
+      bun = import ./nix/bun.nix { inherit pkgs; };
+      # Development shell only: component and Plugin sources whose digests
+      # are pinned by a published release still run on Deno until that
+      # release is cut. No package or runtime closure refers to it.
       deno = import ./nix/deno.nix { inherit pkgs; };
       cowboy-nodejs = import ./nix/nodejs.nix { inherit pkgs; };
       execution-runtime = import ./nix/execution-runtime.nix { inherit pkgs; };
-      buildDenoViteApp = import ./nix/deno-vite-app.nix {
-        inherit pkgs deno;
+      buildBunViteApp = import ./nix/bun-vite-app.nix {
+        inherit pkgs bun;
         lib = pkgs.lib;
       };
 
@@ -255,7 +259,7 @@
         mkdir -p components
         ln -s ${./components/registry.json} components/registry.json
         ln -s ${./components/worker-registry-input.json} components/worker-registry-input.json
-        ${deno}/bin/deno run --allow-read ${./tools/worker-registry-input.ts}
+        ${bun}/bin/bun ${./tools/worker-registry-input.ts}
         touch "$out"
       '';
       worker-generation = "worker-" + builtins.substring 0 20 (
@@ -268,18 +272,18 @@
       );
 
       # The SPA uses Cowboy's local two-layer builder: a deps-only FOD
-      # (vendored npm cache, keyed by the lockfiles → depsHash below) + a normal
-      # content-addressed offline build. Any source edit rebuilds automatically;
-      # only refresh depsHash when web/deno.lock or web/package.json change
-      # (lib.fakeHash → build → copy "got"). Local component packages are
-      # copied only to resolve their file: manifests; their source stays in the
-      # ordinary content-addressed build rather than the dependency cache.
-      cowboy-web = buildDenoViteApp {
+      # (installed node_modules, keyed by the lockfiles → depsHash below) + a
+      # normal content-addressed offline build. Any source edit rebuilds
+      # automatically; only refresh depsHash when web/bun.lock or a manifest
+      # changes (lib.fakeHash → build → copy "got"). Local component packages
+      # contribute only their workspace manifests; their source stays in the
+      # ordinary content-addressed build rather than the dependency tree.
+      cowboy-web = buildBunViteApp {
         pname = "cowboy";
         version = "0.1.0";
-        nodejs = cowboy-nodejs;
         src = pkgs.lib.cleanSource ./.;
-        localPackages = [
+        workspaces = [
+          "web"
           "components/app-shell"
           "components/provider-authoring"
           "components/provider-ui"
@@ -287,7 +291,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-CfVJESKmXrQECBmPrP3wK8NM3tqfFw6Z5C+GtwQof1A=";
+        depsHash = "sha256-y+Zo8zLEQrYVIAOSOSN5v8JX2/KfRv+ZaibCTRjBBCU=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
@@ -380,14 +384,14 @@
           test -e ${worker-registry-check}
         '';
         buildInputs = [ pkgs.openssl ];
-        nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh deno ];
+        nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh bun ];
         preCheck = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
         '';
         # current_exe resolves the release symlink to this package, so the
         # closed Plugin runtime must be beside the real executable too.
         postInstall = ''
-          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
+          ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
         '';
         passthru.workerGeneration = worker-generation;
         meta = {
@@ -417,13 +421,13 @@
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
         postInstall = ''
-          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
+          ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
           # User services have a closed PATH. Supply the connection tool while
           # retaining the OS user's existing gh login and configuration.
           wrapProgram $out/bin/cowboy \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh bun ]}
           wrapProgram $out/bin/cowboy-machine \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh bun ]}
         '';
         doCheck = false;
         meta = {
@@ -572,7 +576,7 @@
         pkgs.runCommand "cowboy-controller-release" { } ''
           mkdir -p "$out/bin" "$out/etc/cowboy-release"
           ln -s ${cowboy}/bin/cowboy "$out/bin/cowboy"
-          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
+          ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
           cat >"$out/etc/cowboy-release/source.json" <<'EOF'
           ${builtins.toJSON (release-source "controller" false)}
           EOF
@@ -645,7 +649,7 @@
           "$out/bin/cowboy-execution-host"
         cp ${cowboy-machine}/bin/.cowboy-wrapped "$out/bin/.cowboy-wrapped"
         makeWrapper "$out/bin/.cowboy-wrapped" "$out/bin/cowboy" \
-          --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
+          --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh bun ]}
         ${if retain-workers then ''
           for command in cowboy-plugin-js cowboy-acp-worker cowboy-codex-app-server cowboy-code-adapter cowboy-zed-adapter cowboy-zed-server; do
             ln -s ${retained-worker-bundle}/bin/"$command" "$out/bin/$command"
@@ -653,7 +657,7 @@
           cp ${retained-worker-bundle}/etc/cowboy-release/source.json \
             "$out/etc/cowboy-release/retained-worker-source.json"
         '' else ''
-          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
+          ln -s ${bun}/bin/bun "$out/bin/cowboy-plugin-js"
           ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
           ln -s ${cowboy}/bin/cowboy-codex-app-server \
             "$out/bin/cowboy-codex-app-server"
@@ -905,7 +909,7 @@
           androidRust
           tauriCli
           pkgs.jdk21
-          deno
+          bun
           pkgs.python3
           pkgs.git
           pkgs.gnutar
@@ -923,9 +927,9 @@
         # scripts; rustc keeps the profile selected by Cargo.
         CFLAGS = "-O1";
         # Rust toolchain plus opt-in sccache, and the frontend toolchain
-        # (Cowboy's pinned Deno + node 24 for any node-shaped tool that
-        # deno's npm interop can't shim).
-        COWBOY_DENO_VERSION = deno.version;
+        # (Cowboy's pinned Bun; node 24 remains for the Agent Plugin launchers,
+        # which run on Node in production and are tested on it).
+        COWBOY_BUN_VERSION = bun.version;
         COWBOY_NODE_VERSION = cowboy-nodejs.version;
         # Match the Rust packages' OpenSSL inputs even when the caller has no
         # inherited developer environment (for example a remote executor).
@@ -960,12 +964,12 @@
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)
-        ] ++ [ deno cowboy-nodejs ];
+        ] ++ [ bun deno pkgs.dprint cowboy-nodejs ];
 
         shellHook = ''
-          echo "cowboy dev shell — rust + optional sccache + deno"
+          echo "cowboy dev shell — rust + optional sccache + bun"
           sccache --version >/dev/null 2>&1 && echo "sccache: $(sccache --version)"
-          deno --version 2>/dev/null | head -1
+          echo "bun $(bun --version 2>/dev/null)"
         '';
       };
       };

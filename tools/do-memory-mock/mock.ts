@@ -43,5 +43,5 @@ const report = {
 console.log(JSON.stringify(report, null, 2));
 
 if (!report.fitsTarget || !report.droppedRawOutput || !report.sharedFrame) {
-  Deno.exit(1);
+  process.exit(1);
 }

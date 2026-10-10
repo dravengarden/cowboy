@@ -1,14 +1,17 @@
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { join, resolve } from "node:path";
 import {
   repairBorrowedWorktreeState,
   verifyWorktreeDependencyView,
 } from "./check-worktree-dependencies.ts";
 
-Deno.test("rejects a node_modules directory borrowed from another checkout", async () => {
+test("rejects a node_modules directory borrowed from another checkout", async () => {
   await withFixture(async ({ root, otherRoot }) => {
     const otherModules = resolve(otherRoot, "web", "node_modules");
-    await Deno.mkdir(otherModules, { recursive: true });
-    await Deno.symlink(otherModules, resolve(root, "web", "node_modules"));
+    await mkdir(otherModules, { recursive: true });
+    await symlink(otherModules, resolve(root, "web", "node_modules"));
 
     await assertRejects(
       () => verifyWorktreeDependencyView(root),
@@ -17,28 +20,28 @@ Deno.test("rejects a node_modules directory borrowed from another checkout", asy
   });
 });
 
-Deno.test("repairs only the borrowed node_modules link", async () => {
+test("repairs only the borrowed node_modules link", async () => {
   await withFixture(async ({ root, otherRoot }) => {
     const otherModules = resolve(otherRoot, "web", "node_modules");
     const sentinel = resolve(otherModules, "keep-me");
-    await Deno.mkdir(otherModules, { recursive: true });
-    await Deno.writeTextFile(sentinel, "stable checkout dependency");
-    await Deno.symlink(otherModules, resolve(root, "web", "node_modules"));
+    await mkdir(otherModules, { recursive: true });
+    await writeFile(sentinel, "stable checkout dependency");
+    await symlink(otherModules, resolve(root, "web", "node_modules"));
 
     assert(await repairBorrowedWorktreeState(root), "expected a repair");
     assert(
-      (await Deno.lstat(sentinel)).isFile,
+      (await lstat(sentinel)).isFile(),
       "repair removed the borrowed checkout's dependency",
     );
     await verifyWorktreeDependencyView(root);
   });
 });
 
-Deno.test("rejects and repairs the obsolete external source seam", async () => {
+test("rejects and repairs the obsolete external source seam", async () => {
   await withFixture(async ({ root, otherRoot }) => {
     const source = resolve(root, "web", "src");
-    await Deno.mkdir(source, { recursive: true });
-    await Deno.symlink(
+    await mkdir(source, { recursive: true });
+    await symlink(
       resolve(otherRoot, "components"),
       resolve(source, "_shell"),
     );
@@ -52,7 +55,7 @@ Deno.test("rejects and repairs the obsolete external source seam", async () => {
   });
 });
 
-Deno.test("rejects a local package link into another checkout", async () => {
+test("rejects a local package link into another checkout", async () => {
   await withFixture(async ({ root, otherRoot }) => {
     const borrowed = resolve(otherRoot, "components", "app-shell");
     await linkInstalledComponent(
@@ -60,7 +63,7 @@ Deno.test("rejects a local package link into another checkout", async () => {
       borrowed,
     );
     const sentinel = resolve(borrowed, "keep-me");
-    await Deno.writeTextFile(sentinel, "other checkout source");
+    await writeFile(sentinel, "other checkout source");
 
     await assertRejects(
       () => verifyWorktreeDependencyView(root, { requireInstalled: true }),
@@ -68,7 +71,7 @@ Deno.test("rejects a local package link into another checkout", async () => {
     );
     assert(await repairBorrowedWorktreeState(root), "expected a repair");
     assert(
-      (await Deno.lstat(sentinel)).isFile,
+      (await lstat(sentinel)).isFile(),
       "repair removed the other checkout's package source",
     );
     await linkInstalledComponent(
@@ -79,7 +82,7 @@ Deno.test("rejects a local package link into another checkout", async () => {
   });
 });
 
-Deno.test("accepts checkout-local node_modules and file package links", async () => {
+test("accepts checkout-local node_modules and workspace package links", async () => {
   await withFixture(async ({ root }) => {
     await linkInstalledComponent(
       root,
@@ -92,25 +95,34 @@ Deno.test("accepts checkout-local node_modules and file package links", async ()
 async function withFixture(
   run: (fixture: { root: string; otherRoot: string }) => Promise<void>,
 ): Promise<void> {
-  const base = await Deno.makeTempDir({ prefix: "cowboy-dependency-view-" });
+  const base = await mkdtemp(join(tmpdir(), "cowboy-dependency-view-"));
   const root = resolve(base, "current");
   const otherRoot = resolve(base, "other");
   try {
     for (const checkout of [root, otherRoot]) {
-      await Deno.mkdir(resolve(checkout, "web"), { recursive: true });
-      await Deno.mkdir(resolve(checkout, "components", "app-shell"), {
+      await mkdir(resolve(checkout, "web"), { recursive: true });
+      await mkdir(resolve(checkout, "components", "app-shell"), {
         recursive: true,
       });
     }
-    await Deno.writeTextFile(
+    await writeFile(
+      resolve(root, "package.json"),
+      JSON.stringify({ workspaces: ["web", "components/app-shell"] }),
+    );
+    await writeFile(
+      resolve(root, "components", "app-shell", "package.json"),
+      JSON.stringify({ name: "@cowboy/app-shell" }),
+    );
+    await writeFile(
       resolve(root, "web", "package.json"),
       JSON.stringify({
-        dependencies: { "@cowboy/app-shell": "file:../components/app-shell" },
+        name: "cowboy-web",
+        dependencies: { "@cowboy/app-shell": "workspace:*" },
       }),
     );
     await run({ root, otherRoot });
   } finally {
-    await Deno.remove(base, { recursive: true });
+    await rm(base, { recursive: true });
   }
 }
 
@@ -119,8 +131,8 @@ async function linkInstalledComponent(
   component: string,
 ): Promise<void> {
   const scope = resolve(root, "web", "node_modules", "@cowboy");
-  await Deno.mkdir(scope, { recursive: true });
-  await Deno.symlink(component, resolve(scope, "app-shell"));
+  await mkdir(scope, { recursive: true });
+  await symlink(component, resolve(scope, "app-shell"));
 }
 
 async function assertRejects(

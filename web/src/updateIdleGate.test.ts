@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { EDITOR_ENGAGEMENT_MS, editorHoldsUpdate } from "./updateIdleGate.ts";
 
 const typing = {
@@ -8,12 +10,12 @@ const typing = {
   sinceInputMs: 2_000,
 };
 
-Deno.test("an editor being typed in holds a client update", () => {
+test("an editor being typed in holds a client update", () => {
   assertEquals(editorHoldsUpdate(typing), true);
   assertEquals(editorHoldsUpdate({ ...typing, focusedEditable: false }), false);
 });
 
-Deno.test("a caret resting in the Desktop composer does not hold an update forever", () => {
+test("a caret resting in the Desktop composer does not hold an update forever", () => {
   assertEquals(
     editorHoldsUpdate({ ...typing, sinceInputMs: EDITOR_ENGAGEMENT_MS }),
     false,
@@ -22,7 +24,7 @@ Deno.test("a caret resting in the Desktop composer does not hold an update forev
   assertEquals(editorHoldsUpdate({ ...typing, windowFocused: false }), false);
 });
 
-Deno.test("an open IME composition holds an update however long it has been idle", () => {
+test("an open IME composition holds an update however long it has been idle", () => {
   assertEquals(
     editorHoldsUpdate({
       ...typing,
@@ -34,8 +36,8 @@ Deno.test("an open IME composition holds an update however long it has been idle
   );
 });
 
-Deno.test("the store's update gate asks the editor engagement policy", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("the store's update gate asks the editor engagement policy", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   const gate = store.slice(store.indexOf("export function canApplyUpdateNow()"));
   assert(gate.slice(0, 1_400).includes("editorHoldsUpdate({"));
 });

@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   getComposerSourceMode,
   setComposerSourceMode,
@@ -17,30 +19,30 @@ import {
 import { chromeShortcutConflict } from "./desktop/commands/chromeShortcutPolicy.ts";
 import { macShortcutConflict } from "./desktop/commands/macShortcutPolicy.ts";
 
-const extensions = await Deno.readTextFile(
-  new URL("./composerExtensions.ts", import.meta.url),
+const extensions = await readFile(
+  new URL("./composerExtensions.ts", import.meta.url), "utf8",
 );
-const editor = await Deno.readTextFile(
-  new URL("./ComposerEditor.tsx", import.meta.url),
+const editor = await readFile(
+  new URL("./ComposerEditor.tsx", import.meta.url), "utf8",
 );
-const commands = await Deno.readTextFile(
-  new URL("./composerCommands.tsx", import.meta.url),
+const commands = await readFile(
+  new URL("./composerCommands.tsx", import.meta.url), "utf8",
 );
-const composerBindings = await Deno.readTextFile(
-  new URL("./desktop/commands/DesktopComposerShortcuts.tsx", import.meta.url),
+const composerBindings = await readFile(
+  new URL("./desktop/commands/DesktopComposerShortcuts.tsx", import.meta.url), "utf8",
 );
-const statusLine = await Deno.readTextFile(
-  new URL("./desktop/DesktopStatusLine.tsx", import.meta.url),
+const statusLine = await readFile(
+  new URL("./desktop/DesktopStatusLine.tsx", import.meta.url), "utf8",
 );
-const shortcutsDialog = await Deno.readTextFile(
-  new URL("./desktop/commands/DesktopShortcutsDialog.tsx", import.meta.url),
+const shortcutsDialog = await readFile(
+  new URL("./desktop/commands/DesktopShortcutsDialog.tsx", import.meta.url), "utf8",
 );
-const app = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
-const preview = await Deno.readTextFile(
-  new URL("./MessagePreview.tsx", import.meta.url),
+const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+const preview = await readFile(
+  new URL("./MessagePreview.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("source mode is one persisted preference the whole app toggles", () => {
+test("source mode is one persisted preference the whole app toggles", () => {
   setComposerSourceMode(false);
   assertEquals(getComposerSourceMode(), false);
   assertEquals(toggleComposerSourceMode(), true);
@@ -52,7 +54,7 @@ Deno.test("source mode is one persisted preference the whole app toggles", () =>
 // Source mode drops the DECORATION engine and nothing else: the document, the
 // editing behaviour and cowboy's own token widgets stay identical, so a toggle
 // can never rewrite what the user typed.
-Deno.test("source mode omits the live-preview engine, keeping every other extension", () => {
+test("source mode omits the live-preview engine, keeping every other extension", () => {
   const body = extensions.slice(
     extensions.indexOf("export function livePreviewExtensions"),
   );
@@ -87,7 +89,7 @@ Deno.test("source mode omits the live-preview engine, keeping every other extens
   }
 });
 
-Deno.test("every composer surface reads the same mode, and the preview never does", () => {
+test("every composer surface reads the same mode, and the preview never does", () => {
   assert(editor.includes("const sourceMode = useComposerSourceMode();"));
   assert(editor.includes("...livePreviewExtensions({ sourceMode }),"));
   // In the extension memo's dependency list, so a flip reconfigures CM6.
@@ -101,7 +103,7 @@ Deno.test("every composer surface reads the same mode, and the preview never doe
   assertEquals(preview.includes("sourceMode"), false);
 });
 
-Deno.test("mobile reaches source mode through the curatable toolbar registry", () => {
+test("mobile reaches source mode through the curatable toolbar registry", () => {
   assert(commands.includes('id: "sourceMode"'));
   assert(commands.includes("toggleComposerSourceMode()"));
   assert(DEFAULT_COMPOSER_TOOLBAR.includes("sourceMode"));
@@ -123,7 +125,7 @@ Deno.test("mobile reaches source mode through the curatable toolbar registry", (
 // Obsidian's Mod+E is unavailable to Cowboy, so the toggle uses FOCUS.md's
 // documented fallback: the platform workspace prefix. Keep this test as the
 // executable record of WHY the binding is a sequence.
-Deno.test("source mode uses the workspace prefix because Mod+E is reserved", () => {
+test("source mode uses the workspace prefix because Mod+E is reserved", () => {
   assert(chromeShortcutConflict("composer.toggleSourceMode", "Mod+E", true));
   assert(macShortcutConflict("composer.toggleSourceMode", "Mod+E"));
   assert(chromeShortcutConflict("composer.toggleSourceMode", "Alt+E", false));
@@ -148,7 +150,7 @@ Deno.test("source mode uses the workspace prefix because Mod+E is reserved", () 
   assertEquals(command.includes("regions:"), false);
 });
 
-Deno.test("the mode is discoverable without the palette", () => {
+test("the mode is discoverable without the palette", () => {
   // Status line while the composer owns focus; the armed leader lists it in
   // the which-key panel from its registered sequence.
   assert(statusLine.includes("keys: DESKTOP_SHORTCUTS.toggleSourceMode"));

@@ -1,5 +1,7 @@
 // Core contract, not a separately installable Plugin SDK. Run via the pinned shell.
 // Only this deliberately closed, non-recursive schema profile is supported.
+import { Command } from "./lib/command.ts";
+import { readFile, writeFile } from "node:fs/promises";
 import { strictJson } from "../contracts/strict-json.ts";
 interface Shape {
   $ref?: string;
@@ -20,7 +22,7 @@ interface Shape {
 }
 
 const source = "contracts/composition-v1.schema.json";
-const schema = strictJson(await Deno.readTextFile(source), 1048576, 32) as {
+const schema = strictJson(await readFile(source, "utf8"), 1048576, 32) as {
   $schema: string;
   $id: string;
   title: string;
@@ -365,15 +367,14 @@ async function formatted(
   args: string[],
   value: string,
 ): Promise<string> {
-  const child = new Deno.Command(command, {
+  const child = new Command(command, {
     args,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
   }).spawn();
-  const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(value));
-  await writer.close();
+  child.stdin.write(value);
+  child.stdin.end();
   const result = await child.output();
   if (!result.success) throw new Error(new TextDecoder().decode(result.stderr));
   return new TextDecoder().decode(result.stdout);
@@ -386,17 +387,21 @@ for (
     ],
     [
       "contracts/composition.generated.ts",
-      await formatted(Deno.execPath(), ["fmt", "--ext=ts", "-"], ts),
+      await formatted(
+        "dprint",
+        ["fmt", "--stdin", "contracts/composition.generated.ts"],
+        ts,
+      ),
     ],
   ]
 ) {
-  if (Deno.args.includes("--write")) await Deno.writeTextFile(path, value);
-  else if (await Deno.readTextFile(path) !== value) {
+  if (process.argv.slice(2).includes("--write")) await writeFile(path, value);
+  else if (await readFile(path, "utf8") !== value) {
     throw new Error(`${path}: stale contract generation`);
   }
 }
 console.log(
   `composition contract ${fingerprint}: ${
-    Deno.args.includes("--write") ? "generated" : "checked"
+    process.argv.slice(2).includes("--write") ? "generated" : "checked"
   }`,
 );

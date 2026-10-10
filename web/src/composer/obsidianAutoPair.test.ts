@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -67,7 +68,7 @@ function typeAll(marked: string, keys: string): string {
   return show(state);
 }
 
-Deno.test("typing bold markers never leaves stray asterisks", () => {
+test("typing bold markers never leaves stray asterisks", () => {
   assertEquals(typeAll("|", "*"), "*|*");
   assertEquals(typeAll("|", "**"), "**|");
   assertEquals(typeAll("|", "**bold**"), "**bold**|");
@@ -80,13 +81,13 @@ Deno.test("typing bold markers never leaves stray asterisks", () => {
   assertEquals(typeAll("|", "`code`"), "`code`|");
 });
 
-Deno.test("a closing delimiter from the toolbar is stepped over", () => {
+test("a closing delimiter from the toolbar is stepped over", () => {
   assertEquals(typeAll("**bold|**", "*"), "**bold*|*");
   assertEquals(typeAll("**bold|**", "**"), "**bold**|");
   assertEquals(typeAll("~~x|~~", "~"), "~~x~|~~");
 });
 
-Deno.test("same-character tokens pair only between whitespace", () => {
+test("same-character tokens pair only between whitespace", () => {
   assertEquals(typeAll("中文|", "*"), "中文*|");
   assertEquals(typeAll("（|", "*"), "（*|");
   assertEquals(typeAll("(|)", "*"), "(*|)");
@@ -94,14 +95,14 @@ Deno.test("same-character tokens pair only between whitespace", () => {
   assertEquals(typeAll("say |", '"'), 'say "|"');
 });
 
-Deno.test("brackets pair before whitespace and closers, and step over", () => {
+test("brackets pair before whitespace and closers, and step over", () => {
   assertEquals(typeAll("|", "("), "(|)");
   assertEquals(typeAll("|word", "("), "(|word");
   assertEquals(typeAll("|", "(a)"), "(a)|");
   assertEquals(typeAll("|", "[x]"), "[x]|");
 });
 
-Deno.test("selection wrapping follows Obsidian", () => {
+test("selection wrapping follows Obsidian", () => {
   assertEquals(typeAll("<foo>", "*"), "*<foo>*");
   assertEquals(typeAll("<foo>", "("), "(<foo>)");
   assertEquals(typeAll("<foo>", "="), "=<foo>=");
@@ -112,7 +113,7 @@ Deno.test("selection wrapping follows Obsidian", () => {
   assertEquals(typeAll("a|", "="), "a=|");
 });
 
-Deno.test("three backticks open a fenced block with list indentation", () => {
+test("three backticks open a fenced block with list indentation", () => {
   assertEquals(typeAll("|", "```"), "```|\n```");
   assertEquals(typeAll("- |", "```"), "- ```|\n  ```");
   assertEquals(typeAll("> |", "```"), "> ```|\n> ```");

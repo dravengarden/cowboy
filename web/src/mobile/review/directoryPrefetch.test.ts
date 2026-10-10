@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { directoryPrefetchTargets } from "./directoryPrefetch.ts";
 
-Deno.test("directory prefetch looks ahead one directory layer with a cap", () => {
+test("directory prefetch looks ahead one directory layer with a cap", () => {
   assertEquals(
     directoryPrefetchTargets(
       [

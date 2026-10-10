@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   forcedBundleRecoveryUrl,
   isBundleRecoveryUrl,
@@ -6,11 +8,11 @@ import {
   latestBundleRecoveryUrl,
 } from "./moduleRecovery.ts";
 
-const recoveryGuard = await Deno.readTextFile(
-  new URL("../index.html", import.meta.url),
+const recoveryGuard = await readFile(
+  new URL("../index.html", import.meta.url), "utf8",
 );
 
-Deno.test("recognizes browser module and lazy chunk load failures", () => {
+test("recognizes browser module and lazy chunk load failures", () => {
   for (
     const message of [
       "Importing a module script failed.",
@@ -23,11 +25,11 @@ Deno.test("recognizes browser module and lazy chunk load failures", () => {
   }
 });
 
-Deno.test("does not treat ordinary render failures as stale bundles", () => {
+test("does not treat ordinary render failures as stale bundles", () => {
   assertEquals(isModuleLoadError(new Error("Cannot read properties of undefined")), false);
 });
 
-Deno.test("mobile recovery probes the deployed entry before cache-busting navigation", async () => {
+test("mobile recovery probes the deployed entry before cache-busting navigation", async () => {
   const requests: { url: string; init?: RequestInit }[] = [];
   const recoveryUrl = await latestBundleRecoveryUrl(
     "https://cowboy.example/?session=one",
@@ -61,7 +63,7 @@ Deno.test("mobile recovery probes the deployed entry before cache-busting naviga
   assertEquals(requests.every((request) => request.init?.cache === "no-store"), true);
 });
 
-Deno.test("mobile recovery stays put when the deployed entry is unavailable", async () => {
+test("mobile recovery stays put when the deployed entry is unavailable", async () => {
   const recoveryUrl = await latestBundleRecoveryUrl(
     "https://cowboy.example/",
     "https://cowboy.example",
@@ -79,7 +81,7 @@ Deno.test("mobile recovery stays put when the deployed entry is unavailable", as
   assertEquals(recoveryUrl, undefined);
 });
 
-Deno.test("manual recovery always cache-busts the current top-level URL", () => {
+test("manual recovery always cache-busts the current top-level URL", () => {
   assertEquals(
     forcedBundleRecoveryUrl(
       "https://cowboy.example/?session=one&cowboy-recover=old#drafts",
@@ -89,14 +91,14 @@ Deno.test("manual recovery always cache-busts the current top-level URL", () => 
   );
 });
 
-Deno.test("recovery navigation is visible to the module loader", () => {
+test("recovery navigation is visible to the module loader", () => {
   assertEquals(isBundleRecoveryUrl("https://cowboy.example/?cowboy-recover=9012"), true);
   assertEquals(isBundleRecoveryUrl("https://cowboy.example/?session=one"), false);
 });
 
-Deno.test("mobile error recovery replaces the URL instead of reloading stale WKWebView HTML", async () => {
-  const boundary = await Deno.readTextFile(
-    new URL("./AppErrorBoundary.tsx", import.meta.url),
+test("mobile error recovery replaces the URL instead of reloading stale WKWebView HTML", async () => {
+  const boundary = await readFile(
+    new URL("./AppErrorBoundary.tsx", import.meta.url), "utf8",
   );
   assertEquals(boundary.includes("latestBundleRecoveryUrl("), true);
   assertEquals(boundary.includes("if (force)"), true);
@@ -108,13 +110,13 @@ Deno.test("mobile error recovery replaces the URL instead of reloading stale WKW
   assertEquals(boundary.includes("Retry update"), true);
 });
 
-Deno.test("mobile recovery uses a distinct Vite module identity", async () => {
-  const entry = await Deno.readTextFile(new URL("./main.tsx", import.meta.url));
+test("mobile recovery uses a distinct Vite module identity", async () => {
+  const entry = await readFile(new URL("./main.tsx", import.meta.url), "utf8");
   assertEquals(entry.includes('import("./mobile/MobileApp?bundle-recovery")'), true);
   assertEquals(entry.includes("isBundleRecoveryUrl(globalThis.location.href)"), true);
 });
 
-Deno.test("desktop pre-module recovery remains automatic after its first probe window", () => {
+test("desktop pre-module recovery remains automatic after its first probe window", () => {
   assertEquals(recoveryGuard.includes("scheduleRecovery(state.attempts)"), true);
   assertEquals(recoveryGuard.includes('addEventListener("online", retryActiveRecovery)'), true);
   assertEquals(recoveryGuard.includes('addEventListener("focus", retryActiveRecovery)'), true);
@@ -123,7 +125,7 @@ Deno.test("desktop pre-module recovery remains automatic after its first probe w
   assertEquals(recoveryGuard.includes("state.attempts >= 3"), false);
 });
 
-Deno.test("desktop recovery bounds stalled network probes", () => {
+test("desktop recovery bounds stalled network probes", () => {
   assertEquals(recoveryGuard.includes("controller.abort()"), true);
   assertEquals(recoveryGuard.includes("signal: controller.signal"), true);
   assertEquals(recoveryGuard.includes("Date.now() + 12_000"), true);

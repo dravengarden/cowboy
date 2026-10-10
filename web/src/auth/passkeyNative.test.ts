@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   createPasskeyNatively,
   hasNativePasskeyBridge,
@@ -19,7 +20,7 @@ function clearBridge(): void {
   delete root.__cowboyNativePasskey;
 }
 
-Deno.test("native Passkey capability is explicit and RP scoped", async () => {
+test("native Passkey capability is explicit and RP scoped", async () => {
   clearBridge();
   assertEquals(hasNativePasskeyBridge(), false);
   root.__cowboyNativePasskeyBridgeVersion = 1;
@@ -36,7 +37,7 @@ Deno.test("native Passkey capability is explicit and RP scoped", async () => {
   }
 });
 
-Deno.test("native registration emits standard WebAuthn JSON", async () => {
+test("native registration emits standard WebAuthn JSON", async () => {
   root.__cowboyNativePasskeyBridgeVersion = 1;
   root.__cowboyNativePasskey = async () => ({
     ok: true,
@@ -69,7 +70,7 @@ Deno.test("native registration emits standard WebAuthn JSON", async () => {
   }
 });
 
-Deno.test("only unavailable native capability may fall back", async () => {
+test("only unavailable native capability may fall back", async () => {
   root.__cowboyNativePasskeyBridgeVersion = 1;
   root.__cowboyNativePasskey = async () => ({
     ok: false,

@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { convergeArguments, parseInvocation } from "./converge-machine.ts";
 
-Deno.test("a dry run is the default and --apply is the only way to submit", () => {
+test("a dry run is the default and --apply is the only way to submit", () => {
   assertEquals(
     convergeArguments({ machines: ["hawk"], plugins: [], apply: false }),
     ["operator", "converge", "--machine", "hawk"],
@@ -12,7 +13,7 @@ Deno.test("a dry run is the default and --apply is the only way to submit", () =
   );
 });
 
-Deno.test("the requested Machine order survives into the rollout", () => {
+test("the requested Machine order survives into the rollout", () => {
   // The first Machine is the canary; reordering it would change which host
   // absorbs a bad release first.
   assertEquals(
@@ -37,7 +38,7 @@ Deno.test("the requested Machine order survives into the rollout", () => {
   );
 });
 
-Deno.test("Machines are accepted positionally or by flag", () => {
+test("Machines are accepted positionally or by flag", () => {
   const parsed = parseInvocation(["hawk", "--machine", "falcon", "--apply"]);
   assertEquals("error" in parsed, false);
   if ("error" in parsed) return;
@@ -46,7 +47,7 @@ Deno.test("Machines are accepted positionally or by flag", () => {
   assertEquals(parsed.cowboy, "cowboy");
 });
 
-Deno.test("no Machine at all converges every connected Machine", () => {
+test("no Machine at all converges every connected Machine", () => {
   const parsed = parseInvocation([]);
   assertEquals("error" in parsed, false);
   if ("error" in parsed) return;
@@ -54,7 +55,7 @@ Deno.test("no Machine at all converges every connected Machine", () => {
   assertEquals(convergeArguments(parsed.invocation), ["operator", "converge"]);
 });
 
-Deno.test("a typo is refused rather than widened into a bigger run", () => {
+test("a typo is refused rather than widened into a bigger run", () => {
   assertEquals(parseInvocation(["--aply"]), { error: "unknown option --aply" });
   assertEquals(parseInvocation(["--plugin"]), {
     error: "--plugin needs a value",
@@ -64,7 +65,7 @@ Deno.test("a typo is refused rather than widened into a bigger run", () => {
   });
 });
 
-Deno.test("a custom cowboy path is used to run, not passed to it", () => {
+test("a custom cowboy path is used to run, not passed to it", () => {
   const parsed = parseInvocation([
     "hawk",
     "--cowboy",

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   bundleEntryChanged,
   checkForDeployedUpdate,
@@ -20,7 +21,7 @@ function deferred(): {
   return { promise, resolve, reject };
 }
 
-Deno.test("service worker update checks coalesce resume event bursts", async () => {
+test("service worker update checks coalesce resume event bursts", async () => {
   let calls = 0;
   let now = 10_000;
   const pending = deferred();
@@ -44,7 +45,7 @@ Deno.test("service worker update checks coalesce resume event bursts", async () 
   assertEquals(calls, 2);
 });
 
-Deno.test("failed update checks retry immediately after network recovery", async () => {
+test("failed update checks retry immediately after network recovery", async () => {
   let calls = 0;
   const failed = deferred();
   const check = createServiceWorkerUpdateCheck(() => {
@@ -60,7 +61,7 @@ Deno.test("failed update checks retry immediately after network recovery", async
   assertEquals(calls, 2);
 });
 
-Deno.test("module entry extraction tolerates generated attribute order", () => {
+test("module entry extraction tolerates generated attribute order", () => {
   assertEquals(
     moduleEntryFromHtml(
       `<script crossorigin src="/assets/index-new.js" type="module"></script>`,
@@ -75,7 +76,7 @@ Deno.test("module entry extraction tolerates generated attribute order", () => {
   );
 });
 
-Deno.test("bundle entry probe detects a stale resumed page", async () => {
+test("bundle entry probe detects a stale resumed page", async () => {
   assertEquals(
     await bundleEntryChanged(
       "/assets/index-old.js",
@@ -102,7 +103,7 @@ Deno.test("bundle entry probe detects a stale resumed page", async () => {
   );
 });
 
-Deno.test("bundle probe reports an update while service worker update remains pending", async () => {
+test("bundle probe reports an update while service worker update remains pending", async () => {
   const pendingWorkerUpdate = deferred();
   let reported = 0;
   await checkForDeployedUpdate(

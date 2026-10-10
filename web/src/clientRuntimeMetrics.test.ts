@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { localStorageMetrics } from "./clientRuntimeMetrics.ts";
 
 function storage(entries: readonly (readonly [string, string])[]): Storage {
@@ -16,7 +18,7 @@ function storage(entries: readonly (readonly [string, string])[]): Storage {
   } as Storage;
 }
 
-Deno.test("client local storage reports bytes, entries, and composer drafts", () => {
+test("client local storage reports bytes, entries, and composer drafts", () => {
   assertEquals(
     localStorageMetrics(storage([
       ["theme", "dark"],
@@ -32,7 +34,7 @@ Deno.test("client local storage reports bytes, entries, and composer drafts", ()
   );
 });
 
-Deno.test("client local storage degrades to an empty readable snapshot", () => {
+test("client local storage degrades to an empty readable snapshot", () => {
   assertEquals(localStorageMetrics(undefined), {
     bytes: 0,
     entries: 0,
@@ -40,9 +42,9 @@ Deno.test("client local storage degrades to an empty readable snapshot", () => {
   });
 });
 
-Deno.test("About storage distinguishes service and current-device metrics", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./InfoSheet.tsx", import.meta.url),
+test("About storage distinguishes service and current-device metrics", async () => {
+  const source = await readFile(
+    new URL("./InfoSheet.tsx", import.meta.url), "utf8",
   );
   assert(source.includes('data-storage-scope="service"'));
   assert(source.includes('data-storage-scope="client"'));

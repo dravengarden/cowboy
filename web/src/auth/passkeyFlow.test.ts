@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { AuthApiError } from "./authApi.ts";
 import {
   externalPasskeyEventsUrl,
@@ -25,7 +26,7 @@ class SilentWebSocket extends EventTarget {
   send(): void {}
 }
 
-Deno.test("external Passkey URL carries only the opaque transaction in a fragment", () => {
+test("external Passkey URL carries only the opaque transaction in a fragment", () => {
   const transactionId = "a".repeat(64);
   const url = new URL(
     externalPasskeyUrl("https://cowboy.example", transactionId),
@@ -48,7 +49,7 @@ Deno.test("external Passkey URL carries only the opaque transaction in a fragmen
   assertEquals(nativeUrl.search, "");
 });
 
-Deno.test("external Passkey events use a same-origin WebSocket without secrets", () => {
+test("external Passkey events use a same-origin WebSocket without secrets", () => {
   const url = new URL(externalPasskeyEventsUrl("https://cowboy.example/app"));
   assertEquals(url.protocol, "wss:");
   assertEquals(url.host, "cowboy.example");
@@ -57,7 +58,7 @@ Deno.test("external Passkey events use a same-origin WebSocket without secrets",
   assertEquals(url.hash, "");
 });
 
-Deno.test("external Passkey event wait has a hard deadline when iOS suspends the socket", async () => {
+test("external Passkey event wait has a hard deadline when iOS suspends the socket", async () => {
   const socket = new SilentWebSocket();
   await assertRejects(
     () =>
@@ -77,7 +78,7 @@ Deno.test("external Passkey event wait has a hard deadline when iOS suspends the
   assertEquals(socket.closeCalls, 1);
 });
 
-Deno.test("native foreground resume wakes a suspended Passkey event wait", async () => {
+test("native foreground resume wakes a suspended Passkey event wait", async () => {
   const socket = new SilentWebSocket();
   const waiting = waitForExternalPasskeyEvent(
     "a".repeat(64),
@@ -94,7 +95,7 @@ Deno.test("native foreground resume wakes a suspended Passkey event wait", async
   assertEquals(socket.closeCalls, 1);
 });
 
-Deno.test("returning focus from an in-app Safari sheet wakes Passkey reconciliation", async () => {
+test("returning focus from an in-app Safari sheet wakes Passkey reconciliation", async () => {
   const socket = new SilentWebSocket();
   const waiting = waitForExternalPasskeyEvent(
     "a".repeat(64),
@@ -111,7 +112,7 @@ Deno.test("returning focus from an in-app Safari sheet wakes Passkey reconciliat
   assertEquals(socket.closeCalls, 1);
 });
 
-Deno.test("Passkey failures preserve server errors and explain browser cancellation", () => {
+test("Passkey failures preserve server errors and explain browser cancellation", () => {
   assertEquals(
     passkeyErrorMessage(
       new AuthApiError("Passkey setup expired", 400),
@@ -166,7 +167,7 @@ Deno.test("Passkey failures preserve server errors and explain browser cancellat
   );
 });
 
-Deno.test("Passkey cancellation is a normal user outcome", () => {
+test("Passkey cancellation is a normal user outcome", () => {
   assertEquals(
     passkeyFlowCancelled(new DOMException("cancelled", "NotAllowedError")),
     true,
@@ -207,7 +208,7 @@ Deno.test("Passkey cancellation is a normal user outcome", () => {
   );
 });
 
-Deno.test("closing the native browser finalizes a completed Passkey after foreground resume", async () => {
+test("closing the native browser finalizes a completed Passkey after foreground resume", async () => {
   let finalizeCalls = 0;
   const result = await reconcileExternalPasskeyAfterBrowserClose(
     "a".repeat(64),
@@ -234,7 +235,7 @@ Deno.test("closing the native browser finalizes a completed Passkey after foregr
   assertEquals(finalizeCalls, 2);
 });
 
-Deno.test("foreground resume probes completion without cancelling an active Passkey", async () => {
+test("foreground resume probes completion without cancelling an active Passkey", async () => {
   let finalizeCalls = 0;
   const result = await reconcileExternalPasskeyAfterResume(
     "a".repeat(64),
@@ -252,7 +253,7 @@ Deno.test("foreground resume probes completion without cancelling an active Pass
   assertEquals(finalizeCalls, 10);
 });
 
-Deno.test("closing an unfinished native Passkey request never races its server completion", async () => {
+test("closing an unfinished native Passkey request never races its server completion", async () => {
   let finalizeCalls = 0;
   await assertRejects(
     () =>
@@ -279,7 +280,7 @@ Deno.test("closing an unfinished native Passkey request never races its server c
 // being fetched, and a provider holding no credential for the site returns the
 // same exception a dismissal does. Elapsed time is the one signal that is ours
 // to read — a prompt no human could have answered did not get answered.
-Deno.test("a prompt that closed instantly is not reported as a decision", () => {
+test("a prompt that closed instantly is not reported as a decision", () => {
   const now = 10_000;
   assert(passkeyPromptWasUntouched(now - 50, now));
   assert(passkeyPromptWasUntouched(now - (PASSKEY_UNTOUCHED_MS - 1), now));

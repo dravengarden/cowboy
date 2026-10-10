@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   htmlHasMarkdownStructure,
   type HtmlNodeLike,
@@ -27,7 +28,7 @@ function txt(value: string): HtmlNodeLike {
 }
 const body = (...kids: Child[]) => el("body", {}, ...kids);
 
-Deno.test("headings, emphasis, links and paragraphs", () => {
+test("headings, emphasis, links and paragraphs", () => {
   assertEquals(
     htmlNodeToMarkdown(body(
       el("h2", {}, "Title"),
@@ -48,7 +49,7 @@ Deno.test("headings, emphasis, links and paragraphs", () => {
   );
 });
 
-Deno.test("nested lists, tasks and quotes", () => {
+test("nested lists, tasks and quotes", () => {
   assertEquals(
     htmlNodeToMarkdown(body(
       el(
@@ -68,7 +69,7 @@ Deno.test("nested lists, tasks and quotes", () => {
   );
 });
 
-Deno.test("code blocks, tables, images and unsafe URLs", () => {
+test("code blocks, tables, images and unsafe URLs", () => {
   assertEquals(
     htmlNodeToMarkdown(body(
       el("pre", {}, el("code", { class: "language-ts" }, "const a = 1;\n")),
@@ -91,7 +92,7 @@ Deno.test("code blocks, tables, images and unsafe URLs", () => {
   );
 });
 
-Deno.test("only semantic HTML is converted", () => {
+test("only semantic HTML is converted", () => {
   assertEquals(
     htmlHasMarkdownStructure('<div><span style="color:red">x</span></div>'),
     false,

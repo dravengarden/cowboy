@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
 const authDir = new URL(".", import.meta.url);
 const webSrc = new URL("../", import.meta.url);
@@ -34,12 +36,12 @@ async function readAuthSources(): Promise<string> {
     "useIdlePasskeyLock.ts",
   ];
   const chunks = await Promise.all(
-    names.map((name) => Deno.readTextFile(new URL(name, authDir))),
+    names.map((name) => readFile(new URL(name, authDir), "utf8")),
   );
   return chunks.join("\n");
 }
 
-Deno.test("auth package never imports store.ts or opens the product WebSocket", async () => {
+test("auth package never imports store.ts or opens the product WebSocket", async () => {
   const source = await readAuthSources();
   assertEquals(source.includes('from "../store"'), false);
   assertEquals(source.includes('from "../store.ts"'), false);
@@ -54,9 +56,9 @@ Deno.test("auth package never imports store.ts or opens the product WebSocket", 
   assertEquals(source.includes('"/ws"'), false);
 });
 
-Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async () => {
-  const main = await Deno.readTextFile(new URL("main.tsx", webSrc));
-  const app = await Deno.readTextFile(new URL("App.tsx", webSrc));
+test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async () => {
+  const main = await readFile(new URL("main.tsx", webSrc), "utf8");
+  const app = await readFile(new URL("App.tsx", webSrc), "utf8");
   assert(main.includes("ProductAuthGate"));
   assert(main.includes("<ProductAuthGate>"));
   assert(main.includes("DeviceAuthorizationRoute"));
@@ -68,15 +70,15 @@ Deno.test("ProductAuthGate wraps DesktopApp and MobileApp in main.tsx", async ()
   assertEquals(app.includes("/api/auth/status"), false);
 });
 
-Deno.test("system Safari Passkey page is isolated from the cached app shell", async () => {
-  const page = await Deno.readTextFile(
-    new URL("../../passkey.html", import.meta.url),
+test("system Safari Passkey page is isolated from the cached app shell", async () => {
+  const page = await readFile(
+    new URL("../../passkey.html", import.meta.url), "utf8",
   );
-  const externalPage = await Deno.readTextFile(
-    new URL("passkeyExternalPage.ts", authDir),
+  const externalPage = await readFile(
+    new URL("passkeyExternalPage.ts", authDir), "utf8",
   );
-  const worker = await Deno.readTextFile(
-    new URL("../../public/sw.js", import.meta.url),
+  const worker = await readFile(
+    new URL("../../public/sw.js", import.meta.url), "utf8",
   );
   assert(page.includes('name="referrer" content="no-referrer"'));
   assert(page.includes("default-src 'none'"));
@@ -112,29 +114,29 @@ Deno.test("system Safari Passkey page is isolated from the cached app shell", as
   assert(worker.includes("event.respondWith(fetch(request))"));
 });
 
-Deno.test("official Apple shells isolate their WebAuthn association", async () => {
+test("official Apple shells isolate their WebAuthn association", async () => {
   const association = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       new URL(
         "../../public/.well-known/apple-app-site-association",
         import.meta.url,
-      ),
+      ), "utf8",
     ),
   ) as { webcredentials?: { apps?: unknown } };
   const defaultMacConfig = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       new URL(
         "../../../apps/native-shell/tauri/tauri.macos.conf.json",
         import.meta.url,
-      ),
+      ), "utf8",
     ),
   ) as { bundle?: { macOS?: Record<string, unknown> } };
   const passkeyMacConfig = JSON.parse(
-    await Deno.readTextFile(
+    await readFile(
       new URL(
         "../../../apps/native-shell/tauri/tauri.macos.passkeys.conf.json",
         import.meta.url,
-      ),
+      ), "utf8",
     ),
   ) as { bundle?: { macOS?: Record<string, unknown> } };
 
@@ -150,11 +152,11 @@ Deno.test("official Apple shells isolate their WebAuthn association", async () =
   assertEquals(passkeyMacConfig.bundle?.macOS?.signingIdentity, undefined);
 });
 
-Deno.test("login page is product chrome and hides register unless accepted", async () => {
-  const login = await Deno.readTextFile(
-    new URL("ProductLoginPage.tsx", authDir),
+test("login page is product chrome and hides register unless accepted", async () => {
+  const login = await readFile(
+    new URL("ProductLoginPage.tsx", authDir), "utf8",
   );
-  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+  const gate = await readFile(new URL("ProductAuthGate.tsx", authDir), "utf8");
   assert(login.includes("cowboy"));
   assertEquals(login.includes("Cowboy Admin"), false);
   assertEquals(login.includes("<Paper"), false);
@@ -199,8 +201,8 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(gate.includes("passkeyFlowCancelled(reason)"));
 });
 
-Deno.test("the unreachable page keeps retrying and acknowledges a tap", async () => {
-  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+test("the unreachable page keeps retrying and acknowledges a tap", async () => {
+  const gate = await readFile(new URL("ProductAuthGate.tsx", authDir), "utf8");
   // A repeated `retry`/`activating` decision re-sets the same view, so the
   // poll effect must re-arm on a value that changes after every settled probe.
   assert(gate.includes("setProbeSeq((seq) => seq + 1)"));
@@ -218,8 +220,8 @@ Deno.test("the unreachable page keeps retrying and acknowledges a tap", async ()
   assert(gate.includes("attemptsRef.current = 0;\n    void loadStatus();"));
 });
 
-Deno.test("logged-out gate never mounts product children or /ws", async () => {
-  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+test("logged-out gate never mounts product children or /ws", async () => {
+  const gate = await readFile(new URL("ProductAuthGate.tsx", authDir), "utf8");
   const readyBranch = gate.slice(
     gate.indexOf('if (view === "ready" && me)'),
     gate.indexOf('if (view === "login")'),
@@ -230,18 +232,18 @@ Deno.test("logged-out gate never mounts product children or /ws", async () => {
   assert(loginBranch.includes("ProductLoginPage"));
 });
 
-Deno.test("desktop can manage devices and sign out without importing store", async () => {
-  const desktop = await Deno.readTextFile(
-    new URL("desktop/DesktopApp.tsx", webSrc),
+test("desktop can manage devices and sign out without importing store", async () => {
+  const desktop = await readFile(
+    new URL("desktop/DesktopApp.tsx", webSrc), "utf8",
   );
-  const clients = await Deno.readTextFile(
-    new URL("ProductDevicesPanel.tsx", authDir),
+  const clients = await readFile(
+    new URL("ProductDevicesPanel.tsx", authDir), "utf8",
   );
-  const capacity = await Deno.readTextFile(
-    new URL("ProductSessionCapacityPanel.tsx", authDir),
+  const capacity = await readFile(
+    new URL("ProductSessionCapacityPanel.tsx", authDir), "utf8",
   );
-  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
-  const store = await Deno.readTextFile(new URL("store.ts", webSrc));
+  const gate = await readFile(new URL("ProductAuthGate.tsx", authDir), "utf8");
+  const store = await readFile(new URL("store.ts", webSrc), "utf8");
   assert(desktop.includes("useProductAuth"));
   assert(desktop.includes("account.signOut"));
   assert(desktop.includes("account.devices"));
@@ -284,8 +286,8 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
   assertEquals(authLostHandler.includes('setView("login")'), false);
 });
 
-Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
-  const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
+test("service worker does not cache /api/auth and bumped VERSION", async () => {
+  const sw = await readFile(new URL("../../public/sw.js", authDir), "utf8");
   const version = /const VERSION = "cowboy-v([1-9]\d*)"/.exec(sw);
   assert(version && Number(version[1]) >= 1683);
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
@@ -298,15 +300,15 @@ Deno.test("service worker does not cache /api/auth and bumped VERSION", async ()
   assertEquals(authBranch.includes("caches.match"), false);
 });
 
-Deno.test("Passkey changes recover from an expired recent-auth window", async () => {
-  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
-  const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+test("Passkey changes recover from an expired recent-auth window", async () => {
+  const gate = await readFile(new URL("ProductAuthGate.tsx", authDir), "utf8");
+  const panel = await readFile(
+    new URL("ProductPasskeysPanel.tsx", authDir), "utf8",
   );
-  const sheet = await Deno.readTextFile(
-    new URL("ProductRecentAuthSheet.tsx", authDir),
+  const sheet = await readFile(
+    new URL("ProductRecentAuthSheet.tsx", authDir), "utf8",
   );
-  const retry = await Deno.readTextFile(new URL("recentAuth.ts", authDir));
+  const retry = await readFile(new URL("recentAuth.ts", authDir), "utf8");
   assert(gate.includes("options?: RecentProductAuthOptions"));
   assert(gate.includes("<ProductRecentAuthSheet"));
   assert(gate.includes("hostPlugins={hostPlugins}"));
@@ -347,26 +349,26 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(revokeHandler.includes("authApi.deletePasskey"));
 });
 
-Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
-  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
-  const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+test("Passkey names are explicit and the product lock is event-driven", async () => {
+  const gate = await readFile(new URL("ProductAuthGate.tsx", authDir), "utf8");
+  const panel = await readFile(
+    new URL("ProductPasskeysPanel.tsx", authDir), "utf8",
   );
-  const lock = await Deno.readTextFile(
-    new URL("PasskeyReauthLock.tsx", authDir),
+  const lock = await readFile(
+    new URL("PasskeyReauthLock.tsx", authDir), "utf8",
   );
-  const admin = await Deno.readTextFile(
-    new URL("admin/AdminPasskeys.tsx", webSrc),
+  const admin = await readFile(
+    new URL("admin/AdminPasskeys.tsx", webSrc), "utf8",
   );
-  const idleLock = await Deno.readTextFile(
-    new URL("useIdlePasskeyLock.ts", authDir),
+  const idleLock = await readFile(
+    new URL("useIdlePasskeyLock.ts", authDir), "utf8",
   );
   assertEquals(`${gate}\n${panel}\n${admin}`.includes('"This device"'), false);
   assert(gate.includes('const [nickname, setNickname] = useState("")'));
   assert(panel.includes('useState("")'));
   assert(panel.includes("PASSKEY_REAUTH_INTERVALS"));
-  const intervals = await Deno.readTextFile(
-    new URL("passkeyIntervals.ts", authDir),
+  const intervals = await readFile(
+    new URL("passkeyIntervals.ts", authDir), "utf8",
   );
   assert(intervals.includes("Every day · Default"));
   assert(intervals.includes("Every hour"));
@@ -382,15 +384,15 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
   assert(lock.includes("Unlock with Passkey"));
 });
 
-Deno.test("Passkey settings use a progressive, visible mobile account hierarchy", async () => {
-  const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+test("Passkey settings use a progressive, visible mobile account hierarchy", async () => {
+  const panel = await readFile(
+    new URL("ProductPasskeysPanel.tsx", authDir), "utf8",
   );
-  const account = await Deno.readTextFile(
-    new URL("ProductAccountMenu.tsx", authDir),
+  const account = await readFile(
+    new URL("ProductAccountMenu.tsx", authDir), "utf8",
   );
-  const externalPage = await Deno.readTextFile(
-    new URL("passkeyExternalPage.ts", authDir),
+  const externalPage = await readFile(
+    new URL("passkeyExternalPage.ts", authDir), "utf8",
   );
   assert(panel.includes("Add your first Passkey"));
   assert(panel.includes("Registered Passkeys"));
@@ -403,8 +405,8 @@ Deno.test("Passkey settings use a progressive, visible mobile account hierarchy"
   assert(account.includes("Running agents keep"));
   assert(account.includes("retryWithRecentProductAuth"));
   assert(account.includes("reauthenticate"));
-  const gate = await Deno.readTextFile(
-    new URL("ProductAuthGate.tsx", authDir),
+  const gate = await readFile(
+    new URL("ProductAuthGate.tsx", authDir), "utf8",
   );
   assert(gate.includes("isRecentProductAuthRequired(reason)"));
   assert(externalPage.includes("Tap Done to return to Cowboy"));
@@ -412,19 +414,19 @@ Deno.test("Passkey settings use a progressive, visible mobile account hierarchy"
   assert(externalPage.includes('finishNative("cancelled")'));
 });
 
-Deno.test("session reauthentication is pushed and stays compact until required", async () => {
-  const guard = await Deno.readTextFile(
-    new URL("ProductSessionGuard.tsx", authDir),
+test("session reauthentication is pushed and stays compact until required", async () => {
+  const guard = await readFile(
+    new URL("ProductSessionGuard.tsx", authDir), "utf8",
   );
-  const sheet = await Deno.readTextFile(
-    new URL("ProductRecentAuthSheet.tsx", authDir),
+  const sheet = await readFile(
+    new URL("ProductRecentAuthSheet.tsx", authDir), "utf8",
   );
-  const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+  const panel = await readFile(
+    new URL("ProductPasskeysPanel.tsx", authDir), "utf8",
   );
-  const store = await Deno.readTextFile(new URL("store.ts", webSrc));
-  const events = await Deno.readTextFile(
-    new URL("productAuthEvents.ts", webSrc),
+  const store = await readFile(new URL("store.ts", webSrc), "utf8");
+  const events = await readFile(
+    new URL("productAuthEvents.ts", webSrc), "utf8",
   );
 
   assert(guard.includes("useSurfaceProfile"));

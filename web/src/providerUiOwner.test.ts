@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { defineProviderUiContract } from "@cowboy/provider-authoring";
 import type { ProviderHostContext, UiNode } from "@cowboy/provider-ui";
 import {
@@ -39,7 +40,7 @@ function owner() {
   return createProviderUiOwner(providerUiManifestFixture(), "empty");
 }
 
-Deno.test("authoring helper preserves the exact data-only wire object", () => {
+test("authoring helper preserves the exact data-only wire object", () => {
   const before = JSON.stringify(providerUiContractFixture);
   assert(
     defineProviderUiContract(providerUiContractFixture) ===
@@ -48,7 +49,7 @@ Deno.test("authoring helper preserves the exact data-only wire object", () => {
   assertEquals(JSON.stringify(providerUiContractFixture), before);
 });
 
-Deno.test("UI owner admits once before same-stack and subscriber reentry", async () => {
+test("UI owner admits once before same-stack and subscriber reentry", async () => {
   const current = owner();
   const completion = Promise.withResolvers<void>();
   let calls = 0;
@@ -82,7 +83,7 @@ Deno.test("UI owner admits once before same-stack and subscriber reentry", async
   await current.dispose();
 });
 
-Deno.test("effect lookup includes pure reducers before the effect rule", async () => {
+test("effect lookup includes pure reducers before the effect rule", async () => {
   const current = owner();
   let calls = 0;
   current.updateContext({
@@ -100,7 +101,7 @@ Deno.test("effect lookup includes pure reducers before the effect rule", async (
   await current.dispose();
 });
 
-Deno.test("admission rechecks committed visibility, enabled state and blocked capabilities", async () => {
+test("admission rechecks committed visibility, enabled state and blocked capabilities", async () => {
   const current = owner();
   let calls = 0;
   const invoke = async () => {
@@ -124,7 +125,7 @@ Deno.test("admission rechecks committed visibility, enabled state and blocked ca
   await current.dispose();
 });
 
-Deno.test("missing host dispatch cannot run an effect or its optimistic reducer", async () => {
+test("missing host dispatch cannot run an effect or its optimistic reducer", async () => {
   const current = owner();
   current.updateContext({ host });
   await current.emit(button(current));
@@ -132,7 +133,7 @@ Deno.test("missing host dispatch cannot run an effect or its optimistic reducer"
   await current.dispose();
 });
 
-Deno.test("only the owner's exact surface nodes can emit, never forged/cross-owner buttons", async () => {
+test("only the owner's exact surface nodes can emit, never forged/cross-owner buttons", async () => {
   const current = owner();
   const other = owner();
   let calls = 0;
@@ -148,7 +149,7 @@ Deno.test("only the owner's exact surface nodes can emit, never forged/cross-own
   await Promise.all([current.dispose(), other.dispose()]);
 });
 
-Deno.test("input and host mutation cannot alter an admitted immutable UI binding", async () => {
+test("input and host mutation cannot alter an admitted immutable UI binding", async () => {
   const input = providerUiManifestFixture();
   const current = createProviderUiOwner(input, "empty");
   const mutableHost = { ...host };
@@ -175,7 +176,7 @@ Deno.test("input and host mutation cannot alter an admitted immutable UI binding
   await current.dispose();
 });
 
-Deno.test("dispose fences late success, drains exactly once, and never cancels/replays a host effect", async () => {
+test("dispose fences late success, drains exactly once, and never cancels/replays a host effect", async () => {
   const current = owner();
   const completion = Promise.withResolvers<void>();
   let calls = 0;
@@ -205,7 +206,7 @@ Deno.test("dispose fences late success, drains exactly once, and never cancels/r
   assertEquals(current.lifecycle().phase, "disposed");
 });
 
-Deno.test("late failure stays on its old task and cannot clear a replacement owner's busy state", async () => {
+test("late failure stays on its old task and cannot clear a replacement owner's busy state", async () => {
   const old = owner();
   const newer = owner();
   const first = Promise.withResolvers<void>();
@@ -226,7 +227,7 @@ Deno.test("late failure stays on its old task and cannot clear a replacement own
   await newer.dispose();
 });
 
-Deno.test("host failure is settled once and raw diagnostic is not copied into Plugin state", async () => {
+test("host failure is settled once and raw diagnostic is not copied into Plugin state", async () => {
   const current = owner();
   current.updateContext({
     host,
@@ -244,7 +245,7 @@ Deno.test("host failure is settled once and raw diagnostic is not copied into Pl
   await current.dispose();
 });
 
-Deno.test("core callback observations are fenced without cancelling its submitted operation", async () => {
+test("core callback observations are fenced without cancelling its submitted operation", async () => {
   const current = owner();
   const completion = Promise.withResolvers<void>();
   let observed = 0;
@@ -266,7 +267,7 @@ Deno.test("core callback observations are fenced without cancelling its submitte
   assertEquals(observed, 0);
 });
 
-Deno.test("observer exceptions do not turn a successful host effect into failure", async () => {
+test("observer exceptions do not turn a successful host effect into failure", async () => {
   const current = owner();
   let calls = 0;
   current.updateContext({
@@ -285,7 +286,7 @@ Deno.test("observer exceptions do not turn a successful host effect into failure
 });
 
 for (const profile of ["request", "success", "failure", "chain"] as const) {
-  Deno.test(`unsupported ${profile} profile fails before effect dispatch`, async () => {
+  test(`unsupported ${profile} profile fails before effect dispatch`, async () => {
     const input = providerUiManifestFixture();
     if (profile === "request") {
       input.logic.effects[0]!.request = { argument: "string" };
@@ -319,13 +320,13 @@ for (const profile of ["request", "success", "failure", "chain"] as const) {
   });
 }
 
-Deno.test("invalid initial state is rejected before ownership or execution", () => {
+test("invalid initial state is rejected before ownership or execution", () => {
   const input = providerUiManifestFixture();
   input.logic.state[0]!.initial = "false";
   assertThrows(() => createProviderUiOwner(input, "empty"));
 });
 
-Deno.test("pure messages remain local and need no host callback", async () => {
+test("pure messages remain local and need no host callback", async () => {
   const input = providerUiManifestFixture();
   input.ui.surfaces.empty = {
     component: "button",
@@ -342,7 +343,7 @@ Deno.test("pure messages remain local and need no host callback", async () => {
   await current.dispose();
 });
 
-Deno.test("other surfaces are not an emission authority", async () => {
+test("other surfaces are not an emission authority", async () => {
   const input = providerUiManifestFixture();
   const current = createProviderUiOwner(input, "settings");
   current.updateContext({

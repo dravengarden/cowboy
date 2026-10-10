@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { RELIABLE_TOUCH_TAP_MOVE_SLOP_PX } from "./touchGestures.ts";
 import {
   iosRubberBand,
@@ -19,7 +20,7 @@ import {
   pushDrawerVelocitySample,
 } from "./obsidianDrawerGesture.ts";
 
-Deno.test("workspace swipe tracks after two pixels of horizontal intent", () => {
+test("workspace swipe tracks after two pixels of horizontal intent", () => {
   assertEquals(obsidianDrawerLockPx(false), OBSIDIAN_DRAWER_TRACK_PX);
   assertEquals(obsidianDrawerShouldPrepare(1, 0, true), false);
   assertEquals(obsidianDrawerShouldPrepare(2, 0, true), true);
@@ -37,7 +38,7 @@ Deno.test("workspace swipe tracks after two pixels of horizontal intent", () => 
   assertEquals(obsidianDrawerClaimsSwipe(8, 9, OBSIDIAN_DRAWER_TRACK_PX), null);
 });
 
-Deno.test("rail slop stays above a session-row tap", () => {
+test("rail slop stays above a session-row tap", () => {
   assertEquals(
     OBSIDIAN_DRAWER_RAIL_SLOP_PX > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX,
     true,
@@ -61,7 +62,7 @@ Deno.test("rail slop stays above a session-row tap", () => {
   );
 });
 
-Deno.test("scrollable content waits past incidental horizontal tremor", () => {
+test("scrollable content waits past incidental horizontal tremor", () => {
   const lockPx = obsidianDrawerLockPx(false, true);
   const dominance = obsidianDrawerDominance(true);
   assertEquals(lockPx, OBSIDIAN_DRAWER_SCROLL_SLOP_PX);
@@ -86,14 +87,14 @@ Deno.test("scrollable content waits past incidental horizontal tremor", () => {
   assertEquals(obsidianDrawerDominance(false), 1);
 });
 
-Deno.test("the first clear axis wins between scroll and swipe", () => {
+test("the first clear axis wins between scroll and swipe", () => {
   assertEquals(obsidianDrawerAbandonsToScroll(0, 1), false);
   assertEquals(obsidianDrawerAbandonsToScroll(1, 2), true);
   assertEquals(obsidianDrawerAbandonsToScroll(8, 7), false);
   assertEquals(obsidianDrawerAbandonsToScroll(7, 8), true);
 });
 
-Deno.test("release is a flick or the nearer rest state", () => {
+test("release is a flick or the nearer rest state", () => {
   assertEquals(OBSIDIAN_DRAWER_COMMIT_PROGRESS, 0.5);
   assertEquals(obsidianDrawerShouldOpen(0.49, 0), false);
   assertEquals(obsidianDrawerShouldOpen(0.5, 0), true);
@@ -107,7 +108,7 @@ Deno.test("release is a flick or the nearer rest state", () => {
   );
 });
 
-Deno.test("velocity uses the last 100ms of the finger", () => {
+test("velocity uses the last 100ms of the finger", () => {
   const samples = [];
   pushDrawerVelocitySample(samples, 1000, 10);
   pushDrawerVelocitySample(samples, 1040, 20);
@@ -117,7 +118,7 @@ Deno.test("velocity uses the last 100ms of the finger", () => {
   assertEquals(obsidianDrawerVelocityPxPerMs(samples, -1), -0.25);
 });
 
-Deno.test("overscroll uses the iOS rubber band, not a linear scale", () => {
+test("overscroll uses the iOS rubber band, not a linear scale", () => {
   assertEquals(obsidianDrawerRubberOffset(80, 320), 80);
   assertEquals(obsidianDrawerRubberOffset(0, 320), 0);
   assertEquals(obsidianDrawerRubberOffset(320, 320), 320);

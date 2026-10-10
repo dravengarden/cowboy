@@ -1,13 +1,15 @@
-import { assert } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const storeSource = await Deno.readTextFile(
-  new URL("./store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("./store.ts", import.meta.url), "utf8",
 );
 
-Deno.test("Machines can be deleted only through the current Service API", () => {
+test("Machines can be deleted only through the current Service API", () => {
   assert(appSource.includes("function MachinesContent"));
   assert(appSource.includes("/revoke`"));
   assert(appSource.includes("Delete from this Cowboy Service"));
@@ -16,9 +18,9 @@ Deno.test("Machines can be deleted only through the current Service API", () => 
   assert(!/setMachines\(\(current\) =>\s*current\.filter/u.test(appSource));
 });
 
-Deno.test("deleting the last Machine waits for the authoritative pushed snapshot", async () => {
-  const gateSource = await Deno.readTextFile(
-    new URL("./setup/MachineSetupGate.tsx", import.meta.url),
+test("deleting the last Machine waits for the authoritative pushed snapshot", async () => {
+  const gateSource = await readFile(
+    new URL("./setup/MachineSetupGate.tsx", import.meta.url), "utf8",
   );
   assert(appSource.includes("deletingLastMachine"));
   assert(appSource.includes("This is the last registered computer."));

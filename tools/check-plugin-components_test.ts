@@ -1,11 +1,13 @@
-import { assert, assertThrows } from "jsr:@std/assert@1.0.19";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertThrows } from "@std/assert";
 import {
   validateCodeAdapterRuntime,
   validateIndependentPluginVersion,
   validateReleaseHistory,
 } from "./check-plugin-components.ts";
 
-Deno.test("a private Code adapter runtime pin must match the locally built version", () => {
+test("a private Code adapter runtime pin must match the locally built version", () => {
   const contract = (versions: string[]) => ({
     id: "fixture-code",
     version: "2.0.0",
@@ -38,7 +40,7 @@ const component = {
   digest: "sha256:fixture",
 };
 
-Deno.test("a component release requires every plugin version to increase", () => {
+test("a component release requires every plugin version to increase", () => {
   const first = {
     version: "1.0.0",
     components: [component],
@@ -68,7 +70,7 @@ Deno.test("a component release requires every plugin version to increase", () =>
   ]);
 });
 
-Deno.test("a plugin can release independently above its component baseline", () => {
+test("a plugin can release independently above its component baseline", () => {
   validateIndependentPluginVersion("codex", "1.2.0", "1.1.0");
   assertThrows(
     () => validateIndependentPluginVersion("codex", "1.0.9", "1.1.0"),
@@ -77,7 +79,7 @@ Deno.test("a plugin can release independently above its component baseline", () 
   );
 });
 
-Deno.test("published capability schemas are independently resolvable", async () => {
+test("published capability schemas are independently resolvable", async () => {
   for (
     const name of [
       "authentication-provider",
@@ -86,8 +88,8 @@ Deno.test("published capability schemas are independently resolvable", async () 
     ]
   ) {
     const schema = JSON.parse(
-      await Deno.readTextFile(
-        `components/plugin-contract/${name}.schema.json`,
+      await readFile(
+        `components/plugin-contract/${name}.schema.json`, "utf8",
       ),
     );
     const inspect = (value: unknown): void => {

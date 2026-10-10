@@ -4,7 +4,7 @@ import {
   assessAdminPassword,
   type AdminPasswordAssessment,
   type AdminPasswordLevel,
-} from "./passwordStrength";
+} from "./passwordStrength.ts";
 
 const LEVEL_COLOR: Record<AdminPasswordLevel, "inherit" | "error" | "success"> = {
   empty: "inherit",

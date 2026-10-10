@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { Envelope } from "./protocol.ts";
 import {
   confirmedImageSrc,
@@ -33,7 +34,7 @@ const imageMessage = {
   attachments: [{ isImage: true }],
 };
 
-Deno.test("text-first echoes keep the optimistic image until the image block lands", () => {
+test("text-first echoes keep the optimistic image until the image block lands", () => {
   assertEquals(
     promptEchoReadyToReplaceOptimistic(imageMessage, [
       envelope(1, "text", "c1"),
@@ -49,7 +50,7 @@ Deno.test("text-first echoes keep the optimistic image until the image block lan
   );
 });
 
-Deno.test("image-first echoes can replace once the image block is present", () => {
+test("image-first echoes can replace once the image block is present", () => {
   assertEquals(
     promptEchoReadyToReplaceOptimistic(imageMessage, [
       envelope(1, "image", "c1"),
@@ -58,7 +59,7 @@ Deno.test("image-first echoes can replace once the image block is present", () =
   );
 });
 
-Deno.test("text-only sends replace on the first tagged echo", () => {
+test("text-only sends replace on the first tagged echo", () => {
   assertEquals(
     promptEchoReadyToReplaceOptimistic({ cmid: "c1", attachments: [] }, [
       envelope(1, "text", "c1"),
@@ -67,7 +68,7 @@ Deno.test("text-only sends replace on the first tagged echo", () => {
   );
 });
 
-Deno.test("a tagged but unrenderable image echo cannot replace the overlay", () => {
+test("a tagged but unrenderable image echo cannot replace the overlay", () => {
   const emptyImage: Envelope = {
     session_id: "s1",
     seq: 1,
@@ -90,7 +91,7 @@ Deno.test("a tagged but unrenderable image echo cannot replace the overlay", () 
   );
 });
 
-Deno.test("unpresented overlays linger until the presented timeline can replace them", () => {
+test("unpresented overlays linger until the presented timeline can replace them", () => {
   const overlay = { cmid: "c1", attachments: [] as { isImage?: boolean }[] };
   assertEquals(
     retainUnpresentedOptimistic([overlay], [], [], true),
@@ -110,7 +111,7 @@ Deno.test("unpresented overlays linger until the presented timeline can replace 
   );
 });
 
-Deno.test("a live presentation follows the store even when the echo lost its cmid", () => {
+test("a live presentation follows the store even when the echo lost its cmid", () => {
   // Echoes persisted before the submission ledger carry no cmid. Once the renderer
   // shows the canonical timeline, a retired overlay must not linger and hide
   // the next human prompt behind a repainted copy of this one.
@@ -122,7 +123,7 @@ Deno.test("a live presentation follows the store even when the echo lost its cmi
   assertEquals(retainUnpresentedOptimistic([overlay], [], untagged, false), []);
 });
 
-Deno.test("only agent work after the echo proves the whole prompt was echoed", () => {
+test("only agent work after the echo proves the whole prompt was echoed", () => {
   const update = (sessionUpdate: string): Envelope => ({
     session_id: "s1",
     seq: 3,
@@ -154,7 +155,7 @@ Deno.test("only agent work after the echo proves the whole prompt was echoed", (
   );
 });
 
-Deno.test("confirmed image rows keep the send preview instead of the artifact URL", () => {
+test("confirmed image rows keep the send preview instead of the artifact URL", () => {
   rememberSendImagePreviews("c1", [{
     id: "att-1",
     name: "shot.jpg",
@@ -173,14 +174,14 @@ Deno.test("confirmed image rows keep the send preview instead of the artifact UR
   );
 });
 
-Deno.test("an adjacent send cannot supply the missing image of an earlier echo", () => {
+test("an adjacent send cannot supply the missing image of an earlier echo", () => {
   assertEquals(promptEchoReadyToReplaceOptimistic(imageMessage, [
     envelope(1, "text", "c1"),
     envelope(2, "image", "c2"),
   ]), false);
 });
 
-Deno.test("image-first captions and files remain on the local bubble until all content is present", () => {
+test("image-first captions and files remain on the local bubble until all content is present", () => {
   const message = { cmid: "c1", text: "caption", attachments: [{ isImage: true }, { isImage: false }] };
   const image = envelope(1, "image", "c1");
   const caption = envelope(3, "text");
@@ -194,7 +195,7 @@ Deno.test("image-first captions and files remain on the local bubble until all c
   assertEquals(promptEchoReadyToReplaceOptimistic(message, [image, busy, caption, file]), true);
 });
 
-Deno.test("confirmed previews follow inline document order instead of attachment tray order", () => {
+test("confirmed previews follow inline document order instead of attachment tray order", () => {
   const image = (id: string, data: string) => ({
     id, name: `${id}.png`, mimeType: "image/png", isImage: true,
     previewUrl: `data:image/png;base64,${data}`,
@@ -206,7 +207,7 @@ Deno.test("confirmed previews follow inline document order instead of attachment
   assertEquals(confirmedImageSrc("/artifact/2", "reordered", 1), "data:image/png;base64,YQ==");
 });
 
-Deno.test("the echoed text of a tagged prompt is recovered for draft retirement", () => {
+test("the echoed text of a tagged prompt is recovered for draft retirement", () => {
   const events = [envelope(1, "text", "c1"), envelope(2, "image", "c1"), envelope(3, "text", "c2")];
   assertEquals(promptEchoText(events, "c1"), "caption");
   assertEquals(promptEchoText(events, "missing"), undefined);

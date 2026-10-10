@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   CREATED_SESSION_LISTING_GRACE_MS,
   listedOrJustCreatedSessions,
@@ -8,7 +10,7 @@ import {
 } from "./transcriptSessionCache";
 import { prefetchCandidates } from "./hydrationScheduler";
 
-Deno.test("transcript session cache keeps the current session and evicts LRU history", () => {
+test("transcript session cache keeps the current session and evicts LRU history", () => {
   let order: string[] = [];
   for (const id of ["a", "b", "c", "d"]) {
     order = touchTranscriptSessionCache(order, id, 3).order;
@@ -24,7 +26,7 @@ Deno.test("transcript session cache keeps the current session and evicts LRU his
   assertEquals(opened.evicted, ["c"]);
 });
 
-Deno.test("transcript session cache drops deleted sessions", () => {
+test("transcript session cache drops deleted sessions", () => {
   const retained = retainTranscriptSessionCache(
     ["a", "b", "c"],
     new Set(["a", "c"]),
@@ -38,7 +40,7 @@ Deno.test("transcript session cache drops deleted sessions", () => {
 // The evicted active session dropped `hydrated`, prefetch skips the active id,
 // and every later snapshot/event was discarded as uncached — the transcript sat
 // on its loading skeleton until the user reopened it.
-Deno.test("prefetch rounds never evict the opened transcript", () => {
+test("prefetch rounds never evict the opened transcript", () => {
   const opened = "active";
   let order = touchTranscriptSessionCache(
     [],
@@ -82,13 +84,13 @@ Deno.test("prefetch rounds never evict the opened transcript", () => {
   assertEquals(order.length, TRANSCRIPT_SESSION_CACHE_LIMIT);
 });
 
-Deno.test("pinning evicts the next coldest session instead", () => {
+test("pinning evicts the next coldest session instead", () => {
   const touched = touchTranscriptSessionCache(["a", "b", "c"], "d", 3, "a");
   assertEquals(touched.order, ["a", "c", "d"]);
   assertEquals(touched.evicted, ["b"]);
 });
 
-Deno.test("a list produced before a creation does not evict the session just opened", () => {
+test("a list produced before a creation does not evict the session just opened", () => {
   const created = new Map([["new", 1_000]]);
   // The stale frame arrives after the client opened the created session.
   const stale = listedOrJustCreatedSessions(new Set(["a"]), created, 1_050);
@@ -108,7 +110,7 @@ Deno.test("a list produced before a creation does not evict the session just ope
   );
 });
 
-Deno.test("a created session that no list ever names stops being protected", () => {
+test("a created session that no list ever names stops being protected", () => {
   const created = new Map([["new", 1_000]]);
   const valid = listedOrJustCreatedSessions(
     new Set(["a"]),
@@ -119,8 +121,8 @@ Deno.test("a created session that no list ever names stops being protected", () 
   assertEquals(created.size, 0);
 });
 
-Deno.test("the store prunes against created sessions and recovers an opened skeleton", async () => {
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+test("the store prunes against created sessions and recovers an opened skeleton", async () => {
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   const listHandler = store.slice(
     store.indexOf('case "sessions": {'),
     store.indexOf('case "machines": {'),

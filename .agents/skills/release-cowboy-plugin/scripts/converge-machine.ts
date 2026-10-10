@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-run
+#!/usr/bin/env bun
 /**
  * Bring one or more Machines' installed Plugins up to the Catalog's newest
  * ready releases, one signed upgrade at a time.
@@ -21,6 +21,7 @@
  * explicitly authorized act described in SKILL.md.
  */
 
+import { Command } from "../../../../tools/lib/command.ts";
 export interface ConvergeInvocation {
   readonly machines: readonly string[];
   readonly plugins: readonly string[];
@@ -78,16 +79,16 @@ export function parseInvocation(
 }
 
 if (import.meta.main) {
-  const parsed = parseInvocation(Deno.args);
+  const parsed = parseInvocation(process.argv.slice(2));
   if ("error" in parsed) {
     console.error(`${parsed.error}
 usage: converge-machine.ts [<machine>...] [--apply] [--plugin id]... [--cowboy path]`);
-    Deno.exit(2);
+    process.exit(2);
   }
-  const { code } = await new Deno.Command(parsed.cowboy, {
+  const { code } = await new Command(parsed.cowboy, {
     args: convergeArguments(parsed.invocation),
     stdout: "inherit",
     stderr: "inherit",
   }).output();
-  Deno.exit(code);
+  process.exit(code);
 }

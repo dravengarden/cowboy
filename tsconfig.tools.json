@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "bun"
+    ],
+    "allowJs": true,
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "files": [
+    "site/build.ts",
+    "site/build_test.ts",
+    "site/site.js",
+    "tools/cdp-browser-conformance.ts",
+    "tools/cdp-fixture.ts",
+    "tools/cdp-keyboard-acceptance.ts",
+    "tools/check-native-shell.ts",
+    "tools/check-native-shell_test.ts",
+    "tools/check-plugin-components.ts",
+    "tools/check-provider-release-coverage.ts",
+    "tools/check-provider-release-coverage_test.ts",
+    "tools/check-worktree-dependencies.ts",
+    "tools/check-worktree-dependencies_test.ts",
+    "tools/composition-link-conformance.ts",
+    "tools/execution_environment_lifetime_probe.ts",
+    "tools/generate-composition-contract.ts",
+    "tools/idb-browser-conformance.ts",
+    "tools/native-shell-probe_test.ts",
+    "tools/plugin-publication-receipt.ts",
+    "tools/publish-plugin-release.ts"
+  ]
+}

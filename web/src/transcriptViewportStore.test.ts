@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   canRestoreTranscriptViewport,
   clearTranscriptViewport,
@@ -8,7 +9,7 @@ import {
   saveTranscriptViewport,
 } from "./transcriptViewportStore.ts";
 
-Deno.test("viewport positions are isolated by session and mode", () => {
+test("viewport positions are isolated by session and mode", () => {
   resetTranscriptViewportStoreForTest();
   saveTranscriptViewport({
     sessionId: "alpha",
@@ -44,7 +45,7 @@ Deno.test("viewport positions are isolated by session and mode", () => {
   assertEquals(getTranscriptViewport("beta", "history", 1_200), null);
 });
 
-Deno.test("clearing page position preserves history position", () => {
+test("clearing page position preserves history position", () => {
   resetTranscriptViewportStoreForTest();
   saveTranscriptViewport({
     sessionId: "alpha",
@@ -74,7 +75,7 @@ Deno.test("clearing page position preserves history position", () => {
   );
 });
 
-Deno.test("expired and removed-session positions are discarded", () => {
+test("expired and removed-session positions are discarded", () => {
   resetTranscriptViewportStoreForTest();
   saveTranscriptViewport({
     sessionId: "expired",
@@ -106,7 +107,7 @@ Deno.test("expired and removed-session positions are discarded", () => {
   );
 });
 
-Deno.test("a page offset restores even without a DOM anchor", () => {
+test("a page offset restores even without a DOM anchor", () => {
   saveTranscriptViewport({
     sessionId: "page-session",
     mode: "page",

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   backgroundProviderUpdateLabel,
   providerUpdateProgress,
@@ -6,7 +7,7 @@ import {
   waitingOnBackground,
 } from "./backgroundActivity.ts";
 
-Deno.test("an idle session still waiting on background work reads as active", () => {
+test("an idle session still waiting on background work reads as active", () => {
   assertEquals(waitingOnBackground("running", 2), true);
   assertEquals(waitingOnBackground("running", 0), false);
   assertEquals(waitingOnBackground("running", undefined), false);
@@ -18,7 +19,7 @@ Deno.test("an idle session still waiting on background work reads as active", ()
   assertEquals(backgroundTasksLabel(2), "Waiting on 2 background tasks…");
 });
 
-Deno.test("only an automatic Provider update reads as background maintenance", () => {
+test("only an automatic Provider update reads as background maintenance", () => {
   const update = { from: "3.19.3", to: "3.19.4", automatic: true, started_at_ms: 0 };
   assertEquals(
     backgroundProviderUpdateLabel("starting", update),
@@ -30,7 +31,7 @@ Deno.test("only an automatic Provider update reads as background maintenance", (
   assertEquals(backgroundProviderUpdateLabel("running", update), null);
 });
 
-Deno.test("background update progress rises monotonically and never completes", () => {
+test("background update progress rises monotonically and never completes", () => {
   const start = 1_000_000;
   assertEquals(providerUpdateProgress(start, start), 5);
   // A controller clock ahead of the client never reads as negative progress.

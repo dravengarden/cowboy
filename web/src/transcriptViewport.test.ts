@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   columnReverseVisualFirstRowIndex,
   conversationEmptyPresentation,
@@ -25,7 +26,7 @@ import {
   visibleTranscriptTopGap,
 } from "./transcriptViewport.ts";
 
-Deno.test("visible scrollback bootstrap rearms when the cursor advances", () => {
+test("visible scrollback bootstrap rearms when the cursor advances", () => {
   const current = scrollbackBoundaryRequestKey({
     sessionId: "sess-1",
     managed: true,
@@ -52,7 +53,7 @@ Deno.test("visible scrollback bootstrap rearms when the cursor advances", () => 
   );
 });
 
-Deno.test("a visible scrollback boundary prefetches once after restoration", () => {
+test("a visible scrollback boundary prefetches once after restoration", () => {
   const visible = {
     managed: true,
     restoring: false,
@@ -100,7 +101,7 @@ Deno.test("a visible scrollback boundary prefetches once after restoration", () 
   );
 });
 
-Deno.test("scrollback skeleton is replaced by measured older content", () => {
+test("scrollback skeleton is replaced by measured older content", () => {
   assertEquals(
     scrollbackFillRemaining({
       targetHeight: 360,
@@ -121,7 +122,7 @@ Deno.test("scrollback skeleton is replaced by measured older content", () => {
   );
 });
 
-Deno.test("cleared conversation empty state yields to new content", () => {
+test("cleared conversation empty state yields to new content", () => {
   assertEquals(
     shouldShowClearedConversationEmptyState(["message", "cleared"]),
     true,
@@ -137,7 +138,7 @@ Deno.test("cleared conversation empty state yields to new content", () => {
   assertEquals(shouldShowClearedConversationEmptyState([]), false);
 });
 
-Deno.test("a booting agent is never described as ready", () => {
+test("a booting agent is never described as ready", () => {
   // The regression this function exists for: clearing a conversation restarts
   // the agent, so the cleared empty state is on screen WHILE status is
   // "starting". It kept its own wording but must not claim readiness.
@@ -206,7 +207,7 @@ Deno.test("a booting agent is never described as ready", () => {
   );
 });
 
-Deno.test("mounted scrollback content hands the viewport to real rows", () => {
+test("mounted scrollback content hands the viewport to real rows", () => {
   assertEquals(
     scrollbackReplacementFromTop({
       currentFromTop: 0,
@@ -233,7 +234,7 @@ Deno.test("mounted scrollback content hands the viewport to real rows", () => {
   );
 });
 
-Deno.test("scrollback heuristic fills only a nearby unfinished skeleton", () => {
+test("scrollback heuristic fills only a nearby unfinished skeleton", () => {
   const base = {
     remaining: 120,
     loadedRows: 10,
@@ -260,7 +261,7 @@ Deno.test("scrollback heuristic fills only a nearby unfinished skeleton", () => 
   );
 });
 
-Deno.test("mobile transcript refills when an iPad viewport grows", () => {
+test("mobile transcript refills when an iPad viewport grows", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
       managed: true,
@@ -278,7 +279,7 @@ Deno.test("mobile transcript refills when an iPad viewport grows", () => {
   );
 });
 
-Deno.test("empty transcript copy is reserved for a truly fresh session", () => {
+test("empty transcript copy is reserved for a truly fresh session", () => {
   assertEquals(
     shouldShowFreshSessionEmptyState({
       loading: false,
@@ -314,7 +315,7 @@ Deno.test("empty transcript copy is reserved for a truly fresh session", () => {
   );
 });
 
-Deno.test("an unrenderable durable tail jumps to a question boundary", () => {
+test("an unrenderable durable tail jumps to a question boundary", () => {
   const tail = {
     managed: true,
     itemCount: 0,
@@ -334,7 +335,7 @@ Deno.test("an unrenderable durable tail jumps to a question boundary", () => {
   );
 });
 
-Deno.test("a hole above the first real row keeps viewport refill going", () => {
+test("a hole above the first real row keeps viewport refill going", () => {
   const base = {
     managed: true,
     allowed: true,
@@ -365,7 +366,7 @@ Deno.test("a hole above the first real row keeps viewport refill going", () => {
   );
 });
 
-Deno.test("column-reverse gap measurement starts from the visual top row", () => {
+test("column-reverse gap measurement starts from the visual top row", () => {
   // Rows are newest-first in DOM order. Measuring index 0 would treat the
   // newest row near the composer as a large empty area above the transcript.
   assertEquals(columnReverseVisualFirstRowIndex(3), 2);
@@ -386,7 +387,7 @@ Deno.test("column-reverse gap measurement starts from the visual top row", () =>
   );
 });
 
-Deno.test("Desktop keeps its scrollback skeleton during viewport backfill", () => {
+test("Desktop keeps its scrollback skeleton during viewport backfill", () => {
   const backfill = {
     managed: true,
     desktop: true,
@@ -409,7 +410,7 @@ Deno.test("Desktop keeps its scrollback skeleton during viewport backfill", () =
   );
 });
 
-Deno.test("viewport restoration synchronizes live windowing with follow intent", () => {
+test("viewport restoration synchronizes live windowing with follow intent", () => {
   assertEquals(
     restoredTranscriptFollowing({
       canRestore: true,
@@ -444,7 +445,7 @@ Deno.test("viewport restoration synchronizes live windowing with follow intent",
   );
 });
 
-Deno.test("Desktop masks intermediate pages while restoring a detached viewport", () => {
+test("Desktop masks intermediate pages while restoring a detached viewport", () => {
   const restoring = {
     desktop: true,
     canRestore: true,
@@ -465,7 +466,7 @@ Deno.test("Desktop masks intermediate pages while restoring a detached viewport"
   );
 });
 
-Deno.test("detached viewport restore waits for deep paging but remains bounded", () => {
+test("detached viewport restore waits for deep paging but remains bounded", () => {
   assertEquals(
     shouldContinueTranscriptViewportRestore({ tries: 90, stableFrames: 0 }),
     true,
@@ -488,7 +489,7 @@ Deno.test("detached viewport restore waits for deep paging but remains bounded",
   );
 });
 
-Deno.test("viewport backfill stops after a detached restore is revealed", () => {
+test("viewport backfill stops after a detached restore is revealed", () => {
   assertEquals(
     shouldAllowTranscriptViewportBackfill({
       following: false,
@@ -512,7 +513,7 @@ Deno.test("viewport backfill stops after a detached restore is revealed", () => 
   );
 });
 
-Deno.test("mounted skeleton height drives incremental viewport refill", () => {
+test("mounted skeleton height drives incremental viewport refill", () => {
   const base = {
     managed: true,
     allowed: true,
@@ -538,7 +539,7 @@ Deno.test("mounted skeleton height drives incremental viewport refill", () => {
   );
 });
 
-Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
+test("viewport resize refill leaves Desktop navigation unchanged", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
       managed: true,
@@ -556,7 +557,7 @@ Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
   );
 });
 
-Deno.test("transcript refill stops while a page is loading or history is exhausted", () => {
+test("transcript refill stops while a page is loading or history is exhausted", () => {
   const base = {
     managed: true,
     allowed: true,
@@ -594,7 +595,7 @@ Deno.test("transcript refill stops while a page is loading or history is exhaust
   );
 });
 
-Deno.test("history prefetch requests once per entry into the top threshold", () => {
+test("history prefetch requests once per entry into the top threshold", () => {
   assertEquals(
     historyPrefetchTransition({
       managed: true,
@@ -627,7 +628,7 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
   );
 });
 
-Deno.test("page projection never invokes transcript-managed history loading", () => {
+test("page projection never invokes transcript-managed history loading", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
       managed: false,
@@ -655,7 +656,7 @@ Deno.test("page projection never invokes transcript-managed history loading", ()
   );
 });
 
-Deno.test("history magnetizes at the live edge after the gesture settles", () => {
+test("history magnetizes at the live edge after the gesture settles", () => {
   assertEquals(
     shouldMagnetizeTranscript({
       history: true,
@@ -680,7 +681,7 @@ Deno.test("history magnetizes at the live edge after the gesture settles", () =>
   );
 });
 
-Deno.test("touch settle waits for finger-up before following at the live edge", () => {
+test("touch settle waits for finger-up before following at the live edge", () => {
   const atLiveEdge = {
     history: true,
     working: false,
@@ -706,7 +707,7 @@ Deno.test("touch settle waits for finger-up before following at the live edge", 
   );
 });
 
-Deno.test("magnetic haptic uses hysteresis around the live edge", () => {
+test("magnetic haptic uses hysteresis around the live edge", () => {
   assertEquals(magneticHapticTransition(false, 47, 48), {
     armed: true,
     fire: true,
@@ -725,7 +726,7 @@ Deno.test("magnetic haptic uses hysteresis around the live edge", () => {
   });
 });
 
-Deno.test("only a streaming page magnetizes at its bottom", () => {
+test("only a streaming page magnetizes at its bottom", () => {
   const page = {
     history: false,
     detached: true,
@@ -743,7 +744,7 @@ Deno.test("only a streaming page magnetizes at its bottom", () => {
   );
 });
 
-Deno.test("shifted reading anchor settles without a reader scroll", () => {
+test("shifted reading anchor settles without a reader scroll", () => {
   // Newer content grew 240px while the session was closed (column-reverse).
   let offset = -600;
   let anchorTop = -120;
@@ -767,7 +768,7 @@ Deno.test("shifted reading anchor settles without a reader scroll", () => {
   assertEquals(transcriptViewportRestoreTimedOut({ tries, stableFrames }), false);
 });
 
-Deno.test("restore uses the saved offset until the anchor mounts", () => {
+test("restore uses the saved offset until the anchor mounts", () => {
   assertEquals(transcriptRestoreTargetOffset({
     savedOffset: -600,
     currentOffset: 0,

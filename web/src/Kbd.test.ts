@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { confirmEnterIntent } from "./confirmShortcut";
 import { isMac } from "./platform";
 
@@ -18,11 +19,11 @@ function keyEvent(
   } as KeyboardEvent;
 }
 
-Deno.test("confirm modals suppress bare Enter", () => {
+test("confirm modals suppress bare Enter", () => {
   assertEquals(confirmEnterIntent(keyEvent()), "suppress");
 });
 
-Deno.test("confirm modals accept only the platform Command chord", () => {
+test("confirm modals accept only the platform Command chord", () => {
   const event = isMac
     ? keyEvent({ metaKey: true })
     : keyEvent({ ctrlKey: true });

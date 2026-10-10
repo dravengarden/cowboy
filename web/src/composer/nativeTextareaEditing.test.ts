@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   mapNativeSelectionThroughValueChange,
   nativeTextareaFittedHeight,
@@ -7,7 +8,7 @@ import {
   wrapNativeSelection,
 } from "./nativeTextareaEditing";
 
-Deno.test("native textarea ignores subpixel overflow before enabling scroll", () => {
+test("native textarea ignores subpixel overflow before enabling scroll", () => {
   assertEquals(nativeTextareaNeedsScroll(73, 72), false);
   assertEquals(nativeTextareaNeedsScroll(74, 72), false);
   assertEquals(nativeTextareaNeedsScroll(75, 72), true);
@@ -15,13 +16,13 @@ Deno.test("native textarea ignores subpixel overflow before enabling scroll", ()
   assertEquals(nativeTextareaNeedsScroll(1417, 431), true);
 });
 
-Deno.test("compact native textarea height follows content and never shrinks below the min", () => {
+test("compact native textarea height follows content and never shrinks below the min", () => {
   assertEquals(nativeTextareaFittedHeight(36), 48);
   assertEquals(nativeTextareaFittedHeight(48), 48);
   assertEquals(nativeTextareaFittedHeight(96), 96);
 });
 
-Deno.test("native text paste replaces forward or backward selections", () => {
+test("native text paste replaces forward or backward selections", () => {
   assertEquals(replaceNativeSelection("before after", 7, 12, "middle"), {
     value: "before middle",
     from: 13,
@@ -34,7 +35,7 @@ Deno.test("native text paste replaces forward or backward selections", () => {
   });
 });
 
-Deno.test("native toolbar wraps a caret or selected text", () => {
+test("native toolbar wraps a caret or selected text", () => {
   assertEquals(wrapNativeSelection("hello", 5, 5, "**", "**"), {
     value: "hello****",
     from: 7,
@@ -42,7 +43,7 @@ Deno.test("native toolbar wraps a caret or selected text", () => {
   });
 });
 
-Deno.test("native external value sync maps the caret through newline edits", () => {
+test("native external value sync maps the caret through newline edits", () => {
   assertEquals(
     mapNativeSelectionThroughValueChange("one\ntwo", "one\n\ntwo", 7, 7),
     { from: 8, to: 8 },

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type {
   ProductMe,
   ProductPasskeyServerPolicy,
@@ -35,7 +36,7 @@ const me: ProductMe = {
   session_server_now_ms: 0,
 };
 
-Deno.test("session protection formats service policy without hiding configured fields", () => {
+test("session protection formats service policy without hiding configured fields", () => {
   assertEquals(sessionPolicyDuration(30 * 60 * 1_000), "30 minutes");
   assertEquals(sessionPolicyDuration(24 * 60 * 60 * 1_000), "1 day");
   assertEquals(configuredSessionProtectionItems(passkeys, session), [
@@ -51,7 +52,7 @@ Deno.test("session protection formats service policy without hiding configured f
   ]);
 });
 
-Deno.test("current session protection distinguishes browser, Passkey, and full sign-in state", () => {
+test("current session protection distinguishes browser, Passkey, and full sign-in state", () => {
   assertEquals(currentSessionProtectionItems(me, passkeys, session, 0), [
     { label: "This browser", value: "Signed in as draven" },
     { label: "Idle sign-out", value: "Due in 1h" },

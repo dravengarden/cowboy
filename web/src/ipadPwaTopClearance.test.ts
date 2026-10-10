@@ -1,52 +1,54 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const html = await Deno.readTextFile(
-  new URL("../index.html", import.meta.url),
+const html = await readFile(
+  new URL("../index.html", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const themeSource = await Deno.readTextFile(
-  new URL("./theme.ts", import.meta.url),
+const themeSource = await readFile(
+  new URL("./theme.ts", import.meta.url), "utf8",
 );
-const reviewSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewApp.tsx", import.meta.url),
+const reviewSource = await readFile(
+  new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
 );
-const repositorySource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewRepository.tsx", import.meta.url),
+const repositorySource = await readFile(
+  new URL("./mobile/review/ReviewRepository.tsx", import.meta.url), "utf8",
 );
-const fileTreeSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url),
+const fileTreeSource = await readFile(
+  new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url), "utf8",
 );
-const changesSource = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewChanges.tsx", import.meta.url),
+const changesSource = await readFile(
+  new URL("./mobile/review/ReviewChanges.tsx", import.meta.url), "utf8",
 );
-const exploreSource = await Deno.readTextFile(
-  new URL("./explore/ExploreSurface.tsx", import.meta.url),
+const exploreSource = await readFile(
+  new URL("./explore/ExploreSurface.tsx", import.meta.url), "utf8",
 );
-const detentSheetSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/detent-sheet.tsx", import.meta.url),
+const detentSheetSource = await readFile(
+  new URL("../../components/app-shell/detent-sheet.tsx", import.meta.url), "utf8",
 );
-const connectionBannerSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/connection-banner.tsx", import.meta.url),
+const connectionBannerSource = await readFile(
+  new URL("../../components/app-shell/connection-banner.tsx", import.meta.url), "utf8",
 );
-const mobileNavigationSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/mobile-navigation.tsx", import.meta.url),
+const mobileNavigationSource = await readFile(
+  new URL("../../components/app-shell/mobile-navigation.tsx", import.meta.url), "utf8",
 );
-const navShellSource = await Deno.readTextFile(
-  new URL("../../components/app-shell/nav-shell.tsx", import.meta.url),
+const navShellSource = await readFile(
+  new URL("../../components/app-shell/nav-shell.tsx", import.meta.url), "utf8",
 );
-const loginSource = await Deno.readTextFile(
-  new URL("./auth/ProductLoginPage.tsx", import.meta.url),
+const loginSource = await readFile(
+  new URL("./auth/ProductLoginPage.tsx", import.meta.url), "utf8",
 );
-const deviceAuthSource = await Deno.readTextFile(
-  new URL("./auth/DeviceAuthorizationPage.tsx", import.meta.url),
+const deviceAuthSource = await readFile(
+  new URL("./auth/DeviceAuthorizationPage.tsx", import.meta.url), "utf8",
 );
-const passkeyHtml = await Deno.readTextFile(
-  new URL("../passkey.html", import.meta.url),
+const passkeyHtml = await readFile(
+  new URL("../passkey.html", import.meta.url), "utf8",
 );
 
-Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
+test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   assert(
     html.includes(
       "@media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) and (min-height: 700px)",
@@ -75,7 +77,7 @@ Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   );
 });
 
-Deno.test("only the iPad PWA floor paints a synthetic status strip", () => {
+test("only the iPad PWA floor paints a synthetic status strip", () => {
   // An iPhone PWA starts below its system-drawn status bar and reports a zero
   // inset. A floor there would add a blurred band under that bar.
   const floors = html.match(
@@ -112,7 +114,7 @@ Deno.test("only the iPad PWA floor paints a synthetic status strip", () => {
   assert(appSource.includes("data-mobile-status-strip-material={"));
 });
 
-Deno.test("transient Explore glass clears rather than overlaps iPad system chrome", () => {
+test("transient Explore glass clears rather than overlaps iPad system chrome", () => {
   assert(
     exploreSource.includes(
       'top: "calc(var(--cowboy-system-top-clearance) + 8px)"',
@@ -120,7 +122,7 @@ Deno.test("transient Explore glass clears rather than overlaps iPad system chrom
   );
 });
 
-Deno.test("cover sheets and shared chrome consume the iPad top-clearance contract", () => {
+test("cover sheets and shared chrome consume the iPad top-clearance contract", () => {
   assert(
     detentSheetSource.includes(
       "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
@@ -168,7 +170,7 @@ Deno.test("cover sheets and shared chrome consume the iPad top-clearance contrac
   );
 });
 
-Deno.test("the mobile Draft page clears the iPad status bar", () => {
+test("the mobile Draft page clears the iPad status bar", () => {
   assert(
     appSource.includes(
       'data-mobile-drawer-surface={mobile ? "true" : undefined}\n                        sx={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", pointerEvents: "auto", pt: mobile && navbarAtBottom ? "var(--cowboy-system-top-clearance)" : 0 }}>',

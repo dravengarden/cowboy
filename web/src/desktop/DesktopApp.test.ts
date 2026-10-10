@@ -1,21 +1,23 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const desktopAppSource = await Deno.readTextFile(
-  new URL("./DesktopApp.tsx", import.meta.url),
+const desktopAppSource = await readFile(
+  new URL("./DesktopApp.tsx", import.meta.url), "utf8",
 );
-const workspaceControllerSource = await Deno.readTextFile(
-  new URL("./DesktopWorkspaceController.tsx", import.meta.url),
+const workspaceControllerSource = await readFile(
+  new URL("./DesktopWorkspaceController.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("desktop never mounts a page-wide keyboard target overlay", () => {
+test("desktop never mounts a page-wide keyboard target overlay", () => {
   assertEquals(desktopAppSource.includes("DesktopHintOverlay"), false);
   assertEquals(workspaceControllerSource.includes('"hint"'), false);
 });
 
-Deno.test("the open session owns selected material in rail and collapsed layouts", () => {
+test("the open session owns selected material in rail and collapsed layouts", () => {
   assertEquals(
     appSource.includes(
       `...(desktop && s.id === activeId && {`,

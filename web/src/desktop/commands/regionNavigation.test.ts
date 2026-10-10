@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { regionInDirection, regionMotionKey } from "./regionNavigation.ts";
 
 const box = (left: number, top: number, right: number, bottom: number) => ({
@@ -17,7 +18,7 @@ const queue = box(260, 800, 820, 1000);
 const conversation = box(820, 40, 1560, 1000);
 const all = [sessions, topbar, composer, queue, conversation];
 
-Deno.test("Ctrl+H/L cross panes by geometry", () => {
+test("Ctrl+H/L cross panes by geometry", () => {
   assertEquals(regionInDirection(composer, all, "h"), 0);
   assertEquals(regionInDirection(composer, all, "l"), 4);
   assertEquals(regionInDirection(queue, all, "l"), 4);
@@ -26,7 +27,7 @@ Deno.test("Ctrl+H/L cross panes by geometry", () => {
   assertEquals(regionInDirection(conversation, all, "l"), null);
 });
 
-Deno.test("Ctrl+J/K move within a column and up to the top bar", () => {
+test("Ctrl+J/K move within a column and up to the top bar", () => {
   assertEquals(regionInDirection(composer, all, "j"), 3);
   assertEquals(regionInDirection(queue, all, "k"), 2);
   assertEquals(regionInDirection(composer, all, "k"), 1);
@@ -41,7 +42,7 @@ Deno.test("Ctrl+J/K move within a column and up to the top bar", () => {
   assertEquals(regionInDirection(queue, all, "j"), null);
 });
 
-Deno.test("only plain Ctrl with h/j/k/l by physical key", () => {
+test("only plain Ctrl with h/j/k/l by physical key", () => {
   const event = (code: string, extra = {}) => ({
     code,
     ctrlKey: true,
@@ -57,7 +58,7 @@ Deno.test("only plain Ctrl with h/j/k/l by physical key", () => {
   assertEquals(regionMotionKey(event("KeyA")), null);
 });
 
-Deno.test("a thin bar sharing a sliver of the edge does not win", () => {
+test("a thin bar sharing a sliver of the edge does not win", () => {
   // From Sessions, L passes the top bar (40px of shared edge) for Prompt.
   assertEquals(regionInDirection(sessions, all, "l"), 2);
 });

@@ -1,9 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assertEquals,
   assertMatch,
   assertRejects,
   assertStringIncludes,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { adminApi, type PluginRelease } from "./adminApi.ts";
 
 const release: PluginRelease = {
@@ -17,7 +19,7 @@ const release: PluginRelease = {
   supported_platforms: [{ os: "linux", architecture: "x86_64" }],
 };
 
-Deno.test("admin install uses the registered generic Plugin route and exact release", async () => {
+test("admin install uses the registered generic Plugin route and exact release", async () => {
   const original = globalThis.fetch;
   const calls: Array<[string, RequestInit | undefined]> = [];
   globalThis.fetch = (input, init) => {
@@ -39,8 +41,8 @@ Deno.test("admin install uses the registered generic Plugin route and exact rele
       version: release.plugin_version,
       digest: release.artifact_digest,
     });
-    const routes = await Deno.readTextFile(
-      new URL("../../../src/server.rs", import.meta.url),
+    const routes = await readFile(
+      new URL("../../../src/server.rs", import.meta.url), "utf8",
     );
     assertStringIncludes(routes, '"/api/machines/{id}/plugins/{provider_id}"');
   } finally {
@@ -48,7 +50,7 @@ Deno.test("admin install uses the registered generic Plugin route and exact rele
   }
 });
 
-Deno.test("admin install refuses unbound releases without sending a request", async () => {
+test("admin install refuses unbound releases without sending a request", async () => {
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = () => {

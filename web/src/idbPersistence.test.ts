@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { ScopeClosedError } from "../../components/state-store/owned-scope.ts";
 import {
   createIdbPersistenceOwner,
@@ -18,7 +19,7 @@ import {
   microtasks,
 } from "./idbPersistence.fixture.ts";
 
-Deno.test("IDB owner lazily shares one connection, borrows facades and preserves defaults/data", async () => {
+test("IDB owner lazily shares one connection, borrows facades and preserves defaults/data", async () => {
   const factory = new FakeIndexedDb();
   const owner = createIdbPersistenceOwner({ factory });
   const a = owner.persistence<{ value: number }>("a", { strictWrites: true });
@@ -58,7 +59,7 @@ Deno.test("IDB owner lazily shares one connection, borrows facades and preserves
   }
 });
 
-Deno.test("IDB owners isolate close authority even for the same target", async () => {
+test("IDB owners isolate close authority even for the same target", async () => {
   const factory = new FakeIndexedDb();
   const a = createIdbPersistenceOwner({ factory });
   const b = createIdbPersistenceOwner({ factory });
@@ -71,7 +72,7 @@ Deno.test("IDB owners isolate close authority even for the same target", async (
   await b.dispose();
 });
 
-Deno.test("IDB owners capture an exact schema floor and reject invalid versions before open", async () => {
+test("IDB owners capture an exact schema floor and reject invalid versions before open", async () => {
   const factory = new FakeIndexedDb();
   const options = { factory, schemaVersion: 2 };
   const owner = createIdbPersistenceOwner(options);
@@ -90,7 +91,7 @@ Deno.test("IDB owners capture an exact schema floor and reject invalid versions 
   await owner.dispose();
 });
 
-Deno.test("IDB strict key inspection is bounded and never reports failure as empty", async () => {
+test("IDB strict key inspection is bounded and never reports failure as empty", async () => {
   const absent = createIdbPersistenceOwner({ factory: null });
   assertEquals(await absent.listKeys(), []);
   await assertRejects(
@@ -126,7 +127,7 @@ Deno.test("IDB strict key inspection is bounded and never reports failure as emp
   await owner.dispose();
 });
 
-Deno.test("transaction-lifetime connections drain leases and preserve the logical record on reopen", async () => {
+test("transaction-lifetime connections drain leases and preserve the logical record on reopen", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const owner = createIdbPersistenceOwner({
@@ -156,7 +157,7 @@ Deno.test("transaction-lifetime connections drain leases and preserve the logica
   await owner.dispose();
 });
 
-Deno.test("IDB closing-connection retry and delayed old events preserve replacement identity", async () => {
+test("IDB closing-connection retry and delayed old events preserve replacement identity", async () => {
   const factory = new FakeIndexedDb();
   const owner = createIdbPersistenceOwner({ factory });
   const record = owner.persistence<number>("queue", { strictWrites: true });
@@ -175,7 +176,7 @@ Deno.test("IDB closing-connection retry and delayed old events preserve replacem
 });
 
 for (const mode of ["read", "write", "keys"] as const) {
-  Deno.test(`IDB ${mode} waits for terminal commit, and disposal drains its lease`, async () => {
+  test(`IDB ${mode} waits for terminal commit, and disposal drains its lease`, async () => {
     const factory = new FakeIndexedDb();
     factory.autoTransactions = false;
     factory.data.set("key", 7);
@@ -212,7 +213,7 @@ for (const mode of ["read", "write", "keys"] as const) {
     assertEquals(owner.lifecycle.transactions, 0);
   });
 
-  Deno.test(`IDB ${mode} abort without request error settles instead of hanging`, async () => {
+  test(`IDB ${mode} abort without request error settles instead of hanging`, async () => {
     const factory = new FakeIndexedDb();
     factory.autoTransactions = false;
     const owner = createIdbPersistenceOwner({ factory });
@@ -240,7 +241,7 @@ for (const mode of ["read", "write", "keys"] as const) {
   });
 }
 
-Deno.test("IDB success followed by abort never reports a durable write", async () => {
+test("IDB success followed by abort never reports a durable write", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const owner = createIdbPersistenceOwner({ factory });
@@ -262,7 +263,7 @@ Deno.test("IDB success followed by abort never reports a durable write", async (
   await owner.dispose();
 });
 
-Deno.test("IDB request error retains lease until abort and never replays a submitted transaction", async () => {
+test("IDB request error retains lease until abort and never replays a submitted transaction", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const owner = createIdbPersistenceOwner({ factory });
@@ -294,7 +295,7 @@ Deno.test("IDB request error retains lease until abort and never replays a submi
   assertEquals(factory.requests.length, 1);
 });
 
-Deno.test("IDB synchronous clone failure aborts and releases the created transaction", async () => {
+test("IDB synchronous clone failure aborts and releases the created transaction", async () => {
   const factory = new FakeIndexedDb();
   factory.configure = (db): void => {
     db.throwRequest = true;
@@ -309,7 +310,7 @@ Deno.test("IDB synchronous clone failure aborts and releases the created transac
   await owner.dispose();
 });
 
-Deno.test("IDB only retries InvalidStateError before transaction creation, and only once", async () => {
+test("IDB only retries InvalidStateError before transaction creation, and only once", async () => {
   for (const name of ["InvalidStateError", "QuotaExceededError"]) {
     const factory = new FakeIndexedDb();
     factory.configure = (db): void => {
@@ -329,7 +330,7 @@ Deno.test("IDB only retries InvalidStateError before transaction creation, and o
   }
 });
 
-Deno.test("IDB versionchange closes synchronously but drains the old transaction alongside a new generation", async () => {
+test("IDB versionchange closes synchronously but drains the old transaction alongside a new generation", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const owner = createIdbPersistenceOwner({ factory });
@@ -357,7 +358,7 @@ Deno.test("IDB versionchange closes synchronously but drains the old transaction
 });
 
 for (const reason of ["blocked", "timeout"] as const) {
-  Deno.test(`IDB ${reason} bounds data results without pretending a native open was cancelled`, async () => {
+  test(`IDB ${reason} bounds data results without pretending a native open was cancelled`, async () => {
     const factory = new FakeIndexedDb();
     factory.autoOpen = false;
     const owner = createIdbPersistenceOwner({
@@ -389,7 +390,7 @@ for (const reason of ["blocked", "timeout"] as const) {
   });
 }
 
-Deno.test("IDB abandoned open aborts a late upgrade without creating schema; later retry is fresh", async () => {
+test("IDB abandoned open aborts a late upgrade without creating schema; later retry is fresh", async () => {
   const factory = new FakeIndexedDb();
   factory.autoOpen = false;
   const owner = createIdbPersistenceOwner({ factory });
@@ -411,7 +412,7 @@ Deno.test("IDB abandoned open aborts a late upgrade without creating schema; lat
   await owner.dispose();
 });
 
-Deno.test("IDB disposal drains a write admitted before open completes", async () => {
+test("IDB disposal drains a write admitted before open completes", async () => {
   const factory = new FakeIndexedDb();
   factory.autoOpen = false;
   const owner = createIdbPersistenceOwner({ factory });
@@ -425,7 +426,7 @@ Deno.test("IDB disposal drains a write admitted before open completes", async ()
   assertEquals(factory.databases[0]!.closeCalls, 1);
 });
 
-Deno.test("IDB unavailable storage preserves best-effort reads and strict writes", async () => {
+test("IDB unavailable storage preserves best-effort reads and strict writes", async () => {
   const owner = createIdbPersistenceOwner({ factory: null });
   assertEquals(await owner.listKeys(), []);
   assertEquals(await owner.persistence("key").load(), null);
@@ -438,7 +439,7 @@ Deno.test("IDB unavailable storage preserves best-effort reads and strict writes
   await owner.dispose();
 });
 
-Deno.test("IDB schema mismatch closes without a destructive database/version migration", async () => {
+test("IDB schema mismatch closes without a destructive database/version migration", async () => {
   const factory = new FakeIndexedDb();
   factory.configure = (db): void => {
     db.storeExists = false;
@@ -459,7 +460,7 @@ Deno.test("IDB schema mismatch closes without a destructive database/version mig
   await owner.dispose();
 });
 
-Deno.test("IDB cleanup failure remains visible without retrying close or exposing private diagnostics", async () => {
+test("IDB cleanup failure remains visible without retrying close or exposing private diagnostics", async () => {
   const factory = new FakeIndexedDb();
   const owner = createIdbPersistenceOwner({ factory });
   await owner.listKeys();
@@ -474,7 +475,7 @@ Deno.test("IDB cleanup failure remains visible without retrying close or exposin
   assertEquals(JSON.stringify(owner.lifecycle).includes("private"), false);
 });
 
-Deno.test("IDB snapshots configuration and rejects invalid deadlines before acquisition", async () => {
+test("IDB snapshots configuration and rejects invalid deadlines before acquisition", async () => {
   const factory = new FakeIndexedDb();
   const options = { factory, dbName: "original", storeName: "clients" };
   const owner = createIdbPersistenceOwner(options);
@@ -497,7 +498,7 @@ Deno.test("IDB snapshots configuration and rejects invalid deadlines before acqu
   assertEquals(factory.requests.length, 1);
 });
 
-Deno.test("legacy IDB helpers own their connections and expose/await cleanup", async () => {
+test("legacy IDB helpers own their connections and expose/await cleanup", async () => {
   const factory = new FakeIndexedDb();
   const record = idbPersistence<number>("key", { factory, strictWrites: true });
   await record.save(1);
@@ -507,7 +508,7 @@ Deno.test("legacy IDB helpers own their connections and expose/await cleanup", a
   assert(factory.databases.every((db) => db.closeCalls === 1));
 });
 
-Deno.test("IDB factory reentrant disposal cannot escape task admission or generation ownership", async () => {
+test("IDB factory reentrant disposal cannot escape task admission or generation ownership", async () => {
   const factory = new FakeIndexedDb();
   let closing: Promise<void> | undefined;
   const owner = createIdbPersistenceOwner({
@@ -525,7 +526,7 @@ Deno.test("IDB factory reentrant disposal cannot escape task admission or genera
   assertEquals(factory.databases[0]!.closeCalls, 1);
 });
 
-Deno.test("IDB synchronous factory failure releases its holder and permits a later fresh open", async () => {
+test("IDB synchronous factory failure releases its holder and permits a later fresh open", async () => {
   const factory = new FakeIndexedDb();
   let fail = true;
   const owner = createIdbPersistenceOwner({
@@ -545,7 +546,7 @@ Deno.test("IDB synchronous factory failure releases its holder and permits a lat
   assertEquals(factory.data.get("key"), 2);
 });
 
-Deno.test("IDB fresh upgrade creates only the configured store", async () => {
+test("IDB fresh upgrade creates only the configured store", async () => {
   const factory = new FakeIndexedDb();
   factory.autoOpen = false;
   factory.configure = (db): void => {
@@ -561,7 +562,7 @@ Deno.test("IDB fresh upgrade creates only the configured store", async () => {
   await owner.dispose();
 });
 
-Deno.test("IDB forced connection close still retains its transaction until terminal abort", async () => {
+test("IDB forced connection close still retains its transaction until terminal abort", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const owner = createIdbPersistenceOwner({ factory });

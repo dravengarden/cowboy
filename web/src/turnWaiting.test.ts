@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   hasOpenTool,
   hasUnresolvedPermission,
@@ -13,7 +15,7 @@ import {
 import { derive } from "./derive.ts";
 import type { Envelope } from "./protocol.ts";
 
-Deno.test("Sending never revives a completed assistant bubble before the user echo", () => {
+test("Sending never revives a completed assistant bubble before the user echo", () => {
   const completed: Envelope[] = [
     {
       session_id: "s",
@@ -81,7 +83,7 @@ Deno.test("Sending never revives a completed assistant bubble before the user ec
   }
 });
 
-Deno.test("thoughts and retained history respect canonical turn boundaries", () => {
+test("thoughts and retained history respect canonical turn boundaries", () => {
   const thought = { key: "10", kind: "thought" };
   const busy: Envelope = {
     session_id: "s",
@@ -111,7 +113,7 @@ Deno.test("thoughts and retained history respect canonical turn boundaries", () 
   assertEquals(isCurrentTurnStreamingItem(true, undefined, []), false);
 });
 
-Deno.test("agent wait activity names the provider immediately", () => {
+test("agent wait activity names the provider immediately", () => {
   assertEquals(waitingActivityLabel("Grok", 0), "Waiting for Grok…");
   assertEquals(
     waitingActivityLabel("Grok", WAITING_ELAPSED_VISIBLE_SECONDS - 1),
@@ -119,7 +121,7 @@ Deno.test("agent wait activity names the provider immediately", () => {
   );
 });
 
-Deno.test("agent wait activity exposes elapsed seconds after a short silence", () => {
+test("agent wait activity exposes elapsed seconds after a short silence", () => {
   assertEquals(
     waitingActivityLabel("Grok", WAITING_ELAPSED_VISIBLE_SECONDS),
     "Waiting for Grok · 5s",
@@ -127,7 +129,7 @@ Deno.test("agent wait activity exposes elapsed seconds after a short silence", (
   assertEquals(waitingActivityLabel("Codex", 53), "Waiting for Codex · 53s");
 });
 
-Deno.test("Codex terminal output is turn activity, usage snapshots are not", () => {
+test("Codex terminal output is turn activity, usage snapshots are not", () => {
   assertEquals(isTurnActivityUpdate("tool_call_update"), true);
   assertEquals(isTurnActivityUpdate("agent_thought_chunk"), true);
   assertEquals(isTurnActivityUpdate("usage_update"), false);
@@ -135,7 +137,7 @@ Deno.test("Codex terminal output is turn activity, usage snapshots are not", () 
   assertEquals(isTurnActivityUpdate("available_commands_update"), false);
 });
 
-Deno.test("hasOpenTool detects in-progress tools", () => {
+test("hasOpenTool detects in-progress tools", () => {
   assertEquals(
     hasOpenTool([{ kind: "thought" }, { kind: "tool", status: "in_progress" }]),
     true,
@@ -146,7 +148,7 @@ Deno.test("hasOpenTool detects in-progress tools", () => {
   );
 });
 
-Deno.test("a silent pending tool is still quiet; a permission is a human wait", () => {
+test("a silent pending tool is still quiet; a permission is a human wait", () => {
   assertEquals(
     shouldShowQuietBadge(true, QUIET_BADGE_MIN, false),
     true,
@@ -161,7 +163,7 @@ Deno.test("a silent pending tool is still quiet; a permission is a human wait", 
   );
 });
 
-Deno.test("quiet badge ignores idle time from before the current turn", () => {
+test("quiet badge ignores idle time from before the current turn", () => {
   assertEquals(quietMinutes(10 * 60_000, 0), 10);
   assertEquals(shouldShowQuietBadge(true, QUIET_BADGE_MIN, false), true);
   assertEquals(shouldShowQuietBadge(true, QUIET_BADGE_MIN, true), false);
@@ -169,12 +171,12 @@ Deno.test("quiet badge ignores idle time from before the current turn", () => {
   assertEquals(shouldShowQuietBadge(true, QUIET_BADGE_MIN - 1, false), false);
 });
 
-Deno.test("live store treats dropped Codex terminal deltas as turn activity", async () => {
-  const storeSource = await Deno.readTextFile(
-    new URL("./store.ts", import.meta.url),
+test("live store treats dropped Codex terminal deltas as turn activity", async () => {
+  const storeSource = await readFile(
+    new URL("./store.ts", import.meta.url), "utf8",
   );
-  const transcriptSource = await Deno.readTextFile(
-    new URL("./Transcript.tsx", import.meta.url),
+  const transcriptSource = await readFile(
+    new URL("./Transcript.tsx", import.meta.url), "utf8",
   );
   assertEquals(storeSource.includes("isTurnActivityUpdate"), true);
   assertEquals(storeSource.includes("markSessionTurnActivity"), true);

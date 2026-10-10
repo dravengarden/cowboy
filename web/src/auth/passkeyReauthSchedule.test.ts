@@ -1,31 +1,33 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   passkeyReauthDue,
   passkeyReauthTimerDelay,
 } from "./passkeyReauthSchedule.ts";
 
-Deno.test("Passkey lock is due only for an eligible browser", () => {
+test("Passkey lock is due only for an eligible browser", () => {
   assertEquals(passkeyReauthDue(false, true, null, 100), false);
   assertEquals(passkeyReauthDue(true, true, null, 100), true);
   assertEquals(passkeyReauthDue(true, false, 99, 100), true);
   assertEquals(passkeyReauthDue(true, false, 101, 100), false);
 });
 
-Deno.test("Passkey lock schedules the exact future deadline", () => {
+test("Passkey lock schedules the exact future deadline", () => {
   assertEquals(passkeyReauthTimerDelay(true, false, 250, 100), 150);
   assertEquals(passkeyReauthTimerDelay(true, false, 100, 100), null);
   assertEquals(passkeyReauthTimerDelay(true, true, 250, 100), null);
   assertEquals(passkeyReauthTimerDelay(false, false, 250, 100), null);
 });
 
-const lockSource = await Deno.readTextFile(
-  new URL("./PasskeyReauthLock.tsx", import.meta.url),
+const lockSource = await readFile(
+  new URL("./PasskeyReauthLock.tsx", import.meta.url), "utf8",
 );
 
 // A dismissed prompt used to leave this card silent, which is indistinguishable
 // from a card that did nothing — and the common cause is not a dismissal at
 // all: a password manager answered the prompt holding no Passkey for this site.
-Deno.test("a dismissed unlock prompt explains itself instead of going quiet", () => {
+test("a dismissed unlock prompt explains itself instead of going quiet", () => {
   assert(lockSource.includes("if (passkeyFlowCancelled(err)) {"));
   assert(lockSource.includes("setHint("));
   assert(lockSource.includes("pick that app in the prompt"));
@@ -45,11 +47,11 @@ Deno.test("a dismissed unlock prompt explains itself instead of going quiet", ()
   );
 });
 
-const sheetSource = await Deno.readTextFile(
-  new URL("./ProductRecentAuthSheet.tsx", import.meta.url),
+const sheetSource = await readFile(
+  new URL("./ProductRecentAuthSheet.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("verification outcomes render beside the button that caused them", () => {
+test("verification outcomes render beside the button that caused them", () => {
   // The body scrolls. An alert inserted above the method tabs lands off-screen
   // on a phone, which is what "I tapped Verify and nothing happened" looks like.
   const actionArea = sheetSource.slice(sheetSource.indexOf("{error && <Alert"));
@@ -76,7 +78,7 @@ Deno.test("verification outcomes render beside the button that caused them", () 
 // that already succeeded and is waiting for the reader's Continue tap. `me` is
 // a fresh object on every session push, so depending on it meant any background
 // refresh discarded that result and the tap read as doing nothing.
-Deno.test("a background session refresh cannot discard a finished verification", () => {
+test("a background session refresh cannot discard a finished verification", () => {
   const effect = sheetSource.slice(
     sheetSource.indexOf("const resetInputs = useRef("),
     sheetSource.indexOf("}, [open, purpose]);") + "}, [open, purpose]);".length,

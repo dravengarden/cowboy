@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { MachineSummary } from "./protocol.ts";
 import {
   machineResourceMetrics,
@@ -20,7 +21,7 @@ function machine(overrides: Partial<MachineSummary>): MachineSummary {
   } as MachineSummary;
 }
 
-Deno.test("a reporting Machine shows memory, swap, load, disk and sessions", () => {
+test("a reporting Machine shows memory, swap, load, disk and sessions", () => {
   const ovh = machine({
     resources: {
       memory_total_bytes: 12 * GIB,
@@ -48,7 +49,7 @@ Deno.test("a reporting Machine shows memory, swap, load, disk and sessions", () 
   assertEquals(machineResourcesCaption(ovh, 31_000), "Remote · updated 30s ago");
 });
 
-Deno.test("a Machine low on disk says so in its caption", () => {
+test("a Machine low on disk says so in its caption", () => {
   const low = machine({
     resources: {
       memory_total_bytes: 12 * GIB,
@@ -70,7 +71,7 @@ Deno.test("a Machine low on disk says so in its caption", () => {
   assertEquals(machineResourceMetrics(low)[1], ["Swap", "None"]);
 });
 
-Deno.test("an older or offline Machine still shows what is known", () => {
+test("an older or offline Machine still shows what is known", () => {
   const old = machine({});
   assertEquals(machineResourceMetrics(old), [["Live sessions", "8 / 28"]]);
   assertEquals(
@@ -83,7 +84,7 @@ Deno.test("an older or offline Machine still shows what is known", () => {
   );
 });
 
-Deno.test("remote Machines list before the Controller host", () => {
+test("remote Machines list before the Controller host", () => {
   const ordered = machinesForResources([
     machine({ id: "hawk", display_name: "Hawk", local: true }),
     machine({ id: "ovh", display_name: "OVH" }),

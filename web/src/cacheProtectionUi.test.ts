@@ -1,16 +1,18 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const providerConfigSource = await Deno.readTextFile(
-  new URL("./providerConfigOptions.ts", import.meta.url),
+const providerConfigSource = await readFile(
+  new URL("./providerConfigOptions.ts", import.meta.url), "utf8",
 );
-const claudeDeepSeekSource = await Deno.readTextFile(
-  new URL("../../plugins/claude-deepseek/provider.json", import.meta.url),
+const claudeDeepSeekSource = await readFile(
+  new URL("../../plugins/claude-deepseek/provider.json", import.meta.url), "utf8",
 );
 
-Deno.test("large DeepSeek sessions expose bounded cache-protection status", () => {
+test("large DeepSeek sessions expose bounded cache-protection status", () => {
   assertEquals(composerSource.includes('"deepseek_cache_protection"'), false);
   assertEquals(
     claudeDeepSeekSource.includes('"id": "deepseek_cache_protection"'),

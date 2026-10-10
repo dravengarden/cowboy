@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   OBSIDIAN_SHEET_CLOSED_SCALE,
   OBSIDIAN_SHEET_INSET_PX,
@@ -14,17 +16,17 @@ import {
   obsidianSheetTransform,
 } from "./obsidianSheetMotion.ts";
 
-const sheetSource = await Deno.readTextFile(
-  new URL("./Sheet.tsx", import.meta.url),
+const sheetSource = await readFile(
+  new URL("./Sheet.tsx", import.meta.url), "utf8",
 );
-const modalSource = await Deno.readTextFile(
-  new URL("./ObsidianSheet.tsx", import.meta.url),
+const modalSource = await readFile(
+  new URL("./ObsidianSheet.tsx", import.meta.url), "utf8",
 );
-const drawerMotion = await Deno.readTextFile(
-  new URL("./mobileDrawerMotion.ts", import.meta.url),
+const drawerMotion = await readFile(
+  new URL("./mobileDrawerMotion.ts", import.meta.url), "utf8",
 );
 
-Deno.test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
+test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
   assertEquals(OBSIDIAN_SHEET_SETTLE_EASING, "cubic-bezier(0.32, 0.72, 0, 1)");
   assert(drawerMotion.includes(`"${OBSIDIAN_SHEET_SETTLE_EASING}"`));
   assertEquals(OBSIDIAN_SHEET_SETTLE_MS, 240);
@@ -37,7 +39,7 @@ Deno.test("compact sheet settle matches the Obsidian/iOS drawer cubic", () => {
   assertEquals(obsidianSheetSettleMs(false), 240);
 });
 
-Deno.test("scale and scrim interpolate from closed to open", () => {
+test("scale and scrim interpolate from closed to open", () => {
   assertEquals(obsidianSheetScale(200, 200), OBSIDIAN_SHEET_CLOSED_SCALE);
   assertEquals(obsidianSheetScale(0, 200), 1);
   assertEquals(obsidianSheetScale(100, 200), 0.98);
@@ -54,7 +56,7 @@ Deno.test("scale and scrim interpolate from closed to open", () => {
   );
 });
 
-Deno.test("closing scrim remains hit-testable until the sheet unmounts", () => {
+test("closing scrim remains hit-testable until the sheet unmounts", () => {
   assertEquals(obsidianSheetScrimPointerEvents(0.48, false), "auto");
   assertEquals(obsidianSheetScrimPointerEvents(0, false), "none");
   assertEquals(obsidianSheetScrimPointerEvents(0, true), "auto");
@@ -63,7 +65,7 @@ Deno.test("closing scrim remains hit-testable until the sheet unmounts", () => {
   assert(modalSource.includes("onPointerUp={dismissBackdrop.onPointerUp}"));
 });
 
-Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad", () => {
+test("phone sheets use the compact Obsidian card, not a floating footer pad", () => {
   assert(sheetSource.includes("<ObsidianSheet"));
   assert(sheetSource.includes("!props.cover"));
   assert(modalSource.includes("data-obsidian-sheet"));
@@ -90,7 +92,7 @@ Deno.test("phone sheets use the compact Obsidian card, not a floating footer pad
   assert(modalSource.includes('justifyContent: "space-between"'));
 });
 
-Deno.test("compact sheets can dim the status bar and float dismissal over content", () => {
+test("compact sheets can dim the status bar and float dismissal over content", () => {
   assert(modalSource.includes('meta[name="theme-color"]'));
   assert(modalSource.includes("OBSIDIAN_SHEET_SCRIM_MAX"));
   assert(modalSource.includes("floatingDismiss"));

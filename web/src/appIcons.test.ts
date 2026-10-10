@@ -1,9 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   APP_ICON_GROUPS,
   APP_ICONS,
@@ -19,7 +21,7 @@ import {
   selectAppIcon,
 } from "./appIcons.ts";
 
-Deno.test("icon catalog preserves Lilac Flow default and all fifty color styles", () => {
+test("icon catalog preserves Lilac Flow default and all fifty color styles", () => {
   assertEquals(APP_ICONS.length, 50);
   assertEquals(APP_ICON_GROUPS.length, 2);
   assert(APP_ICON_GROUPS.every((group) => group.styles.length === 25));
@@ -38,7 +40,7 @@ Deno.test("icon catalog preserves Lilac Flow default and all fifty color styles"
   }
 });
 
-Deno.test("icon paths fail closed for untrusted stored values", () => {
+test("icon paths fail closed for untrusted stored values", () => {
   for (
     const value of [
       "../../secret",
@@ -60,7 +62,7 @@ Deno.test("icon paths fail closed for untrusted stored values", () => {
   }
 });
 
-Deno.test("icon filtering considers both pieces, background tone, and hex search", () => {
+test("icon filtering considers both pieces, background tone, and hex search", () => {
   assert(
     filterAppIcons({ family: "purple", tone: "dark" }).some((p) =>
       p.id === DEFAULT_APP_ICON
@@ -86,7 +88,7 @@ Deno.test("icon filtering considers both pieces, background tone, and hex search
   ]);
 });
 
-Deno.test("native icon replies reject errors, malformed data, and unknown current state", () => {
+test("native icon replies reject errors, malformed data, and unknown current state", () => {
   for (
     const raw of [null, {}, { ok: false, error: "Denied" }, { ok: true }, {
       ok: true,
@@ -108,7 +110,7 @@ Deno.test("native icon replies reject errors, malformed data, and unknown curren
   );
 });
 
-Deno.test("native icon selection commits only after the OS reports the selected icon", async () => {
+test("native icon selection commits only after the OS reports the selected icon", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyNativeShell?: boolean;
     __cowboyAppIcon?: (request: unknown) => Promise<unknown>;
@@ -148,14 +150,14 @@ Deno.test("native icon selection commits only after the OS reports the selected 
   }
 });
 
-Deno.test("every icon has installable files with a shared identity and an isolated handoff", async () => {
+test("every icon has installable files with a shared identity and an isolated handoff", async () => {
   for (const icon of APP_ICONS) {
     const base = new URL(
       `../public/app-icons/v10/${icon.id}/`,
       import.meta.url,
     );
     const manifest = JSON.parse(
-      await Deno.readTextFile(new URL("manifest.webmanifest", base)),
+      await readFile(new URL("manifest.webmanifest", base), "utf8"),
     );
     assertEquals(manifest.id, "/");
     assertEquals(manifest.scope, "/");
@@ -164,18 +166,18 @@ Deno.test("every icon has installable files with a shared identity and an isolat
       manifest.icons.some((p: { purpose: string }) => p.purpose === "maskable"),
     );
     for (const size of [96, 180, 192, 512]) {
-      const bytes = await Deno.readFile(new URL(`icon-${size}.png`, base));
+      const bytes = await readFile(new URL(`icon-${size}.png`, base));
       const view = new DataView(bytes.buffer);
       assertEquals([view.getUint32(16), view.getUint32(20)], [size, size]);
     }
-    const install = await Deno.readTextFile(new URL("install.html", base));
+    const install = await readFile(new URL("install.html", base), "utf8");
     assert(install.includes('rel="apple-touch-icon"'));
     assert(install.includes(`/?app-icon=${icon.id}`));
     assert(!install.includes("tmpfiles.org"));
   }
 });
 
-Deno.test("Curlseal previews preserve the approved artwork in both modes", () => {
+test("Curlseal previews preserve the approved artwork in both modes", () => {
   // The opaque vector, not the 192px raster the installable files still use.
   assertEquals(
     appIconAppearanceAsset(DEFAULT_APP_ICON, false),
@@ -197,7 +199,7 @@ Deno.test("Curlseal previews preserve the approved artwork in both modes", () =>
   }
 });
 
-Deno.test("tab marks are independent of opaque installation icons", () => {
+test("tab marks are independent of opaque installation icons", () => {
   assertEquals(
     appIconTabAsset(DEFAULT_APP_ICON),
     "/app-icons/v10/curlseal-026/favicon.svg",

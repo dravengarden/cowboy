@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   cowboyVersionFromServiceWorkerSource,
   fetchReadyCowboyVersion,
@@ -6,7 +8,7 @@ import {
   mobileUpdateBanner,
 } from "./mobileUpdateVersion.ts";
 
-Deno.test("the update bar names the ready service-worker version", () => {
+test("the update bar names the ready service-worker version", () => {
   assertEquals(
     cowboyVersionFromServiceWorkerSource('const VERSION = "cowboy-v1352";'),
     "cowboy-v1352",
@@ -21,7 +23,7 @@ Deno.test("the update bar names the ready service-worker version", () => {
   );
 });
 
-Deno.test("the phone bar narrates a download it does not offer to hurry", () => {
+test("the phone bar narrates a download it does not offer to hurry", () => {
   // A download nobody asked for shows as a hairline, so this copy only
   // appears when there is something to say; either way it names no action,
   // because there is nothing useful to press while bits are in flight.
@@ -47,7 +49,7 @@ Deno.test("the phone bar narrates a download it does not offer to hurry", () => 
   );
 });
 
-Deno.test("a press names what a second press would do, not what the first did", () => {
+test("a press names what a second press would do, not what the first did", () => {
   // The control's meaning inverts once it has been pressed. Leaving it
   // reading "Reload" would make the cancel a trap.
   assertEquals(
@@ -56,7 +58,7 @@ Deno.test("a press names what a second press would do, not what the first did", 
   );
 });
 
-Deno.test("every pressable phase draws its action as an action", () => {
+test("every pressable phase draws its action as an action", () => {
   // The bar looks like the notice it used to be, so the verb has to leave the
   // sentence and become a control of its own.
   assertEquals(
@@ -85,7 +87,7 @@ Deno.test("every pressable phase draws its action as an action", () => {
   );
 });
 
-Deno.test("the swap itself offers nothing to press", () => {
+test("the swap itself offers nothing to press", () => {
   assertEquals(
     mobileUpdateBanner("cowboy-v1352", { kind: "reloading" }),
     { text: "Updating to cowboy-v1352…" },
@@ -93,7 +95,7 @@ Deno.test("the swap itself offers nothing to press", () => {
   assertEquals(mobileUpdateBanner(undefined, { kind: "reloading" }), { text: "Updating…" });
 });
 
-Deno.test("a screen reader hears one control, not a layout", () => {
+test("a screen reader hears one control, not a layout", () => {
   assertEquals(
     mobileUpdateAnnouncement(mobileUpdateBanner("cowboy-v1352", { kind: "ready" })),
     "cowboy-v1352 is ready. Reload",
@@ -103,9 +105,9 @@ Deno.test("a screen reader hears one control, not a layout", () => {
     "Updating to cowboy-v1352…",
   );
 });
-Deno.test("the mobile bar reads the version and keeps its hooks unconditional", async () => {
-  const bannerSource = await Deno.readTextFile(
-    new URL("./MobileConnectionBanner.tsx", import.meta.url),
+test("the mobile bar reads the version and keeps its hooks unconditional", async () => {
+  const bannerSource = await readFile(
+    new URL("./MobileConnectionBanner.tsx", import.meta.url), "utf8",
   );
   assertEquals(
     bannerSource.includes("mobileUpdateBanner(readyVersion, phase)"),
@@ -118,7 +120,7 @@ Deno.test("the mobile bar reads the version and keeps its hooks unconditional", 
   assertEquals(bannerSource.indexOf("useAutoUpdate(store") < earlyReturn, true);
 });
 
-Deno.test("a waiting worker script wins over the current /sw.js", async () => {
+test("a waiting worker script wins over the current /sw.js", async () => {
   const version = await fetchReadyCowboyVersion(
     (url) =>
       Promise.resolve(

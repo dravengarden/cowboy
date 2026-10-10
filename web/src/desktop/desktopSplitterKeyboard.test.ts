@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   adjacentDesktopSplitter,
   preferredDesktopSplitter,
@@ -6,14 +7,14 @@ import {
   splitterAdjustment,
 } from "./desktopSplitterKeyboard.ts";
 
-Deno.test("splitter selection follows the focused pane", () => {
+test("splitter selection follows the focused pane", () => {
   const agent = ["sessions-prompt", "prompt-conversation"] as const;
   assertEquals(preferredDesktopSplitter(agent, "sessions"), "sessions-prompt");
   assertEquals(preferredDesktopSplitter(agent, "prompt"), "prompt-conversation");
   assertEquals(preferredDesktopSplitter(agent, "conversation"), "prompt-conversation");
 });
 
-Deno.test("Tab cycles visible splitters in both directions", () => {
+test("Tab cycles visible splitters in both directions", () => {
   const visible = ["sessions-prompt", "prompt-conversation"] as const;
   assertEquals(
     adjacentDesktopSplitter(visible, "sessions-prompt", 1),
@@ -25,7 +26,7 @@ Deno.test("Tab cycles visible splitters in both directions", () => {
   );
 });
 
-Deno.test("width resize keeps a selected bar and otherwise follows the focused pane", () => {
+test("width resize keeps a selected bar and otherwise follows the focused pane", () => {
   const visible = ["sessions-prompt", "prompt-conversation"] as const;
   assertEquals(
     resolveDesktopResizeSplitter(visible, "sessions-prompt", "prompt"),
@@ -37,7 +38,7 @@ Deno.test("width resize keeps a selected bar and otherwise follows the focused p
   );
 });
 
-Deno.test("splitter adjustment accepts only the typed DOM contract", () => {
+test("splitter adjustment accepts only the typed DOM contract", () => {
   assertEquals(
     splitterAdjustment(new CustomEvent("resize", {
       detail: { splitter: "prompt-conversation", delta: -16 },

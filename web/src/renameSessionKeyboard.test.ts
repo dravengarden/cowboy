@@ -1,13 +1,15 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const focusHookSource = await Deno.readTextFile(
-  new URL("./useDialogInputFocus.ts", import.meta.url),
+const focusHookSource = await readFile(
+  new URL("./useDialogInputFocus.ts", import.meta.url), "utf8",
 );
 
-Deno.test("session rename focuses its real input inside the initiating tap", () => {
+test("session rename focuses its real input inside the initiating tap", () => {
   const menuClose = appSource.indexOf(
     "flushSync(() => setMenuAnchor(null));",
   );

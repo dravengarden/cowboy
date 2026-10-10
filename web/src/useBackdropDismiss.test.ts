@@ -1,9 +1,10 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { shouldBlockBackdropClick } from "./backdropDismiss.ts";
 
 const guard = { x: 320, y: 640, expiresAt: 1_700 };
 
-Deno.test("backdrop guard consumes the paired compatibility click", () => {
+test("backdrop guard consumes the paired compatibility click", () => {
   assertEquals(
     shouldBlockBackdropClick(
       guard,
@@ -30,7 +31,7 @@ Deno.test("backdrop guard consumes the paired compatibility click", () => {
   );
 });
 
-Deno.test("backdrop guard preserves keyboard, later, and unrelated clicks", () => {
+test("backdrop guard preserves keyboard, later, and unrelated clicks", () => {
   assertEquals(
     shouldBlockBackdropClick(
       guard,

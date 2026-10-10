@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { RenderItem } from "../derive";
 import {
   authoritativeTailPageId,
@@ -12,20 +14,20 @@ import {
   questionTitle,
 } from "./questionPages";
 
-const exploreSurfaceSource = await Deno.readTextFile(
-  new URL("./ExploreSurface.tsx", import.meta.url),
+const exploreSurfaceSource = await readFile(
+  new URL("./ExploreSurface.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("../Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("../Composer.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
-const desktopWorkspaceSource = await Deno.readTextFile(
-  new URL("../desktop/DesktopWorkspace.tsx", import.meta.url),
+const desktopWorkspaceSource = await readFile(
+  new URL("../desktop/DesktopWorkspace.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("mobile page index cover escapes the drawer-follow footer containing block", () => {
+test("mobile page index cover escapes the drawer-follow footer containing block", () => {
   assertEquals(exploreSurfaceSource.includes("function maybePortalToBody("), true);
   assertEquals(
     exploreSurfaceSource.includes("createPortal(node, globalThis.document.body)"),
@@ -39,7 +41,7 @@ Deno.test("mobile page index cover escapes the drawer-follow footer containing b
   );
 });
 
-Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
+test("mobile Page Dock retains disabled previous and next slots", () => {
   assertEquals(exploreSurfaceSource.includes("onlyCompletePage"), false);
   assertEquals(exploreSurfaceSource.includes('aria-label="Next page"'), true);
   assertEquals(
@@ -48,7 +50,7 @@ Deno.test("mobile Page Dock retains disabled previous and next slots", () => {
   );
 });
 
-Deno.test("Page view terminology is consistent across user-facing surfaces", () => {
+test("Page view terminology is consistent across user-facing surfaces", () => {
   const surfaces = appSource + composerSource + exploreSurfaceSource +
     desktopWorkspaceSource;
   assertEquals(composerSource.includes("Page view"), true);
@@ -65,14 +67,14 @@ Deno.test("Page view terminology is consistent across user-facing surfaces", () 
   }
 });
 
-Deno.test("mobile question pages do not duplicate Page Dock navigation in the transcript", () => {
+test("mobile question pages do not duplicate Page Dock navigation in the transcript", () => {
   assertEquals(
     exploreSurfaceSource.includes("pageFooter={current && props.desktop"),
     true,
   );
 });
 
-Deno.test("question rows use the shared Cowboy list selection language", () => {
+test("question rows use the shared Cowboy list selection language", () => {
   assertEquals(exploreSurfaceSource.includes("desktopListItemSx()"), true);
   assertEquals(
     exploreSurfaceSource.includes("`inset 3px 0 0 ${theme.palette.primary.main}`"),
@@ -81,7 +83,7 @@ Deno.test("question rows use the shared Cowboy list selection language", () => {
   assertEquals(exploreSurfaceSource.includes("borderRadius: 1,"), true);
 });
 
-Deno.test("question directory merges live pages and sorts oldest to newest", () => {
+test("question directory merges live pages and sorts oldest to newest", () => {
   assertEquals(
     mergeQuestionPageDirectory(
       [
@@ -102,7 +104,7 @@ Deno.test("question directory merges live pages and sorts oldest to newest", () 
   );
 });
 
-Deno.test("desktop question navigator presents newest first without mutating chronology", () => {
+test("desktop question navigator presents newest first without mutating chronology", () => {
   const chronological = [
     { id: "1", ordinal: 1 },
     { id: "2", ordinal: 2 },
@@ -115,7 +117,7 @@ Deno.test("desktop question navigator presents newest first without mutating chr
   assertEquals(chronological.map((page) => page.id), ["1", "2", "3"]);
 });
 
-Deno.test("a partial answer cannot inflate the known page count", () => {
+test("a partial answer cannot inflate the known page count", () => {
   const indexed = [{ id: "10", title: "Question", ordinal: 51 }];
   const partial = { id: "11", title: "Earlier page", questionCount: 0 };
   assertEquals(mergeQuestionPageDirectory(indexed, [partial], 51), indexed);
@@ -155,7 +157,7 @@ function assistant(key: string, text: string): RenderItem {
   };
 }
 
-Deno.test("question pages split on human prompts and retain intervening events", () => {
+test("question pages split on human prompts and retain intervening events", () => {
   const pages = deriveQuestionPages([
     user("1", "What is ACP?"),
     { key: "2", kind: "thought", sections: ["Checking"] },
@@ -170,7 +172,7 @@ Deno.test("question pages split on human prompts and retain intervening events",
   assertEquals(pages[1]?.itemKeys, ["4", "5", "6"]);
 });
 
-Deno.test("auto-resume user echoes stay in the preceding page", () => {
+test("auto-resume user echoes stay in the preceding page", () => {
   const pages = deriveQuestionPages([
     user("1", "Continue the deployment"),
     assistant("2", "Starting."),
@@ -182,7 +184,7 @@ Deno.test("auto-resume user echoes stay in the preceding page", () => {
   assertEquals(pages[0]?.itemKeys, ["1", "2", "3", "4"]);
 });
 
-Deno.test("context management commands do not create question pages", () => {
+test("context management commands do not create question pages", () => {
   const pages = deriveQuestionPages([
     user("1", "A real question"),
     assistant("2", "A real answer"),
@@ -204,7 +206,7 @@ Deno.test("context management commands do not create question pages", () => {
   assertEquals(pages[0]?.itemKeys, ["1", "2", "3", "4"]);
 });
 
-Deno.test("agent runtime prompts do not create question pages", () => {
+test("agent runtime prompts do not create question pages", () => {
   const pages = deriveQuestionPages([
     user("1", "A real question"),
     assistant("2", "A real answer"),
@@ -217,14 +219,14 @@ Deno.test("agent runtime prompts do not create question pages", () => {
   assertEquals(pages[0]?.itemKeys, ["1", "2", "3", "4"]);
 });
 
-Deno.test("a cleared empty transcript is not a provisional question page", () => {
+test("a cleared empty transcript is not a provisional question page", () => {
   assertEquals(
     deriveQuestionPages([{ key: "9", kind: "cleared", at: 123 }]),
     [],
   );
 });
 
-Deno.test("question title is compact and strips common markdown wrappers", () => {
+test("question title is compact and strips common markdown wrappers", () => {
   assertEquals(
     questionTitle(user("1", "## [Prompt caching](https://example.test)\nDetails"), 1),
     "Prompt caching Details",
@@ -234,7 +236,7 @@ Deno.test("question title is compact and strips common markdown wrappers", () =>
   assertEquals(longTitle, `${"A".repeat(69)}…`);
 });
 
-Deno.test("explicit follow-ups fold into their target page without moving history", () => {
+test("explicit follow-ups fold into their target page without moving history", () => {
   const base = deriveQuestionPages([
     user("1", "Root question"),
     assistant("2", "Root answer"),
@@ -250,7 +252,7 @@ Deno.test("explicit follow-ups fold into their target page without moving histor
   assertEquals(pages[0]?.itemKeys, ["1", "2", "5", "6"]);
 });
 
-Deno.test("a canonical transcript row resolves to its owning question page", () => {
+test("a canonical transcript row resolves to its owning question page", () => {
   const pages = deriveQuestionPages([
     user("question-1", "First"),
     assistant("answer-1", "Answer one"),
@@ -263,7 +265,7 @@ Deno.test("a canonical transcript row resolves to its owning question page", () 
   assertEquals(pageContainingItemKey(pages, "missing"), undefined);
 });
 
-Deno.test("a partial history tail keeps leading answer rows addressable", () => {
+test("a partial history tail keeps leading answer rows addressable", () => {
   const pages = deriveQuestionPages([
     assistant("answer-tail", "The root prompt is on an older history page"),
     user("next-question", "Next"),
@@ -275,7 +277,7 @@ Deno.test("a partial history tail keeps leading answer rows addressable", () => 
   assertEquals(pageContainingItemKey(pages, "answer-tail")?.id, "answer-tail");
 });
 
-Deno.test("a completed provisional tail hydrates from the authoritative question root", () => {
+test("a completed provisional tail hydrates from the authoritative question root", () => {
   const provisional = deriveQuestionPages([
     assistant("188841", "Only the retained end of a long answer"),
   ])[0]!;
@@ -299,7 +301,7 @@ Deno.test("a completed provisional tail hydrates from the authoritative question
   );
 });
 
-Deno.test("previous navigation waits for the real user question boundary", () => {
+test("previous navigation waits for the real user question boundary", () => {
   const partial = deriveQuestionPages([
     assistant("answer-tail", "The question is on the next history batch"),
     user("current-question", "Current"),
@@ -322,7 +324,7 @@ Deno.test("previous navigation waits for the real user question boundary", () =>
   );
 });
 
-Deno.test("authoritative page index survives a sparse loaded content window", () => {
+test("authoritative page index survives a sparse loaded content window", () => {
   const index = [
     { id: "28", ordinal: 28 },
     { id: "29", ordinal: 29 },
@@ -344,7 +346,7 @@ Deno.test("authoritative page index survives a sparse loaded content window", ()
   });
 });
 
-Deno.test("authoritative page index falls back from a provisional id to its ordinal", () => {
+test("authoritative page index falls back from a provisional id to its ordinal", () => {
   const index = [
     { id: "30", ordinal: 1 },
     { id: "31", ordinal: 2 },

@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   DEFAULT_DIAGNOSTIC_LOG_FILTERS,
   diagnosticKindLabel,
@@ -10,7 +12,7 @@ import { applyUsageHostPlugins } from "./usageHostMap.ts";
 
 applyUsageHostPlugins(testFirstPartyHostPlugins());
 
-Deno.test("diagnostic logs use bounded server-side filters and cursor pagination", () => {
+test("diagnostic logs use bounded server-side filters and cursor pagination", () => {
   assertEquals(
     diagnosticLogUrl(
       {
@@ -29,7 +31,7 @@ Deno.test("diagnostic logs use bounded server-side filters and cursor pagination
   );
 });
 
-Deno.test("diagnostic logs default to serious events without narrowing kind or runtime", () => {
+test("diagnostic logs default to serious events without narrowing kind or runtime", () => {
   assertEquals(DEFAULT_DIAGNOSTIC_LOG_FILTERS.severities, [
     "critical",
     "error",
@@ -38,9 +40,9 @@ Deno.test("diagnostic logs default to serious events without narrowing kind or r
   assertEquals(DEFAULT_DIAGNOSTIC_LOG_FILTERS.agents, []);
 });
 
-Deno.test("diagnostic logs do not poll or render an empty state beside request errors", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./UsageLogs.tsx", import.meta.url),
+test("diagnostic logs do not poll or render an empty state beside request errors", async () => {
+  const source = await readFile(
+    new URL("./UsageLogs.tsx", import.meta.url), "utf8",
   );
   assertEquals(source.includes("globalThis.setInterval"), false);
   assertEquals(
@@ -49,9 +51,9 @@ Deno.test("diagnostic logs do not poll or render an empty state beside request e
   );
 });
 
-Deno.test("critical and error use distinct severity accents across log dots and filters", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./UsageLogs.tsx", import.meta.url),
+test("critical and error use distinct severity accents across log dots and filters", async () => {
+  const source = await readFile(
+    new URL("./UsageLogs.tsx", import.meta.url), "utf8",
   );
   assertEquals(
     source.includes(
@@ -76,14 +78,14 @@ Deno.test("critical and error use distinct severity accents across log dots and 
   );
 });
 
-Deno.test("diagnostic log kinds have concise user-facing labels", () => {
+test("diagnostic log kinds have concise user-facing labels", () => {
   assertEquals(diagnosticKindLabel("session_error"), "Session");
   assertEquals(diagnosticKindLabel("provider_error"), "Provider");
   assertEquals(diagnosticKindLabel("cache_anomaly"), "Cache");
   assertEquals(diagnosticKindLabel("automation"), "Automation");
 });
 
-Deno.test("diagnostic log filters round-trip persisted multi-select and reject unknown values", () => {
+test("diagnostic log filters round-trip persisted multi-select and reject unknown values", () => {
   assertEquals(
     parseDiagnosticLogFilters({
       kinds: ["provider_error", "not-a-kind", "provider_error"],
@@ -102,7 +104,7 @@ Deno.test("diagnostic log filters round-trip persisted multi-select and reject u
   );
 });
 
-Deno.test("malformed persisted diagnostic filters return safe defaults", () => {
+test("malformed persisted diagnostic filters return safe defaults", () => {
   assertEquals(
     parseDiagnosticLogFilters({
       kinds: ["provider_error"],

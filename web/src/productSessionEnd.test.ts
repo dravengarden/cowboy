@@ -1,4 +1,6 @@
-import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   announceProductSessionEnd,
   PRODUCT_SESSION_END_EVENT,
@@ -9,7 +11,7 @@ import { createIdbPersistenceOwner } from "../../components/state-sync-idb/index
 import { FakeIndexedDb, microtasks } from "./idbPersistence.fixture.ts";
 import { createSyncShutdown } from "./syncShutdown.ts";
 
-Deno.test("session-end event seals synchronously and waits for all registered cleanup before navigation", async () => {
+test("session-end event seals synchronously and waits for all registered cleanup before navigation", async () => {
   const target = new EventTarget();
   const slow = Promise.withResolvers<void>();
   const events: string[] = [];
@@ -40,7 +42,7 @@ Deno.test("session-end event seals synchronously and waits for all registered cl
   assertEquals(events, ["seal", "navigate"]);
 });
 
-Deno.test("session-end observes cleanup rejection without trapping logout or calling it drained", async () => {
+test("session-end observes cleanup rejection without trapping logout or calling it drained", async () => {
   const target = new EventTarget();
   target.addEventListener(PRODUCT_SESSION_END_EVENT, (event) => {
     if (event instanceof ProductSessionEndEvent) {
@@ -51,7 +53,7 @@ Deno.test("session-end observes cleanup rejection without trapping logout or cal
   assertEquals(await announceProductSessionEnd(new EventTarget()), "drained");
 });
 
-Deno.test("session-end deadline does not turn a stuck IDB open into successful disposal", async () => {
+test("session-end deadline does not turn a stuck IDB open into successful disposal", async () => {
   const factory = new FakeIndexedDb();
   factory.autoOpen = false;
   const database = createIdbPersistenceOwner({ factory });
@@ -72,7 +74,7 @@ Deno.test("session-end deadline does not turn a stuck IDB open into successful d
   assertEquals(database.lifecycle.phase, "disposed");
 });
 
-Deno.test("session-end deadlines are bounded before any observer can acquire effects", async () => {
+test("session-end deadlines are bounded before any observer can acquire effects", async () => {
   const target = new EventTarget();
   let called = 0;
   target.addEventListener(PRODUCT_SESSION_END_EVENT, () => called++);
@@ -86,7 +88,7 @@ Deno.test("session-end deadlines are bounded before any observer can acquire eff
   assertEquals(productSessionSignal(target).aborted, false);
 });
 
-Deno.test("product authority lifetime is stable, ends before events and never revives for late consumers", async () => {
+test("product authority lifetime is stable, ends before events and never revives for late consumers", async () => {
   const target = new EventTarget();
   const other = new EventTarget();
   const signal = productSessionSignal(target);
@@ -106,9 +108,9 @@ Deno.test("product authority lifetime is stable, ends before events and never re
   assertEquals(productSessionSignal(late).aborted, true);
 });
 
-Deno.test("all controlled auth navigations await local end barriers without importing product store", async () => {
-  const gate = await Deno.readTextFile(
-    new URL("./auth/ProductAuthGate.tsx", import.meta.url),
+test("all controlled auth navigations await local end barriers without importing product store", async () => {
+  const gate = await readFile(
+    new URL("./auth/ProductAuthGate.tsx", import.meta.url), "utf8",
   );
   assertEquals(
     gate.match(/const ending = announceProductSessionEnd\(\);/g)?.length,
@@ -128,7 +130,7 @@ Deno.test("all controlled auth navigations await local end barriers without impo
     3,
   );
   assertEquals(gate.includes('from "../store"'), false);
-  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const store = await readFile(new URL("./store.ts", import.meta.url), "utf8");
   assertEquals(
     store.includes(
       "productSessionAbandoned = true;\n  syncDatabase.stopAdmission();",

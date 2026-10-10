@@ -1,7 +1,8 @@
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import { formatEmbeddedFrame } from "./shellFormatter.ts";
 
-Deno.test("PostgreSQL frames uppercase structure while preserving data casing", async () => {
+test("PostgreSQL frames uppercase structure while preserving data casing", async () => {
   const frame = await formatEmbeddedFrame({
     launcher: "psql -c",
     language: "sql",
@@ -18,7 +19,7 @@ Deno.test("PostgreSQL frames uppercase structure while preserving data casing", 
   assertEquals(frame.language, "sql");
 });
 
-Deno.test("invalid SQL fails closed to the decoded payload", async () => {
+test("invalid SQL fails closed to the decoded payload", async () => {
   const source = "select '";
   const frame = await formatEmbeddedFrame({ launcher: "psql -c", language: "sql", text: source }, 46);
   assertEquals(frame.text, source);

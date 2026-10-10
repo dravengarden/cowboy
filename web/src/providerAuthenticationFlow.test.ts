@@ -1,10 +1,11 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   providerAuthenticationCompleted,
   providerAuthenticationPromoting,
 } from "./providerAuthenticationFlow.ts";
 
-Deno.test("Provider authentication completes only on the newest durable success state", () => {
+test("Provider authentication completes only on the newest durable success state", () => {
   assertEquals(
     providerAuthenticationCompleted([
       { event: "login_state", state: "pending" },
@@ -33,7 +34,7 @@ Deno.test("Provider authentication completes only on the newest durable success 
   );
 });
 
-Deno.test("Provider authentication distinguishes browser waiting from credential promotion", () => {
+test("Provider authentication distinguishes browser waiting from credential promotion", () => {
   assertEquals(
     providerAuthenticationPromoting([
       { event: "login_state", state: "pending" },

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   type CallApproval,
   callApprovalReason,
@@ -20,7 +21,7 @@ function approval(overrides: Partial<CallApproval> = {}): CallApproval {
   };
 }
 
-Deno.test("a pushed approval lives until its ttl or its removal", () => {
+test("a pushed approval lives until its ttl or its removal", () => {
   receiveCallApproval("s", approval(), 1_000);
   assertEquals(currentCallApproval("s", 15_999)?.requests, 1);
   assertEquals(currentCallApproval("s", 16_000), null);
@@ -32,7 +33,7 @@ Deno.test("a pushed approval lives until its ttl or its removal", () => {
   assertEquals(currentCallApproval("other", 20_000), null);
 });
 
-Deno.test("the prompt names the caller, the targets and why", () => {
+test("the prompt names the caller, the targets and why", () => {
   assertEquals(callApprovalTitle(approval()), "Claude wants to call Codex");
   assertEquals(
     callApprovalTitle(

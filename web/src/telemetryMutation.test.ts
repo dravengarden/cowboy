@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   confirmBindingOnce,
   matchesBinding,
@@ -14,11 +16,11 @@ import {
 } from "./telemetryMutation.ts";
 
 const fixture = JSON.parse(
-  Deno.readTextFileSync(
+  readFileSync(
     new URL(
       "../../tests/fixtures/telemetry-binding-surface.json",
       import.meta.url,
-    ),
+    ), "utf8",
   ),
 );
 const signal = () => new AbortController().signal;
@@ -27,7 +29,7 @@ const response = (value: unknown) =>
     headers: { "content-type": "application/json" },
   });
 
-Deno.test("ordinary binding projections agree with Rust and preserve exact request identity", () => {
+test("ordinary binding projections agree with Rust and preserve exact request identity", () => {
   const plan = parseBindingPlan(fixture.plan);
   const receipt = parseBindingReceipt(fixture.receipt);
   assertEquals(plan, fixture.plan);
@@ -38,7 +40,7 @@ Deno.test("ordinary binding projections agree with Rust and preserve exact reque
   ) assert(!JSON.stringify(fixture).includes(field));
 });
 
-Deno.test("binding plan decoders reject purpose substitution, schema drift, changed state and counter reuse", () => {
+test("binding plan decoders reject purpose substitution, schema drift, changed state and counter reuse", () => {
   for (
     const change of [
       { actor: "fake" },
@@ -72,7 +74,7 @@ Deno.test("binding plan decoders reject purpose substitution, schema drift, chan
   assertThrows(() => parseBindingPlan(next));
 });
 
-Deno.test("choices are closed bounded exact installations and cannot migrate a Service slot", () => {
+test("choices are closed bounded exact installations and cannot migrate a Service slot", () => {
   const target = {
     machine_id: "machine-test",
     installation: fixture.plan.result_head.selection,
@@ -110,7 +112,7 @@ Deno.test("choices are closed bounded exact installations and cannot migrate a S
   ) assertThrows(() => parseBindingChoices({ ...choices, ...change }));
 });
 
-Deno.test("receipt correlation binds owners and full request, unresolved phases are not silently completed", () => {
+test("receipt correlation binds owners and full request, unresolved phases are not silently completed", () => {
   const plan = parseBindingPlan(fixture.plan);
   const receipt = parseBindingReceipt(fixture.receipt);
   for (
@@ -159,7 +161,7 @@ Deno.test("receipt correlation binds owners and full request, unresolved phases 
   }
 });
 
-Deno.test("binding confirmation sends one finite reference and ambiguous HTTP permits only exact durable GET", async () => {
+test("binding confirmation sends one finite reference and ambiguous HTTP permits only exact durable GET", async () => {
   const previous = globalThis.fetch;
   const calls: Array<{ path: string; method: string; body: unknown }> = [];
   const plan = parseBindingPlan(fixture.plan);
@@ -196,7 +198,7 @@ Deno.test("binding confirmation sends one finite reference and ambiguous HTTP pe
   }
 });
 
-Deno.test("missing receipt or ended observation does not replay binding or claim failure as success", async () => {
+test("missing receipt or ended observation does not replay binding or claim failure as success", async () => {
   const previous = globalThis.fetch;
   let calls = 0;
   try {
@@ -235,7 +237,7 @@ Deno.test("missing receipt or ended observation does not replay binding or claim
   }
 });
 
-Deno.test("preview transport independently checks the exact requested target or restoration", async () => {
+test("preview transport independently checks the exact requested target or restoration", async () => {
   const previous = globalThis.fetch;
   try {
     globalThis.fetch = () => Promise.resolve(response(fixture.plan));
@@ -269,9 +271,9 @@ Deno.test("preview transport independently checks the exact requested target or 
   }
 });
 
-Deno.test("core binding surface retains separate confirmation, synchronous one-use ownership and honest fence copy", () => {
-  const source = Deno.readTextFileSync(
-    new URL("./TelemetryMutationPanel.tsx", import.meta.url),
+test("core binding surface retains separate confirmation, synchronous one-use ownership and honest fence copy", () => {
+  const source = readFileSync(
+    new URL("./TelemetryMutationPanel.tsx", import.meta.url), "utf8",
   ).replace(/\s+/g, " ");
   for (
     const text of [

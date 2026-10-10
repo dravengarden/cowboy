@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   ACTION_ICON_WIDTH_PX,
   TOPBAR_DENSITY_HYSTERESIS_PX,
@@ -19,7 +21,7 @@ const WIDTHS = {
   trailing: 130,
 };
 
-Deno.test("the countdown answers 'when' in the narrowest truthful form", () => {
+test("the countdown answers 'when' in the narrowest truthful form", () => {
   const now = Date.UTC(2026, 8, 16, 12, 0, 0);
   const at = (ms: number): number | undefined =>
     usageCountdown((now + ms) / 1000, now) as string | undefined;
@@ -35,7 +37,7 @@ Deno.test("the countdown answers 'when' in the narrowest truthful form", () => {
   assertEquals(usageCountdown(undefined, now), undefined);
 });
 
-Deno.test("remaining quota buckets so 0% cannot read like 95%", () => {
+test("remaining quota buckets so 0% cannot read like 95%", () => {
   assertEquals(usageRemainingTone(0), "critical");
   assertEquals(usageRemainingTone(10), "critical");
   assertEquals(usageRemainingTone(11), "low");
@@ -44,7 +46,7 @@ Deno.test("remaining quota buckets so 0% cannot read like 95%", () => {
   assertEquals(usageRemainingTone(100), "normal");
 });
 
-Deno.test("density collapses the words before anything leaves the viewport", () => {
+test("density collapses the words before anything leaves the viewport", () => {
   const full = topBarWidth(WIDTHS, "full");
   const compact = topBarWidth(WIDTHS, "compact");
   assertEquals(compact < full, true);
@@ -62,13 +64,13 @@ Deno.test("density collapses the words before anything leaves the viewport", () 
   assertEquals(topBarDensity(Number.NaN, WIDTHS, "compact"), "compact");
 });
 
-Deno.test("the countdown is what buys the narrower quota segment", () => {
+test("the countdown is what buys the narrower quota segment", () => {
   // 156px was set by `resets Sep 20 02:00 PM`; `Weekly · 3d20h` fits 104.
   assertEquals(USAGE_SEGMENT_WIDTH_PX, 104);
   assertEquals(3 * 156 - 3 * USAGE_SEGMENT_WIDTH_PX, 156);
 });
 
-Deno.test("a second account window costs a column, not a segment", () => {
+test("a second account window costs a column, not a segment", () => {
   assertEquals(usagePercentSegmentWidth(1), USAGE_SEGMENT_WIDTH_PX);
   assertEquals(
     usagePercentSegmentWidth(2),
@@ -78,12 +80,12 @@ Deno.test("a second account window costs a column, not a segment", () => {
   assertEquals(usagePercentSegmentWidth(0), USAGE_SEGMENT_WIDTH_PX);
 });
 
-const topBar = await Deno.readTextFile(
-  new URL("./DesktopTopBarControls.tsx", import.meta.url),
+const topBar = await readFile(
+  new URL("./DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const app = await Deno.readTextFile(new URL("../App.tsx", import.meta.url));
+const app = await readFile(new URL("../App.tsx", import.meta.url), "utf8");
 
-Deno.test("the quota strip spends its width on the countdown, not a stamp", () => {
+test("the quota strip spends its width on the countdown, not a stamp", () => {
   assert(topBar.includes("usageCountdown(window.resetsAt, now)"));
   // The 30s tick is threaded in, so the countdown cannot quietly go stale.
   assert(topBar.includes("now={clock}"));
@@ -98,7 +100,7 @@ Deno.test("the quota strip spends its width on the countdown, not a stamp", () =
   assert(topBar.includes("first ? {} : { borderLeft: 1"));
 });
 
-Deno.test("density is measured against the room, not the strip's wishes", () => {
+test("density is measured against the room, not the strip's wishes", () => {
   // App.tsx owns the scroller; the strip itself is `max-content` and would
   // measure what it wants rather than what it has.
   assert(app.includes("data-desktop-topbar-scroller"));

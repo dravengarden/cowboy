@@ -1,17 +1,19 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { mobileNativePasteInventory } from "./mobileNativePasteTelemetry";
 
-const editorSource = await Deno.readTextFile(
-  new URL("../ComposerEditor.tsx", import.meta.url),
+const editorSource = await readFile(
+  new URL("../ComposerEditor.tsx", import.meta.url), "utf8",
 );
-const textareaSource = await Deno.readTextFile(
-  new URL("../ComposerTextarea.tsx", import.meta.url),
+const textareaSource = await readFile(
+  new URL("../ComposerTextarea.tsx", import.meta.url), "utf8",
 );
-const telemetrySource = await Deno.readTextFile(
-  new URL("./mobileNativePasteTelemetry.ts", import.meta.url),
+const telemetrySource = await readFile(
+  new URL("./mobileNativePasteTelemetry.ts", import.meta.url), "utf8",
 );
 
-Deno.test("native paste inventory counts files and item-only entries", () => {
+test("native paste inventory counts files and item-only entries", () => {
   const file = { name: "shot.png" } as File;
   const items = [
     { kind: "string" },
@@ -30,7 +32,7 @@ Deno.test("native paste inventory counts files and item-only entries", () => {
   );
 });
 
-Deno.test("native paste telemetry is content-free and wired into both editors", () => {
+test("native paste telemetry is content-free and wired into both editors", () => {
   assertEquals(telemetrySource.includes("mobile_native_paste_event"), true);
   assertEquals(telemetrySource.includes("listed_files:"), true);
   assertEquals(telemetrySource.includes("file.name"), false);

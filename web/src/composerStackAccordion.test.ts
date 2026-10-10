@@ -1,17 +1,19 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { nextComposerStackExpanded } from "./composerStackAccordion.ts";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const planSource = await Deno.readTextFile(
-  new URL("./PlanDock.tsx", import.meta.url),
+const planSource = await readFile(
+  new URL("./PlanDock.tsx", import.meta.url), "utf8",
 );
-const pendingSource = await Deno.readTextFile(
-  new URL("./pendingPanelState.ts", import.meta.url),
+const pendingSource = await readFile(
+  new URL("./pendingPanelState.ts", import.meta.url), "utf8",
 );
 
-Deno.test("composer stack disclosure is exclusive and can collapse all", () => {
+test("composer stack disclosure is exclusive and can collapse all", () => {
   assertEquals(nextComposerStackExpanded(null, "draft"), "draft");
   assertEquals(nextComposerStackExpanded("draft", "draft"), null);
   assertEquals(nextComposerStackExpanded("draft", "queued"), "queued");
@@ -19,7 +21,7 @@ Deno.test("composer stack disclosure is exclusive and can collapse all", () => {
   assertEquals(nextComposerStackExpanded("plan", "plan"), null);
 });
 
-Deno.test("plan queue and draft share the exclusive stack accordion", () => {
+test("plan queue and draft share the exclusive stack accordion", () => {
   assertEquals(planSource.includes("toggleComposerStackPanel(\"plan\")"), true);
   assertEquals(composerSource.includes("toggleComposerStackPanel(kind)"), true);
   assertEquals(

@@ -1,10 +1,11 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   restoreReviewScrollTop,
   safeReviewScrollTop,
 } from "./reviewScrollPosition.ts";
 
-Deno.test("review scroll restoration clamps stale tab positions", () => {
+test("review scroll restoration clamps stale tab positions", () => {
   assertEquals(safeReviewScrollTop(240, 1_000, 400), 240);
   assertEquals(safeReviewScrollTop(900, 1_000, 400), 600);
   assertEquals(safeReviewScrollTop(-1, 1_000, 400), 0);
@@ -14,7 +15,7 @@ Deno.test("review scroll restoration clamps stale tab positions", () => {
   assertEquals(safeReviewScrollTop(200, 300, 400), 0);
 });
 
-Deno.test("review scroll restoration falls back when the element rejects it", () => {
+test("review scroll restoration falls back when the element rejects it", () => {
   let writes = 0;
   const element = {
     clientHeight: 400,

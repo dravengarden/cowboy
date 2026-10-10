@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { GitCommitSummary } from "./codeApi.ts";
 import { buildGitGraph } from "./gitGraphModel.ts";
 
@@ -11,7 +12,7 @@ const commit = (oid: string, parents: string[]): GitCommitSummary => ({
   decorations: [],
 });
 
-Deno.test("git graph keeps first-parent line and exposes merge edge", () => {
+test("git graph keeps first-parent line and exposes merge edge", () => {
   const graph = buildGitGraph([
     commit("merge", ["main", "topic"]),
     commit("topic", ["base"]),
@@ -31,7 +32,7 @@ Deno.test("git graph keeps first-parent line and exposes merge edge", () => {
   assertEquals(graph[3].nodeLane, 0);
 });
 
-Deno.test("git graph does not draw an incoming stub for a disconnected ref", () => {
+test("git graph does not draw an incoming stub for a disconnected ref", () => {
   const graph = buildGitGraph([
     commit("head", ["main"]),
     commit("detached", []),
@@ -40,7 +41,7 @@ Deno.test("git graph does not draw an incoming stub for a disconnected ref", () 
   assertEquals(graph.map((row) => row.incoming), [false, false, true]);
 });
 
-Deno.test("git graph drops parents outside the visible history", () => {
+test("git graph drops parents outside the visible history", () => {
   const graph = buildGitGraph([
     commit("head", ["visible"]),
     commit("visible", ["outside-window"]),
@@ -52,7 +53,7 @@ Deno.test("git graph drops parents outside the visible history", () => {
   assertEquals(graph[2].incoming, false);
 });
 
-Deno.test("git graph keeps existing lanes stable when another ref appears", () => {
+test("git graph keeps existing lanes stable when another ref appears", () => {
   const graph = buildGitGraph([
     commit("head", ["main"]),
     commit("side", []),

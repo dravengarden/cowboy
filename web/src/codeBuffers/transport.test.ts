@@ -1,11 +1,12 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import golden from "../../../contracts/code-buffer-client.fixture.json" with {
   type: "json",
 };
 import { BufferClientError } from "./protocol.ts";
 import { fixture, opened, wire } from "./fixture.ts";
 
-Deno.test("HTTP status, non-JSON, malformed UTF-8 and oversized bodies fail without exposing private text", async () => {
+test("HTTP status, non-JSON, malformed UTF-8 and oversized bodies fail without exposing private text", async () => {
   for (
     const response of [
       new Response("private failure", { status: 503 }),
@@ -37,7 +38,7 @@ Deno.test("HTTP status, non-JSON, malformed UTF-8 and oversized bodies fail with
   }
 });
 
-Deno.test("UTF-8 chunk boundaries preserve a nonempty diagnostic observation", async () => {
+test("UTF-8 chunk boundaries preserve a nonempty diagnostic observation", async () => {
   const f = await opened();
   const result = f.owner.read("language");
   const bytes = new TextEncoder().encode(JSON.stringify(golden.language));
@@ -55,7 +56,7 @@ Deno.test("UTF-8 chunk boundaries preserve a nonempty diagnostic observation", a
   assertEquals<unknown>(await result, golden.language);
 });
 
-Deno.test("deadline fences an uncooperative fetch and cancels its late body", async () => {
+test("deadline fences an uncooperative fetch and cancels its late body", async () => {
   const f = fixture(5);
   const result = f.owner.prepare();
   await assertRejects(() => result, BufferClientError, "transport");
@@ -76,7 +77,7 @@ Deno.test("deadline fences an uncooperative fetch and cancels its late body", as
   assertEquals((await f.owner.close()).kind, "unopened");
 });
 
-Deno.test("deadline includes stalled response-body reads and releases the reader even if cancel never resolves", async () => {
+test("deadline includes stalled response-body reads and releases the reader even if cancel never resolves", async () => {
   const f = fixture(5);
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
@@ -94,7 +95,7 @@ Deno.test("deadline includes stalled response-body reads and releases the reader
   assertEquals(body.locked, false);
 });
 
-Deno.test("oversized language body retains the owner and never reports successful empty diagnostics", async () => {
+test("oversized language body retains the owner and never reports successful empty diagnostics", async () => {
   const f = await opened();
   const result = f.owner.read("language");
   let cancelled = false;

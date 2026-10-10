@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   nativeClipboardImageFiles,
   nativeClipboardImageStatus,
@@ -9,7 +10,7 @@ import {
   supportsNativeClipboardImages,
 } from "./nativeShell.ts";
 
-Deno.test("native clipboard image payloads become ordinary image Files", async () => {
+test("native clipboard image payloads become ordinary image Files", async () => {
   const files = nativeClipboardImageFiles({
     changeCount: 7,
     images: [
@@ -29,7 +30,7 @@ Deno.test("native clipboard image payloads become ordinary image Files", async (
   assertEquals(await files[0]?.text(), "png-bytes");
 });
 
-Deno.test("native image read outcome distinguishes empty and malformed replies", async () => {
+test("native image read outcome distinguishes empty and malformed replies", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyReadClipboardImages?: () => Promise<unknown>;
   };
@@ -63,11 +64,11 @@ Deno.test("native image read outcome distinguishes empty and malformed replies",
   }
 });
 
-Deno.test("image paste stays disabled without both native clipboard bridges", () => {
+test("image paste stays disabled without both native clipboard bridges", () => {
   assertEquals(supportsNativeClipboardImages(), false);
 });
 
-Deno.test("image status probes metadata without reading clipboard payloads", async () => {
+test("image status probes metadata without reading clipboard payloads", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyReadClipboard?: () => Promise<unknown>;
     __cowboyClipboardImageStatus?: () => Promise<unknown>;
@@ -134,7 +135,7 @@ Deno.test("image status probes metadata without reading clipboard payloads", asy
   }
 });
 
-Deno.test("legacy native image status defaults an available clipboard to one image", async () => {
+test("legacy native image status defaults an available clipboard to one image", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyClipboardImageStatus?: () => Promise<unknown>;
     __cowboyReadClipboardImages?: () => Promise<unknown>;
@@ -162,7 +163,7 @@ Deno.test("legacy native image status defaults an available clipboard to one ima
   }
 });
 
-Deno.test("legacy native shells keep explicit text Paste available", async () => {
+test("legacy native shells keep explicit text Paste available", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyReadClipboard?: () => Promise<unknown>;
     __cowboyClipboardImageStatus?: () => Promise<unknown>;
@@ -199,7 +200,7 @@ Deno.test("legacy native shells keep explicit text Paste available", async () =>
   }
 });
 
-Deno.test("current native shell disables Paste for a known empty clipboard", async () => {
+test("current native shell disables Paste for a known empty clipboard", async () => {
   const root = globalThis as typeof globalThis & {
     __cowboyReadClipboard?: () => Promise<unknown>;
     __cowboyClipboardImageStatus?: () => Promise<unknown>;

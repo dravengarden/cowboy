@@ -1,19 +1,21 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const appSource = await Deno.readTextFile(
-  new URL("../App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("../App.tsx", import.meta.url), "utf8",
 );
-const workspaceSource = await Deno.readTextFile(
-  new URL("./DesktopWorkspace.tsx", import.meta.url),
+const workspaceSource = await readFile(
+  new URL("./DesktopWorkspace.tsx", import.meta.url), "utf8",
 );
-const commandsSource = await Deno.readTextFile(
-  new URL("./commands/DesktopCommandProvider.tsx", import.meta.url),
+const commandsSource = await readFile(
+  new URL("./commands/DesktopCommandProvider.tsx", import.meta.url), "utf8",
 );
-const statusSource = await Deno.readTextFile(
-  new URL("./DesktopStatusLine.tsx", import.meta.url),
+const statusSource = await readFile(
+  new URL("./DesktopStatusLine.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("every Desktop vertical boundary exposes the shared splitter contract", () => {
+test("every Desktop vertical boundary exposes the shared splitter contract", () => {
   assert(appSource.includes('data-desktop-splitter="sessions-prompt"'));
   assert(workspaceSource.includes('data-desktop-splitter="prompt-conversation"'));
   assertEquals(
@@ -22,7 +24,7 @@ Deno.test("every Desktop vertical boundary exposes the shared splitter contract"
   );
 });
 
-Deno.test("the workspace prefix enters an exclusive H/L Resize mode", () => {
+test("the workspace prefix enters an exclusive H/L Resize mode", () => {
   assert(commandsSource.includes("leaderArmed.current"));
   assert(commandsSource.includes("DESKTOP_WORKSPACE_COMMANDS"));
   assert(commandsSource.includes("matchesDesktopWorkspacePrefix(event)"));
@@ -37,7 +39,7 @@ Deno.test("the workspace prefix enters an exclusive H/L Resize mode", () => {
   assert(statusSource.includes('{ keys: "H/L", label: "Resize" }'));
 });
 
-Deno.test("Prompt divider is governed by the Conversation floor, not a hidden percentage cap", () => {
+test("Prompt divider is governed by the Conversation floor, not a hidden percentage cap", () => {
   assertEquals(workspaceSource.includes("46%"), false);
   assert(workspaceSource.includes("calc(100% -"));
 });

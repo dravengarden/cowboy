@@ -1,23 +1,25 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { mobileNativeYScrollSx } from "./mobileNativeOverflow.ts";
 
-const reviewFileTree = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url),
+const reviewFileTree = await readFile(
+  new URL("./mobile/review/ReviewFileTree.tsx", import.meta.url), "utf8",
 );
-const reviewChanges = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewChanges.tsx", import.meta.url),
+const reviewChanges = await readFile(
+  new URL("./mobile/review/ReviewChanges.tsx", import.meta.url), "utf8",
 );
-const codeViewer = await Deno.readTextFile(
-  new URL("./mobile/review/CodeViewer.tsx", import.meta.url),
+const codeViewer = await readFile(
+  new URL("./mobile/review/CodeViewer.tsx", import.meta.url), "utf8",
 );
-const reviewApp = await Deno.readTextFile(
-  new URL("./mobile/review/ReviewApp.tsx", import.meta.url),
+const reviewApp = await readFile(
+  new URL("./mobile/review/ReviewApp.tsx", import.meta.url), "utf8",
 );
-const transcript = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcript = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
+test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(mobileNativeYScrollSx.touchAction === "pan-y pinch-zoom");
   assert(reviewFileTree.includes("...mobileNativeYScrollSx"));
   assert(reviewChanges.includes("...mobileNativeYScrollSx"));
@@ -29,7 +31,7 @@ Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(reviewApp.includes('touchAction: "pan-x pan-y pinch-zoom"'));
 });
 
-Deno.test("Review Markdown wrap is a separate preference in the source wrap slot", () => {
+test("Review Markdown wrap is a separate preference in the source wrap slot", () => {
   assert(reviewApp.includes("touchWrap={settings.markdownSoftWrap}"));
   assert(reviewApp.includes("markdownSoftWrap: !settings.markdownSoftWrap"));
   assert(reviewApp.includes('"Wrap Markdown code and tables"'));
@@ -40,7 +42,7 @@ Deno.test("Review Markdown wrap is a separate preference in the source wrap slot
   assert(reviewApp.includes("<Markdown text={block.text} touchWrap />"));
 });
 
-Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () => {
+test("wrap-on Review source keeps live CodeMirror for workspace swipe", () => {
   assert(codeViewer.includes("bindCodeViewerSwipeFreeze"));
   assert(codeViewer.includes('data-mobile-code-layer="true"'));
   assert(codeViewer.includes('data-mobile-code-wrap'));
@@ -53,7 +55,7 @@ Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () 
   assert(reviewApp.includes('data-mobile-overflow-layer'));
 });
 
-Deno.test("Code Review samples navigation position after scroll goes idle", () => {
+test("Code Review samples navigation position after scroll goes idle", () => {
   assert(codeViewer.includes("createMobileCodeScrollIdleReporter"));
   const listenerStart = codeViewer.indexOf("if (onVisibleLine) {");
   const listenerEnd = codeViewer.indexOf(

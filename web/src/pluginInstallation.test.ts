@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
@@ -5,7 +6,7 @@ import {
   assertNotEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   createPluginInstallRequest,
   decodeInstallHistory,
@@ -46,7 +47,7 @@ function typedFixture() {
   };
 }
 
-Deno.test("typed history accepts only matching receipt and Service progress; legacy remains explicitly legacy", () => {
+test("typed history accepts only matching receipt and Service progress; legacy remains explicitly legacy", () => {
   const applied = {
     state: "applied",
     revision: `installation-${"d".repeat(64)}`,
@@ -126,7 +127,7 @@ Deno.test("typed history accepts only matching receipt and Service progress; leg
   ) assertThrows(() => decodeInstallHistory(input(changed)));
 });
 
-Deno.test("installation evidence is closed, immutable and cannot authorize an effect", () => {
+test("installation evidence is closed, immutable and cannot authorize an effect", () => {
   const history = decodeInstallHistory(fixture());
   assert(Object.isFrozen(history));
   assert(Object.isFrozen(history.operations));
@@ -175,7 +176,7 @@ Deno.test("installation evidence is closed, immutable and cannot authorize an ef
   }
 });
 
-Deno.test("historical completion and authentication pending never imply current inventory", () => {
+test("historical completion and authentication pending never imply current inventory", () => {
   for (
     const [phase, problem] of [
       ["completed", null],
@@ -199,7 +200,7 @@ Deno.test("historical completion and authentication pending never imply current 
   }
 });
 
-Deno.test("one explicit installation action allocates one exact immutable identity", () => {
+test("one explicit installation action allocates one exact immutable identity", () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const first = createPluginInstallRequest("1.1.0", digest);
   assert(Object.isFrozen(first));
@@ -212,7 +213,7 @@ Deno.test("one explicit installation action allocates one exact immutable identi
   assertThrows(() => createPluginInstallRequest("1.1.0", "latest"));
 });
 
-Deno.test("reload reads only saved evidence and never posts or retries an installation", async () => {
+test("reload reads only saved evidence and never posts or retries an installation", async () => {
   const original = globalThis.fetch;
   const calls: RequestInit[] = [];
   const urls: string[] = [];
@@ -243,7 +244,7 @@ Deno.test("reload reads only saved evidence and never posts or retries an instal
   }
 });
 
-Deno.test("failed, malformed and oversized history responses are unavailable, never empty or retried", async () => {
+test("failed, malformed and oversized history responses are unavailable, never empty or retried", async () => {
   const original = globalThis.fetch;
   try {
     for (

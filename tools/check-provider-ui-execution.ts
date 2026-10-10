@@ -1,6 +1,7 @@
 /** Run after the independent SDK package build/validator. This keeps ordinary
  * Web unit tests independent of generated dist files and never invokes a host.
  */
+import { readFile } from "node:fs/promises";
 import {
   type SurfaceSlot,
   validateProviderUiManifest,
@@ -9,8 +10,8 @@ import { createProviderUiOwner } from "../web/src/providerUiOwner.ts";
 
 let providers = 0;
 let surfaces = 0;
-for (const path of Deno.args) {
-  const artifact = JSON.parse(await Deno.readTextFile(path));
+for (const path of process.argv.slice(2)) {
+  const artifact = JSON.parse(await readFile(path, "utf8"));
   if (artifact.payload?.kind !== "agent_provider") continue;
   const manifest: unknown = artifact.payload.contract.manifest;
   validateProviderUiManifest(manifest);

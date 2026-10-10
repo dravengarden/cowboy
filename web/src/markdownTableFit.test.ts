@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   fitMarkdownTables,
   MARKDOWN_TABLE_WRAP_ATTRIBUTE,
@@ -6,8 +8,8 @@ import {
   markdownTableOverflows,
 } from "./markdownTableFit.ts";
 
-const markdownImpl = await Deno.readTextFile(
-  new URL("./MarkdownImpl.tsx", import.meta.url),
+const markdownImpl = await readFile(
+  new URL("./MarkdownImpl.tsx", import.meta.url), "utf8",
 );
 
 /** A table whose laid-out width depends on its wrap step. */
@@ -39,12 +41,12 @@ function fakeTable(
   };
 }
 
-Deno.test("a table overflows only past the one-pixel rounding tolerance", () => {
+test("a table overflows only past the one-pixel rounding tolerance", () => {
   assertEquals(markdownTableOverflows(355, 354), false);
   assertEquals(markdownTableOverflows(355.5, 354), true);
 });
 
-Deno.test("tables step from word wrap to compact before breaking anywhere", () => {
+test("tables step from word wrap to compact before breaking anywhere", () => {
   const fits = fakeTable({ words: 300, compact: 280, anywhere: 250 });
   const compact = fakeTable({ words: 391, compact: 354, anywhere: 330 });
   const anywhere = fakeTable({ words: 449, compact: 392, anywhere: 354 });
@@ -60,7 +62,7 @@ Deno.test("tables step from word wrap to compact before breaking anywhere", () =
   );
 });
 
-Deno.test("a refit re-evaluates from word wrap after the column widens", () => {
+test("a refit re-evaluates from word wrap after the column widens", () => {
   const table = fakeTable({ words: 449, compact: 392, anywhere: 354 });
   fitMarkdownTables([table]);
   assertEquals(table.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE), "anywhere");
@@ -69,7 +71,7 @@ Deno.test("a refit re-evaluates from word wrap after the column widens", () => {
   assertEquals(table.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE), undefined);
 });
 
-Deno.test("fit mode never leaves a table wrapper as a scroll container", () => {
+test("fit mode never leaves a table wrapper as a scroll container", () => {
   const wrapper = markdownTableFitSx["& [data-markdown-table-scroll]"];
   assertEquals(wrapper.overflowX, "clip");
   assertEquals(wrapper.WebkitOverflowScrolling, "auto");
@@ -80,7 +82,7 @@ Deno.test("fit mode never leaves a table wrapper as a scroll container", () => {
   );
 });
 
-Deno.test("only touch-wrapped Markdown on a coarse pointer fits its tables", () => {
+test("only touch-wrapped Markdown on a coarse pointer fits its tables", () => {
   assert(markdownImpl.includes("const fitTables = touchWrap && coarse;"));
   assert(markdownImpl.includes("{ noSsr: true }"));
   assert(markdownImpl.includes("...(fitTables && markdownTableFitSx)"));
@@ -91,9 +93,9 @@ Deno.test("only touch-wrapped Markdown on a coarse pointer fits its tables", () 
   assert(markdownImpl.includes("table: MarkdownTable,"));
 });
 
-Deno.test("transcript prose scrolls wide code and tables instead of fitting them", async () => {
-  const transcript = await Deno.readTextFile(
-    new URL("./Transcript.tsx", import.meta.url),
+test("transcript prose scrolls wide code and tables instead of fitting them", async () => {
+  const transcript = await readFile(
+    new URL("./Transcript.tsx", import.meta.url), "utf8",
   );
   assert(
     transcript.includes(
@@ -105,8 +107,8 @@ Deno.test("transcript prose scrolls wide code and tables instead of fitting them
       '"& pre, & [data-markdown-table-scroll], & .katex-display": {\n            touchAction: "pan-x pan-y pinch-zoom",',
     ),
   );
-  const markdownImpl = await Deno.readTextFile(
-    new URL("./MarkdownImpl.tsx", import.meta.url),
+  const markdownImpl = await readFile(
+    new URL("./MarkdownImpl.tsx", import.meta.url), "utf8",
   );
   assert(!markdownImpl.includes('whiteSpace: "nowrap" }}'));
   assert(markdownImpl.includes("maxWidth: MARKDOWN_TABLE_CELL_MEASURE"));

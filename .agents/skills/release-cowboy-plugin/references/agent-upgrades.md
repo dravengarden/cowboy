@@ -34,7 +34,7 @@ Start with the existing read-only audit; it reports exact registry candidates,
 not an instruction to upgrade everything:
 
 ```bash
-nix develop -c deno run --allow-read --allow-net \
+nix develop -c bun \
   .agents/skills/release-cowboy-plugin/scripts/audit-dependencies.ts all
 ```
 
@@ -122,9 +122,8 @@ Run the parent's applicable package, Provider and repository gates. The focused
 preset regression checks can also run with:
 
 ```bash
-nix develop -c deno test --config web/deno.json --sloppy-imports \
-  --allow-read --allow-env=NODE_ENV,LOG \
-  web/src/runConfigPresets.test.ts web/src/providerSdk.test.ts
+nix develop -c bash -c 'cd web && bun test \
+  ./src/runConfigPresets.test.ts ./src/providerSdk.test.ts'
 ```
 
 For Claude CLI, SDK, ACP or remote runtime changes, follow

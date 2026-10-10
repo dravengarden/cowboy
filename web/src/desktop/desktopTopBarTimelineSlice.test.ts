@@ -1,4 +1,5 @@
-import { assert } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
@@ -12,7 +13,7 @@ const update = (seq: number, sessionUpdate: string, extra = {}): Envelope => ({
   update: { sessionUpdate, ...extra },
 });
 
-Deno.test("desktop top bar ignores ordinary streaming transcript churn", () => {
+test("desktop top bar ignores ordinary streaming transcript churn", () => {
   const base: Envelope[] = [
     update(1, "available_commands_update", {
       availableCommands: [{ name: "compact", description: "Compact" }],
@@ -30,7 +31,7 @@ Deno.test("desktop top bar ignores ordinary streaming transcript churn", () => {
   assert(sameDesktopTopBarTimelineSlice(before, after));
 });
 
-Deno.test("desktop top bar reacts to command and compaction signals", () => {
+test("desktop top bar reacts to command and compaction signals", () => {
   const initial = desktopTopBarTimelineSlice([
     update(1, "available_commands_update", { availableCommands: [] }),
   ]);

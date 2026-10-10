@@ -1,8 +1,9 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { ClientSpan } from "./otel.ts";
 import { ClientOperations } from "./otelOperations.ts";
 
-Deno.test("operation retries keep context and only same-session live echoes count", () => {
+test("operation retries keep context and only same-session live echoes count", () => {
   let now = 1;
   const ended: string[] = [];
   const durations: string[] = [];
@@ -42,7 +43,7 @@ Deno.test("operation retries keep context and only same-session live echoes coun
   assertEquals(ended, ["command:ok", "first_output:ok"]);
 });
 
-Deno.test("another client's echo, disconnection and timeout cancel output attribution", () => {
+test("another client's echo, disconnection and timeout cancel output attribution", () => {
   let now = 1;
   const durations: string[] = [];
   const operations = new ClientOperations(

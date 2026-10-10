@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
 import { applyUsageHostPlugins } from "./usageHostMap.ts";
 import { usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";
 
 applyUsageHostPlugins(testFirstPartyHostPlugins());
 
-Deno.test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
+test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
   const providers = usageWidgetProviders({
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -128,7 +129,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
   ]);
 });
 
-Deno.test("usage widget marks partial 24h valuation and keeps the same cache window", () => {
+test("usage widget marks partial 24h valuation and keeps the same cache window", () => {
   const providers = usageWidgetProviders({
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -181,7 +182,7 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
   }]);
 });
 
-Deno.test("usage widget removes providers without complete account-level core data", () => {
+test("usage widget removes providers without complete account-level core data", () => {
   const providers = usageWidgetProviders({
     refreshed_at_ms: 1,
     next_refresh_at_ms: 2,
@@ -197,7 +198,7 @@ Deno.test("usage widget removes providers without complete account-level core da
   assertEquals(providers, []);
 });
 
-Deno.test("usage widget projects one available account", () => {
+test("usage widget projects one available account", () => {
   assertEquals(
     usageWidgetForAccount({
       provider: "xai",
@@ -233,7 +234,7 @@ Deno.test("usage widget projects one available account", () => {
   );
 });
 
-Deno.test("usage widget shows every reported account window, shortest first", () => {
+test("usage widget shows every reported account window, shortest first", () => {
   const widget = usageWidgetForAccount({
     provider: "anthropic",
     status: "available",
@@ -267,7 +268,7 @@ Deno.test("usage widget shows every reported account window, shortest first", ()
   });
 });
 
-Deno.test("usage widget keeps one column when the account reports one window", () => {
+test("usage widget keeps one column when the account reports one window", () => {
   const widget = usageWidgetForAccount({
     provider: "anthropic",
     status: "available",

@@ -1,0 +1,25 @@
+{
+  "name": "cowboy",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.3",
+  "workspaces": [
+    "web",
+    "components/app-shell",
+    "components/provider-authoring",
+    "components/provider-ui",
+    "components/state-store",
+    "components/state-sync",
+    "components/state-sync-idb"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.tools.json"
+  },
+  "devDependencies": {
+    "@cowboy/provider-ui": "workspace:*",
+    "@std/assert": "npm:@jsr/std__assert@^1.0.19",
+    "@types/bun": "^1.4.0",
+    "dprint": "0.54.0",
+    "typescript": "7.0.2"
+  }
+}

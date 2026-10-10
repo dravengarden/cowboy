@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { AuthHostPlugin, ProductOidcProvider } from "./authApi.ts";
 import {
   loginMethodLabel,
@@ -23,7 +24,7 @@ const accountMethods = productAccountVerificationMethods(
   hostPlugins,
 );
 
-Deno.test("primary reauthentication keeps the session's password method", () => {
+test("primary reauthentication keeps the session's password method", () => {
   assertEquals(resolvePrimaryReauthMethods("password", accountMethods), {
     methods: [{
       id: "password",
@@ -34,7 +35,7 @@ Deno.test("primary reauthentication keeps the session's password method", () => 
   });
 });
 
-Deno.test("primary reauthentication keeps the session's provider method", () => {
+test("primary reauthentication keeps the session's provider method", () => {
   assertEquals(resolvePrimaryReauthMethods("cardea", accountMethods), {
     methods: [{
       id: "provider:cardea",
@@ -45,7 +46,7 @@ Deno.test("primary reauthentication keeps the session's provider method", () => 
   });
 });
 
-Deno.test("only external login method labels may use a host Plugin", () => {
+test("only external login method labels may use a host Plugin", () => {
   assertEquals(
     loginMethodLabel("password", hostPlugins, providers),
     "Password",
@@ -66,7 +67,7 @@ Deno.test("only external login method labels may use a host Plugin", () => {
   assertEquals(loginMethodLabel("cardea", [], providers), "Cardea");
 });
 
-Deno.test("legacy sessions choose once while disabled methods cannot switch", () => {
+test("legacy sessions choose once while disabled methods cannot switch", () => {
   assertEquals(resolvePrimaryReauthMethods(null, accountMethods), {
     methods: accountMethods,
     legacySession: true,

@@ -8,9 +8,12 @@
  * network and the page never reaches a product endpoint.
  */
 
+import { Command } from "./lib/command.ts";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 export const FIXTURE_ORIGIN = "https://cowboy-conformance.invalid";
 
-// deno-lint-ignore no-explicit-any
 export type CdpParams = any;
 
 export interface FixturePage {
@@ -41,18 +44,18 @@ export async function openFixturePage(
   if (!endpoint.startsWith("http://127.0.0.1:")) {
     throw new Error("the DevTools endpoint must be loopback");
   }
-  const temporary = await Deno.makeTempDir({ prefix: "cowboy-cdp-fixture-" });
+  const temporary = await mkdtemp(join(tmpdir(), "cowboy-cdp-fixture-"));
   let script: Uint8Array<ArrayBuffer>;
   try {
-    const built = await new Deno.Command("node", {
+    const built = await new Command("node", {
       args: ["tools/idb-browser-bundle.mjs", temporary, suite],
       stdout: "null",
       stderr: "inherit",
     }).output();
     if (!built.success) throw new Error("browser fixture bundle failed");
-    script = await Deno.readFile(`${temporary}/fixture.js`);
+    script = await readFile(`${temporary}/fixture.js`);
   } finally {
-    await Deno.remove(temporary, { recursive: true });
+    await rm(temporary, { recursive: true });
   }
   const digest = Array.from(
     new Uint8Array(await crypto.subtle.digest("SHA-256", script)),

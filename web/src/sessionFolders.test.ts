@@ -1,4 +1,5 @@
-import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import type { SessionMeta } from "./protocol";
 import {
   childFolders,
@@ -28,14 +29,14 @@ function ids(value: SessionFoldersValue, parent: string | null): string[] {
   return childFolders(value, parent).map((folder) => folder.id);
 }
 
-Deno.test("names are trimmed, bounded, and free of control characters", () => {
+test("names are trimmed, bounded, and free of control characters", () => {
   assertEquals(normalizeSessionFolderName("  Cowboy "), "Cowboy");
   assertEquals(normalizeSessionFolderName("   "), null);
   assertEquals(normalizeSessionFolderName("a".repeat(81)), null);
   assertEquals(normalizeSessionFolderName("a\tb"), null);
 });
 
-Deno.test("create appends after siblings and rejects what the arbiter would", () => {
+test("create appends after siblings and rejects what the arbiter would", () => {
   let value = m.create(EMPTY_SESSION_FOLDERS, {
     id: "f-a",
     name: " A ",
@@ -74,7 +75,7 @@ Deno.test("create appends after siblings and rejects what the arbiter would", ()
   );
 });
 
-Deno.test("move rejects cycles and appends in the new parent", () => {
+test("move rejects cycles and appends in the new parent", () => {
   let value = m.create(EMPTY_SESSION_FOLDERS, {
     id: "f-a",
     name: "A",
@@ -90,7 +91,7 @@ Deno.test("move rejects cycles and appends in the new parent", () => {
   assertEquals(folderAncestors(value, "f-b"), ["f-a"]);
 });
 
-Deno.test("move destinations identify Global and disambiguate equal folder names", () => {
+test("move destinations identify Global and disambiguate equal folder names", () => {
   let value = m.create(EMPTY_SESSION_FOLDERS, {
     id: "a",
     name: "Work",
@@ -107,7 +108,7 @@ Deno.test("move destinations identify Global and disambiguate equal folder names
   assertEquals(sessionFolderLocation(value, "c"), "Global › Work › Work");
 });
 
-Deno.test("reorder permutes only the submitted siblings", () => {
+test("reorder permutes only the submitted siblings", () => {
   let value = EMPTY_SESSION_FOLDERS;
   for (const id of ["f-a", "f-b", "f-c", "f-d"]) {
     value = m.create(value, { id, name: id, parent: null });
@@ -121,7 +122,7 @@ Deno.test("reorder permutes only the submitted siblings", () => {
   assertEquals(ids(value, "f-a"), ["f-x"]);
 });
 
-Deno.test("bind keeps one folder per project", () => {
+test("bind keeps one folder per project", () => {
   let value = m.create(EMPTY_SESSION_FOLDERS, {
     id: "f-a",
     name: "A",
@@ -137,7 +138,7 @@ Deno.test("bind keeps one folder per project", () => {
   assertEquals(value.folders.map((folder) => folder.project), [null, "cowboy"]);
 });
 
-Deno.test("organizing by project adopts a same-named unbound folder before creating one", () => {
+test("organizing by project adopts a same-named unbound folder before creating one", () => {
   let value = m.create(EMPTY_SESSION_FOLDERS, {
     id: "f-a",
     name: " cowboy",
@@ -164,7 +165,7 @@ Deno.test("organizing by project adopts a same-named unbound folder before creat
   });
 });
 
-Deno.test("placement is explicit, project binding is derived, remove lifts to the parent", () => {
+test("placement is explicit, project binding is derived, remove lifts to the parent", () => {
   let value = m.create(EMPTY_SESSION_FOLDERS, {
     id: "f-a",
     name: "A",

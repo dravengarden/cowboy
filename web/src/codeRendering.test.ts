@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   HIGHLIGHT_CHAR_LIMIT,
   HIGHLIGHT_LINE_LIMIT,
@@ -6,7 +7,7 @@ import {
   shouldUseLightweightCode,
 } from "./codeRendering";
 
-Deno.test("large code falls back before syntax highlighting explodes the DOM", () => {
+test("large code falls back before syntax highlighting explodes the DOM", () => {
   if (shouldUseLightweightCode("const compact = true;\n")) {
     throw new Error("ordinary code should retain syntax highlighting");
   }
@@ -18,7 +19,7 @@ Deno.test("large code falls back before syntax highlighting explodes the DOM", (
   }
 });
 
-Deno.test("large code preview stops at a complete line", () => {
+test("large code preview stops at a complete line", () => {
   const source = "one\ntwo\nthree\nfour";
   if (previewCodeForRendering(source, 2) !== "one\ntwo") {
     throw new Error("preview should contain exactly the requested complete lines");
@@ -28,7 +29,7 @@ Deno.test("large code preview stops at a complete line", () => {
   }
 });
 
-Deno.test("lightweight code chunks preserve every line in order", () => {
+test("lightweight code chunks preserve every line in order", () => {
   const source = Array.from({ length: 11 }, (_, index) => `line ${index}`).join("\n");
   const chunks = chunkCodeForRendering(source, 3);
   if (chunks.join("\n") !== source) {

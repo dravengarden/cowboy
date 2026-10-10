@@ -1,5 +1,6 @@
+import { test } from "bun:test";
 import { createTheme } from "@mui/material";
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import {
   APP_ICONS,
   DEFAULT_APP_ICON,
@@ -7,7 +8,7 @@ import {
 } from "./appIcons.ts";
 import { appearancePalette, colorContrast } from "./appearanceThemes.ts";
 
-Deno.test("all fifty styles retain readable light and dark controls and text", () => {
+test("all fifty styles retain readable light and dark controls and text", () => {
   for (const dark of [false, true]) {
     const accents = new Set<string>();
     for (const icon of APP_ICONS) {
@@ -53,7 +54,7 @@ Deno.test("all fifty styles retain readable light and dark controls and text", (
   );
 });
 
-Deno.test("default migration preserves deliberate and archived custom styles", () => {
+test("default migration preserves deliberate and archived custom styles", () => {
   assertEquals(resolveIconPreference(null, null), DEFAULT_APP_ICON);
   assertEquals(resolveIconPreference(null, "palette-054"), DEFAULT_APP_ICON);
   assertEquals(resolveIconPreference(null, "palette-126"), "palette-126");
@@ -65,7 +66,7 @@ Deno.test("default migration preserves deliberate and archived custom styles", (
   assertEquals(resolveIconPreference("../../external", null), DEFAULT_APP_ICON);
 });
 
-Deno.test("style changes preserve surfaces and MUI semantic status colors", () => {
+test("style changes preserve surfaces and MUI semantic status colors", () => {
   for (const dark of [false, true]) {
     const baseline = createTheme({
       palette: { mode: dark ? "dark" : "light" },

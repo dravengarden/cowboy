@@ -1,9 +1,11 @@
 // Executable contract for the service worker's app shell
 // (docs/offline-first-sync.md §Boot). The worker is plain JS, so it is
 // evaluated here against in-memory fakes of `caches`, `fetch` and `self`.
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const source = await Deno.readTextFile(new URL("../public/sw.js", import.meta.url));
+const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
 const version = /const VERSION = "(cowboy-v\d+)"/.exec(source)![1]!;
 const SHELL = `${version}-shell`;
 const ASSETS = `${version}-assets`;
@@ -143,7 +145,7 @@ async function cachedText(caches: FakeCaches, name: string, key: string): Promis
   return await (await caches.match(key, { cacheName: name }))?.text();
 }
 
-Deno.test("a cached shell answers a navigation while the network is still hanging", async () => {
+test("a cached shell answers a navigation while the network is still hanging", async () => {
   const worker = startWorker();
   await (await worker.caches.open(SHELL)).put("/", basic("cached shell"));
   // A weak connection is slow, not failed: this request never settles.
@@ -156,7 +158,7 @@ Deno.test("a cached shell answers a navigation while the network is still hangin
   assertEquals(winner, "cached shell");
 });
 
-Deno.test("the deployed shell is promoted only once its boot assets are cached", async () => {
+test("the deployed shell is promoted only once its boot assets are cached", async () => {
   const worker = startWorker();
   await (await worker.caches.open(SHELL)).put("/", basic("old shell"));
   const deployed = shellHtml("/assets/main-new.js", ["/assets/MobileApp-new.js"]);
@@ -190,7 +192,7 @@ Deno.test("the deployed shell is promoted only once its boot assets are cached",
   assertEquals(await (await worker.navigate("/").response).text(), deployed);
 });
 
-Deno.test("a new worker generation opens from the previous generation's shell", async () => {
+test("a new worker generation opens from the previous generation's shell", async () => {
   const worker = startWorker();
   await (await worker.caches.open("cowboy-v7-shell")).put("/", basic("older"));
   await (await worker.caches.open("cowboy-v9-shell")).put("/", basic("previous"));
@@ -198,7 +200,7 @@ Deno.test("a new worker generation opens from the previous generation's shell", 
   assertEquals(await (await worker.navigate("/").response).text(), "previous");
 });
 
-Deno.test("a device with no shell, an update and a recovery all go to the network", async () => {
+test("a device with no shell, an update and a recovery all go to the network", async () => {
   const worker = startWorker();
   worker.network = (url) =>
     url.startsWith("/?") || url === "/"
@@ -218,7 +220,7 @@ Deno.test("a device with no shell, an update and a recovery all go to the networ
   assertEquals(await (await worker.navigate("/?cowboy-update=2").response).text(), "deployed");
 });
 
-Deno.test("the update action learns whether the deployed shell was downloaded", async () => {
+test("the update action learns whether the deployed shell was downloaded", async () => {
   const worker = startWorker();
   worker.network = () => Promise.reject(new TypeError("offline"));
   assertEquals(await worker.message({ type: "cowboy.refresh-shell" }), [{ ok: false }]);
@@ -229,7 +231,7 @@ Deno.test("the update action learns whether the deployed shell was downloaded", 
   assert((await cachedText(worker.caches, SHELL, "/"))?.includes("/assets/main.js"));
 });
 
-Deno.test("an unflagged refresh still gets exactly one reply", async () => {
+test("an unflagged refresh still gets exactly one reply", async () => {
   // The client on the other end of this port is the PREVIOUS build, the one
   // asking to be replaced, and it resolves on the first message it receives:
   // anything without `ok` reads as a failed download. Progress sent at it
@@ -243,7 +245,7 @@ Deno.test("an unflagged refresh still gets exactly one reply", async () => {
   assertEquals(await worker.message({ type: "cowboy.refresh-shell" }), [{ ok: true }]);
 });
 
-Deno.test("the refresh reports the boot assets as they land", async () => {
+test("the refresh reports the boot assets as they land", async () => {
   // The page fills its update bar from this count, so it has to arrive during
   // the download and end on the real total — a bar that only ever reads 0%
   // until the reload is no better than no bar at all.
@@ -261,7 +263,7 @@ Deno.test("the refresh reports the boot assets as they land", async () => {
   ]);
 });
 
-Deno.test("a refresh that fails stops short of a full count", async () => {
+test("a refresh that fails stops short of a full count", async () => {
   // The bar keeps the ground the download took and says so; it must never be
   // told 100% for a build that is not wholly here.
   const worker = startWorker();
@@ -280,7 +282,7 @@ Deno.test("a refresh that fails stops short of a full count", async () => {
   assertEquals(await cachedText(worker.caches, SHELL, "/"), undefined);
 });
 
-Deno.test("a build that did not start is put back to the one that did", async () => {
+test("a build that did not start is put back to the one that did", async () => {
   // The two-generation retention is what makes this possible: the build the
   // user was running moments ago is still whole, document and assets alike.
   const worker = startWorker();
@@ -300,7 +302,7 @@ Deno.test("a build that did not start is put back to the one that did", async ()
   assertEquals(await (await worker.navigate("/").response).text(), "the build that works");
 });
 
-Deno.test("a rolled-back device stops being handed the build it rejected", async () => {
+test("a rolled-back device stops being handed the build it rejected", async () => {
   const worker = startWorker();
   const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
   await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
@@ -320,7 +322,7 @@ Deno.test("a rolled-back device stops being handed the build it rejected", async
   assertEquals(await cachedText(worker.caches, SHELL, "/"), "the build that works");
 });
 
-Deno.test("asking again is what lifts a rejection", async () => {
+test("asking again is what lifts a rejection", async () => {
   const worker = startWorker();
   const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
   await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
@@ -337,7 +339,7 @@ Deno.test("asking again is what lifts a rejection", async () => {
   assert((await cachedText(worker.caches, SHELL, "/"))?.includes("/assets/main.js"));
 });
 
-Deno.test("a second failed start is counted, so the surface can give up", async () => {
+test("a second failed start is counted, so the surface can give up", async () => {
   const worker = startWorker();
   const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
   await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
@@ -353,7 +355,7 @@ Deno.test("a second failed start is counted, so the surface can give up", async 
   });
 });
 
-Deno.test("with nothing cached to fall back to, the rollback refuses", async () => {
+test("with nothing cached to fall back to, the rollback refuses", async () => {
   // Refusing is the honest answer: the caller keeps running what it has, and
   // the client falls through to its ordinary forward recovery.
   const worker = startWorker();
@@ -365,7 +367,7 @@ Deno.test("with nothing cached to fall back to, the rollback refuses", async () 
   assertEquals(await cachedText(worker.caches, SHELL, "/"), "the only build here");
 });
 
-Deno.test("admin, passkey and identity requests never touch the shell cache", async () => {
+test("admin, passkey and identity requests never touch the shell cache", async () => {
   const worker = startWorker();
   await (await worker.caches.open(SHELL)).put("/", basic("cached shell"));
   worker.network = (url) => Promise.resolve(basic("network " + url));

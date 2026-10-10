@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { EditorState } from "@codemirror/state";
 import {
   caretOffImageLineSpec,
@@ -9,7 +10,7 @@ import {
   selectionOnLoneImageLine,
 } from "./inlineImageCaretPolicy";
 
-Deno.test("Return on an image line is a normal line break", () => {
+test("Return on an image line is a normal line break", () => {
   const withTrailer = EditorState.create({
     doc: "![shot](cowboy-att:image-1)\n",
     selection: { anchor: 0 },
@@ -41,7 +42,7 @@ Deno.test("Return on an image line is a normal line break", () => {
   assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
 });
 
-Deno.test("the whitespace landing line under a lone image keeps breaking on Return", () => {
+test("the whitespace landing line under a lone image keeps breaking on Return", () => {
   const token = "![p.png](cowboy-att:p1)";
   const state = (doc: string, at: number): EditorState =>
     EditorState.create({ doc, selection: { anchor: at } });

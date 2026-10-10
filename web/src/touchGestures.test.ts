@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   createRetargetedTouchClickGuard,
   drawerIgnoresTouch,
@@ -14,19 +15,19 @@ import {
   swipeCommits,
 } from "./touchGestures.ts";
 
-Deno.test("paired touch click stays suppressed regardless of Safari delay", () => {
+test("paired touch click stays suppressed regardless of Safari delay", () => {
   assertEquals(isPairedTouchClick(true, 1), true);
   assertEquals(isPairedTouchClick(true, 2), true);
   assertEquals(isPairedTouchClick(true, 0, "touch"), true);
 });
 
-Deno.test("keyboard and assistive clicks are not swallowed by a touch claim", () => {
+test("keyboard and assistive clicks are not swallowed by a touch claim", () => {
   assertEquals(isPairedTouchClick(true, 0), false);
   assertEquals(isPairedTouchClick(false, 1), false);
   assertEquals(isPairedTouchClick(false, 0), false);
 });
 
-Deno.test("retargeted touch click guard consumes only the completed gesture click", () => {
+test("retargeted touch click guard consumes only the completed gesture click", () => {
   const guard = createRetargetedTouchClickGuard();
 
   guard.arm();
@@ -35,7 +36,7 @@ Deno.test("retargeted touch click guard consumes only the completed gesture clic
   assertEquals(guard.consume(1, "touch"), false);
 });
 
-Deno.test("a fresh pointer gesture releases the retargeted click guard", () => {
+test("a fresh pointer gesture releases the retargeted click guard", () => {
   const guard = createRetargetedTouchClickGuard();
 
   guard.arm();
@@ -43,27 +44,27 @@ Deno.test("a fresh pointer gesture releases the retargeted click guard", () => {
   assertEquals(guard.consume(1, "touch"), false);
 });
 
-Deno.test("expanded native text selection owns horizontal handle drags", () => {
+test("expanded native text selection owns horizontal handle drags", () => {
   assertEquals(expandedSelection(null), false);
   assertEquals(expandedSelection({ rangeCount: 1, isCollapsed: true }), false);
   assertEquals(expandedSelection({ rangeCount: 1, isCollapsed: false }), true);
 });
 
-Deno.test("only the focused keyboard overlay reserves the drawer gesture", () => {
+test("only the focused keyboard overlay reserves the drawer gesture", () => {
   assertEquals(inputOverlayOwnsDrawerGesture(false, false), false);
   assertEquals(inputOverlayOwnsDrawerGesture(false, true), false);
   assertEquals(inputOverlayOwnsDrawerGesture(true, false), false);
   assertEquals(inputOverlayOwnsDrawerGesture(true, true), true);
 });
 
-Deno.test("horizontal swipe waits for a deliberate direction lock", () => {
+test("horizontal swipe waits for a deliberate direction lock", () => {
   assertEquals(horizontalSwipe(11, 0), null);
   assertEquals(horizontalSwipe(40, 32), null);
   assertEquals(horizontalSwipe(48, 10), { direction: "right", distance: 48 });
   assertEquals(horizontalSwipe(-48, 10), { direction: "left", distance: 48 });
 });
 
-Deno.test("a row tap stops qualifying before the drawer can lock", () => {
+test("a row tap stops qualifying before the drawer can lock", () => {
   assertEquals(
     MOBILE_DRAWER_DIRECTION_LOCK_PX > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX,
     true,
@@ -78,14 +79,14 @@ Deno.test("a row tap stops qualifying before the drawer can lock", () => {
   );
 });
 
-Deno.test("horizontal navigation requires a substantial phone swipe", () => {
+test("horizontal navigation requires a substantial phone swipe", () => {
   assertEquals(swipeCommits(87, 390), false);
   assertEquals(swipeCommits(94, 390), true);
   assertEquals(swipeCommits(111, 1024), false);
   assertEquals(swipeCommits(112, 1024), true);
 });
 
-Deno.test("real vertical overflow remains native instead of reserving a swipe", () => {
+test("real vertical overflow remains native instead of reserving a swipe", () => {
   assertEquals(
     isVerticalScrollContainer({ clientHeight: 600, scrollHeight: 1800 }, "auto"),
     true,
@@ -100,14 +101,14 @@ Deno.test("real vertical overflow remains native instead of reserving a swipe", 
   );
 });
 
-Deno.test("preview movement freeze belongs only to a primary mouse press", () => {
+test("preview movement freeze belongs only to a primary mouse press", () => {
   assertEquals(shouldFreezePreviewPointer("mouse", 0), true);
   assertEquals(shouldFreezePreviewPointer("mouse", 1), false);
   assertEquals(shouldFreezePreviewPointer("touch", 0), false);
   assertEquals(shouldFreezePreviewPointer("pen", 0), false);
 });
 
-Deno.test("a swipe keeps its touch stream after a render detaches the start node", () => {
+test("a swipe keeps its touch stream after a render detaches the start node", () => {
   class StartNode extends EventTarget {
     isConnected = true;
   }
@@ -143,7 +144,7 @@ Deno.test("a swipe keeps its touch stream after a render detaches the start node
   assertEquals(followDetachedTouchStream(null, noop)(), undefined);
 });
 
-Deno.test("an idle writing page lets its editor yield the drawer swipe", () => {
+test("an idle writing page lets its editor yield the drawer swipe", () => {
   const element = (
     ancestors: Record<string, unknown>,
     focusWithin = false,

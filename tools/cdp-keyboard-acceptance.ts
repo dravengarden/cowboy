@@ -7,18 +7,18 @@
  * IME composition uses `Input.imeSetComposition`; it exercises the page's
  * composition path but is not a substitute for a real OS input method.
  *
- * Usage: deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 \
- *   --allow-env tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft]
+ * Usage: bun tools/cdp-keyboard-acceptance.ts http://127.0.0.1:9223 <out-dir> [composer|draft]
  */
+import { mkdir, writeFile } from "node:fs/promises";
 import { type CdpParams, openFixturePage } from "./cdp-fixture.ts";
 
-const endpoint = Deno.args[0] ?? "";
-const output = Deno.args[1];
+const endpoint = process.argv.slice(2)[0] ?? "";
+const output = process.argv.slice(2)[1];
 if (!output?.startsWith("/")) {
   throw new Error("expected an absolute output directory");
 }
-await Deno.mkdir(output, { recursive: true });
-const flow = Deno.args[2] ?? "composer";
+await mkdir(output, { recursive: true });
+const flow = process.argv.slice(2)[2] ?? "composer";
 if (flow !== "composer" && flow !== "draft") throw new Error("unknown flow");
 
 const page = await openFixturePage(
@@ -105,7 +105,7 @@ const click = async (selector: string) => {
 };
 const shot = async (name: string) => {
   const { data } = await page.send("Page.captureScreenshot", { format: "png" });
-  await Deno.writeFile(
+  await writeFile(
     `${output}/${name}.png`,
     Uint8Array.from(atob(data), (c) => c.charCodeAt(0)),
   );
@@ -517,7 +517,7 @@ try {
       2,
     ),
   );
-  Deno.exitCode = 1;
+  process.exitCode = 1;
 } finally {
   await page.close();
 }

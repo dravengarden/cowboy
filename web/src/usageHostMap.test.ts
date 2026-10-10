@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readdirSync, readFileSync } from "node:fs";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   applyUsageHostPlugins,
   usageActivityAgentIds,
@@ -36,17 +38,17 @@ import {
 
 function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
   const root = new URL("../../plugins/", import.meta.url);
-  return [...Deno.readDirSync(root)]
-    .filter((entry) => entry.isDirectory)
+  return [...readdirSync(root, { withFileTypes: true })]
+    .filter((entry) => entry.isDirectory())
     .sort((left, right) => left.name.localeCompare(right.name))
     .flatMap((entry) => {
       try {
         const host = JSON.parse(
-          Deno.readTextFileSync(new URL(`${entry.name}/host.json`, root)),
+          readFileSync(new URL(`${entry.name}/host.json`, root), "utf8"),
         ) as Record<string, unknown>;
         return [{ id: entry.name, ...host }];
       } catch (reason) {
-        if (reason instanceof Deno.errors.NotFound) return [];
+        if ((reason as { code?: string }).code === "ENOENT") return [];
         throw reason;
       }
     });
@@ -59,9 +61,9 @@ function restoreFirstPartyHosts(): void {
   applyUsageHostPlugins(FIRST_PARTY_HOSTS);
 }
 
-Deno.test("usage maps have no source-compiled first-party inventory", () => {
-  const source = Deno.readTextFileSync(
-    new URL("./usageHostMap.ts", import.meta.url),
+test("usage maps have no source-compiled first-party inventory", () => {
+  const source = readFileSync(
+    new URL("./usageHostMap.ts", import.meta.url), "utf8",
   );
   assertEquals(source.includes("bundledHostPlugins"), false);
   assertEquals(source.includes("FALLBACK_USAGE_PLUGIN_IDS"), false);
@@ -69,7 +71,7 @@ Deno.test("usage maps have no source-compiled first-party inventory", () => {
   assert(FIRST_PARTY_HOSTS.length > 0);
 });
 
-Deno.test("usage plugin ids map account providers onto agent plugins", () => {
+test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("openai"), "codex");
   assertEquals(usagePluginId("xai"), "grok");
   assertEquals(usagePluginId("anthropic"), "claude-code");
@@ -78,7 +80,7 @@ Deno.test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("future-b"), "future-b");
 });
 
-Deno.test("activated host inventory replaces usage account mapping", () => {
+test("activated host inventory replaces usage account mapping", () => {
   try {
     applyUsageHostPlugins([
       { id: "custom-grok", usage: { account: "xai" } },
@@ -92,7 +94,7 @@ Deno.test("activated host inventory replaces usage account mapping", () => {
   assertEquals(usagePluginId("xai"), "grok");
 });
 
-Deno.test("host usage specs overlay reset ids and product labels", () => {
+test("host usage specs overlay reset ids and product labels", () => {
   try {
     applyUsageHostPlugins([{
       id: "grok",
@@ -114,7 +116,7 @@ Deno.test("host usage specs overlay reset ids and product labels", () => {
   assertEquals(usageProductLabel("xai"), "xAI");
 });
 
-Deno.test("host usage specs overlay parser, order, errors, and top-bar windows", () => {
+test("host usage specs overlay parser, order, errors, and top-bar windows", () => {
   try {
     applyUsageHostPlugins([{
       id: "custom-codex",
@@ -235,7 +237,7 @@ Deno.test("host usage specs overlay parser, order, errors, and top-bar windows",
   assertEquals(usageCacheOptionName("gemini"), "");
 });
 
-Deno.test("host usage specs overlay cache-protection thresholds", () => {
+test("host usage specs overlay cache-protection thresholds", () => {
   try {
     applyUsageHostPlugins([{
       id: "claude-deepseek",
@@ -265,7 +267,7 @@ Deno.test("host usage specs overlay cache-protection thresholds", () => {
   assertEquals(usageCacheIntervalLabel(), "8h");
 });
 
-Deno.test("host usage specs overlay activity model families", () => {
+test("host usage specs overlay activity model families", () => {
   try {
     applyUsageHostPlugins([{
       id: "claude-deepseek",
@@ -284,7 +286,7 @@ Deno.test("host usage specs overlay activity model families", () => {
   assertEquals(usageActivityModelLabel("pro"), "Pro");
 });
 
-Deno.test("reset ids index the plugin-keyed schedule map", () => {
+test("reset ids index the plugin-keyed schedule map", () => {
   const schedules: Record<string, { fire_at_ms: number }> = {
     codex: { fire_at_ms: 100 },
     xai: { fire_at_ms: 200 },

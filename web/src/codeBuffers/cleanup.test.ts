@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertNotEquals,
   assertRejects,
   assertStrictEquals,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { type CleanupHandle } from "./cleanup.ts";
 import { createOwnedCodeBuffers } from "./owner.ts";
 import { BufferClientError } from "./protocol.ts";
@@ -19,7 +20,7 @@ async function pending() {
   return { ...f, source: f.registry.cleanup };
 }
 
-Deno.test("cleanup observation is stable, immutable and local; active owners have no cleanup row", async () => {
+test("cleanup observation is stable, immutable and local; active owners have no cleanup row", async () => {
   const f = fixture();
   const source = f.registry.cleanup;
   const a = source.get();
@@ -41,7 +42,7 @@ Deno.test("cleanup observation is stable, immutable and local; active owners hav
   off();
 });
 
-Deno.test("observers are independent leases and cannot fail or bypass an admitted job", async () => {
+test("observers are independent leases and cannot fail or bypass an admitted job", async () => {
   const f = fixture();
   let count = 0;
   const observedJobs: unknown[] = [];
@@ -72,7 +73,7 @@ Deno.test("observers are independent leases and cannot fail or bypass an admitte
   assertEquals(count, last, "an unsubscribed observer received a callback");
 });
 
-Deno.test("context watch exists only while the registry has a consumer or retained owner", async () => {
+test("context watch exists only while the registry has a consumer or retained owner", async () => {
   const context = new AbortController();
   const add = context.signal.addEventListener.bind(context.signal);
   const remove = context.signal.removeEventListener.bind(context.signal);
@@ -100,7 +101,7 @@ Deno.test("context watch exists only while the registry has a consumer or retain
   assert(registry.cleanup.get().contextLost);
 });
 
-Deno.test("subscribers added by a notification wait for a later owner change", async () => {
+test("subscribers added by a notification wait for a later owner change", async () => {
   const f = fixture();
   const seen: string[] = [];
   let late: (() => void) | undefined;
@@ -122,7 +123,7 @@ Deno.test("subscribers added by a notification wait for a later owner change", a
   await close;
 });
 
-Deno.test("pending cleanup projects captured input and explicit continuation observes before releasing once", async () => {
+test("pending cleanup projects captured input and explicit continuation observes before releasing once", async () => {
   const f = await pending();
   const row = f.source.get().rows[0]!;
   assertEquals([row.status, row.canInspect, row.canContinue], [
@@ -156,7 +157,7 @@ Deno.test("pending cleanup projects captured input and explicit continuation obs
   assertEquals(f.calls.length, 5);
 });
 
-Deno.test("uncertain DELETE is inspect-only even after open evidence; errors cannot remove its row", async () => {
+test("uncertain DELETE is inspect-only even after open evidence; errors cannot remove its row", async () => {
   const f = await opened();
   const close = f.owner.close();
   await f.advance(3);
@@ -192,7 +193,7 @@ Deno.test("uncertain DELETE is inspect-only even after open evidence; errors can
   );
 });
 
-Deno.test("foreign, serialized and retired cleanup handles cannot target a new owner", async () => {
+test("foreign, serialized and retired cleanup handles cannot target a new owner", async () => {
   const a = await pending(), b = await pending();
   const row = a.source.get().rows[0]!;
   await assertRejects(() => b.source.inspect(row.handle), BufferClientError);
@@ -227,7 +228,7 @@ Deno.test("foreign, serialized and retired cleanup handles cannot target a new o
   b.context.abort();
 });
 
-Deno.test("ending one status observer preserves the borrowed request across panel remount", async () => {
+test("ending one status observer preserves the borrowed request across panel remount", async () => {
   const f = await pending();
   const handle = f.source.get().rows[0]!.handle;
   const observer = new AbortController();
@@ -243,7 +244,7 @@ Deno.test("ending one status observer preserves the borrowed request across pane
   f.context.abort();
 });
 
-Deno.test("context end immediately redacts retained paths and fences stale confirmation before notifications", async () => {
+test("context end immediately redacts retained paths and fences stale confirmation before notifications", async () => {
   const f = await pending();
   const row = f.source.get().rows[0]!;
   f.context.abort();

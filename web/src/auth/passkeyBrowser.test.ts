@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   shapePasskeyCreationPublicKey,
   shapePasskeyRequestPublicKey,
@@ -8,7 +10,7 @@ const desktopTab = { standalone: false, mobile: false };
 const desktopPwa = { standalone: true, mobile: false };
 const phonePwa = { standalone: true, mobile: true };
 
-Deno.test("desktop assertion prefers this device before hybrid QR", () => {
+test("desktop assertion prefers this device before hybrid QR", () => {
   const shaped = shapePasskeyRequestPublicKey({
     challenge: "challenge",
     rpId: "cowboy.example",
@@ -23,7 +25,7 @@ Deno.test("desktop assertion prefers this device before hybrid QR", () => {
   }]);
 });
 
-Deno.test("missing transports are filled so Chrome tries Touch ID, not only QR", () => {
+test("missing transports are filled so Chrome tries Touch ID, not only QR", () => {
   const shaped = shapePasskeyRequestPublicKey({
     challenge: "challenge",
     allowCredentials: [{ type: "public-key", id: "cred" }],
@@ -39,7 +41,7 @@ Deno.test("missing transports are filled so Chrome tries Touch ID, not only QR",
 // the authenticator never offered, and that claim is what puts a third-party
 // passkey provider in front of a credential it does not hold: the browser was
 // told this one might be reachable the way that provider works.
-Deno.test("a reported transport set is authoritative, never widened", () => {
+test("a reported transport set is authoritative, never widened", () => {
   const platformOnly = shapePasskeyRequestPublicKey({
     challenge: "challenge",
     allowCredentials: [{
@@ -83,7 +85,7 @@ Deno.test("a reported transport set is authoritative, never widened", () => {
   assertEquals(synced.hints, ["client-device", "hybrid"]);
 });
 
-Deno.test("phone assertion does not advertise hybrid QR", () => {
+test("phone assertion does not advertise hybrid QR", () => {
   const shaped = shapePasskeyRequestPublicKey({
     challenge: "challenge",
     allowCredentials: [{
@@ -100,7 +102,7 @@ Deno.test("phone assertion does not advertise hybrid QR", () => {
   }]);
 });
 
-Deno.test("registration overrides discouraged resident keys", () => {
+test("registration overrides discouraged resident keys", () => {
   const shaped = shapePasskeyCreationPublicKey({
     challenge: "challenge",
     authenticatorSelection: {
@@ -117,7 +119,7 @@ Deno.test("registration overrides discouraged resident keys", () => {
   });
 });
 
-Deno.test("installed PWA registration asks for the platform authenticator", () => {
+test("installed PWA registration asks for the platform authenticator", () => {
   const shaped = shapePasskeyCreationPublicKey({
     challenge: "challenge",
   }, desktopPwa);
@@ -128,7 +130,7 @@ Deno.test("installed PWA registration asks for the platform authenticator", () =
   });
 });
 
-Deno.test("required resident keys stay required", () => {
+test("required resident keys stay required", () => {
   const shaped = shapePasskeyCreationPublicKey({
     challenge: "challenge",
     authenticatorSelection: {
@@ -142,8 +144,8 @@ Deno.test("required resident keys stay required", () => {
   });
 });
 
-const source = await Deno.readTextFile(
-  new URL("./passkeyBrowser.ts", import.meta.url),
+const source = await readFile(
+  new URL("./passkeyBrowser.ts", import.meta.url), "utf8",
 );
 
 // The chain only works if the first link exists: the authenticator reports its
@@ -151,7 +153,7 @@ const source = await Deno.readTextFile(
 // credential and back out into `allowCredentials` on every later assertion.
 // Without this the Service stores `transports: null` and the client is left
 // guessing routes for a credential it knows nothing about.
-Deno.test("registration records the authenticator's own transports", () => {
+test("registration records the authenticator's own transports", () => {
   const registration = source.slice(
     source.indexOf("if (response instanceof AuthenticatorAttestationResponse)"),
     source.indexOf(

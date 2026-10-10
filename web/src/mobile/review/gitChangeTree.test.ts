@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { GitReviewEntry } from "./gitReviewModel.ts";
 import { buildGitChangeTree } from "./gitChangeTree.ts";
 
@@ -12,7 +13,7 @@ const entry = (path: string): GitReviewEntry => ({
   scope: "unstaged",
 });
 
-Deno.test("git change tree contains only changed files and expands directories", () => {
+test("git change tree contains only changed files and expands directories", () => {
   const tree = buildGitChangeTree([
     entry("src/server.rs"),
     entry("src/mobile/review.ts"),
@@ -28,7 +29,7 @@ Deno.test("git change tree contains only changed files and expands directories",
   ]);
 });
 
-Deno.test("git change tree compacts directory-only path chains", () => {
+test("git change tree compacts directory-only path chains", () => {
   const tree = buildGitChangeTree([
     entry("config/data-selections/active.json"),
     entry("crates/corsair-data/src/lib.rs"),
@@ -42,7 +43,7 @@ Deno.test("git change tree compacts directory-only path chains", () => {
   ]);
 });
 
-Deno.test("git change tree preserves branching directories", () => {
+test("git change tree preserves branching directories", () => {
   const tree = buildGitChangeTree([
     entry("src/mobile/app.ts"),
     entry("src/server/api.ts"),

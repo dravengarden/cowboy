@@ -3,6 +3,7 @@
 /plugins/zed/adapter/target
 
 # Frontend
+node_modules/
 web/node_modules/
 tools/do-memory-mock/node_modules/
 web/dist/
@@ -44,3 +45,4 @@ tools/__pycache__/
 
 # The state engines remain committed Cowboy components; they are never staged
 # from another checkout during development or release builds.
+components/*/node_modules/

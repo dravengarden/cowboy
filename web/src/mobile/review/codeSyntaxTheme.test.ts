@@ -1,4 +1,5 @@
-import { assert, assertNotEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertNotEquals } from "@std/assert";
 import { codeSyntaxPalette } from "./codeSyntaxTheme.ts";
 
 function luminance(hex: string): number {
@@ -18,7 +19,7 @@ function contrast(a: string, b: string): number {
   return (high + 0.05) / (low + 0.05);
 }
 
-Deno.test("code syntax palettes stay readable on Cowboy surfaces", () => {
+test("code syntax palettes stay readable on Cowboy surfaces", () => {
   for (
     const [mode, background] of [
       ["light", "#f6f4fb"],
@@ -35,7 +36,7 @@ Deno.test("code syntax palettes stay readable on Cowboy surfaces", () => {
   }
 });
 
-Deno.test("light and dark code palettes are independently tuned", () => {
+test("light and dark code palettes are independently tuned", () => {
   const light = codeSyntaxPalette("light");
   const dark = codeSyntaxPalette("dark");
   for (const name of Object.keys(light) as (keyof typeof light)[]) {

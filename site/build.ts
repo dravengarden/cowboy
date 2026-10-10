@@ -1,3 +1,4 @@
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
 interface PluginManifest {
@@ -249,7 +250,7 @@ function assertHexColor(value: string, label: string): string {
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(path)) as T;
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
@@ -257,8 +258,12 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
   const identities = new Set<string>();
 
   for (const sourceRoot of PLUGIN_SOURCE_ROOTS) {
-    for await (const entry of Deno.readDir(joinPath(root, sourceRoot))) {
-      if (!entry.isDirectory) continue;
+    for (
+      const entry of await readdir(joinPath(root, sourceRoot), {
+        withFileTypes: true,
+      })
+    ) {
+      if (!entry.isDirectory()) continue;
       const sourcePath = joinPath(sourceRoot, entry.name);
       let manifest: PluginManifest;
       try {
@@ -266,7 +271,7 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
           joinPath(root, sourcePath, "plugin.json"),
         );
       } catch (error) {
-        if (error instanceof Deno.errors.NotFound) continue;
+        if ((error as { code?: string }).code === "ENOENT") continue;
         throw error;
       }
       if (identities.has(manifest.id)) {
@@ -509,9 +514,10 @@ export async function buildSite(
     plugins.filter((plugin) => plugin.kind === "agent_provider").length;
   const codeCount =
     plugins.filter((plugin) => plugin.kind === "code_intelligence").length;
-  const template = await Deno.readTextFile(joinPath(root, "site/index.html"));
-  const brandMark = await Deno.readTextFile(
+  const template = await readFile(joinPath(root, "site/index.html"), "utf8");
+  const brandMark = await readFile(
     joinPath(root, "site/assets/cowboy-wordmark-v2.svg"),
+    "utf8",
   );
   let brandIndex = 0;
   const html = template
@@ -532,7 +538,7 @@ export async function buildSite(
     ["styles.css", "site.js", "robots.txt", "sitemap.xml"].map(
       async (file) => ({
         file,
-        content: await Deno.readTextFile(joinPath(root, `site/${file}`)),
+        content: await readFile(joinPath(root, `site/${file}`), "utf8"),
       }),
     ),
   );
@@ -540,7 +546,7 @@ export async function buildSite(
     REQUIRED_ASSETS.map(async ([source, destination]) => ({
       source,
       destination,
-      content: await Deno.readFile(joinPath(root, source)),
+      content: await readFile(joinPath(root, source)),
     })),
   );
 
@@ -560,23 +566,23 @@ export async function buildSite(
     assertPublicSiteContent(source, content);
   }
 
-  await Deno.remove(output, { recursive: true }).catch((error) => {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  await rm(output, { recursive: true }).catch((error) => {
+    if (!((error as { code?: string }).code === "ENOENT")) throw error;
   });
-  await Deno.mkdir(joinPath(output, "assets"), { recursive: true });
-  await Deno.writeTextFile(joinPath(output, "index.html"), html);
-  await Deno.writeTextFile(joinPath(output, "404.html"), html);
-  await Deno.writeTextFile(joinPath(output, ".nojekyll"), "");
-  await Deno.writeTextFile(
+  await mkdir(joinPath(output, "assets"), { recursive: true });
+  await writeFile(joinPath(output, "index.html"), html);
+  await writeFile(joinPath(output, "404.html"), html);
+  await writeFile(joinPath(output, ".nojekyll"), "");
+  await writeFile(
     joinPath(output, "plugins.json"),
     catalog,
   );
 
   for (const { file, content } of staticFiles) {
-    await Deno.writeTextFile(joinPath(output, file), content);
+    await writeFile(joinPath(output, file), content);
   }
   for (const { destination, content } of assets) {
-    await Deno.writeFile(joinPath(output, destination), content);
+    await writeFile(joinPath(output, destination), content);
   }
 
   return output;
@@ -585,11 +591,14 @@ export async function buildSite(
 function parseOutputArgument(args: string[]): string {
   if (args.length === 0) return "site-dist";
   if (args.length === 2 && args[0] === "--out" && args[1]) return args[1];
-  throw new Error("usage: deno run site/build.ts [--out <directory>]");
+  throw new Error("usage: bun site/build.ts [--out <directory>]");
 }
 
 if (import.meta.main) {
-  const root = Deno.cwd();
-  const output = await buildSite(root, parseOutputArgument(Deno.args));
+  const root = process.cwd();
+  const output = await buildSite(
+    root,
+    parseOutputArgument(process.argv.slice(2)),
+  );
   console.log(`Cowboy website built at ${output}`);
 }

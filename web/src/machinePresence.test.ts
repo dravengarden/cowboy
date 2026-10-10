@@ -1,7 +1,8 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { machinePresencePresentation } from "./machinePresence.ts";
 
-Deno.test("machine reconnect grace is distinct from true offline presence", () => {
+test("machine reconnect grace is distinct from true offline presence", () => {
   assertEquals(machinePresencePresentation("online"), {
     indicator: "running",
     label: "online",

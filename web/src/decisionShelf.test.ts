@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
 /** Comment-free, whitespace-collapsed view: these are assertions about the
  *  STYLE, and `deno fmt` is free to rewrap any of these template literals. */
@@ -9,8 +11,8 @@ function code(source: string): string {
     .replace(/\s+/g, " ");
 }
 
-const shelfSource = await Deno.readTextFile(
-  new URL("./decisionShelf.ts", import.meta.url),
+const shelfSource = await readFile(
+  new URL("./decisionShelf.ts", import.meta.url), "utf8",
 );
 const shelf = code(shelfSource);
 const emphasis = shelf.slice(
@@ -20,18 +22,18 @@ const emphasis = shelf.slice(
 const surface = shelf.slice(
   shelf.indexOf("export function decisionShelfSurface"),
 );
-const actions = await Deno.readTextFile(
-  new URL("./MobileDecisionActions.tsx", import.meta.url),
+const actions = await readFile(
+  new URL("./MobileDecisionActions.tsx", import.meta.url), "utf8",
 );
-const card = await Deno.readTextFile(
-  new URL("./ObsidianSheet.tsx", import.meta.url),
+const card = await readFile(
+  new URL("./ObsidianSheet.tsx", import.meta.url), "utf8",
 );
 const filterSheets = await Promise.all(
   [
     "./UsageLogs.tsx",
     "./ProviderUsageActivityDetails.tsx",
     "./ObservabilityFilters.tsx",
-  ].map((file) => Deno.readTextFile(new URL(file, import.meta.url))),
+  ].map((file) => readFile(new URL(file, import.meta.url), "utf8")),
 );
 
 // The lift is painted, never composited. A wide upward `box-shadow` on this
@@ -39,7 +41,7 @@ const filterSheets = await Promise.all(
 // the frosted cover sheet (`fix(mobile): flatten new session action footer`).
 // Gradients have no shadow/backdrop-filter interaction, so they cannot regress
 // that way — keep the plate itself shadow-free.
-Deno.test("the decision plate lifts with a gradient, never an upward shadow", () => {
+test("the decision plate lifts with a gradient, never an upward shadow", () => {
   assert(surface.includes('bottom: "100%"'));
   assert(surface.includes("linear-gradient(to top"));
   assertEquals(/boxShadow|box-shadow/.test(surface), false);
@@ -50,7 +52,7 @@ Deno.test("the decision plate lifts with a gradient, never an upward shadow", ()
   assertEquals(/linear-gradient\([^)]*transparent/.test(surface), false);
 });
 
-Deno.test("the hairline carries the app accent; the glow carries the decision's", () => {
+test("the hairline carries the app accent; the glow carries the decision's", () => {
   assert(shelf.includes("const accent = t.palette.primary.main;"));
   assert(/borderTop: `1px solid \$\{\s*alpha\(accent/.test(surface));
   // The lift takes the BUTTON's colour: a destructive confirm glowing in the
@@ -74,7 +76,7 @@ Deno.test("the hairline carries the app accent; the glow carries the decision's"
   assert(emphasis.includes(".MuiButton-text.MuiButton-text"));
 });
 
-Deno.test("decision surfaces share their default material with an explicit flat form variant", () => {
+test("decision surfaces share their default material with an explicit flat form variant", () => {
   // The two real decision FOOTERS get the whole plate.
   assert(actions.includes("decisionShelfSurface(theme)"));
   assert(actions.includes("flatDecisionShelf(theme)"));
@@ -99,23 +101,23 @@ Deno.test("decision surfaces share their default material with an explicit flat 
   }
 });
 
-const consequence = await Deno.readTextFile(
-  new URL("./ConfirmConsequence.tsx", import.meta.url),
+const consequence = await readFile(
+  new URL("./ConfirmConsequence.tsx", import.meta.url), "utf8",
 );
-const composer = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composer = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const topBar = await Deno.readTextFile(
-  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url),
+const topBar = await readFile(
+  new URL("./desktop/DesktopTopBarControls.tsx", import.meta.url), "utf8",
 );
-const commands = await Deno.readTextFile(
-  new URL("./agentCommands.ts", import.meta.url),
+const commands = await readFile(
+  new URL("./agentCommands.ts", import.meta.url), "utf8",
 );
 
 // A confirm card states two different things: what the action MEANS, and what
 // happens to THIS session on tap. The second one was a 13px grey orphan between
 // the paragraph and the buttons; it is now a block in the decision's colour.
-Deno.test("the consequence is a block in the decision's colour, not an orphan line", () => {
+test("the consequence is a block in the decision's colour, not an orphan line", () => {
   assert(consequence.includes("data-confirm-consequence={tone}"));
   assert(consequence.includes("theme.palette[tone].main"));
   assert(consequence.includes("This can't be undone."));

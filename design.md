@@ -230,7 +230,7 @@ binary (omega pattern, via `rust-embed`). "PC" and "phone" are the **same app at
 different widths**, not separate builds — no desktop/Tauri app.
 
 - **Stack:** React 19, MUI 7 + Emotion, TanStack Router, TanStack Query, Vite 7,
-  TypeScript (strictest), built with Deno, linted with oxlint.
+  TypeScript (strictest), built with Bun, linted with oxlint.
 - **Realtime:** WebSocket client + a small store accumulating each session's
   timeline. TanStack Query (`useInfiniteQuery`) handles non-stream REST and
   **cursor-based history pagination** (`seq < cursor`, see §6).

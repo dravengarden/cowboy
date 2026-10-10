@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { AuthStatus } from "./authApi.ts";
 import {
   authStatusCacheExpiry,
@@ -28,7 +29,7 @@ function status(me: AuthStatus["me"], session?: AuthStatus["session"]): AuthStat
   return { registration, ...(session !== undefined ? { session } : {}), ...(me !== undefined ? { me } : {}) };
 }
 
-Deno.test("a cached principal mounts only for retry probes and only before its deadline", () => {
+test("a cached principal mounts only for retry probes and only before its deadline", () => {
   const storage = memoryStorage();
   const now = 1_000_000;
   const me = { account: "draven", user_id: "user-a", role: "owner" as const, primary_reauth_due_at_ms: now + 5_000 };
@@ -47,7 +48,7 @@ Deno.test("a cached principal mounts only for retry probes and only before its d
   assertEquals(readCachedAuthStatus(now, storage), null);
 });
 
-Deno.test("expiry follows the earliest known deadline and auth-off never expires", () => {
+test("expiry follows the earliest known deadline and auth-off never expires", () => {
   const now = 10;
   assertEquals(
     authStatusCacheExpiry(status({ account: "a", user_id: "u", role: "owner", auth_enabled: false }), now),
@@ -65,7 +66,7 @@ Deno.test("expiry follows the earliest known deadline and auth-off never expires
   );
 });
 
-Deno.test("a status without a user id clears the cache instead of storing a label", () => {
+test("a status without a user id clears the cache instead of storing a label", () => {
   const storage = memoryStorage();
   rememberAuthStatus(status({ account: "a", user_id: "u", role: "owner" }), 1, storage);
   rememberAuthStatus(status({ account: "legacy", role: "owner" }), 2, storage);
@@ -74,7 +75,7 @@ Deno.test("a status without a user id clears the cache instead of storing a labe
   assertEquals(readCachedAuthStatus(3, storage), null);
 });
 
-Deno.test("the app boots from a still-valid cached principal before any probe answers", () => {
+test("the app boots from a still-valid cached principal before any probe answers", () => {
   const storage = memoryStorage();
   const now = 2_000_000;
   assertEquals(bootAuthDecision(now, storage), null);

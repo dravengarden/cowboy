@@ -1,8 +1,10 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-Deno.test("default font scale is 65 percent with a 50 percent minimum", async () => {
-  const source = await Deno.readTextFile(
-    new URL("readingSettings.ts", import.meta.url),
+test("default font scale is 65 percent with a 50 percent minimum", async () => {
+  const source = await readFile(
+    new URL("readingSettings.ts", import.meta.url), "utf8",
   );
   assertEquals(
     source.includes("export const FONT_SCALE_DEFAULT = 0.65;"),

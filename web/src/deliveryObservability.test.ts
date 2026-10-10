@@ -1,8 +1,10 @@
-import { assert } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert } from "@std/assert";
 
-Deno.test("local delivery failures are reported before callers can swallow them", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./store.ts", import.meta.url),
+test("local delivery failures are reported before callers can swallow them", async () => {
+  const source = await readFile(
+    new URL("./store.ts", import.meta.url), "utf8",
   );
   const start = source.indexOf('"delivery_persist_started"');
   const persist = source.indexOf("await mutateQueueDurably", start);

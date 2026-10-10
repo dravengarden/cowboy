@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   createAuthoredSendGate,
   type PendingAuthoredSend,
@@ -10,7 +11,7 @@ const held = (id: string): PendingAuthoredSend => ({
   held: true,
 });
 
-Deno.test("sending waits for restored obligations before asking or consuming its source", async () => {
+test("sending waits for restored obligations before asking or consuming its source", async () => {
   const restoration = Promise.withResolvers<void>();
   let pending: PendingAuthoredSend[] = [];
   let decisions = 0;
@@ -36,7 +37,7 @@ Deno.test("sending waits for restored obligations before asking or consuming its
   assertEquals(consumed, false);
 });
 
-Deno.test("restoration failure leaves the source untouched and opens no decision", async () => {
+test("restoration failure leaves the source untouched and opens no decision", async () => {
   let decisions = 0;
   const gate = createAuthoredSendGate({
     hydrate: () => Promise.reject(new Error("Storage unavailable")),
@@ -53,7 +54,7 @@ Deno.test("restoration failure leaves the source untouched and opens no decision
   assertEquals(decisions, 0);
 });
 
-Deno.test("explicit processing excludes its own retry identity but still checks other authored sends", async () => {
+test("explicit processing excludes its own retry identity but still checks other authored sends", async () => {
   let pending: PendingAuthoredSend[] = [
     held("source"),
     { ...held("source-operation"), sourceCmid: "source" },
@@ -76,7 +77,7 @@ Deno.test("explicit processing excludes its own retry identity but still checks 
   assertEquals(pending.length, 4);
 });
 
-Deno.test("a new held send arriving during a decision needs its own decision", async () => {
+test("a new held send arriving during a decision needs its own decision", async () => {
   let pending = [held("first")];
   const decisions: string[][] = [];
   const gate = createAuthoredSendGate({
@@ -91,7 +92,7 @@ Deno.test("a new held send arriving during a decision needs its own decision", a
   assertEquals(decisions, [["first"], ["arrived-while-waiting"]]);
 });
 
-Deno.test("retrying is still pending until the original obligation is confirmed", () => {
+test("retrying is still pending until the original obligation is confirmed", () => {
   let pending: PendingAuthoredSend[] = [{ ...held("original"), held: false }];
   const gate = createAuthoredSendGate({
     hydrate: async () => {},

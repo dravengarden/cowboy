@@ -1,4 +1,5 @@
-import { assertEquals, assertNotStrictEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertNotStrictEquals } from "@std/assert";
 import type { ConfigOption } from "./protocol";
 import {
   providerConfigOptionDisabled,
@@ -8,7 +9,7 @@ import {
   providerConfigSurfaceDisabled,
 } from "./providerConfigOptions";
 
-Deno.test("the UI preserves Provider-projected configuration generically", () => {
+test("the UI preserves Provider-projected configuration generically", () => {
   const options: ConfigOption[] = [{
     id: "future_option",
     name: "Future option",
@@ -20,7 +21,7 @@ Deno.test("the UI preserves Provider-projected configuration generically", () =>
   assertNotStrictEquals(projected, options);
 });
 
-Deno.test("signed option policy controls layout order and lifecycle without Provider ids", () => {
+test("signed option policy controls layout order and lifecycle without Provider ids", () => {
   const option: ConfigOption = {
     id: "future_option",
     name: "Future option",

@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   advanceUpdateAttempt,
   clearUpdateAttempt,
@@ -19,7 +21,7 @@ function storage(seed: Record<string, string> = {}) {
   };
 }
 
-Deno.test("a swap signs itself in, then the build signs off", () => {
+test("a swap signs itself in, then the build signs off", () => {
   const store = storage();
   markUpdateSwapping(store, "cowboy-v1753", 1000);
   assertEquals(updateSwapInFlight(store), true);
@@ -35,7 +37,7 @@ Deno.test("a swap signs itself in, then the build signs off", () => {
   assertEquals(advanceUpdateAttempt(store.getItem(UPDATE_ATTEMPT_KEY), 1300).failed, undefined);
 });
 
-Deno.test("a document that ran and never came up is the failure signature", () => {
+test("a document that ran and never came up is the failure signature", () => {
   // Exactly one shape means a build did not start: a second load finding
   // `booting`. The first load wrote it and was supposed to erase it.
   const store = storage();
@@ -49,7 +51,7 @@ Deno.test("a document that ran and never came up is the failure signature", () =
   assertEquals(second.failed?.phase, "booting");
 });
 
-Deno.test("a stale or unreadable marker accuses nobody", () => {
+test("a stale or unreadable marker accuses nobody", () => {
   const store = storage();
   markUpdateSwapping(store, "cowboy-v1753", 1000);
   const booting = advanceUpdateAttempt(store.getItem(UPDATE_ATTEMPT_KEY), 1000).next;
@@ -73,7 +75,7 @@ Deno.test("a stale or unreadable marker accuses nobody", () => {
   }
 });
 
-Deno.test("denied storage loses the guard, never the update", () => {
+test("denied storage loses the guard, never the update", () => {
   const denied = {
     getItem: (): string | null => {
       throw new Error("denied");
@@ -91,10 +93,10 @@ Deno.test("denied storage loses the guard, never the update", () => {
   markUpdateSwapping(undefined, "cowboy-v1753", 1000);
 });
 
-Deno.test("the pre-module ledger in index.html is the same ledger", async () => {
+test("the pre-module ledger in index.html is the same ledger", async () => {
   // The document has to decide this before any module exists, so the rules are
   // written twice. These are the exact strings that make the two copies one.
-  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const ledger = html.slice(
     html.indexOf("Did the build this document belongs to actually start?"),
     html.indexOf("__cowboyUpdateBootFailed") + 64,
@@ -107,33 +109,33 @@ Deno.test("the pre-module ledger in index.html is the same ledger", async () => 
   assert(ledger.includes(`attempt.phase === "booting"`));
 });
 
-Deno.test("the boot guard rolls back before it renders the tree that failed", async () => {
-  const main = await Deno.readTextFile(new URL("./main.tsx", import.meta.url));
+test("the boot guard rolls back before it renders the tree that failed", async () => {
+  const main = await readFile(new URL("./main.tsx", import.meta.url), "utf8");
   const guard = main.indexOf("__cowboyUpdateBootFailed");
   const render = main.indexOf("createRoot(el).render");
   assert(guard > 0 && render > guard, "the rollback guard must precede the render");
 
   // A crash inside a swap goes backward, not forward: forward is the build
   // that just crashed.
-  const boundary = await Deno.readTextFile(new URL("./AppErrorBoundary.tsx", import.meta.url));
+  const boundary = await readFile(new URL("./AppErrorBoundary.tsx", import.meta.url), "utf8");
   const swapCheck = boundary.indexOf("updateSwapInFlight(globalThis.localStorage)");
   const forward = boundary.indexOf("if (isModuleLoadError(error)) void this.recover(false);");
   assert(swapCheck > 0 && forward > swapCheck, "the swap check must come first");
 });
 
-Deno.test("a rollback navigates away from the network, not toward it", async () => {
+test("a rollback navigates away from the network, not toward it", async () => {
   const target = rolledBackNavigationUrl("https://cowboy.test/?session=one#drafts", 1234);
   // A distinct URL, because WKWebView can replay the very document that failed.
   assertEquals(target, "https://cowboy.test/?session=one&cowboy-rolled-back=1234#drafts");
 
   // And never a param the worker treats as network-first: the network holds
   // exactly the build being run away from.
-  const sw = await Deno.readTextFile(new URL("../public/sw.js", import.meta.url));
+  const sw = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
   const networkParams = /const SHELL_NETWORK_PARAMS = \[([^\]]*)\]/.exec(sw)?.[1] ?? "";
   assert(networkParams.length > 0);
   assert(!networkParams.includes("cowboy-rolled-back"));
   for (const source of ["./main.tsx", "./AppErrorBoundary.tsx"]) {
-    const text = await Deno.readTextFile(new URL(source, import.meta.url));
+    const text = await readFile(new URL(source, import.meta.url), "utf8");
     if (!text.includes("rolledBackNavigationUrl")) continue;
     assert(
       !/rollback[\s\S]{0,400}globalThis\.location\.reload\(\)/.test(text),

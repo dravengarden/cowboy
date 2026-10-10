@@ -1,9 +1,10 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import {
   createProductSyncDatabase,
   ProductSyncDatasetChangedError,
@@ -83,7 +84,7 @@ async function opened() {
   return { ...f, registry, owner };
 }
 
-Deno.test("core buffer readiness reuses the bound dataset without opening storage, sockets or native buffers", async () => {
+test("core buffer readiness reuses the bound dataset without opening storage, sockets or native buffers", async () => {
   const f = fixture();
   assertEquals(f.discoveries(), 0);
   const [a, b] = await Promise.all([f.product.ready(), f.product.ready()]);
@@ -97,7 +98,7 @@ Deno.test("core buffer readiness reuses the bound dataset without opening storag
   await f.data.dispose();
 });
 
-Deno.test("unauthenticated discovery cannot construct a buffer owner or adopt a display label", async () => {
+test("unauthenticated discovery cannot construct a buffer owner or adopt a display label", async () => {
   const f = fixture();
   f.principal(undefined);
   const stop = f.product.cleanup.subscribe(() => {});
@@ -126,7 +127,7 @@ Deno.test("unauthenticated discovery cannot construct a buffer owner or adopt a 
   await f.data.dispose();
 });
 
-Deno.test("temporary discovery failures can retry before binding and never expose private error details", async () => {
+test("temporary discovery failures can retry before binding and never expose private error details", async () => {
   const f = fixture();
   f.discovery(() => Promise.reject(new Error("private endpoint")));
   const error = await assertRejects(() => f.product.ready(), BufferClientError);
@@ -139,7 +140,7 @@ Deno.test("temporary discovery failures can retry before binding and never expos
   await f.data.dispose();
 });
 
-Deno.test("view cancellation detaches one readiness observer without disposing the shared context", async () => {
+test("view cancellation detaches one readiness observer without disposing the shared context", async () => {
   const f = fixture(),
     view = new AbortController(),
     pending = deferred<SyncDataset>();
@@ -155,7 +156,7 @@ Deno.test("view cancellation detaches one readiness observer without disposing t
   await f.data.dispose();
 });
 
-Deno.test("an already cancelled view or already ended authority starts no discovery", async () => {
+test("an already cancelled view or already ended authority starts no discovery", async () => {
   const f = fixture();
   await assertRejects(
     () => f.product.ready(AbortSignal.abort()),
@@ -173,7 +174,7 @@ Deno.test("an already cancelled view or already ended authority starts no discov
   await f.data.dispose();
 });
 
-Deno.test("authority loss fences readiness even when shared discovery never settles", async () => {
+test("authority loss fences readiness even when shared discovery never settles", async () => {
   const f = fixture(), pending = deferred<SyncDataset>();
   f.discovery(() => pending.promise);
   const ready = f.product.ready();
@@ -190,7 +191,7 @@ Deno.test("authority loss fences readiness even when shared discovery never sett
   await f.data.dispose();
 });
 
-Deno.test("real session-end rendezvous fences a borrowed read before cleanup observers run", async () => {
+test("real session-end rendezvous fences a borrowed read before cleanup observers run", async () => {
   const f = await opened();
   const read = f.owner.read("language");
   const rejected = assertRejects(() => read, BufferClientError, "context_lost");
@@ -213,7 +214,7 @@ Deno.test("real session-end rendezvous fences a borrowed read before cleanup obs
   await f.data.dispose();
 });
 
-Deno.test("same-Service reconnect and transient outage preserve the original buffer owner", async () => {
+test("same-Service reconnect and transient outage preserve the original buffer owner", async () => {
   const f = await opened();
   await f.data.connection();
   f.discovery(() => Promise.reject(new Error("offline")));
@@ -227,7 +228,7 @@ Deno.test("same-Service reconnect and transient outage preserve the original buf
   await f.data.dispose();
 });
 
-Deno.test("observed Service replacement fences original owners and cannot ABA-revive them", async () => {
+test("observed Service replacement fences original owners and cannot ABA-revive them", async () => {
   const f = await opened();
   f.discovery(() => Promise.resolve(descriptor("b")));
   await assertRejects(
@@ -251,7 +252,7 @@ Deno.test("observed Service replacement fences original owners and cannot ABA-re
   await f.data.dispose();
 });
 
-Deno.test("principal mismatch during initial discovery permanently ends the original context", async () => {
+test("principal mismatch during initial discovery permanently ends the original context", async () => {
   const f = fixture(), pending = deferred<SyncDataset>();
   f.discovery(() => pending.promise);
   const ready = f.product.ready();
@@ -270,7 +271,7 @@ Deno.test("principal mismatch during initial discovery permanently ends the orig
   await f.data.dispose();
 });
 
-Deno.test("observed principal change and database disposal fence previously borrowed registries", async () => {
+test("observed principal change and database disposal fence previously borrowed registries", async () => {
   for (const change of ["principal", "dispose"] as const) {
     const f = await opened();
     if (change === "principal") {
@@ -290,7 +291,7 @@ Deno.test("observed principal change and database disposal fence previously borr
   }
 });
 
-Deno.test("ending authority between readiness admission and its microtask starts no discovery", async () => {
+test("ending authority between readiness admission and its microtask starts no discovery", async () => {
   const context = new AbortController();
   let calls = 0;
   const product = createProductCodeBuffers({
@@ -306,7 +307,7 @@ Deno.test("ending authority between readiness admission and its microtask starts
   assertEquals(calls, 0);
 });
 
-Deno.test("a context ending after ready cannot admit a reconnect or late local deletion", async () => {
+test("a context ending after ready cannot admit a reconnect or late local deletion", async () => {
   const f = fixture();
   const key = "cowboy:sync:queue:unowned";
   const value = { private: "retained" };
@@ -330,7 +331,7 @@ Deno.test("a context ending after ready cannot admit a reconnect or late local d
   await f.data.dispose();
 });
 
-Deno.test("ending remote authority still drains previously borrowed local outbox writes before database disposal", async () => {
+test("ending remote authority still drains previously borrowed local outbox writes before database disposal", async () => {
   const f = fixture();
   const store = replicatedStore({
     initial: 0,
@@ -363,7 +364,7 @@ Deno.test("ending remote authority still drains previously borrowed local outbox
   assertEquals(f.data.lifecycle.phase, "disposed");
 });
 
-Deno.test("permanent root abandonment fences buffers before local writer disposal completes", async () => {
+test("permanent root abandonment fences buffers before local writer disposal completes", async () => {
   const f = await opened();
   const slow = deferred<void>();
   const shutdown = createSyncShutdown(f.data);

@@ -1,10 +1,11 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
 
-Deno.test("hydration may seed config options when no live update raced it", () => {
+test("hydration may seed config options when no live update raced it", () => {
   assertEquals(shouldApplyHydratedConfigOptions(3, 3), true);
 });
 
-Deno.test("hydration cannot overwrite a newer live config update", () => {
+test("hydration cannot overwrite a newer live config update", () => {
   assertEquals(shouldApplyHydratedConfigOptions(3, 4), false);
 });

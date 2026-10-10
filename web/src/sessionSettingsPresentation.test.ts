@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   sessionProviderFacts,
   sessionProviderManageLabel,
@@ -17,11 +19,11 @@ import {
 
 applyUsageHostPlugins(testFirstPartyHostPlugins());
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("workspace options name the live queue and page-view state", () => {
+test("workspace options name the live queue and page-view state", () => {
   assertEquals(
     workspaceOptionsSummary({ queuePaused: false, pageView: false }),
     "Queue running · Conversation",
@@ -32,7 +34,7 @@ Deno.test("workspace options name the live queue and page-view state", () => {
   );
 });
 
-Deno.test("unsigned Providers demand attention until the catalog says they are ready", () => {
+test("unsigned Providers demand attention until the catalog says they are ready", () => {
   assertEquals(
     sessionProviderNeedsAttention({
       catalogReady: false,
@@ -67,7 +69,7 @@ Deno.test("unsigned Providers demand attention until the catalog says they are r
   );
 });
 
-Deno.test("signed-in Providers collapse to a brief account summary", () => {
+test("signed-in Providers collapse to a brief account summary", () => {
   assertEquals(
     sessionProviderSummary({
       displayName: "Grok",
@@ -98,7 +100,7 @@ Deno.test("signed-in Providers collapse to a brief account summary", () => {
   );
 });
 
-Deno.test("signed-in session Providers show facts and keep account actions folded", () => {
+test("signed-in session Providers show facts and keep account actions folded", () => {
   assertEquals(
     sessionProviderFacts({
       vendor: "xAI",
@@ -123,7 +125,7 @@ Deno.test("signed-in session Providers show facts and keep account actions folde
   );
 });
 
-Deno.test("signed-in session Providers show this account's usage windows", () => {
+test("signed-in session Providers show this account's usage windows", () => {
   assertEquals(
     sessionProviderShowsUsage({
       ready: true,
@@ -254,7 +256,7 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
   );
 });
 
-Deno.test("session settings collapse queue and page view behind one disclosure", () => {
+test("session settings collapse queue and page view behind one disclosure", () => {
   assertEquals(composerSource.includes("WorkspaceOptionsSection"), true);
   assertEquals(composerSource.includes("workspaceOptionsSummary"), true);
   assertEquals(

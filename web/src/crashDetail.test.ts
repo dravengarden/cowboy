@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { RenderItem } from "./derive.ts";
 import {
   crashDetailsMatch,
@@ -9,7 +11,7 @@ import {
 const jsonDump =
   'Internal error: { "message": "You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:45 AM.", "codexErrorInfo": "usageLimitExceeded" }';
 
-Deno.test("usage-limit JSON dumps keep the human sentence", () => {
+test("usage-limit JSON dumps keep the human sentence", () => {
   assertEquals(
     prettifyCrashDetail(jsonDump),
     "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:45 AM.",
@@ -20,14 +22,14 @@ Deno.test("usage-limit JSON dumps keep the human sentence", () => {
   );
 });
 
-Deno.test("plain crash details stay as written", () => {
+test("plain crash details stay as written", () => {
   assertEquals(
     prettifyCrashDetail("runtime: broken pipe"),
     "runtime: broken pipe",
   );
 });
 
-Deno.test("ACP restore timeouts become a reopen/handoff sentence", () => {
+test("ACP restore timeouts become a reopen/handoff sentence", () => {
   assertEquals(
     prettifyCrashDetail(
       "agent did not complete ACP session/resume within 240s",
@@ -49,7 +51,7 @@ Deno.test("ACP restore timeouts become a reopen/handoff sentence", () => {
   );
 });
 
-Deno.test("a live crash bar hides the matching trailing lifecycle row", () => {
+test("a live crash bar hides the matching trailing lifecycle row", () => {
   const items: RenderItem[] = [
     {
       kind: "message",
@@ -70,30 +72,30 @@ Deno.test("a live crash bar hides the matching trailing lifecycle row", () => {
   assertEquals(hideLiveCrashDuplicate(items, "running", jsonDump), items);
 });
 
-const overlaySource = await Deno.readTextFile(
-  new URL("./TurnStatusOverlay.tsx", import.meta.url),
+const overlaySource = await readFile(
+  new URL("./TurnStatusOverlay.tsx", import.meta.url), "utf8",
 );
-const transcriptSource = await Deno.readTextFile(
-  new URL("./Transcript.tsx", import.meta.url),
+const transcriptSource = await readFile(
+  new URL("./Transcript.tsx", import.meta.url), "utf8",
 );
-const appSource = await Deno.readTextFile(
-  new URL("./App.tsx", import.meta.url),
+const appSource = await readFile(
+  new URL("./App.tsx", import.meta.url), "utf8",
 );
-const storeSource = await Deno.readTextFile(
-  new URL("./store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("./store.ts", import.meta.url), "utf8",
 );
-const protocolSource = await Deno.readTextFile(
-  new URL("./protocol.ts", import.meta.url),
+const protocolSource = await readFile(
+  new URL("./protocol.ts", import.meta.url), "utf8",
 );
 
-Deno.test("composer overlay does not retry a crashed turn", () => {
+test("composer overlay does not retry a crashed turn", () => {
   assertEquals(overlaySource.includes("retryTurn"), false);
   assertEquals(overlaySource.includes("Agent error"), false);
   assertEquals(transcriptSource.includes("hideLiveCrashDuplicate"), true);
   assertEquals(transcriptSource.includes("prettifyCrashDetail"), true);
 });
 
-Deno.test("interrupted turns expose status without synthetic resume controls", () => {
+test("interrupted turns expose status without synthetic resume controls", () => {
   assertEquals(overlaySource.includes("resumeTurn"), false);
   assertEquals(overlaySource.includes('label: "Resume"'), true);
   assertEquals(storeSource.includes('type: "resume_turn"'), false);

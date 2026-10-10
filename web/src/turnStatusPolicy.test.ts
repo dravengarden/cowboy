@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   deriveTurnStatusKind,
   type TurnStatusSignals,
@@ -10,11 +11,11 @@ const settled: TurnStatusSignals = {
   paused: false,
 };
 
-Deno.test("manual queue pause remains Composer-owned", () => {
+test("manual queue pause remains Composer-owned", () => {
   assertEquals(deriveTurnStatusKind({ ...settled, paused: true }), "paused");
 });
 
-Deno.test("crashes stay on the transcript status bar instead of overlay Retry", () => {
+test("crashes stay on the transcript status bar instead of overlay Retry", () => {
   assertEquals(
     deriveTurnStatusKind({ ...settled, status: "crashed" }),
     null,

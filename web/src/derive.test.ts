@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   derive,
   isCompactionCompletionTail,
@@ -10,7 +11,7 @@ import {
 } from "./derive";
 import type { Envelope } from "./protocol";
 
-Deno.test("derive coalesces text and memoizes immutable timelines", () => {
+test("derive coalesces text and memoizes immutable timelines", () => {
   const timeline: Envelope[] = [
     {
       session_id: "s1",
@@ -35,7 +36,7 @@ Deno.test("derive coalesces text and memoizes immutable timelines", () => {
   if (message.chunks[0].text !== "hello") throw new Error("chunks were not coalesced");
 });
 
-Deno.test("structured agent questions are not presented as tool approvals", () => {
+test("structured agent questions are not presented as tool approvals", () => {
   const timeline: Envelope[] = [{
     session_id: "s1",
     seq: 1,
@@ -57,7 +58,7 @@ Deno.test("structured agent questions are not presented as tool approvals", () =
   }
 });
 
-Deno.test("clean worker exits are not transcript rows", () => {
+test("clean worker exits are not transcript rows", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -85,7 +86,7 @@ Deno.test("clean worker exits are not transcript rows", () => {
   }
 });
 
-Deno.test("derive collapses equivalent crash JSON dumps onto one row", () => {
+test("derive collapses equivalent crash JSON dumps onto one row", () => {
   const dump =
     'Internal error: { "message": "You\'ve hit your usage limit.", "codexErrorInfo": "usageLimitExceeded" }';
   const items = derive([
@@ -112,7 +113,7 @@ Deno.test("derive collapses equivalent crash JSON dumps onto one row", () => {
   }
 });
 
-Deno.test("derive collapses repeated terminal lifecycle projections", () => {
+test("derive collapses repeated terminal lifecycle projections", () => {
   const detail = "Gemini personal access retired";
   const items = derive([detail, null, null].map((projectedDetail, index): Envelope => ({
     session_id: "gemini-session",
@@ -129,7 +130,7 @@ Deno.test("derive collapses repeated terminal lifecycle projections", () => {
   }
 });
 
-Deno.test("Codex compact command and completion drive the compact state", () => {
+test("Codex compact command and completion drive the compact state", () => {
   const requested: Envelope[] = [{
     session_id: "s1",
     seq: 10,
@@ -181,7 +182,7 @@ Deno.test("Codex compact command and completion drive the compact state", () => 
   }
 });
 
-Deno.test("derive preserves unchanged row identities across timeline successors", () => {
+test("derive preserves unchanged row identities across timeline successors", () => {
   const firstTimeline: Envelope[] = [
     {
       session_id: "s1",
@@ -219,7 +220,7 @@ Deno.test("derive preserves unchanged row identities across timeline successors"
   if (second[2]?.kind !== "message") throw new Error("new row should still be derived");
 });
 
-Deno.test("derive exposes Codex read locations and formatted raw output", () => {
+test("derive exposes Codex read locations and formatted raw output", () => {
   const items = derive([{
     session_id: "s1",
     seq: 7,
@@ -245,7 +246,7 @@ Deno.test("derive exposes Codex read locations and formatted raw output", () => 
   }
 });
 
-Deno.test("derive turns empty Codex HTML separators into thought sections only", () => {
+test("derive turns empty Codex HTML separators into thought sections only", () => {
   const timeline: Envelope[] = [
     {
       session_id: "s1",
@@ -298,7 +299,7 @@ Deno.test("derive turns empty Codex HTML separators into thought sections only",
   }
 });
 
-Deno.test("derive isolates user-role system-reminder echoes as agent runtime", () => {
+test("derive isolates user-role system-reminder echoes as agent runtime", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -365,7 +366,7 @@ Deno.test("derive isolates user-role system-reminder echoes as agent runtime", (
   }
 });
 
-Deno.test("derive strips cowboy-att tokens from user text so Markdown cannot paint a dead image", () => {
+test("derive strips cowboy-att tokens from user text so Markdown cannot paint a dead image", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -401,7 +402,7 @@ Deno.test("derive strips cowboy-att tokens from user text so Markdown cannot pai
   if (image?.type !== "image") throw new Error("image chunk should remain");
 });
 
-Deno.test("derive keeps the originating cmid on a coalesced user prompt", () => {
+test("derive keeps the originating cmid on a coalesced user prompt", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -431,7 +432,7 @@ Deno.test("derive keeps the originating cmid on a coalesced user prompt", () => 
   }
 });
 
-Deno.test("derive hides a Grok prompt echo after an unrendered lifecycle", () => {
+test("derive hides a Grok prompt echo after an unrendered lifecycle", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -501,7 +502,7 @@ Deno.test("derive hides a Grok prompt echo after an unrendered lifecycle", () =>
   }
 });
 
-Deno.test("derive hides an image replay whose bytes were externalized to an artifact URL", () => {
+test("derive hides an image replay whose bytes were externalized to an artifact URL", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -547,7 +548,7 @@ Deno.test("derive hides an image replay whose bytes were externalized to an arti
   }
 });
 
-Deno.test("a second human prompt still becomes its own bubble", () => {
+test("a second human prompt still becomes its own bubble", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -585,7 +586,7 @@ Deno.test("a second human prompt still becomes its own bubble", () => {
   }
 });
 
-Deno.test("runtime prompt echoes do not retire the current plan", () => {
+test("runtime prompt echoes do not retire the current plan", () => {
   const plan = latestPlan([
     {
       session_id: "s1",
@@ -629,7 +630,7 @@ function assistantTexts(items: ReturnType<typeof derive>): string[] {
     );
 }
 
-Deno.test("an unpainted status edge does not break a streamed message in two", () => {
+test("an unpainted status edge does not break a streamed message in two", () => {
   for (const status of ["starting", "running", "busy", "exited"] as const) {
     const texts = assistantTexts(derive([
       agentChunk(1, "`canc"),
@@ -642,7 +643,7 @@ Deno.test("an unpainted status edge does not break a streamed message in two", (
   }
 });
 
-Deno.test("resolving a permission does not break the message that follows its card", () => {
+test("resolving a permission does not break the message that follows its card", () => {
   const texts = assistantTexts(derive([
     { session_id: "s1", seq: 1, kind: "permission_request", request_id: "r1", tool_call: {}, options: [] },
     { session_id: "s1", seq: 2, kind: "permission_resolved", request_id: "r1", option_id: "allow" },
@@ -655,7 +656,7 @@ Deno.test("resolving a permission does not break the message that follows its ca
   }
 });
 
-Deno.test("a visible boundary still separates two messages", () => {
+test("a visible boundary still separates two messages", () => {
   const boundaries: Envelope[][] = [
     [{ session_id: "s1", seq: 2, kind: "turn_end", stop_reason: "end_turn" }],
     [{ session_id: "s1", seq: 2, kind: "lifecycle", status: "crashed", detail: null }],
@@ -683,7 +684,7 @@ Deno.test("a visible boundary still separates two messages", () => {
   }
 });
 
-Deno.test("a sent file is its own chunk, not a paperclip glued to the prompt", () => {
+test("a sent file is its own chunk, not a paperclip glued to the prompt", () => {
   const items = derive([
     {
       session_id: "s1",
@@ -729,7 +730,7 @@ Deno.test("a sent file is its own chunk, not a paperclip glued to the prompt", (
   }
 });
 
-Deno.test("consecutive submissions have distinct identities even without agent output between them", () => {
+test("consecutive submissions have distinct identities even without agent output between them", () => {
   const events: Envelope[] = ["first", "second", "third"].map((cmid, i) => ({
     session_id: "s1", seq: i + 1, kind: "update", cmid,
     update: {
@@ -744,7 +745,7 @@ Deno.test("consecutive submissions have distinct identities even without agent o
   }
 });
 
-Deno.test("unrenderable first block keeps its identity across status frames and image continuation", () => {
+test("unrenderable first block keeps its identity across status frames and image continuation", () => {
   const events: Envelope[] = [
     { session_id: "s1", seq: 1, kind: "update", cmid: "previous",
       update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human", source: "composer" }, content: { type: "image", url: "/api/artifacts/previous.png" } } },

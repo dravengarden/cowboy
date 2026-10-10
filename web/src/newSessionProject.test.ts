@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { defaultNewSessionProject } from "./newSessionProject.ts";
 import type { MachineSummary } from "./protocol.ts";
 import type { ProjectChoice } from "./projectPlacement.ts";
@@ -11,10 +12,10 @@ const projects = [
   { value: "root", machineId: "hawk", name: "columbus" },
   { value: "remote-root", machineId: "ovh", name: "columbus" },
 ] as ProjectChoice[];
-Deno.test("automatic new project prefers registered columbus instead of alphabetic first", () => {
+test("automatic new project prefers registered columbus instead of alphabetic first", () => {
   assertEquals(defaultNewSessionProject(projects, machines, "")?.value, "root");
 });
-Deno.test("explicit default uses stable identity; a removed default never redirects", () => {
+test("explicit default uses stable identity; a removed default never redirects", () => {
   assertEquals(
     defaultNewSessionProject(projects, machines, "argus")?.value,
     "argus",
@@ -24,7 +25,7 @@ Deno.test("explicit default uses stable identity; a removed default never redire
     undefined,
   );
 });
-Deno.test("automatic choice retains connected local preference and supports inventories without columbus", () => {
+test("automatic choice retains connected local preference and supports inventories without columbus", () => {
   assertEquals(
     defaultNewSessionProject(
       projects.filter((p) => p.value !== "root"),

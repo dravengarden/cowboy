@@ -1,9 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
 import {
   assertEquals,
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { ScopeClosedError } from "@cowboy/state-store/scope";
 import {
   type ClientSnapshot,
@@ -14,7 +16,7 @@ import { createIdbPersistenceOwner } from "../../components/state-sync-idb/index
 import { FakeIndexedDb, microtasks } from "./idbPersistence.fixture.ts";
 import { createSyncShutdown } from "./syncShutdown.ts";
 
-Deno.test("sync shutdown seals every writer synchronously, then drains before releasing database", async () => {
+test("sync shutdown seals every writer synchronously, then drains before releasing database", async () => {
   const events: string[] = [];
   const slow = Promise.withResolvers<void>();
   const shutdown = createSyncShutdown({
@@ -46,7 +48,7 @@ Deno.test("sync shutdown seals every writer synchronously, then drains before re
   assertEquals(events, ["one", "two", "database"]);
 });
 
-Deno.test("sync shutdown aggregates failures, still seals other writers, and shares reentrant barrier", async () => {
+test("sync shutdown aggregates failures, still seals other writers, and shares reentrant barrier", async () => {
   const events: string[] = [];
   const failure = new Error("writer failed");
   const databaseFailure = new Error("database failed");
@@ -80,7 +82,7 @@ Deno.test("sync shutdown aggregates failures, still seals other writers, and sha
   assertStrictEquals(shutdown([]), closing);
 });
 
-Deno.test("real sync client drains its IDB outbox before database closure; a new owner resumes the same obligation", async () => {
+test("real sync client drains its IDB outbox before database closure; a new owner resumes the same obligation", async () => {
   const factory = new FakeIndexedDb();
   factory.autoTransactions = false;
   const database = createIdbPersistenceOwner({ factory });
@@ -135,16 +137,16 @@ Deno.test("real sync client drains its IDB outbox before database closure; a new
   await createSyncShutdown(nextDatabase)([replacement]);
 });
 
-Deno.test("product uses one explicit database owner only at permanent sign-out", async () => {
-  const source = await Deno.readTextFile(
-    new URL("./store.ts", import.meta.url),
+test("product uses one explicit database owner only at permanent sign-out", async () => {
+  const source = await readFile(
+    new URL("./store.ts", import.meta.url), "utf8",
   );
   assertEquals(source.includes("idbPersistence<"), false);
   assertEquals(source.includes("idbListKeys("), false);
   assertEquals(source.includes("createIdbPersistenceOwner("), false);
   assertEquals(source.match(/productSyncDatabase as syncDatabase/g)?.length, 1);
-  const owner = await Deno.readTextFile(
-    new URL("./productSyncDatabase.ts", import.meta.url),
+  const owner = await readFile(
+    new URL("./productSyncDatabase.ts", import.meta.url), "utf8",
   );
   assertEquals(owner.match(/createIdbPersistenceOwner\(\{/g)?.length, 1);
   assertEquals(owner.includes("schemaVersion: 2"), true);

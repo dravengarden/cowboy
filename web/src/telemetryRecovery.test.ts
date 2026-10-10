@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { PreviewDeadline } from "./telemetryBinding.ts";
 import {
   confirmRecoveryOnce,
@@ -15,11 +17,11 @@ import {
 } from "./telemetryRecovery.ts";
 
 const fixture = JSON.parse(
-  Deno.readTextFileSync(
+  readFileSync(
     new URL(
       "../../tests/fixtures/telemetry-recovery-surface.json",
       import.meta.url,
-    ),
+    ), "utf8",
   ),
 );
 const signal = () => new AbortController().signal;
@@ -28,7 +30,7 @@ const response = (value: unknown) =>
     headers: { "content-type": "application/json" },
   });
 
-Deno.test("Machine recovery projections agree with Rust and carry no serialized authority", () => {
+test("Machine recovery projections agree with Rust and carry no serialized authority", () => {
   assertEquals(parseRecoveryPlan(fixture.plan), fixture.plan);
   assertEquals(parseRecoveryReceipt(fixture.receipt), fixture.receipt);
   assertEquals(parseRecoveryAudit(fixture.audit), fixture.audit);
@@ -45,7 +47,7 @@ Deno.test("Machine recovery projections agree with Rust and carry no serialized 
   }
 });
 
-Deno.test("durable recovery audit binds the original before separately from a terminal Service operation", () => {
+test("durable recovery audit binds the original before separately from a terminal Service operation", () => {
   const resolved = {
     ...fixture.audit,
     operation: {
@@ -94,7 +96,7 @@ Deno.test("durable recovery audit binds the original before separately from a te
   ) assertThrows(() => parseRecoveryAudit({ ...resolved, ...change }));
 });
 
-Deno.test("durable audit discovery sends one GET with no stored plan and rejects changed operation or unsupported Machine", async () => {
+test("durable audit discovery sends one GET with no stored plan and rejects changed operation or unsupported Machine", async () => {
   const previous = globalThis.fetch;
   for (
     const mode of ["recorded", "absent", "changed", "unavailable", "oversized"]
@@ -148,7 +150,7 @@ Deno.test("durable audit discovery sends one GET with no stored plan and rejects
   }
 });
 
-Deno.test("recovery decoders reject Service actions, changed heads, raw evidence and invalid counters", () => {
+test("recovery decoders reject Service actions, changed heads, raw evidence and invalid counters", () => {
   for (
     const change of [
       { action: "record_rejected" },
@@ -202,7 +204,7 @@ Deno.test("recovery decoders reject Service actions, changed heads, raw evidence
   );
 });
 
-Deno.test("recovery audit correlation includes full request and its original expiry", () => {
+test("recovery audit correlation includes full request and its original expiry", () => {
   const plan = parseRecoveryPlan(fixture.plan);
   const receipt = parseRecoveryReceipt(fixture.receipt);
   for (
@@ -221,7 +223,7 @@ Deno.test("recovery audit correlation includes full request and its original exp
   assert(deadline.ended(101, 1_000_002));
 });
 
-Deno.test("Machine confirmation sends only a finite reference and never chains Service resolution", async () => {
+test("Machine confirmation sends only a finite reference and never chains Service resolution", async () => {
   const previous = globalThis.fetch;
   const calls: { url: string; init?: RequestInit }[] = [];
   globalThis.fetch = ((url, init) => {
@@ -246,7 +248,7 @@ Deno.test("Machine confirmation sends only a finite reference and never chains S
   }
 });
 
-Deno.test("lost HTTP response permits one exact Machine audit GET, not POST replay", async () => {
+test("lost HTTP response permits one exact Machine audit GET, not POST replay", async () => {
   const previous = globalThis.fetch;
   const plan = parseRecoveryPlan(fixture.plan);
   for (const outcome of ["exact", "foreign", "restart", "oversized", "html"]) {
@@ -286,7 +288,7 @@ Deno.test("lost HTTP response permits one exact Machine audit GET, not POST repl
   }
 });
 
-Deno.test("logout or unmount refuses a new recovery inspection scope", async () => {
+test("logout or unmount refuses a new recovery inspection scope", async () => {
   const previous = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (() => {
@@ -310,7 +312,7 @@ Deno.test("logout or unmount refuses a new recovery inspection scope", async () 
   }
 });
 
-Deno.test("preview requests reject another operation without retry", async () => {
+test("preview requests reject another operation without retry", async () => {
   const previous = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = ((_url, init) => {
@@ -328,12 +330,12 @@ Deno.test("preview requests reject another operation without retry", async () =>
   }
 });
 
-Deno.test("Machine recovery uses a separate core ConfirmSheet under an exact operation scope", () => {
-  const panel = Deno.readTextFileSync(
-    new URL("./TelemetryRecoveryPanel.tsx", import.meta.url),
+test("Machine recovery uses a separate core ConfirmSheet under an exact operation scope", () => {
+  const panel = readFileSync(
+    new URL("./TelemetryRecoveryPanel.tsx", import.meta.url), "utf8",
   );
-  const parent = Deno.readTextFileSync(
-    new URL("./TelemetryBindingPanel.tsx", import.meta.url),
+  const parent = readFileSync(
+    new URL("./TelemetryBindingPanel.tsx", import.meta.url), "utf8",
   );
   assert(parent.includes("operation.operation_digest}"));
   assert(parent.includes("{operation && !busy && ("));

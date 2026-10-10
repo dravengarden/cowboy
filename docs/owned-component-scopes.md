@@ -102,7 +102,7 @@ removed.
 Component registry 3.2.0 appends state-store 2.1.0, state-sync 1.4.0, and the
 transitive state-sync-idb 1.4.0 peer update. The seven Plugin sources, versions,
 2.9.0 pins and signed artifacts are unchanged. Web binds the new framework-free
-package subpath explicitly in its Deno/TypeScript resolution and Vite peer
+package subpath explicitly in its TypeScript resolution and Vite peer
 deduplication; source remains
 owned by the same Cowboy component. Only a Web release is needed. No native ABI,
 Controller protocol or Machine maintenance change is included.

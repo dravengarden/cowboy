@@ -1,15 +1,17 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const outlineSource = await Deno.readTextFile(
-  new URL("./ReviewOutline.tsx", import.meta.url),
+const outlineSource = await readFile(
+  new URL("./ReviewOutline.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("outline sheet portals off the Review pager containing block", () => {
+test("outline sheet portals off the Review pager containing block", () => {
   assertEquals(outlineSource.includes("portal"), true);
   assertEquals(outlineSource.includes("forceSheet"), true);
 });
 
-Deno.test("outline kind marks are code glyphs, not decorative logos", () => {
+test("outline kind marks are code glyphs, not decorative logos", () => {
   assertEquals(outlineSource.includes("DataArrayOutlined"), false);
   assertEquals(outlineSource.includes("DiamondOutlined"), false);
   assertEquals(outlineSource.includes("FormatQuoteOutlined"), false);

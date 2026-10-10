@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import type { SessionMeta } from "../../protocol";
 import {
   buildReviewContextProjects,
@@ -10,7 +11,7 @@ import {
   worktreeLabel,
 } from "./reviewContextModel";
 
-Deno.test("registered workspaces use an explicit non-session code context id", () => {
+test("registered workspaces use an explicit non-session code context id", () => {
   assertEquals(workspaceCodeContextId("hawk", "cowboy"), "workspace::hawk::cowboy");
 });
 
@@ -32,7 +33,7 @@ function session(
   };
 }
 
-Deno.test("review contexts group newest-first sessions by project and worktree", () => {
+test("review contexts group newest-first sessions by project and worktree", () => {
   const projects = buildReviewContextProjects([
     session("new", "/worktrees/cowboy/feature", "cowboy"),
     session("old", "/worktrees/cowboy/feature", "cowboy"),
@@ -51,7 +52,7 @@ Deno.test("review contexts group newest-first sessions by project and worktree",
   ]);
 });
 
-Deno.test("review contexts expose every registered project without a session", () => {
+test("review contexts expose every registered project without a session", () => {
   const projects = buildReviewContextProjects([
     session("hawk", "/hawk/cowboy", "cowboy", "hawk"),
     session("falcon", "/falcon/cowboy", "cowboy", "falcon"),
@@ -70,7 +71,7 @@ Deno.test("review contexts expose every registered project without a session", (
   });
 });
 
-Deno.test("review contexts keep a shared-workspace session separate from creation source", () => {
+test("review contexts keep a shared-workspace session separate from creation source", () => {
   const projects = buildReviewContextProjects([
     session("main", "/home/draven/columbus/projects/cowboy", "cowboy"),
   ], "hawk", [{
@@ -83,7 +84,7 @@ Deno.test("review contexts keep a shared-workspace session separate from creatio
   assertEquals(projects[0]?.worktrees[0]?.sessions.map((value) => value.id), ["main"]);
 });
 
-Deno.test("current review project sorts first without disturbing alphabetical peers", () => {
+test("current review project sorts first without disturbing alphabetical peers", () => {
   const projects = buildReviewContextProjects([
     session("z", "/z", "zeta"),
     session("a", "/a", "alpha"),
@@ -97,11 +98,11 @@ Deno.test("current review project sorts first without disturbing alphabetical pe
   );
 });
 
-Deno.test("worktree labels tolerate root-like paths", () => {
+test("worktree labels tolerate root-like paths", () => {
   assertEquals(worktreeLabel("/"), "/");
 });
 
-Deno.test("review session history returns to the actual previous context", () => {
+test("review session history returns to the actual previous context", () => {
   let history: readonly string[] = [];
   history = pushReviewSessionHistory(history, "a", "b");
   history = pushReviewSessionHistory(history, "b", "c");
@@ -118,7 +119,7 @@ Deno.test("review session history returns to the actual previous context", () =>
   );
 });
 
-Deno.test("review session history ignores deleted and current sessions", () => {
+test("review session history ignores deleted and current sessions", () => {
   assertEquals(
     previousReviewSessionId(["a", "deleted", "c"], "c", new Set(["a", "c"])),
     "a",

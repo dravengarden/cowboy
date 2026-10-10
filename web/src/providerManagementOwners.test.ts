@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertStringIncludes,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { createProviderAuthenticationOwner } from "./providerAuthenticationOwner.ts";
 import { createProviderDialogOwner } from "./providerDialogOwner.ts";
 import { createProviderUninstallOwner } from "./providerUninstallOwner.ts";
@@ -138,7 +139,7 @@ function events(events: unknown[], request_id = "request-a") {
   return { request_id, events };
 }
 
-Deno.test("sign-in waits for refreshed executor inventory and admits only one start", async () => {
+test("sign-in waits for refreshed executor inventory and admits only one start", async () => {
   const selection = deferredFixture<
     ReturnType<typeof managementEntryFixture>
   >();
@@ -160,7 +161,7 @@ Deno.test("sign-in waits for refreshed executor inventory and admits only one st
   }
 });
 
-Deno.test("closing during executor refresh prevents a late sign-in mutation", async () => {
+test("closing during executor refresh prevents a late sign-in mutation", async () => {
   const selection = deferredFixture<
     ReturnType<typeof managementEntryFixture>
   >();
@@ -177,7 +178,7 @@ Deno.test("closing during executor refresh prevents a late sign-in mutation", as
   }
 });
 
-Deno.test("accepted authorization input retains visible submission progress until provider completion", async () => {
+test("accepted authorization input retains visible submission progress until provider completion", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -197,7 +198,7 @@ Deno.test("accepted authorization input retains visible submission progress unti
   }
 });
 
-Deno.test("account switching copies the original challenge without replacing or cancelling authentication", async () => {
+test("account switching copies the original challenge without replacing or cancelling authentication", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -226,7 +227,7 @@ Deno.test("account switching copies the original challenge without replacing or 
   }
 });
 
-Deno.test("late account-switch clipboard completion cannot update another login", async () => {
+test("late account-switch clipboard completion cannot update another login", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -242,7 +243,7 @@ Deno.test("late account-switch clipboard completion cannot update another login"
   }
 });
 
-Deno.test("dialog owner reserves admission before observers and drains retired writes", async () => {
+test("dialog owner reserves admission before observers and drains retired writes", async () => {
   const owner = createProviderDialogOwner<{ id: string }, "write">();
   const first = owner.open({ id: "old" })!;
   const result = deferredFixture<void>();
@@ -272,7 +273,7 @@ Deno.test("dialog owner reserves admission before observers and drains retired w
   assertEquals(owner.lifecycle().resources, 0);
 });
 
-Deno.test("dialog observers cannot mutate consent or prevent an admitted request", async () => {
+test("dialog observers cannot mutate consent or prevent an admitted request", async () => {
   const owner = createProviderDialogOwner<
     { nested: { consent: boolean } },
     "write"
@@ -293,7 +294,7 @@ Deno.test("dialog observers cannot mutate consent or prevent an admitted request
   await owner.dispose();
 });
 
-Deno.test("dialog resource budget and failing cleanup retain honest ownership", async () => {
+test("dialog resource budget and failing cleanup retain honest ownership", async () => {
   const owner = createProviderDialogOwner<number, "write">();
   const deferred = deferredFixture<void>();
   for (let i = 0; i < 16; i++) {
@@ -312,7 +313,7 @@ Deno.test("dialog resource budget and failing cleanup retain honest ownership", 
   assertEquals(owner.lifecycle().resources, 1);
 });
 
-Deno.test("sign-in start is synchronous single-flight and sends the selected immutable release", async () => {
+test("sign-in start is synchronous single-flight and sends the selected immutable release", async () => {
   const f = authFixture();
   try {
     f.open();
@@ -336,7 +337,7 @@ Deno.test("sign-in start is synchronous single-flight and sends the selected imm
 });
 
 for (const success of [true, false]) {
-  Deno.test(`old sign-in start ${success ? "success" : "failure"} cannot bind or clear a new flow`, async () => {
+  test(`old sign-in start ${success ? "success" : "failure"} cannot bind or clear a new flow`, async () => {
     const f = authFixture();
     try {
       f.open();
@@ -369,7 +370,7 @@ for (const success of [true, false]) {
   });
 }
 
-Deno.test("sign-in observation uses one bounded read, including after abort is ignored", async () => {
+test("sign-in observation uses one bounded read, including after abort is ignored", async () => {
   const f = authFixture();
   try {
     await f.start();
@@ -392,7 +393,7 @@ Deno.test("sign-in observation uses one bounded read, including after abort is i
   }
 });
 
-Deno.test("late expired-response body cannot close a replacement sign-in browser", async () => {
+test("late expired-response body cannot close a replacement sign-in browser", async () => {
   const f = authFixture();
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   try {
@@ -421,7 +422,7 @@ Deno.test("late expired-response body cannot close a replacement sign-in browser
   }
 });
 
-Deno.test("unmount drains a submitted start without DELETE, native close, or late polling", async () => {
+test("unmount drains a submitted start without DELETE, native close, or late polling", async () => {
   const f = authFixture();
   f.open();
   const task = f.owner.start("key");
@@ -436,7 +437,7 @@ Deno.test("unmount drains a submitted start without DELETE, native close, or lat
   await f.cleanup();
 });
 
-Deno.test("code submission is single-flight, surfaces rejection, and retains editable input", async () => {
+test("code submission is single-flight, surfaces rejection, and retains editable input", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -461,7 +462,7 @@ Deno.test("code submission is single-flight, surfaces rejection, and retains edi
   }
 });
 
-Deno.test("newest durable sign-in success outranks an older submit failure and clipboard result", async () => {
+test("newest durable sign-in success outranks an older submit failure and clipboard result", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -498,7 +499,7 @@ Deno.test("newest durable sign-in success outranks an older submit failure and c
 });
 
 for (const back of [true, false]) {
-  Deno.test(`explicit ${back ? "back" : "cancel"} rejects once without erasing a failed request`, async () => {
+  test(`explicit ${back ? "back" : "cancel"} rejects once without erasing a failed request`, async () => {
     const f = authFixture();
     try {
       await f.start();
@@ -522,7 +523,7 @@ for (const back of [true, false]) {
   });
 }
 
-Deno.test("back success returns to methods; dismissing or replacing while cancel waits never changes the next flow", async () => {
+test("back success returns to methods; dismissing or replacing while cancel waits never changes the next flow", async () => {
   const f = authFixture();
   try {
     await f.start();
@@ -550,7 +551,7 @@ for (
     events: [],
   }, events([{ ...challenge(), input_required: "yes" }])]
 ) {
-  Deno.test("sign-in reads reject mismatched or ill-typed evidence without following it", async () => {
+  test("sign-in reads reject mismatched or ill-typed evidence without following it", async () => {
     const f = authFixture();
     try {
       const poll = await f.start();
@@ -566,7 +567,7 @@ for (
   });
 }
 
-Deno.test("Provider sign-in refuses unknown methods and preserves the replacement clipboard notice", async () => {
+test("Provider sign-in refuses unknown methods and preserves the replacement clipboard notice", async () => {
   const f = authFixture();
   try {
     f.open();
@@ -608,7 +609,7 @@ function uninstallFixture() {
   };
 }
 
-Deno.test("poll expiry outranks a late submit failure and clears only the current request", async () => {
+test("poll expiry outranks a late submit failure and clears only the current request", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -630,7 +631,7 @@ Deno.test("poll expiry outranks a late submit failure and clears only the curren
   }
 });
 
-Deno.test("failed cancel retries never multiply an abort-ignoring status read", async () => {
+test("failed cancel retries never multiply an abort-ignoring status read", async () => {
   const f = authFixture();
   try {
     await f.start();
@@ -649,7 +650,7 @@ Deno.test("failed cancel retries never multiply an abort-ignoring status read", 
   }
 });
 
-Deno.test("unknown login states and revoked status access stop observation without cancelling", async () => {
+test("unknown login states and revoked status access stop observation without cancelling", async () => {
   for (const status of [200, 401, 403]) {
     const f = authFixture();
     try {
@@ -676,7 +677,7 @@ Deno.test("unknown login states and revoked status access stop observation witho
   }
 });
 
-Deno.test("expired Cowboy authentication does not silently poll Provider sign-in forever", async () => {
+test("expired Cowboy authentication does not silently poll Provider sign-in forever", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -695,7 +696,7 @@ Deno.test("expired Cowboy authentication does not silently poll Provider sign-in
   }
 });
 
-Deno.test("sign-in polls bypass caches and recover visibly from a failed observation", async () => {
+test("sign-in polls bypass caches and recover visibly from a failed observation", async () => {
   for (const failure of ["network", "http", "html"]) {
     const f = authFixture();
     try {
@@ -733,7 +734,7 @@ Deno.test("sign-in polls bypass caches and recover visibly from a failed observa
   }
 });
 
-Deno.test("checking sign-in status replaces only the read and never repeats the login", async () => {
+test("checking sign-in status replaces only the read and never repeats the login", async () => {
   const f = authFixture();
   try {
     const poll = await f.start();
@@ -759,7 +760,7 @@ Deno.test("checking sign-in status replaces only the read and never repeats the 
   }
 });
 
-Deno.test("uninstall preview projection discards unowned fields and freezes nested consent", async () => {
+test("uninstall preview projection discards unowned fields and freezes nested consent", async () => {
   const f = uninstallFixture();
   try {
     const task = f.owner.prepare("machine-a", "example");
@@ -782,7 +783,7 @@ Deno.test("uninstall preview projection discards unowned fields and freezes nest
   }
 });
 
-Deno.test("uninstall confirmation requires a current unexpired plan and explicit active-session consent", async () => {
+test("uninstall confirmation requires a current unexpired plan and explicit active-session consent", async () => {
   const f = uninstallFixture();
   try {
     await f.owner.confirm();
@@ -814,7 +815,7 @@ Deno.test("uninstall confirmation requires a current unexpired plan and explicit
 });
 
 for (const status of [200, 409]) {
-  Deno.test(`late uninstall ${status} cannot close or poison the next confirmation`, async () => {
+  test(`late uninstall ${status} cannot close or poison the next confirmation`, async () => {
     const f = uninstallFixture();
     try {
       await f.prepare();
@@ -840,7 +841,7 @@ for (const status of [200, 409]) {
   });
 }
 
-Deno.test("plan preparation is latest-wins and retired Provider surfaces cannot open a confirmation", async () => {
+test("plan preparation is latest-wins and retired Provider surfaces cannot open a confirmation", async () => {
   const f = uninstallFixture();
   try {
     const old = f.owner.prepare("machine-a", "example");
@@ -866,7 +867,7 @@ for (
     active_session_ids: ["unknown"],
   }, { expires_at_ms: null }]
 ) {
-  Deno.test("malformed or retargeted uninstall previews cannot acquire confirmation", async () => {
+  test("malformed or retargeted uninstall previews cannot acquire confirmation", async () => {
     const f = uninstallFixture();
     try {
       const task = f.owner.prepare("machine-a", "example");

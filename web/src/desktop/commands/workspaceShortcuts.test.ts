@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { chromeShortcutConflict } from "./chromeShortcutPolicy.ts";
 import { macShortcutConflict } from "./macShortcutPolicy.ts";
 import {
@@ -30,7 +31,7 @@ function keyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   } as KeyboardEvent;
 }
 
-Deno.test("workspace prefix matches Command-K on macOS and Alt-K elsewhere", () => {
+test("workspace prefix matches Command-K on macOS and Alt-K elsewhere", () => {
   assertEquals(
     matchesDesktopWorkspacePrefix(keyEvent({ metaKey: true }), true),
     true,
@@ -49,7 +50,7 @@ Deno.test("workspace prefix matches Command-K on macOS and Alt-K elsewhere", () 
   );
 });
 
-Deno.test("continuations use physical keys with or without the held prefix modifier", () => {
+test("continuations use physical keys with or without the held prefix modifier", () => {
   const physicalS = { key: "ß", code: "KeyS" };
   assertEquals(desktopWorkspaceContinuationKey(keyEvent(physicalS), true), "s");
   assertEquals(
@@ -75,7 +76,7 @@ Deno.test("continuations use physical keys with or without the held prefix modif
   );
 });
 
-Deno.test("workspace sequence preempts idle IME markers but not real composition", () => {
+test("workspace sequence preempts idle IME markers but not real composition", () => {
   const idleImePrefix = keyEvent({
     key: "Process",
     code: "KeyK",
@@ -115,7 +116,7 @@ Deno.test("workspace sequence preempts idle IME markers but not real composition
   );
 });
 
-Deno.test("every prefix continuation has one stable command meaning", () => {
+test("every prefix continuation has one stable command meaning", () => {
   assertEquals(DESKTOP_WORKSPACE_COMMANDS, {
     s: "group:s",
     p: "workspace.focusPrompt",
@@ -145,7 +146,7 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
   });
 });
 
-Deno.test("pane collapse continuations use physical bracket keys", () => {
+test("pane collapse continuations use physical bracket keys", () => {
   assertEquals(
     desktopWorkspaceContinuationKey(
       keyEvent({ key: "ü", code: "BracketLeft", metaKey: true }),
@@ -169,7 +170,7 @@ Deno.test("pane collapse continuations use physical bracket keys", () => {
   );
 });
 
-Deno.test("Space arms the leader only as a bare, non-repeated key", () => {
+test("Space arms the leader only as a bare, non-repeated key", () => {
   const space = {
     code: "Space",
     metaKey: false,
@@ -187,7 +188,7 @@ Deno.test("Space arms the leader only as a bare, non-repeated key", () => {
   assertEquals(isDesktopLeaderSpace({ ...space, code: "KeyK" }), false);
 });
 
-Deno.test("leader keycaps draw the glyph and key in one label", () => {
+test("leader keycaps draw the glyph and key in one label", () => {
   assertEquals(desktopLeaderLabel("n"), "␣N");
   assertEquals(desktopLeaderLabel(" "), "␣␣");
   assertEquals(desktopLeaderLabel("["), "␣[");
@@ -198,7 +199,7 @@ Deno.test("leader keycaps draw the glyph and key in one label", () => {
   assertEquals(desktopLeaderKey({ sequence: ["G", "1"] }), null);
 });
 
-Deno.test("rich text uses direct chords, never the leader", () => {
+test("rich text uses direct chords, never the leader", () => {
   for (const [id, chord] of Object.entries(DESKTOP_COMPOSER_FORMAT_CHORDS)) {
     const command = `composer.format.${id}`;
     assertEquals(chord.startsWith("Mod+"), true);
@@ -211,7 +212,7 @@ Deno.test("rich text uses direct chords, never the leader", () => {
   assertEquals("m" in DESKTOP_LEADER_GROUPS, false);
 });
 
-Deno.test("surface groups double their key to focus and hold its buttons", () => {
+test("surface groups double their key to focus and hold its buttons", () => {
   assertEquals(DESKTOP_LEADER_GROUPS.s, "Sessions");
   assertEquals(DESKTOP_WORKSPACE_KEYS.focusSessions, "SS");
   assertEquals(DESKTOP_WORKSPACE_KEYS.focusTopbar, "T");
@@ -229,7 +230,7 @@ Deno.test("surface groups double their key to focus and hold its buttons", () =>
   }
 });
 
-Deno.test("previous item is Space-Tab, drawn as one keycap", () => {
+test("previous item is Space-Tab, drawn as one keycap", () => {
   assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.alternateSession), "␣⇥");
   assertEquals(desktopLeaderLabel("Tab"), "␣⇥");
   assertEquals(
@@ -242,7 +243,7 @@ Deno.test("previous item is Space-Tab, drawn as one keycap", () => {
   assertEquals(DESKTOP_WORKSPACE_KEYS.rename, "R");
 });
 
-Deno.test("an open Draft's actions are root keys, not a group", () => {
+test("an open Draft's actions are root keys, not a group", () => {
   assertEquals("d" in DESKTOP_LEADER_GROUPS, false);
   assertEquals(DESKTOP_DOCUMENT_KEYS.copy, "Y");
   assertEquals(DESKTOP_DOCUMENT_KEYS.readableWidth, "UW");

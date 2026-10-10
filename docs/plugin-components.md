@@ -88,7 +88,7 @@ The derived worker-registry input retains 3.37.0 for this app-shell-only tail;
 the subsequent real Claude release 3.39.0 advances it normally.
 Both the root gate and immutable worker build verify that derivation. After a
 registry edit, regenerate it from the repository root in the pinned shell with
-`nix develop -c deno run --allow-read --allow-write tools/worker-registry-input.ts --write`.
+`nix develop -c bun tools/worker-registry-input.ts --write`.
 SDK, Plugin and consumed component changes remain release-causing worker inputs;
 the derived file is not an administrator-selected generation pin.
 
@@ -398,7 +398,7 @@ both gates.
 
 For release preparation, `--print-digests` and `--print-closure` print candidate
 metadata only; they are not validation or publication commands. Normal
-`deno run --allow-read --allow-run tools/check-plugin-components.ts` validates
+`bun tools/check-plugin-components.ts` validates
 the complete tree in the pinned shell (Cargo metadata inherits that shell).
 
 An explicit `plugin_additions` list permits new first-party Plugin identities in

@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   adjacentReviewTabAfterClose,
   closeAllReviewTabs,
@@ -19,7 +20,7 @@ const source = (path: string, pinned = false): ReviewTab => ({
   pinned,
 });
 
-Deno.test("commit files use a closeless tab identity", () => {
+test("commit files use a closeless tab identity", () => {
   assertEquals(
     reviewTabKey({ kind: "commit", path: "src/main.rs", pinned: false }),
     "commit:src/main.rs",
@@ -30,12 +31,12 @@ Deno.test("commit files use a closeless tab identity", () => {
   );
 });
 
-Deno.test("opening an existing tab preserves its position", () => {
+test("opening an existing tab preserves its position", () => {
   const tabs = openReviewTab([source("a.rs"), source("b.rs")], source("a.rs"));
   assertEquals(tabs.map(reviewTabKey), ["source:a.rs", "source:b.rs"]);
 });
 
-Deno.test("close others preserves pinned tabs", () => {
+test("close others preserves pinned tabs", () => {
   const tabs = closeOtherReviewTabs(
     [source("a.rs", true), source("b.rs"), source("c.rs")],
     "source:b.rs",
@@ -43,7 +44,7 @@ Deno.test("close others preserves pinned tabs", () => {
   assertEquals(tabs.map(reviewTabKey), ["source:a.rs", "source:b.rs"]);
 });
 
-Deno.test("close all affects only the selected review mode", () => {
+test("close all affects only the selected review mode", () => {
   const diff: ReviewTab = {
     kind: "diff",
     path: "change.rs",
@@ -57,13 +58,13 @@ Deno.test("close all affects only the selected review mode", () => {
   );
 });
 
-Deno.test("tabs can be pinned and closed", () => {
+test("tabs can be pinned and closed", () => {
   const pinned = toggleReviewTabPin([source("a.rs")], "source:a.rs");
   assertEquals(pinned[0]?.pinned, true);
   assertEquals(closeReviewTab(pinned, "source:a.rs"), []);
 });
 
-Deno.test("closing the active tab prefers its left neighbour", () => {
+test("closing the active tab prefers its left neighbour", () => {
   const tabs = [source("a.rs"), source("b.rs"), source("c.rs")];
   assertEquals(
     reviewTabKey(
@@ -79,7 +80,7 @@ Deno.test("closing the active tab prefers its left neighbour", () => {
   );
 });
 
-Deno.test("closing a tab never falls through to the other review mode", () => {
+test("closing a tab never falls through to the other review mode", () => {
   const diff: ReviewTab = {
     kind: "diff",
     path: "change.rs",
@@ -92,7 +93,7 @@ Deno.test("closing a tab never falls through to the other review mode", () => {
   );
 });
 
-Deno.test("source and diff tabs have independent capacity", () => {
+test("source and diff tabs have independent capacity", () => {
   const diff = (path: string): ReviewTab => ({
     kind: "diff",
     path,
@@ -110,7 +111,7 @@ Deno.test("source and diff tabs have independent capacity", () => {
   assertEquals(tabs.filter((tab) => tab.kind === "diff").length, 12);
 });
 
-Deno.test("tabs reorder without changing their identity", () => {
+test("tabs reorder without changing their identity", () => {
   const tabs = [source("a.rs"), source("b.rs"), source("c.rs")];
   assertEquals(
     reorderReviewTabs(tabs, "source:a.rs", "source:c.rs").map(reviewTabKey),
@@ -118,7 +119,7 @@ Deno.test("tabs reorder without changing their identity", () => {
   );
 });
 
-Deno.test("committed diff tabs are removed while source tabs remain", () => {
+test("committed diff tabs are removed while source tabs remain", () => {
   const changed: ReviewTab = {
     kind: "diff",
     path: "changed.rs",

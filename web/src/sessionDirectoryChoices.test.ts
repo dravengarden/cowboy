@@ -1,11 +1,12 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices.ts";
 import {
   effectiveSessionFolder,
   sessionFolderMutators,
 } from "./sessionFolders.ts";
 import type { SessionMeta } from "./protocol.ts";
-Deno.test("session directory choices contain only folders; empty placement remains Global", () => {
+test("session directory choices contain only folders; empty placement remains Global", () => {
   const folders = {
     folders: [
       {

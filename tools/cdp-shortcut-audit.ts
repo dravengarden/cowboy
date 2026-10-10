@@ -2,19 +2,19 @@
  * integrated App (the draft-documents fixture held at an open session) in a
  * running Chrome. Writes a screenshot next to the report.
  *
- * Usage: deno run --allow-read --allow-write --allow-run --allow-net=127.0.0.1 \
- *   --allow-env tools/cdp-shortcut-audit.ts http://127.0.0.1:9222 <out-dir>
+ * Usage: bun tools/cdp-shortcut-audit.ts http://127.0.0.1:9222 <out-dir>
  *
  * Exits 1 when any control lacks a slot (FOCUS.md "Leader").
  */
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { openFixturePage } from "./cdp-fixture.ts";
 
-const endpoint = Deno.args[0] ?? "";
-const output = Deno.args[1];
+const endpoint = process.argv.slice(2)[0] ?? "";
+const output = process.argv.slice(2)[1];
 if (!output?.startsWith("/")) {
   throw new Error("expected an absolute output directory");
 }
-await Deno.mkdir(output, { recursive: true });
+await mkdir(output, { recursive: true });
 const page = await openFixturePage(
   endpoint,
   "draft-documents",
@@ -38,7 +38,7 @@ try {
   }
   if (!result) throw new Error("audit did not reach the integrated App");
   const { data } = await page.send("Page.captureScreenshot", { format: "png" });
-  await Deno.writeFile(
+  await writeFile(
     `${output}/shortcut-audit.png`,
     Uint8Array.from(atob(data), (c) => c.charCodeAt(0)),
   );
@@ -74,7 +74,7 @@ try {
   if (rows === 0) throw new Error("␣O did not open Recent with its visits");
   await new Promise((resolve) => setTimeout(resolve, 300));
   const recent = await page.send("Page.captureScreenshot", { format: "png" });
-  await Deno.writeFile(
+  await writeFile(
     `${output}/recent.png`,
     Uint8Array.from(atob(recent.data), (c) => c.charCodeAt(0)),
   );
@@ -106,7 +106,7 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 250));
   const pick = await page.send("Page.captureScreenshot", { format: "png" });
-  await Deno.writeFile(
+  await writeFile(
     `${output}/move-pick.png`,
     Uint8Array.from(atob(pick.data), (c) => c.charCodeAt(0)),
   );
@@ -164,7 +164,7 @@ try {
     await waitFor("document.querySelector(\"[data-draft-title-hint='normal']\")", "the title names its way back");
     if (name === "j") {
       const hint = await page.send("Page.captureScreenshot", { format: "png" });
-      await Deno.writeFile(`${output}/title-normal.png`, Uint8Array.from(atob(hint.data), (c) => c.charCodeAt(0)));
+      await writeFile(`${output}/title-normal.png`, Uint8Array.from(atob(hint.data), (c) => c.charCodeAt(0)));
     }
     await back();
     await waitFor(inBody, `${name} in the title's Normal returns to the body`);
@@ -234,7 +234,7 @@ try {
   // inline code a chip in the body colour, headings larger than the body.
   const content = "document.querySelector('[data-desktop-region=\"prompt.composer\"] .cm-content')";
   {
-    const css = await Deno.readTextFile("web/src/mdlive/styles/inline-preview.css");
+    const css = await readFile("web/src/mdlive/styles/inline-preview.css", "utf8");
     await page.evaluate(`(() => { const s = document.createElement("style"); s.textContent = ${JSON.stringify(css)}; document.head.append(s); return true; })()`);
     await press("k", "KeyK", 75, mac ? 4 : 1);
     await press("p", "KeyP", 80);
@@ -267,7 +267,7 @@ try {
     if (style.code[1] === "rgba(0, 0, 0, 0)" || style.code[0] === style.link) fail("inline code is not a body-coloured chip");
     if (parseFloat(style.h1) <= parseFloat(style.body[2])) fail("H1 is not larger than the body");
     const shot = await page.send("Page.captureScreenshot", { format: "png" });
-    await Deno.writeFile(`${output}/rich-text.png`, Uint8Array.from(atob(shot.data), (c) => c.charCodeAt(0)));
+    await writeFile(`${output}/rich-text.png`, Uint8Array.from(atob(shot.data), (c) => c.charCodeAt(0)));
     console.log(JSON.stringify({ rich_text: style }));
   }
   // Ctrl+H/J/K/L from Vim Insert: no mode change first, nothing deleted.
@@ -309,4 +309,4 @@ try {
 } finally {
   await page.close();
 }
-if (missing > 0) Deno.exit(1);
+if (missing > 0) process.exit(1);

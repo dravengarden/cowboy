@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   cancelPriorSendDecisions,
   currentPriorSendDecision,
@@ -7,7 +8,7 @@ import {
   subscribePriorSendDecision,
 } from "./priorSendDecision.ts";
 
-Deno.test("prior send decisions wait for an explicit choice and serialize sessions", async () => {
+test("prior send decisions wait for an explicit choice and serialize sessions", async () => {
   const unsubscribe = subscribePriorSendDecision(() => {});
   try {
     let proceeded = false;
@@ -36,7 +37,7 @@ Deno.test("prior send decisions wait for an explicit choice and serialize sessio
   }
 });
 
-Deno.test("missing decision surface refuses a new send instead of silently proceeding", async () => {
+test("missing decision surface refuses a new send instead of silently proceeding", async () => {
   await assertRejects(
     () => requestPriorSendDecision("a", ["old-a"]),
     Error,
@@ -45,7 +46,7 @@ Deno.test("missing decision surface refuses a new send instead of silently proce
   assertEquals(currentPriorSendDecision(), null);
 });
 
-Deno.test("concurrent decisions for the same old message have independent identities and completion", async () => {
+test("concurrent decisions for the same old message have independent identities and completion", async () => {
   const unsubscribe = subscribePriorSendDecision(() => {});
   try {
     const firstSend = requestPriorSendDecision("same-session", ["same-old"]);

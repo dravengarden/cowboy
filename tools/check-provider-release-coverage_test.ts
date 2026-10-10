@@ -1,15 +1,19 @@
-import { assertEquals } from "jsr:@std/assert@1.0.19";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { checkProviderReleaseCoverage } from "./check-provider-release-coverage.ts";
 
-Deno.test("Provider release coverage requires the exact signed published version", async () => {
-  const root = await Deno.makeTempDir({ prefix: "cowboy-provider-coverage-" });
+test("Provider release coverage requires the exact signed published version", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowboy-provider-coverage-"));
   try {
     const plugins = `${root}/plugins`;
     const catalog = `${root}/catalog`;
-    await Deno.mkdir(`${plugins}/example`, { recursive: true });
-    await Deno.mkdir(`${plugins}/zed`, { recursive: true });
-    await Deno.mkdir(`${catalog}/trusted-publishers`, { recursive: true });
-    await Deno.mkdir(`${catalog}/receipts`, { recursive: true });
+    await mkdir(`${plugins}/example`, { recursive: true });
+    await mkdir(`${plugins}/zed`, { recursive: true });
+    await mkdir(`${catalog}/trusted-publishers`, { recursive: true });
+    await mkdir(`${catalog}/receipts`, { recursive: true });
     const packageDigest = `sha256:${await sha256("package")}`;
     const hostBundleDigest = `sha256:${await sha256("host")}`;
     const artifactDigest = `sha256:${"2".repeat(64)}`;
@@ -19,7 +23,7 @@ Deno.test("Provider release coverage requires the exact signed published version
     const packagePath = `${stem}.cowboy-plugin`;
     const releasePath = `${stem}.release.json`;
     const hostBundlePath = `${stem}.hostbundle.json`;
-    await Deno.writeTextFile(
+    await writeFile(
       `${plugins}/example/plugin.json`,
       JSON.stringify({
         id: "example",
@@ -28,7 +32,7 @@ Deno.test("Provider release coverage requires the exact signed published version
         kind: "agent_provider",
       }),
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${plugins}/zed/plugin.json`,
       JSON.stringify({
         id: "zed",
@@ -37,19 +41,19 @@ Deno.test("Provider release coverage requires the exact signed published version
         kind: "code_intelligence",
       }),
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${catalog}/trusted-publishers/cowboy-first-party.pub`,
       "ssh-ed25519 fixture\n",
     );
-    await Deno.mkdir(`${catalog}/artifacts/${packageValue}`, {
+    await mkdir(`${catalog}/artifacts/${packageValue}`, {
       recursive: true,
     });
-    await Deno.writeTextFile(
+    await writeFile(
       `${catalog}/artifacts/${packageValue}/example.cowboy-plugin`,
       "package",
     );
-    await Deno.writeTextFile(packagePath, "package");
-    await Deno.writeTextFile(hostBundlePath, "host");
+    await writeFile(packagePath, "package");
+    await writeFile(hostBundlePath, "host");
     const release = {
       release_schema: 2,
       plugin_id: "example",
@@ -63,8 +67,8 @@ Deno.test("Provider release coverage requires the exact signed published version
       signature: "signed",
       runtime_artifacts: [],
     };
-    await Deno.writeTextFile(releasePath, JSON.stringify(release));
-    await Deno.writeTextFile(
+    await writeFile(releasePath, JSON.stringify(release));
+    await writeFile(
       `${catalog}/receipts/example-1.2.3-${artifactValue}.json`,
       JSON.stringify({
         schema_version: 1,
@@ -87,41 +91,41 @@ Deno.test("Provider release coverage requires the exact signed published version
 
     const publishedPackage =
       `${catalog}/artifacts/${packageValue}/example.cowboy-plugin`;
-    await Deno.writeTextFile(publishedPackage, "tampered");
+    await writeFile(publishedPackage, "tampered");
     const [tampered] = await checkProviderReleaseCoverage(plugins, catalog);
     assertEquals(tampered?.covered, false);
     assertEquals(
       tampered?.detail,
       `published artifact digest mismatch: ${publishedPackage}`,
     );
-    await Deno.writeTextFile(publishedPackage, "package");
+    await writeFile(publishedPackage, "package");
 
-    await Deno.writeTextFile(hostBundlePath, "tampered");
+    await writeFile(hostBundlePath, "tampered");
     const [tamperedHost] = await checkProviderReleaseCoverage(plugins, catalog);
     assertEquals(tamperedHost?.covered, false);
     assertEquals(
       tamperedHost?.detail,
       `published artifact digest mismatch: ${hostBundlePath}`,
     );
-    await Deno.writeTextFile(hostBundlePath, "host");
+    await writeFile(hostBundlePath, "host");
 
     const nativeRelease = {
       ...release,
       release_schema: 4,
       plugin_kind: "agent_provider",
     };
-    await Deno.writeTextFile(releasePath, JSON.stringify(nativeRelease));
+    await writeFile(releasePath, JSON.stringify(nativeRelease));
     const [native] = await checkProviderReleaseCoverage(plugins, catalog);
     assertEquals(native?.covered, true);
 
-    await Deno.writeTextFile(hostBundlePath, "tampered native host");
+    await writeFile(hostBundlePath, "tampered native host");
     const [nativeHost] = await checkProviderReleaseCoverage(plugins, catalog);
     assertEquals(nativeHost?.covered, false);
     assertEquals(
       nativeHost?.detail,
       `published artifact digest mismatch: ${hostBundlePath}`,
     );
-    await Deno.writeTextFile(hostBundlePath, "host");
+    await writeFile(hostBundlePath, "host");
 
     for (
       const [invalid, expected] of [
@@ -132,24 +136,24 @@ Deno.test("Provider release coverage requires the exact signed published version
         ],
       ] as const
     ) {
-      await Deno.writeTextFile(releasePath, JSON.stringify(invalid));
+      await writeFile(releasePath, JSON.stringify(invalid));
       const [rejected] = await checkProviderReleaseCoverage(plugins, catalog);
       assertEquals(rejected?.covered, false);
       assertEquals(rejected?.detail, expected);
     }
 
-    await Deno.writeTextFile(
+    await writeFile(
       releasePath,
       JSON.stringify({ ...nativeRelease, host_bundle_digest: undefined }),
     );
     const [unboundHost] = await checkProviderReleaseCoverage(plugins, catalog);
     assertEquals(unboundHost?.covered, false);
     assertEquals(unboundHost?.detail, "catalog host bundle is unbound");
-    await Deno.remove(hostBundlePath);
+    await rm(hostBundlePath);
     const [withoutHost] = await checkProviderReleaseCoverage(plugins, catalog);
     assertEquals(withoutHost?.covered, true);
 
-    await Deno.remove(releasePath);
+    await rm(releasePath);
     assertEquals(await checkProviderReleaseCoverage(plugins, catalog), [{
       plugin_id: "example",
       plugin_version: "1.2.3",
@@ -157,7 +161,7 @@ Deno.test("Provider release coverage requires the exact signed published version
       detail: "no exact signed release is published",
     }]);
   } finally {
-    await Deno.remove(root, { recursive: true });
+    await rm(root, { recursive: true });
   }
 });
 

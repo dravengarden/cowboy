@@ -1,17 +1,19 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   pendingRowMatchesArrival,
   pendingRowRevealDelta,
 } from "./pendingPanelState.ts";
 
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
-const storeSource = await Deno.readTextFile(
-  new URL("./store.ts", import.meta.url),
+const storeSource = await readFile(
+  new URL("./store.ts", import.meta.url), "utf8",
 );
 
-Deno.test("a just-staged optimistic row still matches after the server id arrives", () => {
+test("a just-staged optimistic row still matches after the server id arrives", () => {
   assertEquals(
     pendingRowMatchesArrival({ id: "opt-abc", cmid: "abc" }, {
       kind: "draft",
@@ -38,21 +40,21 @@ Deno.test("a just-staged optimistic row still matches after the server id arrive
   );
 });
 
-Deno.test("staging a draft or queue item expands that panel and flashes the row", () => {
+test("staging a draft or queue item expands that panel and flashes the row", () => {
   assertEquals(storeSource.includes("revealPendingArrival({"), true);
   assertEquals(composerSource.includes("subscribePendingArrival"), true);
   assertEquals(composerSource.includes("data-pending-row-flash"), true);
   assertEquals(composerSource.includes("scrollPendingRowIntoView"), true);
 });
 
-Deno.test("an arrived row is anchored instead of accepting partial visibility", () => {
+test("an arrived row is anchored instead of accepting partial visibility", () => {
   assertEquals(pendingRowRevealDelta(520, 200), 312);
   assertEquals(pendingRowRevealDelta(208, 200), 0);
   assertEquals(composerSource.includes("onEntered={revealArrivalRow}"), true);
   assertEquals(composerSource.includes('addEventListener("load", onImageLoad, true)'), true);
 });
 
-Deno.test("the first pending row reserves room for its arrival focus ring", () => {
+test("the first pending row reserves room for its arrival focus ring", () => {
   const scrollportStart = composerSource.indexOf(
     "data-mobile-pending-scrollport=",
   );
@@ -68,7 +70,7 @@ Deno.test("the first pending row reserves room for its arrival focus ring", () =
   assertEquals(scrollport.includes("pb: mobileFloatingEdit ? 0 : 0.5"), true);
 });
 
-Deno.test("queue and draft bulk actions live in the header kebab", () => {
+test("queue and draft bulk actions live in the header kebab", () => {
   assertEquals(composerSource.includes('aria-label={kind === "draft" ? "Draft actions" : "Queue actions"}'), true);
   assertEquals(composerSource.includes("<MoreVert fontSize=\"small\" />"), true);
   assertEquals(composerSource.includes("setBulkConfirm(\"send-all\")"), true);

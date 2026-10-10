@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   clampKeyboardOverlap,
   inferKeyboardOpen,
@@ -15,7 +17,7 @@ import {
   visualViewportBox,
 } from "./keyboardGeometry.ts";
 
-Deno.test("keyboard geometry detects visual viewport overlap", () => {
+test("keyboard geometry detects visual viewport overlap", () => {
   assertEquals(inferKeyboardOpen({
     layoutHeight: 844,
     visualHeight: 510,
@@ -24,7 +26,7 @@ Deno.test("keyboard geometry detects visual viewport overlap", () => {
   }), true);
 });
 
-Deno.test("keyboard geometry detects third-party IME joint viewport resize", () => {
+test("keyboard geometry detects third-party IME joint viewport resize", () => {
   assertEquals(inferKeyboardOpen({
     layoutHeight: 510,
     visualHeight: 510,
@@ -33,7 +35,7 @@ Deno.test("keyboard geometry detects third-party IME joint viewport resize", () 
   }), true);
 });
 
-Deno.test("keyboard geometry ignores layout changes without editable focus", () => {
+test("keyboard geometry ignores layout changes without editable focus", () => {
   assertEquals(inferKeyboardOpen({
     layoutHeight: 510,
     visualHeight: 510,
@@ -42,7 +44,7 @@ Deno.test("keyboard geometry ignores layout changes without editable focus", () 
   }), false);
 });
 
-Deno.test("keyboard overlap ignores a one-frame collapsed visual viewport", () => {
+test("keyboard overlap ignores a one-frame collapsed visual viewport", () => {
   assertEquals(isUnreliableVisualViewport(844, 0), true);
   assertEquals(isUnreliableVisualViewport(844, 10), true);
   assertEquals(isUnreliableVisualViewport(844, 510), false);
@@ -52,14 +54,14 @@ Deno.test("keyboard overlap ignores a one-frame collapsed visual viewport", () =
   assertEquals(clampKeyboardOverlap(0, 844), 0);
 });
 
-Deno.test("expand-collapse remount must not learn the keyboard-sized rest height", () => {
+test("expand-collapse remount must not learn the keyboard-sized rest height", () => {
   assertEquals(shouldLearnKeyboardFreeBaseline(844, 844), true);
   assertEquals(shouldLearnKeyboardFreeBaseline(844, 800), true);
   assertEquals(shouldLearnKeyboardFreeBaseline(844, 510), false);
   assertEquals(shouldLearnKeyboardFreeBaseline(0, 510), true);
 });
 
-Deno.test("keyboard geometry closes at the restored baseline", () => {
+test("keyboard geometry closes at the restored baseline", () => {
   assertEquals(inferKeyboardOpen({
     layoutHeight: 844,
     visualHeight: 844,
@@ -68,7 +70,7 @@ Deno.test("keyboard geometry closes at the restored baseline", () => {
   }), false);
 });
 
-Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
+test("PWA inset follows the painted box, not a stale innerHeight", () => {
   // Safari kept innerHeight at the pre-keyboard layout while resizes-content
   // already shortened html/#root to the visual viewport.
   assertEquals(paintedLayoutHeight(844, 510, 510), 510);
@@ -105,7 +107,7 @@ Deno.test("PWA inset follows the painted box, not a stale innerHeight", () => {
   assertEquals(keyboardCoverOverlap(844, 510, -40), 334);
 });
 
-Deno.test("Safari cover sheets pin to the visual viewport, not 100dvh of html", () => {
+test("Safari cover sheets pin to the visual viewport, not 100dvh of html", () => {
   // html stays 714 while innerHeight tracks the 376px visual viewport and
   // offsetTop pans to keep Title on screen. The cover must use html's box
   // so offsetTop is not clamped to 0.
@@ -116,7 +118,7 @@ Deno.test("Safari cover sheets pin to the visual viewport, not 100dvh of html", 
   assertEquals(visualViewportBox(510, 510, 0), { offset: 0, height: 510 });
 });
 
-Deno.test("PWA iOS accessory bar is added only while an editable is focused", () => {
+test("PWA iOS accessory bar is added only while an editable is focused", () => {
   assertEquals(isAppleTouchDevice({ userAgent: "iPhone" }), true);
   assertEquals(isAppleTouchDevice({ platform: "MacIntel", maxTouchPoints: 5 }), true);
   assertEquals(isAppleTouchDevice({ userAgent: "Macintosh", maxTouchPoints: 0 }), false);
@@ -148,8 +150,8 @@ Deno.test("PWA iOS accessory bar is added only while an editable is focused", ()
   assertEquals(publishedKeyboardInset(334, iosPwaKeyboardAccessoryPx), 378);
 });
 
-Deno.test("keyboard inset measures the painted page instead of innerHeight", async () => {
-  const source = await Deno.readTextFile(new URL("./keyboardInset.ts", import.meta.url));
+test("keyboard inset measures the painted page instead of innerHeight", async () => {
+  const source = await readFile(new URL("./keyboardInset.ts", import.meta.url), "utf8");
   assertEquals(source.includes("paintedLayoutHeight("), true);
   assertEquals(
     source.includes("keyboardCoverOverlap(\n        layoutHeight,\n        vv.height,\n        vv.offsetTop,"),
@@ -177,15 +179,15 @@ Deno.test("keyboard inset measures the painted page instead of innerHeight", asy
   assertEquals(source.includes("fight the form scroller every frame"), true);
 });
 
-Deno.test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {
-  const appSource = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
+test("New session is a cover sheet on the mobile navbar so Title clears the PWA accessory", async () => {
+  const appSource = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
   const dialog = appSource.slice(
     appSource.indexOf("function CreateDialog("),
     appSource.indexOf("const EMPTY_TRANSCRIPT_TIMELINE"),
   );
   assertEquals(dialog.includes('ariaLabel="Create"'), true);
   assertEquals(dialog.includes("cover"), true);
-  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   assertEquals(html.includes("--vv-height"), true);
   assertEquals(html.includes("[data-obsidian-sheet]"), true);
   assertEquals(
@@ -200,7 +202,7 @@ Deno.test("New session is a cover sheet on the mobile navbar so Title clears the
   );
 });
 
-Deno.test("native document scroll strays from its locked rest offset", () => {
+test("native document scroll strays from its locked rest offset", () => {
   // Physical iPhone native shell, Create cover (2026-10-06): WebKit's focus
   // reveal left the document at scrollY = -228.
   assertEquals(isStrayDocumentScroll(0, -228), true);

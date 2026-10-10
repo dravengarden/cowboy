@@ -1,16 +1,18 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 
-const composerSurfaceSource = await Deno.readTextFile(
-  new URL("./mobileComposerSurface.ts", import.meta.url),
+const composerSurfaceSource = await readFile(
+  new URL("./mobileComposerSurface.ts", import.meta.url), "utf8",
 );
-const accessoryDockSource = await Deno.readTextFile(
-  new URL("./MobileComposerAccessoryDock.tsx", import.meta.url),
+const accessoryDockSource = await readFile(
+  new URL("./MobileComposerAccessoryDock.tsx", import.meta.url), "utf8",
 );
-const composerSource = await Deno.readTextFile(
-  new URL("./Composer.tsx", import.meta.url),
+const composerSource = await readFile(
+  new URL("./Composer.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("focused mobile composer chrome shares one themed hairline family", () => {
+test("focused mobile composer chrome shares one themed hairline family", () => {
   assertEquals(
     composerSurfaceSource.includes(
       "export function mobileComposerOutlineColor",
@@ -41,7 +43,7 @@ Deno.test("focused mobile composer chrome shares one themed hairline family", ()
   );
 });
 
-Deno.test("accessory dock rails use the themed hairline instead of gray divider", () => {
+test("accessory dock rails use the themed hairline instead of gray divider", () => {
   assertEquals(accessoryDockSource.includes("palette.divider"), false);
   assertEquals(
     accessoryDockSource.includes("borderColor: mobileComposerHairlineColor"),
@@ -61,7 +63,7 @@ Deno.test("accessory dock rails use the themed hairline instead of gray divider"
   );
 });
 
-Deno.test("compact format-row split uses the same inner hairline", () => {
+test("compact format-row split uses the same inner hairline", () => {
   assertEquals(
     composerSource.includes("borderTopColor: mobileComposerHairlineColor"),
     true,
@@ -78,7 +80,7 @@ Deno.test("compact format-row split uses the same inner hairline", () => {
   );
 });
 
-Deno.test("themed outline glow stays on the outer card, not inner rails", () => {
+test("themed outline glow stays on the outer card, not inner rails", () => {
   const glowUses = accessoryDockSource.split("mobileComposerOutlineGlow")
     .length - 1;
   assertEquals(glowUses, 2);

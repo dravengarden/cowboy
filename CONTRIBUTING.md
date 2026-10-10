@@ -13,7 +13,7 @@ Provider work, tests, and thoughtful product proposals are welcome.
 
 ## Development environment
 
-Cowboy uses a pinned Nix development shell for Rust, Deno, Node, and project
+Cowboy uses a pinned Nix development shell for Rust, Bun, Node, and project
 tools.
 
 ```sh

@@ -1,9 +1,11 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readdir, readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import { appIconAppearanceAsset } from "./appIcons.ts";
 
 const repoRoot = new URL("../../", import.meta.url);
-const read = (path: string) => Deno.readTextFile(new URL(path, repoRoot));
-const bytes = (path: string) => Deno.readFile(new URL(path, repoRoot));
+const read = (path: string) => readFile(new URL(path, repoRoot), "utf8");
+const bytes = (path: string) => readFile(new URL(path, repoRoot));
 
 async function pngSize(path: string): Promise<[number, number]> {
   const data = await bytes(path);
@@ -12,7 +14,7 @@ async function pngSize(path: string): Promise<[number, number]> {
   return [view.getUint32(16), view.getUint32(20)];
 }
 
-Deno.test("Lilac Flow default exports cover web, native, Manager and website", async () => {
+test("Lilac Flow default exports cover web, native, Manager and website", async () => {
   for (
     const [path, size] of Object.entries({
       "assets/brand/cowboy-logo.png": 1024,
@@ -70,7 +72,7 @@ Deno.test("Lilac Flow default exports cover web, native, Manager and website", a
   );
 });
 
-Deno.test("entry points use the current icon and the service worker changes generation", async () => {
+test("entry points use the current icon and the service worker changes generation", async () => {
   for (const path of ["README.md", "README.zh-CN.md"]) {
     assert(
       (await read(path)).includes("site/assets/cowboy-readme-mark-v10.svg"),
@@ -101,7 +103,7 @@ Deno.test("entry points use the current icon and the service worker changes gene
 // SideStore re-signs every bundled file on device under a free team, so the
 // asset catalog carries only icons the picker can actually select. Archived
 // catalog entries keep their web artwork and lose Home Screen switching.
-Deno.test("native alternate icons ship exactly the curated picker styles", async () => {
+test("native alternate icons ship exactly the curated picker styles", async () => {
   const styles = JSON.parse(await read("web/src/appIconStyles.json")) as {
     groups: { styles: { id: string }[] }[];
   };
@@ -130,9 +132,9 @@ Deno.test("native alternate icons ship exactly the curated picker styles", async
     assert(!svg.includes("prefers-color-scheme"), id);
   }
   const bundled: string[] = [];
-  for await (
-    const entry of Deno.readDir(
-      new URL("apps/native-shell/apple/Assets.xcassets", repoRoot),
+  for (
+    const entry of await readdir(
+      new URL("apps/native-shell/apple/Assets.xcassets", repoRoot), { withFileTypes: true },
     )
   ) {
     const id = /^Cowboy-(.+)\.appiconset$/.exec(entry.name)?.[1];
@@ -156,7 +158,7 @@ Deno.test("native alternate icons ship exactly the curated picker styles", async
 // Neon was the default before curlseal-026, so a stored preference still
 // resolves. Its Home Screen variant is archived; the paired web appearances
 // that appIconAppearanceAsset() serves are not.
-Deno.test("archived Neon retains its light and dark web appearances", async () => {
+test("archived Neon retains its light and dark web appearances", async () => {
   for (
     const path of [
       "web/public/app-icons/v6/palette-103/icon-light-192.png",
@@ -173,7 +175,7 @@ Deno.test("archived Neon retains its light and dark web appearances", async () =
   );
 });
 
-Deno.test("tab SVGs are transparent vectors and ICO has native browser frames", async () => {
+test("tab SVGs are transparent vectors and ICO has native browser frames", async () => {
   const svg = await read("web/public/cowboy-favicon-v10.svg");
   assert(svg.includes("prefers-color-scheme:dark"));
   assert(

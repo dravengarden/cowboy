@@ -1,4 +1,6 @@
-import { assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import {
   resolveTimeRange,
   timeRangeLabel,
@@ -6,11 +8,11 @@ import {
   validTimeRange,
 } from "./observabilityTimeRange.ts";
 
-const filtersSource = await Deno.readTextFile(
-  new URL("./ObservabilityFilters.tsx", import.meta.url),
+const filtersSource = await readFile(
+  new URL("./ObservabilityFilters.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("relative observability windows advance with now", () => {
+test("relative observability windows advance with now", () => {
   const value = { mode: "relative", amount: 6, unit: "hour" } as const;
   assertEquals(resolveTimeRange(value, 10 * 3_600_000), {
     fromMs: 4 * 3_600_000,
@@ -23,13 +25,13 @@ Deno.test("relative observability windows advance with now", () => {
   });
 });
 
-Deno.test("absolute observability windows keep both exact boundaries", () => {
+test("absolute observability windows keep both exact boundaries", () => {
   const value = { mode: "absolute", fromMs: 1_000, toMs: 2_000 } as const;
   assertEquals(resolveTimeRange(value, 9_000), { fromMs: 1_000, toMs: 2_000 });
   assertEquals(timeRangeQuery(value, 9_000), { from_ms: "1000", to_ms: "2000" });
 });
 
-Deno.test("observability windows reject reversed, future, and oversized ranges", () => {
+test("observability windows reject reversed, future, and oversized ranges", () => {
   const now = 100 * 86_400_000;
   assertEquals(validTimeRange({ mode: "relative", amount: 30, unit: "day" }, 30 * 86_400_000, now), true);
   assertEquals(validTimeRange({ mode: "relative", amount: 31, unit: "day" }, 30 * 86_400_000, now), false);
@@ -37,7 +39,7 @@ Deno.test("observability windows reject reversed, future, and oversized ranges",
   assertEquals(validTimeRange({ mode: "absolute", fromMs: now - 1_000, toMs: now + 600_000 }, 30 * 86_400_000, now), false);
 });
 
-Deno.test("selected quick range keeps authoritative paint after iOS hover", () => {
+test("selected quick range keeps authoritative paint after iOS hover", () => {
   assertEquals(filtersSource.includes("aria-pressed={selected}"), true);
   assertEquals(
     filtersSource.includes("&&[aria-pressed='true']:hover"),

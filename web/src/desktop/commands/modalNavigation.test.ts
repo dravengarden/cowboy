@@ -1,4 +1,5 @@
-import { assertEquals } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals } from "@std/assert";
 import { modalRows } from "./modalNavigation.ts";
 
 const box = (top: number, height: number, left: number) => ({
@@ -8,7 +9,7 @@ const box = (top: number, height: number, left: number) => ({
   right: left + 40,
 });
 
-Deno.test("modal rows group controls that share a vertical band", () => {
+test("modal rows group controls that share a vertical band", () => {
   const stops = {
     session: box(0, 40, 0),
     draft: box(0, 40, 100),

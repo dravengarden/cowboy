@@ -1,10 +1,11 @@
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fixture, ID, opened, wire } from "./fixture.ts";
 import { content, golden, navigationWire } from "./navigationFixture.ts";
 import { BufferClientError } from "./protocol.ts";
 import { syncWire } from "./synchronizationFixture.ts";
 
-Deno.test("all 32 pending navigation reservations are counted before I/O; terminal release alone frees capacity", async () => {
+test("all 32 pending navigation reservations are counted before I/O; terminal release alone frees capacity", async () => {
   const f = fixture(), captured = await content();
   const owners = [f.owner];
   for (let n = 1; n <= 32; n++) {
@@ -80,7 +81,7 @@ Deno.test("all 32 pending navigation reservations are counted before I/O; termin
   await assertRejects(() => retry, BufferClientError, "http");
 });
 
-Deno.test("an attached synchronization excludes navigation preparation", async () => {
+test("an attached synchronization excludes navigation preparation", async () => {
   const f = await opened(), captured = await content();
   const preparing = f.owner.prepareSynchronization(captured);
   f.reply(2, syncWire());
