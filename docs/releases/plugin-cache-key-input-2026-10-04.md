@@ -51,5 +51,5 @@ the Web profile. All five health/version/SPA/worker-presence HTTP checks return
 namespace contains only `.lock`, and the reader floor SHA-256 remains
 `26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`. Noninteractive sudo is available, with unchanged sudoers
 and installed root activator digests. The
-[full production receipt](../experiments/plugin-cache-key-input-2026-10-04.json)
+full production receipt (in Git history)
 retains exact native/installer identities, controls and before/after observations.

@@ -197,9 +197,9 @@ through the real projection; the enrolled-session fixture now checks the actual
 browser Machine inventory after removing every runtime project. Controller and
 Web (`cowboy-v1792`) activation succeeded, with OVH online, schedulable and still
 hosting zero projects. The existing Machine generation and project registries
-were retained. The [follow-up receipt](experiments/ovh-ai-picker-release-2026-10-02.json)
+were retained. The follow-up receipt (in Git history)
 records the failing old behavior, passing regressions, and live Provider joins.
 
 Web `612aaf14` (`cowboy-v1793`) adds the compact AI selection and direct parent
-project selection described above. Its [activation receipt](experiments/session-picker-ui-release-2026-10-02.json)
+project selection described above. Its activation receipt (in Git history)
 records 17 browser checks, 1,980 Web tests and the unchanged Controller process.

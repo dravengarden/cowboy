@@ -97,5 +97,5 @@ performed by this slice.
 
 Sudo remains available; its policy SHA-256 remains
 `149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69`.
-The [machine-readable receipt](../experiments/plugin-floored-signed-refresh-2026-10-04.json)
+The machine-readable receipt (in Git history)
 retains exact sources, executable digests, process samples and component receipts.

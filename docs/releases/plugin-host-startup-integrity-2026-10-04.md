@@ -134,7 +134,7 @@ system unit was observed or reset. At `2026-10-04T04:39:17.734667Z` the
 Machine logged zero deleted IDs and `writer_enabled=false`; its deletion
 namespace remains only `.lock`.
 
-The [machine-readable evidence](../experiments/plugin-host-startup-integrity-2026-10-04.json)
+The machine-readable evidence (in Git history)
 records exact build/native/retained identities, source checks, owner, successful
 transaction and complete before/after process and HTTPS samples.
 Existing remote portable installations must refresh their bootstrap and launcher

@@ -103,5 +103,5 @@ slice. Lost-anchor recovery remains closed.
 
 Sudo remains available and its policy SHA-256 remains
 `149c822dfd64e9b5354c33e050f27b6f8da51779c05c2186728a37a0862eaf69`.
-The [machine-readable receipt](../experiments/plugin-floor-selection-recovery-2026-10-04.json)
+The machine-readable receipt (in Git history)
 retains exact source, artifact, process, refusal and activation evidence.

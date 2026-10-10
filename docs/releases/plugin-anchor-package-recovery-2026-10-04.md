@@ -75,7 +75,7 @@ full immutable bundle
 `/nix/store/rs21kbymnbgsdqv52dajg1wn0s2lvclq-cowboy-machine-release`,
 worker generation `worker-dc63f38423cbd1971eda`. Independent maintenance
 acceptance is recorded in
-[the native receipt](../experiments/plugin-anchor-maintenance-2026-10-04.json):
+the native receipt (in Git history):
 Codex and Claude signed generation coexistence and descendant drain passed on the
 exact native worker; native execution passed 22 and 33 checks respectively;
 real public remote-session admission/recovery passed 15 checks; connected Code
@@ -116,7 +116,7 @@ all six companion paths and digests from the independently accepted source
 `90ec4edae56349cb06b9f39f13a0086197b5356b`.
 
 The bounded before/after observations, `09:40:33.259Z` and `09:41:37.838Z`,
-are in [the production receipt](../experiments/plugin-anchor-package-recovery-2026-10-04.json).
+are in the production receipt (in Git history).
 Machine PID changed `706832` → `1434181`. All 13 detached worker and 5 keeper
 unit IDs, active states and PIDs remained equal. Controller PID `812989` and its
 component receipt remained equal; Web profile remained equal. `/healthz`,

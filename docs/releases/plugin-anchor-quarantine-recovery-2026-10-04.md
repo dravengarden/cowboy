@@ -100,7 +100,7 @@ Independent root transaction `1791108507466320305-48ba48b9442d` started at
 `2026-10-04T10:08:36.099027685Z`; published true, maintenance true,
 recovered false. The bounded before/after observations at
 `10:06:46.176Z` and `10:09:23.618Z` are in
-[the production receipt](../experiments/plugin-anchor-quarantine-recovery-2026-10-04.json).
+the production receipt (in Git history).
 Machine PID changed `1434181` → `1737365`. All 13 worker and 5 keeper unit IDs,
 active states and PIDs remained equal; Controller PID `812989`, its component
 receipt and Web profile remained equal. `/healthz`, `/version`, `/`, `/sw.js`

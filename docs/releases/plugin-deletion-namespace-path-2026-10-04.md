@@ -54,7 +54,7 @@ floor stay identical; all five HTTP checks return 200. Startup reports zero
 deleted Sessions and writer false. The namespace contains only `.lock`, the
 floor SHA-256 remains `26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017`, and sudo remains noninteractive with
 unchanged sudoers/installed-owner digests. See
-[the full receipt](../experiments/plugin-deletion-namespace-path-2026-10-04.json).
+the full receipt (in Git history).
 
 Production writer admission still requires its own compatible activation/fallback/
 recovery contract and actual immutable writer crash/reopen/failure acceptance.

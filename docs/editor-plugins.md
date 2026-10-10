@@ -168,7 +168,7 @@ layout limit is not solved here.
 
 ## Verification and remaining gaps
 
-Automated (see `docs/acceptance-results/editor-plugins-2026-10-05.json`):
+Automated (receipt in Git history):
 
 - Unit: manifest/digest validation, install, permissions, stale tokens after
   typing/IME/command end, upgrade rollback, hang termination persisting across

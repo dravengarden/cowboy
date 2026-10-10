@@ -117,4 +117,4 @@ No Controller/Web restart, Plugin operation or production signed bootstrap
 publication was performed by this slice.
 
 Exact executable digests, process timestamps and activation receipts are in the
-[machine-readable evidence](../experiments/plugin-bootstrap-startup-authentication-2026-10-04.json).
+machine-readable evidence (in Git history).

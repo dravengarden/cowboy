@@ -119,7 +119,7 @@ bootstrap/recovery selection, publisher-key rotation, committed portable deletio
 state and production deletion writing remain closed. This task activated no
 Controller, Web, host configuration, installed Plugin or iOS component.
 
-The [machine-readable evidence](../experiments/plugin-signed-bootstrap-bundle-2026-10-04.json)
+The machine-readable evidence (in Git history)
 contains exact source/build identities, owner and receipt, retained companion
 hashes, complete process/HTTPS samples and validation boundaries.
 

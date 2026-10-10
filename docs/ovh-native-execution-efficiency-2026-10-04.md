@@ -68,7 +68,7 @@ quiet builds offer much more scope than reading a short README.
 
 ## Reproducible adapter measurements
 
-The [probe](experiments/ovh-native-efficiency-2026-10-04.mjs.txt) imports the
+The probe (in Git history) imports the
 current `WorkspaceTools` implementation, supplies a generated remote-file
 fixture and records its actual RPC methods. It also supplies a simulated clock
 and quiet-process responses to the actual output collection loop. It uses the

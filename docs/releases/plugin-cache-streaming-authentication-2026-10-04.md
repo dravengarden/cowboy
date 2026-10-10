@@ -65,7 +65,7 @@ anchor cases, 28 selection-pointer cases, 5 signed refresh cases, 9 signed start
 cases, 24 cached startup cases and the bootstrap old-package negative control.
 
 Independent maintenance acceptance is in
-[the native pool receipt](../experiments/plugin-cache-streaming-maintenance-2026-10-04.json):
+the native pool receipt (in Git history):
 Codex and Claude signed-generation coexistence/descendant drain passed on the exact
 new worker; native execution passed 22 and 33 checks; real remote-session
 admission/recovery passed 15 checks; connected Code passed 38 checks with cleanup
@@ -99,4 +99,4 @@ SHA-256 stayed `26910e8cf5add044da3bf74ab2ed56161d2321113d9662e27952e16cc25ae017
 `.lock`. Startup reports zero deleted sessions and writer false. Noninteractive
 sudo remains available; sudoers and the installed root activator digests are
 unchanged. Full observations and byte bindings are in
-[the production receipt](../experiments/plugin-cache-streaming-authentication-2026-10-04.json).
+the production receipt (in Git history).

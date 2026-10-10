@@ -159,7 +159,7 @@ publisher-key rotation, committed portable state and production deletion writing
 remain unadmitted. No Controller, Web, host configuration, installed Plugin or
 iOS activation was performed by this task.
 
-The [machine-readable evidence](../experiments/plugin-portable-reader-floor-2026-10-04.json)
+The machine-readable evidence (in Git history)
 records exact sources, builds, native/installer/retained identities, immutable
 acceptance controls, owner, success transaction, and complete before/after process
 and HTTPS samples.

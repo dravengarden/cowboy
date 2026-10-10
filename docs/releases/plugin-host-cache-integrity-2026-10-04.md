@@ -142,7 +142,7 @@ journals are absent and no failed system unit was observed or cleared. The
 Machine logged zero deleted IDs with `writer_enabled=false` at
 `2026-10-04T03:56:25.922499Z`; deletion state remains only `.lock`.
 
-The [machine-readable evidence](../experiments/plugin-host-cache-integrity-2026-10-04.json)
+The machine-readable evidence (in Git history)
 contains artifact/native/retained identities, exact owner and transaction, initial
 stale refusal, complete process/HTTP samples and the unchanged boundary hashes.
 Portable cached startup authentication, persistent floor, bootstrap/recovery
