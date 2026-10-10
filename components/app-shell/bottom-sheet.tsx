@@ -13,6 +13,7 @@
 // Drawer.
 
 import CloseIcon from "@mui/icons-material/Close";
+import ArrowBackIosNewRounded from "@mui/icons-material/ArrowBackIosNewRounded";
 import {
   alpha,
   Box,
@@ -219,6 +220,12 @@ export interface BottomSheetProps {
   readonly floatingActions?: boolean;
   /** Skip the entrance slide for a lightweight nested picker. Default true. */
   readonly animateOnOpen?: boolean;
+  /** A nested level of a multi-level sheet: the mobile footer island shows
+   *  Back beside Close. Desktop dialogs are unchanged. */
+  readonly onBack?: (() => void) | undefined;
+  /** Mobile cover body that does not scroll: the content fills it edge to edge
+   *  and owns its scroller (an embedded transcript). */
+  readonly fill?: boolean;
 }
 
 export function FloatingActionIsland(
@@ -449,6 +456,69 @@ export function MobileSheetActionGroup(
   );
 }
 
+function IslandGlyphButton(
+  { onActivate, label, children }: {
+    readonly onActivate: () => void;
+    readonly label: string;
+    readonly children: ReactNode;
+  },
+): ReactNode {
+  const tap = useReliableDismissTap(onActivate);
+  return (
+    <ButtonBase
+      aria-label={label}
+      {...tap}
+      sx={{
+        color: "text.primary",
+        height: MOBILE_SHEET_DISMISS_BUTTON_PX,
+        borderRadius: 999,
+        display: "grid",
+        placeItems: "center",
+        touchAction: "manipulation",
+        transition: "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "&:active": { transform: "scale(0.94)" },
+        "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
+      }}
+    >
+      {children}
+    </ButtonBase>
+  );
+}
+
+/** Back and Close in one glass island, for a nested level of a sheet. */
+export function MobileSheetBackDismiss(
+  { onBack, onClose }: { readonly onBack: () => void; readonly onClose: () => void },
+): ReactNode {
+  return (
+    <Box
+      data-mobile-sheet-footer-shield
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      sx={{
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "auto",
+      }}
+    >
+      <FloatingActionIsland
+        columns={`${MOBILE_SHEET_DISMISS_BUTTON_PX}px ${MOBILE_SHEET_DISMISS_BUTTON_PX}px`}
+        // Two glyph cells, their gap and the island's own padding and rim.
+        maxWidth={2 * MOBILE_SHEET_DISMISS_BUTTON_PX + 4 + 2 * (4 + 1)}
+        minHeight={MOBILE_SHEET_DISMISS_ISLAND_PX}
+      >
+        <IslandGlyphButton onActivate={onBack} label="Back">
+          <ArrowBackIosNewRounded fontSize="small" sx={{ transform: "translateX(-1px)" }} />
+        </IslandGlyphButton>
+        <IslandGlyphButton onActivate={onClose} label="Close">
+          <CloseIcon fontSize="small" sx={{ transform: "translate(-0.75px, -0.5px)" }} />
+        </IslandGlyphButton>
+      </FloatingActionIsland>
+    </Box>
+  );
+}
+
 export function MobileSheetDismiss(
   { onClose, label = "Close" }: { readonly onClose: () => void; readonly label?: string },
 ): ReactNode {
@@ -528,6 +598,8 @@ export function BottomSheet(
     mobileDismiss = "footer",
     floatingActions = true,
     animateOnOpen = true,
+    onBack,
+    fill = false,
   }: BottomSheetProps,
 ): ReactNode {
   const theme = useTheme();
@@ -568,6 +640,7 @@ export function BottomSheet(
       cover={cover}
       animateOnOpen={animateOnOpen}
       footerOverlay={floatingActions}
+      fillBody={fill && cover}
       ariaLabel={typeof title === "string" ? title : undefined}
       // Dim the standalone status bar in lockstep with the scrim, and — since
       // surfaceColor is also what DetentSheet RESTORES the bar to on close —
@@ -625,7 +698,11 @@ export function BottomSheet(
                 {actions}
               </Box>
             )}
-            {mobileDismiss === "footer" ? <MobileSheetDismiss onClose={onClose} /> : null}
+            {mobileDismiss === "footer"
+              ? onBack
+                ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} />
+                : <MobileSheetDismiss onClose={onClose} />
+              : null}
           </Box>
         )}
     >
@@ -633,7 +710,13 @@ export function BottomSheet(
         /* The sheet body is edge-to-edge; a modal sheet's text/controls want a
           side gutter, so add it here (every BottomSheet consumer inherits it). */
       }
-      <Box sx={{ px: 2 }}>{children}</Box>
+      {fill && cover
+        ? (
+          <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            {children}
+          </Box>
+        )
+        : <Box sx={{ px: 2 }}>{children}</Box>}
     </DetentSheet>
   );
 }

@@ -128,9 +128,38 @@ test("the store prunes against created sessions and recovers an opened skeleton"
     store.indexOf('case "machines": {'),
   );
   // Every pruner reads the widened set, so none can run on the raw list.
-  assertEquals(listHandler.includes("new Set(msg.sessions.map((s) => s.id)),\n        unlistedCreatedSessions,"), true);
-  assertEquals(listHandler.includes("retainTranscriptSessions(validSessions);"), true);
-  assertEquals(listHandler.includes("void hydrateSession(openedSessionId);"), true);
-  const created = store.slice(store.indexOf("export function markSessionHydrated("));
-  assertEquals(created.slice(0, 600).includes("unlistedCreatedSessions.set(id, Date.now());"), true);
+  assertEquals(
+    listHandler.includes(
+      "new Set(msg.sessions.map((s) => s.id)),\n        unlistedCreatedSessions,",
+    ),
+    true,
+  );
+  assertEquals(
+    listHandler.includes("retainTranscriptSessions(validSessions);"),
+    true,
+  );
+  assertEquals(
+    listHandler.includes("void hydrateSession(openedSessionId);"),
+    true,
+  );
+  const created = store.slice(
+    store.indexOf("export function markSessionHydrated("),
+  );
+  assertEquals(
+    created.slice(0, 600).includes(
+      "unlistedCreatedSessions.set(id, Date.now());",
+    ),
+    true,
+  );
+});
+
+Deno.test("every pinned session survives eviction", () => {
+  const update = touchTranscriptSessionCache(
+    ["opened", "peeked", "cold"],
+    "new",
+    3,
+    new Set(["opened", "peeked"]),
+  );
+  assertEquals(update.evicted, ["cold"]);
+  assertEquals(update.order, ["opened", "peeked", "new"]);
 });

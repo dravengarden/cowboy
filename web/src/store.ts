@@ -419,16 +419,48 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
   }
 }
 
+// Transcripts shown beside the opened session (a managed call's child in the
+// Calls modal). While shown they are pinned in the cache, so live events keep
+// applying, and recovered like the opened session; unlike `openSession` they
+// never revive the agent or change which session is opened.
+const peekedSessions = new Map<string, number>();
+
+function ensurePeeked(sessionId: string): void {
+  if (productSessionAbandoned || sessionId === openedSessionId) return;
+  prefetch.cancel(sessionId);
+  touchTranscriptSession(sessionId);
+  if (!state.hydrated.has(sessionId) && !sessionHydrations.has(sessionId)) {
+    void restoreReplicaTail(sessionId);
+    void hydrateSession(sessionId);
+  }
+}
+
+/** Keep one session's transcript loaded and live until the returned release. */
+export function peekSession(sessionId: string): () => void {
+  peekedSessions.set(sessionId, (peekedSessions.get(sessionId) ?? 0) + 1);
+  ensurePeeked(sessionId);
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    const remaining = (peekedSessions.get(sessionId) ?? 1) - 1;
+    if (remaining > 0) peekedSessions.set(sessionId, remaining);
+    else peekedSessions.delete(sessionId);
+  };
+}
+
 function touchTranscriptSession(sessionId: string): void {
   // Background prefetch touches this MRU too (see `prefetch`), and an evicted
   // OPENED session never comes back: prefetch excludes the active id, and its
   // snapshots and events are then dropped as uncached, so the transcript stays
   // on its skeleton for good. Pin the opened session out of the victim list.
+  const pinned = new Set(peekedSessions.keys());
+  if (openedSessionId !== undefined) pinned.add(openedSessionId);
   const update = touchTranscriptSessionCache(
     transcriptSessionCache,
     sessionId,
     TRANSCRIPT_SESSION_CACHE_LIMIT,
-    openedSessionId,
+    pinned,
   );
   transcriptSessionCache = update.order;
   evictTranscriptSessions(update.evicted);
@@ -669,6 +701,11 @@ if (typeof document !== "undefined") {
       refreshProviderCatalog();
       if (openedSessionId && state.transcriptSources.get(openedSessionId)?.source === "replica") {
         void hydrateSession(openedSessionId);
+      }
+      for (const peeked of peekedSessions.keys()) {
+        if (state.transcriptSources.get(peeked)?.source === "replica") {
+          void hydrateSession(peeked);
+        }
       }
       schedulePrefetch();
     }
@@ -1609,6 +1646,11 @@ function handle(msg: Outbound): void {
       ) {
         touchTranscriptSession(openedSessionId);
         void hydrateSession(openedSessionId);
+      }
+      if (state.connected) {
+        for (const peeked of peekedSessions.keys()) {
+          if (validSessions.has(peeked)) ensurePeeked(peeked);
+        }
       }
       break;
     }

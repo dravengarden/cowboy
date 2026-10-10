@@ -18,18 +18,20 @@ export function touchTranscriptSessionCache(
   current: readonly string[],
   sessionId: string,
   limit = TRANSCRIPT_SESSION_CACHE_LIMIT,
-  pinned?: string | undefined,
+  pinned?: string | ReadonlySet<string> | undefined,
 ): TranscriptSessionCacheUpdate {
+  const isPinned = (id: string): boolean =>
+    typeof pinned === "string" ? id === pinned : pinned?.has(id) === true;
   const order = current.filter((id) => id !== sessionId);
   order.push(sessionId);
   const overflow = Math.max(0, order.length - Math.max(1, limit));
   if (overflow === 0) return { order, evicted: [] };
   const evicted: string[] = [];
   const kept: string[] = [];
-  // Coldest first, skipping the two entries that must survive: the session
-  // just touched and the opened one.
+  // Coldest first, skipping the entries that must survive: the session just
+  // touched and the pinned ones (the opened session and any peeked ones).
   for (const id of order) {
-    if (evicted.length < overflow && id !== sessionId && id !== pinned) {
+    if (evicted.length < overflow && id !== sessionId && !isPinned(id)) {
       evicted.push(id);
     } else {
       kept.push(id);

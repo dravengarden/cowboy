@@ -6,20 +6,28 @@ import {
   CircularProgress,
   Collapse,
   Divider,
-  IconButton,
   Stack,
   Tooltip,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import {
   AccountTree,
-  ArrowBack,
   ExpandLess,
   ExpandMore,
+  InfoOutlined,
   OpenInNew,
   StopCircleOutlined,
 } from "@mui/icons-material";
-import { memo, type ReactNode, useMemo, useState } from "react";
+import {
+  type KeyboardEvent,
+  memo,
+  type ReactNode,
+  useMemo,
+  useState,
+} from "react";
+import { CallTranscript } from "./CallTranscript";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
 import { Markdown } from "./Markdown";
@@ -319,13 +327,12 @@ function CallDetailView({
   call,
   desktop,
   onOpenChild,
-  onBack,
 }: {
   parent: string;
   call: ManagedCallSummary;
   desktop: boolean;
-  onOpenChild: (child: string) => void;
-  onBack?: (() => void) | undefined;
+  /** Absent when the child is already the opened session. */
+  onOpenChild?: ((child: string) => void) | undefined;
 }): React.JSX.Element {
   const { detail, error } = useManagedCall(
     parent,
@@ -339,15 +346,6 @@ function CallDetailView({
   return (
     <Stack spacing={1.25} sx={{ minWidth: 0 }}>
       <Stack direction="row" spacing={1} alignItems="center">
-        {onBack && (
-          <IconButton
-            aria-label="Back to calls"
-            onClick={onBack}
-            size={desktop ? "small" : "medium"}
-          >
-            <ArrowBack fontSize="small" />
-          </IconButton>
-        )}
         <ProviderIcon provider={call.provider} sx={{ fontSize: "1.375rem" }} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
@@ -370,15 +368,17 @@ function CallDetailView({
         <StateChip call={call} />
       </Stack>
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<OpenInNew fontSize="small" />}
-          onClick={(): void => onOpenChild(call.child_session_id)}
-          sx={{ minHeight: desktop ? 32 : 44 }}
-        >
-          Open conversation
-        </Button>
+        {onOpenChild && (
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<OpenInNew fontSize="small" />}
+            onClick={(): void => onOpenChild(call.child_session_id)}
+            sx={{ minHeight: desktop ? 32 : 44 }}
+          >
+            Open as session
+          </Button>
+        )}
         {stoppable && (
           <Button
             size="small"
@@ -493,6 +493,123 @@ function CallDetailView({
   );
 }
 
+/** A call's title as a heading ("Correctness · Round 1"); list rows get the
+ * same effect from CSS, but sheet titles are plain strings. */
+function displayTitle(call: ManagedCallSummary): string {
+  return callTitle(call).replace(
+    /(^|[\s·-])(\p{Ll})/gu,
+    (_, lead, letter) => `${lead}${letter.toUpperCase()}`,
+  );
+}
+
+/** Which call the modal shows, and how deep: its transcript or its details. */
+type CallRoute = { call: string; level: "transcript" | "details" };
+
+/** The floating mobile footer island the newest message passes under. */
+const MOBILE_FOOTER_CLEARANCE = "calc(76px + env(safe-area-inset-bottom, 0px))";
+
+/** Level 2: the child's own conversation, headed by the call's state; its
+ * details are one step further. */
+function CallConversation({
+  call,
+  desktop,
+  detailsOpen,
+  onDetails,
+}: {
+  call: ManagedCallSummary;
+  desktop: boolean;
+  detailsOpen?: boolean;
+  onDetails: () => void;
+}): React.JSX.Element {
+  const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
+  return (
+    <Box
+      data-call-conversation={call.call_id}
+      sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        flexWrap={desktop ? "nowrap" : "wrap"}
+        useFlexGap
+        sx={{
+          px: desktop ? 0 : 2,
+          pb: 1,
+          gap: 1,
+          borderBottom: 1,
+          borderColor: "divider",
+          minWidth: 0,
+        }}
+      >
+        {
+          /* Phone: identity on its own line, state and Details below it. */
+        }
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ flex: desktop ? 1 : "1 0 100%", minWidth: 0 }}
+        >
+          <ProviderIcon
+            provider={call.provider}
+            sx={{ fontSize: "1.125rem", flexShrink: 0 }}
+          />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            noWrap
+            sx={{ minWidth: 0 }}
+          >
+            {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
+            {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
+          </Typography>
+        </Stack>
+        {
+          /* A verdict already says the review finished; a phone keeps the
+            row to what it can fit. */
+        }
+        {(desktop || call.state !== "completed" || !call.verdict) && (
+          <StateChip call={call} />
+        )}
+        {(call.verdict || call.finding_count !== undefined) && (
+          <ButtonBase
+            aria-label="Open review result"
+            onClick={onDetails}
+            sx={{ borderRadius: 999, minWidth: 0 }}
+          >
+            <VerdictChip
+              verdict={call.verdict ?? null}
+              findings={call.finding_count}
+            />
+          </ButtonBase>
+        )}
+        <Box sx={{ flex: desktop ? "0 0 auto" : 1 }} />
+        <Button
+          size="small"
+          variant={detailsOpen ? "contained" : "outlined"}
+          disableElevation
+          startIcon={<InfoOutlined fontSize="small" />}
+          onClick={onDetails}
+          aria-pressed={desktop ? detailsOpen : undefined}
+          sx={{
+            minHeight: desktop ? 30 : 36,
+            flexShrink: 0,
+            ...(desktop ? {} : { textTransform: "none", px: 1.25 }),
+          }}
+        >
+          Details
+        </Button>
+      </Stack>
+      <CallTranscript
+        sessionId={call.child_session_id}
+        provider={call.provider}
+        bottomInset={desktop ? "0px" : MOBILE_FOOTER_CLEARANCE}
+        desktop={desktop}
+      />
+    </Box>
+  );
+}
+
 function CallList({
   calls,
   selected,
@@ -556,8 +673,11 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
 }): React.JSX.Element | null {
   const { calls, observedAt, error } = useManagedCalls(sessionId);
   const expanded = useStore(composerStackExpandedStore()) === "calls";
-  const [selected, setSelected] = useState<string | null>(null);
+  // Kept across close/reopen so the modal returns to where it was left.
+  const [route, setRoute] = useState<CallRoute | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopOpen, setDesktopOpen] = useState(false);
+  const [desktopDetails, setDesktopDetails] = useState(true);
   const toggle = (): void => {
     if (desktop) toggleComposerStackPanel("calls");
     else setMobileOpen(true);
@@ -565,12 +685,40 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
   if (calls.length === 0) return null;
   const overview = callsOverview(calls);
-  const selectedCall = calls.find((call) => call.call_id === selected) ?? null;
-  const stale = error !== null && observedAt !== null;
-  const openChild = (child: string): void => {
-    setMobileOpen(false);
-    setActiveSessionId(child);
+  const routed = route
+    ? calls.find((call) => call.call_id === route.call) ?? null
+    : null;
+  const level = routed ? route!.level : null;
+  const openCall = (call: string): void => {
+    setRoute({ call, level: "transcript" });
+    if (desktop) setDesktopOpen(true);
   };
+  const back = (): void =>
+    setRoute(
+      route && route.level === "details"
+        ? { call: route.call, level: "transcript" }
+        : null,
+    );
+  const desktopKeys = (event: KeyboardEvent): void => {
+    const target = event.target as HTMLElement;
+    if (
+      event.metaKey || event.ctrlKey || event.altKey ||
+      target.closest("input, textarea, [contenteditable='true']")
+    ) return;
+    if (event.key === "i") {
+      event.preventDefault();
+      setDesktopDetails((open) => !open);
+    } else if (event.key === "o" && routed) {
+      event.preventDefault();
+      openChild(routed.child_session_id);
+    }
+  };
+  const stale = error !== null && observedAt !== null;
+  function openChild(child: string): void {
+    setMobileOpen(false);
+    setDesktopOpen(false);
+    setActiveSessionId(child);
+  }
   const summary = overview.active > 0
     ? `${overview.activeTitle ?? "Working"}${
       overview.active > 1 ? ` +${overview.active - 1}` : ""
@@ -695,65 +843,144 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
           >
             <CallList
               calls={calls}
-              selected={selected}
+              selected={desktopOpen && routed ? routed.call_id : null}
               desktop
-              onSelect={setSelected}
+              onSelect={openCall}
             />
-            {selectedCall && (
-              <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-                <CallDetailView
-                  parent={sessionId}
-                  call={selectedCall}
-                  desktop
-                  onOpenChild={openChild}
-                  onBack={(): void =>
-                    setSelected(null)}
-                />
-              </Box>
-            )}
           </Stack>
         </Collapse>
+      )}
+      {desktop && (
+        <Sheet
+          open={desktopOpen && routed !== null}
+          onClose={(): void =>
+            setDesktopOpen(false)}
+          title={routed ? displayTitle(routed) : "Call"}
+          desktopMaxWidth={1240}
+        >
+          {routed && (
+            <Box
+              data-desktop-call-modal={routed.call_id}
+              data-desktop-keys="own"
+              onKeyDown={desktopKeys}
+              sx={{
+                height: "min(84vh, 980px)",
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
+                color: "text.primary",
+                typography: "body2",
+              }}
+            >
+              <Typography
+                variant="subtitle1"
+                noWrap
+                sx={{ fontWeight: 700, textTransform: "capitalize", pb: 1 }}
+              >
+                {callTitle(routed)}
+              </Typography>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{ flex: 1, minHeight: 0 }}
+              >
+                <CallConversation
+                  call={routed}
+                  desktop
+                  detailsOpen={desktopDetails}
+                  onDetails={(): void => setDesktopDetails((open) => !open)}
+                />
+                {desktopDetails && (
+                  <Box
+                    data-call-details-panel
+                    sx={{
+                      width: 380,
+                      flexShrink: 0,
+                      overflowY: "auto",
+                      overscrollBehavior: "contain",
+                      borderLeft: 1,
+                      borderColor: "divider",
+                      pl: 2,
+                      pb: 2,
+                    }}
+                  >
+                    <CallDetailView
+                      parent={sessionId}
+                      call={routed}
+                      desktop
+                      onOpenChild={openChild}
+                    />
+                  </Box>
+                )}
+              </Stack>
+            </Box>
+          )}
+        </Sheet>
       )}
       {!desktop && (
         <Sheet
           open={mobileOpen}
-          onClose={(): void =>
-            setMobileOpen(false)}
-          title={selectedCall ? "Call" : "Calls"}
+          onClose={(): void => setMobileOpen(false)}
+          title={!routed
+            ? "Calls"
+            : level === "details"
+            ? "Details"
+            : displayTitle(routed)}
+          onBack={routed ? back : undefined}
+          fill={level === "transcript"}
           forceSheet
           cover
           portal
         >
-          <Box sx={{ pb: 2, color: "text.primary", typography: "body2" }}>
-            {selectedCall
-              ? (
-                <CallDetailView
-                  parent={sessionId}
-                  call={selectedCall}
-                  desktop={false}
-                  onOpenChild={openChild}
-                  onBack={(): void => setSelected(null)}
-                />
-              )
-              : (
-                <CallList
-                  calls={calls}
-                  selected={null}
-                  desktop={false}
-                  onSelect={setSelected}
-                />
-              )}
-          </Box>
+          {routed && level === "transcript"
+            ? (
+              <CallConversation
+                call={routed}
+                desktop={false}
+                onDetails={(): void =>
+                  setRoute({ call: routed.call_id, level: "details" })}
+              />
+            )
+            : (
+              <Box sx={{ pb: 2, color: "text.primary", typography: "body2" }}>
+                {routed
+                  ? (
+                    <CallDetailView
+                      parent={sessionId}
+                      call={routed}
+                      desktop={false}
+                      onOpenChild={openChild}
+                    />
+                  )
+                  : (
+                    <CallList
+                      calls={calls}
+                      selected={null}
+                      desktop={false}
+                      onSelect={openCall}
+                    />
+                  )}
+              </Box>
+            )}
         </Sheet>
       )}
     </Box>
   );
 });
 
-/** Shown instead of the Prompt in a managed child: one controller owns it. */
+/** Shown instead of the Prompt in a managed child: one controller owns it.
+ * Details opens the same call details the parent's Calls modal shows. */
 export function ManagedChildNotice(
-  { parent }: { parent: string },
+  { parent, child }: { parent: string; child: string },
 ): React.JSX.Element {
+  const { calls } = useManagedCalls(parent);
+  const theme = useTheme();
+  const desktop = useMediaQuery(theme.breakpoints.up("md"));
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // The newest call that ran this child (a continued child has several).
+  const call = calls
+    .filter((candidate) => candidate.child_session_id === child)
+    .sort((left, right) => right.created_at_ms - left.created_at_ms)[0];
   return (
     <Box
       sx={{
@@ -771,6 +998,17 @@ export function ManagedChildNotice(
           This read-only child conversation is controlled by its parent's
           managed call.
         </Typography>
+        {call && (
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<InfoOutlined fontSize="small" />}
+            onClick={(): void => setDetailsOpen(true)}
+            sx={{ minHeight: 44 }}
+          >
+            Details
+          </Button>
+        )}
         <Button
           size="small"
           variant="outlined"
@@ -780,6 +1018,24 @@ export function ManagedChildNotice(
           Open parent
         </Button>
       </Stack>
+      {call && (
+        <Sheet
+          open={detailsOpen}
+          onClose={(): void => setDetailsOpen(false)}
+          title="Details"
+          {...(desktop ? { desktopMaxWidth: 560 } : { forceSheet: true })}
+          cover
+          portal
+        >
+          <Box sx={{ pb: 2, color: "text.primary", typography: "body2" }}>
+            <CallDetailView
+              parent={parent}
+              call={call}
+              desktop={desktop}
+            />
+          </Box>
+        </Sheet>
+      )}
     </Box>
   );
 }

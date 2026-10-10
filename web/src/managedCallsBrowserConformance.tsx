@@ -68,6 +68,36 @@ function overlay(
   };
 }
 
+/** A child conversation the store hydrates through its bootstrap route. */
+function childBootstrap(url: string): Response | null {
+  const match = /^\/api\/sessions\/([^/]+)\/bootstrap$/.exec(url);
+  if (!match) return null;
+  const session = decodeURIComponent(match[1]!);
+  const update = (seq: number, sessionUpdate: string, text: string) => ({
+    session_id: session,
+    seq,
+    kind: "update",
+    update: { sessionUpdate, content: { type: "text", text } },
+  });
+  return Response.json({
+    messages: [{
+      type: "snapshot",
+      session_id: session,
+      reached_start: true,
+      events: [
+        update(1, "user_message_chunk", "Review the billing retry change."),
+        update(
+          2,
+          "agent_message_chunk",
+          "The retry path in `charge.go` resubmits after the provider accepted " +
+            "the request, so a charge can be **duplicated**.\n\n" +
+            "The outbound client also has no deadline.",
+        ),
+      ],
+    }],
+  });
+}
+
 function check(value: unknown, label: string): asserts value {
   if (!value) throw new Error(label);
 }
@@ -171,6 +201,8 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    const bootstrap = childBootstrap(url);
+    if (bootstrap) return Promise.resolve(bootstrap);
     if (url === "/api/plugins") {
       return Promise.resolve(
         Response.json({
@@ -310,9 +342,34 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     tests.push("desktop-list-shows-placement-and-group");
 
     (rows[1] as HTMLElement).click();
+    const modal = await until(
+      () =>
+        document.querySelector<HTMLElement>(
+          "[data-desktop-call-modal='call-correctness']",
+        ),
+      "a call must open in a modal",
+    );
+    check(
+      modal.querySelector("[data-call-transcript='child-call-correctness']"),
+      "the modal must show the child's own transcript",
+    );
     await until(
       () => text().includes("Retry duplicates the charge") ? true : null,
       "full result not loaded",
+    );
+    modal.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "i", bubbles: true }),
+    );
+    await until(
+      () => modal.querySelector("[data-call-details-panel]") ? null : true,
+      "i must hide the details panel",
+    );
+    modal.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "i", bubbles: true }),
+    );
+    await until(
+      () => modal.querySelector("[data-call-details-panel]"),
+      "i must show the details panel again",
     );
     check(
       text().includes("internal/billing/charge.go:42"),
@@ -323,7 +380,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "disposition ownership note missing",
     );
     check(text().includes("Input snapshot"), "snapshot identity missing");
-    tests.push("desktop-detail-shows-review-result");
+    tests.push("desktop-modal-shows-transcript-and-details");
 
     (rows[0] as HTMLElement).click();
     await until(
@@ -332,12 +389,15 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     button("Stop call")!.click();
     const confirm = await until(
-      () =>
-        [
+      () => {
+        // The call modal is a dialog too; the confirmation opens after it.
+        const stops = [
           ...document.querySelectorAll<HTMLButtonElement>(
             "[role='dialog'] button",
           ),
-        ].find((node) => node.textContent?.trim() === "Stop call"),
+        ].filter((node) => node.textContent?.trim() === "Stop call");
+        return stops.length > 1 ? stops.at(-1) : null;
+      },
       "stop confirmation missing",
     );
     check(cancelCount() === 0, "stop must wait for confirmation");
@@ -354,10 +414,14 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     tests.push("stop-requires-confirmation-and-posts-once");
 
     setActiveSessionId("parent");
-    button("Open conversation")!.click();
+    button("Open as session")!.click();
     check(
       getActiveSessionId() === "child-call-security",
-      "open conversation must select the child",
+      "open as session must select the child",
+    );
+    await until(
+      () => document.querySelector("[data-desktop-call-modal]") ? null : true,
+      "opening the child must close the modal",
     );
     tests.push("open-conversation-selects-child");
 
@@ -385,17 +449,46 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       "mobile rows must be large touch targets",
     );
     row.click();
+    // Level 2: the child's transcript, with Back beside Close.
     await until(
-      () => button("Back to calls"),
-      "mobile detail missing back action",
+      () =>
+        document.querySelector(
+          "[data-call-transcript='child-call-correctness']",
+        ),
+      "a mobile call must open its transcript",
     );
+    const backButton = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>(
+        "[data-mobile-sheet-footer-shield] button[aria-label='Back']",
+      );
+    check(backButton(), "a nested level must offer Back in the island");
+    await until(
+      () => text().includes("can be duplicated") ? true : null,
+      `the child's own messages must render: ${text().slice(0, 300)}`,
+    );
+    check(
+      !text().includes("Retry duplicates the charge"),
+      "details stay one level deeper than the transcript",
+    );
+    // Level 3: details.
+    (await until(() => button("Details"), "details entry missing")).click();
     await until(
       () => text().includes("Retry duplicates the charge") ? true : null,
       "mobile detail result missing",
     );
-    button("Back to calls")!.click();
+    backButton()!.click();
     await until(
-      () => button("Back to calls") ? null : true,
+      () =>
+        document.querySelector(
+            "[data-call-transcript='child-call-correctness']",
+          ) && !text().includes("Retry duplicates the charge")
+          ? true
+          : null,
+      "back must return from details to the transcript",
+    );
+    backButton()!.click();
+    await until(
+      () => backButton() ? null : true,
       "back did not return to the list",
     );
     // Like every Cowboy cover sheet, the page closes from the frosted
@@ -416,11 +509,21 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => button("correctness") ? null : true,
       "floating close did not dismiss the calls page",
     );
-    tests.push("mobile-page-drills-in-and-back");
+    tests.push("mobile-page-list-transcript-details-and-back");
 
     root.unmount();
     root = createRoot(container);
-    render(<ManagedChildNotice parent="parent" />);
+    render(<ManagedChildNotice parent="parent" child="child-call-security" />);
+    (await until(() => button("Details"), "child notice lacks details"))
+      .click();
+    await until(
+      () => text().includes("Input snapshot") ? true : null,
+      "child details did not open",
+    );
+    check(
+      !button("Open as session"),
+      "a child's own details must not offer to open itself",
+    );
     setActiveSessionId("child-call-security");
     button("Open parent")!.click();
     check(
@@ -626,6 +729,8 @@ export async function renderManagedCallsPreview(
   provider.manifest.display.name = "Codex";
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
+    const bootstrap = childBootstrap(url);
+    if (bootstrap) return Promise.resolve(bootstrap);
     if (url === "/api/plugins") {
       return Promise.resolve(
         Response.json({
@@ -714,6 +819,11 @@ export async function renderManagedCallsPreview(
   } else {
     (await until(() => button("Open calls"), "mobile header")).click();
     (await until(() => button("correctness"), "mobile row")).click();
+    await until(
+      () => document.querySelector("[data-call-transcript]"),
+      "preview transcript",
+    );
+    return;
   }
   await until(
     () =>

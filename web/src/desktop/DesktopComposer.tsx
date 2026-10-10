@@ -15,7 +15,7 @@ export function DesktopComposer({
       snapshot.sessions.find((session) => session.id === sessionId),
     )
   );
-  if (parent !== null) return <ManagedChildNotice parent={parent} />;
+  if (parent !== null) return <ManagedChildNotice parent={parent} child={sessionId} />;
   return (
     <ComposerWorkspace
       sessionId={sessionId}

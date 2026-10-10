@@ -521,6 +521,29 @@ arrive. Collapse completed aspects by default; surface active/blocked ones witho
 reordering a row under the user's finger. Screen-reader live announcements are
 limited to meaningful state changes rather than every output token.
 
+### Calls modal (implemented)
+
+A call is read in a modal with three levels, the same on every surface:
+**list → the child's transcript → details**. Selecting a call opens its child
+conversation, not a summary: the same Transcript renderer as an opened session,
+read-only and live, scrolled to the newest message. The store keeps that child
+loaded and receives its events while shown (`peekSession`) without opening it,
+reviving its agent or changing the opened session. Its header shows Provider,
+version, runtime → execution Machine, elapsed time, state and verdict; Details
+(or the verdict) opens execution information, the structured result and
+findings, Stop and **Open as session**.
+
+- Mobile: one cover sheet. Nested levels show Back beside Close in the shared
+  glass footer island (`BottomSheet` `onBack`); the transcript level fills the
+  sheet (`fill`) and passes under that island. Closing keeps the level, so the
+  modal reopens where it was left. Edge-swipe back is deliberately absent until
+  it is arbitrated with the Agent↔Review pager.
+- Desktop: the inline Calls list above the Prompt stays the overview (its focus
+  and shortcut unchanged); a call opens a Desktop modal with the transcript and
+  a Details panel side by side. `i` toggles Details, `o` opens the child as a
+  session, Escape closes.
+- An opened child session's notice offers the same Details beside Open parent.
+
 ### Shared semantics
 
 The overview separates execution status, review findings and handler disposition.

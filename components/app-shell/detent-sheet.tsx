@@ -303,6 +303,9 @@ export interface DetentSheetProps {
   /** Skip the entrance slide for a lightweight nested picker. The surface still
    *  anchors to the bottom and keeps its dismiss transition. Default true. */
   readonly animateOnOpen?: boolean | undefined;
+  /** The body does not scroll; its child fills it and owns its own scroller
+   *  (an embedded transcript). Only meaningful with `cover`. Default false. */
+  readonly fillBody?: boolean | undefined;
 }
 
 // Haptic tap on open is delegated to the shared `haptic()` primitive (./haptics) —
@@ -372,6 +375,7 @@ export function DetentSheet(
     cover = false,
     haptic = true,
     animateOnOpen = true,
+    fillBody = false,
   }: DetentSheetProps,
 ): ReactNode {
   // +1 hides downward (bottom sheet), −1 hides upward (top sheet). All geometry
@@ -772,7 +776,8 @@ export function DetentSheet(
         // so the body GROWS to fill it (flex:1) and scrolls within.
         flex: isCover ? "1 1 auto" : "0 1 auto",
         minHeight: 0,
-        overflowY: "auto",
+        overflowY: fillBody ? "hidden" : "auto",
+        ...(fillBody ? { display: "flex", flexDirection: "column" } : {}),
         // iOS scroll perf: this scroller is nested under the sheet root, which
         // carries the detent transform + containment. Give the scroller momentum
         // scrolling, but do NOT add a transform here: a transformed overflow
@@ -784,7 +789,9 @@ export function DetentSheet(
         // content, so an edge-to-edge body (a full-width list, a chart) works.
         // Consumers that want a text gutter add their own px (BottomSheet does).
         pt: isTop ? SAFE_TOP : 0,
-        pb: bodyPb,
+        // A filled body's own scroller passes under the floating footer and
+        // reserves that clearance itself.
+        pb: fillBody ? 0 : bodyPb,
       }}
     >
       {contentReady ? children : null}
