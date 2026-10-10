@@ -1,3 +1,4 @@
+import { AGENT_CALLS_PROMPT } from "./agent-calls.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -1214,9 +1215,10 @@ async function native(args) {
       skillPlugin,
       Boolean(memory),
     );
+    // A managed child cannot call; every ordinary session learns to.
     const nativeArgv = managed
       ? managedNativeArguments(ordinaryArgv, managed.schema)
-      : ordinaryArgv;
+      : [...ordinaryArgv, "--append-system-prompt", AGENT_CALLS_PROMPT];
     broker.mode = startingPermissionMode(nativeArgv);
     startupPhase("native-spawn");
     child = spawn(executable, nativeArgv, {

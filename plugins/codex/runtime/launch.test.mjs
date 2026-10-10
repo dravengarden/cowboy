@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  AGENT_CALLS_PROMPT,
+  agentCallsConfiguration,
   managedMcpOverrides,
   managedRuleViolations,
   splitConfigurationArguments,
@@ -64,4 +66,34 @@ test("managed profile arguments keep validated configuration pairs", () => {
     "features.hooks=false",
   ]);
   assert.deepEqual(split.arguments, []);
+});
+
+test("ordinary sessions learn Cowboy calls without replacing user instructions", () => {
+  const added = agentCallsConfiguration(["-c", "approval_policy=never"], "");
+  assert.equal(added[0], "-c");
+  assert.match(added[1], /^developer_instructions="/);
+  // The value is a TOML basic string the native CLI parses back intact.
+  assert.equal(
+    JSON.parse(added[1].slice("developer_instructions=".length)),
+    AGENT_CALLS_PROMPT,
+  );
+  assert.match(AGENT_CALLS_PROMPT, /cowboy claude --request-file -/);
+  assert.doesNotMatch(AGENT_CALLS_PROMPT, /cowboy codex/);
+  // The user's own developer instructions, or Cowboy's, are never replaced.
+  assert.deepEqual(
+    agentCallsConfiguration(
+      [],
+      'model = "x"\ndeveloper_instructions = "mine"\n',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    agentCallsConfiguration(["-c", 'developer_instructions="cowboy"'], ""),
+    [],
+  );
+  // A commented-out key is not a setting.
+  assert.equal(
+    agentCallsConfiguration([], '# developer_instructions = "old"\n').length,
+    2,
+  );
 });

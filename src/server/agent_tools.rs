@@ -381,7 +381,22 @@ fn agents_listing(state: &AppState) -> Vec<String> {
 }
 
 /// Presets of an agent's newest signed package, for choosing a target model.
-fn presets(state: &AppState, agent: &str) -> serde_json::Value {
+/// Whether `preset` is one of `agent`'s signed configuration presets.
+pub(super) fn preset_exists(state: &AppState, agent: &str, preset: &str) -> bool {
+    state
+        .provider_catalog
+        .latest_package(agent)
+        .is_some_and(|(_, _, package)| {
+            package
+                .manifest
+                .configuration
+                .presets
+                .iter()
+                .any(|candidate| candidate.id == preset)
+        })
+}
+
+pub(super) fn presets(state: &AppState, agent: &str) -> serde_json::Value {
     state
         .provider_catalog
         .latest_package(agent)

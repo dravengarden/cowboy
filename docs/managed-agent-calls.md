@@ -222,6 +222,22 @@ maximum running calls (safe to resubmit the same request later) and
 budget; concurrent submissions may pass them together. `cowboy call
 capabilities` reports `enabled`, `default`, the limits and a per-Provider reason.
 
+### Agents know to use it
+
+An ordinary Claude or Codex session is told about managed calls once, in its
+system prompt (Claude `--append-system-prompt`; Codex `developer_instructions`
+through the launcher's `-c` options, never replacing a user's or Cowboy's own
+`developer_instructions`). The paragraph names the other family's command, a
+minimal request and the wait/result commands, and says not to start `codex
+exec`, `codex review` or `claude -p` directly: those run hidden from the user,
+outside the session's policy and model choice. Managed children do not get it.
+
+`--preset ID` on `cowboy codex|claude|call start` selects one of that explicit
+Provider's signed presets for this call (refused with Auto, with `continue`,
+and as `preset_unavailable` when the exact Provider has no such preset); it is
+part of the replay identity. `cowboy call capabilities` lists each Provider's
+`presets`. Without it the session's Tools choice applies.
+
 ### Asking the person
 
 A policy refusal is a question, not a dead end. The coordinator records each

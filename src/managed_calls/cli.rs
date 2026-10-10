@@ -29,6 +29,10 @@ pub struct StartArgs {
     /// person to allow it in Cowboy, resubmitting the same request.
     #[arg(long, default_value_t = 100_000, value_parser = clap::value_parser!(u64).range(0..=3_600_000))]
     approval_wait_ms: u64,
+    /// One of the called agent's presets (model and reasoning) for this
+    /// call; `cowboy call capabilities` lists them. Default: the session's.
+    #[arg(long)]
+    preset: Option<String>,
 }
 
 /// How often a waiting request asks again; it also keeps the prompt shown.
@@ -240,6 +244,7 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
                 provider: provider.into(),
                 request: Box::new(request.clone()),
                 wait_ms: args.wait_ms,
+                preset: args.preset.clone(),
             },
             args.wait_ms,
         )

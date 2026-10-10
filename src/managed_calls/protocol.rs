@@ -16,6 +16,10 @@ pub enum Action {
         provider: String,
         request: Box<Request>,
         wait_ms: u64,
+        /// One of the explicit Provider's signed configuration presets,
+        /// overriding the session's choice for this call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preset: Option<String>,
     },
     Inspect {
         call_id: String,
@@ -49,9 +53,18 @@ impl Action {
                 provider,
                 request,
                 wait_ms,
+                preset,
             } => {
                 if !matches!(provider.as_str(), "codex" | "claude-code" | "auto")
                     || *wait_ms > MAX_WAIT_MS
+                    || preset.as_ref().is_some_and(|preset| {
+                        provider == "auto"
+                            || preset.is_empty()
+                            || preset.len() > 128
+                            || !preset.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                            })
+                    })
                 {
                     return Err(InputError::InvalidContract);
                 }
@@ -243,5 +256,45 @@ mod tests {
         value = valid;
         value["capability"] = json!("a".repeat(63));
         assert!(LocalRequest::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn start(provider: &str, preset: Option<&str>) -> Action {
+        let mut value = json!({
+            "kind": "start",
+            "provider": provider,
+            "wait_ms": 0,
+            "request": {
+                "schema": 1,
+                "request_id": "r-1",
+                "purpose": "review",
+                "instruction": "review",
+                "context": {"scope": "current-worktree"},
+                "access": "read-only",
+                "conversation": {"mode": "fresh"},
+            },
+        });
+        if let Some(preset) = preset {
+            value["preset"] = json!(preset);
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_preset_names_one_explicit_agent_preset() {
+        assert!(start("codex", None).validate().is_ok());
+        assert!(start("codex", Some("astra-high")).validate().is_ok());
+        // Preset ids belong to one Provider; Auto has none to pick from.
+        assert!(start("auto", Some("astra-high")).validate().is_err());
+        assert!(start("codex", Some("")).validate().is_err());
+        assert!(start("codex", Some("astra high")).validate().is_err());
+        // An absent preset stays off the wire for older gateways.
+        let wire = serde_json::to_value(start("codex", None)).unwrap();
+        assert!(wire.get("preset").is_none());
     }
 }

@@ -21664,9 +21664,9 @@
         }
       ],
       "plugins": {
-        "claude-code": "3.19.17",
+        "claude-code": "3.19.18",
         "claude-deepseek": "3.1.32",
-        "codex": "3.4.1",
+        "codex": "3.4.2",
         "codex-deepseek": "3.1.32",
         "gemini": "3.1.32",
         "grok": "3.1.33",
@@ -21731,7 +21731,7 @@
                 "version": "0.1.1"
               }
             ],
-            "source_digest": "sha256:06a251ab5a68be3f65890e12fcedd792d7a0de62888184c98bb32aa1e0f7373c"
+            "source_digest": "sha256:f05aefd8e2663e2ff7282fefc5276ca0055270ed0694371d4f86eb27955676e8"
           },
           "claude-deepseek": {
             "component_release": "3.45.0",
@@ -21795,7 +21795,7 @@
                 "version": "0.1.1"
               }
             ],
-            "source_digest": "sha256:8e4a8c196431c655193fe3729f4d225c678cd86ac5df46972d44184b7932fde3"
+            "source_digest": "sha256:50e6606898edc6f85084493d868199ddf0fdd8f836b352be4ecd92d244b095ae"
           },
           "codex-deepseek": {
             "component_release": "3.45.0",

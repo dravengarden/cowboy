@@ -315,7 +315,19 @@ pub(in crate::server) async fn handle(
             provider,
             request,
             wait_ms,
-        } => start(state, &meta, &ledger, &provider, *request, wait_ms).await,
+            preset,
+        } => {
+            start(
+                state,
+                &meta,
+                &ledger,
+                &provider,
+                *request,
+                wait_ms,
+                preset.as_deref(),
+            )
+            .await
+        }
         Action::Inspect { call_id } => match ledger.inspect(&call_id).await {
             Ok(Some(record)) => envelope(&record),
             Ok(None) => error("not_found", "not_submitted"),
@@ -598,6 +610,8 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "reason": reason,
             "version": readiness.generation.as_ref().map(|generation| &generation.version),
             "preset": target.and_then(|target| target.preset.as_ref()),
+            // `--preset` choices; the session's Tools choose otherwise.
+            "presets": agent_tools::presets(state, provider),
             "access": ["read-only"],
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
@@ -630,7 +644,10 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
 
 /// A repeated request id names the same call: an explicit agent must match,
 /// and Auto matches a call Auto chose.
-fn same_request(original: &Record, requested: &str) -> bool {
+fn same_request(original: &Record, requested: &str, preset: Option<&str>) -> bool {
+    if preset.is_some_and(|preset| original.preset.as_deref() != Some(preset)) {
+        return false;
+    }
     if requested == agent_tools::AUTO {
         original.selection.as_deref() == Some(agent_tools::AUTO)
     } else {
@@ -645,13 +662,16 @@ async fn start(
     requested: &str,
     request: Request,
     wait_ms: u64,
+    preset: Option<&str>,
 ) -> Value {
     // A repeated request id observes the original call, even if the Provider
     // has since become unavailable or the policy changed; conflicting inputs
     // are refused.
     match ledger.observe(&request.request_id).await {
         Ok(Some(original)) => {
-            if original.request_digest != request.digest() || !same_request(&original, requested) {
+            if original.request_digest != request.digest()
+                || !same_request(&original, requested, preset)
+            {
                 return error("request_conflict", "not_submitted");
             }
             super::runner::ensure_runner(state, &original);
@@ -688,6 +708,19 @@ async fn start(
     };
     if continued.is_some() {
         targets.truncate(1);
+    }
+    // An explicit preset names one of that agent's signed presets; a continued
+    // conversation keeps the configuration its child already has.
+    if let Some(preset) = preset {
+        if continued.is_some() {
+            return error("invalid_contract", "not_submitted");
+        }
+        if !agent_tools::preset_exists(state, requested, preset) {
+            return error("preset_unavailable", "not_submitted");
+        }
+        for target in &mut targets {
+            target.preset = Some(preset.to_owned());
+        }
     }
     // A soft per-session budget: concurrent admissions may pass it together.
     match state
