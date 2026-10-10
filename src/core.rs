@@ -3972,7 +3972,9 @@ impl Hub {
     /// See `provider_version_portable`.
     pub fn provider_version_changeable(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();
-        sessions.get(session_id).is_some_and(provider_version_portable)
+        sessions
+            .get(session_id)
+            .is_some_and(provider_version_portable)
     }
 
     pub fn agent_session_id_for_resume(&self, session_id: &str) -> Option<String> {
@@ -4153,7 +4155,10 @@ impl Hub {
             // with the active installation's credential generation here.
             session.meta.status = Status::Starting;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
-            (session.meta.clone(), current_context_has_user_message(session))
+            (
+                session.meta.clone(),
+                current_context_has_user_message(session),
+            )
         };
         let (meta, resumes) = meta;
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -9393,7 +9398,10 @@ mod core_tests {
             update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": {"text": "lost"}}),
         });
         unsaved.set_status("provider-reload-unsaved", Status::Running, None);
-        let unsaved_meta = unsaved.session_info("provider-reload-unsaved").unwrap().meta;
+        let unsaved_meta = unsaved
+            .session_info("provider-reload-unsaved")
+            .unwrap()
+            .meta;
         assert!(!unsaved.provider_version_changeable(&unsaved_meta.id));
         assert!(
             unsaved
@@ -9410,9 +9418,12 @@ mod core_tests {
         // Cleared: the old native thread is not resumed on either release.
         let (hub, before) = provider_reload_fixture();
         hub.prepare_context_reset(&before.id);
-        hub.push(&before.id, Event::Update {
-            update: serde_json::json!({"sessionUpdate": "context_cleared"}),
-        });
+        hub.push(
+            &before.id,
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "context_cleared"}),
+            },
+        );
         assert!(hub.provider_version_changeable(&before.id));
         let cleared = hub.session_info(&before.id).unwrap().meta;
         hub.begin_provider_reload(&cleared, "new", "new-digest", &behavior, false)
