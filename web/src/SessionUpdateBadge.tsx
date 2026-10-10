@@ -33,7 +33,9 @@ export function SessionUpdateBadge({ session }: { session: SessionMeta }) {
           fontVariantNumeric: "tabular-nums",
           bgcolor: (theme) => alpha(theme.palette.info.main, 0.08),
           "& .MuiChip-icon": { fontSize: "0.8125rem", ml: "0.3rem", mr: "-0.2rem" },
-          "& .MuiChip-label": { px: "0.45rem" },
+          // A version is short and meaningless when cut; never ellipsize it.
+          maxWidth: "none",
+          "& .MuiChip-label": { px: "0.45rem", overflow: "visible" },
         }}
       />
     </HintTooltip>

@@ -2167,19 +2167,10 @@ export class WorkspaceTools {
     });
   }
 
-  async mcpRead(id, afterSeq, waitMs) {
-    if (!Object.hasOwn(this.state.mcp, id)) {
-      throw new Error("MCP process does not belong to this session");
-    }
-    // An idle server costs no executor calls: wait for its output or end
-    // notification (or a lost one, bounded), then read without waiting.
-    const read = () =>
-      this.mcpCall("process/read", {
-        processId: id,
-        afterSeq,
-        maxBytes: MAX_OUTPUT * 16,
-        waitMs: 0,
-      });
+  // An idle process costs no executor calls: read without waiting; with
+  // nothing new, wait for a notification naming the process (or a lost one,
+  // bounded by waitMs), then read once more.
+  async notifiedRead(id, waitMs, read) {
     // Listen before reading, so output arriving in between still wakes it.
     let listener;
     let timer;
@@ -2192,17 +2183,32 @@ export class WorkspaceTools {
       timer = setTimeout(resolve, waitMs);
       this.connection.listeners?.add(listener);
     });
-    let result;
     try {
-      result = await read();
-      if (!result.chunks.length && !result.closed) {
-        await notified;
-        result = await read();
-      }
+      const result = await read();
+      if (result.chunks.length || result.closed) return result;
+      await notified;
+      return await read();
     } finally {
       clearTimeout(timer);
       this.connection.listeners?.delete(listener);
     }
+  }
+
+  async mcpRead(id, afterSeq, waitMs) {
+    if (!Object.hasOwn(this.state.mcp, id)) {
+      throw new Error("MCP process does not belong to this session");
+    }
+    const result = await this.notifiedRead(
+      id,
+      waitMs,
+      () =>
+        this.mcpCall("process/read", {
+          processId: id,
+          afterSeq,
+          maxBytes: MAX_OUTPUT * 16,
+          waitMs: 0,
+        }),
+    );
     // The executor retains bounded output (sequence numbers start at 1). A
     // gap would hand native a cut JSON-RPC stream, so the server ends
     // instead, saying why. Its exit and close take numbers of their own.
@@ -3488,12 +3494,19 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       if (!job) return { gone: true };
       if (job.stopped) return { stopped: true };
       if (job.closed) return { closed: true, exitCode: job.exitCode ?? null };
-      const result = await this.connection.call("process/read", {
-        processId: id,
-        afterSeq,
-        maxBytes: 65536,
-        waitMs: Math.max(1, Math.min(1000, deadline - Date.now())),
-      });
+      // A held background command waits on its output notifications rather
+      // than a read every second for as long as it runs.
+      const result = await this.notifiedRead(
+        id,
+        Math.max(1, Math.min(10000, deadline - Date.now())),
+        () =>
+          this.connection.call("process/read", {
+            processId: id,
+            afterSeq,
+            maxBytes: 65536,
+            waitMs: 0,
+          }),
+      );
       afterSeq = result.chunks.at(-1)?.seq ?? afterSeq;
       if (this.state.jobs[id]?.stopped) return { stopped: true };
       for (const chunk of job.end ? result.chunks : []) {
