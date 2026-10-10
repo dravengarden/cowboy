@@ -1,5 +1,6 @@
 //! Product observations use the same parent visibility boundary as transcripts.
 
+mod approval;
 mod coordinator;
 mod runner;
 
@@ -108,4 +109,44 @@ pub(super) async fn cancel(
         Some(record) => Json(json!({"schema":1,"call":record.summary()})).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ApprovalDecision {
+    decision: approval::Decision,
+}
+
+/// A person's answer to the calls its session's agent is waiting for.
+pub(super) async fn decide_approval(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path(parent): Path<String>,
+    Json(body): Json<ApprovalDecision>,
+) -> Response {
+    if !session_is_visible(&state.hub, &authenticated.principal, &parent) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(info) = state.hub.session_info(&parent) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !authenticated
+        .principal
+        .can_mutate(info.meta.owner_user_id.as_deref())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let approvals = &state.managed_calls.approvals;
+    // Nothing waiting: the agent already stopped asking.
+    let Some(agents) = approvals.decide(&parent, body.decision) else {
+        state.hub.broadcast_call_approval(&parent, None);
+        return StatusCode::CONFLICT.into_response();
+    };
+    if body.decision == approval::Decision::Session {
+        super::agent_tools::allow_session(&state, &info.meta, &agents);
+    }
+    state
+        .hub
+        .broadcast_call_approval(&parent, approvals.view(&parent, &info.meta.provider));
+    StatusCode::NO_CONTENT.into_response()
 }

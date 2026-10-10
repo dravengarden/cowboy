@@ -1378,6 +1378,14 @@ pub enum Outbound {
     /// The Controller's account usage snapshot, including which accounts are
     /// refreshing. Sent whenever it changes so every client shows one state.
     Usage { snapshot: serde_json::Value },
+    /// Agent calls a session's agent is waiting for a person to approve, or
+    /// `None` once nothing waits. Re-sent while the agent keeps asking, so a
+    /// reconnecting client recovers it; it expires after `ttl_ms` otherwise.
+    CallApproval {
+        session_id: String,
+        #[serde(default)]
+        approval: Option<serde_json::Value>,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -1951,6 +1959,14 @@ impl Hub {
             .broadcast_last_bytes
             .store(bytes, Ordering::Relaxed);
         let _ = self.inner.tx.send(FanoutFrame::new(outbound));
+    }
+
+    /// Publish a session's pending agent-call approval to its viewers.
+    pub fn broadcast_call_approval(&self, session_id: &str, approval: Option<serde_json::Value>) {
+        self.fanout(Outbound::CallApproval {
+            session_id: session_id.to_owned(),
+            approval,
+        });
     }
 
     /// Publish the current account usage snapshot to every client.

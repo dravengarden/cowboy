@@ -150,6 +150,7 @@ import { retainedEventCountForRows, retainTimelineState } from "./timelineRetent
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { readUsage, startUsageRefresh } from "./usageApi";
 import type { UsageSnapshot } from "./usageLimits";
+import { receiveCallApproval } from "./callApproval";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import {
   listedOrJustCreatedSessions,
@@ -1554,6 +1555,9 @@ function handle(msg: Outbound): void {
       break;
     case "usage":
       setState({ ...state, usage: msg.snapshot });
+      break;
+    case "call_approval":
+      receiveCallApproval(msg.session_id, msg.approval);
       break;
     case "ping":
       // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for

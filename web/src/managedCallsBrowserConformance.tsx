@@ -1,6 +1,7 @@
 /** Actual Calls dock and child notice, synthetic HTTP in an isolated browser. */
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { Box } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceProvider } from "./surface/SurfaceProfile";
 import { ManagedCallsDock, ManagedChildNotice } from "./ManagedCallsDock";
@@ -10,6 +11,12 @@ import { managementEntryFixture } from "./providerManagement.fixture";
 import { resetProviderCatalog } from "./providerCatalogRegistry";
 import type { ManagedCallSummary } from "./managedCalls";
 import { AgentToolsSettings, SessionToolsSection } from "./AgentToolsPanel";
+import { CallApprovalOverlay } from "./CallApprovalOverlay";
+import {
+  type CallApproval,
+  receiveCallApproval,
+  useCallApproval,
+} from "./callApproval";
 import {
   type AgentTools,
   overrideFor,
@@ -150,6 +157,7 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
   const sessionWrites: SessionToolsOverride[] = [];
   let agentDefaults: AgentTools = toolsDefaults;
   const agentWrites: (AgentTools | null)[] = [];
+  const decisions: string[] = [];
   const sessionTools = () => ({
     session_id: "parent",
     agent: "claude-code",
@@ -171,6 +179,12 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
           authentication_executors: [],
         }),
       );
+    }
+    if (url === "/api/sessions/parent/calls/approval") {
+      decisions.push(
+        (JSON.parse(String(init?.body)) as { decision: string }).decision,
+      );
+      return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url === "/api/sessions/parent/tools") {
       if (init?.method === "PUT") {
@@ -514,6 +528,79 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     );
     check(agentWrites[1] === null, "reset must restore built-in defaults");
     tests.push("agent-defaults-save-and-reset");
+
+    // A refused call becomes one actionable prompt; answering removes it.
+    root.unmount();
+    root = createRoot(container);
+    const pending: CallApproval = {
+      schema: 1,
+      caller: "claude-code",
+      reason: "calls_disabled",
+      requests: 3,
+      agents: ["codex"],
+      items: [
+        { agent: "codex", purpose: "review", summary: "aspect=security" },
+        { agent: "codex", purpose: "review", summary: "aspect=api" },
+        { agent: "codex", purpose: "design_review", summary: "aspect=spec" },
+      ],
+      ttl_ms: 15_000,
+    };
+    function ApprovalSlot(): React.JSX.Element | null {
+      const approval = useCallApproval("parent");
+      return approval
+        ? <CallApprovalOverlay approval={approval} sessionId="parent" />
+        : null;
+    }
+    render(<ApprovalSlot />);
+    check(
+      !document.querySelector("[data-call-approval-overlay]"),
+      "no prompt before the agent asks",
+    );
+    receiveCallApproval("parent", pending);
+    await until(
+      () => document.querySelector("[data-call-approval-overlay]"),
+      "a pushed approval must render",
+    );
+    check(
+      text().includes("Claude wants to start 3 calls (Codex)") &&
+        text().includes("Agent calls are off for this session.") &&
+        text().includes("design review · aspect=spec"),
+      `the prompt must name caller, targets and requests: ${text()}`,
+    );
+    (await until(() => button("Allow these calls"), "allow is missing"))
+      .click();
+    await until(
+      () => decisions.length === 1 ? true : null,
+      "allowing was not sent",
+    );
+    check(decisions[0] === "once", `allow must be once: ${decisions[0]}`);
+    await until(
+      () =>
+        document.querySelector("[data-call-approval-overlay]") ? null : true,
+      "an answered prompt must disappear",
+    );
+    receiveCallApproval("parent", {
+      ...pending,
+      requests: 1,
+      items: [pending.items[0]!],
+    });
+    (await until(
+      () => button("Allow for this session"),
+      "session allow is missing",
+    ))
+      .click();
+    await until(
+      () => decisions.length === 2 ? true : null,
+      "session allow was not sent",
+    );
+    check(decisions[1] === "session", `expected session: ${decisions[1]}`);
+    receiveCallApproval("parent", pending, Date.now() - 20_000);
+    await until(
+      () =>
+        document.querySelector("[data-call-approval-overlay]") ? null : true,
+      "an expired prompt must not render",
+    );
+    tests.push("call-approval-prompt-answers-and-expires");
     return tests;
   } finally {
     root.unmount();
@@ -575,6 +662,30 @@ export async function renderManagedCallsPreview(
     root.render(
       <BrowserProductTheme>
         <SurfaceProvider>
+          <CallApprovalOverlay
+            sessionId="parent"
+            approval={{
+              schema: 1,
+              caller: "claude-code",
+              reason: "calls_disabled",
+              requests: 2,
+              agents: ["codex"],
+              items: [
+                {
+                  agent: "codex",
+                  purpose: "review",
+                  summary: "aspect=security group=T-42 round=1",
+                },
+                {
+                  agent: "codex",
+                  purpose: "design_review",
+                  summary: "aspect=spec group=T-42 round=1",
+                },
+              ],
+              ttl_ms: 15_000,
+            }}
+          />
+          <Box sx={{ height: 8 }} />
           <ManagedCallsDock
             sessionId="parent"
             desktop={surface === "desktop"}

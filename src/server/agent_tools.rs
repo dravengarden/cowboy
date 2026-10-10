@@ -236,6 +236,56 @@ pub(super) fn effective(state: &AppState, session: &crate::core::SessionMeta) ->
         .overlay(&session_override(state, &session.id))
 }
 
+/// A policy that admits `requested` once, as a person approved it: calls are
+/// on and the requested agent is a target. Limits still apply.
+pub(super) fn allow_once(mut policy: CallsPolicy, requested: &str) -> CallsPolicy {
+    policy.enabled = true;
+    widen(&mut policy.targets, requested);
+    policy
+}
+
+fn widen(targets: &mut Vec<CallTarget>, requested: &str) {
+    let missing: Vec<&str> = if requested == AUTO {
+        if targets.is_empty() {
+            CALL_TARGETS.to_vec()
+        } else {
+            Vec::new()
+        }
+    } else if CALL_TARGETS.contains(&requested)
+        && !targets.iter().any(|target| target.agent == requested)
+    {
+        vec![requested]
+    } else {
+        Vec::new()
+    };
+    targets.extend(missing.into_iter().map(|agent| CallTarget {
+        agent: agent.to_owned(),
+        preset: None,
+    }));
+}
+
+/// Turn calls on for one session and allow the agents it just asked for.
+/// Only the session's override changes; its kind's defaults stay as they are.
+pub(super) fn allow_session(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    requested: &[String],
+) {
+    let mut session = session_override(state, &meta.id);
+    let current = effective(state, meta).calls;
+    let mut targets = current.targets.clone();
+    for agent in requested {
+        widen(&mut targets, agent);
+    }
+    session.calls.enabled = Some(true);
+    if targets != current.targets {
+        session.calls.targets = Some(targets);
+    }
+    state
+        .hub
+        .set_setting(format!("{SESSION_TOOLS_PREFIX}{}", meta.id), json!(session));
+}
+
 /// A requested agent resolved against the session's policy, before readiness.
 pub(super) enum Choice {
     /// Ordered candidates; Auto tries each until one is ready.
@@ -469,6 +519,27 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn an_approval_admits_the_requested_agent_once() {
+        let mut calls = AgentTools::builtin("claude-code").calls;
+        calls.targets.retain(|target| target.agent == "claude-code");
+        assert!(matches!(
+            choose(&calls, "claude-code", "codex"),
+            Choice::Refused("calls_disabled")
+        ));
+        let once = allow_once(calls.clone(), "codex");
+        assert!(matches!(
+            choose(&once, "claude-code", "codex"),
+            Choice::Candidates {
+                selection: "explicit",
+                ..
+            }
+        ));
+        calls.targets.clear();
+        let once = allow_once(calls, AUTO);
+        assert_eq!(once.targets.len(), CALL_TARGETS.len());
     }
 
     #[test]
