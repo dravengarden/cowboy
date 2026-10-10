@@ -48,3 +48,32 @@ export function retainTranscriptSessionCache(
     evicted: current.filter((id) => !valid.has(id)),
   };
 }
+
+/** How long a session this client created may stay absent from `sessions`
+ * lists before an absence is believed. Bounds a stale frame's delivery, not
+ * the session's startup. */
+export const CREATED_SESSION_LISTING_GRACE_MS = 30_000;
+
+/** The session ids a `sessions` list may prune against.
+ *
+ * The creation POST can beat the independent WebSocket, so a list produced
+ * before the creation may still be in flight when the client has already
+ * opened the new session. That list is not evidence of deletion: treating it
+ * as one evicts the opened transcript's `hydrated` flag and aborts its
+ * bootstrap while nothing re-fetches it, leaving the loading skeleton up for
+ * good. A created session stays valid until a list names it or the grace
+ * expires. Mutates `created` (id → creation time). */
+export function listedOrJustCreatedSessions(
+  listed: Set<string>,
+  created: Map<string, number>,
+  now: number,
+  graceMs = CREATED_SESSION_LISTING_GRACE_MS,
+): Set<string> {
+  if (created.size === 0) return listed;
+  const valid = new Set(listed);
+  for (const [id, createdAt] of created) {
+    if (listed.has(id) || now - createdAt >= graceMs) created.delete(id);
+    else valid.add(id);
+  }
+  return valid;
+}
