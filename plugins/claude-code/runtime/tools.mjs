@@ -198,6 +198,10 @@ const text = (value, native) => ({
 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+// The executor's completed-operation retention (15 minutes), well past any
+// request still in transport after its call settled.
+export const UNKNOWN_PROCESS_SETTLED_MS = 15 * 60 * 1000;
+
 // The file helper's `snapshot` in POSIX shell: verify the cached base,
 // append the delta into a new snapshot, verify it, then replace the cache.
 // Exit 75 is a cache miss and 3 a target without a SHA-256 tool; neither
@@ -3638,6 +3642,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         maxBytes: 1,
         waitMs: 1,
       });
+      if (this.state.jobs[id]?.unknownSince !== undefined) {
+        await this.save(() => {
+          const previous = this.state.jobs[id];
+          if (!previous) return;
+          const { unknownSince: _since, ...job } = previous;
+          this.state.jobs[id] = job;
+          return () => this.state.jobs[id] = previous;
+        });
+      }
       if (!result.closed) return;
       await this.save(() => {
         const previous = this.state.jobs[id];
@@ -3647,10 +3660,45 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       });
       this.foreground.delete(id);
       await this.releaseCwdFile(id);
-    } catch {
+    } catch (error) {
       // Missing/unknown before admission settles is not cancellation proof.
       // Keep the intent for another observation or a cold runtime resume.
+      await this.settleUnknownCancellation(id, error).catch(() => {});
     }
+  }
+
+  // A settled start is never submitted again, so an identity the executor
+  // has not known for longer than it retains completed operations either
+  // never ran or ran and was forgotten after it exited. Without this bound
+  // a lost start reply kept a terminate and a read every second, forever.
+  async settleUnknownCancellation(id, error) {
+    if (
+      this.startingForeground.has(id) ||
+      !/unknown process|not found|no such process/i.test(
+        JSON.stringify(error?.remote ?? null),
+      )
+    ) return;
+    const job = this.state.jobs[id];
+    if (!job?.cancelRequested) return;
+    const now = Date.now();
+    if (job.unknownSince === undefined) {
+      await this.save(() => {
+        const previous = this.state.jobs[id];
+        if (!previous) return;
+        this.state.jobs[id] = { ...previous, unknownSince: now };
+        return () => this.state.jobs[id] = previous;
+      });
+      return;
+    }
+    if (now - job.unknownSince < UNKNOWN_PROCESS_SETTLED_MS) return;
+    await this.releaseCwdFile(id);
+    await this.save(() => {
+      const previous = this.state.jobs[id];
+      delete this.state.jobs[id];
+      return () => this.state.jobs[id] = previous;
+    });
+    this.foreground.delete(id);
+    this.treesKilled.delete(id);
   }
 
   async reconcileCancellations() {

@@ -202,3 +202,17 @@ update does not replace an executor, and replacing a busy session's executor
 would stop its target processes. Without a helper, 3.19.15 performs the same
 verified append snapshot in POSIX shell with `sha256sum` or `shasum`; a target
 with neither keeps the whole-copy contract.
+
+## Endless cancellation of a forgotten process (3.19.17)
+
+After 3.19.15, worker call durations fell from p50 1.6 s / p99 7.8 s to
+p50 0.4 s / p99 2.4 s and the OVH upload from 50-280 KB/s to about 10 KB/s.
+The same logs then showed three sessions failing a call about every 1.4 s
+for up to 13 hours (1,400-2,600 failures an hour each): a cancelled command
+whose start reply had been lost was retried with `process/terminate` and
+`process/read` (plus a `ps` tree search when it had jobs) while the executor
+answered `unknown process id`. One such command had finished at 22:49 the
+day before. A settled start is never submitted again, and the executor keeps
+completed operations for 15 minutes, so 3.19.17 records when a settled
+cancellation was first unknown and drops it after 15 minutes of being
+unknown; seeing the process again restarts the window.

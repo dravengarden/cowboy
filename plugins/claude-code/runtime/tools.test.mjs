@@ -19,6 +19,7 @@ import {
   TASK_OUTPUT_PREFIX,
   textBytes,
   textFile,
+  UNKNOWN_PROCESS_SETTLED_MS,
   WorkspaceTools,
 } from "./tools.mjs";
 const fileHelper = fileURLToPath(
@@ -347,6 +348,63 @@ test("hook transcripts send only appended bytes to an executor without the file 
   sent = 0;
   await tools.hookTranscript(fourth, join(directory, "five.jsonl"), undefined);
   assert.equal(sent, fourth.length);
+});
+
+test("a cancellation the executor has long not known ends instead of polling forever", async (t) => {
+  const { tools, connection } = await fixture(t);
+  let known = false;
+  const calls = [];
+  connection.call = async (method, params) => {
+    calls.push(method);
+    if (method === "process/read" && known) {
+      return { chunks: [], closed: false };
+    }
+    if (method === "process/terminate" || method === "process/read") {
+      throw Object.assign(new Error("refused"), {
+        remote: {
+          code: -32600,
+          message: `unknown process id ${params.processId}`,
+        },
+      });
+    }
+    return {};
+  };
+  const id = "lost-start";
+  tools.state.jobs[id] = {
+    afterSeq: null,
+    exited: false,
+    cancelRequested: true,
+    stopped: true,
+  };
+  // While the start is unsettled, unknown is not evidence.
+  tools.startingForeground.set(id, new Promise(() => {}));
+  await tools.reconcileCancellation(id);
+  assert.equal(tools.state.jobs[id].unknownSince, undefined);
+  tools.startingForeground.delete(id);
+
+  await tools.reconcileCancellation(id);
+  const since = tools.state.jobs[id].unknownSince;
+  assert.ok(since > 0);
+  await tools.reconcileCancellation(id);
+  assert.equal(tools.state.jobs[id].unknownSince, since);
+
+  // Seen again: the window starts over.
+  known = true;
+  await tools.reconcileCancellation(id);
+  assert.equal(tools.state.jobs[id].unknownSince, undefined);
+  assert.equal(tools.state.jobs[id].cancelRequested, true);
+  known = false;
+  await tools.reconcileCancellation(id);
+  tools.state.jobs[id].unknownSince = Date.now() -
+    UNKNOWN_PROCESS_SETTLED_MS - 1;
+  calls.length = 0;
+  await tools.reconcileCancellation(id);
+  assert.equal(tools.state.jobs[id], undefined);
+  const saved = JSON.parse(await readFile(tools.statePath, "utf8"));
+  assert.equal(saved.jobs[id], undefined);
+  calls.length = 0;
+  await tools.reconcileCancellations();
+  assert.deepEqual(calls, []);
 });
 
 async function fixture(t) {
