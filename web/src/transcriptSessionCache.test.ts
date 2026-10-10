@@ -153,7 +153,7 @@ test("the store prunes against created sessions and recovers an opened skeleton"
   );
 });
 
-Deno.test("every pinned session survives eviction", () => {
+test("every pinned session survives eviction", () => {
   const update = touchTranscriptSessionCache(
     ["opened", "peeked", "cold"],
     "new",
