@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import { assert, assertEquals } from "@std/assert";
 
 /** Comment-free, whitespace-collapsed view: these are assertions about the
- *  STYLE, and `deno fmt` is free to rewrap any of these template literals. */
+ *  STYLE, and the formatter is free to rewrap any of these template literals. */
 function code(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, " ")

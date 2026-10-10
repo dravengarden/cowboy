@@ -1,3 +1,4 @@
+import { spawn } from "./process.js";
 /* Native Claude usage protocol and projection. No HTTP or credential reads. */
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
@@ -62,14 +63,14 @@ export async function nativeJson(args, request, { command, env, deadline }) {
   if (timeoutMs <= 0) throw new Error("Claude Code usage timed out.");
   let child;
   try {
-    child = new Deno.Command(command, {
+    child = spawn(command, {
       args,
       env,
       clearEnv: true,
       stdin: request ? "piped" : "null",
       stdout: "piped",
       stderr: "null",
-    }).spawn();
+    });
   } catch {
     throw new Error("Claude Code usage command could not start.");
   }

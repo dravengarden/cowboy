@@ -56,7 +56,7 @@ export interface NativeClipboardImageStatus {
 }
 
 function nativeClipboardWindow(): CowboyNativeClipboardWindow {
-  // `globalThis` is the Window in browsers and remains harmless in Deno/SSR,
+  // `globalThis` is the Window in browsers and remains harmless in tests/SSR,
   // where the injected bridge properties are simply absent.
   return globalThis as unknown as CowboyNativeClipboardWindow;
 }

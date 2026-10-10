@@ -1,3 +1,4 @@
+import { spawn } from "./process.js";
 /* Signed Codex account-usage collector. Executes outside Cowboy core. */
 
 export async function* readLines(stream) {
@@ -14,7 +15,7 @@ export async function* readLines(stream) {
 }
 
 async function input() {
-  const text = await new Response(Deno.stdin.readable).text();
+  const text = await Bun.stdin.text();
   return text.trim() === "" ? { operation: "collect" } : JSON.parse(text);
 }
 
@@ -39,9 +40,9 @@ class JsonRpcLines {
   }
 
   static async start() {
-    const command = Deno.env.get("COWBOY_PLUGIN_COMMAND_CODEX") ??
-      Deno.env.get("COWBOY_CODEX_COMMAND") ?? Deno.args[0] ?? "codex";
-    const child = new Deno.Command(command, {
+    const command = process.env.COWBOY_PLUGIN_COMMAND_CODEX ??
+      process.env.COWBOY_CODEX_COMMAND ?? process.argv.slice(2)[0] ?? "codex";
+    const child = spawn(command, {
       args: [
         "app-server",
         "--stdio",
@@ -53,7 +54,7 @@ class JsonRpcLines {
       stdin: "piped",
       stdout: "piped",
       stderr: "null",
-    }).spawn();
+    });
     const rpc = new JsonRpcLines(child);
     await rpc.request("initialize", {
       clientInfo: { name: "cowboy-usage", title: "Cowboy", version: "1" },
@@ -191,7 +192,7 @@ async function main() {
       }));
     } else {
       console.error(message);
-      Deno.exitCode = 1;
+      process.exitCode = 1;
     }
   } finally {
     rpc?.close();

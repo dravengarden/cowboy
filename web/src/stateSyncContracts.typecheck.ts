@@ -1,4 +1,4 @@
-// Production tsc includes these negative contracts; Deno's no-check test runner
+// Production tsc includes these negative contracts; Bun's no-check test runner
 // is not evidence of compile-time safety. Never executed or bundled.
 import { createOwnedResourceScope } from "@cowboy/state-store/scope";
 import { replicatedStore } from "@cowboy/state-sync";

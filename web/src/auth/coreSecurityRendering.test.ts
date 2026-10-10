@@ -14,7 +14,7 @@ const sso = {
 function render(
   overrides: Partial<Parameters<typeof ProductLoginPage>[0]> = {},
 ): string {
-  // Deno compiles linked packages outside web/ with classic JSX, while the
+  // Bun compiles linked packages outside web/ with classic JSX, while the
   // production Vite builder supplies the automatic runtime. Keep that test
   // adapter scoped to this synchronous render, not the installed application.
   const prior = Object.getOwnPropertyDescriptor(globalThis, "React");

@@ -5770,7 +5770,7 @@ mod tests {
                 ),
                 (
                     "collector/index.js".to_owned(),
-                    r#"const request = JSON.parse(await new Response(Deno.stdin.readable).text()); if (request.delay_ms) await new Promise(resolve => setTimeout(resolve, request.delay_ms)); console.log(JSON.stringify({operation: request.operation, command: Deno.env.get("COWBOY_PLUGIN_COMMAND_GEMINI"), home: Deno.env.get("HOME")}));"#
+                    r#"const request = JSON.parse(await Bun.stdin.text()); if (request.delay_ms) await new Promise(resolve => setTimeout(resolve, request.delay_ms)); console.log(JSON.stringify({operation: request.operation, command: process.env.COWBOY_PLUGIN_COMMAND_GEMINI, home: process.env.HOME}));"#
                         .to_owned(),
                 ),
             ]),

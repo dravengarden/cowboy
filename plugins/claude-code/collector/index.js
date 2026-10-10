@@ -29,7 +29,7 @@ const CHILD_ENV_KEYS = [
 const KNOWN_PLANS = new Set(["max", "pro", "team", "enterprise", "free"]);
 
 async function input() {
-  const text = await new Response(Deno.stdin.readable).text();
+  const text = await Bun.stdin.text();
   try {
     const request = text.trim() === ""
       ? { operation: "collect" }
@@ -46,7 +46,7 @@ async function input() {
 function childEnvironment() {
   const env = {};
   for (const key of CHILD_ENV_KEYS) {
-    const value = Deno.env.get(key);
+    const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
   env.DISABLE_AUTOUPDATER = "1";
@@ -57,8 +57,8 @@ function childEnvironment() {
 }
 
 function claudeCommand() {
-  return Deno.env.get("COWBOY_PLUGIN_COMMAND_CLAUDE") ??
-    Deno.env.get("CLAUDE_CODE_EXECUTABLE") ?? Deno.args[0] ?? "claude";
+  return process.env.COWBOY_PLUGIN_COMMAND_CLAUDE ??
+    process.env.CLAUDE_CODE_EXECUTABLE ?? process.argv.slice(2)[0] ?? "claude";
 }
 
 /** `claude auth status --json` is the Provider's own read-only status verb. */
@@ -128,7 +128,7 @@ async function main() {
     console.log(JSON.stringify(await collect()));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    Deno.exitCode = 1;
+    process.exitCode = 1;
   }
 }
 

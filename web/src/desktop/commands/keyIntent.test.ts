@@ -13,7 +13,7 @@ class FakeElement {
   }
 }
 
-// Deno has no DOM; the classifier only needs `instanceof Element` + matches().
+// Bun has no DOM; the classifier only needs `instanceof Element` + matches().
 (globalThis as { Element?: unknown }).Element = FakeElement;
 
 function target(...selectors: string[]): EventTarget {

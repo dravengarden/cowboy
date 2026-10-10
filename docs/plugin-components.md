@@ -79,6 +79,13 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.46.0 changes no component. It records Claude Code 3.19.18,
+Codex 3.4.2, Claude DeepSeek 3.1.33 and Grok 3.1.34, whose signed collectors
+now call the bundled Bun runtime directly instead of a host-provided
+compatibility global. A Machine host from this release on no longer preloads
+that global, so these are the oldest collector releases it can run; converge a
+Machine's Plugins before replacing its host.
+
 Component release 3.45.0 moves the last build scripts and tests inside
 component and Plugin sources from Deno to Bun. It records plugin-api 1.1.2,
 app-shell 1.1.22, state-store 2.1.1, provider-ui 3.1.18 and provider-runtime

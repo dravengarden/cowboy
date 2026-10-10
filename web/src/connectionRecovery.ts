@@ -1,6 +1,6 @@
 // WebSocket readyState values are fixed by the WebSocket standard. Keeping the
 // foreground decision pure makes the mobile resume policy regression-testable
-// without constructing browser sockets in Deno.
+// without constructing browser sockets in unit tests.
 const WEBSOCKET_CONNECTING = 0;
 const WEBSOCKET_OPEN = 1;
 

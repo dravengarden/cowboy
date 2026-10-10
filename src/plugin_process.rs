@@ -274,10 +274,7 @@ fn configure_plugin_command(
     } else {
         plugin_js_arguments(args)?
     };
-    command.args(plugin_js_runtime_arguments(
-        &normalized,
-        &plugin_js_prelude()?,
-    )?);
+    command.args(plugin_js_runtime_arguments(&normalized)?);
     command.env_clear();
     for name in plugin_environment_names(args)? {
         if let Some(value) = environment
@@ -306,9 +303,6 @@ fn configure_plugin_command(
     Ok(())
 }
 
-/// The collector API module the host loads before a signed entry.
-const PLUGIN_JS_PRELUDE: &str = include_str!("plugin_process/prelude.js");
-
 /// Lower a validated `@plugin-js` command to the bundled Bun runtime.
 ///
 /// Read, run and network grants remain part of the signed manifest and are
@@ -316,19 +310,13 @@ const PLUGIN_JS_PRELUDE: &str = include_str!("plugin_process/prelude.js");
 /// no permission model to receive them. The host confines a collector through
 /// the environment it passes and the process group it owns, not through the
 /// runtime.
-fn plugin_js_runtime_arguments(
-    normalized: &[String],
-    prelude: &Path,
-) -> anyhow::Result<Vec<String>> {
+fn plugin_js_runtime_arguments(normalized: &[String]) -> anyhow::Result<Vec<String>> {
     let entry = normalized
         .iter()
         .skip(1)
         .position(|argument| !argument.starts_with("--"))
         .context("Plugin JavaScript command has no entry")?
         + 1;
-    let prelude = prelude
-        .to_str()
-        .context("Plugin JavaScript prelude path is not UTF-8")?;
     let mut arguments = [
         "run",
         // Nothing outside the signed package and this host may load: no
@@ -337,75 +325,11 @@ fn plugin_js_runtime_arguments(
         "--no-env-file",
         "--no-macros",
         "--no-addons",
-        "--preload",
-        prelude,
     ]
     .map(str::to_owned)
     .to_vec();
     arguments.extend_from_slice(&normalized[entry..]);
     Ok(arguments)
-}
-
-/// Materialize the embedded prelude where the runtime can import it.
-///
-/// The file lives in a directory only this user can write and is named by its
-/// content, so hosts of different releases never overwrite each other's copy
-/// and a matching name is trusted only after its bytes compare equal.
-fn plugin_js_prelude() -> anyhow::Result<PathBuf> {
-    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
-
-    use sha2::Digest as _;
-
-    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-    let owner = rustix::process::geteuid().as_raw();
-    let directory = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("cowboy-plugin-js-{owner}"));
-    match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => {
-            return Err(error).context("creating the Plugin JavaScript runtime directory");
-        }
-    }
-    let metadata = std::fs::symlink_metadata(&directory)
-        .context("inspecting the Plugin JavaScript runtime directory")?;
-    ensure!(
-        metadata.is_dir() && metadata.uid() == owner && metadata.mode() & 0o022 == 0,
-        "Plugin JavaScript runtime directory is not private to this user"
-    );
-    let digest = sha2::Sha256::digest(PLUGIN_JS_PRELUDE.as_bytes());
-    let name = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let path = directory.join(format!("prelude-{name}.js"));
-    if std::fs::read(&path).is_ok_and(|bytes| bytes == PLUGIN_JS_PRELUDE.as_bytes()) {
-        return Ok(path);
-    }
-    let temporary = directory.join(format!(
-        ".prelude-{}-{}.tmp",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = (|| -> std::io::Result<()> {
-        use std::io::Write as _;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o400)
-            .open(&temporary)?;
-        file.write_all(PLUGIN_JS_PRELUDE.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, &path)
-    })();
-    if let Err(error) = written {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error).context("writing the Plugin JavaScript prelude");
-    }
-    Ok(path)
 }
 
 fn plugin_js_arguments(args: &[String]) -> anyhow::Result<Vec<String>> {
@@ -735,14 +659,7 @@ mod tests {
             "account".to_owned(),
         ])
         .unwrap();
-        let prelude = plugin_js_prelude().unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&prelude).unwrap(),
-            PLUGIN_JS_PRELUDE
-        );
-        // A second host of the same release reuses the same file.
-        assert_eq!(plugin_js_prelude().unwrap(), prelude);
-        let arguments = plugin_js_runtime_arguments(&normalized, &prelude).unwrap();
+        let arguments = plugin_js_runtime_arguments(&normalized).unwrap();
         assert_eq!(
             arguments,
             [
@@ -751,13 +668,11 @@ mod tests {
                 "--no-env-file",
                 "--no-macros",
                 "--no-addons",
-                "--preload",
-                prelude.to_str().unwrap(),
                 "/srv/plugin/collector/index.js",
                 "account",
             ]
         );
-        assert!(plugin_js_runtime_arguments(&["run".to_owned()], &prelude).is_err());
+        assert!(plugin_js_runtime_arguments(&["run".to_owned()]).is_err());
     }
 
     #[test]

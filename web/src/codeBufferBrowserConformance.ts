@@ -30,7 +30,7 @@ async function until(predicate: () => boolean) {
 }
 async function requests(f: ReturnType<typeof fixture>, count: number) {
   // Native browser Response streams can deliver across event-loop tasks;
-  // counting only microtasks is a Deno mock assumption, not a timing contract.
+  // counting only microtasks is a mock-timer assumption, not a timing contract.
   await until(() => f.calls.length >= count);
   check(
     f.calls.length === count,

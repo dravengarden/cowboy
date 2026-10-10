@@ -14,18 +14,16 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   cross-worktree Rust hit rate is proven on the active host. Do not use host
   `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
   wrapper is an environment failure, not a product-code failure.
-- JavaScript and TypeScript run on the pinned Bun; Deno is retired. The
+- JavaScript and TypeScript run on the pinned Bun. The
   repository root is one Bun workspace (`web` plus the `components/*` packages
   it links): `just install` creates `node_modules`, `bun.lock` is the only
   lockfile, and a dependency change needs a new `depsHash` in `flake.nix`.
   Tests import `test` from `bun:test` and assertions from `@std/assert`;
   scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
-  New code must not use the `Deno` global or `jsr:`/`npm:` specifiers.
-- Signed Plugin collectors (`plugins/*/collector/`) are the one place the
-  `Deno` name survives. They run on Bun: the host preloads
-  `src/plugin_process/prelude.js`, which supplies the `Deno` surface they use,
-  so one collector source runs on a Machine host of either generation. Rewrite
-  them and delete the prelude once every supported Machine runs a Bun host.
+  Do not use `jsr:`/`npm:` specifiers.
+- Signed Plugin collectors (`plugins/*/collector/`) run on the Machine's
+  bundled Bun with no host-provided globals. A package is self-contained, so
+  a collector that starts its provider CLI carries its own `process.js`.
 
 ## Deploy (read before deploying)
 - User preference: completed product fixes include verification, integration into

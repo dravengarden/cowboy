@@ -1,3 +1,4 @@
+import { spawn } from "./process.js";
 /* Signed xAI account-usage/reset collector. Executes outside Cowboy core. */
 
 export async function* readLines(stream) {
@@ -29,7 +30,7 @@ const CHILD_ENV_KEYS = [
 ];
 
 async function input() {
-  const text = await new Response(Deno.stdin.readable).text();
+  const text = await Bun.stdin.text();
   return text.trim() === "" ? { operation: "collect" } : JSON.parse(text);
 }
 
@@ -54,14 +55,14 @@ class AcpRpc {
   }
 
   static async start() {
-    const command = Deno.env.get("COWBOY_PLUGIN_COMMAND_GROK") ??
-      Deno.env.get("COWBOY_ACP_GROK_CMD") ?? Deno.args[0] ?? "grok";
+    const command = process.env.COWBOY_PLUGIN_COMMAND_GROK ??
+      process.env.COWBOY_ACP_GROK_CMD ?? process.argv.slice(2)[0] ?? "grok";
     const env = { GROK_FOLDER_TRUST: "0" };
     for (const key of CHILD_ENV_KEYS) {
-      const value = Deno.env.get(key);
+      const value = process.env[key];
       if (value) env[key] = value;
     }
-    const child = new Deno.Command(command, {
+    const child = spawn(command, {
       args: [
         "--no-auto-update",
         "--experimental-memory",
@@ -76,7 +77,7 @@ class AcpRpc {
       stdin: "piped",
       stdout: "piped",
       stderr: "null",
-    }).spawn();
+    });
     const rpc = new AcpRpc(child);
     await rpc.request("initialize", {
       protocolVersion: 1,
@@ -141,22 +142,18 @@ export function credentialFromJson(document) {
 }
 
 async function loadCredential() {
-  const inline = Deno.env.get("GROK_AUTH");
+  const inline = process.env.GROK_AUTH;
   if (inline?.trim()) return credentialFromJson(JSON.parse(inline));
   const paths = [
-    Deno.env.get("GROK_AUTH_PATH"),
-    Deno.env.get("GROK_HOME")
-      ? `${Deno.env.get("GROK_HOME")}/auth.json`
-      : undefined,
-    Deno.env.get("HOME")
-      ? `${Deno.env.get("HOME")}/.grok/auth.json`
-      : undefined,
+    process.env.GROK_AUTH_PATH,
+    process.env.GROK_HOME ? `${process.env.GROK_HOME}/auth.json` : undefined,
+    process.env.HOME ? `${process.env.HOME}/.grok/auth.json` : undefined,
   ];
   for (const path of paths) {
     if (!path) continue;
     try {
       const credential = credentialFromJson(
-        JSON.parse(await Deno.readTextFile(path)),
+        JSON.parse(await Bun.file(path).text()),
       );
       if (credential) return credential;
     } catch {
@@ -497,7 +494,7 @@ async function main() {
       }));
     } else {
       console.error(message);
-      Deno.exitCode = 1;
+      process.exitCode = 1;
     }
   } finally {
     rpc?.close();

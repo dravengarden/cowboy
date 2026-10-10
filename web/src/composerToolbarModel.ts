@@ -1,5 +1,5 @@
 // Pure persisted-order model. Keep this module free of React/MUI imports so its
-// migrations can run in the repository's capability-restricted Deno tests.
+// migrations can run in the repository's DOM-less unit tests.
 
 export const DEFAULT_COMPOSER_TOOLBAR: readonly string[] = [
   "undo",

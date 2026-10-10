@@ -2,8 +2,8 @@
 
 import { decorateActivity } from "./pricing.js";
 
-const accountId = Deno.args[0] ?? "deepseek";
-const lanes = Deno.args.slice(1);
+const accountId = process.argv.slice(2)[0] ?? "deepseek";
+const lanes = process.argv.slice(2).slice(1);
 
 function unavailable(message) {
   throw new Error(message);
@@ -92,7 +92,7 @@ export function collectorTargets(
 
 async function main() {
   try {
-    const input = await new Response(Deno.stdin.readable).text();
+    const input = await Bun.stdin.text();
     const request = input.trim() === "" ? {} : JSON.parse(input);
     if (request.operation === "decorate_activity") {
       console.log(
@@ -103,13 +103,13 @@ async function main() {
     if (request.operation !== undefined && request.operation !== "collect") {
       unavailable("unsupported collector operation");
     }
-    const exactTargets = Deno.env.get("COWBOY_PLUGIN_SIDECAR_TARGETS");
+    const exactTargets = process.env.COWBOY_PLUGIN_SIDECAR_TARGETS;
     const envKey = `COWBOY_PROVIDER_INFO_${
       accountId.toUpperCase().replaceAll("-", "_")
     }_URLS`;
     const targets = collectorTargets(
       exactTargets,
-      Deno.env.get(envKey) ?? Deno.env.get("COWBOY_PROVIDER_INFO_URLS") ?? "",
+      process.env[envKey] ?? process.env.COWBOY_PROVIDER_INFO_URLS ?? "",
       lanes,
       accountId,
     );
@@ -157,7 +157,7 @@ async function main() {
     }));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    Deno.exitCode = 1;
+    process.exitCode = 1;
   }
 }
 
