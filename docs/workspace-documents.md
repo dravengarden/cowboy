@@ -41,6 +41,19 @@ recovery history (its latest 30 revisions). Attachments are kept unless one
 side removed them. Title and location changes are last-writer-wins. Trash and
 restore reapply the local intent.
 
+The merge replaces the outbox in one step. Observers see the local text and
+then the merged text, never the older server text in between. A write
+authored during the merge is folded into it or queued after it.
+
+Each write carries the whole text, so queued writes that the server cannot
+have applied fold into the newest one. An offline session stores and replays
+at most two writes: the one already dispatched, which keeps its operation
+identity so a lost reply is retried rather than merged with itself, and the
+fold of everything typed since. A write the server rejects outright (too
+large, invalid) stays local and reports the reason. Polling does not upload
+it again. Corrected text folds over it and syncs. A reply without JSON from
+a proxy in front of a restarting controller counts as waiting, not failure.
+
 An open editor folds newer content in place. With no local typing since its
 last synchronized content, it adopts the update. Otherwise it merges and
 autosave writes the result. Remote edits map the caret, stay out of local

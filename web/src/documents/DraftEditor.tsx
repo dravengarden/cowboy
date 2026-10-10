@@ -1101,7 +1101,12 @@ function DraftEditingSession(
       )}
       {(error || syncError) && (
         <Alert
-          severity={phase === "conflict" ? "warning" : "error"}
+          // Waiting for the server is not a failure: the text is saved here.
+          severity={phase === "conflict"
+            ? "warning"
+            : !error && phase === "local"
+            ? "info"
+            : "error"}
           action={phase === "conflict"
             ? (
               <Button
@@ -1124,7 +1129,10 @@ function DraftEditingSession(
               </Button>
             )}
         >
-          {error ?? syncError}
+          {error ??
+            (phase === "local"
+              ? "Saved on this device. It will sync when the server is reachable."
+              : syncError)}
         </Alert>
       )}
       <Box

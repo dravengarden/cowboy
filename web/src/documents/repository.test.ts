@@ -18,18 +18,24 @@ function fixture() {
   const lifetime = new AbortController();
   let blocked = false;
   let offline = false;
+  let gateway = false;
+  let dropReply = false;
+  let saving: (() => Promise<void>) | undefined;
   let index: unknown = null;
-  const create = () =>
+  const client = (
+    local: Map<string, ClientSnapshot<DraftDocument | null>>,
+    offline: () => boolean,
+  ) =>
     createDraftRepository({
       signal: lifetime.signal,
       persistence: (
         id,
       ): LocalPersistence<ClientSnapshot<DraftDocument | null>> => ({
         load: () => Promise.resolve(local.get(id) ?? null),
-        save: (snapshot) => {
-          if (blocked) return Promise.reject(new Error("quota"));
+        save: async (snapshot) => {
+          if (blocked) throw new Error("quota");
+          await saving?.();
           local.set(id, structuredClone(snapshot));
-          return Promise.resolve();
         },
       }),
       cache: {
@@ -43,7 +49,7 @@ function fixture() {
       localIds: () => Promise.resolve([...local.keys()]),
       notify: (message) => notices.push(message),
       request: (path, init) => {
-        if (offline) return Promise.reject(new Error("offline"));
+        if (offline()) return Promise.reject(new Error("offline"));
         requests.push(path);
         if (path === "/api/drafts") {
           return Promise.resolve(
@@ -51,10 +57,22 @@ function fixture() {
           );
         }
         if (path === "/api/drafts/mutations") {
+          // A proxy in front of a restarting controller: no JSON body.
+          if (gateway) {
+            return Promise.resolve(new Response("", { status: 502 }));
+          }
           const args = JSON.parse(String(init?.body)) as DraftMutationArgs & {
             operation_id: string;
           };
           const current = server.get(args.document_id) ?? null;
+          if (
+            args.change.type === "write" &&
+            args.change.body.includes("OVERSIZE")
+          ) {
+            return Promise.resolve(
+              Response.json({ error: "Too large" }, { status: 422 }),
+            );
+          }
           if (operations.has(args.operation_id)) {
             return Promise.resolve(Response.json(current));
           }
@@ -73,6 +91,10 @@ function fixture() {
           })!;
           server.set(next.id, next);
           operations.set(args.operation_id, next.id);
+          if (dropReply) {
+            dropReply = false;
+            return Promise.reject(new Error("timeout"));
+          }
           return Promise.resolve(Response.json(next));
         }
         if (path.endsWith("/history")) {
@@ -84,8 +106,19 @@ function fixture() {
         );
       },
     });
+  const create = () => client(local, () => offline);
   return {
     create,
+    /** Another device of the same account: its own storage and connection. */
+    device: () => {
+      let disconnected = false;
+      return {
+        repository: client(new Map(), () => disconnected),
+        offline: (value: boolean) => {
+          disconnected = value;
+        },
+      };
+    },
     local,
     server,
     requests,
@@ -97,6 +130,17 @@ function fixture() {
     },
     offline: (value: boolean) => {
       offline = value;
+    },
+    gateway: (value: boolean) => {
+      gateway = value;
+    },
+    /** The next accepted mutation is applied, but its reply never arrives. */
+    dropReply: () => {
+      dropReply = true;
+    },
+    /** Runs inside every local save, before it becomes durable. */
+    whileSaving: (hook: (() => Promise<void>) | undefined) => {
+      saving = hook;
     },
   };
 }
@@ -325,4 +369,235 @@ Deno.test("a pushed revision refreshes only an open document that lacks it", asy
     2,
   );
   await first.dispose();
+});
+
+Deno.test("merging a refused write never shows an older text than the local one", async () => {
+  const f = fixture();
+  const phone = f.create();
+  const id = await phone.create("Draft", null, "document", "one\ntwo\n");
+  const owner = phone.document(id);
+  await settle(() => owner.get().phase === "saved");
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    body: "one\ntwo\nthree\n",
+    revision: 2,
+    body_revision: 2,
+  });
+  const shown: string[] = [];
+  owner.subscribe(() => shown.push(owner.get().document?.body ?? ""));
+  await owner.change({ type: "write", body: "ONE\ntwo\n", attachments: [] });
+  await settle(() =>
+    owner.get().phase === "saved" &&
+    f.server.get(id)?.body === "ONE\ntwo\nthree\n"
+  );
+  // Neither the pre-edit text nor the remote text without the local edit: an
+  // open editor would fold either one in as if another device had typed it.
+  assertEquals(shown.filter((body) => !body.startsWith("ONE")), []);
+  await phone.dispose();
+});
+
+Deno.test("a write authored while a refused write is merged survives", async () => {
+  const f = fixture();
+  const phone = f.create();
+  const id = await phone.create("Draft", null, "document", "one\ntwo\n");
+  const owner = phone.document(id);
+  await settle(() => owner.get().phase === "saved");
+  f.server.set(id, {
+    ...f.server.get(id)!,
+    body: "one\ntwo\nthree\n",
+    revision: 2,
+    body_revision: 2,
+  });
+  await owner.change({ type: "write", body: "ONE\ntwo\n", attachments: [] });
+  // The next local save is the merge of the refused write. The editor's
+  // autosave lands exactly then, authored against its last written text.
+  let typed: Promise<void> | undefined;
+  f.whileSaving(async () => {
+    if (typed) return;
+    typed = owner.change(
+      { type: "write", body: "ONE\ntwo\nextra\n", attachments: [] },
+      undefined,
+      { body: "ONE\ntwo\n", attachments: [] },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+  await settle(() => typed !== undefined);
+  await typed;
+  f.whileSaving(undefined);
+  await settle(() =>
+    owner.get().phase === "saved" &&
+    owner.get().document?.body === f.server.get(id)?.body
+  );
+  assertEquals(f.server.get(id)?.body, "ONE\ntwo\nthree\nextra\n");
+  assertEquals(f.server.size, 1);
+  assertEquals(f.notices, []);
+  await phone.dispose();
+});
+
+Deno.test("a gateway reply without JSON keeps the write queued instead of failing it", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "base");
+  const owner = first.document(id);
+  await settle(() => owner.get().phase === "saved");
+  f.gateway(true);
+  await owner.change({ type: "write", body: "typed", attachments: [] });
+  await settle(() => owner.get().phase !== "saving");
+  assertEquals(owner.get().phase, "local");
+  assertEquals(owner.get().document?.body, "typed");
+  f.gateway(false);
+  await owner.retry();
+  await settle(() => owner.get().phase === "saved");
+  assertEquals(f.server.get(id)?.body, "typed");
+  await first.dispose();
+});
+
+Deno.test("a write the server rejects does not block the corrected text", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "base");
+  const owner = first.document(id);
+  await settle(() => owner.get().phase === "saved");
+  await owner.change({ type: "write", body: "OVERSIZE", attachments: [] });
+  await settle(() => owner.get().phase === "error");
+  assertEquals(owner.get().error, "Too large");
+  assertEquals(owner.get().document?.body, "OVERSIZE");
+  // Polling does not upload the same rejected content again.
+  const sent = f.requests.filter((p) => p === "/api/drafts/mutations").length;
+  await first.refresh();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assertEquals(
+    f.requests.filter((p) => p === "/api/drafts/mutations").length,
+    sent,
+  );
+  assertEquals(owner.get().phase, "error");
+  await owner.change({ type: "write", body: "fits now", attachments: [] });
+  await settle(() => owner.get().phase === "saved");
+  assertEquals(f.server.get(id)?.body, "fits now");
+  assertEquals(f.server.get(id)?.body_revision, 2);
+  await first.dispose();
+});
+
+Deno.test("writes queued offline fold behind the one already dispatched", async () => {
+  const f = fixture();
+  const first = f.create();
+  await first.start();
+  const id = await first.create("Draft", null, "document", "base");
+  const owner = first.document(id);
+  await settle(() => owner.get().phase === "saved");
+  f.offline(true);
+  for (const body of ["one", "one two", "one two three"]) {
+    await owner.change({ type: "write", body, attachments: [] });
+  }
+  // The first one was dispatched and keeps its identity; the rest fold.
+  await settle(() => f.local.get(id)?.pending.length === 2);
+  assertEquals(owner.get().document?.body, "one two three");
+  // A title change after the fold still reaches the sidebar index.
+  await owner.change({ type: "rename", title: "Renamed" });
+  assertEquals(first.get().entries.find((e) => e.id === id)?.title, "Renamed");
+  f.offline(false);
+  const sent = f.requests.filter((p) => p === "/api/drafts/mutations").length;
+  await owner.retry();
+  await settle(() => owner.get().phase === "saved");
+  assertEquals(f.server.get(id)?.body, "one two three");
+  assertEquals(f.server.get(id)?.body_revision, 3);
+  assertEquals(f.server.get(id)?.title, "Renamed");
+  assertEquals(
+    f.requests.filter((p) => p === "/api/drafts/mutations").length,
+    sent + 3,
+  );
+  await first.dispose();
+});
+
+Deno.test("a write whose reply was lost is retried, not merged with its own text", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "a");
+  const owner = first.document(id);
+  await settle(() => owner.get().phase === "saved");
+  f.dropReply();
+  await owner.change({ type: "write", body: "a b", attachments: [] });
+  await settle(() => owner.get().phase === "local");
+  assertEquals(f.server.get(id)?.body, "a b");
+  for (const body of ["a b c", "a b c d"]) {
+    await owner.change({ type: "write", body, attachments: [] });
+  }
+  await settle(() => owner.get().phase === "saved");
+  assertEquals(f.server.get(id)?.body, "a b c d");
+  assertEquals(f.server.get(id)?.body_revision, 3);
+  await first.dispose();
+});
+
+Deno.test("two devices editing through outages converge without losing a word", async () => {
+  for (let seed = 1; seed <= 60; seed++) {
+    let state = seed;
+    const random = (bound: number): number => {
+      state = (state * 1103515245 + 12345) & 0x7fffffff;
+      return state % bound;
+    };
+    const f = fixture();
+    const devices = [f.device(), f.device()];
+    const id = await devices[0]!.repository.create(
+      "Shared",
+      null,
+      "document",
+      "alpha beta gamma delta",
+    );
+    await settle(() =>
+      devices[0]!.repository.document(id).get().phase === "saved"
+    );
+    await devices[1]!.repository.document(id).refresh();
+    const typed: string[] = [];
+    for (let step = 0; step < 30; step++) {
+      const device = devices[random(2)]!;
+      const owner = device.repository.document(id);
+      const action = random(10);
+      if (action < 6) {
+        const body = owner.get().document!.body;
+        const words = body.split(" ");
+        const word = `w${typed.length}`;
+        typed.push(word);
+        words.splice(random(words.length + 1), 0, word);
+        await owner.change(
+          { type: "write", body: words.join(" "), attachments: [] },
+          undefined,
+          { body, attachments: [] },
+        );
+      } else if (action < 8) device.offline(random(2) === 0);
+      else if (action === 8) f.dropReply();
+      else await owner.refresh();
+      if (random(3) === 0) await new Promise((r) => setTimeout(r, 1));
+    }
+    for (const device of devices) device.offline(false);
+    const owners = devices.map((d) => d.repository.document(id));
+    for (let round = 0; round < 50; round++) {
+      for (const owner of owners) {
+        await owner.retry();
+        await owner.refresh();
+      }
+      await new Promise((r) => setTimeout(r, 2));
+      const body = f.server.get(id)!.body;
+      if (
+        owners.every((o) =>
+          o.get().phase === "saved" && o.get().document?.body === body
+        )
+      ) break;
+    }
+    const body = f.server.get(id)!.body;
+    for (const owner of owners) {
+      assertEquals(owner.get().phase, "saved", `seed ${seed}`);
+      assertEquals(owner.get().document?.body, body, `seed ${seed}`);
+    }
+    const words = body.split(" ");
+    for (const word of ["alpha", "beta", "gamma", "delta", ...typed]) {
+      assertEquals(
+        words.filter((w) => w === word).length,
+        1,
+        `seed ${seed}: ${word} in ${body}`,
+      );
+    }
+    assertEquals(f.server.size, 1, `seed ${seed}`);
+    assertEquals(f.notices, [], `seed ${seed}`);
+    for (const device of devices) await device.repository.dispose();
+  }
 });

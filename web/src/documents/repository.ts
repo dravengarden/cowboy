@@ -85,11 +85,32 @@ export function createDraftRepository(options: RepositoryOptions) {
   function emit(): void {
     if (!stopped) { for (const listener of listeners) listener(); }
   }
-  function updateIndex(document: DraftDocument | null): void {
+  /** Highest server revision of each document the server has reported. */
+  const served = new Map<string, number>();
+  /** Documents whose index entry is their own local view. */
+  const ownViews = new Set<string>();
+  function heard({ id, revision }: DraftMetadata): void {
+    served.set(id, Math.max(served.get(id) ?? 0, revision));
+  }
+  /** `base` marks a local view (its server base plus the outbox). Its own
+   * revision is a projection that falls when queued writes fold, so it is
+   * current unless the server reported a revision its base lacks. Until the
+   * server reports one, a cached entry with a higher revision is newer. */
+  function updateIndex(document: DraftDocument | null, base?: number): void {
     if (!document || stopped) return;
+    const { id } = document;
     const metadata = draftMetadata(document);
-    const existing = library.entries.find((d) => d.id === document.id);
-    if (existing && existing.revision > document.revision) return;
+    const existing = library.entries.find((d) => d.id === id);
+    const newer = existing !== undefined &&
+      existing.revision > document.revision;
+    const stale = base === undefined
+      ? newer
+      : served.has(id)
+      ? served.get(id)! > base
+      : newer && !ownViews.has(id);
+    if (stale) return;
+    if (base === undefined) ownViews.delete(id);
+    else ownViews.add(id);
     if (existing && JSON.stringify(existing) === JSON.stringify(metadata)) {
       return;
     }
@@ -114,7 +135,17 @@ export function createDraftRepository(options: RepositoryOptions) {
     let fetching: Promise<void> | undefined;
     let draining = false;
     let sealed = false;
+    // Replacing the outbox takes several replica steps; observers see only
+    // the settled result, never a step that lacks the local text.
+    let settling = false;
+    // The server rejected the head of the outbox itself (not a race): only
+    // new local content or an explicit retry may send again.
+    let rejected = false;
     const deliverable = new Map<string, Mutation>();
+    // Writes the server cannot have applied: authored in this page and never
+    // dispatched, or rejected outright. Only these fold. A dispatched write
+    // keeps its operation id, so retrying a lost reply stays idempotent.
+    const fresh = new Set<string>();
     const replica = replicatedStore<DraftDocument | null, typeof draftMutators>(
       {
         clientId: `draft-${crypto.randomUUID()}`,
@@ -123,16 +154,22 @@ export function createDraftRepository(options: RepositoryOptions) {
         local: options.persistence(id),
         send: (mutation) => {
           deliverable.set(mutation.id, mutation);
+          rejected = false;
           void drain();
         },
-        onChange: () => publish(),
+        onChange: () => {
+          if (!settling) publish();
+        },
       },
     );
     function publish(patch: Partial<DraftDocumentSnapshot> = {}): void {
       if (stopped || sealed) return;
       snapshot = { ...snapshot, document: replica.get(), ...patch };
-      updateIndex(snapshot.document);
+      reindex();
       for (const subscriber of subscribers) subscriber();
+    }
+    function reindex(): void {
+      updateIndex(snapshot.document, replica.baseValue()?.revision ?? 0);
     }
     function hydrate(): Promise<void> {
       return hydrated ??= replica.hydrate().then(() => {
@@ -186,84 +223,134 @@ export function createDraftRepository(options: RepositoryOptions) {
     async function rebase(
       mutation: Mutation,
       remote: DraftDocument | null,
-    ): Promise<boolean> {
+    ): Promise<void> {
       const args = mutation.args as DraftMutationArgs;
       const { change } = args;
-      const view = replica.get();
-      const writes = replica.pending()
-        .filter((m) => {
-          const type = (m.args as DraftMutationArgs).change.type;
-          return type === "write" || type === "create";
-        })
-        .map((m) => m.id);
-      let superseded = [mutation.id];
-      let replacement:
-        | { change: DraftChange; expected: number; base?: DraftContent }
-        | null = null;
-      switch (change.type) {
-        case "create":
-        case "write": {
-          superseded = writes;
-          const ours = view ? draftContent(view) : draftContent(
-            change.type === "create" ? change : { body: "", attachments: [] },
-          );
-          const theirs = remote && !remote.deleted
-            ? draftContent(remote)
-            : null;
-          if (theirs && sameDraftContent(ours, theirs)) break;
-          const ancestor = change.type === "create"
-            ? null
-            : args.base ?? await historicAncestor(args.expected_revision);
-          const merged = theirs && ancestor
-            ? mergeDraftContent(ancestor, ours, theirs)
-            : null;
-          if (!merged || !theirs || !remote) {
-            await preserve(ours);
-          } else if (!sameDraftContent(merged, theirs)) {
-            replacement = {
-              change: { type: "write", ...merged },
-              expected: remote.body_revision,
-              base: theirs,
-            };
+      const ancestor = change.type === "write"
+        ? args.base ?? await historicAncestor(args.expected_revision)
+        : null;
+      let kept: DraftContent | null = null;
+      for (;;) {
+        // From this read to the last replica step nothing waits, so a write
+        // authored meanwhile is either folded into the merge or queued after
+        // it. One authored in between would be overwritten by the merge.
+        const view = replica.get();
+        let superseded = [mutation.id];
+        let replacement:
+          | { change: DraftChange; expected: number; base?: DraftContent }
+          | null = null;
+        let lost: DraftContent | null = null;
+        switch (change.type) {
+          case "create":
+          case "write": {
+            superseded = replica.pending()
+              .filter((m) => {
+                const type = (m.args as DraftMutationArgs).change.type;
+                return type === "write" || type === "create";
+              })
+              .map((m) => m.id);
+            const ours = view ? draftContent(view) : draftContent(
+              change.type === "create" ? change : { body: "", attachments: [] },
+            );
+            const theirs = remote && !remote.deleted
+              ? draftContent(remote)
+              : null;
+            if (theirs && sameDraftContent(ours, theirs)) break;
+            const merged = theirs && ancestor
+              ? mergeDraftContent(ancestor, ours, theirs)
+              : null;
+            if (!merged || !theirs || !remote) {
+              lost = ours;
+            } else if (!sameDraftContent(merged, theirs)) {
+              replacement = {
+                change: { type: "write", ...merged },
+                expected: remote.body_revision,
+                base: theirs,
+              };
+            }
+            break;
           }
-          break;
+          case "rename":
+            if (remote && !remote.deleted && remote.title !== change.title) {
+              replacement = { change, expected: remote.metadata_revision };
+            }
+            break;
+          case "move":
+            if (
+              remote && !remote.deleted && remote.parent_id !== change.parent_id
+            ) {
+              replacement = { change, expected: remote.metadata_revision };
+            }
+            break;
+          case "trash":
+          case "restore":
+            if (remote && remote.deleted !== (change.type === "trash")) {
+              replacement = { change, expected: remote.revision };
+            }
+            break;
         }
-        case "rename":
-          if (remote && !remote.deleted && remote.title !== change.title) {
-            replacement = { change, expected: remote.metadata_revision };
+        if (lost && !(kept && sameDraftContent(kept, lost))) {
+          // The copy must be durable before the outbox gives the text up.
+          await preserve(lost);
+          kept = lost;
+          if (replica.get() !== view) continue;
+        }
+        settling = true;
+        try {
+          replica.confirm(superseded);
+          for (const id of superseded) {
+            deliverable.delete(id);
+            fresh.delete(id);
           }
-          break;
-        case "move":
-          if (
-            remote && !remote.deleted && remote.parent_id !== change.parent_id
-          ) {
-            replacement = { change, expected: remote.metadata_revision };
+          replica.applyPatch(snapshotPatch(remote?.revision ?? 0, remote, []), {
+            force: true,
+          });
+          if (replacement) {
+            const operation = crypto.randomUUID();
+            if (replacement.change.type === "write") fresh.add(operation);
+            replica.mutate("change", {
+              document_id: id,
+              expected_revision: replacement.expected,
+              change: replacement.change,
+              authored_at_ms: Date.now(),
+              ...(replacement.base ? { base: replacement.base } : {}),
+            }, operation);
           }
-          break;
-        case "trash":
-        case "restore":
-          if (remote && remote.deleted !== (change.type === "trash")) {
-            replacement = { change, expected: remote.revision };
-          }
-          break;
+        } finally {
+          settling = false;
+        }
+        break;
       }
-      await replica.confirmDurably(superseded);
-      for (const id of superseded) deliverable.delete(id);
-      replica.applyPatch(snapshotPatch(remote?.revision ?? 0, remote, []), {
-        force: true,
-      });
-      if (replacement) {
-        await replica.mutateDurably("change", {
+      // Durable before the caller sends the replacement or reports the result.
+      await replica.flush();
+    }
+    /** Each write replaces the whole text, so only the newest queued one
+     * matters. Folding them keeps an offline session from storing and then
+     * replaying every autosave, and lets corrected text past a write the
+     * server rejected. The fold keeps the first write's ancestor. */
+    async function fold(writes: readonly Mutation[]): Promise<void> {
+      const first = writes[0]!.args as DraftMutationArgs;
+      const last = writes.at(-1)!.args as DraftMutationArgs;
+      const operation = crypto.randomUUID();
+      settling = true;
+      try {
+        replica.confirm(writes.map((m) => m.id));
+        for (const m of writes) {
+          deliverable.delete(m.id);
+          fresh.delete(m.id);
+        }
+        fresh.add(operation);
+        replica.mutate("change", {
           document_id: id,
-          expected_revision: replacement.expected,
-          change: replacement.change,
-          authored_at_ms: Date.now(),
-          ...(replacement.base ? { base: replacement.base } : {}),
-        }, crypto.randomUUID());
-      } else {
-        await replica.flush();
+          expected_revision: first.expected_revision,
+          change: last.change,
+          authored_at_ms: last.authored_at_ms,
+          ...(first.base ? { base: first.base } : {}),
+        }, operation);
+      } finally {
+        settling = false;
       }
-      return true;
+      await replica.flush();
     }
     async function drain(): Promise<void> {
       if (draining || stopped || sealed || snapshot.phase === "conflict") {
@@ -275,7 +362,15 @@ export function createDraftRepository(options: RepositoryOptions) {
         for (;;) {
           const mutation = replica.pending().find((m) => deliverable.has(m.id));
           if (!mutation || stopped || sealed) break;
+          // Nothing is in flight here. A write still being made durable is
+          // newer than any fold, so folding waits for it.
+          const writes = replica.pending().filter((m) => fresh.has(m.id));
+          if (writes.length > 1 && writes.every((m) => deliverable.has(m.id))) {
+            await fold(writes);
+            continue;
+          }
           const args = mutation.args as DraftMutationArgs;
+          fresh.delete(mutation.id);
           publish({ phase: "saving", error: null });
           let response: Response;
           try {
@@ -298,14 +393,20 @@ export function createDraftRepository(options: RepositoryOptions) {
             break;
           }
           if (stopped || sealed) break;
-          const result: unknown = await response.json();
+          // A proxy in front of a restarting controller answers without JSON.
+          const result: unknown = await response.json().catch(() => null);
           if (!response.ok) {
-            const detail = result as { error?: string; current?: unknown };
+            const detail =
+              (result !== null && typeof result === "object" ? result : {}) as {
+                error?: string;
+                current?: unknown;
+              };
             if (response.status === 409 && "current" in detail) {
               const remote = detail.current
                 ? decodeDraft(detail.current)
                 : null;
-              if (rebases < MAX_REBASES && await rebase(mutation, remote)) {
+              if (rebases < MAX_REBASES) {
+                await rebase(mutation, remote);
                 rebases++;
                 publish({
                   phase: replica.pending().length ? "local" : "saved",
@@ -333,9 +434,16 @@ export function createDraftRepository(options: RepositoryOptions) {
                   remote,
                 });}
             } else {
+              rejected = response.status < 500;
+              if (rejected && args.change.type === "write") {
+                fresh.add(mutation.id);
+              }
               publish({
-                phase: response.status >= 500 ? "local" : "error",
-                error: detail.error ?? "Draft could not sync",
+                phase: rejected ? "error" : "local",
+                error: detail.error ??
+                  (response.status === 413
+                    ? "This draft is too large to sync. Remove an attachment."
+                    : "Draft could not sync"),
               });
             }
             break;
@@ -445,16 +553,29 @@ export function createDraftRepository(options: RepositoryOptions) {
         authored_at_ms: Date.now(),
         ...(ancestor ? { base: ancestor } : {}),
       };
+      const operation = crypto.randomUUID();
+      if (change.type === "write") fresh.add(operation);
       try {
-        await replica.mutateDurably("change", args, crypto.randomUUID());
+        await replica.mutateDurably("change", args, operation);
         assertActive();
       } catch (error) {
+        fresh.delete(operation);
         publish({
           phase: "error",
           error:
             "Could not save on this device. Keep this editor open and export your text.",
         });
         throw error;
+      }
+    }
+    async function retry(): Promise<void> {
+      await hydrate();
+      if (snapshot.phase !== "conflict") {
+        publish({
+          phase: replica.pending().length ? "local" : "saved",
+          error: null,
+        });
+        replica.resend();
       }
     }
     return {
@@ -467,6 +588,7 @@ export function createDraftRepository(options: RepositoryOptions) {
       },
       hydrate,
       refresh,
+      reindex,
       change,
       whenSynced: (): Promise<void> =>
         new Promise((resolve, reject) => {
@@ -497,15 +619,10 @@ export function createDraftRepository(options: RepositoryOptions) {
           options.signal.addEventListener("abort", abort, { once: true });
           check();
         }),
-      retry: async () => {
-        await hydrate();
-        if (snapshot.phase !== "conflict") {
-          publish({
-            phase: replica.pending().length ? "local" : "saved",
-            error: null,
-          });
-          replica.resend();
-        }
+      retry,
+      /** Background retry: never uploads again what the server rejected. */
+      resume: async () => {
+        if (!rejected) await retry();
       },
       /** Only after an explicit recovery decision; durable confirmation keeps
        * a reload from resending a branch the user chose to abandon. */
@@ -514,6 +631,7 @@ export function createDraftRepository(options: RepositoryOptions) {
         if (draining) throw new Error("Wait for the current save to finish");
         await replica.confirmDurably(replica.pending().map((m) => m.id));
         deliverable.clear();
+        fresh.clear();
         const remote = snapshot.remote;
         replica.applyPatch(snapshotPatch(remote?.revision ?? 0, remote, []), {
           force: true,
@@ -566,11 +684,13 @@ export function createDraftRepository(options: RepositoryOptions) {
           )
         );
         assertActive();
+        for (const entry of entries) heard(entry);
+        ownViews.clear();
         library = { entries, loaded: true, error: null };
-        for (const owner of owners.values()) updateIndex(owner.get().document);
+        for (const owner of owners.values()) owner.reindex();
         await options.cache.save(library.entries);
         emit();
-        for (const owner of owners.values()) void owner.retry();
+        for (const owner of owners.values()) void owner.resume();
       } catch (error) {
         library = {
           ...library,
@@ -645,6 +765,7 @@ export function createDraftRepository(options: RepositoryOptions) {
       } catch {
         continue;
       }
+      heard(metadata);
       if (library.loaded) updateIndex(metadata);
       const owner = owners.get(metadata.id);
       if (owner && !owner.revisionKnown(metadata.revision)) {
