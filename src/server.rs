@@ -10291,6 +10291,10 @@ async fn serve_axum(
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/calls", get(managed_calls::list))
         .route(
+            "/api/sessions/{id}/calls/approval",
+            post(managed_calls::decide_approval),
+        )
+        .route(
             "/api/sessions/{id}/tools",
             get(agent_tools::session).put(agent_tools::configure_session),
         )
@@ -19175,7 +19179,8 @@ fn project_outbound(
                 .collect(),
         }),
         Outbound::Snapshot { ref session_id, .. }
-        | Outbound::ConfigOptions { ref session_id, .. } => {
+        | Outbound::ConfigOptions { ref session_id, .. }
+        | Outbound::CallApproval { ref session_id, .. } => {
             session_is_visible(hub, principal, session_id).then_some(message)
         }
         Outbound::Event { ref envelope } => {

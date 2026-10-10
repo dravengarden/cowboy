@@ -41,6 +41,7 @@ pub(in crate::server) struct Coordinator {
     installing: Mutex<HashSet<String>>,
     pub(super) runners: Mutex<HashSet<String>>,
     pub(super) changed: tokio::sync::Notify,
+    pub(super) approvals: super::approval::Approvals,
 }
 
 pub(super) fn error(code: &str, admission: &str) -> Value {
@@ -675,7 +676,12 @@ async fn start(
     };
     let (mut targets, selection) = match agent_tools::choose(&policy, &meta.provider, requested) {
         agent_tools::Choice::Candidates { targets, selection } => (targets, selection),
-        agent_tools::Choice::Refused(code) => return error(code, "not_submitted"),
+        agent_tools::Choice::Refused(code) => {
+            match await_approval(state, meta, &policy, requested, &request, code) {
+                Ok(admitted) => admitted,
+                Err(refusal) => return refusal,
+            }
+        }
     };
     if continued.is_some() {
         targets.truncate(1);
@@ -741,9 +747,45 @@ async fn start(
             return error(code, "not_submitted");
         }
     };
+    state
+        .managed_calls
+        .approvals
+        .admitted(&meta.id, &request.request_id);
     super::runner::ensure_runner(state, &record);
     state.managed_calls.notify();
     envelope(&wait_started(state, ledger, &record, wait_ms).await)
+}
+
+/// A policy refusal becomes a question for the session's person: the agent
+/// keeps resubmitting this request while it waits, and the parent's viewers
+/// see one prompt to allow it once, for the session, or decline it.
+fn await_approval(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    policy: &agent_tools::CallsPolicy,
+    requested: &str,
+    request: &Request,
+    code: &'static str,
+) -> Result<(Vec<agent_tools::CallTarget>, &'static str), Value> {
+    let approvals = &state.managed_calls.approvals;
+    match approvals.refused(&meta.id, request, requested, code) {
+        super::approval::Gate::Declined => Err(error("calls_declined", "not_submitted")),
+        super::approval::Gate::Pending => {
+            state
+                .hub
+                .broadcast_call_approval(&meta.id, approvals.view(&meta.id, &meta.provider));
+            let mut refusal = error(code, "not_submitted");
+            refusal["approval"] = json!("pending");
+            Err(refusal)
+        }
+        super::approval::Gate::Approved => {
+            let once = agent_tools::allow_once(policy.clone(), requested);
+            match agent_tools::choose(&once, &meta.provider, requested) {
+                agent_tools::Choice::Candidates { targets, selection } => Ok((targets, selection)),
+                agent_tools::Choice::Refused(code) => Err(error(code, "not_submitted")),
+            }
+        }
+    }
 }
 
 /// Bounded initial observation: return once the call left the launch

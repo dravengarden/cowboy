@@ -195,6 +195,8 @@ import {
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { ProviderQuotaStatus } from "./ProviderQuotaStatus";
 import { PermissionOverlay } from "./PermissionOverlay";
+import { CallApprovalOverlay } from "./CallApprovalOverlay";
+import { useCallApproval } from "./callApproval";
 import {
   composerTimelineSlice,
   sameComposerTimelineSlice,
@@ -1211,6 +1213,9 @@ export function ComposerWorkspace({
   // the sticky PermissionOverlay takes the floating slot INSTEAD of the
   // turn-status pill — the two share the slot + material but never show at once.
   const pendingPermission = timelineState.pendingPermission;
+  // Agent calls the session's policy refused, waiting for this person's
+  // answer. It ranks below a tool permission and above the turn status.
+  const callApproval = useCallApproval(sessionId);
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
@@ -1960,6 +1965,28 @@ export function ComposerWorkspace({
                       title={action === "approve"
                         ? "Allow once"
                         : "Reject once"}
+                      showWhenPane="conversation"
+                    />
+                  </Suspense>
+                ),
+              }
+              : {})}
+          />
+        )
+        : callApproval
+        ? (
+          <CallApprovalOverlay
+            approval={callApproval}
+            sessionId={sessionId}
+            {...(desktop
+              ? {
+                shortcutForAction: (action: "approve" | "reject") => (
+                  <Suspense fallback={null}>
+                    <DesktopRegionShortcut
+                      shortcut={action === "approve" ? "A" : "R"}
+                      title={action === "approve"
+                        ? "Allow once"
+                        : "Decline"}
                       showWhenPane="conversation"
                     />
                   </Suspense>

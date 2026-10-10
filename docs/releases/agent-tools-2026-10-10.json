@@ -54,5 +54,35 @@
   "Calls are off by default: Suger Codex reviews exit 3 until a session or agent kind enables them in Tools.",
   "No production end-to-end call or UI toggle was exercised: the site needs the owner's Cardea login and the driving session predates call context.",
   "Matrix tools/recall switches are stored and shown; adapter enforcement is phase 2."
- ]
+ ],
+ "call_approval": {
+  "revision": "54c9a4ce58b7e574a921c4b3a9b9c0972ceb7268",
+  "scope": "Policy refusals become an Allow once / Allow for this session / Decline prompt; the CLI waits with --approval-wait-ms",
+  "releases": {
+   "controller": "/nix/store/8wv6igbhcf9ar062rj8nkcg1bg9sx8ha-cowboy-controller-release",
+   "web": "/nix/store/xs2475m8cnfc3wnl5q9g6zz4a1wvrqfp-cowboy-web-release",
+   "hawk_machine": "/nix/store/5l4sw9k048fjsyw1c21pbqpp6cwgxrdq-cowboy-machine-writer-host-release",
+   "ovh_machine": {
+    "release": "/nix/store/8w3wjq6j1njd95a2zny3yrpqy15lb20n-cowboy-machine-release",
+    "receipt": "/var/lib/columbus/ovh-machine-54c9a4ce58b7-20261010T041244Z",
+    "workers": "retained"
+   },
+   "suger": "f395dc6 rebased: waits up to 15 minutes for the answer; calls_declined exits 3"
+  },
+  "gates": {
+   "check_compact": "passed",
+   "managed_calls_browser_conformance": 11,
+   "claude_worker": "passed",
+   "codex_worker": "passed",
+   "session_checks": 15,
+   "suger_adapter_tests": 10
+  },
+  "production_checks": {
+   "hawk_cli_has_approval_wait": true,
+   "controller_warnings_since_restart": 0
+  },
+  "limits": [
+   "The prompt was exercised in browser conformance, not on the production site (owner Cardea login required)."
+  ]
+ }
 }

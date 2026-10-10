@@ -25,7 +25,14 @@ pub struct StartArgs {
     /// Bounded initial observation; elapsed waiting never cancels the call.
     #[arg(long, default_value_t = 30_000, value_parser = clap::value_parser!(u64).range(0..=60_000))]
     wait_ms: u64,
+    /// While the session's policy refuses this call, wait this long for a
+    /// person to allow it in Cowboy, resubmitting the same request.
+    #[arg(long, default_value_t = 100_000, value_parser = clap::value_parser!(u64).range(0..=3_600_000))]
+    approval_wait_ms: u64,
 }
+
+/// How often a waiting request asks again; it also keeps the prompt shown.
+const APPROVAL_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Args)]
 pub struct CallArgs {
@@ -61,7 +68,7 @@ enum CallCommand {
 }
 
 // Deliberately no Debug: both wiring and RPC frames contain private grants.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Wiring {
     schema: u16,
@@ -223,16 +230,40 @@ pub async fn start(provider: &str, args: StartArgs) -> anyhow::Result<()> {
         Err(code) => return emit(&error(code, "not_submitted")),
     };
     let request_id = request.request_id.clone();
-    let mut value = exchange(
-        context,
-        Action::Start {
-            provider: provider.into(),
-            request: Box::new(request),
-            wait_ms: args.wait_ms,
-        },
-        args.wait_ms,
-    )
-    .await;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_millis(args.approval_wait_ms);
+    let mut announced = false;
+    let mut value = loop {
+        let value = exchange(
+            context.clone(),
+            Action::Start {
+                provider: provider.into(),
+                request: Box::new(request.clone()),
+                wait_ms: args.wait_ms,
+            },
+            args.wait_ms,
+        )
+        .await;
+        if value.get("approval").and_then(Value::as_str) != Some("pending")
+            || std::time::Instant::now() + APPROVAL_POLL > deadline
+        {
+            break value;
+        }
+        if !announced {
+            announced = true;
+            eprintln!(
+                "Agent calls are off for this Cowboy session; waiting for the user to allow this call in Cowboy..."
+            );
+        }
+        tokio::time::sleep(APPROVAL_POLL).await;
+    };
+    if value.get("approval").and_then(Value::as_str) == Some("pending") {
+        // Nobody answered in time; the same request may simply be run again.
+        value["request_id"] = json!(request_id);
+        value["hint"] = json!(
+            "The user has not allowed this call yet. They can allow it from the prompt in Cowboy or turn on Agent calls in the session's Tools; rerun the same command afterwards."
+        );
+    }
     if value.pointer("/error/admission").and_then(Value::as_str) == Some("unknown") {
         value["request_id"] = json!(request_id);
         value["next"] = json!({"argv":["cowboy","call","observe",request_id]});

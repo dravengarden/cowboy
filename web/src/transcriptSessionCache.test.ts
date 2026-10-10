@@ -1,5 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  CREATED_SESSION_LISTING_GRACE_MS,
+  listedOrJustCreatedSessions,
   retainTranscriptSessionCache,
   touchTranscriptSessionCache,
   TRANSCRIPT_SESSION_CACHE_LIMIT,
@@ -84,4 +86,35 @@ Deno.test("pinning evicts the next coldest session instead", () => {
   const touched = touchTranscriptSessionCache(["a", "b", "c"], "d", 3, "a");
   assertEquals(touched.order, ["a", "c", "d"]);
   assertEquals(touched.evicted, ["b"]);
+});
+
+Deno.test("a list produced before a creation does not evict the session just opened", () => {
+  const created = new Map([["new", 1_000]]);
+  // The stale frame arrives after the client opened the created session.
+  const stale = listedOrJustCreatedSessions(new Set(["a"]), created, 1_050);
+  assertEquals(
+    retainTranscriptSessionCache(["a", "new"], stale).evicted,
+    [],
+  );
+  assertEquals([...created.keys()], ["new"]);
+
+  // The authoritative list names it; later absences are real deletions.
+  listedOrJustCreatedSessions(new Set(["a", "new"]), created, 1_100);
+  assertEquals(created.size, 0);
+  const deleted = listedOrJustCreatedSessions(new Set(["a"]), created, 1_200);
+  assertEquals(
+    retainTranscriptSessionCache(["a", "new"], deleted).evicted,
+    ["new"],
+  );
+});
+
+Deno.test("a created session that no list ever names stops being protected", () => {
+  const created = new Map([["new", 1_000]]);
+  const valid = listedOrJustCreatedSessions(
+    new Set(["a"]),
+    created,
+    1_000 + CREATED_SESSION_LISTING_GRACE_MS,
+  );
+  assertEquals([...valid], ["a"]);
+  assertEquals(created.size, 0);
 });

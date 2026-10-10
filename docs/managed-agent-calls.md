@@ -215,6 +215,34 @@ maximum running calls (safe to resubmit the same request later) and
 budget; concurrent submissions may pass them together. `cowboy call
 capabilities` reports `enabled`, `default`, the limits and a per-Provider reason.
 
+### Asking the person
+
+A policy refusal is a question, not a dead end. The coordinator records each
+`calls_disabled`/`policy_denied` request in an in-memory registry per parent
+and pushes `call_approval` (gated by session visibility) with one aggregated
+prompt: the caller, the requested agents and a short label per request. The
+refusal carries `"approval": "pending"`, and `cowboy codex|claude|call start`
+resubmits the same request every 3 seconds for `--approval-wait-ms` (default
+100 seconds, up to an hour) while printing one waiting notice on stderr. Each
+resubmission refreshes the prompt; a request nobody resubmits drops out after
+15 seconds, and clients hide a prompt whose `ttl_ms` passed, so the prompt
+lives exactly as long as an agent waits and survives reconnects.
+
+The composer shows it in the tool-permission slot with the same material
+(below a pending permission, above the turn status). `POST
+/api/sessions/{id}/calls/approval {"decision": "once"|"session"|"decline"}`
+(requires `can_mutate`) applies to every request waiting at that moment:
+
+- `once` admits those requests with calls on and their agent added as a target
+  for that admission only; the session policy is unchanged.
+- `session` also writes the session override: calls on and the requested
+  agents added to its targets.
+- `decline` makes their resubmissions fail with `calls_declined`.
+
+Desktop `A`/`R` resolve it like a permission (Allow once / Decline). Limits
+still apply after approval; decisions expire after 30 minutes and are
+forgotten on Controller restart, where the agent simply asks again.
+
 The runner applies the selected preset's exact value map as configuration
 preferences for the child before its first prompt. The managed worker accepts
 `session/set_config_option` only for option ids that the signed package's

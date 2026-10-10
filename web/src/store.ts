@@ -150,8 +150,10 @@ import { retainedEventCountForRows, retainTimelineState } from "./timelineRetent
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { readUsage, startUsageRefresh } from "./usageApi";
 import type { UsageSnapshot } from "./usageLimits";
+import { receiveCallApproval } from "./callApproval";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import {
+  listedOrJustCreatedSessions,
   retainTranscriptSessionCache,
   touchTranscriptSessionCache,
   TRANSCRIPT_SESSION_CACHE_LIMIT,
@@ -348,6 +350,9 @@ let productSessionPausedForAuth = false;
 // re-assert it to the daemon (revive-on-open), recovering the agent after a
 // daemon restart we reconnected across. See openSession + connect's onopen.
 let openedSessionId: string | undefined;
+// Sessions this client created that no `sessions` list has named yet (id →
+// creation time). See `listedOrJustCreatedSessions`.
+const unlistedCreatedSessions = new Map<string, number>();
 interface SessionHydration {
   promise: Promise<void>;
   controller: AbortController;
@@ -1551,6 +1556,9 @@ function handle(msg: Outbound): void {
     case "usage":
       setState({ ...state, usage: msg.snapshot });
       break;
+    case "call_approval":
+      receiveCallApproval(msg.session_id, msg.approval);
+      break;
     case "ping":
       // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
       // the liveness watchdog). Nothing to render.
@@ -1580,11 +1588,27 @@ function handle(msg: Outbound): void {
       // The list is authoritative: drop composer drafts for sessions that no
       // longer exist (deleted here or on another terminal). Tolerant + off the
       // input path.
-      const validSessions = new Set(msg.sessions.map((s) => s.id));
+      const validSessions = listedOrJustCreatedSessions(
+        new Set(msg.sessions.map((s) => s.id)),
+        unlistedCreatedSessions,
+        Date.now(),
+      );
       pruneDrafts(validSessions);
       prunePendingEdits(validSessions);
       retainTranscriptSessions(validSessions);
       retainReplicaSessions(validSessions);
+      // An opened transcript with neither history nor a fetch in progress has
+      // no other way back from its skeleton; the list proves it still exists.
+      if (
+        openedSessionId !== undefined && validSessions.has(openedSessionId) &&
+        !state.hydrated.has(openedSessionId) &&
+        !sessionHydrations.has(openedSessionId) &&
+        !sessionHydrationRetryTimers.has(openedSessionId) &&
+        state.connected && globalThis.document?.visibilityState !== "hidden"
+      ) {
+        touchTranscriptSession(openedSessionId);
+        void hydrateSession(openedSessionId);
+      }
       break;
     }
     case "machines": {
@@ -4906,6 +4930,9 @@ export function markSessionHydrated(id: string): void {
   const retry = sessionHydrationRetryTimers.get(id);
   if (retry !== undefined) clearTimeout(retry);
   sessionHydrationRetryTimers.delete(id);
+  if (!rawSessions.some((session) => session.id === id)) {
+    unlistedCreatedSessions.set(id, Date.now());
+  }
   if (state.hydrated.has(id)) return;
   setState({ ...state, hydrated: new Set(state.hydrated).add(id) });
 }

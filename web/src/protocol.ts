@@ -398,6 +398,13 @@ export type Outbound =
   // The Controller's account usage snapshot, sent whenever it or its refresh
   // state changes so every client shows the same values and progress.
   | { type: "usage"; snapshot: import("./usageLimits").UsageSnapshot }
+  // Agent calls this session's agent waits for a person to approve; null
+  // once nothing waits. Re-sent while it waits (see callApproval.ts).
+  | {
+    type: "call_approval";
+    session_id: string;
+    approval: import("./callApproval").CallApproval | null;
+  }
   // Addressed refusal of one client-authored command. Only the device whose
   // outbox owns `cmid` acts on it (docs/offline-first-sync.md §Conflict catalog).
   | {

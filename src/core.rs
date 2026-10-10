@@ -713,9 +713,38 @@ pub struct RestoredSession {
     pub mobile_review_state: serde_json::Value,
     /// Explicit sidebar folder placement (`sessions.folder_id`).
     pub folder_id: Option<String>,
-    /// Wall-clock epoch ms of the newest durable event, so idle-based
-    /// policies keep measuring across Controller restarts.
+    /// Wall-clock epoch ms of the newest durable event that counts as
+    /// activity, so idle-based policies keep measuring across restarts.
     pub last_event_at_ms: Option<i64>,
+}
+
+/// ACP updates a worker emits on its own whenever it starts or reconnects.
+/// They, like lifecycle edges, say nothing about whether anyone used the
+/// session, so they do not reset its idle clock.
+const NON_ACTIVITY_SESSION_UPDATES: [&str; 5] = [
+    "available_commands_update",
+    "current_mode_update",
+    "config_option_update",
+    "usage_update",
+    "session_info_update",
+];
+
+/// [`NON_ACTIVITY_SESSION_UPDATES`] as a SQL list for the restore queries.
+pub(crate) const NON_ACTIVITY_SESSION_UPDATES_SQL: &str = "'available_commands_update', \
+'current_mode_update', 'config_option_update', 'usage_update', 'session_info_update'";
+
+/// Whether an event shows the session being used: prompts, agent output,
+/// tool calls and permissions. Lifecycle edges and worker metadata replayed
+/// by a restart or reconnect are not.
+pub(crate) fn counts_as_activity(event: &Event) -> bool {
+    match event {
+        Event::Lifecycle { .. } => false,
+        Event::Update { update } => !update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| NON_ACTIVITY_SESSION_UPDATES.contains(&kind)),
+        _ => true,
+    }
 }
 
 /// When a restored session was last active, from its newest durable event.
@@ -765,8 +794,8 @@ struct Session {
     event_count: u64,
     reached_start: bool,
     next_seq: u64,
-    /// When this Controller last appended an event to the session. Monotonic;
-    /// a restart restores it from the newest durable event's wall-clock time,
+    /// When the session last showed activity (see [`counts_as_activity`]).
+    /// Monotonic; a restart restores it from the newest such durable event,
     /// so idle-based policies do not restart their wait on every deploy.
     last_activity: std::time::Instant,
     /// Last seen agent-advertised config options (raw ACP
@@ -1349,6 +1378,14 @@ pub enum Outbound {
     /// The Controller's account usage snapshot, including which accounts are
     /// refreshing. Sent whenever it changes so every client shows one state.
     Usage { snapshot: serde_json::Value },
+    /// Agent calls a session's agent is waiting for a person to approve, or
+    /// `None` once nothing waits. Re-sent while the agent keeps asking, so a
+    /// reconnecting client recovers it; it expires after `ttl_ms` otherwise.
+    CallApproval {
+        session_id: String,
+        #[serde(default)]
+        approval: Option<serde_json::Value>,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -1922,6 +1959,14 @@ impl Hub {
             .broadcast_last_bytes
             .store(bytes, Ordering::Relaxed);
         let _ = self.inner.tx.send(FanoutFrame::new(outbound));
+    }
+
+    /// Publish a session's pending agent-call approval to its viewers.
+    pub fn broadcast_call_approval(&self, session_id: &str, approval: Option<serde_json::Value>) {
+        self.fanout(Outbound::CallApproval {
+            session_id: session_id.to_owned(),
+            approval,
+        });
     }
 
     /// Publish the current account usage snapshot to every client.
@@ -4457,7 +4502,9 @@ impl Hub {
             }
             let seq = s.next_seq;
             s.next_seq += 1;
-            s.last_activity = std::time::Instant::now();
+            if counts_as_activity(&event) {
+                s.last_activity = std::time::Instant::now();
+            }
             let envelope = Envelope {
                 session_id: session_id.to_owned(),
                 seq,
@@ -6741,6 +6788,42 @@ mod runtime_reconciliation_tests {
         assert_eq!(value["placement"]["filed"], "f-a");
         // A placement into a vanished folder degrades to the root.
         assert!(value["placement"].get("loose").is_none());
+    }
+
+    #[test]
+    fn worker_replays_do_not_reset_the_idle_clock() {
+        let hub = Hub::new();
+        let mut idle = restored_busy("idle");
+        idle.meta.status = Status::Exited;
+        idle.last_event_at_ms = Some(now_ms() - 2 * 60 * 60 * 1000);
+        hub.restore_with_workers(vec![idle], &[]);
+        let long = std::time::Duration::from_secs(7_000);
+        // A reconnect re-asserts status and replays worker metadata.
+        hub.set_status("idle", Status::Running, None);
+        hub.push(
+            "idle",
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "available_commands_update", "availableCommands": []}),
+            },
+        );
+        assert!(hub.session_idle_for("idle").unwrap() >= long);
+        // Agent output is real use.
+        hub.push(
+            "idle",
+            Event::Update {
+                update: serde_json::json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}}),
+            },
+        );
+        assert!(hub.session_idle_for("idle").unwrap() < std::time::Duration::from_secs(5));
+        for kind in crate::core::NON_ACTIVITY_SESSION_UPDATES {
+            assert!(crate::core::NON_ACTIVITY_SESSION_UPDATES_SQL.contains(&format!("'{kind}'")));
+        }
+        assert_eq!(
+            crate::core::NON_ACTIVITY_SESSION_UPDATES_SQL
+                .matches('\'')
+                .count(),
+            2 * crate::core::NON_ACTIVITY_SESSION_UPDATES.len()
+        );
     }
 
     #[test]
