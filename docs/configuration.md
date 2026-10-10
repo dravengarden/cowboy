@@ -203,8 +203,10 @@ Hibernation sends no model request and the conversation resumes when the
 session is opened (`docs/hibernation-token-audit-2026-10-06.md`). Keeping the
 idle threshold at or above the longest Provider prompt-cache lifetime means a
 reclaimed session's cache had already expired, so reclaiming it adds no token
-cost. Idle time is measured by the running Controller; after a restart every
-session counts as freshly active.
+cost. Idle time counts from a session's newest event. A Controller restart
+restores it from that event's durable timestamp, so a deploy does not restart
+the wait for reclaim or idle Provider updates; a session without a recorded
+event counts as freshly active.
 
 ## Disk retention
 

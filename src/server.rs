@@ -1245,6 +1245,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     config_preferences: ls.config_preferences,
                     mobile_review_state: ls.mobile_review_state,
                     folder_id: ls.folder_id,
+                    last_event_at_ms: ls.last_event_at_ms,
                 })
                 .collect();
             let restored_count = restored.len();

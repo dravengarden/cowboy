@@ -425,6 +425,8 @@ pub struct LoadedSession {
     pub mobile_review_state: serde_json::Value,
     /// Explicit sidebar folder placement (`sessions.folder_id`), if any.
     pub folder_id: Option<String>,
+    /// Epoch ms of the newest durable event, if any.
+    pub last_event_at_ms: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -3242,10 +3244,12 @@ impl PostgresStorage {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
                 "WITH recent AS MATERIALIZED ( \
-                     SELECT seq, payload FROM events \
+                     SELECT seq, payload, \
+                            (extract(epoch FROM ts) * 1000)::bigint AS ts_ms \
+                     FROM events \
                      WHERE session_id = $1 ORDER BY seq DESC LIMIT $2 \
                  ), sized AS ( \
-                     SELECT seq, payload, \
+                     SELECT seq, payload, ts_ms, \
                             row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
                             sum(octet_length(payload::text) + $4) \
                                 OVER (ORDER BY seq DESC) AS cumulative_bytes \
@@ -3254,7 +3258,7 @@ impl PostgresStorage {
                      SELECT count(*)::bigint AS total_count \
                      FROM events WHERE session_id = $1 \
                  ) \
-                 SELECT sized.seq, sized.payload, totals.total_count \
+                 SELECT sized.seq, sized.payload, totals.total_count, sized.ts_ms \
                  FROM sized CROSS JOIN totals \
                  WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= $3 \
                  ORDER BY sized.seq DESC",
@@ -3271,6 +3275,7 @@ impl PostgresStorage {
                 .first()
                 .and_then(|r| u64::try_from(r.total_count).ok())
                 .unwrap_or(0);
+            let last_event_at_ms = event_rows.first().and_then(|r| r.ts_ms);
             let mut reached_start =
                 event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
             let mut events = Vec::with_capacity(event_rows.len());
@@ -3337,6 +3342,7 @@ impl PostgresStorage {
                 config_preferences,
                 mobile_review_state,
                 folder_id,
+                last_event_at_ms,
             });
         }
         Ok(out)
@@ -8829,6 +8835,9 @@ struct EventRow {
     seq: i64,
     payload: serde_json::Value,
     total_count: i64,
+    /// Only the restore query selects it.
+    #[sqlx(default)]
+    ts_ms: Option<i64>,
 }
 
 #[cfg(test)]
@@ -10274,6 +10283,12 @@ mod storage_contract_tests {
         assert!(restored.meta.owner_username.is_none());
         assert_eq!(restored.events.len(), 2);
         assert_eq!(restored.next_seq, 2);
+        // The newest event's wall-clock time restores the idle clock.
+        let written_at = restored
+            .last_event_at_ms
+            .context("restore lost the newest event time")?;
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(written_at <= now + 1_000 && written_at > now - 10 * 60 * 1_000);
         assert_eq!(restored.queue[0].id, "queue-1");
         assert_eq!(restored.drafts[0].id, "draft-1");
         assert_eq!(

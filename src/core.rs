@@ -713,6 +713,20 @@ pub struct RestoredSession {
     pub mobile_review_state: serde_json::Value,
     /// Explicit sidebar folder placement (`sessions.folder_id`).
     pub folder_id: Option<String>,
+    /// Wall-clock epoch ms of the newest durable event, so idle-based
+    /// policies keep measuring across Controller restarts.
+    pub last_event_at_ms: Option<i64>,
+}
+
+/// When a restored session was last active, from its newest durable event.
+/// Without a record (or with a clock in the future) it counts as just active,
+/// the conservative choice for every idle-based policy.
+fn restored_last_activity(last_event_at_ms: Option<i64>, now_ms: i64) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    last_event_at_ms
+        .and_then(|at| u64::try_from(now_ms.saturating_sub(at)).ok())
+        .and_then(|idle| now.checked_sub(std::time::Duration::from_millis(idle)))
+        .unwrap_or(now)
 }
 
 /// Per-session info for the UI's session-info dialog — the metadata plus the
@@ -751,9 +765,9 @@ struct Session {
     event_count: u64,
     reached_start: bool,
     next_seq: u64,
-    /// When this Controller last appended an event to the session. Monotonic
-    /// and process-local: a restart treats every session as just active, so
-    /// idle-based policies wait a full idle period before acting.
+    /// When this Controller last appended an event to the session. Monotonic;
+    /// a restart restores it from the newest durable event's wall-clock time,
+    /// so idle-based policies do not restart their wait on every deploy.
     last_activity: std::time::Instant,
     /// Last seen agent-advertised config options (raw ACP
     /// `configOptions` array — see acp.rs intercept). `None` until the agent
@@ -2181,6 +2195,7 @@ impl Hub {
                     mut config_preferences,
                     mobile_review_state,
                     folder_id,
+                    last_event_at_ms,
                 } = r;
                 let mut healed = false;
                 let queue_len = queue.len();
@@ -2280,7 +2295,7 @@ impl Hub {
                         event_count,
                         reached_start,
                         next_seq,
-                        last_activity: std::time::Instant::now(),
+                        last_activity: restored_last_activity(last_event_at_ms, now_ms()),
                         config_options,
                         config_preferences,
                         queue,
@@ -6728,6 +6743,32 @@ mod runtime_reconciliation_tests {
         assert!(value["placement"].get("loose").is_none());
     }
 
+    #[test]
+    fn restore_keeps_measuring_idle_time_from_the_newest_durable_event() {
+        let hub = Hub::new();
+        let mut idle = restored_busy("idle");
+        idle.meta.status = Status::Exited;
+        idle.last_event_at_ms = Some(now_ms() - 2 * 60 * 60 * 1000);
+        let mut unknown = restored_busy("unknown");
+        unknown.meta.status = Status::Exited;
+        let mut future = restored_busy("future");
+        future.meta.status = Status::Exited;
+        future.last_event_at_ms = Some(now_ms() + 60_000);
+        hub.restore_with_workers(vec![idle, unknown, future], &[]);
+        let idle_for = hub.session_idle_for("idle").unwrap();
+        assert!(
+            idle_for >= std::time::Duration::from_secs(7_190),
+            "{idle_for:?}"
+        );
+        assert!(
+            idle_for <= std::time::Duration::from_secs(7_300),
+            "{idle_for:?}"
+        );
+        // No record, or a clock ahead of ours, conservatively means just active.
+        assert!(hub.session_idle_for("unknown").unwrap() < std::time::Duration::from_secs(5));
+        assert!(hub.session_idle_for("future").unwrap() < std::time::Duration::from_secs(5));
+    }
+
     fn restored_busy(id: &str) -> RestoredSession {
         RestoredSession {
             meta: SessionMeta {
@@ -6770,6 +6811,7 @@ mod runtime_reconciliation_tests {
             config_preferences: serde_json::json!({}),
             mobile_review_state: serde_json::Value::Null,
             folder_id: None,
+            last_event_at_ms: None,
         }
     }
 

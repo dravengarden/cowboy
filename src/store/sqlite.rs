@@ -2296,10 +2296,10 @@ impl SqliteStorage {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as(
                 "WITH recent AS MATERIALIZED ( \
-                     SELECT seq, payload FROM events \
+                     SELECT seq, payload, ts_ms FROM events \
                      WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2 \
                  ), sized AS ( \
-                     SELECT seq, payload, \
+                     SELECT seq, payload, ts_ms, \
                             row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
                             sum(length(CAST(payload AS BLOB)) + ?4) \
                                 OVER (ORDER BY seq DESC) AS cumulative_bytes \
@@ -2307,7 +2307,7 @@ impl SqliteStorage {
                  ), totals AS ( \
                      SELECT count(*) AS total_count FROM events WHERE session_id = ?1 \
                  ) \
-                 SELECT sized.seq, sized.payload, totals.total_count \
+                 SELECT sized.seq, sized.payload, totals.total_count, sized.ts_ms \
                  FROM sized CROSS JOIN totals \
                  WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= ?3 \
                  ORDER BY sized.seq DESC",
@@ -2323,6 +2323,7 @@ impl SqliteStorage {
                 .first()
                 .and_then(|event| u64::try_from(event.total_count).ok())
                 .unwrap_or(0);
+            let last_event_at_ms = event_rows.first().and_then(|event| event.ts_ms);
             let mut reached_start =
                 event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
             let mut events: Vec<_> = event_rows
@@ -2356,6 +2357,7 @@ impl SqliteStorage {
                 config_preferences,
                 mobile_review_state,
                 folder_id,
+                last_event_at_ms,
             });
         }
         Ok(output)
