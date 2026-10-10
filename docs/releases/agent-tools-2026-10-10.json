@@ -1,0 +1,58 @@
+{
+ "schema": 1,
+ "observed_at": "2026-10-10T00:10:00Z",
+ "revision": "56e6a7e3b061199130e098e6a4302d3db8c3783c",
+ "feature_revisions": {
+  "policy": "5f7d24f1",
+  "test": "042f7985",
+  "workers_pin": "1ddce158"
+ },
+ "scope": "Agent tools phase 1: off-by-default agent calls policy per agent kind and per session, presets, limits, Settings and session Tools UI",
+ "releases": {
+  "controller": {
+   "release": "/nix/store/zn1kjdj1chkxn0gnzy5p65gv1qy35pfi-cowboy-controller-release",
+   "outcome": "succeeded"
+  },
+  "web": {
+   "release": "/nix/store/afmyg9db27hi60jndgyc0312yw7rw8jh-cowboy-web-release",
+   "outcome": "succeeded",
+   "spa_version": "5a2e25abb4cd71f3d9cca00e2ece6834"
+  },
+  "hawk_machine": {
+   "release": "/nix/store/jzp61j7j336ksh4a2x3j1l6qy7mk41la-cowboy-machine-writer-host-release",
+   "worker_generation": "worker-8701235fd2a3f89f3e15",
+   "retained_worker_source": "042f79854c9a0af80921e4d74a4743ed0db28d97",
+   "outcome": "succeeded"
+  },
+  "ovh_machine": {
+   "release": "/nix/store/cbq9li9xsfw020smbqy1i4vsjrdyxa8c-cowboy-machine-release",
+   "worker_generation": "worker-e368655f5e75802f4c50",
+   "receipt": "/var/lib/columbus/ovh-machine-56e6a7e3b061-20261010T000529Z",
+   "workers_retained": 22
+  },
+  "suger": {
+   "repository": "dravengarden/suger",
+   "revision": "fed4be0",
+   "change": "Codex transport exits 3 on calls_disabled/policy_denied and queues on concurrency_limit"
+  }
+ },
+ "gates": {
+  "check_compact": "passed",
+  "managed_calls_browser_conformance": 10,
+  "claude_worker_checks": 92,
+  "claude_managed": "passed",
+  "codex_worker": "passed",
+  "session_checks": 15,
+  "suger_adapter_tests": 9
+ },
+ "production_checks": {
+  "spa_contains_agent_tools_ui": true,
+  "agent_tools_routes_require_login": "401 for /api/agent-tools and /api/sessions/{id}/tools",
+  "controller_warnings_since_restart": 0
+ },
+ "limits": [
+  "Calls are off by default: Suger Codex reviews exit 3 until a session or agent kind enables them in Tools.",
+  "No production end-to-end call or UI toggle was exercised: the site needs the owner's Cardea login and the driving session predates call context.",
+  "Matrix tools/recall switches are stored and shown; adapter enforcement is phase 2."
+ ]
+}
