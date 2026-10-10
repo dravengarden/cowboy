@@ -444,10 +444,14 @@ here; no intent waives that.
 The swap is then taken by whichever road arrives first. For positive countdowns, an
 update is never applied while any of these hold — composer text or attachments
 present, IME composition active, a row in `saving`/`sending`, a running turn in
-the active session, or a focused editor — and when all clear, both products
+the active session, or an editor in use — and when all clear, both products
 apply after the configured countdown that starts only once the bits are here. A
 busy moment rewinds it to its start rather than freezing it, and the check
-re-arms every second so the reload lands on the first real pause. A configured
+re-arms every second so the reload lands on the first real pause. An editor is
+in use while a composition is open, or while its window has keyboard focus and
+it was typed in during the last 60 seconds: Desktop rests the caret in the
+composer for the whole session, so focus alone would hold an update until a
+manual reload. A configured
 delay of 0 explicitly applies immediately after the complete download, even
 when the idle gate is closed. Manual mode still downloads in the background
 but never applies without a press. Changing mode or delay takes effect for an
