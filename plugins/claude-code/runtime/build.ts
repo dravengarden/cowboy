@@ -84,6 +84,7 @@ try {
       "mcp-proxy.mjs",
       "memory.mjs",
       "managed.mjs",
+      "agent-calls.mjs",
     ];
     const digests: Record<string, string> = {};
     for (const source of sources) {
