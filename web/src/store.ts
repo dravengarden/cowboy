@@ -152,6 +152,7 @@ import { readUsage, startUsageRefresh } from "./usageApi";
 import type { UsageSnapshot } from "./usageLimits";
 import { receiveCallApproval } from "./callApproval";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
+import { editorHoldsUpdate } from "./updateIdleGate";
 import {
   listedOrJustCreatedSessions,
   retainTranscriptSessionCache,
@@ -3077,14 +3078,40 @@ export function canApplyUpdateNow(): boolean {
     const draft = getDraft(openedSessionId);
     if (draft.text.trim() !== "" || draft.attachments.length > 0) return false;
   }
-  const focused = globalThis.document?.activeElement;
-  if (
-    focused instanceof HTMLElement && (
-      focused.isContentEditable || focused.tagName === "TEXTAREA" ||
-      focused.tagName === "INPUT"
-    )
-  ) return false;
-  return true;
+  return !editorHoldsUpdate({
+    focusedEditable: acceptsText(globalThis.document?.activeElement),
+    windowFocused: globalThis.document?.hasFocus() === true,
+    composing: editorComposing,
+    sinceInputMs: Date.now() - lastEditorInputAt,
+  });
+}
+
+function acceptsText(target: unknown): boolean {
+  return target instanceof HTMLElement && (
+    target.isContentEditable || target.tagName === "TEXTAREA" ||
+    target.tagName === "INPUT"
+  );
+}
+
+// What `canApplyUpdateNow` knows about editor use. Capture phase: an editor
+// that stops propagation is still being typed in.
+let lastEditorInputAt = 0;
+let editorComposing = false;
+if (typeof document !== "undefined") {
+  const typed = (event: Event): void => {
+    if (acceptsText(event.target)) lastEditorInputAt = Date.now();
+  };
+  for (const type of ["keydown", "input", "paste"]) {
+    document.addEventListener(type, typed, { capture: true, passive: true });
+  }
+  document.addEventListener("compositionstart", (event) => {
+    editorComposing = true;
+    typed(event);
+  }, { capture: true, passive: true });
+  document.addEventListener("compositionend", (event) => {
+    editorComposing = false;
+    typed(event);
+  }, { capture: true, passive: true });
 }
 
 /** One report for a local sync-storage failure. The IndexedDB code is what
