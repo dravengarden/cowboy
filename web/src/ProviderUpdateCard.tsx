@@ -48,7 +48,10 @@ export function ProviderUpdateCard({
       data-provider-update-scheduled={scheduled || undefined}
       role="status"
       sx={{
-        mt: 1,
+        // The Title field below floats its label above its border; keep a
+        // clear gap so the card never crowds it.
+        mt: 0.5,
+        mb: 2,
         px: 1.5,
         py: 1.25,
         borderRadius: 2,
@@ -96,9 +99,16 @@ export function ProviderUpdateCard({
               size="small"
               variant="contained"
               color="info"
+              disableElevation
               aria-label={`update ${name} to ${offer.version}`}
               onClick={onUpdate}
-              sx={{ minHeight: 44, flexShrink: 0, textTransform: "none" }}
+              sx={{
+                minHeight: 40,
+                px: 2,
+                flexShrink: 0,
+                textTransform: "none",
+                fontWeight: 650,
+              }}
             >
               Update
             </Button>

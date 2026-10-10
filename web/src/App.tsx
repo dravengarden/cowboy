@@ -128,6 +128,7 @@ import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { sessionListProjectLabel, sessionProjectLabel } from "./sessionProject";
 import { SessionMachineBadge } from "./SessionMachineBadge";
+import { SessionUpdateBadge } from "./SessionUpdateBadge";
 import { PICK_SESSION_EVENT, pickSessionDetail } from "./sessionPickRequest";
 import {
     SessionCacheGlyph,
@@ -2089,6 +2090,7 @@ function SessionList({
                                         onInfo={() => onRequestInfo(s)}
                                         compact
                                     />
+                                    <SessionUpdateBadge session={s} />
                                     <SessionObligationBadge sessionId={s.id} />
                                 </Stack>
                             }

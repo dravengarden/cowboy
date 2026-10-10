@@ -65,3 +65,7 @@ Deno.test("mobile Provider update is badged on Options and offered in the sessio
     composerSource.includes("session={open && updateConfirm ? session : null}"),
   );
 });
+
+Deno.test("session rows show a passive Provider update badge beside placement", () => {
+  assert(appSource.includes("<SessionUpdateBadge session={s} />"));
+});
