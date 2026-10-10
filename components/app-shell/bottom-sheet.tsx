@@ -223,6 +223,9 @@ export interface BottomSheetProps {
   /** A nested level of a multi-level sheet: the mobile footer island shows
    *  Back beside Close. Desktop dialogs are unchanged. */
   readonly onBack?: (() => void) | undefined;
+  /** One labelled action between Back and Close in that island (a nested
+   * level's primary next step, such as Details). */
+  readonly islandAction?: IslandAction | undefined;
   /** Mobile cover body that does not scroll: the content fills it edge to edge
    *  and owns its scroller (an embedded transcript). */
   readonly fill?: boolean;
@@ -485,9 +488,20 @@ function IslandGlyphButton(
   );
 }
 
-/** Back and Close in one glass island, for a nested level of a sheet. */
+export interface IslandAction {
+  readonly label: string;
+  readonly icon?: ReactNode;
+  readonly onActivate: () => void;
+}
+
+/** Back and Close in one glass island, for a nested level of a sheet, with an
+ * optional labelled action between them. */
 export function MobileSheetBackDismiss(
-  { onBack, onClose }: { readonly onBack: () => void; readonly onClose: () => void },
+  { onBack, onClose, action }: {
+    readonly onBack: () => void;
+    readonly onClose: () => void;
+    readonly action?: IslandAction | undefined;
+  },
 ): ReactNode {
   return (
     <Box
@@ -503,14 +517,37 @@ export function MobileSheetBackDismiss(
       }}
     >
       <FloatingActionIsland
-        columns={`${MOBILE_SHEET_DISMISS_BUTTON_PX}px ${MOBILE_SHEET_DISMISS_BUTTON_PX}px`}
-        // Two glyph cells, their gap and the island's own padding and rim.
-        maxWidth={2 * MOBILE_SHEET_DISMISS_BUTTON_PX + 4 + 2 * (4 + 1)}
+        columns={action
+          ? `${MOBILE_SHEET_DISMISS_BUTTON_PX}px auto ${MOBILE_SHEET_DISMISS_BUTTON_PX}px`
+          : `${MOBILE_SHEET_DISMISS_BUTTON_PX}px ${MOBILE_SHEET_DISMISS_BUTTON_PX}px`}
+        // Glyph cells (and the action), their gaps and the island's own
+        // padding and rim.
+        maxWidth={2 * MOBILE_SHEET_DISMISS_BUTTON_PX + (action ? 148 : 0) +
+          (action ? 8 : 4) + 2 * (4 + 1)}
         minHeight={MOBILE_SHEET_DISMISS_ISLAND_PX}
       >
         <IslandGlyphButton onActivate={onBack} label="Back">
           <ArrowBackIosNewRounded fontSize="small" sx={{ transform: "translateX(-1px)" }} />
         </IslandGlyphButton>
+        {action && (
+          <IslandGlyphButton onActivate={action.onActivate} label={action.label}>
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.75,
+                px: 1.5,
+                fontSize: "0.9375rem",
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {action.icon}
+              {action.label}
+            </Box>
+          </IslandGlyphButton>
+        )}
         <IslandGlyphButton onActivate={onClose} label="Close">
           <CloseIcon fontSize="small" sx={{ transform: "translate(-0.75px, -0.5px)" }} />
         </IslandGlyphButton>
@@ -599,6 +636,7 @@ export function BottomSheet(
     floatingActions = true,
     animateOnOpen = true,
     onBack,
+    islandAction,
     fill = false,
   }: BottomSheetProps,
 ): ReactNode {
@@ -700,7 +738,7 @@ export function BottomSheet(
             )}
             {mobileDismiss === "footer"
               ? onBack
-                ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} />
+                ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} action={islandAction} />
                 : <MobileSheetDismiss onClose={onClose} />
               : null}
           </Box>

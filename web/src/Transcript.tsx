@@ -3423,6 +3423,7 @@ export function Transcript({
   pageId,
   restoreAnchorKey,
   onAnchorRestored,
+  statusBar = true,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -3487,6 +3488,9 @@ export function Transcript({
   /** Projection transition: restore this canonical row near the viewport centre. */
   restoreAnchorKey?: string | null | undefined;
   onAnchorRestored?: (() => void) | undefined;
+  /** The dormant/interrupted/crashed bar invites a message; a read-only
+   * embedded transcript (a managed call's child) cannot take one. */
+  statusBar?: boolean;
 }): React.JSX.Element {
   const managesScrollHistory = historyPaging === "scroll";
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
@@ -5893,7 +5897,7 @@ export function Transcript({
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */
       }
-      {(status !== "exited" || optimisticMsgs.length === 0) && (
+      {statusBar && (status !== "exited" || optimisticMsgs.length === 0) && (
         <SessionStatusBar status={status} crashDetail={crashDetail} />
       )}
       {
