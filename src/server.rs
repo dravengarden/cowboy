@@ -15357,7 +15357,7 @@ async fn session_upgrade_target(
     if !state.runtime_router.connected(&meta.machine_id) {
         return Err("session Machine is not connected".to_owned());
     }
-    if state.hub.agent_session_id_for_resume(&meta.id).is_none() {
+    if !state.hub.provider_version_changeable(&meta.id) {
         return Err("a saved native session is required to load a new Provider version".to_owned());
     }
     installed_upgrade_target(

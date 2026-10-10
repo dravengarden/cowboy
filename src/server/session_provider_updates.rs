@@ -181,7 +181,7 @@ async fn pass(state: &Arc<AppState>, shutdown: &tokio::sync::watch::Receiver<boo
             continue;
         }
         if !state.runtime_router.connected(&meta.machine_id)
-            || state.hub.agent_session_id_for_resume(&meta.id).is_none()
+            || !state.hub.provider_version_changeable(&meta.id)
         {
             continue;
         }

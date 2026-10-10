@@ -205,6 +205,14 @@ fn current_context_has_user_message(session: &Session) -> bool {
     !session.reached_start
 }
 
+/// Whether the session may move to another Provider version: its current
+/// context holds a saved native session to resume, or nothing to lose (never
+/// prompted, or cleared), so the next turn starts a fresh native session on
+/// either release.
+fn provider_version_portable(session: &Session) -> bool {
+    !current_context_has_user_message(session) || session.meta.agent_session_id.is_some()
+}
+
 fn is_human_question_chunk(envelope: &Envelope) -> bool {
     matches!(
         &envelope.event,
@@ -3961,6 +3969,12 @@ impl Hub {
     /// context generation. An id allocated by `session/new` alone has no rollout
     /// and must not be handed to `session/load` after a restart.
     #[must_use]
+    /// See `provider_version_portable`.
+    pub fn provider_version_changeable(&self, session_id: &str) -> bool {
+        let sessions = self.inner.sessions.lock();
+        sessions.get(session_id).is_some_and(provider_version_portable)
+    }
+
     pub fn agent_session_id_for_resume(&self, session_id: &str) -> Option<String> {
         let sessions = self.inner.sessions.lock();
         let session = sessions.get(session_id)?;
@@ -4055,8 +4069,7 @@ impl Hub {
             {
                 return Err("session changed while preparing to re-pin; try again".to_owned());
             }
-            if !current_context_has_user_message(session) || session.meta.agent_session_id.is_none()
-            {
+            if !provider_version_portable(session) {
                 return Err(
                     "a saved native session is required to change Provider version".to_owned(),
                 );
@@ -4114,8 +4127,7 @@ impl Hub {
             {
                 return Err("session changed while preparing reload; try again".to_owned());
             }
-            if !current_context_has_user_message(session) || session.meta.agent_session_id.is_none()
-            {
+            if !provider_version_portable(session) {
                 return Err(
                     "a saved native session is required to reload a new Provider version"
                         .to_owned(),
@@ -4141,8 +4153,9 @@ impl Hub {
             // with the active installation's credential generation here.
             session.meta.status = Status::Starting;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
-            session.meta.clone()
+            (session.meta.clone(), current_context_has_user_message(session))
         };
+        let (meta, resumes) = meta;
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ReloadProvider(Box::new(meta)));
         }
@@ -4151,8 +4164,13 @@ impl Hub {
             Event::Lifecycle {
                 status: Status::Starting,
                 detail: Some(format!(
-                    "reloading Provider {} -> {version}; preserving native session",
-                    expected.provider_version
+                    "reloading Provider {} -> {version}; {}",
+                    expected.provider_version,
+                    if resumes {
+                        "preserving native session"
+                    } else {
+                        "the next turn starts a fresh native session"
+                    }
                 )),
             },
         );
@@ -9368,14 +9386,52 @@ mod core_tests {
                 .unwrap_err()
                 .contains("changed")
         );
-        hub.prepare_context_reset(&before.id);
-        let cleared = hub.session_info(&before.id).unwrap().meta;
+        // A prompted context whose native session was never saved has
+        // nothing to resume on another release.
+        let unsaved = hub_with_session("provider-reload-unsaved");
+        unsaved.push("provider-reload-unsaved", Event::Update {
+            update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": {"text": "lost"}}),
+        });
+        unsaved.set_status("provider-reload-unsaved", Status::Running, None);
+        let unsaved_meta = unsaved.session_info("provider-reload-unsaved").unwrap().meta;
+        assert!(!unsaved.provider_version_changeable(&unsaved_meta.id));
         assert!(
-            hub.begin_provider_reload(&cleared, "new", "new", &behavior, false)
+            unsaved
+                .begin_provider_reload(&unsaved_meta, "new", "new", &behavior, false)
                 .unwrap_err()
                 .contains("saved native")
         );
-        assert_eq!(hub.status(&before.id), Some(Status::Running));
+        assert_eq!(unsaved.status(&unsaved_meta.id), Some(Status::Running));
+    }
+
+    #[test]
+    fn a_cleared_or_unprompted_context_changes_provider_version() {
+        let behavior = crate::provider::legacy_behavior("codex");
+        // Cleared: the old native thread is not resumed on either release.
+        let (hub, before) = provider_reload_fixture();
+        hub.prepare_context_reset(&before.id);
+        hub.push(&before.id, Event::Update {
+            update: serde_json::json!({"sessionUpdate": "context_cleared"}),
+        });
+        assert!(hub.provider_version_changeable(&before.id));
+        let cleared = hub.session_info(&before.id).unwrap().meta;
+        hub.begin_provider_reload(&cleared, "new", "new-digest", &behavior, false)
+            .expect("reload a cleared context");
+        let reloaded = hub.session_info(&before.id).unwrap().meta;
+        assert_eq!(reloaded.provider_version, "new");
+        assert_eq!(reloaded.status, Status::Starting);
+
+        // Never prompted and dormant: re-pinned without starting.
+        let fresh = hub_with_session("provider-reload-fresh");
+        fresh.set_status("provider-reload-fresh", Status::Exited, None);
+        let exited = fresh.session_info("provider-reload-fresh").unwrap().meta;
+        assert!(fresh.provider_version_changeable(&exited.id));
+        fresh
+            .repin_dormant_provider(&exited, "new", "new-digest", &behavior)
+            .expect("re-pin an unprompted session");
+        let after = fresh.session_info(&exited.id).unwrap().meta;
+        assert_eq!(after.provider_version, "new");
+        assert_eq!(after.status, Status::Exited);
     }
 
     #[tokio::test]

@@ -6,8 +6,9 @@
 //! stayed exited without a worker for `plugins.repin_dormant_after` is moved
 //! to its Device's installed release, but only through the same compatibility
 //! gate as an explicit Reload (unchanged authentication and native session
-//! contract, saved native session). Nothing is started: the next open resumes
-//! the native session on the new release. The following retention pass can
+//! contract, and a saved native session unless the current context is empty).
+//! Nothing is started: the next open resumes the native session, or starts a
+//! fresh one, on the new release. The following retention pass can
 //! then retire the old generation.
 
 use std::collections::{BTreeMap, BTreeSet};
