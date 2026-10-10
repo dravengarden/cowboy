@@ -1470,7 +1470,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     .remove(&session_id)
                     .and_then(|(_, pending)| pending);
                 if accepted && let Some(worker) = replacement {
-                    adopt_snapshot(shared, worker);
+                    adopt_snapshot(shared, &worker);
                 }
                 shared.hub.set_status(
                     &session_id,
@@ -1520,7 +1520,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 }
                 return Ok(());
             }
-            adopt_snapshot(shared, *worker);
+            adopt_snapshot(shared, &worker);
         }
         Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
         Frame::Heartbeat => {}
@@ -1610,14 +1610,14 @@ fn begin_reset(shared: &Shared, session_id: &str) {
         .insert(session_id.to_owned(), (replaced, None));
 }
 
-fn adopt_snapshot(shared: &Shared, worker: WorkerSnapshot) {
-    update_declaration(shared, &worker);
+fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+    update_declaration(shared, worker);
     shared
         .workers
         .lock()
         .insert(worker.session_id.clone(), worker.clone());
-    acknowledge_pending_ensure_from_snapshot(shared, &worker);
-    apply_snapshot(shared, &worker);
+    acknowledge_pending_ensure_from_snapshot(shared, worker);
+    apply_snapshot(shared, worker);
 }
 
 fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
