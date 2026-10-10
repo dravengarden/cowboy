@@ -51,10 +51,10 @@ immutable `.#cowboy-web-release` build also passed.
 Main/Machine/private-Zed retain 32/two/two explicitly ignored tests. Eighteen
 new projection/paging cases cover every-line equality, EOF markers, Unicode,
 bounded original cursors, cancellation and context loss. The projection-only
-Deno typed test also accepts the non-constructible projection brand. A
-supplemental Deno type-check of the loader's entire product import graph hit
-existing state-sync/Deno-configuration errors; it is not reported as acceptance.
-The project's strict TypeScript gate and normal Deno unit recipe both passed.
+typed test also accepts the non-constructible projection brand. A
+supplemental type-check of the loader's entire product import graph hit
+existing state-sync configuration errors; it is not reported as acceptance.
+The project's strict TypeScript gate and normal unit recipe both passed.
 Existing dependency-policy, Web lint and large-chunk warnings remain visible.
 
 All 55 actual Firefox `151.0.1` cases passed from the final source, in fresh

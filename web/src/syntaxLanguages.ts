@@ -35,11 +35,11 @@ const ZED_FIRST_LINE_MATCHERS: readonly {
   },
   {
     language: "typescript",
-    pattern: /^#!.*\b(?:deno run|ts-node|bun|tsx|[/ ]node)\b/u,
+    pattern: /^#!.*\b(?:ts-node|bun|tsx|[/ ]node)\b/u,
   },
   {
     language: "javascript",
-    pattern: /^#!.*\b(?:[/ ]node|deno run.*--ext[= ]js)\b/u,
+    pattern: /^#!.*[/ ]node\b/u,
   },
 ];
 

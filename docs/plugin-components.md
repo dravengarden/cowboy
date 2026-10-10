@@ -87,7 +87,7 @@ that global, so these are the oldest collector releases it can run; converge a
 Machine's Plugins before replacing its host.
 
 Component release 3.45.0 moves the last build scripts and tests inside
-component and Plugin sources from Deno to Bun. It records plugin-api 1.1.2,
+component and Plugin sources to Bun. It records plugin-api 1.1.2,
 app-shell 1.1.22, state-store 2.1.1, provider-ui 3.1.18 and provider-runtime
 1.1.13 for those sources, and state-sync 1.5.1, state-sync-idb 1.8.1 and
 provider-authoring 1.0.6 for their exact peer pins. The six Agent Plugins pin

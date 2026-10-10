@@ -119,7 +119,7 @@ normal safe-boundary rules; the differing generation was not relabelled.
 Private evidence: `/tmp/cowboy-machine-activate.I4BVjS/`, including the exact
 build, five gates, intended-root preflight, activation dispatch log, three
 successful host/worker captures and independent receipt/after/settled audits.
-The initial capture's obsolete Zed assumption, granular Deno `/proc` permission
+The initial capture's obsolete Zed assumption, granular runtime `/proc` permission
 refusal and unpinned status command's missing `jq` are retained as diagnostic
 failures, not product failures. Corrected captures used fresh destinations;
 no runtime oracle or timeout was weakened.

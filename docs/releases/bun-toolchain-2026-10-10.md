@@ -1,7 +1,7 @@
 # Bun toolchain and component release 3.45.0 — 2026-10-10
 
 Released from clean source `edc167921f8b9921688719ce2684ad2159c6f832`, which
-removes Deno from the repository and cuts component release 3.45.0. The six
+moves the repository's JavaScript toolchain to Bun and cuts component release 3.45.0. The six
 Agent Plugins are signed with `cowboy-first-party-v1` and available in the live
 Catalog. No Machine installation was requested or performed by this task; the
 existing hourly Hawk convergence applies them under its own policy.
@@ -18,7 +18,7 @@ existing hourly Hawk convergence applies them under its own policy.
 ## What changed in the packages
 
 Only identity. The release exists because the build scripts and tests that
-moved from Deno to Bun are part of recorded component and Plugin source
+moved to Bun are part of recorded component and Plugin source
 digests; see `docs/plugin-components.md`.
 
 - Every runtime artifact digest equals the one in the Plugin's previous

@@ -200,7 +200,7 @@ then the live app cross-fading in over it. Rules worth keeping:
 2. `bun run typecheck` + `bun run lint`, commit on the branch.
 3. Build picks up new npm deps via a deps-FOD; if you ADDED deps, capture the new
    `depsHash` with `nix build .#cowboy-web --option sandbox false` (DNS fails
-   under the nix sandbox on hawk — see columbus memory `deno-vite-fod-dns-sandbox`,
+   under the nix sandbox on hawk — see the columbus memory on the Vite FOD DNS sandbox,
    recorded for the previous builder).
 4. A web-only host switch atomically retargets `/run/cowboy-web`; it does not
    restart Cowboy, Machine, or session workers. Verify the new `/version` and

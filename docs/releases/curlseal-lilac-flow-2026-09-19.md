@@ -41,7 +41,7 @@ Verified SHA-256:
 - Pinned Web typecheck and lint passed (three existing telemetry spread warnings).
 - 18 focused icon/theme/resource/default tests passed, including all 50 styles in
   both modes, semantic colors, native asset inventory and ICO frame sizes.
-- `just native-shell-check` passed, including its 29 Deno tests, Python checks,
+- `just native-shell-check` passed, including its 29 TypeScript tests, Python checks,
   keyboard geometry and source/dependency validation.
 - `just site-check` passed, including 12 tests and production website generation.
 - Real Chromium website checks at 390px and 1280px in light and dark: no horizontal

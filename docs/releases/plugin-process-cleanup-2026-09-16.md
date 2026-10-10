@@ -88,7 +88,7 @@ was not rerun or recounted as fresh acceptance.
 Earlier fixture failures remain recorded: the new reply kind was absent from the
 relay hold allow-list, and a 12-second read wait was unsuitable for the existing
 90-second installation budget. No production timeout or automatic retry was
-changed. The first configuration-preflight invocation also stopped at Deno's
+changed. The first configuration-preflight invocation also stopped at the runtime's
 `/proc` permission check before running a candidate; the accepted invocation
 used the reviewed script with the needed local permissions. Nix's existing
 hardlink-limit warnings were avoided with per-command

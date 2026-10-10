@@ -37,7 +37,7 @@ iPhone acceptance claim.
 `nix develop -c just check-compact` passed, including Rust/feature-slice tests,
 Clippy, 1,966 Web tests, typecheck, lint, isolated PostgreSQL regressions and
 release builds. The standalone Web test invocation initially omitted the
-repository's Deno test flags and hit import-map type-resolution errors; the
+repository's test flags and hit import-map type-resolution errors; the
 documented test task and separate TypeScript gate passed.
 The full gate passed again after the hot-log review repair. A second native
 review accepted the delivery logic and identified the required PWA version bump;

@@ -35,7 +35,6 @@ type embeddedLanguageSpec struct {
 var embeddedLanguageSpecs = []embeddedLanguageSpec{
 	{commands: []string{"python", "python3"}, language: "python", label: "Python", flags: []string{"-c"}, kind: payloadFlag, minRunes: 32, structural: "\n;:"},
 	{commands: []string{"node", "nodejs"}, language: "javascript", label: "JavaScript", flags: []string{"-e", "--eval", "-p", "--print"}, kind: payloadFlag, minRunes: 36, structural: "\n;{}=>"},
-	{commands: []string{"deno"}, language: "typescript", label: "TypeScript", flags: []string{"eval"}, kind: payloadFlag, minRunes: 36, structural: "\n;{}=>"},
 	{commands: []string{"bun"}, language: "typescript", label: "TypeScript", flags: []string{"-e", "--eval"}, kind: payloadFlag, minRunes: 36, structural: "\n;{}=>"},
 	{commands: []string{"perl"}, language: "perl", label: "Perl", flags: []string{"-e", "-E"}, kind: payloadFlag, minRunes: 36, structural: "\n;{}"},
 	{commands: []string{"ruby"}, language: "ruby", label: "Ruby", flags: []string{"-e"}, kind: payloadFlag, minRunes: 36, structural: "\n;{}"},
@@ -258,7 +257,7 @@ func embeddedHeredocPayload(stmt *syntax.Stmt) (nestedPayload, bool) {
 		language, label = "python", "Python"
 	case base == "node" || base == "nodejs":
 		language, label = "javascript", "JavaScript"
-	case base == "deno" || base == "bun":
+	case base == "bun":
 		language, label = "typescript", "TypeScript"
 	case base == "perl":
 		language, label = "perl", "Perl"

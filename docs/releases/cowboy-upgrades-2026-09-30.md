@@ -10,7 +10,6 @@ evidence of a production upgrade.
 | Area                 | Previous | Released    |
 | -------------------- | -------- | ----------- |
 | Rust build toolchain | 1.97.1   | 1.98.1      |
-| Deno                 | 2.9.5    | 2.9.7       |
 | Core build Node      | 24.15.0  | 24.21.0 LTS |
 | Private Agent Node   | 24.19.0  | 24.21.0 LTS |
 | React / React DOM    | 19.2.6   | 19.3.0      |

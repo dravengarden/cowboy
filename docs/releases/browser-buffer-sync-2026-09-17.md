@@ -98,7 +98,7 @@ The initial dispatcher invocation supplied the internal-only `--machine` flag
 and was refused before transaction dispatch; the unit was inactive and no
 in-progress transaction existed. The corrected public invocation dispatched
 the single committed transaction above. An initial evidence collector also
-needed Deno's explicit `/proc` access; neither preliminary failure is counted
+needed the runtime's explicit `/proc` access; neither preliminary failure is counted
 as successful activation or product-code acceptance.
 
 Private scratch evidence: `/tmp/cowboy-browser-sync-VkaN75Qc` (not a permanent

@@ -174,7 +174,7 @@ Additional create-only evidence under the same private directory:
 | `legacy-session-audit-1788817823932.json` | `8df2f000bf2c13283cc88dcd1793a2360db63e803edcf412d1b7dd3781c65df2` |
 
 The final audit leaves no retained unbound Hawk session. The scoped cleanup
-helper passed the pinned Deno type check; no product binary or deployment was
+helper passed the pinned type check; no product binary or deployment was
 changed for this operation.
 
 ## Remaining boundaries

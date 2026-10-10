@@ -83,7 +83,7 @@ stale checksums, manually pinned releases and extra fields refuse without writes
 No desired-generation override or startup/rollout authority change is made.
 That source's Nix evaluation retained `worker-6ede7a91cc8b8b3402d4`.
 
-The five new Deno tests cover exact historical byte preservation across one and
+The five new TypeScript tests cover exact historical byte preservation across one and
 multiple shell-only releases, unchanged derived input, changed SDK/Plugin source,
 version, pin and graph inputs, shell consumers, invalid registry heads, the real
 repository descriptor and actual CLI success/refusal in isolated temporary

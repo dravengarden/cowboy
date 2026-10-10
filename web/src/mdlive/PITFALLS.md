@@ -205,7 +205,7 @@ here says otherwise.
 
 8. **`buildBunViteApp` deps-FOD DNS fails when adding CM6 deps.** Build with
    `nix build .#cowboy-web --option sandbox false` to capture the new `depsHash`.
-   (See the columbus memory `deno-vite-fod-dns-sandbox`.)
+   (See the columbus memory on the Vite FOD DNS sandbox.)
 
 9. **Controlled `value={text}` corrupts IME + bounces the caret ("状态错乱") —
    the composer editors MUST be uncontrolled (fixed v168).** `@uiw/react-codemirror`

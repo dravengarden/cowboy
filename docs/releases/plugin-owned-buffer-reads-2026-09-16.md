@@ -79,7 +79,7 @@ previous and cold) independently read the same **80 ready releases** and passed
 byte-identical actual-Service configuration preflights. The six-Agent exact
 publication-coverage gate passed, including Claude Code `3.1.24`. No Catalog
 publication or authenticated refresh was performed by this task. The first
-configuration preflight stopped at Deno's protected `/proc` permission check;
+configuration preflight stopped at the runtime's protected `/proc` permission check;
 the audited local script passed with the required permission, without printing
 the Service environment. Its failed log remains separate.
 

@@ -165,7 +165,7 @@ A following prompt returned `OVH_CANCEL_FOLLOWUP_OK`. Continued usability is
 verified, but cancellation latency and stop-reason fidelity remain findings;
 this is not a full cancellation acceptance pass.
 
-The complete gate initially encountered Deno's executable permission check on
+The complete gate initially encountered the runtime's executable permission check on
 the task's relocated Cargo cache: `target` is a symlink to the storage volume.
 The conformance recipe now grants run permission to the canonical executable
 path and invokes that same path, retaining the single-executable allowlist.

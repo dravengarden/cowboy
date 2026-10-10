@@ -36,7 +36,7 @@ test("Zed first-line routing recognizes its built-in matchers", () => {
   assertEquals(languageFromFirstLine("//go:build linux // go run\n"), "go");
   assertEquals(languageFromFirstLine("#!/usr/bin/env node\n"), "javascript");
   assertEquals(
-    languageFromFirstLine("#!/usr/bin/env deno run --ext=ts\n"),
+    languageFromFirstLine("#!/usr/bin/env bun run\n"),
     "typescript",
   );
   assertEquals(languageFromFirstLine("#!/usr/bin/env perl\n"), "");

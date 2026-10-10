@@ -101,7 +101,7 @@ observations have these SHA-256 identities:
 
 Development diagnostics remain alongside successful evidence: the initial
 focused compile's trait-import error was fixed; the initial preflight helper
-needed Deno's explicit procfs permission, and a temporary audit regex was
+needed the runtime's explicit procfs permission, and a temporary audit regex was
 corrected before taking either deployment snapshot. Neither helper failure
 was a product or continuity acceptance, and neither triggered activation.
 

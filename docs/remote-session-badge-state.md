@@ -21,7 +21,7 @@ failure or a stale browser bundle. This change closes the demonstrated
 unavailable-state presentation gap and advances the service-worker version so
 installed clients can adopt it through their configured update policy.
 
-Validation: 1,989 Web tests, TypeScript and Deno checks, Oxlint, component
+Validation: 1,989 Web tests, TypeScript checks, Oxlint, component
 consistency and the isolated Firefox project-placement browser suite. Browser
 coverage includes target retention with a warning and touch/keyboard activation
 without selecting the session. A physical client was not inspected.

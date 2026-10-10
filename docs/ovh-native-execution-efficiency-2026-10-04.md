@@ -72,7 +72,7 @@ The [probe](experiments/ovh-native-efficiency-2026-10-04.mjs.txt) imports the
 current `WorkspaceTools` implementation, supplies a generated remote-file
 fixture and records its actual RPC methods. It also supplies a simulated clock
 and quiet-process responses to the actual output collection loop. It uses the
-pinned Deno shell, creates only its own temporary state, and cleans that state.
+pinned development shell, creates only its own temporary state, and cleans that state.
 No inference, network fault or real business file is used. See
 [results](experiments/ovh-native-efficiency-2026-10-04.json).
 

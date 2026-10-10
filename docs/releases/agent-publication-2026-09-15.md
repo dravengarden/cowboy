@@ -126,7 +126,7 @@ private configuration was included in evidence.
 The first reader attempt stopped because another task had changed the active
 Controller; it did not authorize publication. Fresh role observations were
 captured before the accepted checks above. Earlier disposable build attempts
-also found a minimal-Bash `compgen` mismatch, a Deno capability restriction and
+also found a minimal-Bash `compgen` mismatch, a runtime capability restriction and
 an interrupted Mac artifact transfer. Corrected attempts passed independently;
 failed logs were retained, not relabeled as acceptance.
 

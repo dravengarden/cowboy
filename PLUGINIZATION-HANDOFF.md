@@ -80,9 +80,9 @@ Normative contract: `docs/requirements.md` (especially CR-0/CR-1/CR-2). Plugin l
   `nix develop -c env -u COWBOY_PROVIDER_PACKAGE_PATH just check-compact` for
   the full gate; for a slice use
   `nix develop -c env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --lib --locked <filter>`
-  and Deno tests from `web/` when they need `@cowboy/provider-ui`.
-- Do not use host `cargo`/`deno` as a preliminary check.
-- Do not `deno fmt` `web/src/App.tsx` (4-space outlier). Match 4-space when editing it.
+  and Bun tests from `web/` when they need `@cowboy/provider-ui`.
+- Do not use host `cargo`/`bun` as a preliminary check.
+- Do not reformat `web/src/App.tsx` (4-space outlier). Match 4-space when editing it.
 - Do not edit applied SQLx migrations (bytes are checksummed). Add a new migration.
 - `PluginHostSpec` lives in `components/plugin-sdk/src/host.rs` and has
   `deny_unknown_fields`. New `host.json` keys belong in that shared schema;
@@ -265,7 +265,7 @@ Corrections implemented in this working tree:
    Catalog ingestion all enforce that same identity; schema 1 explicitly
    forbids an attached host bundle.
 5. `cowboy-plugin-pack build` now creates and binds the host bundle itself.
-   The repository-only Deno writer was removed, and the isolation check proves
+   The repository-only TypeScript writer was removed, and the isolation check proves
    a Plugin with host behavior builds outside Cowboy using only its source and
    the matching SDK CLI.
 6. Catalog publication writes package/runtime/host bytes first and installs the
@@ -421,7 +421,7 @@ Corrections implemented in this working tree:
     checkout. The narrow Machine source now includes `build.rs`, required by
     its new generated first-party inventories. The Controller's filtered source
     includes the Authentication package manifests/payloads needed by its signed
-    cutover tests, and the Nix check phase supplies the pinned Deno runtime.
+    cutover tests, and the Nix check phase supplies the pinned TypeScript runtime.
     Both real Rust package directories now contain `cowboy-plugin-js`: placing
     it only beside a release symlink does not satisfy `current_exe()` after
     symlink resolution. The Nix source-boundary check asserts these inputs and
@@ -550,7 +550,7 @@ library tests (six PostgreSQL tests remain in the separate gate) and three
 binary tests. The checkout's complete all-features gate passed again from the
 clean extraction commit: 636 ordinary library tests, all six isolated
 PostgreSQL tests, 1105 Web tests and the other package/lint/build gates above.
-Both real Rust package directories expose pinned Deno 2.9.5 through
+Both real Rust package directories expose the pinned TypeScript runtime through
 `cowboy-plugin-js`, verified with an empty process environment.
 The earlier `78d06754` build remains under `result-pluginization*`; use the
 explicit `result-pluginization-verified*` links above for the final candidate.
@@ -1048,7 +1048,7 @@ attempt writes into its own fresh directory; a failed rerun cannot leave an
 older success at its receipt path. The remote probe rejects a local/stuck loader,
 unrendered UI, wrong origin/port, incompatible or authenticated status response,
 missing native bridge, missing opener command, unauthorized positive IPC and
-overbroad Settings permissions. The updated native gate passes **22 Deno tests
+overbroad Settings permissions. The updated native gate passes **22 TypeScript tests
 and 5 Python harness tests**, source/lock validation, shell syntax and keyboard
 geometry on both Hawk and Mac.
 
@@ -1135,7 +1135,7 @@ remains active at Controller profile generation 150, source `c293e0e9`, with
 
 The repository release skill now routes bridge work through this three-reader
 gate and explicitly retains the actual active/automatic-rollback floor as an
-unaccepted boundary. The pre-existing documentation wrapping is not Deno's
+unaccepted boundary. The pre-existing documentation wrapping is not the formatter's
 canonical format (also confirmed on pre-change source); no unrelated whole-file
 reformat was performed.
 
@@ -1165,9 +1165,9 @@ commit is **`1814cb19e152b417d0c611914ac984d8a5428597`** on
 source passed **517 Rust library tests (2 ignored), 1106 Web tests, Web
 typecheck/oxlint, all-target Clippy and Rust format**. The six current Agent
 Providers, all at 3.1.8, passed exact public release/artifact coverage. The Web
-source was integrated for ancestry, not deployed. Its initial direct Deno test
+source was integrated for ancestry, not deployed. Its initial direct TypeScript test
 invocation lacked DOM types; the repository-owned separate tsc check and full
-Deno runtime test gate both passed without changing either gate or product code.
+TypeScript runtime test gate both passed without changing either gate or product code.
 
 The exact clean immutable Controller release is
 `/nix/store/2d5gbc5pvd2mzrxi97r03nnaj3vln84g-cowboy-controller-release`.
@@ -2080,7 +2080,7 @@ IDB regression tests and delivery-observability tests are byte-identical to
 remote main, preserving its closing-connection recovery, persistence tracing
 and unsent-bubble cleanup. Main's Machine credential-source repair is also
 preserved. Every task SQLx migration is unchanged from the pre-rebase backup.
-The upstream frozen Deno dependency hash is retained and accepted by the real
+The upstream frozen dependency hash is retained and accepted by the real
 Nix Web build.
 
 ### Clean-source checks and build-only outputs

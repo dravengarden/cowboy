@@ -258,7 +258,7 @@ func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 }
 
 func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
-	display, err := formatShellDisplay("nix develop -c bash -c 'cd web && deno task test'", 46)
+	display, err := formatShellDisplay("nix develop -c bash -c 'cd web && bun run test'", 46)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,13 +272,13 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	if strings.Contains(display.Frames[1].Text, "nix develop") {
 		t.Fatalf("child frame must not repeat its launcher: %#v", display.Frames)
 	}
-	if !strings.Contains(display.FlatText, "nix develop") || !strings.Contains(display.FlatText, "deno task test") {
+	if !strings.Contains(display.FlatText, "nix develop") || !strings.Contains(display.FlatText, "bun run test") {
 		t.Fatalf("ordinary readable mode must retain the complete command: %q", display.FlatText)
 	}
 }
 
 func TestProjectsEverySiblingNestedShell(t *testing.T) {
-	display, err := formatShellDisplay(`git diff --check && nix develop -c bash -c 'cd web && deno task check' && nix develop -c bash -c 'cd api && cargo test'`, 54)
+	display, err := formatShellDisplay(`git diff --check && nix develop -c bash -c 'cd web && bun run check' && nix develop -c bash -c 'cd api && cargo test'`, 54)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,10 +294,10 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	if !strings.Contains(display.Frames[0].Text, display.Frames[1].Marker) || !strings.Contains(display.Frames[0].Text, display.Frames[2].Marker) {
 		t.Fatalf("parent payload slots must show matching markers: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[1].Text, "deno task check") || !strings.Contains(display.Frames[2].Text, "cargo test") {
+	if !strings.Contains(display.Frames[1].Text, "bun run check") || !strings.Contains(display.Frames[2].Text, "cargo test") {
 		t.Fatalf("both sibling payloads must remain visible: %#v", display.Frames)
 	}
-	if strings.Contains(display.Frames[0].Text, "deno task") || strings.Contains(display.Frames[0].Text, "cargo test") {
+	if strings.Contains(display.Frames[0].Text, "bun run") || strings.Contains(display.Frames[0].Text, "cargo test") {
 		t.Fatalf("parent skeleton must not duplicate extracted payloads: %#v", display.Frames)
 	}
 }
@@ -518,7 +518,7 @@ func TestExtractsJQThroughTransparentCommandWrappers(t *testing.T) {
 func TestHistoricalQuotedNestedCommands(t *testing.T) {
 	cases := []string{
 		`/nix/store/0641h8qfqaxnwrsw2nzrz6i1wbzyx92l-bash-interactive-5.3p9/bin/bash -lc "sed -n '1710,1875p' web/src/Transcript.tsx && rg -n \"const run|itemIndex|runTitle|function ToolDetailsBrowser|select =\" web/src/Transcript.tsx web/src/tools/presentation.ts* web/src/**/*.test.*"`,
-		`nix develop -c bash -c "cd web && deno eval 'console.log(\".endpoints[] | select(.type == tailscale)\")'"`,
+		`nix develop -c bash -c "cd web && bun -e 'console.log(\".endpoints[] | select(.type == tailscale)\")'"`,
 	}
 	for _, source := range cases {
 		display, err := formatShellDisplay(source, 46)
@@ -867,7 +867,7 @@ func TestExtractsInlineScriptLanguages(t *testing.T) {
 	}{
 		{`python3 -c 'import json; print(json.dumps({"ready": True}))'`, "python"},
 		{`nix develop -c env PYTHONUTF8=1 python3.12 -c 'import json; print(json.dumps({"ready": True}))'`, "python"},
-		{`deno eval 'const value = {ready: true}; console.log(JSON.stringify(value))'`, "typescript"},
+		{`bun -e 'const value = {ready: true}; console.log(JSON.stringify(value))'`, "typescript"},
 		{`node --input-type=module -e 'const value = {ready: true}; console.log(JSON.stringify(value))'`, "javascript"},
 		{`perl -e 'use JSON::PP; print encode_json({ready => JSON::PP::true});'`, "perl"},
 		{`ruby -e 'require "json"; puts JSON.generate({ready: true})'`, "ruby"},

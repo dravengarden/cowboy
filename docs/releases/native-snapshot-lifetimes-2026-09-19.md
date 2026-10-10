@@ -181,7 +181,7 @@ or Service environment was written into these receipts.
 | `audit-settled.json` | `fbcc8fb7689f58b4f16b4148131e81ef3c6737bd1ccff7050dda61f227265b4c` |
 | `website.json` | `f4712b32da7b0386e18de51a14a6003790371fbbe33ee723fc33cd83a39fbc80` |
 
-Private audit-helper setup initially required Deno `/proc` permission and an
+Private audit-helper setup initially required a runtime `/proc` permission and an
 explicit process-observation type; corrected helper checks pass. An initial
 combined source-boundary/helper command failed only at that helper type check;
 the independently repeated source-boundary command succeeds. These are not
