@@ -69,12 +69,14 @@ import { useBootReady } from "../useBootReady";
 import { draftRepository, useDraftDocument } from "./store";
 import { documentNotice } from "./DocumentNotifications";
 import {
+  draftAttachmentsFit,
   type DraftContent,
   draftContent,
   type DraftDocument,
   mergeDraftContent,
   sameDraftContent,
 } from "./model";
+import { DraftMergeError } from "./repository";
 
 const DesktopDraftToolbar = lazy(() =>
   import("../desktop/DesktopDraftToolbar")
@@ -384,6 +386,21 @@ function DraftEditingSession(
             shadow.current,
           );
           shadow.current = written;
+        } catch (cause) {
+          if (!(cause instanceof DraftMergeError)) throw cause;
+          // A closing editor cannot fold the newer document in first. Keep
+          // this text as its own draft instead of dropping it.
+          await draftRepository().create(
+            `${nextTitle} (conflicted copy)`,
+            saved.parent_id,
+            "document",
+            written.body,
+            written.attachments,
+          );
+          documentNotice(
+            "Edited on two devices. Your version was kept as a copy.",
+          );
+          shadow.current = written;
         } finally {
           writing.current = false;
         }
@@ -465,6 +482,7 @@ function DraftEditingSession(
     reconcileRef.current();
   }, [current]);
   const attach = (files: File[]): void => {
+    if (current.deleted) return;
     const selection = editor.current?.getSelection();
     const pending = files.filter((file) => file.type.startsWith("image/")).map((
       file,
@@ -481,10 +499,19 @@ function DraftEditingSession(
           ?.attachment;
         try {
           const attached = await fileToAttachment(file, placeholder?.id);
-          attachmentsRef.current = [
+          const next = [
             ...attachmentsRef.current.filter((a) => a.id !== attached.id),
             attached,
           ];
+          // Refuse here what the server would refuse on every later save.
+          if (!draftAttachmentsFit(next.filter((a) => !a.pending))) {
+            throw new Error(
+              `${
+                file.name || "This file"
+              } does not fit. A draft holds up to 100 attachments and 8 MB in total.`,
+            );
+          }
+          attachmentsRef.current = next;
           seedInlineAttachments([attached]);
           if (mounted.current) {
             setAttachments(attachmentsRef.current);
@@ -558,6 +585,7 @@ function DraftEditingSession(
       fullWidth
       sx={{ flex: 1, minWidth: 0 }}
       inputRef={titleInput}
+      disabled={current.deleted}
       inputProps={{ "aria-label": "Draft title", maxLength: 160 }}
       onKeyDown={(e) => {
         if (!desktop || isImeKeyEvent(e.nativeEvent)) return;
@@ -1095,8 +1123,7 @@ function DraftEditingSession(
             </Button>
           }
         >
-          This draft is in Trash. Your open text has been kept; restore it
-          before continuing.
+          This draft is in Trash. Restore it to keep editing.
         </Alert>
       )}
       {(error || syncError) && (
@@ -1204,6 +1231,9 @@ function DraftEditingSession(
               ? { initialSelection: positions.get(initial.id)!.head }
               : {})}
             onPasteFiles={attach}
+            // In Trash the server refuses every write, and each refused
+            // autosave would keep the text as one more conflicted copy.
+            disabled={current.deleted}
             placeholder="Start writing…"
             borderless
             fill

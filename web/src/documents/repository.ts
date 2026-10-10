@@ -95,8 +95,13 @@ export function createDraftRepository(options: RepositoryOptions) {
   /** `base` marks a local view (its server base plus the outbox). Its own
    * revision is a projection that falls when queued writes fold, so it is
    * current unless the server reported a revision its base lacks. Until the
-   * server reports one, a cached entry with a higher revision is newer. */
-  function updateIndex(document: DraftDocument | null, base?: number): void {
+   * server reports one, a cached entry with a higher revision is newer,
+   * except over `intent`: a title or location change still queued here. */
+  function updateIndex(
+    document: DraftDocument | null,
+    base?: number,
+    intent = false,
+  ): void {
     if (!document || stopped) return;
     const { id } = document;
     const metadata = draftMetadata(document);
@@ -107,7 +112,7 @@ export function createDraftRepository(options: RepositoryOptions) {
       ? newer
       : served.has(id)
       ? served.get(id)! > base
-      : newer && !ownViews.has(id);
+      : newer && !ownViews.has(id) && !intent;
     if (stale) return;
     if (base === undefined) ownViews.delete(id);
     else ownViews.add(id);
@@ -139,8 +144,12 @@ export function createDraftRepository(options: RepositoryOptions) {
     // the settled result, never a step that lacks the local text.
     let settling = false;
     // The server rejected the head of the outbox itself (not a race): only
-    // new local content or an explicit retry may send again.
+    // a new local change or an explicit retry may send again.
     let rejected = false;
+    // A write the server rejected for its content. It stays queued and
+    // reported, and title, location and Trash changes go out past it: they
+    // do not depend on the text. Corrected text folds over it.
+    let held: { id: string; error: string } | null = null;
     const deliverable = new Map<string, Mutation>();
     // Writes the server cannot have applied: authored in this page and never
     // dispatched, or rejected outright. Only these fold. A dispatched write
@@ -169,7 +178,21 @@ export function createDraftRepository(options: RepositoryOptions) {
       for (const subscriber of subscribers) subscriber();
     }
     function reindex(): void {
-      updateIndex(snapshot.document, replica.baseValue()?.revision ?? 0);
+      updateIndex(
+        snapshot.document,
+        replica.baseValue()?.revision ?? 0,
+        replica.pending().some((m) =>
+          !["write", "create"].includes(
+            (m.args as DraftMutationArgs).change.type,
+          )
+        ),
+      );
+    }
+    /** Phase once nothing is being sent. */
+    function rest(): Pick<DraftDocumentSnapshot, "phase" | "error"> {
+      return held
+        ? { phase: "error", error: held.error }
+        : { phase: replica.pending().length ? "local" : "saved", error: null };
     }
     function hydrate(): Promise<void> {
       return hydrated ??= replica.hydrate().then(() => {
@@ -360,7 +383,12 @@ export function createDraftRepository(options: RepositoryOptions) {
       let rebases = 0;
       try {
         for (;;) {
-          const mutation = replica.pending().find((m) => deliverable.has(m.id));
+          if (held && !replica.pending().some((m) => m.id === held?.id)) {
+            held = null;
+          }
+          const mutation = replica.pending().find((m) =>
+            deliverable.has(m.id) && m.id !== held?.id
+          );
           if (!mutation || stopped || sealed) break;
           // Nothing is in flight here. A write still being made durable is
           // newer than any fold, so folding waits for it.
@@ -408,11 +436,7 @@ export function createDraftRepository(options: RepositoryOptions) {
               if (rebases < MAX_REBASES) {
                 await rebase(mutation, remote);
                 rebases++;
-                publish({
-                  phase: replica.pending().length ? "local" : "saved",
-                  error: null,
-                  remote: null,
-                });
+                publish({ ...rest(), remote: null });
                 continue;
               }
               if (["move", "trash", "restore"].includes(args.change.type)) {
@@ -434,17 +458,18 @@ export function createDraftRepository(options: RepositoryOptions) {
                   remote,
                 });}
             } else {
-              rejected = response.status < 500;
-              if (rejected && args.change.type === "write") {
+              const error = detail.error ??
+                (response.status === 413
+                  ? "This draft is too large to sync. Remove an attachment."
+                  : "Draft could not sync");
+              if (response.status < 500 && args.change.type === "write") {
                 fresh.add(mutation.id);
+                held = { id: mutation.id, error };
+                publish(rest());
+                continue;
               }
-              publish({
-                phase: rejected ? "error" : "local",
-                error: detail.error ??
-                  (response.status === 413
-                    ? "This draft is too large to sync. Remove an attachment."
-                    : "Draft could not sync"),
-              });
+              rejected = response.status < 500;
+              publish({ phase: rejected ? "error" : "local", error });
             }
             break;
           }
@@ -457,10 +482,7 @@ export function createDraftRepository(options: RepositoryOptions) {
           );
           await replica.flush();
           deliverable.delete(mutation.id);
-          publish({
-            phase: replica.pending().length ? "local" : "saved",
-            error: null,
-          });
+          publish(rest());
           // Metadata is small; it is never the source of authored content.
           void options.cache.save(library.entries).catch(() => undefined);
         }
@@ -570,6 +592,7 @@ export function createDraftRepository(options: RepositoryOptions) {
     }
     async function retry(): Promise<void> {
       await hydrate();
+      held = null;
       if (snapshot.phase !== "conflict") {
         publish({
           phase: replica.pending().length ? "local" : "saved",
@@ -622,7 +645,10 @@ export function createDraftRepository(options: RepositoryOptions) {
       retry,
       /** Background retry: never uploads again what the server rejected. */
       resume: async () => {
-        if (!rejected) await retry();
+        if (rejected) return;
+        if (!held) return retry();
+        await hydrate();
+        replica.resend();
       },
       /** Only after an explicit recovery decision; durable confirmation keeps
        * a reload from resending a branch the user chose to abandon. */
@@ -632,6 +658,7 @@ export function createDraftRepository(options: RepositoryOptions) {
         await replica.confirmDurably(replica.pending().map((m) => m.id));
         deliverable.clear();
         fresh.clear();
+        held = null;
         const remote = snapshot.remote;
         replica.applyPatch(snapshotPatch(remote?.revision ?? 0, remote, []), {
           force: true,

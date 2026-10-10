@@ -134,6 +134,9 @@ function fixture() {
     gateway: (value: boolean) => {
       gateway = value;
     },
+    cacheIndex: (entries: readonly DraftDocument[]) => {
+      index = entries.map(({ body: _b, attachments: _a, ...entry }) => entry);
+    },
     /** The next accepted mutation is applied, but its reply never arrives. */
     dropReply: () => {
       dropReply = true;
@@ -600,4 +603,53 @@ Deno.test("two devices editing through outages converge without losing a word", 
     assertEquals(f.notices, [], `seed ${seed}`);
     for (const device of devices) await device.repository.dispose();
   }
+});
+
+Deno.test("a rejected write does not hold back a rename, and stays reported", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Draft", null, "document", "base");
+  const owner = first.document(id);
+  await settle(() => owner.get().phase === "saved");
+  await owner.change({ type: "write", body: "OVERSIZE", attachments: [] });
+  await settle(() => owner.get().phase === "error");
+  await owner.change({ type: "rename", title: "Renamed" });
+  await settle(() => f.server.get(id)?.title === "Renamed");
+  await settle(() => owner.get().phase === "error");
+  assertEquals(owner.get().error, "Too large");
+  assertEquals(owner.get().document?.body, "OVERSIZE");
+  assertEquals(f.server.get(id)?.body, "base");
+  // Polling leaves the rejected text alone.
+  const sent = f.requests.filter((p) => p === "/api/drafts/mutations").length;
+  await first.refresh();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assertEquals(
+    f.requests.filter((p) => p === "/api/drafts/mutations").length,
+    sent,
+  );
+  await owner.change({ type: "write", body: "fits now", attachments: [] });
+  await settle(() => owner.get().phase === "saved");
+  assertEquals(f.server.get(id)?.body, "fits now");
+  assertEquals(f.server.get(id)?.title, "Renamed");
+  await first.dispose();
+});
+
+Deno.test("a rename queued offline outranks a newer cached index entry", async () => {
+  const f = fixture();
+  const first = f.create();
+  const id = await first.create("Old", null, "document", "body");
+  await settle(() => first.document(id).get().phase === "saved");
+  await first.dispose();
+  // The index later heard of a newer revision this replica never fetched.
+  f.cacheIndex([{ ...f.server.get(id)!, title: "Elsewhere", revision: 5 }]);
+  f.offline(true);
+  const second = f.create();
+  await second.start();
+  assertEquals(
+    second.get().entries.find((e) => e.id === id)?.title,
+    "Elsewhere",
+  );
+  await second.document(id).change({ type: "rename", title: "Mine" });
+  assertEquals(second.get().entries.find((e) => e.id === id)?.title, "Mine");
+  await second.dispose();
 });

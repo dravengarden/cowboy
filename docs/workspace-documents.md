@@ -51,8 +51,21 @@ at most two writes: the one already dispatched, which keeps its operation
 identity so a lost reply is retried rather than merged with itself, and the
 fold of everything typed since. A write the server rejects outright (too
 large, invalid) stays local and reports the reason. Polling does not upload
-it again. Corrected text folds over it and syncs. A reply without JSON from
-a proxy in front of a restarting controller counts as waiting, not failure.
+it again. Corrected text folds over it and syncs. Title, location and Trash
+changes go out past it. A reply without JSON from a proxy in front of a
+restarting controller counts as waiting, not failure.
+
+The editor refuses an attachment that would pass the server's bounds (100
+attachments, 8 MiB as stored) when it is added. A document in Trash is
+read-only until restored, because the server refuses every write to it. Text
+typed before the deletion arrived is kept once as a conflicted copy. A
+closing editor whose text cannot be merged keeps it the same way.
+
+Deleting a directory moves its documents on the server without a `drafts`
+announcement. A client that sees a document's directory vanish refreshes the
+library one second later instead of waiting for the poll. A title or
+location change still queued on this device shows in the sidebar even over
+a cached entry with a higher revision.
 
 An open editor folds newer content in place. With no local typing since its
 last synchronized content, it adopts the update. Otherwise it merges and

@@ -196,6 +196,34 @@ export function draftLocation(
   return names.length ? names.join(" / ") : "Drafts";
 }
 
+/** The server's bounds on one document's attachments. */
+export const DRAFT_ATTACHMENT_LIMIT = 100;
+export const DRAFT_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+/** Whether `attachments` fit one document, measured as the server stores them. */
+export function draftAttachmentsFit(
+  attachments: readonly Attachment[],
+): boolean {
+  return attachments.length <= DRAFT_ATTACHMENT_LIMIT &&
+    new TextEncoder().encode(JSON.stringify(attachments)).length <=
+      DRAFT_ATTACHMENT_BYTES;
+}
+
+/** A document whose directory no longer exists. Deleting a directory moves
+ * its documents on the server without announcing them. */
+export function draftMissingDirectory(
+  entries: readonly DraftMetadata[],
+  directories: ReadonlySet<string>,
+): boolean {
+  return entries.some((entry) =>
+    !entry.deleted && entry.kind === "document" && entry.parent_id !== null &&
+    !directories.has(entry.parent_id) &&
+    !entries.some((folder) =>
+      folder.id === entry.parent_id && folder.kind === "folder"
+    )
+  );
+}
+
 export const DRAFT_DRAG_TYPE = "application/x-cowboy-draft-document";
 
 export function decodeDraft(value: unknown): DraftDocument {

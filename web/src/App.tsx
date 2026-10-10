@@ -7,7 +7,7 @@ import { openDrafts } from "./documents/navigation";
 import { ReliableListItemButton } from "./ReliableListItemButton";
 import { useDraftRoute, leaveDrafts } from "./documents/navigation";
 import { useDraftLibrary } from "./documents/store";
-import type { DraftMetadata } from "./documents/model";
+import { draftMissingDirectory, type DraftMetadata } from "./documents/model";
 import type { DraftFlush } from "./documents/DraftEditor";
 import { documentNotice } from "./documents/DocumentNotifications";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
@@ -3433,6 +3433,18 @@ export function App({
             else leaveDrafts();
         }
     }, [draftRoute.active, draftRoute.id, draftLibrary.loaded, draftLibrary.entries]);
+    // Deleting a directory moves its Drafts on the server without a push:
+    // fetch the result once the deletion has had time to persist.
+    const workspaceDirectories = useStoreSelector((snapshot) => snapshot.sessionFolders.folders);
+    const draftDirectoryGone = useMemo(
+        () => draftMissingDirectory(draftLibrary.entries, new Set(workspaceDirectories.map((folder) => folder.id))),
+        [draftLibrary.entries, workspaceDirectories],
+    );
+    useEffect(() => {
+        if (!draftDirectoryGone) return;
+        const timer = globalThis.setTimeout(() => void draftRepository().refresh(), 1000);
+        return () => globalThis.clearTimeout(timer);
+    }, [draftDirectoryGone, workspaceDirectories]);
     const draftBeforeLeave = useRef<DraftFlush>(() => Promise.resolve());
     const [draftAction, setDraftAction] = useState<WorkspaceDraftAction | null>(null);
     // Load the signed Provider catalog once at the app boundary so every
