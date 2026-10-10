@@ -142,3 +142,24 @@ worker, and 2,001 ms against 2,181 ms.
   is unchanged. The SDK discarded the launcher's stderr, so 3.19.10 milestone
   lines never reached the worker log; 3.19.11 relays them through a private
   socket to the adapter's stderr.
+
+## Readiness without the /cost turn (2026-10-10)
+
+3.19.11 relayed the launcher's milestones to the worker log. 3.19.12 showed,
+over five production starts: execution connection ~0.2 s, target discovery
+~1.9 s, native spawn to the context module's receipt ~1.0 s, then 3.6–5.4 s
+until the readiness `/cost` result, with the receipt arriving about 20 ms
+before native's initialize reply. A local probe of Claude 2.1.287 explains the
+wait: in SDK mode the first turn blocks until every `--mcp-config` server has
+connected (30 s for a server that never answers; `MCP_CONNECTION_NONBLOCKING`
+does not change it), and target MCP servers start through the Machine link.
+
+3.19.12 replaced the second SDK initialize with the module's authenticated
+`/ready` receipt. 3.19.13 reports ready at the initialize reply when that
+receipt has arrived and sends `/cost` only otherwise; a missing module still
+fails before any prompt reaches native. The first prompt still waits for
+native's own MCP connection. First 3.19.13 starts: ready at 2.8 s, 3.6 s and
+7.3 s (the last with 6.2 s of target discovery). Two new sessions at 03:49 and
+03:50 UTC waited 18 s and 33 s for their execution connection while Hawk's
+`stormbird-device` was being restarted by a separate rollout.
+
