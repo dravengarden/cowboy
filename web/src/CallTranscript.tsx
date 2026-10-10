@@ -59,6 +59,7 @@ export function CallTranscript({
         topInset="0px"
         bottomInset={bottomInset}
         shortContentAtTop={desktop}
+        statusBar={false}
       />
     </Box>
   );

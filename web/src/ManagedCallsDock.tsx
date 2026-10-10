@@ -527,55 +527,46 @@ function CallConversation({
       data-call-conversation={call.call_id}
       sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
     >
+      {
+        /* One line of state above the transcript; on a phone Details lives in
+          the footer island beside Back and Close. */
+      }
       <Stack
         direction="row"
         alignItems="center"
-        flexWrap={desktop ? "nowrap" : "wrap"}
-        useFlexGap
+        spacing={1}
         sx={{
           px: desktop ? 0 : 2,
-          pb: 1,
-          gap: 1,
+          pb: desktop ? 1 : 0.75,
           borderBottom: 1,
           borderColor: "divider",
           minWidth: 0,
         }}
       >
-        {
-          /* Phone: identity on its own line, state and Details below it. */
-        }
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ flex: desktop ? 1 : "1 0 100%", minWidth: 0 }}
+        <ProviderIcon
+          provider={call.provider}
+          sx={{ fontSize: "1rem", flexShrink: 0 }}
+        />
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          noWrap
+          sx={{ flex: 1, minWidth: 0 }}
         >
-          <ProviderIcon
-            provider={call.provider}
-            sx={{ fontSize: "1.125rem", flexShrink: 0 }}
-          />
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            sx={{ minWidth: 0 }}
-          >
-            {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
-            {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
-          </Typography>
-        </Stack>
+          {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
+          {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
+        </Typography>
         {
-          /* A verdict already says the review finished; a phone keeps the
-            row to what it can fit. */
+          /* A verdict already says the review finished. */
         }
-        {(desktop || call.state !== "completed" || !call.verdict) && (
+        {(call.state !== "completed" || !call.verdict) && (
           <StateChip call={call} />
         )}
         {(call.verdict || call.finding_count !== undefined) && (
           <ButtonBase
             aria-label="Open review result"
             onClick={onDetails}
-            sx={{ borderRadius: 999, minWidth: 0 }}
+            sx={{ borderRadius: 999, minWidth: 0, flexShrink: 0 }}
           >
             <VerdictChip
               verdict={call.verdict ?? null}
@@ -583,22 +574,19 @@ function CallConversation({
             />
           </ButtonBase>
         )}
-        <Box sx={{ flex: desktop ? "0 0 auto" : 1 }} />
-        <Button
-          size="small"
-          variant={detailsOpen ? "contained" : "outlined"}
-          disableElevation
-          startIcon={<InfoOutlined fontSize="small" />}
-          onClick={onDetails}
-          aria-pressed={desktop ? detailsOpen : undefined}
-          sx={{
-            minHeight: desktop ? 30 : 36,
-            flexShrink: 0,
-            ...(desktop ? {} : { textTransform: "none", px: 1.25 }),
-          }}
-        >
-          Details
-        </Button>
+        {desktop && (
+          <Button
+            size="small"
+            variant={detailsOpen ? "contained" : "outlined"}
+            disableElevation
+            startIcon={<InfoOutlined fontSize="small" />}
+            onClick={onDetails}
+            aria-pressed={detailsOpen}
+            sx={{ minHeight: 30, flexShrink: 0 }}
+          >
+            Details
+          </Button>
+        )}
       </Stack>
       <CallTranscript
         sessionId={call.child_session_id}
@@ -927,6 +915,14 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             ? "Details"
             : displayTitle(routed)}
           onBack={routed ? back : undefined}
+          islandAction={routed && level === "transcript"
+            ? {
+              label: "Details",
+              icon: <InfoOutlined fontSize="small" />,
+              onActivate: (): void =>
+                setRoute({ call: routed.call_id, level: "details" }),
+            }
+            : undefined}
           fill={level === "transcript"}
           forceSheet
           cover
