@@ -966,14 +966,18 @@ async function native(args) {
   try {
     // The endpoint serves one connection; a restarted session can arrive
     // while the previous process's connection is still being torn down.
-    for (let attempt = 0;; attempt++) {
+    // Retry soon at first, within the same ~10 s budget as before.
+    for (let attempt = 0, waited = 0;; attempt++) {
       try {
         connection = await Connection.open(descriptor);
         startupPhase("execution-connected");
         break;
       } catch (error) {
-        if (attempt >= 20) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (waited >= 10000) throw error;
+        startupPhase("execution-retry");
+        const delay = Math.min(500, 50 * 2 ** attempt);
+        waited += delay;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
     tools = new WorkspaceTools(
