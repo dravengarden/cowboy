@@ -163,3 +163,14 @@ native's own MCP connection. First 3.19.13 starts: ready at 2.8 s, 3.6 s and
 03:50 UTC waited 18 s and 33 s for their execution connection while Hawk's
 `stormbird-device` was being restarted by a separate rollout.
 
+## Background task waits (3.19.14)
+
+A native background task held on a target command read its output with a
+1 s `process/read` wait for as long as the command ran: one Machine-link
+call per second per running background command. It now reads without
+waiting and sleeps on the executor's notification for that process (at
+most 10 s), as target MCP relays already did (25 s). Pre-starting target MCP
+servers before native was rejected: native passes `CLAUDE_CODE_SESSION_ID`
+and `CLAUDECODE` when it starts a server, so an earlier start would differ
+from a local session.
+
