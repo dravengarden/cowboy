@@ -174,3 +174,16 @@ servers before native was rejected: native passes `CLAUDE_CODE_SESSION_ID`
 and `CLAUDECODE` when it starts a server, so an earlier start would differ
 from a local session.
 
+## Replacement snapshot during reset (Controller 3d8b93f5)
+
+From 04:00 to 06:33 UTC on 2026-10-10, 7 of 12 isolated reload starts waited
+6–30 s for `execution-connected` while every fresh start took 0.2–0.4 s. The
+Controller marks a session `resetting` and drops worker `Snapshot` frames
+until the reset `CommandAck`; that acknowledgement removes the worker entry.
+When the replacement worker's snapshot arrived before the acknowledgement it
+was discarded, so the replacement stayed unknown and its execution `Describe`
+was refused as unavailable (retried every second) until a later periodic
+snapshot. The Controller now stashes a replacement snapshot (different epoch,
+not a broker placeholder, not exited) seen while resetting and adopts it when
+the reset is acknowledged. Covered by
+`replacement_snapshot_before_reset_acknowledgement_owns_the_session`.
