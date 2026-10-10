@@ -13,6 +13,10 @@
       .replaceAll("/", "_").replaceAll("=", "");
   }
 
+  function usable(keys) {
+    return keys?.privateKey instanceof CryptoKey && keys.publicKey instanceof CryptoKey;
+  }
+
   async function identity() {
     if (identityPromise) return identityPromise;
     identityPromise = (async () => {
@@ -31,7 +35,7 @@
           tx.oncomplete = () => resolve(read.result);
           tx.onabort = () => reject(tx.error);
         });
-        if (saved) return saved;
+        if (usable(saved)) return saved;
         const candidate = await crypto.subtle.generateKey(
           { name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"],
         );
@@ -43,8 +47,16 @@
           const read = store.get("identity");
           let selected;
           read.onsuccess = () => {
-            selected = read.result || candidate;
-            if (!read.result) store.add(candidate, "identity");
+            if (usable(read.result)) {
+              selected = read.result;
+              return;
+            }
+            // WebKit reads a stored CryptoKey it can no longer unwrap as
+            // undefined while the record still exists. add() then failed with
+            // ConstraintError on every load, so the device could never sign
+            // again. Replace the unreadable identity; this forces a new sign-in.
+            selected = candidate;
+            store.put(candidate, "identity");
           };
           tx.oncomplete = () => resolve(selected);
           tx.onabort = () => reject(tx.error);
