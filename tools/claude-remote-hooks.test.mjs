@@ -369,10 +369,8 @@ test("8 MiB hook transcripts fit the execution wire with and without the Cowboy 
     writes.length = 0;
     await tools.hookTranscript(bytes, path + ".repeat");
     assert.deepEqual(await readFile(path + ".repeat"), bytes);
-    assert.equal(
-      writes.reduce((sum, size) => sum + size, 0),
-      helper ? 0 : bytes.length,
-    );
+    // Unchanged: the helper and the shell snapshot both send no bytes.
+    assert.equal(writes.reduce((sum, size) => sum + size, 0), 0);
   }
 });
 
