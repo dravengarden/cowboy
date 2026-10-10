@@ -165,10 +165,23 @@ update path: the explicit Reload gate (connected Device, saved native session,
 unchanged authentication and native contract), a recheck of the exact binding
 and idle state under the Hub lock, native resume, and never a downgrade or
 pre-release. A session that opted in individually still updates as soon as it
-is idle. Updates are paced: each 30-second pass starts at most one per Device,
+is idle. A dormant (exited, workerless) session under the same policy is only
+re-pinned after the idle period, exactly like `plugins.repin_dormant_sessions`
+but without its longer wait, so its next open starts the new release and no
+Device slot is spent. Updates are paced: each 30-second pass starts at most one per Device,
 and none while another session on that Device is still starting, so a whole
 idle fleet never relaunches at once. Together with re-pinning, a generation is
 retained only while a recently active session uses it.
+
+Each pass also publishes, per session, the newer compatible release it could
+adopt (`provider_update_available` on the session list) even while a turn is
+running. Clients offer it in place: Desktop shows an `Update` top-bar action
+(`␣TP`), Mobile badges the session Options button and shows an update card in
+the session sheet. Updating an idle session reloads it now; a busy session
+records a persisted one-shot request (`PUT /api/sessions/{id}/reload` with
+`{"when_idle": true}`) that the pass applies within seconds of the session
+becoming idle, and a dormant session is re-pinned without starting. A request
+whose release is no longer newer is dropped rather than firing later.
 
 ## Session reclaim on capacity
 

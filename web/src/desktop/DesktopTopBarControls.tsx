@@ -27,7 +27,9 @@ import {
   CleaningServices,
   ExpandMore,
   Refresh,
+  Schedule,
   Tune,
+  Upgrade,
 } from "@mui/icons-material";
 import {
   type HTMLAttributes,
@@ -71,6 +73,13 @@ import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
 import { SessionToolsSection } from "../AgentToolsPanel";
+import { ProviderUpdateDialog } from "../ProviderUpdateDialog";
+import {
+  providerUpdateScheduleText,
+  providerUpdateWaitsForTurn,
+  sessionProviderUpdate,
+} from "../providerUpdateOffer";
+import { providerName } from "../providerPresentation";
 import { setProductSessionAlertHost } from "../auth/productSessionAlertHost";
 import { setProductCapacityAlertHost } from "../capacity/productCapacityAlertHost";
 import {
@@ -1179,7 +1188,7 @@ export function DesktopTopBarControls({
     sameDesktopTopBarTimelineSlice,
   );
   const [openSurface, setOpenSurface] = useState<
-    "config" | "usage" | "reload" | "compact" | "clear" | null
+    "config" | "usage" | "update" | "reload" | "compact" | "clear" | null
   >(null);
   const configOpen = openSurface === "config";
   const usageOpen = openSurface === "usage";
@@ -1212,11 +1221,14 @@ export function DesktopTopBarControls({
     return (): void => observer.disconnect();
   }, []);
   const reloadTarget = openSurface === "reload" ? session ?? null : null;
+  const providerUpdate = sessionProviderUpdate(session);
+  const updateTarget = openSurface === "update" ? session ?? null : null;
   const compactConfirm = openSurface === "compact";
   const clearConfirm = openSurface === "clear";
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   useEffect(() => setOpenSurface(null), [sessionId]);
+  const closeSurface = useCallback(() => setOpenSurface(null), []);
   const optionPresentations = useMemo(
     () =>
       providerConfigOptionPresentations(
@@ -1626,6 +1638,25 @@ export function DesktopTopBarControls({
         )?.click(),
     },
     {
+      id: "topbar.providerUpdate",
+      title: "Update Provider",
+      group: "Top Bar",
+      shortcut: "P",
+      // `␣TP` from anywhere; bare `P` while the bar owns focus. Present only
+      // while a newer compatible release is installed for this session.
+      sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "P"],
+      regions: ["topbar.controls"],
+      leaderAnywhere: true,
+      when: () =>
+        document.querySelector(
+          "[data-desktop-topbar-action='update']:not(:disabled)",
+        ) !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='update']",
+        )?.click(),
+    },
+    {
       id: "topbar.reload",
       title: "Reload Session Runtime",
       group: "Top Bar",
@@ -1703,6 +1734,7 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[4] as DesktopCommand);
   useDesktopCommand(topbarCommands[5] as DesktopCommand);
   useDesktopCommand(topbarCommands[6] as DesktopCommand);
+  useDesktopCommand(topbarCommands[7] as DesktopCommand);
   // Lower bound for the complete session-control strip. Provider summaries own
   // their intrinsic compact width, and run configuration / session actions keep
   // their full touch targets. Auto margin restores the spacious, trailing
@@ -1717,10 +1749,10 @@ export function DesktopTopBarControls({
         : usagePercentSegmentWidth(provider.windows?.length ?? 1)),
     0,
   ) + 44;
-  const actionCount = 2 + Number(Boolean(compactAction)) +
-    Number(Boolean(clearAction));
-  const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +
-    (clearAction ? 80 : 0) + 80 +
+  const actionCount = 2 + Number(Boolean(providerUpdate)) +
+    Number(Boolean(compactAction)) + Number(Boolean(clearAction));
+  const sessionActionsMinWidth = 90 + (providerUpdate ? 104 : 0) +
+    (compactAction ? 96 : 0) + (clearAction ? 80 : 0) + 80 +
     actionCount * DESKTOP_TOPBAR_CONTROL_GAP_PX;
   // Same cluster with the words in tooltips. Both numbers feed the density
   // decision, so the strip knows what it would cost BEFORE it collapses.
@@ -1738,6 +1770,24 @@ export function DesktopTopBarControls({
     usageMinWidth +
     (density === "full" ? sessionActionsMinWidth : compactActionsMinWidth) +
     2 * DESKTOP_TOPBAR_CONTROL_GAP_PX;
+  const updateSchedule = providerUpdate && session
+    ? providerUpdateScheduleText(
+      providerUpdate,
+      providerUpdateWaitsForTurn(session),
+      clock,
+    )
+    : null;
+  const updateTooltip = providerUpdate && session
+    ? `${
+      providerName(
+        session.provider,
+        session.provider_version,
+        session.provider_generation_digest,
+      )
+    } ${session.provider_version ?? ""} → ${providerUpdate.version}${
+      updateSchedule ? ` · ${updateSchedule}` : ""
+    }`
+    : "";
 
   return (
     <Stack
@@ -2103,6 +2153,66 @@ export function DesktopTopBarControls({
         alignItems="center"
         sx={{ flexShrink: 0 }}
       >
+        {providerUpdate && session && (
+          <Tooltip title={updateTooltip}>
+            <span>
+              <Button
+                data-desktop-item="topbar-update"
+                data-desktop-topbar-action="update"
+                data-provider-update-scheduled={providerUpdate.when_idle ||
+                  undefined}
+                size="small"
+                color="info"
+                variant="outlined"
+                startIcon={providerUpdate.when_idle
+                  ? (
+                    <Schedule
+                      sx={{
+                        ...desktopEmbeddedControlIconSx(),
+                        color: "info.main",
+                      }}
+                    />
+                  )
+                  : (
+                    <Upgrade
+                      sx={{
+                        ...desktopEmbeddedControlIconSx(),
+                        color: "info.main",
+                      }}
+                    />
+                  )}
+                aria-label={providerUpdate.when_idle
+                  ? `Provider update to ${providerUpdate.version} scheduled`
+                  : `Update Provider to ${providerUpdate.version}`}
+                onClick={(): void => setOpenSurface("update")}
+                sx={{
+                  ...desktopSessionActionSx({
+                    open: updateTarget !== null,
+                    minWidth: density === "full" ? 104 : ACTION_ICON_WIDTH_PX,
+                  }),
+                  color: "info.main",
+                  borderColor: (theme) => alpha(theme.palette.info.main, 0.45),
+                  bgcolor: (theme) => alpha(theme.palette.info.main, 0.08),
+                  "&:hover": {
+                    borderColor: "info.main",
+                    bgcolor: (theme) => alpha(theme.palette.info.main, 0.14),
+                  },
+                }}
+              >
+                <SessionActionLabel
+                  label={providerUpdate.when_idle
+                    ? "Queued"
+                    : `Update ${providerUpdate.version}`}
+                  keyLabel="P"
+                  accent={updateTarget !== null}
+                  available
+                  density={density}
+                />
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+
         <Tooltip title="Reload session runtime · keep history, queue, drafts, and configuration">
           <span>
             <Button
@@ -2241,6 +2351,10 @@ export function DesktopTopBarControls({
       <SessionReloadDialog
         session={reloadTarget}
         onClose={(): void => setOpenSurface(null)}
+      />
+      <ProviderUpdateDialog
+        session={updateTarget}
+        onClose={closeSurface}
       />
 
       <Dialog

@@ -82,3 +82,22 @@ Deno.test("composer sheet session ignores metadata it does not render", () => {
   assert(!sameComposerSheetSession(active, { ...active, paused: true }));
   assert(!sameComposerSheetSession(active, { ...active, status: "running" }));
 });
+
+Deno.test("session sheet rerenders for a new or scheduled Provider update", () => {
+  const offer = { version: "1.1.0", digest: "next" };
+  const offered = { ...active, provider_update_available: offer };
+  assertEquals(sameComposerSheetSession(active, offered), false);
+  assertEquals(
+    sameComposerSheetSession(offered, {
+      ...offered,
+      provider_update_available: { ...offer, when_idle: true },
+    }),
+    false,
+  );
+  assert(
+    sameComposerSheetSession(
+      { ...offered, provider_update_available: { ...offer, automatic_at_ms: 60_000 } },
+      { ...offered, provider_update_available: { ...offer, automatic_at_ms: 60_100 } },
+    ),
+  );
+});

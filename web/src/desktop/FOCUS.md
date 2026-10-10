@@ -18,8 +18,9 @@ same controller state.
 
 The Top Bar is a workspace region, not a fourth pane. Its actions do not need
 focus: `␣T` opens the Top bar group and the next key runs Run Configuration
-(`R`), Usage (`U`), session verification (`A`), Reload (`L`), Compact (`C`)
-or Clear (`X`) directly; each control shows its `␣TR`-style slot. Focusing
+(`R`), Usage (`U`), session verification (`A`), Provider update (`P`, only
+while a newer compatible release waits), Reload (`L`), Compact (`C`) or
+Clear (`X`) directly; each control shows its `␣TR`-style slot. Focusing
 the bar (`␣TT`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
 Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
 plus a primary underline, and only the focused control receives the keyboard
@@ -101,7 +102,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣K` | Command Palette |
 | `␣P` `␣C` | Focus Prompt, Conversation |
 | `␣S` + `S/Z/N/M/P` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project |
-| `␣T` + `R/U/A/L/C/X/T` | Top bar group: run config, usage, verify, reload, compact, clear; `T` focuses the bar |
+| `␣T` + `R/U/A/P/L/C/X/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload, compact, clear; `T` focuses the bar |
 | `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
 | `␣G` | Open or close Calls (Agents this session called) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |

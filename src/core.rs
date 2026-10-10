@@ -373,6 +373,32 @@ pub struct ProviderUpdate {
     pub started_at_ms: i64,
 }
 
+/// A newer, native-session-compatible Provider release installed on the
+/// session's Device. Clients use it to offer the update; nothing changes
+/// until the user or an idle policy applies it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUpdateAvailable {
+    pub version: String,
+    pub digest: String,
+    /// The user asked to update as soon as the current work finishes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub when_idle: bool,
+    /// Estimated Controller epoch ms at which the idle policy updates this
+    /// session unattended. Absent when no automatic policy applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_at_ms: Option<i64>,
+}
+
+/// Controller-held offer behind [`SessionMeta::provider_update_available`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderUpdateOffer {
+    pub version: String,
+    pub digest: String,
+    pub when_idle: bool,
+    /// Idle period after which a policy updates the session unattended.
+    pub automatic_after: Option<std::time::Duration>,
+}
+
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -468,6 +494,10 @@ pub struct SessionMeta {
     /// Transient; never persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_update: Option<ProviderUpdate>,
+    /// Newer installed Provider release this session can adopt. Derived from
+    /// the Controller's update offers in `session_list`. Transient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_update_available: Option<ProviderUpdateAvailable>,
     /// Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
     /// `None` if none are scheduled. Derived from the drafts in `session_list`
     /// (not stored on the struct proper) so the session-row clock badge can show
@@ -1606,6 +1636,9 @@ struct HubInner {
     /// carries the old values of the rest. Overlaying these keeps that stale
     /// snapshot from flipping the selection back. Lock after `sessions`.
     config_in_flight: Mutex<HashMap<String, InFlightConfig>>,
+    /// Newer installed Provider releases sessions may adopt, republished by
+    /// the Provider update pass. Never held together with `sessions`.
+    provider_update_offers: Mutex<HashMap<String, ProviderUpdateOffer>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer still reduces compact deltas so streaming text coalesces without
     /// enqueueing the accumulated string on every token.
@@ -1804,6 +1837,7 @@ impl Hub {
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 config_in_flight: Mutex::new(HashMap::new()),
+                provider_update_offers: Mutex::new(HashMap::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
@@ -2505,6 +2539,8 @@ impl Hub {
     /// Session list after applying `keep` to each row's `owner_user_id`.
     #[must_use]
     pub fn session_list_filtered(&self, keep: impl Fn(Option<&str>) -> bool) -> Vec<SessionMeta> {
+        let offers = self.inner.provider_update_offers.lock().clone();
+        let now = now_ms();
         let sessions = self.inner.sessions.lock();
         let order = self.inner.order.lock();
         order
@@ -2520,6 +2556,23 @@ impl Hub {
                             .iter()
                             .filter_map(|m| m.schedule.as_ref().map(|sc| sc.fire_at_ms))
                             .min();
+                        meta.provider_update_available = offers
+                            .get(id)
+                            .filter(|offer| {
+                                meta.provider_update.is_none()
+                                    && offer.digest != meta.provider_generation_digest
+                            })
+                            .map(|offer| ProviderUpdateAvailable {
+                                version: offer.version.clone(),
+                                digest: offer.digest.clone(),
+                                when_idle: offer.when_idle,
+                                automatic_at_ms: offer.automatic_after.map(|after| {
+                                    let remaining = after.saturating_sub(s.last_activity.elapsed());
+                                    now.saturating_add(
+                                        i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX),
+                                    )
+                                }),
+                            });
                         meta
                     })
                 })
@@ -2565,6 +2618,68 @@ impl Hub {
     pub fn session_is_system(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).is_some_and(|s| s.meta.system)
+    }
+
+    /// Replace every session's Provider update offer. Clients see the change
+    /// through the ordinary session list broadcast.
+    pub fn publish_provider_update_offers(&self, offers: HashMap<String, ProviderUpdateOffer>) {
+        let changed = {
+            let mut current = self.inner.provider_update_offers.lock();
+            let changed = *current != offers;
+            *current = offers;
+            changed
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
+    /// Drop one offer after its update was applied, together with the
+    /// one-shot "update when idle" request that may have caused it.
+    pub fn settle_provider_update_offer(&self, session_id: &str) {
+        self.inner.provider_update_offers.lock().remove(session_id);
+        self.set_provider_update_when_idle(session_id, false);
+    }
+
+    /// Whether the user asked this session to adopt the installed Provider
+    /// release as soon as it is idle. Persisted; consumed by the update pass.
+    #[must_use]
+    pub fn provider_update_when_idle(&self, session_id: &str) -> bool {
+        self.inner
+            .settings
+            .lock()
+            .get(&format!(
+                "{}{session_id}",
+                settings_keys::SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX
+            ))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    }
+
+    /// Record or cancel the one-shot request and reflect it in the offer.
+    pub fn set_provider_update_when_idle(&self, session_id: &str, when_idle: bool) {
+        if self.provider_update_when_idle(session_id) != when_idle {
+            self.set_setting(
+                format!(
+                    "{}{session_id}",
+                    settings_keys::SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX
+                ),
+                serde_json::json!(when_idle),
+            );
+        }
+        let changed = self
+            .inner
+            .provider_update_offers
+            .lock()
+            .get_mut(session_id)
+            .is_some_and(|offer| {
+                let changed = offer.when_idle != when_idle;
+                offer.when_idle = when_idle;
+                changed
+            });
+        if changed {
+            self.broadcast_sessions();
+        }
     }
 
     /// How long ago this Controller last appended an event to the session.
@@ -2851,6 +2966,7 @@ impl Hub {
             usage: None,
             background_tasks: 0,
             provider_update: None,
+            provider_update_available: None,
             next_schedule_ms: None,
             owner_user_id,
             owner_username,
@@ -6639,6 +6755,7 @@ mod runtime_reconciliation_tests {
                 usage: None,
                 background_tasks: 0,
                 provider_update: None,
+                provider_update_available: None,
                 next_schedule_ms: None,
                 owner_user_id: None,
                 owner_username: None,
@@ -9073,6 +9190,46 @@ mod core_tests {
         );
         assert_eq!(after.cwd, before.cwd);
         assert_eq!(after.machine_id, before.machine_id);
+    }
+
+    #[test]
+    fn provider_update_offer_follows_binding_and_one_shot_request() {
+        let (hub, meta) = provider_reload_fixture();
+        let offer = |when_idle| ProviderUpdateOffer {
+            version: "new".to_owned(),
+            digest: "new-digest".to_owned(),
+            when_idle,
+            automatic_after: Some(std::time::Duration::from_hours(1)),
+        };
+        let listed = |hub: &Hub| {
+            hub.session_list()
+                .into_iter()
+                .find(|listed| listed.id == meta.id)
+                .unwrap()
+                .provider_update_available
+        };
+        assert_eq!(listed(&hub), None);
+        hub.publish_provider_update_offers(HashMap::from([(meta.id.clone(), offer(false))]));
+        let available = listed(&hub).expect("offer listed");
+        assert_eq!(available.version, "new");
+        assert!(!available.when_idle);
+        let at = available.automatic_at_ms.expect("idle policy time");
+        assert!(at > now_ms() + 3_500_000 && at <= now_ms() + 3_600_000);
+
+        hub.set_provider_update_when_idle(&meta.id, true);
+        assert!(hub.provider_update_when_idle(&meta.id));
+        assert!(listed(&hub).unwrap().when_idle);
+
+        // Once the session is bound to the offered release it is not offered.
+        let behavior = crate::provider::legacy_behavior("codex");
+        hub.set_status(&meta.id, Status::Exited, None);
+        let exited = hub.session_info(&meta.id).unwrap().meta;
+        hub.repin_dormant_provider(&exited, "new", "new-digest", &behavior)
+            .expect("re-pin");
+        assert_eq!(listed(&hub), None);
+
+        hub.settle_provider_update_offer(&meta.id);
+        assert!(!hub.provider_update_when_idle(&meta.id));
     }
 
     #[test]

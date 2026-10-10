@@ -130,6 +130,16 @@ export interface ProviderUpdate {
   started_at_ms: number;
 }
 
+/** A newer compatible Provider release installed on the session's Device. */
+export interface ProviderUpdateAvailable {
+  version: string;
+  digest: string;
+  /** The user asked to update once the current work finishes. */
+  when_idle?: boolean;
+  /** Estimated Controller epoch ms when the idle policy updates it. */
+  automatic_at_ms?: number;
+}
+
 export interface SessionMeta {
   id: string;
   provider: string;
@@ -173,6 +183,9 @@ export interface SessionMeta {
    *  `automatic` marks the unattended idle update. Cleared on the next status
    *  change. Transient. */
   provider_update?: ProviderUpdate;
+  /** Newer installed Provider release this session can adopt. Absent while
+   *  none is waiting or an update is already in progress. Transient. */
+  provider_update_available?: ProviderUpdateAvailable;
   /** Full latest ACP usage update. `raw` retains optional standard cost and
    * provider `_meta` rate-limit fields for the Info → Usage panel. */
   usage?: {

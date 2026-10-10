@@ -102,13 +102,18 @@ Deno.test("desktop top-bar controls share height and spacing vocabulary", () => 
 Deno.test("desktop top-bar surfaces have one mutually exclusive owner", () => {
   assert(
     topBarSource.includes(
-      '"config" | "usage" | "reload" | "compact" | "clear" | null',
+      '"config" | "usage" | "update" | "reload" | "compact" | "clear" | null',
     ),
   );
   assert(topBarSource.includes("const configOpen = openSurface === \"config\""));
   assert(topBarSource.includes("const usageOpen = openSurface === \"usage\""));
   assert(topBarSource.includes("const compactConfirm = openSurface === \"compact\""));
   assert(topBarSource.includes("const clearConfirm = openSurface === \"clear\""));
+  assert(
+    topBarSource.includes(
+      'const updateTarget = openSurface === "update" ? session ?? null : null',
+    ),
+  );
   assertEquals(topBarSource.includes("useState<HTMLElement | null>(null)"), false);
   assertEquals(topBarSource.includes("setCompactConfirm"), false);
   assertEquals(topBarSource.includes("setClearConfirm"), false);
@@ -156,4 +161,12 @@ Deno.test("desktop composer no longer owns the icon-only Clear action", () => {
     ),
     true,
   );
+});
+
+Deno.test("desktop Provider update is a top-bar action only while offered", () => {
+  assert(topBarSource.includes("const providerUpdate = sessionProviderUpdate(session)"));
+  assert(topBarSource.includes("{providerUpdate && session && ("));
+  assert(topBarSource.includes('data-desktop-topbar-action="update"'));
+  assert(topBarSource.includes('sequence: [DESKTOP_WORKSPACE_PREFIX, "T", "P"]'));
+  assert(topBarSource.includes("<ProviderUpdateDialog"));
 });

@@ -53,3 +53,15 @@ Deno.test("desktop reload confirmation names every preserved session state", () 
     2,
   );
 });
+
+Deno.test("mobile Provider update is badged on Options and offered in the session sheet", () => {
+  assert(composerSource.includes("data-provider-update-badge"));
+  assert(
+    composerSource.includes(
+      "<ProviderUpdateCard session={session} onUpdate={onProviderUpdate} />",
+    ),
+  );
+  assert(
+    composerSource.includes("session={open && updateConfirm ? session : null}"),
+  );
+});

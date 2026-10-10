@@ -18,6 +18,7 @@ import {
 } from "react";
 import {
   alpha,
+  Badge,
   Box,
   Button,
   ButtonBase,
@@ -138,6 +139,9 @@ import {
 } from "./usageLimits";
 import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
+import { ProviderUpdateCard } from "./ProviderUpdateCard";
+import { ProviderUpdateDialog } from "./ProviderUpdateDialog";
+import { sessionProviderUpdate } from "./providerUpdateOffer";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -6509,6 +6513,7 @@ export function SessionControls({
   }, [touchInput]);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
+  const providerUpdate = sessionProviderUpdate(session);
   const optionPresentations = useMemo(
     () =>
       providerConfigOptionPresentations(
@@ -6580,9 +6585,15 @@ export function SessionControls({
   return (
     <>
       {hasConfig && (
-        <Tooltip title="Options">
+        <Tooltip
+          title={providerUpdate
+            ? `Options · ${providerUpdate.version} update available`
+            : "Options"}
+        >
           <IconButton
-            aria-label="options"
+            aria-label={providerUpdate
+              ? "options, Provider update available"
+              : "options"}
             disabled={providerConfigSurfaceDisabled(
               status,
               options,
@@ -6634,7 +6645,15 @@ export function SessionControls({
               },
             }}
           >
-            <Tune />
+            <Badge
+              variant="dot"
+              color="info"
+              overlap="circular"
+              invisible={providerUpdate === null}
+              data-provider-update-badge={providerUpdate !== null || undefined}
+            >
+              <Tune />
+            </Badge>
           </IconButton>
         </Tooltip>
       )}
@@ -6862,8 +6881,11 @@ function ComposerSheet({
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
+  const [updateConfirm, setUpdateConfirm] = useState(false);
+  const closeUpdateConfirm = useCallback(() => setUpdateConfirm(false), []);
   useEffect(() => {
     if (open) {
+      setUpdateConfirm(false);
       setCustomizeAgent(false);
       setPendingPresetId(null);
       setSessionActionsExpanded(false);
@@ -6999,6 +7021,7 @@ function ComposerSheet({
           onActionsExpandedChange={setSessionActionsExpanded}
           onSessionAction={setCmdConfirm}
           onReload={(): void => setReloadConfirm(true)}
+          onProviderUpdate={(): void => setUpdateConfirm(true)}
         />
       )}
       {session && <SessionProviderSection session={session} />}
@@ -7218,6 +7241,10 @@ function ComposerSheet({
         session={open && reloadConfirm ? session : null}
         onClose={(): void => setReloadConfirm(false)}
       />
+      <ProviderUpdateDialog
+        session={open && updateConfirm ? session : null}
+        onClose={closeUpdateConfirm}
+      />
       </Sheet>
     </>
   );
@@ -7282,6 +7309,7 @@ function SessionInfoSection({
   onActionsExpandedChange,
   onSessionAction,
   onReload,
+  onProviderUpdate,
 }: {
   session: SessionMeta;
   title: string;
@@ -7298,6 +7326,7 @@ function SessionInfoSection({
   onActionsExpandedChange: (expanded: boolean) => void;
   onSessionAction: (action: SessionAction) => void;
   onReload: () => void;
+  onProviderUpdate: () => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -7411,6 +7440,7 @@ function SessionInfoSection({
           Session
         </Typography>
       </Box>
+      <ProviderUpdateCard session={session} onUpdate={onProviderUpdate} />
       <TextField
         inputRef={titleInputRef}
         name="session-title"

@@ -135,6 +135,7 @@ fn session_meta_owner_fields_are_optional_on_the_wire() {
         usage: None,
         background_tasks: 0,
         provider_update: None,
+        provider_update_available: None,
         next_schedule_ms: None,
         owner_user_id: None,
         owner_username: None,

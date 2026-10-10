@@ -84,5 +84,24 @@ export function sameComposerSheetSession(
       a.title === b.title &&
       a.status === b.status &&
       a.origin === b.origin &&
-      a.paused === b.paused);
+      a.paused === b.paused &&
+      sameProviderUpdateOffer(a, b));
+}
+
+/** The update offer drives the session-settings badge and card. Its
+ *  automatic time is re-estimated on every broadcast; only a minute-level
+ *  change is visible. */
+function sameProviderUpdateOffer(a: SessionMeta, b: SessionMeta): boolean {
+  const x = a.provider_update_available;
+  const y = b.provider_update_available;
+  const minute = (at: number | undefined): number | undefined =>
+    at === undefined ? undefined : Math.round(at / 60_000);
+  return a.system === b.system &&
+    (a.provider_update === undefined) === (b.provider_update === undefined) &&
+    (x === y ||
+      (x !== undefined && y !== undefined &&
+        x.version === y.version &&
+        x.digest === y.digest &&
+        x.when_idle === y.when_idle &&
+        minute(x.automatic_at_ms) === minute(y.automatic_at_ms)));
 }

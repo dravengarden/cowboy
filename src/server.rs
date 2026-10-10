@@ -15339,24 +15339,58 @@ async fn session_reload_target(
             "wait for the current turn to finish before loading a new Provider version".to_owned(),
         );
     }
+    session_upgrade_target(state, meta).await
+}
+
+/// The installed release `meta` could adopt: every check of an explicit
+/// Reload except that the session is between turns, so a busy session can
+/// still be told an update is waiting.
+async fn session_upgrade_target(
+    state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
+) -> Result<ResolvedProviderGeneration, String> {
+    if !state.runtime_router.connected(&meta.machine_id) {
+        return Err("session Machine is not connected".to_owned());
+    }
     if state.hub.agent_session_id_for_resume(&meta.id).is_none() {
         return Err("a saved native session is required to load a new Provider version".to_owned());
     }
-    let installed = current_machine_plugin(state, &meta.machine_id, &meta.provider).await?;
-    let auth = state.provider_auth.status(&meta.provider);
+    installed_upgrade_target(
+        state,
+        &meta.machine_id,
+        &meta.provider,
+        &meta.provider_version,
+        &meta.provider_generation_digest,
+    )
+    .await
+}
+
+/// The Device's installed release for a session pinned to `version`/`digest`,
+/// when it keeps authentication and the native session contract unchanged.
+/// Depends only on its arguments, so a pass may share it between sessions.
+async fn installed_upgrade_target(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider: &str,
+    version: &str,
+    digest: &str,
+) -> Result<ResolvedProviderGeneration, String> {
+    let installed = current_machine_plugin(state, machine_id, provider).await?;
+    let auth = state.provider_auth.status(provider);
     let generation = resolve_provider_generation(
         &state.provider_catalog,
         &state.plugin_catalog,
         &[installed],
-        &meta.provider,
+        provider,
         auth.as_ref(),
     )?;
-    let previous = state.provider_catalog.package(
-        &meta.provider, &meta.provider_version, &meta.provider_generation_digest,
-    ).ok_or_else(|| "the previous Provider package is unavailable; cannot verify native session compatibility".to_owned())?;
+    let previous = state.provider_catalog.package(provider, version, digest).ok_or_else(|| {
+        "the previous Provider package is unavailable; cannot verify native session compatibility"
+            .to_owned()
+    })?;
     let next = state
         .provider_catalog
-        .package(&meta.provider, &generation.version, &generation.digest)
+        .package(provider, &generation.version, &generation.digest)
         .ok_or_else(|| "the target Provider package is unavailable".to_owned())?;
     if !provider_reload_contract_compatible(&previous.manifest, &next.manifest) {
         return Err("Provider authentication or native session contract changed; keeping the existing runtime".to_owned());
@@ -15677,6 +15711,7 @@ fn web_session_is_missing_machine(machine_id: &str, origin: &SessionOrigin) -> b
     machine_id == "local" && matches!(origin, SessionOrigin::Web)
 }
 
+#[derive(Clone)]
 struct ResolvedProviderGeneration {
     version: String,
     digest: String,

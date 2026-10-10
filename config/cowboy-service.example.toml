@@ -22,10 +22,11 @@ schema = 1
 # across Controller restarts from the first retention pass that saw it dormant.
 # duration string such as "6h", from 1h to 365d; applies live.
 # repin_dormant_after = "7d"
-# Move every running, idle, non-system session to its Device's newer
-# installed Provider release once it has had no event for
-# `plugins.auto_update_idle_after`, through the same gate and native resume as
-# an explicit Reload. Sessions that opted in individually update as before.
+# Move every idle, non-system session to its Device's newer installed
+# Provider release once it has had no event for `plugins.auto_update_idle_after`,
+# through the same gate and native resume as an explicit Reload. A session
+# without a worker is only re-pinned, so it opens on the new release. Sessions
+# that opted in, or asked to update after their turn, update as soon as idle.
 # boolean (true or false); applies live.
 # auto_update_idle_sessions = false
 # Idle time before the fleet policy updates a session. Keep it at or above the

@@ -1581,6 +1581,7 @@ impl SqliteSessionRow {
             usage: None,
             background_tasks: 0,
             provider_update: None,
+            provider_update_available: None,
             next_schedule_ms: None,
             owner_user_id: self.owner_user_id,
             owner_username: self.owner_username,

@@ -72,7 +72,7 @@ pub static SERVICE_FIELDS: &[Field] = &[
         kind: Kind::Bool,
         default: Value::Bool(false),
         reload: Reload::Live,
-        doc: "Move every running, idle, non-system session to its Device's newer\ninstalled Provider release once it has had no event for\n`plugins.auto_update_idle_after`, through the same gate and native resume as\nan explicit Reload. Sessions that opted in individually update as before.",
+        doc: "Move every idle, non-system session to its Device's newer installed\nProvider release once it has had no event for `plugins.auto_update_idle_after`,\nthrough the same gate and native resume as an explicit Reload. A session\nwithout a worker is only re-pinned, so it opens on the new release. Sessions\nthat opted in, or asked to update after their turn, update as soon as idle.",
     },
     Field {
         key: "plugins.auto_update_idle_after",
