@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolveImmutableReceipt } from "./plugin-publication-receipt.ts";
 import {
   copyImmutable,
@@ -86,6 +86,26 @@ if (
   !publicKey.startsWith("ssh-ed25519 ") || publicKey.includes("PRIVATE KEY")
 ) {
   throw new Error("Plugin publisher public key is not Ed25519");
+}
+// A version names one release forever. Two releases of one Plugin version,
+// built from different sources (concurrent tasks bumping to the same number),
+// would otherwise sit side by side and a reader could install either.
+const otherRelease = new RegExp(
+  `^${escapeRegExp(pluginId)}-${
+    escapeRegExp(release.plugin_version)
+  }-([0-9a-f]{64})\\.release\\.json$`,
+);
+const sameVersion = (await readdir(catalogRoot).catch(() => []))
+  .map((name) => otherRelease.exec(name)?.[1])
+  .filter((digest) =>
+    digest !== undefined && digest !== digestValue(release.artifact_digest)
+  );
+if (sameVersion.length > 0) {
+  throw new Error(
+    `${pluginId} ${release.plugin_version} is already published as a different release (sha256:${
+      sameVersion.join(", sha256:")
+    }); bump the version instead of publishing beside it`,
+  );
 }
 await copyImmutableText(
   publicKey,
@@ -190,6 +210,10 @@ function publicationTarget(
     throw new Error(`artifact URL does not bind its digest: ${artifactUrl}`);
   }
   return { digest, name };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function digestValue(value: string): string {
