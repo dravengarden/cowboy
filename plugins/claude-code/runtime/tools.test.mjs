@@ -1274,3 +1274,40 @@ test("read-ahead keeps a bounded number of reads in flight and reads each path o
   assert.ok(peak <= 3, `peak ${peak}`);
   assert.deepEqual(reads.toSorted(), ["a", "b", "broken", "c", "d", "e"]);
 });
+
+test("a held background command waits on output notifications, not a read per second", async (t) => {
+  const { tools, connection } = await fixture(t);
+  const listeners = new Set();
+  connection.listeners = listeners;
+  tools.state.jobs.job = { afterSeq: null, exited: false, end: "e0" };
+  let reads = 0;
+  let output = false;
+  connection.call = async (method, params) => {
+    assert.equal(method, "process/read");
+    assert.equal(params.waitMs, 0);
+    reads++;
+    return {
+      chunks: output
+        ? [{
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("\x1ee0:0\n").toString("base64"),
+        }]
+        : [],
+      exited: false,
+      closed: false,
+    };
+  };
+  const started = Date.now();
+  const waiting = tools.waitTask("job", null, 60000);
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  // Idle for 2.5 s: one read, then a wait on the notification.
+  assert.equal(reads, 1);
+  output = true;
+  for (const listener of listeners) {
+    listener({ method: "process/output", params: { processId: "job" } });
+  }
+  assert.deepEqual(await waiting, { closed: true, exitCode: 0 });
+  assert.equal(reads, 2);
+  assert.ok(Date.now() - started < 5000);
+});
