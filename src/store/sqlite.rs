@@ -2296,10 +2296,10 @@ impl SqliteStorage {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as(
                 "WITH recent AS MATERIALIZED ( \
-                     SELECT seq, payload, ts_ms FROM events \
+                     SELECT seq, payload FROM events \
                      WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2 \
                  ), sized AS ( \
-                     SELECT seq, payload, ts_ms, \
+                     SELECT seq, payload, \
                             row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
                             sum(length(CAST(payload AS BLOB)) + ?4) \
                                 OVER (ORDER BY seq DESC) AS cumulative_bytes \
@@ -2307,7 +2307,7 @@ impl SqliteStorage {
                  ), totals AS ( \
                      SELECT count(*) AS total_count FROM events WHERE session_id = ?1 \
                  ) \
-                 SELECT sized.seq, sized.payload, totals.total_count, sized.ts_ms \
+                 SELECT sized.seq, sized.payload, totals.total_count \
                  FROM sized CROSS JOIN totals \
                  WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= ?3 \
                  ORDER BY sized.seq DESC",
@@ -2323,7 +2323,19 @@ impl SqliteStorage {
                 .first()
                 .and_then(|event| u64::try_from(event.total_count).ok())
                 .unwrap_or(0);
-            let last_event_at_ms = event_rows.first().and_then(|event| event.ts_ms);
+            let last_event_at_ms: Option<i64> = sqlx::query_scalar(&format!(
+                "SELECT ts_ms FROM events \
+                 WHERE session_id = ?1 AND NOT ( \
+                     json_extract(payload, '$.kind') = 'lifecycle' \
+                     OR (json_extract(payload, '$.kind') = 'update' \
+                         AND json_extract(payload, '$.update.sessionUpdate') IN ({})) \
+                 ) ORDER BY seq DESC LIMIT 1",
+                crate::core::NON_ACTIVITY_SESSION_UPDATES_SQL,
+            ))
+            .bind(&id)
+            .fetch_optional(&self.pool)
+            .await
+            .with_context(|| format!("SELECT SQLite last activity for {id}"))?;
             let mut reached_start =
                 event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
             let mut events: Vec<_> = event_rows

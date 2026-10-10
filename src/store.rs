@@ -425,7 +425,7 @@ pub struct LoadedSession {
     pub mobile_review_state: serde_json::Value,
     /// Explicit sidebar folder placement (`sessions.folder_id`), if any.
     pub folder_id: Option<String>,
-    /// Epoch ms of the newest durable event, if any.
+    /// Epoch ms of the newest durable event that counts as activity, if any.
     pub last_event_at_ms: Option<i64>,
 }
 
@@ -3244,12 +3244,10 @@ impl PostgresStorage {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
                 "WITH recent AS MATERIALIZED ( \
-                     SELECT seq, payload, \
-                            (extract(epoch FROM ts) * 1000)::bigint AS ts_ms \
-                     FROM events \
+                     SELECT seq, payload FROM events \
                      WHERE session_id = $1 ORDER BY seq DESC LIMIT $2 \
                  ), sized AS ( \
-                     SELECT seq, payload, ts_ms, \
+                     SELECT seq, payload, \
                             row_number() OVER (ORDER BY seq DESC) AS recent_rank, \
                             sum(octet_length(payload::text) + $4) \
                                 OVER (ORDER BY seq DESC) AS cumulative_bytes \
@@ -3258,7 +3256,7 @@ impl PostgresStorage {
                      SELECT count(*)::bigint AS total_count \
                      FROM events WHERE session_id = $1 \
                  ) \
-                 SELECT sized.seq, sized.payload, totals.total_count, sized.ts_ms \
+                 SELECT sized.seq, sized.payload, totals.total_count \
                  FROM sized CROSS JOIN totals \
                  WHERE sized.recent_rank = 1 OR sized.cumulative_bytes <= $3 \
                  ORDER BY sized.seq DESC",
@@ -3275,7 +3273,19 @@ impl PostgresStorage {
                 .first()
                 .and_then(|r| u64::try_from(r.total_count).ok())
                 .unwrap_or(0);
-            let last_event_at_ms = event_rows.first().and_then(|r| r.ts_ms);
+            let last_event_at_ms: Option<i64> = sqlx::query_scalar(&format!(
+                "SELECT (extract(epoch FROM ts) * 1000)::bigint FROM events \
+                 WHERE session_id = $1 AND NOT ( \
+                     payload->>'kind' = 'lifecycle' \
+                     OR (payload->>'kind' = 'update' \
+                         AND payload->'update'->>'sessionUpdate' IN ({})) \
+                 ) ORDER BY seq DESC LIMIT 1",
+                crate::core::NON_ACTIVITY_SESSION_UPDATES_SQL,
+            ))
+            .bind(&id)
+            .fetch_optional(&self.pool)
+            .await
+            .with_context(|| format!("SELECT last activity for {id}"))?;
             let mut reached_start =
                 event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
             let mut events = Vec::with_capacity(event_rows.len());
@@ -8835,9 +8845,6 @@ struct EventRow {
     seq: i64,
     payload: serde_json::Value,
     total_count: i64,
-    /// Only the restore query selects it.
-    #[sqlx(default)]
-    ts_ms: Option<i64>,
 }
 
 #[cfg(test)]
