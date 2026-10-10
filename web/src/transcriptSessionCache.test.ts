@@ -118,3 +118,17 @@ Deno.test("a created session that no list ever names stops being protected", () 
   assertEquals([...valid], ["a"]);
   assertEquals(created.size, 0);
 });
+
+Deno.test("the store prunes against created sessions and recovers an opened skeleton", async () => {
+  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const listHandler = store.slice(
+    store.indexOf('case "sessions": {'),
+    store.indexOf('case "machines": {'),
+  );
+  // Every pruner reads the widened set, so none can run on the raw list.
+  assertEquals(listHandler.includes("new Set(msg.sessions.map((s) => s.id)),\n        unlistedCreatedSessions,"), true);
+  assertEquals(listHandler.includes("retainTranscriptSessions(validSessions);"), true);
+  assertEquals(listHandler.includes("void hydrateSession(openedSessionId);"), true);
+  const created = store.slice(store.indexOf("export function markSessionHydrated("));
+  assertEquals(created.slice(0, 600).includes("unlistedCreatedSessions.set(id, Date.now());"), true);
+});
