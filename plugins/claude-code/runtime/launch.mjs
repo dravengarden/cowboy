@@ -704,6 +704,13 @@ async function bridge(
     }
     return result;
   };
+  const becomeReady = async () => {
+    stage = "ready";
+    startupPhase("ready");
+    clearTimeout(timeout);
+    await send(process.stdout, cleanCommands(initialReply));
+    resolveReady();
+  };
   const input = (async () => {
     for await (const frame of frames(process.stdin)) {
       if (
@@ -815,6 +822,16 @@ async function bridge(
         }
         initialReply = frame;
         startupPhase("native-initialized");
+        // Native runs session.start while it initializes, so the module's
+        // receipt normally precedes this reply and is the whole readiness
+        // proof. A /cost turn would only wait for every --mcp-config server
+        // to connect, which native also does before the first prompt anyway.
+        if (moduleReady()) {
+          await becomeReady();
+          continue;
+        }
+        // Otherwise /cost (which cannot call a model) makes native run
+        // session.start before its result.
         stage = "cost";
         await send(child.stdin, {
           type: "user",
@@ -846,11 +863,7 @@ async function bridge(
           error.cowboyDiagnostic = error.message;
           throw error;
         }
-        stage = "ready";
-        startupPhase("ready");
-        clearTimeout(timeout);
-        await send(process.stdout, cleanCommands(initialReply));
-        resolveReady();
+        await becomeReady();
         continue;
       }
       if (stage === "ready") {

@@ -20774,7 +20774,7 @@
         }
       ],
       "plugins": {
-        "claude-code": "3.19.12",
+        "claude-code": "3.19.13",
         "claude-deepseek": "3.1.31",
         "codex": "3.4.0",
         "codex-deepseek": "3.1.31",
@@ -20841,7 +20841,7 @@
                 "version": "0.1.1"
               }
             ],
-            "source_digest": "sha256:81295ae3f245e7a623a89f7790e6b5badf9de50e19aaa407739b000b4de295bf"
+            "source_digest": "sha256:e952defe10d199f613e8f82789fc7b35be3abb296dcf93cb98b6d7f79925df89"
           },
           "claude-deepseek": {
             "component_release": "3.43.0",
