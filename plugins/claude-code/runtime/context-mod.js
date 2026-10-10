@@ -1852,14 +1852,10 @@ export function register(on) {
     if (!response.ok || JSON.parse(response.text).ready !== true) {
       throw new Error("Execution bridge unavailable");
     }
-    // This is a readiness receipt, never a model tool. Cowboy first issues the
-    // native /cost command (which cannot call a model), then asks initialize for
-    // this exact per-process name. Unknown slash commands MUST NOT be used as
+    // The /ready receipt above is the launcher's readiness proof: it issues
+    // the native /cost command (which cannot call a model) and requires this
+    // receipt before its result. Unknown slash commands MUST NOT be used as
     // readiness probes: native Claude can submit them to the model.
-    await $.command.register({
-      name: "cowboy-execution-ready-" + context.nonce,
-      description: "Cowboy execution context loaded",
-    });
     return next(event);
   });
 }

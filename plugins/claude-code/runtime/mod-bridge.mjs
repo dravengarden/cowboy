@@ -79,7 +79,7 @@ async function transcriptCopy(path, root) {
 
 export async function startModBridge(
   tools,
-  { waitMs = 1000, permissions, transcriptRoot } = {},
+  { waitMs = 1000, permissions, transcriptRoot, onReady } = {},
 ) {
   const directory = await mkdtemp("/tmp/cowboy-claude-mod-");
   await chmod(directory, 0o700);
@@ -94,6 +94,8 @@ export async function startModBridge(
   let retainedBytes = 0;
   let outstanding = 0;
   let active = true;
+  // The context module reports that it loaded this process's context.
+  let moduleReady = false;
   const consume = (id, operation) => {
     if (admitted.get(id) !== operation) return;
     admitted.set(id, null);
@@ -137,6 +139,10 @@ export async function startModBridge(
         chunks.push(chunk);
       }
       if (request.url === "/ready") {
+        if (!moduleReady) {
+          moduleReady = true;
+          onReady?.();
+        }
         answer(200, { ready: true });
         return;
       }
@@ -514,6 +520,7 @@ export async function startModBridge(
   return {
     socketPath,
     token,
+    moduleReady: () => moduleReady,
     async close() {
       active = false;
       for (const operation of admitted.values()) {

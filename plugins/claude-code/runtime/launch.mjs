@@ -604,7 +604,15 @@ export function allowedControl(request) {
   ]).has(request.subtype);
 }
 
-async function bridge(child, tools, context, memory, broker, managed) {
+async function bridge(
+  child,
+  tools,
+  context,
+  memory,
+  broker,
+  managed,
+  moduleReady,
+) {
   let resolveReady, rejectReady;
   const ready = new Promise((resolve, reject) => {
     resolveReady = resolve;
@@ -661,8 +669,6 @@ async function bridge(child, tools, context, memory, broker, managed) {
     send(child.stdin, { type: "control_request", request_id: id, request })
       .catch(() => {});
   };
-  const checkId = randomUUID();
-  const privateCommand = "cowboy-execution-ready-" + context.nonce;
   // Readiness crosses the Machine link to the target. A transient overlay
   // stall of 30-60 s is routine on cross-border links; it must delay startup,
   // not fail it. Stay below the Worker's 240 s session/resume deadline.
@@ -675,8 +681,7 @@ async function bridge(child, tools, context, memory, broker, managed) {
   const cleanCommands = (frame) => {
     const result = structuredClone(frame);
     const exposed = (name) =>
-      typeof name === "string" &&
-        !name.startsWith("cowboy-execution-ready-")
+      typeof name === "string"
         ? exposedCommand(name, context.skills)
         : undefined;
     for (const value of [result, result.response?.response]) {
@@ -831,21 +836,10 @@ async function bridge(child, tools, context, memory, broker, managed) {
           frame.is_error || frame.local_command !== "cost" ||
           frame.duration_api_ms !== 0
         ) throw new Error("Claude readiness command failed");
-        stage = "check";
-        startupPhase("native-ready-command");
-        await send(child.stdin, { ...initial, request_id: checkId });
-        continue;
-      }
-      if (
-        stage === "check" && frame.type === "control_response" &&
-        frame.response.request_id === checkId
-      ) {
-        if (
-          frame.response.subtype !== "success" ||
-          !frame.response.response?.commands?.some((command) =>
-            command.name === privateCommand
-          )
-        ) {
+        // Native awaits session.start before it runs the command, so the
+        // module has reported this process's context by now, or never will.
+        // Its report is the receipt; asking initialize again adds nothing.
+        if (!moduleReady()) {
           const error = new Error(
             "Claude execution module is missing or disabled",
           );
@@ -1040,6 +1034,7 @@ async function native(args) {
     const broker = new PermissionBroker("default");
     modBridge = await startModBridge(tools, {
       permissions: broker,
+      onReady: () => startupPhase("module-ready"),
       transcriptRoot: join(
         process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
         "projects",
@@ -1218,7 +1213,15 @@ async function native(args) {
       child.once("error", reject);
       child.once("exit", (code) => resolve(code ?? 1));
     });
-    bridge(child, tools, context, memory, broker, managed).catch((error) => {
+    bridge(
+      child,
+      tools,
+      context,
+      memory,
+      broker,
+      managed,
+      modBridge.moduleReady,
+    ).catch((error) => {
       process.stderr.write(
         (error.cowboyDiagnostic ??
           "Cowboy Claude execution initialization or transport failed; local fallback is disabled") +
