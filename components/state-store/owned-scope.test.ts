@@ -1,12 +1,13 @@
+import { test } from "bun:test";
 import {
   assertEquals,
   assertRejects,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert";
+} from "@std/assert";
 import { createOwnedResourceScope, ScopeClosedError } from "./owned-scope.ts";
 
-Deno.test("owned scope seals synchronously and releases consumer before provider", async () => {
+test("owned scope seals synchronously and releases consumer before provider", async () => {
   const scope = createOwnedResourceScope();
   const order: string[] = [];
   scope.defer(() => {
@@ -37,7 +38,7 @@ Deno.test("owned scope seals synchronously and releases consumer before provider
   });
 });
 
-Deno.test("owned scope drains admitted tasks before releasing their dependencies", async () => {
+test("owned scope drains admitted tasks before releasing their dependencies", async () => {
   const scope = createOwnedResourceScope();
   const task = Promise.withResolvers<void>();
   let released = false;
@@ -56,7 +57,7 @@ Deno.test("owned scope drains admitted tasks before releasing their dependencies
   assertEquals(scope.snapshot().failures, 0);
 });
 
-Deno.test("early release is idempotent and failures stay visible without preventing other cleanup", async () => {
+test("early release is idempotent and failures stay visible without preventing other cleanup", async () => {
   const scope = createOwnedResourceScope();
   let attempts = 0;
   let otherReleased = false;
@@ -84,7 +85,7 @@ Deno.test("early release is idempotent and failures stay visible without prevent
   assertStrictEquals(scope.dispose(), done);
 });
 
-Deno.test("release completion and abort reentrancy cannot revive or double-dispose ownership", async () => {
+test("release completion and abort reentrancy cannot revive or double-dispose ownership", async () => {
   const scope = createOwnedResourceScope();
   let calls = 0;
   let nested: Promise<void> | undefined;
@@ -103,7 +104,7 @@ Deno.test("release completion and abort reentrancy cannot revive or double-dispo
   assertEquals(scope.snapshot().resources, 0);
 });
 
-Deno.test("two instances have separate resources, task counts and callback generations", async () => {
+test("two instances have separate resources, task counts and callback generations", async () => {
   const first = createOwnedResourceScope();
   const second = createOwnedResourceScope();
   let count = 0;

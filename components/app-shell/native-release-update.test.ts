@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { nativeReleaseChannelsFor } from "./native-release-channels.ts";
 
 function assertEqual(actual: unknown, expected: unknown) {
@@ -8,7 +9,7 @@ function assertEqual(actual: unknown, expected: unknown) {
 
 const sidestore = { kind: "sidestore" as const, url: "sidestore://source" };
 
-Deno.test("store channels serve the iOS shell only, unless declared otherwise", () => {
+test("store channels serve the iOS shell only, unless declared otherwise", () => {
   assertEqual(nativeReleaseChannelsFor([sidestore], "ios"), [sidestore]);
   assertEqual(nativeReleaseChannelsFor([sidestore], "macos"), []);
   assertEqual(nativeReleaseChannelsFor([sidestore], "other"), []);

@@ -1,3 +1,16 @@
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 interface ExactDependency {
   id: string;
   version: string;
@@ -88,8 +101,8 @@ interface ReleasedComponent {
 }
 
 const runtimeRoot = dirname(fileURLToPath(import.meta.url));
-const pluginRoot = Deno.args[0] ?? "";
-const baseUrl = (Deno.args[1] ?? "").replace(/\/+$/, "");
+const pluginRoot = process.argv.slice(2)[0] ?? "";
+const baseUrl = (process.argv.slice(2)[1] ?? "").replace(/\/+$/, "");
 if (!baseUrl.startsWith("https://") || baseUrl.includes("latest")) {
   throw new Error("Provider artifact base URL must be immutable HTTPS");
 }
@@ -106,19 +119,18 @@ if (runtimeLock.schema_version !== 1) {
   throw new Error("unsupported runtime lock schema");
 }
 
-const outputBase = Deno.args[2] ?? "dist/plugins";
+const outputBase = process.argv.slice(2)[2] ?? "dist/plugins";
 const outputRoot = join(outputBase, providerId, "runtime");
 const cacheRoot = join(outputBase, ".runtime-cache");
-await Deno.mkdir(cacheRoot, { recursive: true });
-await Deno.remove(outputRoot, { recursive: true }).catch((error) => {
-  if (!(error instanceof Deno.errors.NotFound)) throw error;
+await mkdir(cacheRoot, { recursive: true });
+await rm(outputRoot, { recursive: true }).catch((error) => {
+  if (!((error as { code?: string }).code === "ENOENT")) throw error;
 });
-await Deno.mkdir(outputRoot, { recursive: true });
-const temporaryDirectory = await Deno.makeTempDir({
-  dir: outputBase,
-  prefix: ".provider-runtime-",
-});
-const temporary = await Deno.realPath(temporaryDirectory);
+await mkdir(outputRoot, { recursive: true });
+const temporaryDirectory = await mkdtemp(
+  join(outputBase, ".provider-runtime-"),
+);
+const temporary = await realpath(temporaryDirectory);
 
 try {
   const matrix: Array<{
@@ -180,7 +192,7 @@ try {
     });
   }
   const manifestPath = `${outputRoot}/runtime-artifacts.json`;
-  await Deno.writeTextFile(
+  await writeFile(
     manifestPath,
     `${JSON.stringify(matrix, null, 2)}\n`,
   );
@@ -191,7 +203,7 @@ try {
     targets: matrix.map((entry) => `${entry.os}-${entry.architecture}`),
   }));
 } finally {
-  await Deno.remove(temporary, { recursive: true }).catch(() => undefined);
+  await rm(temporary, { recursive: true }).catch(() => undefined);
 }
 
 function pluginComponentKind(kind: string): string {
@@ -215,7 +227,7 @@ async function buildComponent(
   target: TargetKey,
   destination: string,
 ): Promise<{ path: string; format: "raw" | "tar_gz"; entrypoint?: string }> {
-  await Deno.mkdir(destination, { recursive: true });
+  await mkdir(destination, { recursive: true });
   switch (recipe.kind) {
     case "npm_archive": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
@@ -224,7 +236,7 @@ async function buildComponent(
         required(locked.integrity, "npm integrity"),
       );
       const output = `${destination}/${command}.tar.gz`;
-      await Deno.copyFile(archive, output);
+      await copyFile(archive, output);
       return { path: output, format: "tar_gz", entrypoint: locked.entrypoint };
     }
     case "npm_brotli": {
@@ -233,19 +245,16 @@ async function buildComponent(
         locked.url,
         required(locked.integrity, "npm integrity"),
       );
-      const stage = await Deno.makeTempDir({
-        dir: temporary,
-        prefix: `${command}-`,
-      });
+      const stage = await mkdtemp(join(temporary, `${command}-`));
       await run("tar", ["-xzf", archive, "-C", stage, locked.entrypoint]);
-      await Deno.mkdir(`${stage}/bin`, { recursive: true });
+      await mkdir(`${stage}/bin`, { recursive: true });
       await run("brotli", [
         "--decompress",
         `--output=${stage}/bin/${command}`,
         `${stage}/${locked.entrypoint}`,
       ]);
-      await Deno.chmod(`${stage}/bin/${command}`, 0o755);
-      await Deno.remove(`${stage}/package`, { recursive: true });
+      await chmod(`${stage}/bin/${command}`, 0o755);
+      await rm(`${stage}/package`, { recursive: true });
       await writeProvenance(
         stage,
         dependency,
@@ -262,11 +271,8 @@ async function buildComponent(
         node.url,
         required(node.sha256, "Node SHA-256"),
       );
-      const stage = await Deno.makeTempDir({
-        dir: temporary,
-        prefix: `${command}-`,
-      });
-      await Deno.mkdir(`${stage}/runtime`, { recursive: true });
+      const stage = await mkdtemp(join(temporary, `${command}-`));
+      await mkdir(`${stage}/runtime`, { recursive: true });
       await run("tar", [
         "-xzf",
         nodeArchive,
@@ -275,12 +281,12 @@ async function buildComponent(
         "--strip-components=2",
         node.entrypoint,
       ]);
-      await Deno.mkdir(`${stage}/app`, { recursive: true });
-      await Deno.copyFile(
+      await mkdir(`${stage}/app`, { recursive: true });
+      await copyFile(
         join(runtimeRoot, recipe.package_dir, "package.json"),
         `${stage}/app/package.json`,
       );
-      await Deno.copyFile(
+      await copyFile(
         join(runtimeRoot, recipe.package_dir, "package-lock.json"),
         `${stage}/app/package-lock.json`,
       );
@@ -298,26 +304,26 @@ async function buildComponent(
         `--os=${npmOs}`,
         `--cpu=${npmCpu}`,
       ], { cwd: `${stage}/app` });
-      await Deno.remove(`${stage}/app/node_modules/.bin`, { recursive: true })
+      await rm(`${stage}/app/node_modules/.bin`, { recursive: true })
         .catch((error) => {
-          if (!(error instanceof Deno.errors.NotFound)) throw error;
+          if (!((error as { code?: string }).code === "ENOENT")) throw error;
         });
-      await Deno.mkdir(`${stage}/bin`, { recursive: true });
+      await mkdir(`${stage}/bin`, { recursive: true });
       if (recipe.launcher) {
         if (!/^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher)) {
           throw new Error("unsafe private launcher source");
         }
-        await Deno.copyFile(
+        await copyFile(
           join(runtimeRoot, recipe.launcher),
           `${stage}/app/cowboy-launch.mjs`,
         );
-        await Deno.writeTextFile(
+        await writeFile(
           `${stage}/bin/cowboy-configured-cli`,
           '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
           { mode: 0o755 },
         );
       }
-      await Deno.writeTextFile(
+      await writeFile(
         `${stage}/bin/${command}`,
         `#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=\${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/${
           recipe.launcher ? "cowboy-launch.mjs" : recipe.script
@@ -337,10 +343,7 @@ async function buildComponent(
     }
     case "git_go_static": {
       verifyGitDependency(dependency, recipe);
-      const stage = await Deno.makeTempDir({
-        dir: temporary,
-        prefix: `${command}-`,
-      });
+      const stage = await mkdtemp(join(temporary, `${command}-`));
       const sourceRoot = await materializeGitSource(recipe, stage);
       const goArchitecture = target.endsWith("aarch64") ? "arm64" : "amd64";
       const goOperatingSystem = target.startsWith("linux-")
@@ -351,7 +354,7 @@ async function buildComponent(
       if (!goOperatingSystem) {
         throw new Error(`${dependency.id} has no ${target} build contract`);
       }
-      const output = `${await Deno.realPath(destination)}/${command}`;
+      const output = `${await realpath(destination)}/${command}`;
       await run("nix", [
         "develop",
         `path:${sourceRoot}`,
@@ -369,7 +372,7 @@ async function buildComponent(
         output,
         `./cmd/${recipe.binary}`,
       ], { cwd: sourceRoot });
-      await Deno.chmod(output, 0o755);
+      await chmod(output, 0o755);
       return { path: output, format: "raw" };
     }
   }
@@ -403,7 +406,7 @@ async function materializeGitSource(
     throw new Error(`Git source digest mismatch for ${recipe.binary}`);
   }
   const extracted = `${stage}/source`;
-  await Deno.mkdir(extracted, { recursive: true });
+  await mkdir(extracted, { recursive: true });
   await run("tar", ["-xf", archive, "-C", extracted]);
   return `${extracted}/${recipe.subdir}`;
 }
@@ -431,7 +434,7 @@ async function writeProvenance(
   target: TargetKey,
   nodeVersion: string,
 ): Promise<void> {
-  await Deno.writeTextFile(
+  await writeFile(
     `${stage}/cowboy-runtime.json`,
     `${
       JSON.stringify(
@@ -455,36 +458,34 @@ async function probeArtifact(
   entrypoint: string | undefined,
   args: string[],
 ): Promise<void> {
-  const probeRoot = await Deno.makeTempDir({
-    dir: temporary,
-    prefix: "probe-",
-  });
+  const probeRoot = await mkdtemp(join(temporary, "probe-"));
   const executablePath = format === "raw"
     ? artifact
     : `${probeRoot}/${required(entrypoint, "archive entrypoint")}`;
   if (format === "tar_gz") {
     await run("tar", ["-xzf", artifact, "-C", probeRoot]);
-    await Deno.chmod(executablePath, 0o755);
+    await chmod(executablePath, 0o755);
   }
-  const executable = await Deno.realPath(executablePath);
+  const executable = await realpath(executablePath);
   const home = `${probeRoot}/home`;
-  await Deno.mkdir(home, { recursive: true });
-  const child = new Deno.Command(executable, {
-    args,
+  await mkdir(home, { recursive: true });
+  const child = Bun.spawn({
+    cmd: [executable, ...args],
     cwd: probeRoot,
     env: {
+      ...process.env,
       HOME: home,
       XDG_CONFIG_HOME: `${home}/.config`,
       GROK_HOME: `${home}/.grok`,
     },
-    stdin: "null",
+    stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
-  }).spawn();
+  });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
-  const status = await child.status;
+  const code = await child.exited;
   clearTimeout(timeout);
-  if (!status.success) throw new Error(`runtime probe failed for ${artifact}`);
+  if (code !== 0) throw new Error(`runtime probe failed for ${artifact}`);
 }
 
 async function deterministicTarGz(
@@ -492,7 +493,9 @@ async function deterministicTarGz(
   output: string,
 ): Promise<void> {
   const names = [];
-  for await (const entry of Deno.readDir(stage)) names.push(entry.name);
+  for (const entry of await readdir(stage, { withFileTypes: true })) {
+    names.push(entry.name);
+  }
   names.sort();
   const tarPath = `${output}.tar`;
   await run("tar", [
@@ -509,17 +512,17 @@ async function deterministicTarGz(
     ...names,
   ]);
   await run("gzip", ["-n", "-9", "-f", tarPath]);
-  await Deno.rename(`${tarPath}.gz`, output);
+  await rename(`${tarPath}.gz`, output);
 }
 
 async function rejectLinks(root: string): Promise<void> {
-  for await (const entry of Deno.readDir(root)) {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = `${root}/${entry.name}`;
-    const metadata = await Deno.lstat(path);
-    if (metadata.isSymlink) {
+    const metadata = await lstat(path);
+    if (metadata.isSymbolicLink()) {
       throw new Error(`runtime archive contains symlink ${path}`);
     }
-    if (metadata.isDirectory) await rejectLinks(path);
+    if (metadata.isDirectory()) await rejectLinks(path);
   }
 }
 
@@ -544,7 +547,7 @@ async function downloadVerified(
 ): Promise<string> {
   const path = `${cacheRoot}/${algorithm}-${expected}`;
   if (!(await exists(path))) {
-    const partial = `${path}.${Deno.pid}.partial`;
+    const partial = `${path}.${process.pid}.partial`;
     await run("curl", [
       "--fail",
       "--location",
@@ -556,12 +559,12 @@ async function downloadVerified(
     ]);
     const actual = await digestFile(partial, algorithm);
     if (actual !== expected) {
-      await Deno.remove(partial).catch(() => undefined);
+      await rm(partial).catch(() => undefined);
       throw new Error(`download digest mismatch for ${url}`);
     }
-    await Deno.rename(partial, path).catch(async (error) => {
-      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-      await Deno.remove(partial);
+    await rename(partial, path).catch(async (error) => {
+      if (!((error as { code?: string }).code === "EEXIST")) throw error;
+      await rm(partial);
     });
   }
   const actual = await digestFile(path, algorithm);
@@ -579,11 +582,17 @@ async function digestFile(
   path: string,
   algorithm: "sha256" | "sha512",
 ): Promise<string> {
-  const output = await new Deno.Command(`${algorithm}sum`, { args: [path] })
-    .output();
-  if (!output.success) throw new Error(`${algorithm}sum failed for ${path}`);
-  return new TextDecoder().decode(output.stdout).trim().split(/\s+/)[0]
-    .toLowerCase();
+  const child = Bun.spawn({
+    cmd: [`${algorithm}sum`, path],
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const output = await new Response(child.stdout).text();
+  if (await child.exited !== 0) {
+    throw new Error(`${algorithm}sum failed for ${path}`);
+  }
+  return output.trim().split(/\s+/)[0].toLowerCase();
 }
 
 function base64Hex(value: string): string {
@@ -601,26 +610,26 @@ async function run(
   args: string[],
   options: { cwd?: string } = {},
 ): Promise<void> {
-  const status = await new Deno.Command(command, {
-    args,
-    cwd: options.cwd,
-    stdin: "null",
+  const code = await Bun.spawn({
+    cmd: [command, ...args],
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
-  }).spawn().status;
-  if (!status.success) throw new Error(`${command} exited ${status.code}`);
+  }).exited;
+  if (code !== 0) throw new Error(`${command} exited ${code}`);
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(path)) as T;
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 async function exists(path: string): Promise<boolean> {
   try {
-    await Deno.lstat(path);
+    await lstat(path);
     return true;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if ((error as { code?: string }).code === "ENOENT") return false;
     throw error;
   }
 }

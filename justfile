@@ -1,9 +1,5 @@
 # cowboy — build + quality tasks. Run `just` to list.
 
-# The remaining Deno commands predate the root Bun workspace: keep Deno from
-# adopting its package.json and node_modules. Delete with nix/deno.nix.
-export DENO_NO_PACKAGE_JSON := "1"
-
 default:
     @just --list
 
@@ -254,15 +250,10 @@ component-package-check:
 plugin-check: component-package-check
     dprint check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/usage.test.js
     bun run typecheck
-    # Release-pinned sources still run on Deno; see AGENTS.md § Toolchain.
-    deno check plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/claude-code/collector/index.js
-    deno test --no-check --allow-read components/plugin-api/*.test.ts
-    deno test components/state-store/*.test.ts
+    bun test ./components/plugin-api/*.test.ts ./components/state-store/*.test.ts ./components/app-shell/*.test.ts
     bun test ./tools/check-plugin-components_test.ts ./tools/plugin-component-closure_test.ts
     bun test ./tools/plugin-source-digest_test.ts
-    cd plugins && bun test ./collector-sidecars.test.js
-    deno test plugins/claude-deepseek/pricing.test.js
-    deno test --allow-read --allow-write --allow-run --allow-env plugins/claude-code/usage.test.js
+    cd plugins && bun test ./collector-sidecars.test.js ./claude-deepseek/pricing.test.js ./claude-code/usage.test.js
     bun tools/check-plugin-components.ts
     dprint check tools/worker-registry-input.ts tools/worker-registry-input_test.ts
     bun test ./tools/worker-registry-input_test.ts
@@ -355,7 +346,7 @@ plugin-isolation-check PLUGIN="codex":
 agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run --allow-env components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
+    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then bun "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else bun components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
 
 # No Service credentials or inference: copy an existing rollout into a private
 # home and exercise the real packaged ACP launch in a network namespace.
@@ -414,7 +405,7 @@ plugin-publish PLUGIN CATALOG PUBLIC_KEY:
 
 # Exact Linux adapter/server bytes; never install or update a Machine here.
 zed-plugin-runtime-build ARTIFACT_BASE:
-    deno run --allow-read --allow-write --allow-run plugins/zed/runtime/build.ts "{{ARTIFACT_BASE}}"
+    bun plugins/zed/runtime/build.ts "{{ARTIFACT_BASE}}"
 
 zed-plugin-conformance ADAPTER SERVER:
     cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
@@ -570,8 +561,6 @@ claude-remote-check:
     npm ci --prefer-offline --ignore-scripts --no-audit --no-fund --prefix dist/claude-source-tests
     node --import ./tools/register-memory-client.mjs --test plugins/claude-code/runtime/*.test.mjs components/memory-client/*.test.mjs tools/memory-provider.test.mjs tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     dprint check "plugins/claude-code/runtime/**/*.{ts,js,mjs}"
-    # Release-pinned sources still run on Deno; see AGENTS.md § Toolchain.
-    deno check plugins/claude-code/runtime/build.ts
     dprint check tools/claude-remote-routing.test.mjs tools/claude-remote-agents.test.mjs tools/claude-remote-permissions.test.mjs tools/claude-remote-hooks.test.mjs tools/claude-remote-shell.test.mjs tools/claude-remote-context.test.mjs tools/claude-remote-skills.test.mjs tools/claude-remote-mcp.test.mjs tools/claude-remote-native-baseline.test.mjs tools/claude-remote-hooks-baseline.test.mjs tools/claude-remote-mods-baseline.test.mjs tools/claude-remote-permissions-baseline.test.mjs tools/claude-remote-context-baseline.test.mjs tools/claude-remote-tools-baseline.test.mjs
     bun run typecheck
     python3 -m unittest discover -s tools -p remote_impact_test.py
@@ -583,8 +572,6 @@ provider-check: claude-remote-check plugin-check
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
     dprint check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/source.json
     bun run typecheck
-    # Release-pinned sources still run on Deno; see AGENTS.md § Toolchain.
-    deno check plugins/codex/runtime/build.ts components/provider-runtime/build.ts components/provider-runtime/check.ts
     bun test ./tools/check-provider-release-coverage_test.ts
     bun test ./tools/provider-runtime-platforms_test.ts
     bun test ./.agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
@@ -594,7 +581,7 @@ provider-check: claude-remote-check plugin-check
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py
     python3 -m unittest discover -s tools -p plugin_generation_failure_isolation_test.py
     python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
-    deno run --allow-read components/provider-runtime/check.ts
+    bun components/provider-runtime/check.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
@@ -602,7 +589,7 @@ provider-check: claude-remote-check plugin-check
     just example-telemetry-bundle victoria
     for manifest in plugins/*/plugin.json; do plugin="${manifest#plugins/}"; just plugin-isolation-check "${plugin%/plugin.json}"; done
     cd web && bun run typecheck
-    deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
+    bun components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
     dprint check tools/check-provider-ui-execution.ts
     bun tools/check-provider-ui-execution.ts dist/plugins/*/*.cowboy-plugin
     cd web && bun test ./src/providerSdk.test.ts

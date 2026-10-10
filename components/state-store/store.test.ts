@@ -1,8 +1,9 @@
+import { test } from "bun:test";
 import {
   assertEquals,
   assertStrictEquals,
   assertThrows,
-} from "jsr:@std/assert@1.0.19";
+} from "@std/assert";
 import {
   type KvStorage,
   persisted,
@@ -63,7 +64,7 @@ function fixture() {
   };
 }
 
-Deno.test("persistence requires an explicit typed codec", () => {
+test("persistence requires an explicit typed codec", () => {
   if (false) {
     // @ts-expect-error no default JSON.parse(raw) as T boundary
     persisted("key", false);
@@ -76,7 +77,7 @@ Deno.test("persistence requires an explicit typed codec", () => {
   }
 });
 
-Deno.test("listeners are owned by subscriptions, not import-time construction", () => {
+test("listeners are owned by subscriptions, not import-time construction", () => {
   const f = fixture();
   const store = persisted("key", false, { ...bool, ...f });
   assertEquals(f.listeners.size, 0);
@@ -99,7 +100,7 @@ Deno.test("listeners are owned by subscriptions, not import-time construction", 
   assertEquals(f.storage.getItem("key"), "0"); // cleanup is not deletion
 });
 
-Deno.test("storage area/key filter, clear, and stale events read current backend state", () => {
+test("storage area/key filter, clear, and stale events read current backend state", () => {
   const f = fixture();
   const store = persisted("key", false, { ...bool, ...f });
   let calls = 0;
@@ -120,7 +121,7 @@ Deno.test("storage area/key filter, clear, and stale events read current backend
   store.dispose();
 });
 
-Deno.test("detached reads and re-subscription refresh with stable object snapshots", () => {
+test("detached reads and re-subscription refresh with stable object snapshots", () => {
   const f = fixture();
   const codec = {
     serialize: JSON.stringify,
@@ -152,7 +153,7 @@ Deno.test("detached reads and re-subscription refresh with stable object snapsho
   store.dispose();
 });
 
-Deno.test("disposed and retired listener incarnations cannot publish into a replacement", () => {
+test("disposed and retired listener incarnations cannot publish into a replacement", () => {
   const f = fixture();
   const first = persisted("key", false, { ...bool, ...f });
   let calls = 0;
@@ -175,7 +176,7 @@ Deno.test("disposed and retired listener incarnations cannot publish into a repl
   second.dispose();
 });
 
-Deno.test("getItem/decode failures fall back without throwing or rewriting stored data", () => {
+test("getItem/decode failures fall back without throwing or rewriting stored data", () => {
   const f = fixture();
   const issues: string[] = [];
   f.data.set("key", '{"not":"a boolean"}');
@@ -203,7 +204,7 @@ Deno.test("getItem/decode failures fall back without throwing or rewriting store
   broken.dispose();
 });
 
-Deno.test("quota and serializer failures still commit and notify coherent in-memory state", () => {
+test("quota and serializer failures still commit and notify coherent in-memory state", () => {
   for (const phase of ["write", "encode"] as const) {
     const f = fixture();
     f.data.set("key", "0");
@@ -241,7 +242,7 @@ Deno.test("quota and serializer failures still commit and notify coherent in-mem
   }
 });
 
-Deno.test("explicit memory-only and crossTab:false never install event handlers", () => {
+test("explicit memory-only and crossTab:false never install event handlers", () => {
   const f = fixture();
   for (
     const options of [{ storage: null }, {
@@ -262,7 +263,7 @@ Deno.test("explicit memory-only and crossTab:false never install event handlers"
   }
 });
 
-Deno.test("listener failures do not hide the committed state from other subscribers", () => {
+test("listener failures do not hide the committed state from other subscribers", () => {
   const f = fixture();
   const store = persisted("key", false, { ...bool, ...f });
   store.subscribe(() => {
@@ -277,7 +278,7 @@ Deno.test("listener failures do not hide the committed state from other subscrib
   store.dispose();
 });
 
-Deno.test("disposal inside notification or updater fences remaining callbacks and writes", () => {
+test("disposal inside notification or updater fences remaining callbacks and writes", () => {
   const f = fixture();
   const store = persisted("key", false, { ...bool, ...f });
   store.subscribe(() => store.dispose());
@@ -298,7 +299,7 @@ Deno.test("disposal inside notification or updater fences remaining callbacks an
   assertEquals(f.data.has("other"), false);
 });
 
-Deno.test("default event adapter filters storage areas and handles clear without DOM-specific types", () => {
+test("default event adapter filters storage areas and handles clear without DOM-specific types", () => {
   const f = fixture();
   const store = persisted("key", false, { ...bool, storage: f.storage });
   let calls = 0;
@@ -327,7 +328,7 @@ Deno.test("default event adapter filters storage areas and handles clear without
   store.dispose();
 });
 
-Deno.test("cleanup failure is observable, idempotent and fences retained callbacks", () => {
+test("cleanup failure is observable, idempotent and fences retained callbacks", () => {
   const f = fixture();
   const issues: string[] = [];
   let callback: ((event: StorageChange) => void) | undefined;
@@ -358,7 +359,7 @@ Deno.test("cleanup failure is observable, idempotent and fences retained callbac
   assertEquals(issues, ["unlisten"]);
 });
 
-Deno.test("listener acquisition failure keeps local state usable and reports failure", () => {
+test("listener acquisition failure keeps local state usable and reports failure", () => {
   const f = fixture();
   const issues: string[] = [];
   const store = persisted("key", false, {

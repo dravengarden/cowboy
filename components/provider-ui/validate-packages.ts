@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {
   PROVIDER_PACKAGE_SCHEMA_VERSION,
   validateProviderManifest,
@@ -10,12 +11,12 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-if (Deno.args.length === 0) {
+if (process.argv.slice(2).length === 0) {
   throw new Error("usage: validate-packages.ts <package.cowboy-plugin>...");
 }
 
-for (const path of Deno.args) {
-  const plugin = record(JSON.parse(await Deno.readTextFile(path)));
+for (const path of process.argv.slice(2)) {
+  const plugin = record(JSON.parse(await readFile(path, "utf8")));
   if (!plugin || plugin.package_schema !== 1) {
     throw new Error(`${path}: unsupported Plugin package envelope`);
   }

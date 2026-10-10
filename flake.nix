@@ -28,10 +28,6 @@
         rustc = rustToolchain;
       };
       bun = import ./nix/bun.nix { inherit pkgs; };
-      # Development shell only: component and Plugin sources whose digests
-      # are pinned by a published release still run on Deno until that
-      # release is cut. No package or runtime closure refers to it.
-      deno = import ./nix/deno.nix { inherit pkgs; };
       cowboy-nodejs = import ./nix/nodejs.nix { inherit pkgs; };
       execution-runtime = import ./nix/execution-runtime.nix { inherit pkgs; };
       buildBunViteApp = import ./nix/bun-vite-app.nix {
@@ -964,7 +960,7 @@
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)
-        ] ++ [ bun deno pkgs.dprint cowboy-nodejs ];
+        ] ++ [ bun pkgs.dprint cowboy-nodejs ];
 
         shellHook = ''
           echo "cowboy dev shell — rust + optional sccache + bun"

@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import { decorateActivity, pricingInternals } from "./collector/pricing.js";
 
 function equal(actual, expected, message) {
@@ -12,7 +13,7 @@ function close(actual, expected, message) {
   }
 }
 
-Deno.test("DeepSeek pricing normalizes current and compatibility model names", () => {
+test("DeepSeek pricing normalizes current and compatibility model names", () => {
   equal(pricingInternals.modelFamily("deepseek-flash"), "flash", "flash");
   equal(
     pricingInternals.modelFamily("deepseek-flash[1m]"),
@@ -33,7 +34,7 @@ Deno.test("DeepSeek pricing normalizes current and compatibility model names", (
   equal(pricingInternals.modelFamily("future-model"), undefined, "unknown");
 });
 
-Deno.test("DeepSeek pricing values observed cache tokens and output once", () => {
+test("DeepSeek pricing values observed cache tokens and output once", () => {
   const activity = decorateActivity({
     byBillingModel: {
       "deepseek-flash": {

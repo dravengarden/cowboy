@@ -14,7 +14,7 @@
     },
     "components/app-shell": {
       "name": "@cowboy/app-shell",
-      "version": "1.1.20",
+      "version": "1.1.22",
       "peerDependencies": {
         "@emotion/react": "^11.13.0",
         "@emotion/styled": "^11.13.0",
@@ -26,18 +26,18 @@
     },
     "components/provider-authoring": {
       "name": "@cowboy/provider-authoring",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "peerDependencies": {
-        "@cowboy/provider-ui": "3.1.17",
+        "@cowboy/provider-ui": "3.1.18",
       },
     },
     "components/provider-ui": {
       "name": "@cowboy/provider-ui",
-      "version": "3.1.17",
+      "version": "3.1.18",
     },
     "components/state-store": {
       "name": "@cowboy/state-store",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "peerDependencies": {
         "react": "^19.0.0",
       },
@@ -47,17 +47,17 @@
     },
     "components/state-sync": {
       "name": "@cowboy/state-sync",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "peerDependencies": {
-        "@cowboy/state-store": "2.1.0",
+        "@cowboy/state-store": "2.1.1",
       },
     },
     "components/state-sync-idb": {
       "name": "@cowboy/state-sync-idb",
-      "version": "1.8.0",
+      "version": "1.8.1",
       "peerDependencies": {
-        "@cowboy/state-store": "2.1.0",
-        "@cowboy/state-sync": "1.5.0",
+        "@cowboy/state-store": "2.1.1",
+        "@cowboy/state-sync": "1.5.1",
       },
     },
     "web": {

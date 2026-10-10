@@ -1,3 +1,4 @@
+import { lstat, readdir, readFile } from "node:fs/promises";
 interface ExactDependency {
   id: string;
   version: string;
@@ -89,10 +90,10 @@ const runtimeLock = await readJson<RuntimeLock>(join(runtimeRoot, "lock.json"));
 assert(runtimeLock.schema_version === 1, "unsupported runtime lock schema");
 assert(exactVersion(runtimeLock.node.version), "Node.js version is not exact");
 
-const pluginRoots: string[] = [...Deno.args];
+const pluginRoots: string[] = [...process.argv.slice(2)];
 if (pluginRoots.length === 0) {
-  for await (const entry of Deno.readDir("plugins")) {
-    if (!entry.isDirectory) continue;
+  for (const entry of await readdir("plugins", { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
     if (await exists(`plugins/${entry.name}/provider.json`)) {
       pluginRoots.push(`plugins/${entry.name}`);
     }
@@ -280,7 +281,7 @@ async function validateNpmRecipe(
   if (recipe.launcher !== undefined) {
     assert(
       /^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher) &&
-        (await Deno.lstat(join(runtimeRoot, recipe.launcher))).isFile,
+        (await lstat(join(runtimeRoot, recipe.launcher))).isFile(),
       `${providerId}: ${dependency.id} launcher is not an owned regular source`,
     );
   }
@@ -362,15 +363,15 @@ function exactVersion(value: string): boolean {
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(path)) as T;
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 async function exists(path: string): Promise<boolean> {
   try {
-    await Deno.lstat(path);
+    await lstat(path);
     return true;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if ((error as { code?: string }).code === "ENOENT") return false;
     throw error;
   }
 }

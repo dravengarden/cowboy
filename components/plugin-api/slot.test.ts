@@ -1,4 +1,6 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 import {
   installPluginRenderers,
   installPluginRuntimeHosts,
@@ -8,9 +10,9 @@ import {
   type PluginSlotComponent,
 } from "./types.ts";
 
-const types = await Deno.readTextFile(new URL("./types.ts", import.meta.url));
-const slotSource = await Deno.readTextFile(
-  new URL("./slot.tsx", import.meta.url),
+const types = await readFile(new URL("./types.ts", import.meta.url), "utf8");
+const slotSource = await readFile(
+  new URL("./slot.tsx", import.meta.url), "utf8",
 );
 
 function renderer(name: string): PluginSlotComponent {
@@ -21,7 +23,7 @@ const renderers = Object.fromEntries(
   PLUGIN_RENDERER_IDS.map((id) => [id, renderer(id)]),
 ) as PluginRendererRegistry;
 
-Deno.test("plugin renderer contract is closed and data-only", () => {
+test("plugin renderer contract is closed and data-only", () => {
   assert(types.includes('PLUGIN_HOST_API_VERSION = "1.0.0"'));
   assert(types.includes('PLUGIN_NATIVE_HOST_API_VERSION = "1.0.0"'));
   assert(types.includes("PLUGIN_RENDERER_SCHEMA_VERSION = 1"));
@@ -34,7 +36,7 @@ Deno.test("plugin renderer contract is closed and data-only", () => {
   assertEquals(types.includes("auth?:"), false);
 });
 
-Deno.test("signed renderer declarations select only Cowboy-owned components", async () => {
+test("signed renderer declarations select only Cowboy-owned components", async () => {
   installPluginRenderers(renderers);
   installPluginRuntimeHosts([
     {
@@ -56,7 +58,7 @@ Deno.test("signed renderer declarations select only Cowboy-owned components", as
   assertEquals(await loadPluginSlot("sample", "provider.settings"), null);
 });
 
-Deno.test("exact host generations coexist without falling through to the default", async () => {
+test("exact host generations coexist without falling through to the default", async () => {
   installPluginRenderers(renderers);
   const oldDigest = `sha256:${"a".repeat(64)}`;
   const currentDigest = `sha256:${"b".repeat(64)}`;
@@ -125,7 +127,7 @@ Deno.test("exact host generations coexist without falling through to the default
   );
 });
 
-Deno.test("plugin slot isolates renderer crashes from the shell", () => {
+test("plugin slot isolates renderer crashes from the shell", () => {
   assert(slotSource.includes("class PluginSlotBoundary"));
   assert(
     slotSource.includes("if (this.state.failed) return this.props.fallback"),

@@ -14,28 +14,18 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   cross-worktree Rust hit rate is proven on the active host. Do not use host
   `cargo` or `bun` as a preliminary check; a missing tool or stale Rustup linker
   wrapper is an environment failure, not a product-code failure.
-- JavaScript and TypeScript run on the pinned Bun; Deno is being retired. The
+- JavaScript and TypeScript run on the pinned Bun; Deno is retired. The
   repository root is one Bun workspace (`web` plus the `components/*` packages
   it links): `just install` creates `node_modules`, `bun.lock` is the only
   lockfile, and a dependency change needs a new `depsHash` in `flake.nix`.
   Tests import `test` from `bun:test` and assertions from `@std/assert`;
   scripts use `node:` and `Bun` APIs and spawn through `tools/lib/command.ts`.
   New code must not use the `Deno` global or `jsr:`/`npm:` specifiers.
-- Two groups of existing files still use Deno APIs, because editing them
-  changes a published component or Plugin source digest. Move each to Bun in
-  the commit that cuts its next component or Plugin release, then delete its
-  `deno` line from the `justfile`; delete `nix/deno.nix` with the last one.
-  - Signed Plugin collectors (`plugins/*/collector/`). They run on Bun: the
-    host preloads `src/plugin_process/prelude.js`, which supplies the `Deno`
-    surface they use, so one collector source runs on a host of either
-    generation.
-  - Release-pinned build scripts and tests: the tests inside
-    `components/{app-shell,plugin-api,state-store}`,
-    `components/provider-runtime/{build,check}.ts`,
-    `components/provider-ui/validate-packages.ts`, `plugins/*/runtime/build.ts`,
-    `plugins/claude-code/usage.test.js` and
-    `plugins/claude-deepseek/pricing.test.js`. The dev shell keeps Deno for
-    these alone; no package or runtime closure contains it.
+- Signed Plugin collectors (`plugins/*/collector/`) are the one place the
+  `Deno` name survives. They run on Bun: the host preloads
+  `src/plugin_process/prelude.js`, which supplies the `Deno` surface they use,
+  so one collector source runs on a Machine host of either generation. Rewrite
+  them and delete the prelude once every supported Machine runs a Bun host.
 
 ## Deploy (read before deploying)
 - User preference: completed product fixes include verification, integration into

@@ -1,3 +1,7 @@
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { test } from "bun:test";
 import { childEnvironment, collect } from "./collector/index.js";
 import {
   nativeJson,
@@ -31,7 +35,7 @@ const window = (utilization, resets_at = "2026-09-16T04:00:00Z") => ({
 const quota = (rate_limits) =>
   quotaView({ rate_limits_available: true, rate_limits });
 
-Deno.test("native usage projects percentages, ISO resets, model windows and enabled extra usage", () => {
+test("native usage projects percentages, ISO resets, model windows and enabled extra usage", () => {
   const buckets = quota({
     five_hour: window(0),
     seven_day: window(23.5),
@@ -67,7 +71,7 @@ Deno.test("native usage projects percentages, ISO resets, model windows and enab
 
 // DISABLE_TELEMETRY=1 closes the gate behind `model_scoped`, so a collector
 // that keeps telemetry off only ever sees the unified `limits` array.
-Deno.test("model windows survive a response without the legacy model_scoped projection", () => {
+test("model windows survive a response without the legacy model_scoped projection", () => {
   const buckets = quota({
     five_hour: window(14),
     seven_day: window(47),
@@ -101,7 +105,7 @@ Deno.test("model windows survive a response without the legacy model_scoped proj
 });
 
 // Both shapes together must not double-count the same model.
-Deno.test("a model reported by both projections yields one window", () => {
+test("a model reported by both projections yields one window", () => {
   const buckets = quota({
     seven_day: window(47),
     model_scoped: [{ display_name: "Fable", ...window(10) }],
@@ -118,7 +122,7 @@ Deno.test("a model reported by both projections yields one window", () => {
   equal(Object.keys(buckets).length, 2);
 });
 
-Deno.test("unknown quota stays unknown and malformed responses are transient failures", async () => {
+test("unknown quota stays unknown and malformed responses are transient failures", async () => {
   equal(quotaView({ rate_limits_available: false, rate_limits: null }), {});
   equal(
     quota({
@@ -160,21 +164,21 @@ Deno.test("unknown quota stays unknown and malformed responses are transient fai
 // Fake native processes exercise the same stdin/stdout/timeout path as the
 // released CLI. No credentials, model requests, or network are involved.
 async function fixture(source, run) {
-  const dir = await Deno.makeTempDir({ prefix: "cowboy-claude-usage-" });
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-claude-usage-"));
   const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
   try {
-    await Deno.writeTextFile(`${dir}/fixture.mjs`, source);
+    await writeFile(`${dir}/fixture.mjs`, source);
     const command = `${dir}/claude`;
-    await Deno.writeTextFile(
+    await writeFile(
       command,
-      `#!/bin/sh\nexec ${quote(Deno.execPath())} run --quiet --allow-env ${
+      `#!/bin/sh\nexec ${quote(process.execPath)} run --no-env-file ${
         quote(`${dir}/fixture.mjs`)
       } "$@"\n`,
     );
-    await Deno.chmod(command, 0o700);
+    await chmod(command, 0o700);
     return await run({ command, env: {}, deadline: Date.now() + 3000 });
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await rm(dir, { recursive: true });
   }
 }
 
@@ -192,21 +196,21 @@ const reply = (response) => ({
   },
 });
 
-Deno.test("collector queries account quota without a user prompt and stops a lingering CLI", async () => {
+test("collector queries account quota without a user prompt and stops a lingering CLI", async () => {
   await fixture(
     `
-    if (Deno.args[0] === "auth") {
+    if (process.argv.slice(2)[0] === "auth") {
       console.log(JSON.stringify({loggedIn:true, subscriptionType:"pro", email:"fixture@example.test"}));
     } else {
-      const arg = (name) => Deno.args[Deno.args.indexOf(name) + 1];
-      if (!Deno.args.includes("--no-session-persistence") ||
-          !Deno.args.includes("--strict-mcp-config") ||
+      const arg = (name) => process.argv.slice(2)[process.argv.slice(2).indexOf(name) + 1];
+      if (!process.argv.slice(2).includes("--no-session-persistence") ||
+          !process.argv.slice(2).includes("--strict-mcp-config") ||
           arg("--setting-sources") !== "" || arg("--tools") !== "" ||
           JSON.parse(arg("--settings")).disableAllHooks !== true ||
           Object.keys(JSON.parse(arg("--mcp-config")).mcpServers).length !== 0) {
         throw new Error("Usage query must disable project effects and session persistence");
       }
-      const input = await new Response(Deno.stdin.readable).text();
+      const input = await Bun.stdin.text();
       if (input.trim() !== ${
       JSON.stringify(JSON.stringify(request))
     }) throw new Error("Unexpected prompt or command");
@@ -227,7 +231,7 @@ Deno.test("collector queries account quota without a user prompt and stops a lin
         })) + "\r\n",
       )
     });
-      for (const byte of bytes) await Deno.stdout.write(new Uint8Array([byte]));
+      for (const byte of bytes) await new Promise((done) => process.stdout.write(new Uint8Array([byte]), done));
       await new Promise(() => setInterval(() => {}, 1000));
     }
   `,
@@ -249,7 +253,7 @@ Deno.test("collector queries account quota without a user prompt and stops a lin
   );
 });
 
-Deno.test("native stream bounds timeout, output, malformed JSON, EOF and wrong response ids", async () => {
+test("native stream bounds timeout, output, malformed JSON, EOF and wrong response ids", async () => {
   for (
     const [source, message] of [
       ["setInterval(() => {}, 1000);", "Claude Code usage timed out."],
@@ -280,7 +284,7 @@ Deno.test("native stream bounds timeout, output, malformed JSON, EOF and wrong r
   }
 });
 
-Deno.test("native control errors redact provider diagnostics and classify expired authentication", async () => {
+test("native control errors redact provider diagnostics and classify expired authentication", async () => {
   for (
     const [diagnostic, message] of [
       ["401 secret-token", "Claude Code usage authentication required."],
@@ -308,9 +312,9 @@ Deno.test("native control errors redact provider diagnostics and classify expire
   }
 });
 
-Deno.test("signed-out account status prevents quota requests", async () => {
+test("signed-out account status prevents quota requests", async () => {
   await fixture(
-    "console.log(JSON.stringify({loggedIn:false})); Deno.exit(1);",
+    "console.log(JSON.stringify({loggedIn:false})); process.exit(1);",
     ({ command, env }) =>
       rejects(
         () => collect({ command, env }),
@@ -319,8 +323,8 @@ Deno.test("signed-out account status prevents quota requests", async () => {
   );
 });
 
-Deno.test("collector child environment excludes inherited routing and credentials", () => {
-  Deno.env.set("ANTHROPIC_COWBOY_USAGE_FIXTURE", "do-not-forward");
+test("collector child environment excludes inherited routing and credentials", () => {
+  process.env["ANTHROPIC_COWBOY_USAGE_FIXTURE"] = "do-not-forward";
   try {
     const env = childEnvironment();
     equal(env.ANTHROPIC_COWBOY_USAGE_FIXTURE, undefined);
@@ -335,22 +339,22 @@ Deno.test("collector child environment excludes inherited routing and credential
       [],
     );
   } finally {
-    Deno.env.delete("ANTHROPIC_COWBOY_USAGE_FIXTURE");
+    delete process.env["ANTHROPIC_COWBOY_USAGE_FIXTURE"];
   }
 });
 
-Deno.test("subscriber quota remains reachable when the parent disables nonessential traffic", async () => {
+test("subscriber quota remains reachable when the parent disables nonessential traffic", async () => {
   const key = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
-  const previous = Deno.env.get(key);
-  Deno.env.set(key, "1");
+  const previous = process.env[key];
+  process.env[key] = "1";
   try {
     await fixture(
       `
-      if (Deno.args[0] === "auth") {
+      if (process.argv.slice(2)[0] === "auth") {
         console.log(JSON.stringify({loggedIn:true, subscriptionType:"max"}));
       } else {
-        await new Response(Deno.stdin.readable).text();
-        const blocked = Deno.env.get(${JSON.stringify(key)}) === "1";
+        await Bun.stdin.text();
+        const blocked = process.env[${JSON.stringify(key)}] === "1";
         console.log(JSON.stringify({type:"control_response", response:{
           subtype:"success", request_id:${
         JSON.stringify(REQUEST_ID)
@@ -371,7 +375,7 @@ Deno.test("subscriber quota remains reachable when the parent disables nonessent
       },
     );
   } finally {
-    if (previous === undefined) Deno.env.delete(key);
-    else Deno.env.set(key, previous);
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
   }
 });

@@ -79,6 +79,17 @@ moving references are invalid.
 
 ## Independent Plugin releases
 
+Component release 3.45.0 moves the last build scripts and tests inside
+component and Plugin sources from Deno to Bun. It records plugin-api 1.1.2,
+app-shell 1.1.22, state-store 2.1.1, provider-ui 3.1.18 and provider-runtime
+1.1.13 for those sources, and state-sync 1.5.1, state-sync-idb 1.8.1 and
+provider-authoring 1.0.6 for their exact peer pins. The six Agent Plugins pin
+the new plugin-api, provider-ui and provider-runtime and advance one patch
+version each; Zed advances to 1.20.6 for its own runtime build script and keeps
+its component pins. GitHub is unaffected. No component export, Plugin payload
+contract or collector changed: these are build-time and test-time sources, and
+the release exists because every source file is part of a recorded digest.
+
 Scoped release 3.38.0 records app-shell 1.1.19 for the already-committed native
 installed-bundle version comparison (`eebf0a5c`). No component or Plugin depends
 on app-shell, so all other versions, Plugin pins and historical release records

@@ -1,10 +1,12 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const source = await Deno.readTextFile(
-  new URL("bottom-sheet.tsx", import.meta.url),
+const source = await readFile(
+  new URL("bottom-sheet.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("touch dismiss consumes compatibility events before closing", () => {
+test("touch dismiss consumes compatibility events before closing", () => {
   const down = source.slice(
     source.indexOf("const onPointerDown"),
     source.indexOf("const onPointerMove"),
@@ -25,7 +27,7 @@ Deno.test("touch dismiss consumes compatibility events before closing", () => {
   assertEquals(source.includes("onPointerCancel: () => void"), false);
 });
 
-Deno.test("mobile sheet dismiss rim includes the whole centred tap target", () => {
+test("mobile sheet dismiss rim includes the whole centred tap target", () => {
   assert(source.includes("const MOBILE_SHEET_DISMISS_BUTTON_PX = 46;"));
   assert(source.includes("MOBILE_SHEET_DISMISS_BUTTON_PX + 2 * (4 + 1)"));
   assert(
@@ -33,7 +35,7 @@ Deno.test("mobile sheet dismiss rim includes the whole centred tap target", () =
   );
 });
 
-Deno.test("overlay footer shields keep pointer events exclusive", () => {
+test("overlay footer shields keep pointer events exclusive", () => {
   assert(source.includes('data-mobile-sheet-footer-shield'));
   assert(source.includes("swallowRetargetedClicks()"));
   assertEquals(source.includes('pointerEvents: "none"'), true);

@@ -1,4 +1,5 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { test } from "bun:test";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   type CowboyNativePluginHost,
   installPluginRuntimeHosts,
@@ -18,7 +19,7 @@ const descriptor = {
   native_capabilities: ["webauthn"],
 };
 
-Deno.test("native plugin ABI intersects signed and shell capabilities", async () => {
+test("native plugin ABI intersects signed and shell capabilities", async () => {
   const root = globalThis as typeof globalThis & {
     __COWBOY_NATIVE_PLUGIN_HOST?: CowboyNativePluginHost;
   };
@@ -62,7 +63,7 @@ Deno.test("native plugin ABI intersects signed and shell capabilities", async ()
   }
 });
 
-Deno.test("native plugin ABI rejects incompatible shell versions", async () => {
+test("native plugin ABI rejects incompatible shell versions", async () => {
   const root = globalThis as typeof globalThis & {
     __COWBOY_NATIVE_PLUGIN_HOST?: CowboyNativePluginHost;
   };
@@ -85,7 +86,7 @@ Deno.test("native plugin ABI rejects incompatible shell versions", async () => {
   }
 });
 
-Deno.test("runtime host inventory rejects mutable and duplicate generations", async () => {
+test("runtime host inventory rejects mutable and duplicate generations", async () => {
   const root = globalThis as typeof globalThis & {
     __COWBOY_NATIVE_PLUGIN_HOST?: CowboyNativePluginHost;
   };

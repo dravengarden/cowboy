@@ -18,6 +18,12 @@
     "noEmit": true
   },
   "files": [
+    "components/provider-runtime/build.ts",
+    "components/provider-runtime/check.ts",
+    "components/provider-ui/validate-packages.ts",
+    "plugins/claude-code/runtime/build.ts",
+    "plugins/codex/runtime/build.ts",
+    "plugins/zed/runtime/build.ts",
     "site/build.ts",
     "site/build_test.ts",
     "site/site.js",

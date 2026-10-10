@@ -1,10 +1,12 @@
-import { assert, assertEquals } from "jsr:@std/assert";
+import { readFile } from "node:fs/promises";
+import { test } from "bun:test";
+import { assert, assertEquals } from "@std/assert";
 
-const source = await Deno.readTextFile(
-  new URL("detent-sheet.tsx", import.meta.url),
+const source = await readFile(
+  new URL("detent-sheet.tsx", import.meta.url), "utf8",
 );
 
-Deno.test("drag paints the pointer sample without a frame of lag", () => {
+test("drag paints the pointer sample without a frame of lag", () => {
   assert(source.includes('const SETTLE_EASE = "cubic-bezier(0.32, 0.72, 0, 1)"'));
   assert(source.includes("paint(y, false, true)"));
   assertEquals(source.includes("pendingYRef"), false);
@@ -13,7 +15,7 @@ Deno.test("drag paints the pointer sample without a frame of lag", () => {
   );
 });
 
-Deno.test("cover sheets clear Cowboy's iPad PWA top inset when the host publishes it", () => {
+test("cover sheets clear Cowboy's iPad PWA top inset when the host publishes it", () => {
   assert(
     source.includes(
       "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
@@ -25,7 +27,7 @@ Deno.test("cover sheets clear Cowboy's iPad PWA top inset when the host publishe
   );
 });
 
-Deno.test("overlay footers own the exclusive hit strip over the scroll body", () => {
+test("overlay footers own the exclusive hit strip over the scroll body", () => {
   const footer = source.slice(source.indexOf("data-detent-sheet-footer"));
   assert(footer.includes('data-detent-sheet-footer={footerOverlay ? "overlay" : "row"}'));
   assert(footer.includes("onPointerDown={(event) => event.stopPropagation()}"));

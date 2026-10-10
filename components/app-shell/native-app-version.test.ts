@@ -1,10 +1,11 @@
+import { test } from "bun:test";
 import { getNativeAppVersion } from "./native-app-version.ts";
 
 function assertEqual(actual: unknown, expected: unknown) {
   if (actual !== expected) throw new Error(`${actual} !== ${expected}`);
 }
 
-Deno.test("installed SideStore version wins over the compile-time Tauri version", async () => {
+test("installed SideStore version wins over the compile-time Tauri version", async () => {
   assertEqual(
     await getNativeAppVersion({
       __cowboyNativeApp: Object.freeze({
@@ -17,7 +18,7 @@ Deno.test("installed SideStore version wins over the compile-time Tauri version"
   );
 });
 
-Deno.test("legacy native shells retain their Tauri version discovery", async () => {
+test("legacy native shells retain their Tauri version discovery", async () => {
   assertEqual(
     await getNativeAppVersion({
       __TAURI__: { core: { invoke: () => Promise.resolve("0.1.31") } },
@@ -26,7 +27,7 @@ Deno.test("legacy native shells retain their Tauri version discovery", async () 
   );
 });
 
-Deno.test("browser and failed or malformed bridges do not invent an installed version", async () => {
+test("browser and failed or malformed bridges do not invent an installed version", async () => {
   assertEqual(await getNativeAppVersion({}), null);
   assertEqual(
     await getNativeAppVersion({ __cowboyNativeApp: { version: 33 } }),
@@ -42,7 +43,7 @@ Deno.test("browser and failed or malformed bridges do not invent an installed ve
   );
 });
 
-Deno.test("the iOS bridge, an iPhone or a touch iPad is iOS; a desktop Mac is macOS", async () => {
+test("the iOS bridge, an iPhone or a touch iPad is iOS; a desktop Mac is macOS", async () => {
   const { getNativeAppPlatform } = await import("./native-app-version.ts");
   assertEqual(getNativeAppPlatform({ __cowboyNativeApp: { version: "0.1.34" } }), "ios");
   assertEqual(
