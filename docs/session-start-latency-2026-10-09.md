@@ -216,3 +216,35 @@ day before. A settled start is never submitted again, and the executor keeps
 completed operations for 15 minutes, so 3.19.17 records when a settled
 cancellation was first unknown and drops it after 15 minutes of being
 unknown; seeing the process again restarts the window.
+
+## Bandwidth and metrics (2026-10-11)
+
+Connections: a tool call opens no TCP or TLS connection. Workers reach the
+OVH Machine over a Unix socket and every call shares the Machine's one
+long-lived WebSocket to the Controller; the keeper is local to the Hawk
+Machine. Two minutes of SYN capture on OVH showed none toward Hawk. A
+connection pool was measured instead of built: one flow over the overlay
+moved 8 MiB in 43 s (190 KB/s), four parallel flows 32 MiB in 122 s
+(270 KB/s total). The path, not the flow, is the limit, so extra flows would
+add idle cost for about 40% more bulk throughput; fewer bytes is the lever.
+
+Frames up to 16 KiB, which is every tool request and reply, crossed the link
+as plain JSON, each request repeating an ~800-byte binding. The negotiated
+`deflate-stream-v1` mode compresses them in one deflate context per direction
+(sync flush per frame). Same 90 s window on OVH: workers exchanged 478 KB up
+and 241 KB down; the WebSocket carried 62 KB and 37 KB, where before the
+change wire bytes equalled the raw bytes.
+
+Hook transcripts are incremental in every case: the base length and digest
+persist with the runtime state per transcript file (a restart no longer
+resends the transcript), small transcripts use the snapshot too, targets
+without SHA-256 verify with POSIX cksum, and `agent_transcript_path` gets the
+same private incremental copy. Only a new transcript file or a lost cache
+sends a full copy.
+
+Metrics: `cowboy.execution.tool_overhead` records, per call, the whole
+duration less the keeper's measured backend time (the command and any
+requested wait); `cowboy.session.startup.<phase>` records startup milestones.
+Both are `duration_ms` histograms in `cowboy logs metrics`. Executors started
+before this release do not time replies; their calls appear as
+`cowboy.execution.tool_untimed` until the executor is replaced.
