@@ -60,6 +60,7 @@ export function CallTranscript({
         bottomInset={bottomInset}
         shortContentAtTop={desktop}
         statusBar={false}
+        magneticHaptics={false}
       />
     </Box>
   );

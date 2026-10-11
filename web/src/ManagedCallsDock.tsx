@@ -786,14 +786,18 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
 }): React.JSX.Element | null {
   const { calls, observedAt, error } = useManagedCalls(sessionId);
   const expanded = useStore(composerStackExpandedStore()) === "calls";
-  // Kept across close/reopen so the modal returns to where it was left.
   const [route, setRoute] = useState<CallRoute | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [desktopDetails, setDesktopDetails] = useState(true);
   const toggle = (): void => {
     if (desktop) toggleComposerStackPanel("calls");
-    else setMobileOpen(true);
+    else {
+      // Closing the page leaves it; every open starts at the list. Reset here
+      // rather than on close so the closing sheet keeps its content.
+      setRoute(null);
+      setMobileOpen(true);
+    }
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
   if (calls.length === 0) return null;
@@ -1095,6 +1099,8 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                   setRoute({ call: routed.call_id, level: "details" }),
               },
               {
+                // There is no Follow toggle here; this is the way back to the
+                // newest message after reading earlier ones.
                 label: "Scroll to latest",
                 icon: <VerticalAlignBottom fontSize="small" />,
                 onActivate: (): void =>

@@ -554,6 +554,28 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
       () => button("correctness") ? null : true,
       "floating close did not dismiss the calls page",
     );
+    // Closing from inside a call leaves the whole page: the next open starts
+    // at the list, not at the call that was showing.
+    const callRow = (): HTMLButtonElement | undefined =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find((
+        node,
+      ) => node.getAttribute("aria-label")?.includes("correctness"));
+    button("Open calls")!.click();
+    (await until(callRow, "reopened calls page lacks its list")).click();
+    await until(backButton, "a reopened call must show its transcript");
+    island("Close")!.click();
+    await until(
+      () => island("Close") ? null : true,
+      "close inside a call did not dismiss the calls page",
+    );
+    button("Open calls")!.click();
+    await until(callRow, "reopening after a close inside a call lacks the list");
+    check(!backButton(), "reopening must start at the list, not the call");
+    island("Close")!.click();
+    await until(
+      () => island("Close") ? null : true,
+      "floating close did not dismiss the reopened calls page",
+    );
     tests.push("mobile-page-list-transcript-details-and-back");
 
     root.unmount();

@@ -3425,6 +3425,7 @@ export function Transcript({
   restoreAnchorKey,
   onAnchorRestored,
   statusBar = true,
+  magneticHaptics = true,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -3492,6 +3493,9 @@ export function Transcript({
   /** The dormant/interrupted/crashed bar invites a message; a read-only
    * embedded transcript (a managed call's child) cannot take one. */
   statusBar?: boolean;
+  /** The tick on re-entering the live edge pairs with the composer's Follow
+   * toggle. An embedded transcript without that toggle scrolls silently. */
+  magneticHaptics?: boolean;
 }): React.JSX.Element {
   const managesScrollHistory = historyPaging === "scroll";
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
@@ -3701,6 +3705,8 @@ export function Transcript({
   const parentRef = useRef<HTMLDivElement>(null);
   const managesScrollHistoryRef = useRef(managesScrollHistory);
   managesScrollHistoryRef.current = managesScrollHistory;
+  const magneticHapticsRef = useRef(magneticHaptics);
+  magneticHapticsRef.current = magneticHaptics;
   // Switching from Explore remounts the History transcript. Remember whether
   // that mount carries a viewport hand-off so the ordinary "new session starts
   // at latest" initializer below cannot overwrite the restored reading point.
@@ -4804,6 +4810,18 @@ export function Transcript({
       if (keyMovesTranscriptViewport(event)) markNativeScrollActive();
       if (keyLeavesLatest(event)) detach();
     };
+    const onNestedScroll = (event: Event): void => {
+      // Wide code and tables are their own sideways scrollers, and `scroll`
+      // does not bubble: their momentum reached neither `onScroll` nor the
+      // settle timer. The timer then expired 240ms after finger-up and resumed
+      // streamed rendering, whose reflow and anchor write hitched the glide.
+      // Extend a reader gesture across a nested pan so rendering stays paused
+      // until that glide ends as well. Only extend: a block that scrolls itself
+      // (streamed output following its tail) must never pause the stream.
+      if (
+        event.target !== el && (touching || nativeScrollActiveRef.current)
+      ) markNativeScrollActive();
+    };
     const onScroll = (): void => {
       // Our own anchor-restoring scrollTop write re-enters here; swallow it so it
       // neither re-captures (would chase its own correction) nor re-sticks.
@@ -4849,7 +4867,9 @@ export function Transcript({
         fromBottom,
         magneticThreshold(),
       );
-      if (insideMagneticZone && magnetic.fire) magneticHaptic();
+      if (
+        insideMagneticZone && magnetic.fire && magneticHapticsRef.current
+      ) magneticHaptic();
       magneticArmed = magnetic.armed;
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
@@ -4982,6 +5002,10 @@ export function Transcript({
     el.addEventListener("touchend", onTouchEnd, { passive: true });
     el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scroll", onNestedScroll, {
+      capture: true,
+      passive: true,
+    });
     globalThis.addEventListener("pointerup", onPointerEnd, { passive: true });
     globalThis.addEventListener("pointercancel", onPointerEnd, {
       passive: true,
@@ -5078,6 +5102,7 @@ export function Transcript({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scroll", onNestedScroll, true);
       globalThis.removeEventListener("pointerup", onPointerEnd);
       globalThis.removeEventListener("pointercancel", onPointerEnd);
       globalThis.removeEventListener("blur", onPointerEnd);
