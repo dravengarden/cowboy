@@ -27,6 +27,10 @@ const INLINE_OUTPUT = 30000;
 // return); collection stops early enough that one more read stays within it.
 const MAX_PERSISTED = MAX_FILE;
 const COLLECT_LIMIT = MAX_PERSISTED - 1024 * 1024;
+// A Bash command's whole output is read in pages this large. Each read is a
+// round trip to the target (~0.2 s across the Machine link), so 32 KiB reads
+// held a large output to ~150 KB/s however fast the link was.
+const BULK_READ = 1024 * 1024;
 const MAX_READ_STATE = 512 * 1024;
 // Startup reads kept in flight ahead of an order-dependent walk. Startup also
 // runs git status (7 commands), the shell snapshot and the other walks at
@@ -1720,16 +1724,16 @@ export class WorkspaceTools {
     return current;
   }
 
-  collect(processId, timeout) {
+  collect(processId, timeout, limit = MAX_OUTPUT) {
     // Each task has one output cursor. Other tasks and file operations do not
     // wait behind this collection; cancellation submits terminate immediately.
     return this.ordered(
       `task:${processId}`,
-      () => this.collectOutput(processId, timeout),
+      () => this.collectOutput(processId, timeout, limit),
     );
   }
 
-  async collectOutput(processId, timeout) {
+  async collectOutput(processId, timeout, limit = MAX_OUTPUT) {
     const previous = this.state.jobs[processId];
     if (!previous) throw new Error("Task does not belong to this session");
     // Past its end line, the pipe carries only what the command left running
@@ -1753,7 +1757,10 @@ export class WorkspaceTools {
       const result = await this.connection.call("process/read", {
         processId,
         afterSeq: job.afterSeq,
-        maxBytes: Math.min(32768, MAX_OUTPUT - size),
+        maxBytes: Math.min(
+          limit > MAX_OUTPUT ? BULK_READ : 32768,
+          limit - size,
+        ),
         waitMs: Math.max(1, Math.min(1000, deadline - Date.now())),
       });
       for (const chunk of result.chunks) {
@@ -1822,7 +1829,7 @@ export class WorkspaceTools {
           delete pending[stream];
         }
       }
-      if (drained || size >= MAX_OUTPUT) break;
+      if (drained || size >= limit) break;
     } while (Date.now() < deadline || job.closed);
     await this.save(() => {
       const beforeSave = this.state.jobs[processId];
@@ -1842,14 +1849,14 @@ export class WorkspaceTools {
         this.state.jobs[processId] = beforeSave;
       };
     });
-    if (job.closed && size < MAX_OUTPUT) await this.releaseCwdFile(processId);
+    if (job.closed && size < limit) await this.releaseCwdFile(processId);
     return {
       output: chunks.join(""),
       exited: job.exited,
       closed: job.closed,
       exitCode: job.exitCode,
       task_id: processId,
-      output_limit: size >= MAX_OUTPUT,
+      output_limit: size >= limit,
     };
   }
 
@@ -2667,13 +2674,20 @@ export class WorkspaceTools {
         // Collect the whole output (bounded) so a large result can be
         // persisted as natively, instead of stopping at one read's limit.
         const deadline = Date.now() + timeout;
-        let result = await this.collect(id, timeout);
-        let output = result.output;
+        const page = () =>
+          Math.max(MAX_OUTPUT, COLLECT_LIMIT - Buffer.byteLength(output));
+        let output = "";
+        let result = await this.collect(id, timeout, page());
+        output = result.output;
         while (
           result.output_limit && Buffer.byteLength(output) < COLLECT_LIMIT &&
           (result.closed || Date.now() < deadline)
         ) {
-          result = await this.collect(id, Math.max(1, deadline - Date.now()));
+          result = await this.collect(
+            id,
+            Math.max(1, deadline - Date.now()),
+            page(),
+          );
           output += result.output;
         }
         const complete = { ...result, output };

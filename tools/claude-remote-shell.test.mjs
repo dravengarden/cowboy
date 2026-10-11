@@ -251,6 +251,27 @@ test("large output is persisted on the target with native's preview", async (t) 
   );
 });
 
+test("a large output is read in a few large pages, not 32 KiB reads", async (t) => {
+  const { tools, bash } = await shellFixture(t);
+  const call = tools.connection.call.bind(tools.connection);
+  const reads = [];
+  tools.connection.call = (method, params) => {
+    if (method === "process/read") reads.push(params.maxBytes);
+    return call(method, params);
+  };
+  const shown = await bash({
+    command: "head -c 3000000 /dev/zero | tr '\\0' y",
+  });
+  const path = /Full output saved to: (\S+)/.exec(shown)[1];
+  assert.equal((await readFile(path, "utf8")).length, 3000000);
+  // Each read crosses the Machine link; a 3 MB output takes a handful.
+  assert.ok(Math.max(...reads) >= 1024 * 1024, String(reads));
+  assert.ok(
+    reads.filter((bytes) => bytes > 1).length <= 12,
+    String(reads.length),
+  );
+});
+
 test("long failures keep native's head and tail", () => {
   assert.equal(
     shellFailure({ exitCode: 2, output: "z".repeat(31000) }),
