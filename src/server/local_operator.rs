@@ -61,6 +61,106 @@ async fn status(
     )
 }
 
+/// Every session, as the Web UI's list shows it to an owner.
+async fn sessions(State(state): State<Arc<AppState>>) -> Response {
+    no_store_json(
+        StatusCode::OK,
+        serde_json::json!({"schema":1, "sessions": state.hub.session_list()}),
+    )
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct SessionProviderUpdate {
+    /// Cancel a running turn instead of refusing a busy session.
+    #[serde(default)]
+    force: bool,
+    /// Update once the current work finishes.
+    #[serde(default)]
+    when_idle: bool,
+}
+
+/// Move one session to its Machine's newest installed Provider release
+/// through the same gates as the Web UI's Reload. An exited session is only
+/// re-pinned; a busy one is updated after its turn (`when_idle`) or after
+/// cancelling it (`force`).
+async fn session_provider_update(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(request): Json<SessionProviderUpdate>,
+) -> Response {
+    let Some(info) = state.hub.session_info(&session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let meta = info.meta;
+    let target = match session_upgrade_target(&state, &meta).await {
+        Ok(target) => target,
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    };
+    let reply = |code, state_name: &str| {
+        no_store_json(
+            code,
+            serde_json::json!({
+                "schema":1, "session":session_id, "state":state_name,
+                "from":meta.provider_version, "to":target.version,
+            }),
+        )
+    };
+    if target.digest == meta.provider_generation_digest {
+        return reply(StatusCode::OK, "current");
+    }
+    let busy = matches!(meta.status, Status::Busy | Status::Starting)
+        || state.hub.session_has_in_flight_prompt(&session_id);
+    if busy && !(request.force || request.when_idle) {
+        return (
+            StatusCode::CONFLICT,
+            "session is busy; pass force to cancel its turn or when_idle to update after it",
+        )
+            .into_response();
+    }
+    if busy || request.when_idle {
+        // The update pass applies a requested update as soon as the session
+        // is idle, through the same fenced reload.
+        state.hub.set_provider_update_when_idle(&session_id, true);
+        if busy && request.force {
+            if let Err(error) = state.supervisor.send(&session_id, AgentCommand::Cancel) {
+                state.hub.set_provider_update_when_idle(&session_id, false);
+                return (
+                    StatusCode::CONFLICT,
+                    format!("cancelling the turn failed: {error}"),
+                )
+                    .into_response();
+            }
+            tracing::info!(session = %session_id, "local Operator cancelled a turn to update its Provider");
+            return reply(StatusCode::ACCEPTED, "cancelled_then_update");
+        }
+        return reply(StatusCode::ACCEPTED, "after_turn");
+    }
+    let _fence = match ProviderReloadFence::acquire(
+        &state.plugin_lifecycle_fences,
+        (meta.machine_id.clone(), meta.provider.clone()),
+    ) {
+        Ok(fence) => fence,
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    };
+    let result = if meta.status == Status::Exited {
+        state
+            .hub
+            .repin_dormant_provider(&meta, &target.version, &target.digest, &target.behavior)
+            .map(|()| "repinned")
+    } else {
+        apply_session_provider_reload(&state, &meta, &target, false).map(|()| "updating")
+    };
+    match result {
+        Ok(state_name) => {
+            tracing::info!(session = %session_id, version = %target.version, state = state_name,
+                "local Operator updated a session's Provider");
+            reply(StatusCode::ACCEPTED, state_name)
+        }
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
 async fn install(
     State(state): State<Arc<AppState>>,
     Path((machine, plugin)): Path<(String, String)>,
@@ -212,6 +312,11 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
     let mut shutdown = state.shutdown.clone();
     let app = Router::new()
         .route("/v1/status", get(status))
+        .route("/v1/sessions", get(sessions))
+        .route(
+            "/v1/sessions/{id}/provider-update",
+            post(session_provider_update),
+        )
         .route("/v1/execution-sessions", get(execution::recovery::list))
         .route(
             "/v1/execution-sessions/{id}/recover",

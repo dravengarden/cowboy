@@ -60,6 +60,19 @@ and fails if Cowboy refuses it. A Web UI capability without a dedicated
 subcommand is therefore never out of reach; frequently used ones get a
 subcommand like `session`.
 
-Host operations that are not part of the product surface (Plugin convergence,
-Machine inventories, execution recovery) remain under `cowboy operator`, which
-uses the Controller's private host endpoint instead of a device login.
+## On the Controller host
+
+`cowboy operator` uses the Controller's private host endpoint instead of a
+device login, so the Service account can keep everything current unattended:
+
+```bash
+cowboy operator converge --apply                     # Plugins on every Machine
+cowboy operator sessions [--outdated] [--json]
+cowboy operator session-update --all [--except ID]... [--when-idle | --force]
+cowboy operator session-update ID...
+```
+
+`session-update` reloads idle sessions on the newest installed release,
+re-pins exited ones without starting them, and refuses busy ones unless
+`--when-idle` (update right after the running turn) or `--force` (cancel the
+turn, then update). The same compatibility gates as the Web UI's Reload apply.

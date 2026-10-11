@@ -357,7 +357,7 @@ pub(super) fn rollout_order(
     (ordered, skipped)
 }
 
-async fn read_json(
+pub(super) async fn read_json(
     client: &reqwest::Client,
     method: reqwest::Method,
     segments: &[&str],

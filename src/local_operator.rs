@@ -195,6 +195,32 @@ enum OperatorCommand {
     },
     /// Resume automatic convergence.
     Unfreeze,
+    /// List every session with its status, Provider version and waiting update.
+    Sessions {
+        /// Only sessions with a newer installed Provider release.
+        #[arg(long)]
+        outdated: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move sessions to their Machine's newest installed Provider release.
+    /// Idle sessions reload now, exited ones are re-pinned, busy ones are
+    /// refused unless --when-idle (after the turn) or --force (cancel it).
+    SessionUpdate {
+        sessions: Vec<String>,
+        /// Every session with an update waiting.
+        #[arg(long, conflicts_with = "sessions")]
+        all: bool,
+        /// With --all, leave these sessions alone. Repeatable.
+        #[arg(long, requires = "all")]
+        except: Vec<String>,
+        /// Cancel a running turn instead of refusing a busy session.
+        #[arg(long)]
+        force: bool,
+        /// Update a busy session once its current turn finishes.
+        #[arg(long)]
+        when_idle: bool,
+    },
     /// List trusted published Plugin releases.
     Catalog,
     /// List enrolled Machines and their inventories.
@@ -408,6 +434,21 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
         .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(330))
         .build()?;
+    match args.command {
+        OperatorCommand::Sessions { outdated, json } => {
+            return sessions::run_list(&client, outdated, json).await;
+        }
+        OperatorCommand::SessionUpdate {
+            sessions,
+            all,
+            except,
+            force,
+            when_idle,
+        } => {
+            return sessions::run_update(&client, sessions, all, &except, force, when_idle).await;
+        }
+        _ => {}
+    }
     if let OperatorCommand::Converge {
         machine,
         plugin,
@@ -679,7 +720,9 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
         | OperatorCommand::Disable
         | OperatorCommand::Freeze { .. }
         | OperatorCommand::Unfreeze
-        | OperatorCommand::Converge { .. } => unreachable!(),
+        | OperatorCommand::Converge { .. }
+        | OperatorCommand::Sessions { .. }
+        | OperatorCommand::SessionUpdate { .. } => unreachable!(),
     };
     let mut url = reqwest::Url::parse("http://localhost/v1/")?;
     {
@@ -728,6 +771,7 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
 }
 
 mod converge;
+mod sessions;
 
 #[cfg(test)]
 mod tests;
