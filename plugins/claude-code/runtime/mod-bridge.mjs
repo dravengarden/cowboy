@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -61,6 +61,11 @@ const MCP_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 // A hook may read native's transcript; the target gets a bounded copy of
 // one under native's own projects directory, never another runtime file.
 const MAX_TRANSCRIPT = 8 * 1024 * 1024;
+
+// The target cache of one native transcript file.
+function transcriptKey(path) {
+  return createHash("sha256").update(path).digest("hex").slice(0, 16);
+}
 
 async function transcriptCopy(path, root) {
   if (
@@ -149,7 +154,12 @@ export async function startModBridge(
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       // /hook has required fields and independent optional ones.
       const hookKeys = ["command", "id", "input", "timeout"];
-      const hookOptional = ["argv", "owner", "transcriptPath"];
+      const hookOptional = [
+        "argv",
+        "owner",
+        "transcriptPath",
+        "agentTranscriptPath",
+      ];
       if (
         !call || typeof call !== "object" ||
         (request.url === "/hook"
@@ -419,11 +429,20 @@ export async function startModBridge(
         // cancellation with tools; the session's mode completes its input.
         operation.ready = Promise.resolve().then(() =>
           request.url === "/hook"
-            ? transcriptCopy(call.transcriptPath, transcriptRoot).then((
-              transcript,
-            ) =>
+            ? Promise.all([
+              transcriptCopy(call.transcriptPath, transcriptRoot),
+              transcriptCopy(call.agentTranscriptPath, transcriptRoot),
+            ]).then(([transcript, agentTranscript]) =>
               tools.runHook({
-                transcript,
+                transcript: transcript &&
+                  {
+                    bytes: transcript,
+                    key: transcriptKey(call.transcriptPath),
+                  },
+                agentTranscript: agentTranscript && {
+                  bytes: agentTranscript,
+                  key: transcriptKey(call.agentTranscriptPath),
+                },
                 argv: call.argv,
                 command: call.command,
                 // The launcher's live mode, not one recorded at the last prompt.

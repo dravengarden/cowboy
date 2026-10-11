@@ -208,23 +208,57 @@ export const UNKNOWN_PROCESS_SETTLED_MS = 15 * 60 * 1000;
 
 // The file helper's `snapshot` in POSIX shell: verify the cached base,
 // append the delta into a new snapshot, verify it, then replace the cache.
-// Exit 75 is a cache miss and 3 a target without a SHA-256 tool; neither
+// A digest is 64 hex characters (SHA-256) or `c<crc>-<length>` (POSIX
+// cksum, on targets with neither sha256sum nor shasum). Exit 75 is a cache
+// miss and 3 a SHA-256 digest on a target without a SHA-256 tool; neither
 // has created the snapshot. Arguments: cache delta snapshot base digest.
 export const SHELL_SNAPSHOT = String.raw`umask 077; set -C
-if command -v sha256sum >/dev/null 2>&1; then digest_of() { sha256sum < "$1"; }
-elif command -v shasum >/dev/null 2>&1; then digest_of() { shasum -a 256 < "$1"; }
-else exit 3; fi
-case $5 in *[!0-9a-f]*|'') exit 2;; esac
-[ "${"$"}{#5}" -eq 64 ] || exit 2
+case $5 in
+c*) case $5 in c*[!0-9-]*|c-*|c*-) exit 2;; esac
+  digest_of() { cksum < "$1" | awk '{ printf "c%s-%s", $1, $2 }'; } ;;
+*) case $5 in *[!0-9a-f]*|'') exit 2;; esac
+  [ "${"$"}{#5}" -eq 64 ] || exit 2
+  if command -v sha256sum >/dev/null 2>&1; then digest_of() { sha256sum < "$1" | cut -c1-64; }
+  elif command -v shasum >/dev/null 2>&1; then digest_of() { shasum -a 256 < "$1" | cut -c1-64; }
+  else exit 3; fi ;;
+esac
 if [ -n "$4" ]; then
   [ -f "$1" ] && [ ! -L "$1" ] || exit 75
-  [ "$(digest_of "$1" | cut -c1-64)" = "$4" ] || exit 75
+  [ "$(digest_of "$1")" = "$4" ] || exit 75
   cat -- "$1" "$2" > "$3" || exit 1
 else
   cat -- "$2" > "$3" || exit 1
 fi
-[ "$(digest_of "$3" | cut -c1-64)" = "$5" ] || exit 1
+[ "$(digest_of "$3")" = "$5" ] || exit 1
 cat -- "$3" > "$3.cache" && mv -f -- "$3.cache" "$1"`;
+
+// POSIX `cksum` of `bytes`, in the shell snapshot's digest form.
+const CKSUM_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let crc = index << 24;
+  for (let bit = 0; bit < 8; bit++) {
+    crc = crc & 0x80000000 ? (crc << 1) ^ 0x04c11db7 : crc << 1;
+  }
+  return crc >>> 0;
+});
+export function cksumDigest(bytes) {
+  let crc = 0;
+  const step = (byte) => {
+    crc = ((crc << 8) ^ CKSUM_TABLE[((crc >>> 24) ^ byte) & 0xff]) >>> 0;
+  };
+  for (const byte of bytes) step(byte);
+  for (
+    let length = bytes.length;
+    length > 0;
+    length = Math.floor(length / 256)
+  ) {
+    step(length & 0xff);
+  }
+  return `c${(~crc) >>> 0}-${bytes.length}`;
+}
+
+// Hook transcripts each keep one target cache; a few recent sources (the
+// session transcript, a subagent's) are enough for consecutive hooks.
+const HOOK_TRANSCRIPT_CACHES = 4;
 // Only disposable hook input is cached. A verified base plus an append is
 // materialized into an exclusive snapshot before the hook can start. Never
 // expose the shared cache to a hook, or retry a hook after a lost receipt.
@@ -898,7 +932,9 @@ export class WorkspaceTools {
   // Run one hook command beside the project, with the hook's JSON input on
   // stdin. The executor cannot close a piped stdin, so the input travels in a
   // private file that the shell opens as stdin and unlinks before the command.
-  async runHook({ command, argv, input, timeoutMs, call, transcript }) {
+  async runHook(
+    { command, argv, input, timeoutMs, call, transcript, agentTranscript },
+  ) {
     checkedString(command, "hook command", MAX_OUTPUT);
     const home = this.home();
     if (!home || !this.shell) throw new Error("Target hook shell unavailable");
@@ -906,6 +942,10 @@ export class WorkspaceTools {
     const file = posix.join(directory, randomUUID() + ".json");
     // A private target copy of the runtime transcript for this hook run.
     const copy = transcript
+      ? posix.join(directory, randomUUID() + ".jsonl")
+      : undefined;
+    // A SubagentStop hook also reads the subagent's own transcript.
+    const agentCopy = agentTranscript
       ? posix.join(directory, randomUUID() + ".jsonl")
       : undefined;
     // Known before submission: a lost start reply can still be cancelled.
@@ -919,6 +959,13 @@ export class WorkspaceTools {
       if (copy) {
         await this.hookTranscript(transcript, copy, call);
         input = JSON.stringify({ ...JSON.parse(input), transcript_path: copy });
+      }
+      if (agentCopy) {
+        await this.hookTranscript(agentTranscript, agentCopy, call);
+        input = JSON.stringify({
+          ...JSON.parse(input),
+          agent_transcript_path: agentCopy,
+        });
       }
       await this.hookInputFile(file, Buffer.from(input), call);
       // Shell form runs through the shell; exec form runs its argv directly
@@ -992,7 +1039,7 @@ export class WorkspaceTools {
       if (started && !settled) await this.cancelTasks([id]).catch(() => {});
       this.foreground.delete(id);
       if (call?.id) this.calls.delete(call.id);
-      for (const path of [file, copy]) {
+      for (const path of [file, copy, agentCopy]) {
         if (!path) continue;
         await this.connection.call("fs/remove", {
           path: pathToFileURL(path).href,
@@ -1048,65 +1095,76 @@ export class WorkspaceTools {
     }
   }
 
-  async hookTranscript(transcript, copy, call) {
-    // Small inputs and targets without a SHA-256 tool retain the original
-    // contract. An executor started before the file helper existed (it keeps
-    // running across plugin updates) uses the same snapshot in shell.
-    if (this.hookDigestUnavailable || transcript.length < 128 * 1024) {
-      await this.hookInputFile(copy, transcript, call);
-      return;
-    }
-    // Bound memory/storage to one latest transcript per execution binding.
-    // Serializing preparation does not serialize the hooks themselves.
+  // Every hook sends only what native appended since the last hook that
+  // read the same transcript: a target cache holds the previous copy, and
+  // its length and digest are saved with this runtime's state, so a
+  // restarted runtime continues from it too. The cache is verified before
+  // use; a miss sends the whole transcript once and starts a new base.
+  async hookTranscript(source, copy, call) {
+    const { bytes: transcript, key } = Buffer.isBuffer(source)
+      ? { bytes: source, key: "main" }
+      : source;
     await this.ordered("hook-transcript", async () => {
-      const previous = this.hookTranscriptBase;
-      this.hookTranscriptBase = undefined;
-      const append = previous && transcript.length >= previous.bytes.length &&
-        transcript.subarray(0, previous.bytes.length).equals(previous.bytes);
-      const digest = hash(transcript);
       const cache = posix.join(
         posix.dirname(copy),
-        `transcript-${this.state.binding}.cache`,
+        `transcript-${this.state.binding}-${key}.cache`,
       );
       const delta = copy + ".delta";
-      const prepare = async (bytes, base) => {
-        await this.hookInputFile(delta, bytes, call);
-        return await this.command(
-          [
-            ...(this.fileHelper
-              ? [this.fileHelper, "snapshot", "--"]
-              : [this.shell, "-c", SHELL_SNAPSHOT, this.shell]),
-            cache,
-            delta,
-            copy,
-            base,
-            digest,
-          ],
-          10000,
-          call,
-          { cancelOnError: true },
-        );
-      };
       try {
-        let result = await prepare(
-          append ? transcript.subarray(previous.bytes.length) : transcript,
-          append ? previous.digest : "",
-        );
-        // The shell snapshot found no SHA-256 tool before writing anything.
-        if (!this.fileHelper && result.exitCode === 3) {
-          this.hookDigestUnavailable = true;
-          await this.hookInputFile(copy, transcript, call);
+        for (;;) {
+          const previous = this.state.hookTranscripts?.[key];
+          const kind = this.hookDigestKind ?? "sha256";
+          const digestOf = (bytes) =>
+            kind === "cksum" ? cksumDigest(bytes) : hash(bytes);
+          const append = previous?.kind === kind &&
+            transcript.length >= previous.length &&
+            digestOf(transcript.subarray(0, previous.length)) ===
+              previous.digest;
+          const digest = digestOf(transcript);
+          const prepare = async (bytes, base) => {
+            await this.hookInputFile(delta, bytes, call);
+            return await this.command(
+              [
+                ...(this.fileHelper && kind === "sha256"
+                  ? [this.fileHelper, "snapshot", "--"]
+                  : [this.shell, "-c", SHELL_SNAPSHOT, this.shell]),
+                cache,
+                delta,
+                copy,
+                base,
+                digest,
+              ],
+              10000,
+              call,
+              { cancelOnError: true },
+            );
+          };
+          let result = await prepare(
+            append ? transcript.subarray(previous.length) : transcript,
+            append ? previous.digest : "",
+          );
+          // No SHA-256 tool on the target and nothing was written: the
+          // same snapshot verifies with POSIX cksum instead.
+          if (result.exitCode === 3 && kind === "sha256" && !this.fileHelper) {
+            this.hookDigestKind = "cksum";
+            continue;
+          }
+          // Explicit cache miss, before snapshot creation or hook execution.
+          // A transport error is never grounds to retry any process start.
+          if (append && result.exitCode === 75) {
+            result = await prepare(transcript, "");
+          }
+          if (result.exitCode !== 0) {
+            throw new Error("Target hook transcript preparation failed");
+          }
+          await this.saveHookTranscript(key, {
+            kind,
+            length: transcript.length,
+            digest,
+            used: Date.now(),
+          });
           return;
         }
-        // Explicit cache miss, before snapshot creation or hook execution.
-        // A transport error is never grounds to retry any process start.
-        if (append && result.exitCode === 75) {
-          result = await prepare(transcript, "");
-        }
-        if (result.exitCode !== 0) {
-          throw new Error("Target hook transcript preparation failed");
-        }
-        this.hookTranscriptBase = { bytes: Buffer.from(transcript), digest };
       } finally {
         for (const path of [delta, copy + ".cache"]) {
           await this.connection.call("fs/remove", {
@@ -1116,6 +1174,34 @@ export class WorkspaceTools {
         }
       }
     });
+  }
+
+  async saveHookTranscript(key, base) {
+    let evicted = [];
+    await this.save(() => {
+      const previous = this.state.hookTranscripts;
+      const next = { ...(previous ?? {}), [key]: base };
+      const keys = Object.keys(next).sort((a, b) =>
+        next[b].used - next[a].used
+      );
+      evicted = keys.slice(HOOK_TRANSCRIPT_CACHES);
+      for (const old of evicted) delete next[old];
+      this.state.hookTranscripts = next;
+      return () => this.state.hookTranscripts = previous;
+    });
+    const home = this.home();
+    if (!home) return;
+    for (const old of evicted) {
+      await this.removeTarget(
+        posix.join(
+          home,
+          ".cache",
+          "cowboy",
+          "hook-input",
+          `transcript-${this.state.binding}-${old}.cache`,
+        ),
+      );
+    }
   }
 
   // The target counterpart of native's per-session CLAUDE_ENV_FILE.
