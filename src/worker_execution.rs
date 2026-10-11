@@ -247,11 +247,18 @@ impl Client {
     }
 
     async fn invoke(&self, method: String, params: Value) -> Result<Value> {
+        let started = std::time::Instant::now();
         let invocation = Invocation {
-            operation_id: format!("{:032x}", rand::random::<u128>()),
+            // The suffix asks the keeper for the backend's own duration.
+            operation_id: format!(
+                "{:032x}{}",
+                rand::random::<u128>(),
+                crate::execution_protocol::TIMED_SUFFIX
+            ),
             method,
             params,
         };
+        let method = invocation.method.clone();
         ensure!(invocation.validate(), "invalid execution request");
         let operation_id = invocation.operation_id.clone();
         let mut command = Command::Invoke {
@@ -261,8 +268,11 @@ impl Client {
         loop {
             match self.call(command).await? {
                 Response::Operation {
-                    outcome: Outcome::Completed { reply },
-                } => return Ok(reply),
+                    outcome: Outcome::Completed { mut reply },
+                } => {
+                    self.observe_tool_call(&method, &operation_id, started, &mut reply);
+                    return Ok(reply);
+                }
                 Response::Operation {
                     outcome: Outcome::Pending,
                 } => {
@@ -275,6 +285,49 @@ impl Client {
                     "execution operation refused or its final result is unknown; do not replay"
                 ),
             }
+        }
+    }
+}
+
+impl Client {
+    /// One tool call's Cowboy overhead: its whole duration less the time the
+    /// backend spent on it, which includes the command itself and any wait
+    /// the caller requested (a long-polled read). Removes the keeper's
+    /// duration member, so clients see the backend's reply unchanged.
+    fn observe_tool_call(
+        &self,
+        method: &str,
+        operation: &str,
+        started: std::time::Instant,
+        reply: &mut Value,
+    ) {
+        let total_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let executed_ms = reply
+            .as_object_mut()
+            .and_then(|object| object.remove(crate::execution_protocol::EXECUTED_MS))
+            .and_then(|value| value.as_u64());
+        match executed_ms {
+            // `duration_ms` is the metric: `cowboy logs metrics` histograms it
+            // per event, so this event's histogram is the Cowboy overhead.
+            Some(executed_ms) => tracing::info!(
+                event_name = "cowboy.execution.tool_overhead",
+                session = %self.session,
+                method,
+                %operation,
+                duration_ms = (total_ms - executed_ms as f64).max(0.0),
+                total_ms,
+                executed_ms,
+                "execution tool call overhead"
+            ),
+            // A keeper that predates timing: only the whole duration is known.
+            None => tracing::info!(
+                event_name = "cowboy.execution.tool_untimed",
+                session = %self.session,
+                method,
+                %operation,
+                total_ms,
+                "execution tool call without backend timing"
+            ),
         }
     }
 }

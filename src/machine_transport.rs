@@ -5,6 +5,8 @@
 //! overtake a chunked frame, and the receiver's credit bounds the chunk bytes
 //! buffered below this writer: a single-flow overlay link otherwise holds
 //! every session's small reply behind megabytes already in socket buffers.
+//! With streaming compression, small frames share one deflate context per
+//! direction, so the binding and envelope every RPC repeats cost a few bytes.
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -21,6 +23,8 @@ pub(crate) const COMPRESSION_HEADER: &str = "x-cowboy-machine-compression";
 pub(crate) const DEFLATE: &str = "zlib-v1";
 pub(crate) const PACING_HEADER: &str = "x-cowboy-machine-pacing";
 pub(crate) const CREDIT: &str = "credit-v1";
+pub(crate) const STREAM_HEADER: &str = "x-cowboy-machine-stream";
+pub(crate) const STREAM: &str = "deflate-stream-v1";
 const CHUNK_BYTES: usize = 16 * 1024;
 // Chunk bytes sent beyond the receiver's credit: at the measured ~100 KiB/s
 // overlay a small frame waits about a second behind bulk, while a 0.2-1 s
@@ -31,12 +35,16 @@ const CREDIT_STALL: Duration = Duration::from_secs(60);
 const CREDIT_PREFIX: &[u8] = b"cowboy-credit-v1:";
 const MAX_BYTES: usize = crate::runtime_wire::MAX_FRAME_BYTES + 1024;
 const COMPRESSED: u32 = 1 << 31;
+/// A small frame compressed in the connection's shared deflate stream: one
+/// binary message, decoded in arrival order, never part of a chunked frame.
+const STREAMED: u32 = 1 << 30;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Features {
     pub chunked: bool,
     pub compressed: bool,
     pub paced: bool,
+    pub stream: bool,
 }
 
 impl From<bool> for Features {
@@ -45,6 +53,7 @@ impl From<bool> for Features {
             chunked,
             compressed: false,
             paced: false,
+            stream: false,
         }
     }
 }
@@ -55,17 +64,106 @@ impl From<(bool, bool)> for Features {
             chunked,
             compressed: chunked && compressed,
             paced: false,
+            stream: false,
         }
     }
 }
 
 impl From<(bool, bool, bool)> for Features {
     fn from((chunked, compressed, paced): (bool, bool, bool)) -> Self {
+        Self::from((chunked, compressed, paced, false))
+    }
+}
+
+impl From<(bool, bool, bool, bool)> for Features {
+    fn from((chunked, compressed, paced, stream): (bool, bool, bool, bool)) -> Self {
         Self {
             chunked,
             compressed: chunked && compressed,
             paced: chunked && paced,
+            stream: chunked && stream,
         }
+    }
+}
+
+/// The sending half of a streaming-compressed connection.
+struct StreamEncoder(flate2::Compress);
+
+impl StreamEncoder {
+    fn new() -> Self {
+        Self(flate2::Compress::new(flate2::Compression::new(6), false))
+    }
+
+    /// Compress one frame with a sync flush, so the peer can decode it on
+    /// arrival using everything sent before it.
+    fn frame(&mut self, text: &str) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(8 + text.len() / 2 + 64);
+        out.extend_from_slice(&[0; 8]);
+        let mut input = text.as_bytes();
+        loop {
+            if out.capacity() - out.len() < 64 {
+                out.reserve(out.capacity());
+            }
+            let before = self.0.total_in();
+            self.0
+                .compress_vec(input, &mut out, flate2::FlushCompress::Sync)?;
+            let consumed = usize::try_from(self.0.total_in() - before)?;
+            input = &input[consumed..];
+            // A sync flush is complete once all input is taken and the
+            // output buffer was not filled to the brim.
+            if input.is_empty() && out.len() < out.capacity() {
+                break;
+            }
+        }
+        let total = u32::try_from(out.len() - 8)?;
+        ensure!(
+            total & (COMPRESSED | STREAMED) == 0,
+            "streamed frame too large"
+        );
+        out[..4].copy_from_slice(&(total | STREAMED).to_be_bytes());
+        Ok(out)
+    }
+}
+
+/// The receiving half: inflate a streamed frame, bounded to a small frame.
+struct StreamDecoder(flate2::Decompress);
+
+impl StreamDecoder {
+    fn frame(&mut self, bytes: &[u8]) -> Result<String> {
+        let mut out = Vec::with_capacity(bytes.len() * 4 + 64);
+        let mut input = bytes;
+        loop {
+            if out.capacity() - out.len() < 64 {
+                ensure!(
+                    out.len() <= CHUNK_BYTES,
+                    "streamed Machine frame exceeds limit"
+                );
+                out.reserve(out.capacity());
+            }
+            let (before_in, before_out) = (self.0.total_in(), self.0.total_out());
+            let status = self
+                .0
+                .decompress_vec(input, &mut out, flate2::FlushDecompress::Sync)?;
+            ensure!(
+                status != flate2::Status::StreamEnd,
+                "streamed Machine compression ended"
+            );
+            let consumed = usize::try_from(self.0.total_in() - before_in)?;
+            let produced = self.0.total_out() - before_out;
+            input = &input[consumed..];
+            if input.is_empty() && out.len() < out.capacity() {
+                break;
+            }
+            ensure!(
+                consumed > 0 || produced > 0,
+                "truncated streamed Machine frame"
+            );
+        }
+        ensure!(
+            out.len() <= CHUNK_BYTES,
+            "streamed Machine frame exceeds limit"
+        );
+        Ok(String::from_utf8(out)?)
     }
 }
 
@@ -207,6 +305,21 @@ where
     let mut sent_chunks = 0_u64;
     let mut open = true;
     let mut queued = VecDeque::new();
+    let mut stream = features.stream.then(StreamEncoder::new);
+    // Every frame that is not a chunk leaves through here, in wire order,
+    // which is also the order the peer's stream decoder consumes them.
+    macro_rules! emit {
+        ($message:expr) => {{
+            let message = $message;
+            match (&mut stream, message.text()) {
+                (Some(encoder), Some(text)) if !message.urgent() && text.len() <= CHUNK_BYTES => {
+                    let frame = encoder.frame(text)?;
+                    send(&mut sink, M::binary(frame)).await
+                }
+                _ => send(&mut sink, message).await,
+            }
+        }};
+    }
     loop {
         let message = match queued.pop_front() {
             Some(message) => message,
@@ -228,12 +341,12 @@ where
             for _ in 0..1024 {
                 let Ok(next) = incoming.try_recv() else { break };
                 if first(&next) {
-                    send(&mut sink, next).await?;
+                    emit!(next)?;
                 } else {
                     queued.push_back(next);
                 }
             }
-            send(&mut sink, message).await?;
+            emit!(message)?;
             // A ready sink and the private queue need not yield on their own.
             // Let heartbeat producers run before admitting the next frame.
             tokio::task::yield_now().await;
@@ -261,7 +374,7 @@ where
             for _ in 0..1024 {
                 let Ok(next) = incoming.try_recv() else { break };
                 if first(&next) {
-                    send(&mut sink, next).await?;
+                    emit!(next)?;
                 } else {
                     queued.push_back(next);
                 }
@@ -284,7 +397,7 @@ where
                     tokio::select! {
                         () = &mut changed => {}
                         next = incoming.recv(), if open => match next {
-                            Some(next) if first(&next) => send(&mut sink, next).await?,
+                            Some(next) if first(&next) => emit!(next)?,
                             Some(next) => queued.push_back(next),
                             None => open = false,
                         },
@@ -313,13 +426,20 @@ pub(crate) struct Decoder {
     compressed: bool,
     paced: bool,
     received: u64,
+    /// Chunk bytes arrived since the last credit was returned.
+    credit_due: bool,
+    stream: Option<StreamDecoder>,
 }
 
 impl Decoder {
-    /// A decoder for a connection that negotiated pacing.
+    /// A decoder for a connection's negotiated pacing and stream compression.
     pub(crate) fn new(features: impl Into<Features>) -> Self {
+        let features = features.into();
         Self {
-            paced: features.into().paced,
+            paced: features.paced,
+            stream: features
+                .stream
+                .then(|| StreamDecoder(flate2::Decompress::new(false))),
             ..Self::default()
         }
     }
@@ -334,7 +454,11 @@ impl Decoder {
 
     /// The credit to return for the chunks decoded so far, when paced. Send it
     /// as an urgent message after each chunk.
-    pub(crate) fn credit<M: Message>(&self) -> Option<M> {
+    pub(crate) fn credit<M: Message>(&mut self) -> Option<M> {
+        // Streamed small frames are not chunk bytes and earn no credit.
+        if !std::mem::take(&mut self.credit_due) {
+            return None;
+        }
         self.paced
             .then(|| M::pong([CREDIT_PREFIX, self.received.to_string().as_bytes()].concat()))
     }
@@ -349,11 +473,24 @@ impl Decoder {
             features.chunked,
             "Machine chunk transport was not negotiated"
         );
-        ensure!(
-            (9..=CHUNK_BYTES + 8).contains(&bytes.len()),
-            "invalid Machine chunk size"
-        );
+        ensure!(bytes.len() >= 9, "invalid Machine chunk size");
         let header = u32::from_be_bytes(bytes[..4].try_into()?);
+        if header & STREAMED != 0 {
+            let decoder = self
+                .stream
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("Machine stream compression was not negotiated"))?;
+            ensure!(
+                header & COMPRESSED == 0
+                    && (header & !STREAMED) as usize == bytes.len() - 8
+                    && bytes[4..8] == [0; 4],
+                "invalid streamed Machine frame"
+            );
+            let text = decoder.frame(&bytes[8..])?;
+            self.text(&text)?;
+            return Ok(Some(text));
+        }
+        ensure!(bytes.len() <= CHUNK_BYTES + 8, "invalid Machine chunk size");
         let compressed = header & COMPRESSED != 0;
         ensure!(
             !compressed || features.compressed,
@@ -378,6 +515,7 @@ impl Decoder {
         );
         self.bytes.extend_from_slice(&bytes[8..]);
         self.received += (bytes.len() - 8) as u64;
+        self.credit_due = true;
         if self.bytes.len() != total {
             return Ok(None);
         }
