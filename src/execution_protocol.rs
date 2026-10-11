@@ -229,6 +229,14 @@ pub enum Refusal {
     CursorExpired,
 }
 
+/// Operation IDs ending with this ask the keeper to report, in the reply,
+/// the milliseconds between admission and the backend's answer. Callers that
+/// predate it never use the suffix and never see the extra reply member.
+pub const TIMED_SUFFIX: &str = "-t";
+/// Reply member carrying that duration. The worker removes it before the
+/// reply reaches its client.
+pub const EXECUTED_MS: &str = "cowboy_executed_ms";
+
 pub fn valid_operation_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128

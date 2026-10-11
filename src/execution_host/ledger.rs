@@ -43,6 +43,9 @@ struct Entry {
     outcome: watch::Sender<Outcome>,
     bytes: usize,
     request_bytes: usize,
+    /// When the caller asked for timing (see `execution_protocol::TIMED_SUFFIX`), the admission
+    /// time, so the reply can carry how long the backend took.
+    timed: Option<Instant>,
 }
 
 pub(super) enum Admission {
@@ -127,6 +130,10 @@ impl Ledger {
                 outcome,
                 bytes: 0,
                 request_bytes: serialized.len(),
+                timed: invocation
+                    .operation_id
+                    .ends_with(crate::execution_protocol::TIMED_SUFFIX)
+                    .then(Instant::now),
             },
         );
         Ok(Admission::New { id, receiver })
@@ -164,9 +171,17 @@ impl Ledger {
             .map(|entry| entry.outcome.subscribe())
     }
 
-    pub fn finish(&mut self, id: u64, reply: serde_json::Value) -> Result<(), ()> {
+    pub fn finish(&mut self, id: u64, mut reply: serde_json::Value) -> Result<(), ()> {
         let operation_id = self.pending.remove(&id).ok_or(())?;
         let entry = self.operations.get_mut(&operation_id).ok_or(())?;
+        if let (Some(admitted), Some(object)) = (entry.timed, reply.as_object_mut()) {
+            object.insert(
+                crate::execution_protocol::EXECUTED_MS.to_owned(),
+                serde_json::json!(
+                    u64::try_from(admitted.elapsed().as_millis()).unwrap_or(u64::MAX)
+                ),
+            );
+        }
         self.pending_bytes -= entry.request_bytes;
         entry.request_bytes = 0;
         let bytes = serde_json::to_vec(&reply).map_err(|_| ())?.len();
@@ -278,6 +293,30 @@ mod tests {
             operation_id: "write-once".into(),
             method: "fs/writeFile".into(),
             params: json!({"path": "file:///fixture", "dataBase64": "YQ=="}),
+        }
+    }
+
+    #[test]
+    fn only_timed_operations_report_the_backend_duration() {
+        let mut ledger = Ledger::new();
+        let untimed = invocation();
+        let mut timed = invocation();
+        timed.operation_id = format!("{:032x}{}", 7, crate::execution_protocol::TIMED_SUFFIX);
+        for (invocation, expect) in [(untimed, false), (timed, true)] {
+            let Admission::New { id, receiver } = ledger.admit(&invocation).unwrap() else {
+                panic!("admission");
+            };
+            std::thread::sleep(Duration::from_millis(5));
+            ledger.finish(id, json!({"result": {}})).unwrap();
+            let Outcome::Completed { reply } = receiver.borrow().clone() else {
+                panic!("completed");
+            };
+            let executed = reply.get(crate::execution_protocol::EXECUTED_MS);
+            assert_eq!(executed.is_some(), expect, "{reply}");
+            if let Some(executed) = executed {
+                assert!(executed.as_u64().unwrap() >= 5);
+                assert_eq!(reply["result"], json!({}));
+            }
         }
     }
 
