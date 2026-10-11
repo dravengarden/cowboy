@@ -96,14 +96,11 @@ test("dark diagrams are legible inline and enlarged", () => {
 
 test("Mermaid failures return to the ordinary Markdown code renderer", () => {
   assert(mermaidSource.includes("data-mermaid-source-fallback"));
-  const branchStart = markdownSource.indexOf(
-    'if (lang.toLowerCase() === "mermaid")',
+  assert(
+    markdownSource.includes(
+      "<MermaidDiagram source={text} pending={pending} fallback={block} />",
+    ),
   );
-  assert(branchStart >= 0);
-  const mermaidBranch = markdownSource.slice(branchStart, branchStart + 1_200);
-  assert(mermaidBranch.includes("fallback={"));
-  assert(mermaidBranch.includes("<MarkdownCodeBoundary"));
-  assert(mermaidBranch.includes("<CodeBlock"));
 });
 
 test("a failed Mermaid render does not leak its error art onto the page", () => {
@@ -112,4 +109,18 @@ test("a failed Mermaid render does not leak its error art onto the page", () => 
   // up below the app next to the Markdown source fallback.
   assert(mermaidSource.includes("suppressErrorRendering: true"));
   assert(mermaidSource.includes("document.getElementById(`d${id}`)?.remove()"));
+});
+
+test("a streaming Mermaid fence is not laid out until it closes", () => {
+  // Every chunk of a half-written diagram is a different graph. Rendering it
+  // live remounted the figure per chunk: spinner, a new layout, or a parse
+  // failure, in a loop. The open fence streams as code instead, in the same
+  // component that later draws it, so nothing is remounted when it closes.
+  assertEquals(markdownSource.includes("key={`mermaid:"), false);
+  assert(mermaidSource.includes("if (pending) return undefined;"));
+  assert(mermaidSource.includes("[reactId, source, mode, pending]"));
+  // A changed source keeps the drawn figure until the next one is ready, and
+  // the source block stands in for the spinner while the first one is drawn.
+  assertEquals(mermaidSource.includes("setSvg(undefined)"), false);
+  assert(mermaidSource.includes("if (!failed && !fallback)"));
 });
