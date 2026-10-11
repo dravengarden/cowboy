@@ -262,12 +262,12 @@ its primary connection. A lane carries only execution requests and replies of at
 least 64 KiB, which are independent RPCs, so ordered and small frames stay on
 the primary and are never queued behind bulk. The Controller returns a
 per-connection token on the primary upgrade and admits a lane only while that
-authenticated connection is current. The Machine opens a lane when it sends a
-large request or receives a large reply on the primary, one at a time at most
-every 500 ms and up to four, and closes a lane after 60 s without traffic; an
-idle Machine keeps none. The Controller sends replies only on lanes active in
-the last 45 s, so a lane it writes to never reaches the Machine's idle close. If
-a lane fails, replies routed to it may be lost: the Machine resends every
-execution request still awaiting a reply, which the keeper deduplicates by
-operation ID. The session conformance suite writes and reads four 300 KiB files
-through a real Controller and Machine and requires a lane to open.
+authenticated connection is current. The Machine opens a lane whenever it sends
+a large request or receives a large reply, one at a time at most every 500 ms
+and up to four, and closes a lane after 60 s without traffic; an idle Machine
+keeps none. The Controller sends replies only on lanes active in the last 45 s,
+so a lane it writes to never reaches the Machine's idle close. If a lane fails,
+replies routed to it may be lost: the Machine resends every execution request
+still awaiting a reply, which the keeper deduplicates by operation ID. The
+session conformance suite writes and reads four 300 KiB files through a real
+Controller and Machine and requires a lane to open.

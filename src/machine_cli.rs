@@ -1431,9 +1431,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                             credit.observe(&payload);
                         }
                         Some(Ok(Message::Text(text))) => {
-                            if text.len() >= crate::machine_lanes::LANE_MIN_BYTES
-                                && lanes.len() == 0
-                            {
+                            // Large replies grow the lanes too: the Controller
+                            // spreads its bulk replies over every open lane.
+                            if text.len() >= crate::machine_lanes::LANE_MIN_BYTES {
                                 open_lane(&mut opener);
                             }
                             let frame: MachineFrame = serde_json::from_str(&text)
@@ -1531,6 +1531,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                         LaneSignal::Opened => opener.opened(),
                         LaneSignal::OpenFailed => opener.opened(),
                         LaneSignal::Text(text) => {
+                            if text.len() >= crate::machine_lanes::LANE_MIN_BYTES {
+                                open_lane(&mut opener);
+                            }
                             let Ok(MachineFrame::Runtime { frame }) = serde_json::from_str(&text) else {
                                 continue;
                             };
