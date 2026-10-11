@@ -729,6 +729,31 @@ fn resolve_verification_url(base_url: &Url, advertised: &str) -> Result<Url> {
     Ok(verification_url)
 }
 
+/// Origins this computer holds a login for, so a client command needs no
+/// `--origin` when there is exactly one.
+pub(crate) fn logged_in_origins(state_dir: Option<PathBuf>) -> Result<Vec<String>> {
+    let state_dir = state_dir.map_or_else(default_auth_state_dir, Ok)?;
+    let entries = match std::fs::read_dir(&state_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).context("reading Cowboy login directory"),
+    };
+    let mut origins = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+            && let Some(credential) = load_credential(&path)?
+        {
+            origins.push(credential.origin);
+        }
+    }
+    origins.sort();
+    origins.dedup();
+    Ok(origins)
+}
+
 fn default_auth_state_dir() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(path).join("cowboy/client-auth"));
@@ -920,6 +945,41 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logged_in_origins_lists_each_saved_login_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("client-auth");
+        assert!(logged_in_origins(Some(state.clone())).unwrap().is_empty());
+        prepare_private_directory(&state).unwrap();
+        let key = crate::client_auth::new_signing_key().unwrap();
+        for (file, origin) in [
+            ("a.json", "https://one.example/"),
+            ("b.json", "https://one.example/"),
+            ("c.json", "https://two.example/"),
+        ] {
+            save_credential(
+                &state.join(file),
+                &StoredDeviceCredential {
+                    version: CREDENTIAL_VERSION,
+                    origin: origin.to_owned(),
+                    name: "fixture".to_owned(),
+                    device_id: "0".repeat(32),
+                    private_key: crate::client_auth::signing_key_to_base64(&key),
+                    access_token: String::new(),
+                    access_expires_at_ms: 0,
+                    refresh_token: String::new(),
+                    refresh_expires_at_ms: 0,
+                    cardea_profile: None,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            logged_in_origins(Some(state)).unwrap(),
+            ["https://one.example/", "https://two.example/"]
+        );
+    }
     #[tokio::test]
     async fn cardea_broker_refresh_preserves_product_key_and_never_falls_back_to_browser() {
         use axum::{Json, Router, routing::get};

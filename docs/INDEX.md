@@ -206,6 +206,8 @@ primary phone/desktop product path.
   installation through the shared Cardea CLI/SDK and Cowboy-owned authority
 - [`cardea-device-login.md`](cardea-device-login.md) — Native Cardea broker login,
   silent credential renewal, independent device keys, and revocation boundaries
+- [`product-cli.md`](product-cli.md) — One-year device login and the `session`,
+  `api` and `send` commands that reach every Web UI capability from the CLI
 - [`matrix-memory.md`](matrix-memory.md) — Explicit Matrix enrollment, shared recall/capture, and native memory cutover
 - [`releases/matrix-codeact-2026-10-05.md`](releases/matrix-codeact-2026-10-05.md) — TS/JS CodeAct, native and Remote acceptance, signed Claude 3.4.7 on OVH, and feedback limits
 - [`releases/matrix-memory-2026-10-03.md`](releases/matrix-memory-2026-10-03.md) — Matrix 0.1.1 on OVH, signed Codex/Claude installs, cross-Provider learning, and acceptance limits

@@ -40,8 +40,8 @@ an Ed25519 key locally, opens Cowboy's configured login page, and asks the
 signed-in user to approve that public key. The browser may use Cardea,
 password, or any other server-configured login method. The bridge then keeps a
 private rotating credential under `~/.config/cowboy/client-auth/` (mode 0600),
-uses 10-minute sender-constrained access tokens, and rotates its 30-day refresh
-token on every refresh. The Service stores only the public key and refresh-token
+uses 10-minute sender-constrained access tokens, and rotates its refresh token on every refresh; the device stays signed in for
+one year from approval. The Service stores only the public key and refresh-token
 hash. Account → Authorized devices lists and revokes these clients.
 
 On a headless host the ACP bridge may keep its API connection on loopback. The

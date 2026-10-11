@@ -279,7 +279,7 @@ device's cookie or move another device's deadlines.
 `serve-acp` normally uses browser-approved, sender-constrained device
 credentials. First use opens the configured login and explicit fingerprint
 approval; subsequent access uses a 10-minute access token and a rotating
-30-day refresh token stored with its private Ed25519 key in a mode-0600 local
+refresh token with an absolute one-year deadline stored with its private Ed25519 key in a mode-0600 local
 file. A loopback API connection uses the configured `COWBOY_PUBLIC_ORIGIN` for
 the browser approval page; clients accept that cross-origin handoff only when
 the page is HTTPS, while non-loopback API connections remain same-origin. A
