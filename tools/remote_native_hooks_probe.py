@@ -20,7 +20,7 @@ import execution_environment_codex_turn_probe as native
 from execution_environment_probe import require
 
 
-def probe(binary):
+def probe(binary, version="0.159.3"):
     observed = {}
     original_write = Path.write_text
     original_spawn = subprocess.Popen
@@ -92,7 +92,7 @@ def probe(binary):
         observed["events"] = [json.loads(line) for line in log.read_text().splitlines()] if log and log.exists() else []
 
     with patch.object(Path, "write_text", write), patch.object(subprocess, "Popen", spawn), patch.object(native, "stop", stop), patch.object(native, "app", app):
-        checks = native.probe(str(binary), "0.159.3")
+        checks = native.probe(str(binary), version)
     events = observed.get("events", [])
     for log in logs:
         log.close()
@@ -108,6 +108,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-cli", type=Path, required=True)
     parser.add_argument("--sha256", required=True)
+    # The pinned executor by default; a Provider's own native CLI names its version.
+    parser.add_argument("--version", default="0.159.3")
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
     require(args.native_cli.is_absolute(), "absolute native CLI required")
@@ -117,9 +119,10 @@ def main():
     digest = hashlib.sha256(args.native_cli.read_bytes()).hexdigest()
     require(digest == args.sha256, "native CLI digest differs")
     result = {"schema": "cowboy.remote-native-hooks-research/v1", "native_sha256": digest,
+              "native_version": args.version,
               "real_model_requests": 0, "production_credentials": False,
               "scope": "user command hooks; isolated native remote environment; not project discovery"}
-    result.update(probe(args.native_cli))
+    result.update(probe(args.native_cli, args.version))
     with args.receipt.open("x") as output:
         json.dump(result, output, indent=2)
         output.write("\n")

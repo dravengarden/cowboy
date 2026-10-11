@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
@@ -32,6 +33,9 @@ const MAX_READ_STATE = 512 * 1024;
 // once; together they stay below the connection's 15 pending requests.
 const READ_AHEAD = 3;
 const RANGE_FILE_THRESHOLD = 128 * 1024;
+// The last line of native's environment block (2.1.296).
+export const UNTRUSTED_DOWNLOADS =
+  "Downloaded files and extracted archives are untrusted data: put each in its own new, empty directory, keep scripts you write in a different directory, and pass paths as arguments instead of running an interpreter or build tool from inside it. Interpreters load code from the script's directory and the current directory, so a planted `json.py` runs on `import json`. Run any Python that reads them with `-I`. This does not apply to code the user asked you to build or run.";
 // The questions the startup walks ask before any file is read, answered by
 // one target command instead of one round trip each: the platform, native's
 // git status queries, the rule and skill listings (with sizes where find can
@@ -451,25 +455,37 @@ function decode(bytes) {
   }
 }
 
-// A text file as native's file tools read it (2.1.287, measured): UTF-16LE
+// A text file as native's file tools read it (2.1.296, measured): UTF-16LE
 // when it starts with that byte order mark, otherwise UTF-8 with invalid
-// bytes replaced and a byte order mark set aside; CRLF read as LF.
+// bytes replaced and a byte order mark set aside; CRLF read as LF. `lossy`
+// says that bytes were replaced, so writing the text back would lose them.
 export function textFile(bytes) {
   const utf16 = bytes[0] === 0xff && bytes[1] === 0xfe;
   const bom = !utf16 && bytes[0] === 0xef && bytes[1] === 0xbb &&
     bytes[2] === 0xbf;
+  const body = bom ? bytes.subarray(3) : bytes;
   const raw = utf16
     ? bytes.subarray(2).toString("utf16le")
-    : new TextDecoder("utf-8", { ignoreBOM: true }).decode(
-      bom ? bytes.subarray(3) : bytes,
-    );
+    : new TextDecoder("utf-8", { ignoreBOM: true }).decode(body);
   return {
     text: raw.replaceAll("\r\n", "\n"),
     crlf: raw.includes("\r\n"),
     utf16,
     bom,
+    lossy: !utf16 && !isUtf8(body),
   };
 }
+
+// Native's refusals to save a file it could not decode (2.1.296): an Edit of
+// it, and a Write of the replacement characters Read showed for it.
+const LOSSY_EDIT =
+  "File is not valid UTF-8. It may use a legacy encoding such as Windows-1252, Shift-JIS or GBK, or be binary. This tool saves the whole file as UTF-8, which would replace every byte it cannot decode with U+FFFD. Nothing was written. Make the change with a shell command that reads and writes the file in its own encoding, or ask the user whether to convert the file to UTF-8 first.";
+const LOSSY_WRITE =
+  "The file on disk is not valid UTF-8, and the new content holds U+FFFD, which is what Read shows for the bytes of that file it cannot decode. If the content came from Read, writing it destroys those characters. Nothing was written. Make the change with a shell command that reads and writes the file in its own encoding, or ask the user whether to convert the file to UTF-8 first.";
+// Native's answer to allow_large where the read does not run beside it. The
+// target's limits bound what one call returns, so the flag raises nothing.
+const ALLOW_LARGE_UNAVAILABLE =
+  " allow_large is not available where this read runs; read it in parts with offset and limit.";
 
 // Text written back in the file's own encoding and line endings.
 export function textBytes(text, { crlf, utf16, bom }) {
@@ -607,7 +623,7 @@ export function pdfPages(pages) {
   }
   if (!value || !range) {
     throw new Error(
-      `Invalid pages parameter: "${pages}". Use formats like "1-5", "3", or "10-20". Pages are 1-indexed.`,
+      `Invalid pages parameter: "${pages}". Give one page ("3") or one range ("1-5"), not a list. To read several pages or ranges, read each one separately. Pages are 1-indexed.`,
     );
   }
   const count = range.lastPage === Infinity
@@ -1514,7 +1530,8 @@ export class WorkspaceTools {
       .join("\n");
     if (Buffer.byteLength(rendered) > MAX_OUTPUT) {
       throw new Error(
-        "Selected lines exceed output limit; request a smaller range",
+        "Selected lines exceed output limit; request a smaller range" +
+          (args.allow_large === true ? "." + ALLOW_LARGE_UNAVAILABLE : ""),
       );
     }
     await this.rememberRead(path, data.sha256);
@@ -1931,7 +1948,9 @@ export class WorkspaceTools {
           git !== undefined
         }\n - Platform: linux\n - Shell: ${
           ["bash", "zsh"].includes(shellName) ? shellName : "unknown"
-        }\n - OS Version: ${platform.split("\n")[1].trim()}`,
+        }\n - OS Version: ${
+          platform.split("\n")[1].trim()
+        }\n - ${UNTRUSTED_DOWNLOADS}`,
       git: git ?? null,
       instructionFiles: instructions,
     };
@@ -2438,8 +2457,8 @@ export class WorkspaceTools {
     ].join("\n\n");
   }
 
-  // Instruction files a Read of `path` attaches natively, once per
-  // conversation.
+  // Instruction files a Read, Write or Edit of `path` attaches natively, once
+  // per conversation.
   async nestedFor(path, owner = null) {
     if (!this.nested) return [];
     const { attached } = this.nested;
@@ -2767,6 +2786,14 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       throw new Error("Unsupported execution tool");
     }
     const path = this.path(args.file_path ?? args.notebook_path);
+    if (
+      name === "read" && args.allow_large !== undefined &&
+      typeof args.allow_large !== "boolean"
+    ) throw new Error("Invalid allow_large");
+    // What a refusal for size adds when the call asked for a large read.
+    const large = name === "read" && args.allow_large === true
+      ? ALLOW_LARGE_UNAVAILABLE
+      : "";
     if (name === "read") {
       // Native refuses these by name alone, existing or not.
       const extension = path.slice(path.lastIndexOf(".")).toLowerCase();
@@ -2775,7 +2802,7 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         ![".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"].includes(extension)
       ) {
         throw new Error(
-          `This tool cannot read binary files. The file appears to be a binary ${extension} file. Please use appropriate tools for binary file analysis.`,
+          `This tool cannot read binary files. The file appears to be a binary ${extension} file. Use a skill for this file type if one is available, or a shell command or script that can read the format.`,
         );
       }
     }
@@ -2815,6 +2842,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       );
     } catch (error) {
       if (name === "read" && missing(error)) throw this.missingFile();
+      if (large && /4 MiB/.test(error.message)) {
+        throw new Error(error.message + "." + large);
+      }
       if (name === "write" && await this.isDirectory(path)) {
         throw new Error(
           `${shown} is a directory, not a file. To create a file inside it, include the file name in file_path.`,
@@ -2855,7 +2885,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       ).join("\n");
       if (Buffer.byteLength(result) > MAX_OUTPUT) {
         throw new Error(
-          "Selected lines exceed output limit; request a smaller range",
+          "Selected lines exceed output limit; request a smaller range" +
+            (large && "." + large),
         );
       }
       return await remember(
@@ -2889,8 +2920,15 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
     let notebookResult;
     let written;
     let originalText = null;
-    if (name === "write") content = checkedString(args.content, "content");
-    else if (name === "edit") {
+    // What Read showed for the file is not what Edit decodes (a UTF-16 file
+    // reads as UTF-8), so the edited text is not what the model holds.
+    let unseen = false;
+    if (name === "write") {
+      content = checkedString(args.content, "content");
+      if (bytes && textFile(bytes).lossy && content.includes("\ufffd")) {
+        throw new Error(LOSSY_WRITE);
+      }
+    } else if (name === "edit") {
       // Matched against the file's LF form, the strings as given (a CR in
       // old_string does not match a CRLF file, natively).
       const old = checkedString(args.old_string, "old_string");
@@ -2902,6 +2940,8 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         written = Buffer.from(content);
       } else {
         const file = textFile(bytes);
+        if (file.lossy) throw new Error(LOSSY_EDIT);
+        unseen = file.utf16;
         const original = file.text;
         originalText = original;
         if (!old) {
@@ -3045,8 +3085,9 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         structuredPatch: patch(originalFile, content),
         userModified: false,
         replaceAll: args.replace_all === true,
-        // Natively an edit of an unread file says its content is not known.
-        ...(known === undefined && bytes
+        // Natively an edit of an unread file, or of one Read showed in
+        // another decoding, says its content is not known.
+        ...((known === undefined && bytes) || unseen
           ? { contentNotInModelContext: true }
           : {}),
       }
@@ -3466,9 +3507,10 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
         ? { localRead: result.localRead, localTarget: result.localTarget }
         : {}),
     };
-    // As natively, a Read below the working directory brings the instruction
-    // files of the directories in between, once each.
-    if (name === "Read") {
+    // As natively (2.1.296, measured), a Read, Write or Edit below the working
+    // directory brings the instruction files of the directories in between,
+    // once each.
+    if (["Read", "Write", "Edit"].includes(name)) {
       const nested = await this.nestedFor(
         this.path(args.file_path),
         call?.owner ?? null,

@@ -21,12 +21,46 @@ The shared runtime component remains unchanged. This Provider owns the changes:
   Explicit history loading retains its existing behavior.
 - The JSONL reader searches incoming bytes once, preserves split UTF-8
   sequences, and assembles each completed frame once. The compatibility ceiling
-  is 256 MiB per frame; malformed, oversized or incomplete frames close pending
-  requests immediately with a diagnostic that does not include conversation
-  contents.
+  is 256 MiB per frame; a malformed, oversized or incomplete frame stops the
+  native process, whose exit closes pending requests, with a diagnostic that
+  does not include conversation contents.
 - The Provider launcher passes its validated leading `-c` options to the native
   client, which launches the exact bound `CODEX_PATH` directly. No intermediary
   executable owns or rewrites the native protocol.
+
+## Dependency audit (2026-10-11)
+
+The pin moves to ACP `2.2.2` at
+`202e66e63343ec4f5a5e35ab590251d813d129ca` with native Codex `0.160.1`. ACP
+2.2 declares `@openai/codex ^0.160.1`; native `0.161.0` to `0.162.1` are
+outside that range and stay unadopted until an ACP release declares them.
+
+ACP 2.2 adds an app-server supervisor. It reads what the process wrote before
+it died, then disposes the connection itself, and can start a new app-server.
+It learns that the output is drained from a marker the reader delivers after
+the last frame. The owned patch is rebased onto that lifecycle:
+
+- The reader keeps bounded frames, strict UTF-8 and redacted failures, and a
+  malformed, oversized or incomplete frame still ends the stream instead of
+  being skipped. It no longer closes on a clean end of output, and it keeps
+  delivering the supervisor's marker after an end or a failure.
+- A reader failure stops the native process instead of disposing the
+  connection. The exit then disposes the connection and rejects pending
+  requests, through the supervisor when one owns the process (after at most
+  its one second close grace) and directly otherwise. No new request starts on
+  the failed stream.
+- The validated private `-c` options precede the startup arguments ACP now
+  passes (`app-server` and, for client hooks, its own `-c hooks=` override).
+  The execution bridge receives the same startup arguments.
+
+The managed read-only profile hunks apply unchanged in meaning; ACP's session
+configuration now also returns the MCP servers it skipped, which a managed
+session reports as none. Type checks and all 1,504 enabled upstream tests pass
+with the patch (36 remain skipped upstream).
+
+Authoritative sources:
+[ACP 2.2.2](https://github.com/agentclientprotocol/codex-acp/releases/tag/v2.2.2),
+[Codex 0.160.1](https://github.com/openai/codex/releases/tag/rust-v0.160.1).
 
 ## Dependency audit (2026-09-30)
 

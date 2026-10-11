@@ -629,9 +629,12 @@ def file_phases(args, api, client, checks):
     remote = {"results": results, "effects": file_effects(args.target, inodes)}
     # Stated differences, each documented in the audit: files are rewritten in
     # place (native replaces them, so its inode, hard link and read-only
-    # outcomes differ), and a Mods-answered Read keeps the tab of an empty last
-    # line that native trims.
+    # outcomes differ), a Mods-answered Read keeps the tab of an empty last
+    # line that native trims, and native renders a Mods-answered Edit result
+    # without its contentNotInModelContext, so the UTF-16 edit keeps the note
+    # that the file state is current.
     in_place = {"result:edit_readonly", "effect:readonly.txt", "effect:linked-alias.txt"}
+    context_note = " (file state is current in your context — no need to Read it back)"
     for side in (native["effects"], remote["effects"]):
         for effect in side.values():
             if effect:
@@ -649,6 +652,8 @@ def file_phases(args, api, client, checks):
             actual["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", actual["content"], flags=re.S)
             expected = dict(expected)
             expected["content"] = re.sub(r"^<tool_use_error>(.*)</tool_use_error>$", r"\1", expected["content"], flags=re.S)
+        if name == "edit_utf16" and actual.get("content") == expected["content"] + context_note:
+            continue
         if actual != expected:
             differences["result:" + name] = {"native": expected, "remote": results.get(name)}
     for name, expected in native["effects"].items():

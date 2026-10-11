@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   nativeLocalRead,
+  rememberDenial,
   targetCompactionResult,
   targetImageResult,
+  withheldResult,
 } from "./context-mod.js";
 
 test("target image result retains media and target path without the native cache locator", () => {
@@ -113,4 +115,55 @@ test("native's own Read of a local copy names the target file", async () => {
   assert.deepEqual(await nativeLocalRead({}, event, throwing, answer), {
     deny: "bad /target/a.png",
   });
+});
+
+test("a denial of this module after the tool ran keeps the failure text alone", () => {
+  const reasons = new Map();
+  const failure =
+    'Shell command failed for pattern "!`exit 3`": [stderr]\npartial';
+  const row = (id, content, tool = "Skill") => ({
+    door: "tool-result",
+    origin: { kind: "tool", tool },
+    message: {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: id,
+        content,
+        is_error: true,
+      }],
+    },
+  });
+  const noted = (tool, reason, state = "ran") => [{
+    type: "text",
+    text: `${tool} ${state}, and a plugin withheld its result: ${reason}`,
+  }];
+  rememberDenial({ tool_use_id: "a" }, { deny: failure }, reasons);
+  assert.equal(
+    withheldResult(row("a", noted("Skill", failure)), reasons).message
+      .content[0].content,
+    failure,
+  );
+  assert.equal(reasons.size, 0);
+  rememberDenial({ tool_use_id: "b" }, { deny: "gone" }, reasons);
+  assert.equal(
+    withheldResult(row("b", noted("Read", "gone", "started"), "Read"), reasons)
+      .message.content[0].content,
+    "gone",
+  );
+  // Another plugin's denial, or one for another call, is not this module's.
+  const other = row("c", noted("Skill", failure));
+  assert.equal(withheldResult(other, reasons), other);
+  rememberDenial({ tool_use_id: "d" }, { deny: "mine" }, reasons);
+  const foreign = row("d", noted("Skill", "theirs"));
+  assert.equal(withheldResult(foreign, reasons), foreign);
+  // A denial before the tool ran carries no note and is left as it is.
+  rememberDenial({ tool_use_id: "e" }, { deny: "refused" }, reasons);
+  const plain = row("e", [{ type: "text", text: "refused" }]);
+  assert.equal(withheldResult(plain, reasons), plain);
+  assert.equal(reasons.size, 0);
+  // Only denials are remembered, and the answer is returned as given.
+  const answer = { result: {} };
+  assert.equal(rememberDenial({ tool_use_id: "f" }, answer, reasons), answer);
+  assert.equal(reasons.size, 0);
 });

@@ -138,7 +138,7 @@
   },
   "pages_invalid": {
    "is_error": true,
-   "content": "<tool_use_error>Invalid pages parameter: \"abc\". Use formats like \"1-5\", \"3\", or \"10-20\". Pages are 1-indexed.</tool_use_error>",
+   "content": "<tool_use_error>Invalid pages parameter: \"abc\". Give one page (\"3\") or one range (\"1-5\"), not a list. To read several pages or ranges, read each one separately. Pages are 1-indexed.</tool_use_error>",
    "notes": []
   },
   "pages_too_many": {
@@ -163,7 +163,7 @@
   },
   "pdf_bytes_binary_extension": {
    "is_error": true,
-   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .bin file. Please use appropriate tools for binary file analysis.</tool_use_error>",
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .bin file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
    "notes": []
   },
   "pdf_bytes_no_extension": {
@@ -173,12 +173,12 @@
   },
   "binary_extension_text": {
    "is_error": true,
-   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .zip file. Please use appropriate tools for binary file analysis.</tool_use_error>",
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .zip file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
    "notes": []
   },
   "binary_extension_missing": {
    "is_error": true,
-   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .exe file. Please use appropriate tools for binary file analysis.</tool_use_error>",
+   "content": "<tool_use_error>This tool cannot read binary files. The file appears to be a binary .exe file. Use a skill for this file type if one is available, or a shell command or script that can read the format.</tool_use_error>",
    "notes": []
   },
   "missing_text": {

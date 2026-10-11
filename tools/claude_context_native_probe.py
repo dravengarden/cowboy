@@ -3,7 +3,7 @@
 
 Runs the pinned native CLI against a scripted loopback API (no credentials, no
 inference) and records which instruction files native loads at the start and
-which it attaches as Reads enter subdirectories (CLAUDE.md, CLAUDE.local.md,
+which it attaches as Reads, Writes and Edits enter subdirectories (CLAUDE.md, CLAUDE.local.md,
 .claude/CLAUDE.md, rules with and without paths, @imports, AGENTS.md, parent,
 user and outside directories), how its session context frames Git status
 inside and outside a repository, and how it labels context a Mod's tool.call
@@ -40,6 +40,8 @@ FILES = {
     "sub2/CLAUDE.md": "NESTED_SUB2_CLAUDE_MD\n",
     "sub3/CLAUDE.md": "NESTED_SUB3_CLAUDE_MD\n",
     "sub3/e.txt": "edit me\n",
+    "sub4/CLAUDE.md": "NESTED_SUB4_CLAUDE_MD\n",
+    "sub4/e.txt": "edit me\n",
 }
 AGENTS_ONLY = {"AGENTS.md": "ROOT_AGENTS_MD\n", "sub/AGENTS.md": "NESTED_SUB_AGENTS_MD\n", "sub/file.txt": "sub file\n"}
 MARKERS = sorted({line for text in FILES.values() for line in text.split("\n") if line.isupper() and "_" in line} |
@@ -95,11 +97,13 @@ def discovery(claude, root, files):
              ("read sub/file.txt again", tool("Read", {"file_path": str(runtime / "sub/file.txt")})),
              ("write sub2/new.txt", tool("Write", {"file_path": str(runtime / "sub2/new.txt"), "content": "x\n"})),
              ("read sub3/e.txt", tool("Read", {"file_path": str(runtime / "sub3/e.txt")})),
+             ("edit sub4/e.txt", tool("Edit", {"file_path": str(runtime / "sub4/e.txt"),
+                                               "old_string": "edit me", "new_string": "edited"})),
              ("read ../other/f.txt", tool("Read", {"file_path": str(parent / "other/f.txt")}))]
     api = ScriptedApi([step for _, step in steps] + [[{"type": "text", "text": "DONE"}]], native_titles=True)
     client = None
     try:
-        client = launch(claude, root, runtime, api, "Read,Write")
+        client = launch(claude, root, runtime, api, "Read,Write,Edit")
         client.ready()
         client.prompt(text="go", timeout=60)
         first = api.requests[0]

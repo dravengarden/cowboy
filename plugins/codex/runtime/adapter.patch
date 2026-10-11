@@ -1,5 +1,5 @@
 diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
-index ecdf1b8..0f02b7a 100644
+index f8fc938..ece1d3c 100644
 --- a/src/CodexAcpClient.ts
 +++ b/src/CodexAcpClient.ts
 @@ -26,6 +26,7 @@ import type {ServiceTier} from "./app-server/ServiceTier";
@@ -9,8 +9,8 @@ index ecdf1b8..0f02b7a 100644
 +import {MANAGED_SANDBOX_POLICY, managedProfileActive, managedTurn} from "./CowboyManagedProfile";
  import path from "node:path";
  import {logger} from "./Logger";
- import {sanitizeMcpServerName} from "./McpServerName";
-@@ -864,14 +865,22 @@ export class CodexAcpClient {
+ import {isAccountReadAuthFailureError, isAccountReadUnavailableError} from "./CodexThreadErrors";
+@@ -955,14 +956,22 @@ export class CodexAcpClient {
              apiType: activeProvider.apiType,
              baseUrl: activeProvider.baseUrl,
          });
@@ -35,10 +35,10 @@ index ecdf1b8..0f02b7a 100644
 +            ? mergedConfig
 +            : mergeSandboxWorkspaceWriteRoots(mergedConfig, additionalDirectories);
 +        if (managed || mcpServers.length === 0) {
-             return configWithWorkspaceRoots;
+             return {config: configWithWorkspaceRoots, skippedMcpServers: []};
          }
  
-@@ -1059,6 +1068,9 @@ export class CodexAcpClient {
+@@ -1162,6 +1171,9 @@ export class CodexAcpClient {
      ): Promise<TurnCompletedNotification | null> {
          const input = buildPromptItems(request.prompt);
          const effort = modelId.effort as ReasoningEffort | null; //TODO remove unsafe conversion
@@ -48,7 +48,7 @@ index ecdf1b8..0f02b7a 100644
          await this.refreshSkills(cwd, additionalDirectories);
          if (shouldCancel?.()) {
              return null;
-@@ -1066,13 +1078,16 @@ export class CodexAcpClient {
+@@ -1169,13 +1181,16 @@ export class CodexAcpClient {
          return await this.codexClient.runTurn({
              threadId: request.sessionId,
              input: input,
@@ -69,18 +69,18 @@ index ecdf1b8..0f02b7a 100644
      }
  
 diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
-index 3b79ee4..dea4529 100644
+index d3f90a8..fb68c46 100644
 --- a/src/CodexAcpServer.ts
 +++ b/src/CodexAcpServer.ts
-@@ -32,6 +32,7 @@ import type {
- import type {RateLimitsMap} from "./RateLimitsMap";
+@@ -52,6 +52,7 @@ import type {RateLimitsMap} from "./RateLimitsMap";
  import {ModelId} from "./ModelId";
+ import {normalizeSessionTitle} from "./SessionTitle";
  import {AgentMode, MODE_CONFIG_ID} from "./AgentMode";
 +import {refuseManagedReconfiguration} from "./CowboyManagedProfile";
  import {
      COLLABORATION_MODE_CONFIG_ID,
      createCollaborationModeConfigOption,
-@@ -1396,6 +1397,7 @@ export class CodexAcpServer {
+@@ -1850,6 +1851,7 @@ export class CodexAcpServer {
          });
          const sessionState = this.sessions.get(_params.sessionId);
          if (!sessionState) throw new Error(`Session ${_params.sessionId} not found`);
@@ -88,7 +88,7 @@ index 3b79ee4..dea4529 100644
  
          this.applyModeChange(sessionState, _params.modeId);
          return {};
-@@ -1408,6 +1410,9 @@ export class CodexAcpServer {
+@@ -1862,6 +1864,9 @@ export class CodexAcpServer {
          });
          const sessionState = this.sessions.get(params.sessionId);
          if (!sessionState) throw new Error(`Session ${params.sessionId} not found`);
@@ -99,7 +99,7 @@ index 3b79ee4..dea4529 100644
          await this.applySessionConfigOption(sessionState, params);
  
 diff --git a/src/CodexCommands.ts b/src/CodexCommands.ts
-index 43d6122..a5e3b4e 100644
+index afdb53d..f3bcc83 100644
 --- a/src/CodexCommands.ts
 +++ b/src/CodexCommands.ts
 @@ -1,4 +1,5 @@
@@ -107,8 +107,8 @@ index 43d6122..a5e3b4e 100644
 +import {managedProfileActive} from "./CowboyManagedProfile";
  import type {AvailableCommand} from "@agentclientprotocol/sdk";
  import {ACPSessionConnection, type AcpClientConnection} from "./ACPSessionConnection";
- import {AIR_COMMAND_ACTION_KEY, airOnlyMeta} from "./AirExtension";
-@@ -224,6 +225,9 @@ export class CodexCommands {
+ import {AIR_COMMAND_ACTION_KEY, AIR_SKILL_PATH_KEY, airOnlyMeta} from "./AirExtension";
+@@ -234,6 +235,9 @@ export class CodexCommands {
          sessionState: SessionState,
          options: CommandHandleOptions = {},
      ): Promise<CommandHandleResult> {
@@ -119,20 +119,20 @@ index 43d6122..a5e3b4e 100644
          if (command === null) return { handled: false };
          const commandName = command.name;
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
-index 0f79117..15bd31c 100644
+index 94fb23b..6c94c14 100644
 --- a/src/CodexJsonRpcConnection.ts
 +++ b/src/CodexJsonRpcConnection.ts
-@@ -3,6 +3,7 @@ import type {MessageConnection} from "vscode-jsonrpc/node";
- import type {ChildProcessWithoutNullStreams} from "node:child_process";
- import {spawn} from "node:child_process";
+@@ -3,6 +3,7 @@ import type {Message} from "vscode-jsonrpc/node";
+ import type {MessageConnection} from "vscode-jsonrpc/node";
+ import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
  import {createRequire} from "node:module";
 +import {isAbsolute} from "node:path";
+ import crossSpawn from "cross-spawn";
  
  import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
- import {logger} from "./Logger";
-@@ -14,12 +15,30 @@ export interface CodexConnection {
- 
- export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv): CodexConnection {
+@@ -38,13 +39,32 @@ export function startCodexConnection(
+     options: StartCodexConnectionOptions = {},
+ ): CodexConnection {
      const spawnEnv = env ?? process.env;
 +    const configuration: unknown = JSON.parse(spawnEnv['COWBOY_PRIVATE_CODEX_ARGUMENTS'] ?? '[]');
 +    if (!Array.isArray(configuration) || configuration.length % 2 !== 0 ||
@@ -143,7 +143,7 @@ index 0f79117..15bd31c 100644
 +    if (configuration.length && (!codexPath || !isAbsolute(codexPath))) {
 +        throw new Error('Configured Codex requires an exact executable');
 +    }
-+    const nativeArguments = [...configuration, 'app-server'] as string[];
++    const nativeArguments = [...configuration, ...appServerStartupArgs] as string[];
 +    const executionBridge = spawnEnv['COWBOY_PRIVATE_CODEX_BRIDGE'];
 +    if (spawnEnv['COWBOY_EXECUTION_DESCRIPTOR'] &&
 +        (!codexPath || !isAbsolute(codexPath) || !executionBridge || !isAbsolute(executionBridge) ||
@@ -154,29 +154,31 @@ index 0f79117..15bd31c 100644
      let codex: ChildProcessWithoutNullStreams;
 -    if (codexPath) {
 +    if (executionBridge) {
-+        codex = spawn(process.execPath, [executionBridge!, '--cowboy-private-cli', 'app-server'], {env: spawnEnv});
++        // The bridge prepends the validated private configuration itself.
++        codex = spawn(process.execPath, [executionBridge, '--cowboy-private-cli', ...appServerStartupArgs], {env: spawnEnv});
 +    } else if (codexPath) {
-         codex = process.platform === 'win32'
-             ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv })
--            : spawn(codexPath, ['app-server'], { env: spawnEnv });
-+            : spawn(codexPath, nativeArguments, { env: spawnEnv });
+         // cross-spawn runs `.cmd` shims through cmd.exe with correct escaping for the TOML hook override.
+         codex = process.platform === "win32"
+             ? crossSpawn(codexPath, appServerStartupArgs, {env: spawnEnv}) as ChildProcessWithoutNullStreams
+-            : spawn(codexPath, appServerStartupArgs, {env: spawnEnv});
++            : spawn(codexPath, nativeArguments, {env: spawnEnv});
      } else {
-         const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
-         codex = spawn(process.execPath, [bundledCodexPath, 'app-server'], {env: spawnEnv});
-@@ -32,6 +51,13 @@ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv
+         const bundledCodexPath = require.resolve("@openai/codex/bin/codex.js");
+         codex = spawn(process.execPath, [bundledCodexPath, ...appServerStartupArgs], {env: spawnEnv});
+@@ -60,6 +80,13 @@ export function startCodexConnection(
  
      let connection = rpc.createMessageConnection(reader, writer);
  
-+    // Closing the stream must reject pending requests, including resume. The
-+    // JSON-RPC library's close notification alone does not dispose requests.
-+    connection.onClose(() => {
-+        connection.dispose();
++    // A malformed, oversized or incomplete frame can be a lost response, and
++    // its request, including resume, would then wait forever. Stop the native
++    // process: its exit disposes the connection and rejects pending requests.
++    reader.onError(() => {
 +        if (codex.exitCode === null && codex.signalCode === null) codex.kill();
 +    });
 +
      connection.listen();
  
-     // Terminate all current activities on process termination
+     // vscode-jsonrpc handles the messages that it read one by one, after the read. The marker comes after the last
 diff --git a/src/CowboyManagedProfile.ts b/src/CowboyManagedProfile.ts
 new file mode 100644
 index 0000000..6703242
@@ -240,12 +242,12 @@ index 0000000..6703242
 +    }
 +}
 diff --git a/src/StdUtils.ts b/src/StdUtils.ts
-index 96e8d70..bf9b040 100644
+index 9ab75ee..ae0af64 100644
 --- a/src/StdUtils.ts
 +++ b/src/StdUtils.ts
 @@ -1,9 +1,7 @@
 -import {StringDecoder} from "node:string_decoder";
- import {Readable, Writable} from "node:stream";
+ import {finished, Readable, Writable} from "node:stream";
  import {Emitter} from "vscode-jsonrpc/node";
  import type {DataCallback, Disposable, Message, MessageReader, MessageWriter, PartialMessageInfo} from "vscode-jsonrpc/node";
  import * as acp from "@agentclientprotocol/sdk";
@@ -253,17 +255,21 @@ index 96e8d70..bf9b040 100644
  
  //TODO ask to include proper jsonrpc field and remove
  export function createJSONRPCWriter(writable: Writable): MessageWriter {
-@@ -30,43 +28,112 @@ export function createJSONRPCWriter(writable: Writable): MessageWriter {
+@@ -30,49 +28,124 @@ export function createJSONRPCWriter(writable: Writable): MessageWriter {
      };
  }
  
 -//TODO ask to include proper jsonrpc field and remove
--export function createJSONRPCReader(readable: Readable): MessageReader {
+-export function createJSONRPCReader(readable: Readable): MessageReader & {deliver?: (message: Message) => void} {
+-    let listener: DataCallback | null = null;
 +// Legacy history loads can still contain a large inline-image frame. Resume
 +// excludes turns; this compatibility ceiling bounds a broken or hostile peer.
 +export const MAX_APP_SERVER_FRAME_BYTES = 256 * 1024 * 1024;
 +
-+export function createJSONRPCReader(readable: Readable, maxFrameBytes = MAX_APP_SERVER_FRAME_BYTES): MessageReader {
++export function createJSONRPCReader(
++    readable: Readable,
++    maxFrameBytes = MAX_APP_SERVER_FRAME_BYTES,
++): MessageReader & {deliver?: (message: Message) => void} {
 +    const errors = new Emitter<Error>();
 +    const closes = new Emitter<void>();
 +    const partials = new Emitter<PartialMessageInfo>();
@@ -271,27 +277,26 @@ index 96e8d70..bf9b040 100644
 +    let fragments: Buffer[] = [];
 +    let frameBytes = 0;
 +    let callback: DataCallback | undefined;
-+    let closed = false;
++    let reading = false;
++    let failed = false;
 +
 +    function detach() {
++        reading = false;
 +        readable.off('data', onData);
 +        readable.off('error', onError);
 +        readable.off('end', onEnd);
-+        readable.off('close', onClose);
 +        fragments = [];
 +        frameBytes = 0;
-+        callback = undefined;
 +    }
-+    function onClose() {
-+        if (closed) return;
-+        closed = true;
-+        detach();
-+        closes.fire();
-+    }
++    // A malformed frame can be a lost response, so it ends the stream instead
++    // of being skipped. The owner stops the process on this error; the frames
++    // read so far stay delivered and `deliver` keeps working for its marker.
 +    function fail(message: string) {
-+        if (closed) return;
++        if (failed || !reading) return;
++        failed = true;
++        detach();
 +        errors.fire(new Error(message));
-+        onClose();
++        closes.fire();
 +        readable.destroy();
 +    }
 +    function onError() {
@@ -299,7 +304,7 @@ index 96e8d70..bf9b040 100644
 +    }
 +    function onEnd() {
 +        if (frameBytes && !dispatchFrame('App Server closed with an incomplete JSON frame')) return;
-+        onClose();
++        detach();
 +    }
 +    function dispatchFrame(errorMessage = 'App Server returned an invalid UTF-8 or JSON frame'): boolean {
 +        const bytes = Buffer.concat(fragments, frameBytes);
@@ -327,7 +332,7 @@ index 96e8d70..bf9b040 100644
 +        // Search only the incoming bytes. Assemble and decode each complete
 +        // frame once, preserving UTF-8 sequences split between chunks.
 +        let offset = 0;
-+        while (offset < chunk.length && !closed) {
++        while (offset < chunk.length && reading) {
 +            const newline = chunk.indexOf(10, offset);
 +            const end = newline < 0 ? chunk.length : newline;
 +            const size = end - offset;
@@ -345,7 +350,13 @@ index 96e8d70..bf9b040 100644
 +        }
 +    }
      return {
+         /** Hands `message` to the connection after the messages read so far. */
+         deliver(message: Message) {
+-            listener?.(message);
++            callback?.(message);
+         },
 -        listen(callback: DataCallback): Disposable {
+-            listener = callback;
 -            const onLine = (text: string) => {
 -                const line = text.trim();
 -                if (!line) return;
@@ -366,19 +377,22 @@ index 96e8d70..bf9b040 100644
 -            const onData = (chunk: Buffer) => lines.push(chunk);
 -            const onEnd = () => lines.end();
 +        listen(listener: DataCallback): Disposable {
-+            if (closed || callback) throw new Error('App Server reader is not available');
++            if (failed || callback) throw new Error('App Server reader is not available');
 +            callback = listener;
++            reading = true;
              readable.on('data', onData);
 +            readable.on('error', onError);
              readable.on('end', onEnd);
--            return {
--                dispose() {
+             return {
+                 dispose() {
 -                    readable.off('data', onData);
 -                    readable.off('end', onEnd);
 -                }
 -            }
-+            readable.on('close', onClose);
-+            return {dispose: detach};
++                    detach();
++                    callback = undefined;
++                },
++            };
          },
 -        onError: new Emitter<Error>().event,
 -        onClose: new Emitter<void>().event,
@@ -389,8 +403,9 @@ index 96e8d70..bf9b040 100644
 +        onClose: closes.event,
 +        onPartialMessage: partials.event,
 +        dispose() {
-+            closed = true;
 +            detach();
++            callback = undefined;
++            failed = true;
 +            errors.dispose();
 +            closes.dispose();
 +            partials.dispose();
@@ -398,12 +413,11 @@ index 96e8d70..bf9b040 100644
 +    };
  }
  
- export function createJsonStream(readable: Readable, writable: Writable){
-@@ -74,41 +141,3 @@ export function createJsonStream(readable: Readable, writable: Writable){
-     const output = Readable.toWeb(readable) as ReadableStream<Uint8Array>;
-     return acp.ndJsonStream(input, output);
+ export function createJsonStream(readable: Readable, writable: Writable): acp.Stream {
+@@ -119,44 +192,6 @@ export function createLineWriter(writable: Writable): (line: string | Uint8Array
+     };
  }
--
+ 
 -/**
 - * Splits a byte stream into lines at `\n` only.
 - *
@@ -441,12 +455,16 @@ index 96e8d70..bf9b040 100644
 -        }
 -    }
 -}
+-
+ /**
+  * The value of `promise`, or `"pending"` when it does not settle within `ms`.
+  * A rejection before the timeout rejects. A later rejection is ignored.
 diff --git a/src/__tests__/CodexJsonRpcConnection.test.ts b/src/__tests__/CodexJsonRpcConnection.test.ts
 new file mode 100644
-index 0000000..3fdff74
+index 0000000..c9b5588
 --- /dev/null
 +++ b/src/__tests__/CodexJsonRpcConnection.test.ts
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,94 @@
 +import {EventEmitter} from 'node:events';
 +import {PassThrough} from 'node:stream';
 +import {afterEach, expect, it, vi} from 'vitest';
@@ -457,12 +475,22 @@ index 0000000..3fdff74
 +vi.mock('node:child_process', () => ({spawn: vi.fn()}));
 +afterEach(() => vi.clearAllMocks());
 +
-+it('rejects a pending restore and terminates its native process on malformed output', async () => {
++function nativeProcess() {
 +    const child = Object.assign(new EventEmitter(), {
 +        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
-+        exitCode: null, signalCode: null, kill: vi.fn(),
++        exitCode: null as number | null, signalCode: null as string | null,
++        kill: vi.fn(() => {
++            child.signalCode = 'SIGTERM';
++            child.emit('exit', null, 'SIGTERM');
++            return true;
++        }),
 +    });
 +    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
++    return child;
++}
++
++it('rejects a pending restore and terminates its native process on malformed output', async () => {
++    const child = nativeProcess();
 +    const {connection} = startCodexConnection('/exact/codex', {
 +        COWBOY_PRIVATE_CODEX_ARGUMENTS: '["-c","approval_policy=never"]',
 +    });
@@ -476,12 +504,45 @@ index 0000000..3fdff74
 +    child.stderr.destroy();
 +});
 +
++it('stops the native process and still reports drained output to a supervising owner', async () => {
++    for (const output of ['{"method":"kept"}\n{', '{bad\n']) {
++        const child = nativeProcess();
++        const {connection, drained} = startCodexConnection('/exact/codex', {}, ['app-server'], {disposeOnExit: false});
++        const kept: unknown[] = [];
++        connection.onNotification('kept', () => { kept.push(true); });
++        const pending = connection.sendRequest('thread/resume', {threadId: 'kept-thread', excludeTurns: true});
++        pending.catch(() => {});
++        child.stdout.end(output);
++        if (output.endsWith('{')) {
++            // The marker follows the frames read before the incomplete one.
++            await drained;
++            expect(kept).toEqual([true]);
++        } else {
++            await new Promise(resolve => setImmediate(resolve));
++        }
++        expect(child.kill).toHaveBeenCalledOnce();
++        // No new request starts on a stream that lost a frame; the owner disposes after the exit.
++        expect(() => connection.sendRequest('thread/list', {})).toThrow('closed');
++        connection.dispose();
++        await expect(pending).rejects.toThrow('disposed');
++        child.stdin.destroy();
++        child.stderr.destroy();
++    }
++});
++
++it('keeps the upstream startup arguments behind the private configuration', () => {
++    const child = nativeProcess();
++    const startup = ['app-server', '-c', 'hooks={ }'];
++    const {connection} = startCodexConnection('/exact/codex', {
++        COWBOY_PRIVATE_CODEX_ARGUMENTS: '["-c","approval_policy=never"]',
++    }, startup);
++    expect(spawn).toHaveBeenCalledWith('/exact/codex', ['-c', 'approval_policy=never', ...startup], expect.anything());
++    connection.dispose();
++    for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
++});
++
 +it('uses the owned execution bridge without replacing the native CLI binding', () => {
-+    const child = Object.assign(new EventEmitter(), {
-+        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
-+        exitCode: null, signalCode: null, kill: vi.fn(),
-+    });
-+    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
++    const child = nativeProcess();
 +    const environment = {
 +        COWBOY_PRIVATE_CODEX_ARGUMENTS: '[]',
 +        COWBOY_EXECUTION_DESCRIPTOR: '/private/descriptor',
@@ -543,14 +604,14 @@ index 0000000..797fbf2
 +});
 diff --git a/src/__tests__/CowboyStdUtils.test.ts b/src/__tests__/CowboyStdUtils.test.ts
 new file mode 100644
-index 0000000..8c6b285
+index 0000000..b4065d6
 --- /dev/null
 +++ b/src/__tests__/CowboyStdUtils.test.ts
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,119 @@
 +import {PassThrough} from 'node:stream';
 +import {describe, expect, it} from 'vitest';
 +import {createJSONRPCReader} from '../StdUtils';
-+import type {ResponseMessage} from 'vscode-jsonrpc/node';
++import type {Message, ResponseMessage} from 'vscode-jsonrpc/node';
 +
 +describe('App Server JSON frames', () => {
 +    it('preserves Unicode and multiple frames across every byte boundary', () => {
@@ -603,21 +664,40 @@ index 0000000..8c6b285
 +        reader.dispose();
 +    });
 +
-+    it('reports EOF during a frame and resolves clean EOF once', async () => {
++    it('reports EOF during a frame and leaves a clean EOF to the process owner', async () => {
 +        for (const incomplete of [false, true]) {
 +            const stream = new PassThrough();
 +            const reader = createJSONRPCReader(stream);
 +            const errors: string[] = [];
++            const received: unknown[] = [];
 +            let closes = 0;
 +            reader.onError(error => errors.push(error.message));
-+            const closed = new Promise<void>(resolve => reader.onClose(() => { closes++; resolve(); }));
-+            reader.listen(() => {});
++            reader.onClose(() => closes++);
++            reader.listen(message => received.push(message));
++            const ended = new Promise<void>(resolve => stream.once('end', () => setImmediate(resolve)));
 +            stream.end(incomplete ? '{' : '{}\n');
-+            await closed;
-+            expect(closes).toBe(1);
++            await ended;
++            expect(closes).toBe(incomplete ? 1 : 0);
 +            expect(errors).toEqual(incomplete ? ['App Server closed with an incomplete JSON frame'] : []);
++            // The owner's end-of-output marker follows the frames read so far in both cases.
++            reader.deliver?.({jsonrpc: '2.0', method: 'marker'} as Message);
++            expect(received).toEqual([...(incomplete ? [] : [{jsonrpc: '2.0'}]), {jsonrpc: '2.0', method: 'marker'}]);
 +            reader.dispose();
++            reader.deliver?.({jsonrpc: '2.0', method: 'late'} as Message);
++            expect(received).toHaveLength(incomplete ? 1 : 2);
 +        }
++    });
++
++    it('delivers no frame after a failure', () => {
++        const stream = new PassThrough();
++        const reader = createJSONRPCReader(stream);
++        const received: unknown[] = [];
++        reader.onError(() => {});
++        reader.listen(message => received.push(message));
++        stream.write('{"id":1,"result":{}}\n{bad\n{"id":2,"result":{}}\n');
++        expect(received).toEqual([{jsonrpc: '2.0', id: 1, result: {}}]);
++        expect(() => reader.listen(() => {})).toThrow('not available');
++        reader.dispose();
 +    });
 +
 +    it('releases retained fragments and listeners when disposed', () => {
@@ -629,7 +709,7 @@ index 0000000..8c6b285
 +        reader.dispose();
 +        stream.write(Buffer.from('}\n'));
 +        expect(received).toBe(0);
-+        for (const event of ['data', 'error', 'end', 'close']) expect(stream.listenerCount(event)).toBe(0);
++        for (const event of ['data', 'error', 'end']) expect(stream.listenerCount(event)).toBe(0);
 +        stream.destroy();
 +    });
 +
@@ -648,7 +728,7 @@ index 0000000..8c6b285
 +    });
 +});
 diff --git a/src/__tests__/StdUtils.test.ts b/src/__tests__/StdUtils.test.ts
-index bfe0ee4..2de8984 100644
+index 6c566e8..e72a5a1 100644
 --- a/src/__tests__/StdUtils.test.ts
 +++ b/src/__tests__/StdUtils.test.ts
 @@ -39,8 +39,8 @@ describe("createJSONRPCReader", () => {
