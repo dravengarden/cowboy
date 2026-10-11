@@ -107,11 +107,15 @@ the target's exec-server. It now accepts `provider_cli` and `provider_sha256`
 and records the Provider CLI's digest, so the acceptance covers the pair this
 release produces. The Codex hooks probe takes `--version` for the same reason.
 
-`just check-compact` passes on the source merged with `32b4200f`: formatting,
-lint, dependency policy, the Provider and composition gates, 2,074 core Rust
-tests, 682 Machine tests, 52 code-adapter tests, 126 private Zed adapter
-tests, 2,181 frontend tests, the disposable PostgreSQL checks and the release
-builds.
+`just check-compact` passed in one run on the source merged with `13e42bb4`.
+On the source merged with `32b4200f` every step passed, in two runs: formatting,
+lint, dependency policy, the Provider and composition gates in the first, and
+from `test` on in the second, after one timing test failed under host load (see
+the last section). That is 2,074 core Rust tests, 682 Machine tests, 52
+code-adapter tests, 126 private Zed adapter tests, 2,181 frontend tests, the
+disposable PostgreSQL checks and the release builds. The three Web-only commits
+merged after it passed the component graph check and the Web type check, lint
+and tests.
 
 ## Published releases
 
@@ -183,7 +187,8 @@ usage through the 3.19.20 collector. Local and public `/healthz` return 200.
   `machine_plugins::telemetry::tests::deadline_stops_retry_for_every_otlp_signal_without_cancelling_the_first_attempt`,
   timed out twice inside the complete gate while the host load average was 15
   to 19, and passed alone five times and in the rerun at lower load. Its
-  two-second wait is not load tolerant.
+  two-second wait was not load tolerant; `aef3d926` on `main` has since
+  bounded that wait instead.
 
 Evidence is retained in `/home/draven/tmp/cowboy-upgrades-20261010` on Hawk:
 probe receipts, conformance inputs and receipts per candidate, the release
