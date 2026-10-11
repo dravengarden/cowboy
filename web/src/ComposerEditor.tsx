@@ -51,6 +51,7 @@ import {
   refreshInlineImages,
   removeImageTokenById,
 } from "./inlineImages";
+import { vimImageMode, vimImageModeSync } from "./inlineImageSourceReveal";
 import { clipboardFiles, type Attachment } from "./attachments";
 import { dataTransferCarriesFiles } from "./composer/composerFileDrop";
 import {
@@ -917,6 +918,11 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style images: token stays on a real `.cm-line`; thumbnail
       // hangs below it. See inlineImages.ts.
       inlineImageField,
+      vimImageMode,
+      // An image token under the Vim cursor shows its source text.
+      ...(vimExt
+        ? [vimImageModeSync((view) => vimApiRef.current?.getCM(view) ?? null)]
+        : []),
       inlineImageTheme,
       inlineImageTrailingLine,
       ...(touchInput
