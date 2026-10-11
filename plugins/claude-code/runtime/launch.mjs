@@ -56,6 +56,16 @@ const privateCli = "COWBOY_PRIVATE_CLAUDE_EXECUTABLE";
 // `[session/create]` phases: where a slow start spent its time. The SDK
 // discards this process's stderr, so the adapter relays them (startupTrace).
 export const STARTUP_TRACE = "COWBOY_CLAUDE_STARTUP_TRACE";
+
+// Without eager input streaming the API buffers a tool's whole input, so a
+// Write showed "Preparing file…" until the model had produced the entire file
+// and its path arrived together with the content. Claude Code enables it for
+// first-party requests only behind a server flag; an explicit setting wins.
+export const TOOL_STREAMING = "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING";
+
+export function toolStreamingEnvironment(environment) {
+  return { [TOOL_STREAMING]: environment[TOOL_STREAMING] ?? "1" };
+}
 const launched = performance.now();
 let trace;
 export function startupPhase(name) {
@@ -1251,6 +1261,7 @@ async function native(args) {
       COWBOY_CLAUDE_CONTEXT: contextPath,
       ...(hookPrefix ? { CLAUDE_CODE_SHELL_PREFIX: hookPrefix } : {}),
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+      ...toolStreamingEnvironment(process.env),
       // Native tool bodies never run for project operations. Keep local
       // checkpoints disabled; context-mod.js drops the attachments that
       // describe this machine's files and projects target context instead.

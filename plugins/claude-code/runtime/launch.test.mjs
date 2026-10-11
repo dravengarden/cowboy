@@ -13,6 +13,8 @@ import {
   startupPhase,
   startupTrace,
   sweepStaleRuntimeDirectories,
+  TOOL_STREAMING,
+  toolStreamingEnvironment,
 } from "./launch.mjs";
 import { NATIVE_TOOLS } from "./tools.mjs";
 
@@ -212,4 +214,11 @@ test("stale runtime socket directories are removed and live ones kept", async (t
   assert.equal(await exists(live), true);
   assert.equal(await exists(recent), true);
   assert.equal(await exists(other), true);
+});
+
+test("tool inputs stream eagerly unless the user chose otherwise", () => {
+  assert.deepEqual(toolStreamingEnvironment({}), { [TOOL_STREAMING]: "1" });
+  assert.deepEqual(toolStreamingEnvironment({ [TOOL_STREAMING]: "0" }), {
+    [TOOL_STREAMING]: "0",
+  });
 });
