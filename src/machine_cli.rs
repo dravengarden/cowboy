@@ -1138,6 +1138,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         crate::machine_transport::PACING_HEADER,
         crate::machine_transport::CREDIT.parse()?,
     );
+    request.headers_mut().insert(
+        crate::machine_transport::STREAM_HEADER,
+        crate::machine_transport::STREAM.parse()?,
+    );
     let (mut socket, response) = tokio_tungstenite::connect_async(request)
         .await
         .context("connecting Machine WebSocket")?;
@@ -1155,6 +1159,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             .headers()
             .get(crate::machine_transport::PACING_HEADER)
             .is_some_and(|value| value == crate::machine_transport::CREDIT);
+    let stream = chunked
+        && response
+            .headers()
+            .get(crate::machine_transport::STREAM_HEADER)
+            .is_some_and(|value| value == crate::machine_transport::STREAM);
     let challenge = receive_frame(&mut socket).await?;
     let MachineFrame::Challenge {
         challenge_id,
@@ -1286,14 +1295,14 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let mut controller_writer = tokio::spawn(write_controller_messages(
         socket_sink,
         controller_write_rx,
-        (chunked, compressed, paced),
+        (chunked, compressed, paced, stream),
         Some(Arc::clone(&credit)),
     ));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
     let state_dir = config.state_dir.clone();
     let mut resources_due = tokio::time::Instant::now();
-    let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced));
+    let mut decoder = crate::machine_transport::Decoder::new((chunked, compressed, paced, stream));
     // The Controller may stop hearing this Machine while its frames still
     // arrive here; record how the socket ended and how long it was silent.
     let connected_at = tokio::time::Instant::now();
