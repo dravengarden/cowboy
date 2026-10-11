@@ -731,6 +731,15 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
         color: "text.primary",
         typography: "body2",
         overflow: "hidden",
+        ...(desktop && {
+          transition: "background-color 120ms ease, border-color 120ms ease",
+          // Match PlanDock: workspace focus recolors this surface's own 1px
+          // rounded boundary. A second 3px outer ring read as a doubled edge.
+          "&:focus-within": {
+            borderColor: "primary.main",
+            boxShadow: "none",
+          },
+        }),
       }}
     >
       <ButtonBase

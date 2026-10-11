@@ -4277,7 +4277,7 @@ export function App({
                         outline: "none",
                         transition: "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
                     },
-                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.plan']):not([data-desktop-region='prompt.queued']):not([data-desktop-region='prompt.draft']):not([data-desktop-region='prompt.composer']):not([data-desktop-region='topbar.controls']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
+                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.calls']):not([data-desktop-region='prompt.plan']):not([data-desktop-region='prompt.queued']):not([data-desktop-region='prompt.draft']):not([data-desktop-region='prompt.composer']):not([data-desktop-region='topbar.controls']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
                         bgcolor: desktopFocusFill,
                         boxShadow: (t) =>
                             `inset 0 0 0 1px ${desktopFocusBoundary(t)}`,
@@ -4289,11 +4289,11 @@ export function App({
                         bgcolor: desktopFocusFill,
                         boxShadow: "none",
                     },
-                    // Plan's region wrapper has no visual geometry of its own.
-                    // Recolor the real rounded PlanDock surface, exactly like
-                    // Queue/Draft, instead of drawing a square ring around its
-                    // margin box.
-                    "& [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {
+                    // The Calls and Plan region wrappers have no visual
+                    // geometry of their own. Recolor the real rounded dock
+                    // surface, exactly like Queue/Draft, instead of drawing a
+                    // square ring around its margin box.
+                    "& [data-desktop-region='prompt.calls'][data-desktop-focused='true'] > [data-desktop-calls-surface], & [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {
                         borderColor: desktopFocusBoundary,
                         bgcolor: desktopFocusFill,
                     },
