@@ -18,6 +18,8 @@ import {
   ExpandMore,
   InfoOutlined,
   OpenInNew,
+  VerticalAlignBottom,
+  VerticalAlignTop,
   StopCircleOutlined,
 } from "@mui/icons-material";
 import {
@@ -28,6 +30,7 @@ import {
   useState,
 } from "react";
 import { CallTranscript } from "./CallTranscript";
+import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
 import { Markdown } from "./Markdown";
@@ -915,13 +918,27 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             ? "Details"
             : displayTitle(routed)}
           onBack={routed ? back : undefined}
-          islandAction={routed && level === "transcript"
-            ? {
-              label: "Details",
-              icon: <InfoOutlined fontSize="small" />,
-              onActivate: (): void =>
-                setRoute({ call: routed.call_id, level: "details" }),
-            }
+          islandActions={routed && level === "transcript"
+            ? [
+              {
+                label: "Scroll to start",
+                icon: <VerticalAlignTop fontSize="small" />,
+                onActivate: (): void =>
+                  requestScrollToTop(routed.child_session_id),
+              },
+              {
+                label: "Details",
+                icon: <InfoOutlined fontSize="small" />,
+                onActivate: (): void =>
+                  setRoute({ call: routed.call_id, level: "details" }),
+              },
+              {
+                label: "Scroll to latest",
+                icon: <VerticalAlignBottom fontSize="small" />,
+                onActivate: (): void =>
+                  requestStickToBottom(routed.child_session_id),
+              },
+            ]
             : undefined}
           fill={level === "transcript"}
           forceSheet

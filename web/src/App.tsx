@@ -672,6 +672,8 @@ function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElement | n
 }
 
 type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename";
+/** Input that hands the Sessions list back to the user while it settles. */
+const SETTLE_RELEASE_EVENTS = ["wheel", "pointerdown", "touchstart", "keydown"] as const;
 const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
     l: "open",
     h: "left",
@@ -1279,34 +1281,60 @@ function SessionList({
             setNamePrompt(prompt);
         });
     };
-    const positionedMobileOpenRef = useRef(false);
+    // Each time the list comes into view — the Mobile drawer opening, or the
+    // in-flow rail mounting after a reload — bring the current session into
+    // the reading band once. Later picks never move the list under the pointer.
+    const listShown = !mobileDrawer || mobileDrawerOpen;
+    const positionedShownRef = useRef(false);
     useLayoutEffect(() => {
-        if (!mobileDrawer || !mobileDrawerOpen) {
-            positionedMobileOpenRef.current = false;
+        if (!listShown) {
+            positionedShownRef.current = false;
             return undefined;
         }
-        if (positionedMobileOpenRef.current || !loaded) return undefined;
-        positionedMobileOpenRef.current = true;
-        let frame = requestAnimationFrame(() => {
-            frame = requestAnimationFrame(() => {
-                const list = listRef.current;
-                const current = activeId
-                    ? list?.querySelector<HTMLElement>(
-                        `[data-desktop-item="${CSS.escape(activeId)}"]`,
-                    )
-                    : null;
-                if (!list || !current) return;
-                list.scrollTop = sessionDrawerTargetScroll({
-                    currentScroll: list.scrollTop,
-                    viewportHeight: list.clientHeight,
-                    contentHeight: list.scrollHeight,
-                    itemTop: current.offsetTop,
-                    itemHeight: current.offsetHeight,
-                });
+        if (positionedShownRef.current || !loaded) return undefined;
+        positionedShownRef.current = true;
+        const place = (): void => {
+            const list = listRef.current;
+            const current = activeId
+                ? list?.querySelector<HTMLElement>(
+                    `[data-desktop-item="${CSS.escape(activeId)}"]`,
+                )
+                : null;
+            if (!list || !current) return;
+            list.scrollTop = sessionDrawerTargetScroll({
+                currentScroll: list.scrollTop,
+                viewportHeight: list.clientHeight,
+                contentHeight: list.scrollHeight,
+                itemTop: current.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop,
+                itemHeight: current.offsetHeight,
             });
+        };
+        let frame = requestAnimationFrame(() => {
+            frame = requestAnimationFrame(place);
         });
-        return () => cancelAnimationFrame(frame);
-    }, [activeId, loaded, mobileDrawer, mobileDrawerOpen]);
+        // A reload keeps filling the rail after the first paint (late rows,
+        // drafts, badges), which pushes the placed row back out of view.
+        // Follow those changes briefly, and stop as soon as the user takes
+        // the list. The drawer opens onto a settled list and needs none.
+        const list = listRef.current;
+        if (mobileDrawer || !list) return () => cancelAnimationFrame(frame);
+        const settle = new MutationObserver(() => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(place);
+        });
+        const release = (): void => {
+            settle.disconnect();
+            clearTimeout(timer);
+            for (const type of SETTLE_RELEASE_EVENTS) list.removeEventListener(type, release);
+        };
+        const timer = setTimeout(release, 3000);
+        settle.observe(list, { childList: true, subtree: true });
+        for (const type of SETTLE_RELEASE_EVENTS) list.addEventListener(type, release, { passive: true });
+        return () => {
+            cancelAnimationFrame(frame);
+            release();
+        };
+    }, [activeId, loaded, listShown, mobileDrawer]);
     useEffect(() => {
         const list = listRef.current;
         const region = list?.closest<HTMLElement>("[data-desktop-region='sessions.list']");
@@ -1462,19 +1490,21 @@ function SessionList({
     };
     // Rows are flush with the rail: the grip and kebab glyphs already carry
     // their own inset inside their hit boxes, so an outer gutter and a
-    // rounded capsule only cost title width. Tree rows indent by PADDING, so
-    // a nested row's selection, hover and drop material is as flush with the
-    // rail as a top-level row's; the ancestors' guides paint over it. One
-    // step clears the parent chevron's centre (its guide) by 4px: base
-    // padding + half the chevron box + 4px.
+    // rounded capsule only cost title width. Tree rows indent by MARGIN, not
+    // padding, so a nested row's own selection, hover and drop material
+    // always stays inside its folder: it starts on the pixel after the
+    // parent's guide and never paints across it. One step is therefore the
+    // guide's offset (base padding + half the chevron box) plus its 1px.
     const ROW_BASE_PL = mobileDrawer ? "0px" : "max(env(safe-area-inset-left), 4px)";
     const ROW_END_PR = mobileDrawer ? 0 : "max(env(safe-area-inset-right), 4px)";
-    const INDENT_STEP = `calc(${ROW_BASE_PL} + 18px)`;
-    const INDENT_FINE_STEP = 16;
+    const INDENT_STEP = `calc(${ROW_BASE_PL} + 15px)`;
+    const INDENT_FINE_STEP = 13;
     const rowIndentSx = (depth: number, extraPl = 0, extraFinePl = extraPl) => ({
-        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px + ${String(depth)} * ${INDENT_STEP})`,
+        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px)`,
+        ml: `calc(${String(depth)} * ${INDENT_STEP})`,
         "@media (pointer: fine) and (hover: hover)": {
-            pl: `${String(extraFinePl + depth * INDENT_FINE_STEP)}px`,
+            pl: `${String(extraFinePl)}px`,
+            ml: `${String(depth * INDENT_FINE_STEP)}px`,
         },
     });
     // Flush Desktop rows drop the shared capsule: no radius, and no border
@@ -1491,9 +1521,9 @@ function SessionList({
         : {};
     // Obsidian-style indent guides: one hairline per ancestor level, centred
     // under that ancestor's chevron (28px touch / 24px fine box after the base
-    // padding). The pseudo-element paints over the row's own material; rows
-    // touch, so consecutive rows join into one continuous line and a folder's
-    // body is visibly fenced off. Paint-only.
+    // padding). The pseudo-element reaches back over the row's indent margin;
+    // rows touch, so consecutive rows join into one continuous line and a
+    // folder's body is visibly fenced off. Paint-only.
     const treeGuideSx = (depth: number) => {
         if (depth === 0) return {};
         const levels = Array.from({ length: depth }, (_, level) => level);
@@ -1503,7 +1533,7 @@ function SessionList({
                 position: "absolute",
                 top: 0,
                 bottom: 0,
-                left: 0,
+                left: `calc(-1 * ${String(depth)} * ${INDENT_STEP})`,
                 right: 0,
                 pointerEvents: "none",
                 backgroundImage: (t: Theme) =>
@@ -1514,6 +1544,7 @@ function SessionList({
                     .map((level) => `calc(${String(level)} * ${INDENT_STEP} + ${ROW_BASE_PL} + 14px) 0`)
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
+                    left: `${String(-depth * INDENT_FINE_STEP)}px`,
                     backgroundPosition: levels.map((level) => `${String(level * INDENT_FINE_STEP + 12)}px 0`).join(", "),
                 },
             },
@@ -1706,12 +1737,13 @@ function SessionList({
                         ? "calc(84px + env(safe-area-inset-bottom, 0px))"
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
                     // Touch keeps 44px grip and kebab targets, but the grip
-                    // overhangs its 32px slot so the glyph's own inset is the
-                    // only gutter a phone-width rail pays for. The kebab stays
+                    // overhangs its 24px slot, which is just the glyph: the
+                    // dots sit beside the row's leading edge (its folder's
+                    // guide) with no gutter of their own. The kebab stays
                     // inside the row: an overhang past the scroller's end edge
                     // would let focus scroll the list sideways.
-                    "& .cowboy-session-grip": { mx: "-6px" },
-                    "& .cowboy-session-grip-slot": { width: 32 },
+                    "& .cowboy-session-grip": { mx: "-10px" },
+                    "& .cowboy-session-grip-slot": { width: 24 },
                     "& .cowboy-session-actions": { ml: 0 },
                     // The folder chevron is decorative (the whole row toggles),
                     // so it needs no touch-sized box; tree indentation and
@@ -1729,14 +1761,15 @@ function SessionList({
                             minWidth: 0,
                             height: 32,
                             minHeight: 0,
-                            mx: 0,
                             borderRadius: "6px",
                         },
-                        // The slot follows its grip rather than reserving the
-                        // touch box, which otherwise sets the row height.
-                        "& .cowboy-session-grip-slot": { width: 24, height: 32 },
-                        "& .cowboy-session-actions": { ml: 0.25 },
-                        "& .cowboy-folder-chevron": { width: 24 },
+                        // The grip overhangs a 16px column, so its dots start
+                        // 5px from the row's leading edge; the slot's height
+                        // stops the touch box setting the row height.
+                        "& .cowboy-session-grip": { mx: "-4px" },
+                        "& .cowboy-session-grip-slot": { width: 16, height: 32 },
+                        "& .cowboy-session-actions": { ml: 0.25, mr: 0 },
+                        "& .cowboy-folder-chevron": { width: 24, mx: 0 },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
                             fontSize: "1.125rem",
                         },
