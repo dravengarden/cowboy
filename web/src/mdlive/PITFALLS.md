@@ -3010,10 +3010,17 @@ Editor-facing rules that follow from it:
   new document starts from the latest text instead of the mount-time seed.
   The seed changes only in the same render as the remount, so the living-view
   rule and IME are untouched.
-- Not changed, still open: `@uiw/react-codemirror` rebuilds its view from
-  `value` if React ever tears down the editor's layout effects without
-  unmounting it (a re-suspended boundary). No such case was reproduced; the
-  frozen seed would revert the document if one appears.
+- `@uiw/react-codemirror` discards its view when React disconnects layout
+  effects without unmounting (a Suspense boundary above the editor hides its
+  content because a sibling suspended) and rebuilds it from `value` when the
+  boundary shows again. With the frozen seed that reverted the document to
+  the text the editor opened with, and the next keystroke stored it
+  (reproduced in Chrome). `PlatformComposerEditor` now adopts the latest text
+  as the seed in its own layout-effect cleanup, which runs in the same
+  disconnect, so the rebuilt view starts from what was typed. The caret
+  returns to the document start; the editor had lost focus by being hidden.
+  This covers every consumer of the gateway: prompt, Queue/Draft row edits,
+  fullscreen and Draft documents.
 
 No extension, IME, caret, paste or keyboard path changed. Verified with the
 Web gate and on the Desktop shell in Chrome; not run on iOS.

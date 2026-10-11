@@ -916,6 +916,18 @@ Phase 3 shipped in part with the same release (service worker
   text is stored on every change even while an image is still encoding, and
   an image that settles after its composer was replaced is handed to the
   store (`composer/draftHandOff.ts`).
+- Queue/Draft row edits in IndexedDB: the attachments of a session's
+  in-progress row edits are one `session:<sid>:edits` record keyed by
+  `kind:id`; each edit's localStorage record keeps its text, tokens and a
+  flag. They used to live whole in localStorage, where one pasted screenshot
+  could exceed the quota and the fallback kept only the text. The contract is
+  the composer draft's: a failed read keeps the promise, the restore runs
+  again when the dataset is known (`retryPendingEditRestore`), an open row
+  editor adopts the bytes when they arrive, an edit still waiting for its
+  bytes is neither rewritten in the database nor claimed for parked-draft
+  recovery, and an update waits for bytes in flight (`pendingEditsDurable`).
+  Without a database the localStorage record is the fallback; its quota path
+  now removes only the image tokens instead of collapsing the text's spacing.
 - P3 hover prefetch: a mouse resting on a Desktop sessions row for 150 ms
   fetches that tail ahead of the P2 queue (`prefetchSessionTail`).
 - Conflict 7 (Controller and Web release, service worker `cowboy-v1734`):

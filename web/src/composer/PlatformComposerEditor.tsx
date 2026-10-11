@@ -316,6 +316,18 @@ export const PlatformComposerEditor = forwardRef<
     cmLifetimeRef.current = cmLifetime;
     cmSeedRef.current = latestTextRef.current;
   }
+  // React disconnects layout effects when a Suspense boundary above hides its
+  // content, and the editor library answers by discarding its view; it builds
+  // a new one from `value` when the boundary shows again. Hand it what was
+  // typed, or a sibling that suspends reverts the document to the mount-time
+  // seed and the next keystroke stores that. The seed changes only while no
+  // view is alive, so a living view never receives a new `value`.
+  const [, adoptLatestSeed] = useState(0);
+  useLayoutEffect(() => (): void => {
+    if (cmSeedRef.current === latestTextRef.current) return;
+    cmSeedRef.current = latestTextRef.current;
+    adoptLatestSeed((epoch) => epoch + 1);
+  }, []);
   const mountFocus = desktopEditorMountFocusPolicy(
     focusEndOnMount,
     policy.awaitingRuntime,

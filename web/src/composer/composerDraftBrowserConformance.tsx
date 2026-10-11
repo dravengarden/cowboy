@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { Suspense, use, useRef } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { CssBaseline } from "@mui/material";
@@ -47,6 +47,17 @@ interface Live {
   controller: ComposerDraftController | null;
 }
 
+/** Suspends its boundary while a promise is set, as a lazy sibling does the
+ * first time it renders. React hides the boundary's content, including the
+ * prompt, and disconnects its layout effects until the promise settles. */
+interface Gate {
+  pending: Promise<void> | null;
+}
+function Sibling({ gate }: { gate: Gate }): null {
+  if (gate.pending) use(gate.pending);
+  return null;
+}
+
 /** The product wiring of the Desktop prompt: the real draft controller, the
  * real editor gateway and the real draft store. One instance per session, as
  * App mounts it (`key={session.id}`). */
@@ -89,6 +100,7 @@ export async function checkComposerDraftPersistence(): Promise<string> {
   document.body.append(container);
   const root = createRoot(container);
   const live: Live = { editor: null, controller: null };
+  const gate: Gate = { pending: null };
   const show = (sessionId: string, vim = false): void =>
     flushSync(() =>
       root.render(
@@ -103,7 +115,10 @@ export async function checkComposerDraftPersistence(): Promise<string> {
         >
           <BrowserProductTheme>
             <CssBaseline />
-            <Prompt key={sessionId} sessionId={sessionId} vim={vim} live={live} />
+            <Suspense fallback={null}>
+              <Prompt key={sessionId} sessionId={sessionId} vim={vim} live={live} />
+              <Sibling gate={gate} />
+            </Suspense>
           </BrowserProductTheme>
         </SurfaceContext.Provider>,
       )
@@ -160,6 +175,37 @@ export async function checkComposerDraftPersistence(): Promise<string> {
       "The remounted prompt cannot send the pasted image",
     );
 
+    // A sibling suspends the boundary around the prompt and resumes: React
+    // hides the prompt and the editor library rebuilds its view on return.
+    editor().insertText(" before suspending");
+    const beforeSuspending = editor().getValue();
+    let resume!: () => void;
+    gate.pending = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    show(first);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    gate.pending = null;
+    resume();
+    await until(
+      () =>
+        (container.querySelector<HTMLElement>(".cm-editor")?.offsetParent ?? null) !== null,
+      "The prompt did not come back after its boundary resumed",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    check(
+      editor().getValue() === beforeSuspending,
+      "A suspended boundary reverted the prompt: " + JSON.stringify(editor().getValue()),
+    );
+    editor().insertText("!");
+    // The rebuilt view starts with its caret at the document start.
+    check(
+      getDraft(first).text === editor().getValue() &&
+        getDraft(first).text.length === beforeSuspending.length + 1 &&
+        getDraft(first).text.includes("before suspending"),
+      "Typing after the boundary resumed overwrote the stored draft",
+    );
+
     // Turning Vim on swaps the editor (placeholder, then the real one).
     editor().insertText(" before vim");
     const typed = editor().getValue();
@@ -174,7 +220,7 @@ export async function checkComposerDraftPersistence(): Promise<string> {
       "Turning Vim on reverted the prompt to the text it opened with",
     );
     check(getDraft(first).text === typed, "Turning Vim on changed the stored draft");
-    return "Desktop prompt drafts survive a session switch, a slow image and the Vim editor swap";
+    return "Desktop prompt drafts survive a session switch, a slow image, a suspended boundary and the Vim editor swap";
   } finally {
     root.unmount();
     container.remove();

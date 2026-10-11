@@ -93,9 +93,11 @@ import {
 import { announceDraftChanges } from "./documents/store";
 import {
   claimOrphanedPendingEdits,
+  attachPendingEditDatabase,
   finishOrphanedPendingEdit,
-  flushPendingEdits,
+  pendingEditsDurable,
   prunePendingEdits,
+  retryPendingEditRestore,
 } from "./pendingEditStore";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
@@ -2322,6 +2324,7 @@ function openSocket(): void {
     // first read of the drafts' attachment bytes failed. The dataset is known
     // now: read them before anything can mistake the wait for a loss.
     retryDraftRestore();
+    retryPendingEditRestore();
     await openBoundSocket(dataset);
     openingDataset = false;
   }).catch((error) => {
@@ -2671,6 +2674,7 @@ const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 // value is a cache the next broadcast replaces; nothing here is ever sent.
 // Composer drafts keep their attachment bytes beside the replica caches.
 attachDraftDatabase(syncDatabase);
+attachPendingEditDatabase(syncDatabase);
 
 const replica = createReplica(syncDatabase, {
   onError: (error) => console.warn("replica persistence failed", error),
@@ -3134,8 +3138,7 @@ export function canApplyUpdateNow(): boolean {
   // A reload must find every draft on disk. Attachment bytes reach the
   // database asynchronously; a page replaced before they land comes back
   // without the pasted images.
-  flushPendingEdits();
-  if (!draftsDurable()) return false;
+  if (!pendingEditsDurable() || !draftsDurable()) return false;
   return !editorHoldsUpdate({
     focusedEditable: acceptsText(globalThis.document?.activeElement),
     windowFocused: globalThis.document?.hasFocus() === true,

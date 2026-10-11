@@ -165,6 +165,7 @@ import {
   clearPendingEdit,
   getPendingEdit,
   recoverPendingEditId,
+  subscribePendingEditRestore,
   setPendingEdit,
 } from "./pendingEditStore";
 import { isImeKeyEvent } from "./imeKey";
@@ -237,6 +238,7 @@ import {
   filesToAttachments,
   fileToAttachment,
   pendingImageAttachment,
+  imageTokensInText,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
   settlePendingAttachments,
@@ -5136,6 +5138,28 @@ function PendingRow({
     setOverlayOpen(false);
     onEditDone();
   };
+  // A recovered edit can open before its attachment bytes are back from the
+  // database (a reload reopens the editor at once). Adopt them when they
+  // arrive, and drop the tokens of images that turned out to be gone.
+  useEffect(() => {
+    if (!editing) return undefined;
+    return subscribePendingEditRestore(sessionId, kind, message.id, (restored) => {
+      seedInlineAttachments(restored.attachments);
+      const restoredIds = new Set(restored.attachments.map((attachment) => attachment.id));
+      for (const token of imageTokensInText(editTextRef.current)) {
+        if (restoredIds.has(token.id) || getInlineAttachment(token.id) !== undefined) continue;
+        overlayEditorRef.current?.deleteImage(token.id);
+        editorRef.current?.deleteImage(token.id);
+      }
+      setEditAttachments((current) => {
+        const held = new Set(current.map((attachment) => attachment.id));
+        const missing = restored.attachments.filter((attachment) => !held.has(attachment.id));
+        return missing.length === 0 ? current : [...current, ...missing];
+      });
+      overlayEditorRef.current?.refreshImages();
+      editorRef.current?.refreshImages();
+    });
+  }, [editing, kind, message.id, sessionId]);
   const liveEditText = (): string =>
     pendingEditLiveText(
       overlayEditorRef.current?.getValue() ?? editorRef.current?.getValue(),

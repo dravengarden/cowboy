@@ -25,7 +25,6 @@
 import {
   type Attachment,
   dropOrphanImageTokens,
-  stripImageTokens,
 } from "./attachments";
 import {
   type DraftMirror,
@@ -222,7 +221,7 @@ function persistLegacy(ls: Storage, key: string, draft: Draft): void {
     try {
       ls.setItem(
         key,
-        JSON.stringify({ text: stripImageTokens(draft.text), attachments: [] }),
+        JSON.stringify({ text: dropOrphanImageTokens(draft.text, new Set()), attachments: [] }),
       );
     } catch {
       /* still failing — the in-memory copy holds it for this session */
