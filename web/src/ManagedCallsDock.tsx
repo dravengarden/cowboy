@@ -1,4 +1,5 @@
 import {
+  alpha,
   Box,
   Button,
   ButtonBase,
@@ -505,39 +506,68 @@ function displayTitle(call: ManagedCallSummary): string {
   );
 }
 
-/** A phone's one-line identity and state for a call, under the footer
- * island: title, Provider, placement, elapsed and the outcome. */
-function CallCaption({
-  call,
-  onDetails,
-}: {
-  call: ManagedCallSummary;
-  onDetails: () => void;
-}): React.JSX.Element {
+/** A small filled badge in a status color. */
+function Badge(
+  { label, color }: {
+    label: string;
+    color: "success" | "error" | "warning" | "primary" | "default";
+  },
+): React.JSX.Element {
+  return (
+    <Box
+      component="span"
+      sx={(theme) => {
+        const main = color === "default"
+          ? theme.palette.text.secondary
+          : theme.palette[color].main;
+        return {
+          flexShrink: 0,
+          px: 0.75,
+          height: 20,
+          display: "inline-flex",
+          alignItems: "center",
+          borderRadius: 999,
+          fontSize: "0.6875rem",
+          fontWeight: 700,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+          color: main,
+          bgcolor: alpha(main, theme.palette.mode === "dark" ? 0.22 : 0.14),
+        };
+      }}
+    >
+      {label}
+    </Box>
+  );
+}
+
+/** A phone's dense header for a call's transcript: title, Provider,
+ * placement and elapsed time in one draggable row, with its state and
+ * findings as colored badges. It replaces the sheet's grab handle. */
+function CallHeader({ call }: { call: ManagedCallSummary }): React.JSX.Element {
   const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
   const tone = callTone(call.state);
-  // The shortest outcome: a finding count says more than its verdict.
-  const verdict = call.finding_count !== undefined && call.verdict
+  const attention = call.verdict !== undefined && call.verdict !== null &&
+    call.verdict !== "approve";
+  const outcome = call.finding_count !== undefined && call.verdict
     ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
     : call.verdict
     ? call.verdict.replace(/-/g, " ")
     : null;
-  const attention = call.verdict !== undefined && call.verdict !== null &&
-    call.verdict !== "approve";
   return (
-    <ButtonBase
-      data-call-caption={call.call_id}
-      aria-label={`${displayTitle(call)}: ${callStateLabel(call)}. Open details`}
-      onClick={onDetails}
+    <Box
+      data-call-header={call.call_id}
       sx={{
-        maxWidth: "100%",
-        minWidth: 0,
-        px: 1,
-        py: 0.25,
-        borderRadius: 999,
         display: "flex",
         alignItems: "center",
         gap: 0.75,
+        minWidth: 0,
+        pl: 2,
+        pr: "max(env(safe-area-inset-right), 16px)",
+        pt: 1.5,
+        pb: 1.25,
+        borderBottom: 1,
+        borderColor: "divider",
         typography: "caption",
         lineHeight: 1.4,
         color: "text.secondary",
@@ -545,18 +575,21 @@ function CallCaption({
     >
       <ProviderIcon
         provider={call.provider}
-        sx={{ fontSize: "0.875rem", flexShrink: 0 }}
+        sx={{ fontSize: "1rem", flexShrink: 0 }}
       />
       <Box
         component="span"
+        role="heading"
+        aria-level={2}
         sx={{
+          fontSize: "0.8125rem",
           fontWeight: 700,
           color: "text.primary",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
           minWidth: 0,
-          maxWidth: "60%",
+          maxWidth: "55%",
           flexShrink: 0,
         }}
       >
@@ -565,36 +598,33 @@ function CallCaption({
       <Box
         component="span"
         sx={{
+          flex: 1,
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
           minWidth: 0,
-          flexShrink: 3,
         }}
       >
         {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
         {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
       </Box>
-      <Box
-        component="span"
-        sx={{
-          flexShrink: 0,
-          fontWeight: 650,
-          whiteSpace: "nowrap",
-          color: verdict
-            ? (attention ? "warning.main" : "success.main")
-            : tone === "success"
-            ? "success.main"
-            : tone === "error"
-            ? "error.main"
-            : tone === "active"
-            ? "primary.main"
-            : "text.secondary",
-        }}
-      >
-        {verdict ?? callStateLabel(call)}
-      </Box>
-    </ButtonBase>
+      {
+        /* A finished review's findings already say it completed. */
+      }
+      {(call.state !== "completed" || !outcome) && <Badge
+        label={callStateLabel(call)}
+        color={tone === "success"
+          ? "success"
+          : tone === "error"
+          ? "error"
+          : tone === "active"
+          ? "primary"
+          : "default"}
+      />}
+      {outcome && (
+        <Badge label={outcome} color={attention ? "warning" : "success"} />
+      )}
+    </Box>
   );
 }
 
@@ -602,8 +632,7 @@ function CallCaption({
 type CallRoute = { call: string; level: "transcript" | "details" };
 
 /** The floating mobile footer island the newest message passes under. */
-const MOBILE_FOOTER_CLEARANCE =
-  "calc(76px + max(22px, env(safe-area-inset-bottom, 0px)))";
+const MOBILE_FOOTER_CLEARANCE = "calc(76px + env(safe-area-inset-bottom, 0px))";
 
 /** Level 2: the child's own conversation, headed by the call's state; its
  * details are one step further. */
@@ -626,7 +655,7 @@ function CallConversation({
     >
       {
         /* Desktop: one line of state above the transcript. A phone shows the
-          same line under its footer island (CallCaption). */
+          same line as the sheet's dense header (CallHeader). */
       }
       {desktop && <Stack
         direction="row"
@@ -1019,16 +1048,10 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             ? "Calls"
             : level === "details"
             ? "Details"
-            // The transcript level names itself under the island instead.
-            : undefined}
-          footerCaption={routed && level === "transcript"
-            ? (
-              <CallCaption
-                call={routed}
-                onDetails={(): void =>
-                  setRoute({ call: routed.call_id, level: "details" })}
-              />
-            )
+            // The transcript level names itself in its dense header.
+            : displayTitle(routed)}
+          denseHeader={routed && level === "transcript"
+            ? <CallHeader call={routed} />
             : undefined}
           onBack={routed ? back : undefined}
           islandActions={routed && level === "transcript"

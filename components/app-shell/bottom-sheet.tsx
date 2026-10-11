@@ -226,9 +226,9 @@ export interface BottomSheetProps {
   /** Icon actions between Back and Close in that island (a nested level's
    * own controls, such as Details or jumping to the start or end). */
   readonly islandActions?: readonly IslandAction[] | undefined;
-  /** One line under the mobile footer island, set into the home-indicator
-   * clearance (a nested level's compact identity and state). */
-  readonly footerCaption?: ReactNode;
+  /** Mobile cover: a header node replacing the grab handle and title, for a
+   * level that names itself in one dense, draggable row. */
+  readonly denseHeader?: ReactNode;
   /** Mobile cover body that does not scroll: the content fills it edge to edge
    *  and owns its scroller (an embedded transcript). */
   readonly fill?: boolean;
@@ -626,7 +626,7 @@ export function BottomSheet(
     animateOnOpen = true,
     onBack,
     islandActions,
-    footerCaption,
+    denseHeader,
     fill = false,
   }: BottomSheetProps,
 ): ReactNode {
@@ -669,6 +669,7 @@ export function BottomSheet(
       animateOnOpen={animateOnOpen}
       footerOverlay={floatingActions}
       fillBody={fill && cover}
+      grabber={denseHeader == null}
       ariaLabel={typeof title === "string" ? title : undefined}
       // Dim the standalone status bar in lockstep with the scrim, and — since
       // surfaceColor is also what DetentSheet RESTORES the bar to on close —
@@ -681,7 +682,7 @@ export function BottomSheet(
       // switchable from inside a sheet). Reactive, so a theme switch while the
       // sheet is open restores the new theme's colour. Inert when hosted.
       surfaceColor={theme.palette.background.default}
-      header={title == null ? <Box sx={{ pb: 0.5 }} /> : (
+      header={denseHeader != null ? denseHeader : title == null ? <Box sx={{ pb: 0.5 }} /> : (
         <Box
           sx={{
             display: "flex",
@@ -731,22 +732,7 @@ export function BottomSheet(
                 ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} actions={islandActions} />
                 : <MobileSheetDismiss onClose={onClose} />
               : null}
-            {footerCaption == null ? null : (
-              <Box
-                data-mobile-sheet-footer-caption
-                sx={{
-                  width: "100%",
-                  minWidth: 0,
-                  mt: -0.5,
-                  // Sit in the home-indicator clearance rather than add a row.
-                  mb: "calc(-1 * min(22px, env(safe-area-inset-bottom, 0px)))",
-                  display: "flex",
-                  justifyContent: "center",
-                }}
-              >
-                {footerCaption}
-              </Box>
-            )}
+
           </Box>
         )}
     >
