@@ -725,3 +725,116 @@ async fn pacing_bounds_small_request_delay_behind_bulk_on_a_slow_link() {
     assert!(percentile(&mut fifo, 50) > Duration::from_secs(5));
     assert!(percentile(&mut paced, 100) < Duration::from_secs(3));
 }
+
+fn decode_all(decoder: &mut Decoder, features: Features, frames: Vec<Ws>) -> Vec<String> {
+    let runtime = tokio::runtime::Handle::current();
+    let mut decoded = Vec::new();
+    for frame in frames {
+        match frame {
+            Ws::Binary(bytes) => {
+                if let Some(text) = tokio::task::block_in_place(|| {
+                    runtime.block_on(decoder.chunk(features, &bytes))
+                })
+                .unwrap()
+                {
+                    decoded.push(text);
+                }
+            }
+            Ws::Text(text) => {
+                decoder.text(&text).unwrap();
+                decoded.push(text.to_string());
+            }
+            _ => {}
+        }
+    }
+    decoded
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streamed_small_frames_share_one_context_and_decode_in_order() {
+    let features = Features::from((true, true, true, true));
+    // RPCs repeat their binding and envelope; only ids and payloads change.
+    let frames: Vec<String> = (0..200)
+        .map(|i| format!(
+            "{{\"type\":\"runtime\",\"frame\":{{\"type\":\"execution_request\",\"request\":{{\"session_id\":\"sess-1\",\"binding\":{{\"runtime\":{{\"cwd\":\"/home/ubuntu/.local/state/cowboy-machine/execution/abc/runtime/sess-1\"}},\"environment\":{{\"executor_digest\":\"sha256:8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479\"}}}},\"request_id\":\"{i:032x}\",\"method\":\"process/read\"}}}}}}"
+        ))
+        .collect();
+    let mut messages: Vec<Ws> = frames
+        .iter()
+        .map(|text| Ws::Text(text.clone().into()))
+        .collect();
+    let heartbeat = "{\"type\":\"runtime\",\"frame\":{\"type\":\"heartbeat\"}}";
+    messages.insert(50, Ws::Text(heartbeat.into()));
+    let plain = capture((true, true, true), messages.clone()).await;
+    let streamed = capture(features, messages).await;
+    let bytes = |frames: &[Ws]| frames.iter().map(Ws::len).sum::<usize>();
+    assert!(
+        bytes(&streamed) * 5 < bytes(&plain),
+        "{} vs {}",
+        bytes(&streamed),
+        bytes(&plain)
+    );
+    // Heartbeats stay plain text; application frames become streamed binaries.
+    assert!(
+        streamed
+            .iter()
+            .any(|frame| matches!(frame, Ws::Text(text) if text.as_str() == heartbeat))
+    );
+    let mut decoder = Decoder::new(features);
+    let decoded = decode_all(&mut decoder, features, streamed);
+    // The heartbeat may overtake queued data; application order is kept.
+    assert_eq!(decoded.iter().filter(|text| *text == heartbeat).count(), 1);
+    let application: Vec<String> = decoded
+        .into_iter()
+        .filter(|text| text != heartbeat)
+        .collect();
+    assert_eq!(application, frames);
+    // Streamed frames earn no credit; only chunk bytes do.
+    assert!(decoder.credit::<Ws>().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streamed_frames_interleave_with_a_chunked_frame_and_refuse_without_negotiation() {
+    let features = Features::from((true, true, true, true));
+    let bulk = incompressible(200 * 1024);
+    let streamed = capture(
+        features,
+        vec![
+            Ws::Text(bulk.clone().into()),
+            Ws::Text(REPLY.into()),
+            Ws::Text(REPLY.into()),
+        ],
+    )
+    .await;
+    let mut decoder = Decoder::new(features);
+    assert_eq!(
+        decode_all(&mut decoder, features, streamed.clone()),
+        [bulk, REPLY.to_owned(), REPLY.to_owned()]
+    );
+    // A peer that did not negotiate streaming refuses streamed frames.
+    let old = Features::from((true, true, true));
+    let mut legacy = Decoder::new(old);
+    let first_streamed = streamed
+        .into_iter()
+        .find_map(|frame| match frame {
+            Ws::Binary(bytes)
+                if u32::from_be_bytes(bytes[..4].try_into().unwrap()) & STREAMED != 0 =>
+            {
+                Some(bytes)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(legacy.chunk(old, &first_streamed).await.is_err());
+    // A corrupted stream fails closed instead of yielding garbage.
+    let mut corrupt = first_streamed.to_vec();
+    let last = corrupt.len() - 1;
+    corrupt[10] ^= 0xff;
+    corrupt[last] ^= 0xff;
+    assert!(
+        Decoder::new(features)
+            .chunk(features, &corrupt)
+            .await
+            .is_err()
+    );
+}

@@ -2369,6 +2369,20 @@ async fn agent_main(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(child_stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            if let Some((phase, total_ms)) = startup_phase(&line) {
+                // The startup metric: `cowboy logs metrics` histograms
+                // `duration_ms` per event; one event name per milestone.
+                let event = format!("cowboy.session.startup.{phase}");
+                tracing::info!(
+                    event_name = event.as_str(),
+                    session = %stderr_session,
+                    provider = %stderr_provider,
+                    phase,
+                    duration_ms = total_ms,
+                    "session startup milestone"
+                );
+                continue;
+            }
             tracing::warn!(
                 session = %stderr_session,
                 provider = %stderr_provider,
@@ -4114,4 +4128,38 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
 
     drop(child);
     result.map_err(|e| anyhow::anyhow!("acp connection: {e}"))
+}
+
+/// A Provider's startup milestone line, `[cowboy-claude] phase=<name>
+/// totalMs=<ms>`, as its phase and milliseconds since launch.
+fn startup_phase(line: &str) -> Option<(&str, f64)> {
+    let rest = line.strip_prefix("[cowboy-claude] phase=")?;
+    let (phase, total) = rest.split_once(" totalMs=")?;
+    (!phase.is_empty()
+        && phase.len() <= 40
+        && phase
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'-'))
+    .then_some(())?;
+    let total = total.parse::<u32>().ok()?;
+    Some((phase, f64::from(total)))
+}
+
+#[cfg(test)]
+mod startup_phase_tests {
+    #[test]
+    fn startup_milestones_parse_and_other_lines_do_not() {
+        assert_eq!(
+            super::startup_phase("[cowboy-claude] phase=ready totalMs=3097"),
+            Some(("ready", 3097.0))
+        );
+        for line in [
+            "[cowboy-claude] phase=Ready totalMs=1",
+            "[cowboy-claude] phase=ready totalMs=",
+            "[cowboy-claude] phase=ready totalMs=1 extra",
+            "phase=ready totalMs=1",
+        ] {
+            assert_eq!(super::startup_phase(line), None, "{line}");
+        }
+    }
 }

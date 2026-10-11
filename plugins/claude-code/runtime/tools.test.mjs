@@ -15,6 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  cksumDigest,
   readAhead,
   TASK_OUTPUT_PREFIX,
   textBytes,
@@ -308,7 +309,7 @@ test("hook transcripts send only appended bytes to an executor without the file 
       return { exitCode: error.status, closed: true, output: "" };
     }
   };
-  const cache = join(directory, `transcript-${tools.state.binding}.cache`);
+  const cache = join(directory, `transcript-${tools.state.binding}-main.cache`);
   const first = Buffer.from("x".repeat(200 * 1024));
   await tools.hookTranscript(first, join(directory, "one.jsonl"), undefined);
   assert.equal(sent, first.length);
@@ -330,10 +331,11 @@ test("hook transcripts send only appended bytes to an executor without the file 
   assert.equal(sent, 5 + third.length);
   assert.deepEqual(await readFile(join(directory, "three.jsonl")), third);
 
-  // Without sha256sum or shasum the original whole-copy contract remains.
+  // Without sha256sum or shasum the same snapshot verifies with cksum:
+  // one full base in the new digest, then only appends again.
   const bin = join(directory, "bin");
   await mkdir(bin);
-  for (const tool of ["cat", "cut", "mv"]) {
+  for (const tool of ["awk", "cat", "cksum", "cut", "mv"]) {
     const path = execFileSync("sh", ["-c", `command -v ${tool}`], {
       encoding: "utf8",
     }).trim();
@@ -345,9 +347,33 @@ test("hook transcripts send only appended bytes to an executor without the file 
   await tools.hookTranscript(fourth, join(directory, "four.jsonl"), undefined);
   assert.equal(sent, 5 + fourth.length);
   assert.deepEqual(await readFile(join(directory, "four.jsonl")), fourth);
+  assert.equal(tools.hookDigestKind, "cksum");
   sent = 0;
-  await tools.hookTranscript(fourth, join(directory, "five.jsonl"), undefined);
-  assert.equal(sent, fourth.length);
+  const fifth = Buffer.concat([fourth, Buffer.from("tail\n")]);
+  await tools.hookTranscript(fifth, join(directory, "five.jsonl"), undefined);
+  assert.equal(sent, 5);
+  assert.deepEqual(await readFile(join(directory, "five.jsonl")), fifth);
+  // A restarted runtime continues from the saved base, not a full copy.
+  const restarted = new WorkspaceTools(
+    tools.connection,
+    {
+      workspace: { cwd: "/target with space" },
+      environment: { id: "fixture" },
+    },
+    tools.statePath,
+  );
+  await restarted.load();
+  Object.assign(restarted, {
+    shell: tools.shell,
+    hookDigestKind: "cksum",
+    hookInputFile: tools.hookInputFile,
+    command: tools.command,
+  });
+  sent = 0;
+  const sixth = Buffer.concat([fifth, Buffer.from("more\n")]);
+  await restarted.hookTranscript(sixth, join(directory, "six.jsonl"));
+  assert.equal(sent, 5);
+  assert.deepEqual(await readFile(join(directory, "six.jsonl")), sixth);
 });
 
 test("a cancellation the executor has long not known ends instead of polling forever", async (t) => {
@@ -1513,4 +1539,17 @@ test("a held background command waits on output notifications, not a read per se
   assert.deepEqual(await waiting, { closed: true, exitCode: 0 });
   assert.equal(reads, 2);
   assert.ok(Date.now() - started < 5000);
+});
+
+test("cksum digests match the target's POSIX cksum", () => {
+  for (const text of ["", "a", "line\n".repeat(70000), "会话🦅"]) {
+    const bytes = Buffer.from(text);
+    const [crc, length] = execFileSync("cksum", {
+      input: bytes,
+      encoding: "utf8",
+    })
+      .trim()
+      .split(/\s+/);
+    assert.equal(cksumDigest(bytes), "c" + crc + "-" + length);
+  }
 });

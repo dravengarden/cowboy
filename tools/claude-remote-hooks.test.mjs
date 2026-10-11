@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   DESCRIPTIONS,
@@ -284,7 +284,7 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
   for (const [index, bytes] of [initial, extended, extended].entries()) {
     assert.deepEqual(await readFile(paths[index]), bytes);
   }
-  const cache = join(directory, `transcript-${tools.state.binding}.cache`);
+  const cache = join(directory, `transcript-${tools.state.binding}-main.cache`);
   for (const defect of ["missing", "corrupt", "symlink"]) {
     await rm(cache, { force: true });
     if (defect === "corrupt") await writeFile(cache, "corrupt");
@@ -311,6 +311,7 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
   // A completed utility with a lost reply is not replayed. The next distinct
   // hook safely sends a full base, without assuming the previous write failed.
   let starts = 0;
+  const before = structuredClone(tools.state.hookTranscripts);
   tools.command = async (argv) => {
     starts++;
     await execute(argv);
@@ -321,7 +322,8 @@ test("hook transcripts send only appends and keep immutable, verified snapshots"
     /lost receipt/,
   );
   assert.equal(starts, 1);
-  assert.equal(tools.hookTranscriptBase, undefined);
+  // An uncertain update never becomes the base.
+  assert.deepEqual(tools.state.hookTranscripts, before);
   tools.command = execute;
   writes.length = 0;
   await tools.hookTranscript(extended, join(directory, "recovered.jsonl"));
@@ -409,7 +411,7 @@ test("uncertain transcript preparation is cancelled before input cleanup", async
       "fs/remove",
       "fs/remove",
     ]);
-    assert.equal(tools.hookTranscriptBase, undefined);
+    assert.equal(tools.state.hookTranscripts, undefined);
   }
 });
 
@@ -547,20 +549,31 @@ test("a target hook gets its input on stdin, the project directory and separate 
     call: { id: "hook-t" },
     transcript: Buffer.from("line\n"),
   });
-  const copyWrite = calls.filter(({ method }) => method === "fs/writeFile")[0];
-  const copy = fileURLToPath(copyWrite.params.path);
-  assert.ok(copy.endsWith(".jsonl"));
-  const inputWrite = calls.filter(({ method }) => method === "fs/writeFile")[1];
-  assert.equal(
-    JSON.parse(Buffer.from(inputWrite.params.dataBase64, "base64"))
-      .transcript_path,
-    copy,
+  // Even a small transcript travels as a delta into the target cache; the
+  // hook reads a snapshot materialized from it.
+  const [deltaWrite, inputWrite] = calls.filter(({ method }) =>
+    method === "fs/writeFile"
   );
+  const copy = JSON.parse(
+    Buffer.from(inputWrite.params.dataBase64, "base64"),
+  ).transcript_path;
+  assert.ok(copy.endsWith(".jsonl"));
+  assert.equal(fileURLToPath(deltaWrite.params.path), copy + ".delta");
+  assert.equal(
+    Buffer.from(deltaWrite.params.dataBase64, "base64").toString(),
+    "line\n",
+  );
+  const href = (path) => pathToFileURL(path).href;
   assert.deepEqual(
     calls.filter(({ method }) => method === "fs/remove").map(({ params }) =>
       params.path
     ).sort(),
-    [copyWrite.params.path, inputWrite.params.path].sort(),
+    [
+      href(copy),
+      href(copy + ".delta"),
+      href(copy + ".cache"),
+      inputWrite.params.path,
+    ].sort(),
   );
   // Exec form runs its argv directly; the placeholder is the target's.
   calls.length = 0;
@@ -1069,7 +1082,7 @@ test("the bridge copies only native transcripts under its projects root", async 
   const received = [];
   const bridge = await startModBridge({
     runHook: async (value) => {
-      received.push(value.transcript?.toString() ?? null);
+      received.push(value.transcript?.bytes.toString() ?? null);
       return { exitCode: 0, stdout: "", stderr: "" };
     },
   }, { waitMs: 50, transcriptRoot: root });
@@ -1101,6 +1114,37 @@ test("the bridge copies only native transcripts under its projects root", async 
     });
   }
   assert.deepEqual(received, ["native\n", null, null]);
+  // A subagent transcript under the root travels the same way.
+  const agents = [];
+  const agentBridge = await startModBridge({
+    runHook: async (value) => {
+      agents.push([
+        value.agentTranscript?.bytes.toString() ?? null,
+        value.agentTranscript?.key.length ?? null,
+      ]);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  }, { waitMs: 50, transcriptRoot: root });
+  t.after(() => agentBridge.close());
+  await new Promise((resolve) => {
+    const req = request({
+      socketPath: agentBridge.socketPath,
+      path: "/hook",
+      method: "POST",
+      headers: { authorization: "Bearer " + agentBridge.token },
+    }, (res) => {
+      res.resume();
+      res.on("end", resolve);
+    });
+    req.end(JSON.stringify({
+      id: "hook-agent",
+      command: "stop.sh",
+      input: {},
+      timeout: 5,
+      agentTranscriptPath: join(root, "p", "s.jsonl"),
+    }));
+  });
+  assert.deepEqual(agents, [["native\n", 16]]);
 });
 
 test("the native hook proxy runs its command on the target", async (t) => {

@@ -95,6 +95,8 @@ export async function runProxy(
   // The bridge sends the target a private copy of native's transcript.
   const transcriptPath = hookInput.transcript_path;
   delete hookInput.transcript_path;
+  const agentTranscriptPath = hookInput.agent_transcript_path;
+  delete hookInput.agent_transcript_path;
   // The hook itself may fail or time out (non-blocking, as natively). If the
   // proxy cannot run a PreToolUse guard at all, block the tool instead.
   const unavailable = () => {
@@ -110,6 +112,9 @@ export async function runProxy(
       timeout: hook.timeout,
       ...(hook.argv ? { argv: hook.argv } : {}),
       ...(typeof transcriptPath === "string" ? { transcriptPath } : {}),
+      ...(typeof agentTranscriptPath === "string"
+        ? { agentTranscriptPath }
+        : {}),
     });
     while (reply.status === 202 && !signal.aborted) {
       reply = await post(context, "/result", { id });
