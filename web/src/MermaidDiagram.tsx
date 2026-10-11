@@ -112,9 +112,14 @@ function prepareInlineSvg(markup: string): string {
 export function MermaidDiagram({
   source,
   fallback,
+  pending = false,
 }: {
   source: string;
+  /** The source as ordinary code. Shown until the figure is drawn, and again
+   *  if it cannot be. */
   fallback?: ReactNode;
+  /** The source is still streaming, so it is not a finished diagram yet. */
+  pending?: boolean;
 }): React.JSX.Element {
   const reactId = useId().replaceAll(":", "") || "diagram";
   const isDark = useTheme().palette.mode === "dark";
@@ -123,22 +128,30 @@ export function MermaidDiagram({
   const [failed, setFailed] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   useEffect(() => {
+    // A half-streamed diagram is a different graph on every chunk: laying it
+    // out live re-flows the whole figure (or fails to parse) many times a
+    // second. Its source streams as ordinary code until the fence closes.
+    if (pending) return undefined;
     let cancelled = false;
-    setSvg(undefined);
-    setFailed(false);
-    setPreviewOpen(false);
+    // The previous figure stays up until its replacement is drawn. Dropping
+    // back to the spinner on every source or theme change collapses the block
+    // and re-expands it, which shakes everything below it.
     void renderMermaid(`cowboy-mermaid-${reactId}`, source, mode)
       .then((next) => {
         const prepared = prepareInlineSvg(next);
-        if (!cancelled) setSvg(prepared);
+        if (cancelled) return;
+        setSvg(prepared);
+        setFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setFailed(true);
+        if (cancelled) return;
+        setPreviewOpen(false);
+        setFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [reactId, source, mode]);
+  }, [reactId, source, mode, pending]);
   const previewImages = useMemo<GalleryMedia[]>(() =>
     svg
       ? [{
@@ -151,12 +164,26 @@ export function MermaidDiagram({
   const openTap = useReliableTouchTap<HTMLDivElement>(() => {
     if (previewImages.length > 0) setPreviewOpen(true);
   });
-  if (failed) {
+  if (failed || !svg) {
+    // One tree for "not drawn yet" and "cannot be drawn": the code block keeps
+    // its place while the reply streams, and a spinner never collapses it.
+    if (!failed && !fallback) {
+      return (
+        <Box sx={{ display: "grid", placeItems: "center", flex: 1, py: 6 }}>
+          <CircularProgress size={desktopSize(24)} />
+        </Box>
+      );
+    }
     return (
-      <Box data-mermaid-source-fallback sx={{ px: 2, py: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Mermaid preview unavailable. Showing the Markdown source.
-        </Typography>
+      <Box
+        {...(failed ? { "data-mermaid-source-fallback": true } : {})}
+        sx={failed ? { px: 2, py: 2 } : undefined}
+      >
+        {failed && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Mermaid preview unavailable. Showing the Markdown source.
+          </Typography>
+        )}
         {fallback ?? (
           <Box
             component="pre"
@@ -171,13 +198,6 @@ export function MermaidDiagram({
             {source}
           </Box>
         )}
-      </Box>
-    );
-  }
-  if (!svg) {
-    return (
-      <Box sx={{ display: "grid", placeItems: "center", flex: 1, py: 6 }}>
-        <CircularProgress size={desktopSize(24)} />
       </Box>
     );
   }

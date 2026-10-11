@@ -757,32 +757,12 @@ const MarkdownImpl = memo(function MarkdownImpl({
         );
       }
       const lang = className?.replace("language-", "") ?? "";
-      if (lang.toLowerCase() === "mermaid") {
-        return (
-          <MermaidDiagram
-            key={`mermaid:${text}`}
-            source={text}
-            fallback={
-              <MarkdownCodeBoundary code={text} dark={dark}>
-                <CodeBlock
-                  code={text}
-                  lang={lang}
-                  codeTheme={codeTheme}
-                  dark={dark}
-                  centerCopy={centerCopy}
-                  touchWrap={touchWrap}
-                />
-              </MarkdownCodeBoundary>
-            }
-          />
-        );
-      }
       // A fence still being streamed is not final, so it cannot be copied yet.
       const start = node?.position?.start.offset;
       const end = node?.position?.end.offset;
       const pending = streamingRef.current && start !== undefined && end !== undefined &&
         fencedCodeIsOpen(renderedTextRef.current.slice(start, end));
-      return (
+      const block = (
         <MarkdownCodeBoundary code={text} dark={dark}>
           <CodeBlock
             code={text}
@@ -795,6 +775,12 @@ const MarkdownImpl = memo(function MarkdownImpl({
           />
         </MarkdownCodeBoundary>
       );
+      // The diagram owns the block for its whole life, so the streamed source,
+      // the drawn figure, and a failed render all replace one another in place.
+      if (lang.toLowerCase() === "mermaid") {
+        return <MermaidDiagram source={text} pending={pending} fallback={block} />;
+      }
+      return block;
     },
     // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
     // above already renders its own scrollable container (the highlighter's

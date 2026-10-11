@@ -62,3 +62,45 @@ production credential and no model request.
 | `codex-worker` | Accepted, 34 checks, Provider CLI 0.160.1 with executor 0.159.3 |
 | `session` | Accepted, 9 checks |
 | `keeper` | Accepted, 12 checks |
+
+After the merge with `a2163c97`, `just check-compact` passed again in one run:
+2,077 core Rust tests, 682 Machine tests, 126 private Zed adapter tests and
+2,203 frontend tests, with the other gates and builds.
+
+## Component activation
+
+Both artifacts were built from clean source
+`3edddca998158bba1245e861ef5a5d4dc3c310f7`, which is remote `main`, and handed
+to Hawk's installed activator. The revisions they replaced were ancestors of
+it.
+
+| Lane | Immutable release | Successful transaction |
+| --- | --- | --- |
+| Web | `/nix/store/q5bqpcasjnf0k4by1pj94jzp23vkv77i-cowboy-web-release` | `1791683314055867636-3edddca99815` |
+| Controller | `/nix/store/c03sw2q3l8n5d0dj67s4shdr5agw3m81-cowboy-controller-release` | `1791683356281260496-3edddca99815` |
+
+Both receipts are `succeeded/committed` and published. The Web release moved
+only `/run/cowboy-web`. The Controller release restarted only `cowboy.service`
+(PID 627851 to 987666). Before activation the candidate Controller read the
+live Catalog's 143 releases without creating state, and
+`just provider-release-coverage` passed.
+
+Local and public `/healthz` return 200. The SPA version and ETag are
+`e5b7dd8192dd679142472eaf96d291aa`; HTML and the service worker are `no-store`.
+Existing PWA clients need a hard reload to load the new bundle. Hawk, OVH,
+Falcon and macbook-air reconnected, the Catalog still advertises the six Agent
+releases as `ready`, and the convergence dry run is empty on all four.
+
+## Not released and not checked
+
+- No Machine release was built or activated. The resident Machines keep their
+  current binaries and worker generation; that lane is a separate maintenance
+  boundary.
+- No browser or device run was made against the new bundle. The Web gates are
+  the type check, lint, 2,203 tests and the production build.
+- Session `sess-1791549215502` logs a runtime-crash incident at every
+  Controller start. It did so at 09:03 and 09:21 before this activation, and
+  first failed at 08:24 with `managed review configuration is immutable`. It
+  was left as found.
+
+Evidence is retained in `/home/draven/tmp/cowboy-upgrades-20261010` on Hawk.

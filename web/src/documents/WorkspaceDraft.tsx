@@ -37,11 +37,11 @@ import {
 import { DRAFT_DRAG_TYPE, type DraftChange, type DraftMetadata } from "./model";
 import { draftRepository, useDraftLibrary } from "./store";
 import { documentNotice } from "./DocumentNotifications";
-import { copyDraftToSession } from "./transfer";
+import { copyDraftToSession, moveDraftToSession } from "./transfer";
 
 export type WorkspaceDraftAction = {
   draft: DraftMetadata;
-  action: "menu" | "rename" | "move" | "trash" | "copy";
+  action: "menu" | "rename" | "move" | "trash" | "copy" | "send";
 };
 
 export function WorkspaceDraftRow(
@@ -195,7 +195,9 @@ export function WorkspaceDraftActions(
     return (
       <Sheet open onClose={onClose} title={request.draft.title}>
         <List>
-          {(["rename", "move", "copy", "trash"] as const).map((item) => (
+          {(["rename", "move", "copy", "send", "trash"] as const).map((
+            item,
+          ) => (
             <ListItemButton
               key={item}
               onClick={() => flushSync(() => setAction(item))}
@@ -205,6 +207,7 @@ export function WorkspaceDraftActions(
                   rename: "Rename",
                   move: "Move to…",
                   copy: "Add to Session…",
+                  send: "Move to Session…",
                   trash: "Move to Trash",
                 }[item]}
               />
@@ -244,11 +247,13 @@ export function WorkspaceDraftActions(
       />
     );
   }
-  if (action === "copy") {
+  if (action === "copy" || action === "send") {
     const Picker = desktop ? DraftDestinationModal : DraftDestinationSheet;
     return (
       <Picker
-        title="Add draft to Session"
+        title={action === "send"
+          ? "Move draft to Session"
+          : "Add draft to Session"}
         sourceId=""
         initialFolder={request.draft.parent_id}
         busy={busy}
@@ -257,9 +262,21 @@ export function WorkspaceDraftActions(
         order={order}
         onClose={onClose}
         onPick={(session) =>
-          run(() =>
-            copyDraftToSession(request.draft.id, session.id, session.title)
-          )}
+          run(async () => {
+            if (action === "copy") {
+              return copyDraftToSession(
+                request.draft.id,
+                session.id,
+                session.title,
+              );
+            }
+            await moveDraftToSession(
+              request.draft.id,
+              session.id,
+              session.title,
+            );
+            if (activeId === request.draft.id) onRemoved();
+          })}
       />
     );
   }

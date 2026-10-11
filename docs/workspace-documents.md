@@ -102,6 +102,10 @@ search reveals matching paths and clearing it restores local folds. Top-level
 Sessions remain direct leaves. Keyboard/touch selection copies to the exact
 Session identity, including when titles are equal.
 
+Move to Session copies the same way and then puts the Draft in Trash, so
+the text lives in one place. A failed copy keeps the Draft. Undo restores
+the Draft and removes the copied row only while that row is unchanged.
+
 Trash keeps a tombstone and offers Undo. The shared sidebar exposes Trash when
 it contains documents. Restore is an explicit metadata operation.
 
