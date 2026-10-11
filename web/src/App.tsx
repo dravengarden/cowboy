@@ -1460,29 +1460,42 @@ function SessionList({
         event.stopPropagation();
         runRowCommand(command, rowKey, row, { toggle: key === "Enter" });
     };
-    // Tree rows indent by MARGIN, not padding, so a nested row's own
-    // selection, hover and drop material starts right of its ancestors'
-    // guides instead of painting across them. One step clears the parent
-    // chevron's centre (its guide) by 4px: chevron box + base padding.
-    const ROW_BASE_PL = mobileDrawer ? "4px" : "max(env(safe-area-inset-left), 12px)";
-    const ROW_FINE_PL = "6px";
-    const ROW_MX = mobileDrawer ? 4 : 6;
-    const INDENT_STEP = mobileDrawer ? "22px" : `calc(${ROW_BASE_PL} + 18px)`;
-    const INDENT_FINE_STEP = 22;
+    // Rows are flush with the rail: the grip and kebab glyphs already carry
+    // their own inset inside their hit boxes, so an outer gutter and a
+    // rounded capsule only cost title width. Tree rows indent by MARGIN, not
+    // padding, so a nested row's own selection, hover and drop material
+    // starts right of its ancestors' guides instead of painting across them.
+    // One step clears the parent chevron's centre (its guide) by 4px:
+    // base padding + half the chevron box + 4px.
+    const ROW_BASE_PL = mobileDrawer ? "0px" : "max(env(safe-area-inset-left), 4px)";
+    const ROW_END_PR = mobileDrawer ? 0 : "max(env(safe-area-inset-right), 4px)";
+    const INDENT_STEP = `calc(${ROW_BASE_PL} + 18px)`;
+    const INDENT_FINE_STEP = 16;
     const rowIndentSx = (depth: number, extraPl = 0, extraFinePl = extraPl) => ({
         pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px)`,
-        ml: `calc(${String(ROW_MX)}px + ${String(depth)} * ${INDENT_STEP})`,
-        mr: `${String(ROW_MX)}px`,
+        ml: `calc(${String(depth)} * ${INDENT_STEP})`,
         "@media (pointer: fine) and (hover: hover)": {
-            pl: `calc(${ROW_FINE_PL} + ${String(extraFinePl)}px)`,
-            ml: `${String(ROW_MX + depth * INDENT_FINE_STEP)}px`,
+            pl: `${String(extraFinePl)}px`,
+            ml: `${String(depth * INDENT_FINE_STEP)}px`,
         },
     });
+    // Flush Desktop rows drop the shared capsule: no radius, and no border
+    // whose left and right edges would sit on the rail's own edges. The
+    // keyboard ring moves inside the row, where the scroller cannot clip it.
+    const flushRowSx = desktop
+        ? {
+            borderWidth: 0,
+            borderRadius: 0,
+            "&.Mui-focusVisible": {
+                boxShadow: (t: Theme) => `inset 0 0 0 1px ${t.palette.primary.main}`,
+            },
+        }
+        : {};
     // Obsidian-style indent guides: one hairline per ancestor level, centred
     // under that ancestor's chevron (28px touch / 24px fine box after the base
-    // padding). The pseudo-element reaches back over the row's indent margin
-    // and spans the row gaps, joining consecutive rows into one continuous
-    // line, so a folder's body is visibly fenced off. Paint-only.
+    // padding). The pseudo-element reaches back over the row's indent margin;
+    // rows touch, so consecutive rows join into one continuous line and a
+    // folder's body is visibly fenced off. Paint-only.
     const treeGuideSx = (depth: number) => {
         if (depth === 0) return {};
         const levels = Array.from({ length: depth }, (_, level) => level);
@@ -1490,8 +1503,8 @@ function SessionList({
             "&::before": {
                 content: '""',
                 position: "absolute",
-                top: "-2px",
-                bottom: "-2px",
+                top: 0,
+                bottom: 0,
                 left: `calc(-1 * ${String(depth)} * ${INDENT_STEP})`,
                 right: 0,
                 pointerEvents: "none",
@@ -1504,7 +1517,7 @@ function SessionList({
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
                     left: `${String(-depth * INDENT_FINE_STEP)}px`,
-                    backgroundPosition: levels.map((level) => `${String(level * INDENT_FINE_STEP + 18)}px 0`).join(", "),
+                    backgroundPosition: levels.map((level) => `${String(level * INDENT_FINE_STEP + 12)}px 0`).join(", "),
                 },
             },
         };
@@ -1695,12 +1708,14 @@ function SessionList({
                         : mobileDrawer
                         ? "calc(84px + env(safe-area-inset-bottom, 0px))"
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
-                    // Touch keeps 44px grip and kebab targets, but lets each
-                    // overhang the row's own edge padding so the visible
-                    // gutters stop costing a phone-width rail ~16px.
-                    "& .cowboy-session-grip": { mx: "-4px" },
-                    "& .cowboy-session-grip-slot": { width: 36 },
-                    "& .cowboy-session-actions": { ml: 0, mr: "-4px" },
+                    // Touch keeps 44px grip and kebab targets, but the grip
+                    // overhangs its 32px slot so the glyph's own inset is the
+                    // only gutter a phone-width rail pays for. The kebab stays
+                    // inside the row: an overhang past the scroller's end edge
+                    // would let focus scroll the list sideways.
+                    "& .cowboy-session-grip": { mx: "-6px" },
+                    "& .cowboy-session-grip-slot": { width: 32 },
+                    "& .cowboy-session-actions": { ml: 0 },
                     // The folder chevron is decorative (the whole row toggles),
                     // so it needs no touch-sized box; tree indentation and
                     // guides are measured from this narrower width.
@@ -1710,14 +1725,19 @@ function SessionList({
                     // while fitting more sessions without making the rail noisy.
                     "@media (pointer: fine) and (hover: hover)": {
                         py: 0.5,
+                        // 24px is the glyph plus a hover halo; the 32px height
+                        // keeps a comfortable vertical target.
                         "& .cowboy-session-grip, & .cowboy-session-actions": {
-                            width: 32,
+                            width: 24,
+                            minWidth: 0,
                             height: 32,
+                            minHeight: 0,
                             mx: 0,
+                            borderRadius: "6px",
                         },
-                        // The slot follows its 32px grip rather than reserving
-                        // the touch width beside it.
-                        "& .cowboy-session-grip-slot": { width: 32 },
+                        // The slot follows its grip rather than reserving the
+                        // touch box, which otherwise sets the row height.
+                        "& .cowboy-session-grip-slot": { width: 24, height: 32 },
                         "& .cowboy-session-actions": { ml: 0.25 },
                         "& .cowboy-folder-chevron": { width: 24 },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
@@ -1750,9 +1770,7 @@ function SessionList({
                             alignItems: "center",
                             minHeight: 36,
                             ...rowIndentSx(row.depth, 18, 12),
-                            pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
-                            my: 0.25,
-                            borderRadius: "10px",
+                            pr: ROW_END_PR,
                             color: "text.disabled",
                             "@media (pointer: fine) and (hover: hover)": {
                                 ...rowIndentSx(row.depth, 18, 12)["@media (pointer: fine) and (hover: hover)"],
@@ -1801,14 +1819,14 @@ function SessionList({
                         onActivate={(): void => setFolderCollapsed([f.id], row.expanded)}
                         sx={{
                             ...(desktop && desktopListItemSx()),
+                            ...flushRowSx,
                             ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, rowKey)),
                             ...rowIndentSx(row.depth),
-                            pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
-                            my: 0.25,
+                            pr: ROW_END_PR,
                             "@media (pointer: fine) and (hover: hover)": {
                                 ...rowIndentSx(row.depth)["@media (pointer: fine) and (hover: hover)"],
-                                pr: 0.5,
+                                pr: 0,
                                 py: 0.25,
                             },
                         }}
@@ -1901,9 +1919,9 @@ function SessionList({
                         key={`draft:${row.draft.id}`} draft={row.draft}
                         selected={activeId === `draft:${row.draft.id}`} sortable={sortable}
                         desktop={desktop} onPick={() => onPick(`draft:${row.draft.id}`)} onAction={onDraftAction}
-                        sx={{ ...(desktop && desktopListItemSx()), ...treeGuideSx(row.depth),
+                        sx={{ ...(desktop && desktopListItemSx()), ...flushRowSx, ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, `draft:${row.draft.id}`)),
-                            ...rowIndentSx(row.depth), pr: 0.5, my: 0.25 }}
+                            ...rowIndentSx(row.depth), pr: 0 }}
                     />;
                     const s = row.session;
                     const deleting = deletingSessionIds.has(s.id) || s.closing === true;
@@ -1956,6 +1974,7 @@ function SessionList({
                         // row gutters compact while preserving 44px controls.
                         sx={{
                             ...(desktop && desktopListItemSx()),
+                            ...flushRowSx,
                             ...treeGuideSx(row.depth),
                             ...dropHighlightSx(dropHighlight(row, s.id)),
                             "&[data-workspace-copy-target='true']": { bgcolor: "action.selected", outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
@@ -1967,23 +1986,22 @@ function SessionList({
                                 // selected/current selectors with higher
                                 // specificity so desktopListItemSx's quieter
                                 // shared selection material cannot override it.
+                                // A flush row has no capsule edge to tint, so
+                                // an accent bar on its leading edge marks it.
                                 "&&.Mui-selected, &&[data-desktop-current='true']": {
-                                    borderColor: (t) => alpha(t.palette.primary.main, 0.38),
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
                                     boxShadow: (t) =>
-                                        `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.08)}`,
+                                        `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.85)}`,
                                 },
                                 "&&.Mui-selected:hover, &&[data-desktop-current='true']:hover": {
-                                    borderColor: (t) => alpha(t.palette.primary.main, 0.48),
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
                                 },
                             }),
                             ...rowIndentSx(row.depth),
-                            pr: mobileDrawer ? 0.5 : "max(env(safe-area-inset-right), 12px)",
-                            my: 0.25,
+                            pr: ROW_END_PR,
                             "@media (pointer: fine) and (hover: hover)": {
                                 ...rowIndentSx(row.depth)["@media (pointer: fine) and (hover: hover)"],
-                                pr: 0.5,
+                                pr: 0,
                                 py: 0.25,
                             },
                             ...(deleting && {
@@ -4298,10 +4316,11 @@ export function App({
                     // the Sessions region owns focus.
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
-                        borderColor: (t) => alpha(t.palette.primary.main, 0.62),
                         bgcolor: "transparent",
+                        // Inset: Sessions rows are flush with the rail, whose
+                        // scroller would clip an outer ring.
                         boxShadow: (t) =>
-                            `0 0 0 2px ${alpha(t.palette.primary.main, 0.14)}`,
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.62)}`,
                         "& .cowboy-session-grip": {
                             color: "primary.main",
                         },
@@ -4310,10 +4329,9 @@ export function App({
                         },
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
-                        borderColor: (t) => alpha(t.palette.primary.main, 0.68),
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
                         boxShadow: (t) =>
-                            `0 0 0 2px ${alpha(t.palette.primary.main, 0.15)}`,
+                            `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.85)}, inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.68)}`,
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
