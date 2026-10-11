@@ -221,10 +221,13 @@ where
         let Some(text) = text else {
             // Small-frame replays also build a backlog. Heartbeats arriving
             // while that backlog drains must overtake it, just as they do
-            // between chunks of a large frame. Application data stays FIFO.
+            // between chunks of a large frame. Preserve the same negotiated
+            // execution priority here: putting a small RPC in `queued` hides
+            // it from the chunk loop behind any bulk frame already queued.
+            // Ordered application data stays FIFO.
             for _ in 0..1024 {
                 let Ok(next) = incoming.try_recv() else { break };
-                if next.urgent() {
+                if first(&next) {
                     send(&mut sink, next).await?;
                 } else {
                     queued.push_back(next);

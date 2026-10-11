@@ -379,6 +379,61 @@ const EVENT: &str =
     "{\"type\":\"runtime\",\"frame\":{\"type\":\"worker_event\",\"runtime_seq\":2}}";
 
 #[tokio::test]
+async fn small_frame_drain_does_not_hide_execution_replies_behind_bulk() {
+    for paced in [false, true] {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let bulk = "x".repeat(CHUNK_BYTES * 3);
+        for text in [EVENT, &bulk, REPLY] {
+            tx.send(Ws::Text(text.to_owned().into())).unwrap();
+        }
+        drop(tx);
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&output);
+        let sink = futures::sink::unfold((), move |(), frame: Ws| {
+            captured.lock().unwrap().push(frame);
+            async { Ok::<_, std::io::Error>(()) }
+        });
+        write(
+            Box::pin(sink),
+            rx,
+            (true, false, paced),
+            Some(Arc::new(Credit::default())),
+        )
+        .await
+        .unwrap();
+        let frames = output.lock().unwrap();
+        let reply = frames
+            .iter()
+            .position(|f| f.to_text().ok() == Some(REPLY))
+            .unwrap();
+        let first_chunk = frames
+            .iter()
+            .position(|f| matches!(f, Ws::Binary(_)))
+            .unwrap();
+        let last_chunk = frames
+            .iter()
+            .rposition(|f| matches!(f, Ws::Binary(_)))
+            .unwrap();
+        if paced {
+            assert!(
+                reply < first_chunk,
+                "small-frame draining hid a priority reply behind bulk"
+            );
+        } else {
+            assert!(reply > last_chunk, "unpaced peers require application FIFO");
+        }
+        let event = frames
+            .iter()
+            .position(|f| f.to_text().ok() == Some(EVENT))
+            .unwrap();
+        assert!(
+            event < first_chunk,
+            "ordered worker events must retain their position"
+        );
+    }
+}
+
+#[tokio::test]
 async fn paced_bulk_waits_for_credit_while_execution_replies_overtake() {
     let (tx, rx) = mpsc::unbounded_channel();
     let output = Arc::new(Mutex::new(Vec::new()));
