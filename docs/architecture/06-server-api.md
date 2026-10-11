@@ -167,7 +167,7 @@ code **4001**.
 Native and ACP clients use browser-approved device authorization. The client
 generates its Ed25519 key and PKCE verifier; the browser performs the configured
 Cardea/password/plugin login and explicitly approves the public-key fingerprint.
-The exchange returns a 10-minute access token and an absolute 30-day refresh
+The exchange returns a 10-minute access token and an absolute one-year refresh
 token. Every API and WebSocket handshake signs method, path/query, token hash,
 timestamp, and a single-use nonce. Refresh tokens are hash-only in storage,
 rotate on every use, and revoke the device family on replay. Access tokens are

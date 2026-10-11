@@ -2982,3 +2982,45 @@ it shrinks continuously as the App column's `--kb-inset` padding grows, and
 Hide keyboard renders from `useKeyboardOpen()`. The Mobile shell fixture checks
 that focus alone does not move the bar and that a keyboard inset lifts it; it
 does not reproduce iOS keyboard animation timing (physical check pending).
+
+### 2026-10-11 Prompt drafts must survive a session switch and a reload
+
+Field report: a prompt being written lost data after a mouse click on another
+session. The click moved the caret out of the composer and opened a session
+with an empty draft, the update gate read that as idle and reloaded for a
+deployed build, and the reloaded page dropped the pasted image: its first
+read of the attachment bytes ran before the account was bound, failed, and
+was treated as "the bytes are gone". Reproduced on the production Desktop
+shell; the storage contract is in `docs/offline-first-sync.md`.
+
+Editor-facing rules that follow from it:
+
+- The controller stores the text on every change, directly, on every surface.
+  It used to skip the store while a pasted image was encoding, and on touch it
+  stored from a React effect; both leave a window in which a session switch
+  unmounts the composer with unsaved typing. Do not gate text persistence on
+  attachment state or on a render.
+- A replaced composer's refs are a snapshot of the past. Its late results go
+  through the draft store (`composer/draftHandOff.ts`), and its send
+  acknowledgement clears the stored draft only while that is still exactly
+  what was sent.
+- `PlatformComposerEditor` still seeds CM6 once and never feeds live text back
+  into a living view. The one addition: when the CM6 lifetime key changes
+  (Vim turned on for the first time: placeholder, then the real editor), the
+  new document starts from the latest text instead of the mount-time seed.
+  The seed changes only in the same render as the remount, so the living-view
+  rule and IME are untouched.
+- `@uiw/react-codemirror` discards its view when React disconnects layout
+  effects without unmounting (a Suspense boundary above the editor hides its
+  content because a sibling suspended) and rebuilds it from `value` when the
+  boundary shows again. With the frozen seed that reverted the document to
+  the text the editor opened with, and the next keystroke stored it
+  (reproduced in Chrome). `PlatformComposerEditor` now adopts the latest text
+  as the seed in its own layout-effect cleanup, which runs in the same
+  disconnect, so the rebuilt view starts from what was typed. The caret
+  returns to the document start; the editor had lost focus by being hidden.
+  This covers every consumer of the gateway: prompt, Queue/Draft row edits,
+  fullscreen and Draft documents.
+
+No extension, IME, caret, paste or keyboard path changed. Verified with the
+Web gate and on the Desktop shell in Chrome; not run on iOS.

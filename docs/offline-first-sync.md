@@ -451,7 +451,11 @@ re-arms every second so the reload lands on the first real pause. An editor is
 in use while a composition is open, or while its window has keyboard focus and
 it was typed in during the last 60 seconds: Desktop rests the caret in the
 composer for the whole session, so focus alone would hold an update until a
-manual reload. A configured
+manual reload. Typing in the last 20 seconds holds without the focus: a mouse
+click on another session moves the caret out of the composer and opens an
+empty one, which is the middle of writing a prompt, not a pause. An update is
+also held while any draft's attachment bytes are still on their way to the
+database (`draftsDurable`). A configured
 delay of 0 explicitly applies immediately after the complete download, even
 when the idle gate is closed. Manual mode still downloads in the background
 but never applies without a press. Changing mode or delay takes effect for an
@@ -895,6 +899,35 @@ Phase 3 shipped in part with the same release (service worker
   the tokens of images that are gone (`web/src/draftRestore.ts`). Without a
   database the old text-only quota fallback still applies; a pending paste
   placeholder is still lost on a crash.
+- Drafts survive the reload that restores them (2026-10-11 field loss: a
+  pasted image vanished when the update reload followed a mouse session
+  switch). The store module loads before a reloaded page has bound its
+  account, so its first database read fails. A failed read is not an absent
+  record: the mirror keeps its tokens and its promise, a composer writing its
+  seed back keeps both and leaves the record alone, and
+  `retryDraftRestore` reads the bytes when the dataset is known
+  (`openSocket`). The merge works on the live draft, so text typed and images
+  pasted meanwhile stay, and an image deleted meanwhile stays deleted. New
+  attachment bytes start their database write at once rather than after the
+  typing pause; writes for one session are ordered, so a save cannot land
+  after the discard that followed it; a draft sent before the database
+  answered has its record discarded instead of coming back. Dropping an
+  orphaned token no longer collapses every run of spaces in the draft. The
+  text is stored on every change even while an image is still encoding, and
+  an image that settles after its composer was replaced is handed to the
+  store (`composer/draftHandOff.ts`).
+- Queue/Draft row edits in IndexedDB: the attachments of a session's
+  in-progress row edits are one `session:<sid>:edits` record keyed by
+  `kind:id`; each edit's localStorage record keeps its text, tokens and a
+  flag. They used to live whole in localStorage, where one pasted screenshot
+  could exceed the quota and the fallback kept only the text. The contract is
+  the composer draft's: a failed read keeps the promise, the restore runs
+  again when the dataset is known (`retryPendingEditRestore`), an open row
+  editor adopts the bytes when they arrive, an edit still waiting for its
+  bytes is neither rewritten in the database nor claimed for parked-draft
+  recovery, and an update waits for bytes in flight (`pendingEditsDurable`).
+  Without a database the localStorage record is the fallback; its quota path
+  now removes only the image tokens instead of collapsing the text's spacing.
 - P3 hover prefetch: a mouse resting on a Desktop sessions row for 150 ms
   fetches that tail ahead of the P2 queue (`prefetchSessionTail`).
 - Conflict 7 (Controller and Web release, service worker `cowboy-v1734`):

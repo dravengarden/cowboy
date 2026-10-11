@@ -14,7 +14,7 @@ const endpoint = process.argv.slice(2)[0] ?? "";
 const suite = process.argv.slice(2)[1] ?? "desktop-composer";
 const themeMode = process.argv.slice(2)[2] ?? "light";
 const ENTRIES: Readonly<Record<string, [string, number]>> = {
-  "desktop-composer": ["runDesktopComposerBrowserConformance", 12],
+  "desktop-composer": ["runDesktopComposerBrowserConformance", 13],
   "draft-documents": ["runDraftDocumentsBrowserConformance", 12],
   "editor-plugin-sandbox": ["runEditorPluginSandboxBrowserConformance", 4],
   "managed-calls": ["runManagedCallsBrowserConformance", 11],

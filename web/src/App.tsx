@@ -672,6 +672,8 @@ function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElement | n
 }
 
 type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename";
+/** Primary-tint opacity of the open session's row on Desktop. */
+const CURRENT_ROW_FILL = 0.12;
 /** Input that hands the Sessions list back to the user while it settles. */
 const SETTLE_RELEASE_EVENTS = ["wheel", "pointerdown", "touchstart", "keydown"] as const;
 const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
@@ -1492,13 +1494,15 @@ function SessionList({
     // their own inset inside their hit boxes, so an outer gutter and a
     // rounded capsule only cost title width. Tree rows indent by MARGIN, not
     // padding, so a nested row's own selection, hover and drop material
-    // always stays inside its folder: it starts on the pixel after the
-    // parent's guide and never paints across it. One step is therefore the
-    // guide's offset (base padding + half the chevron box) plus its 1px.
+    // always stays inside its folder: it starts ON the parent's guide, which
+    // is then the row's own leading edge, and never paints across it. A row
+    // that started one pixel later left the pale guide beside a tinted fill,
+    // which read as a gap. One step is therefore exactly the guide's offset:
+    // base padding + half the chevron box.
     const ROW_BASE_PL = mobileDrawer ? "0px" : "max(env(safe-area-inset-left), 4px)";
     const ROW_END_PR = mobileDrawer ? 0 : "max(env(safe-area-inset-right), 4px)";
-    const INDENT_STEP = `calc(${ROW_BASE_PL} + 15px)`;
-    const INDENT_FINE_STEP = 13;
+    const INDENT_STEP = `calc(${ROW_BASE_PL} + 14px)`;
+    const INDENT_FINE_STEP = 12;
     const rowIndentSx = (depth: number, extraPl = 0, extraFinePl = extraPl) => ({
         pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px)`,
         ml: `calc(${String(depth)} * ${INDENT_STEP})`,
@@ -2019,11 +2023,11 @@ function SessionList({
                                 // A flush row is marked by its fill alone: an
                                 // edge on one side reads as a lopsided border.
                                 "&&.Mui-selected, &&[data-desktop-current='true']": {
-                                    bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
+                                    bgcolor: (t) => alpha(t.palette.primary.main, CURRENT_ROW_FILL),
                                     boxShadow: "none",
                                 },
                                 "&&.Mui-selected:hover, &&[data-desktop-current='true']:hover": {
-                                    bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
+                                    bgcolor: (t) => alpha(t.palette.primary.main, CURRENT_ROW_FILL + 0.04),
                                 },
                             }),
                             ...rowIndentSx(row.depth),
@@ -4345,11 +4349,11 @@ export function App({
                     // the Sessions region owns focus.
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
-                        bgcolor: "transparent",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.04),
                         // Inset: Sessions rows are flush with the rail, whose
                         // scroller would clip an outer ring.
                         boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.62)}`,
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.5)}`,
                         "& .cowboy-session-grip": {
                             color: "primary.main",
                         },
@@ -4358,9 +4362,11 @@ export function App({
                         },
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
-                        boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.68)}`,
+                        // The open session is focused after every click, so
+                        // a ring here would box it permanently. The cursor
+                        // resting on it deepens the fill instead.
+                        bgcolor: (t) => alpha(t.palette.primary.main, CURRENT_ROW_FILL + 0.06),
+                        boxShadow: "none",
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),

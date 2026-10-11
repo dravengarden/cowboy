@@ -1,4 +1,5 @@
 import { checkInputVim } from "./desktop/inputVimBrowserConformance";
+import { checkComposerDraftPersistence } from "./composer/composerDraftBrowserConformance";
 import { checkDraftKeyboard } from "./desktop/draftKeyboardBrowserConformance";
 import { checkDraftDestinationDialog } from "./desktop/draftDestinationBrowserConformance";
 import {
@@ -607,6 +608,7 @@ export async function runDesktopComposerBrowserConformance(): Promise<
     results.push(
       "Formatting menu and Escape respect exclusive shortcut scope and preserve the editor",
     );
+    results.push(await checkComposerDraftPersistence());
     results.push(await checkPendingPanelLayout());
     results.push(await checkPendingPreviewTouchDisclosure());
     results.push(await checkDraftDestinationDialog());

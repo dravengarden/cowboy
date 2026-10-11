@@ -119,6 +119,9 @@ export const PlatformComposerEditor = forwardRef<
   surfaceKindRef.current = surface.kind;
   const onChangeRef = useRef(props.onChange);
   onChangeRef.current = props.onChange;
+  // What the user has actually written, whichever child editor holds it. A
+  // fresh CM6 lifetime must start from this, never from the mount-time seed.
+  const latestTextRef = useRef(props.value);
   // Native Pinyin candidate confirmation is still one composition. Swapping
   // the textarea for CM6 (or back) in that window wipes marked text — the
   // candidate tap looks like it did nothing and composition dies. iOS
@@ -214,6 +217,7 @@ export const PlatformComposerEditor = forwardRef<
         pastePromotionPendingRef.current = true;
       }
     }
+    latestTextRef.current = next;
     onChangeRef.current(next);
   }, []);
   // During an image Paste, the token is inserted synchronously and this render
@@ -246,12 +250,17 @@ export const PlatformComposerEditor = forwardRef<
     pastePromotionPendingRef.current,
   );
   const cmSeedRef = useRef(props.value);
-  cmSeedRef.current = composerEditorMountSeed(
+  const adoptedSeed = composerEditorMountSeed(
     wasNativeTouch,
     nativeTouch,
     cmSeedRef.current,
     touchValue,
   );
+  if (adoptedSeed !== cmSeedRef.current) {
+    // The parent's value replaces the CM6 document without an onChange.
+    cmSeedRef.current = adoptedSeed;
+    latestTextRef.current = adoptedSeed;
+  }
   const initialSelection = nativePromotionSelection(
     wasNativeTouch,
     nativeTouch,
@@ -297,6 +306,28 @@ export const PlatformComposerEditor = forwardRef<
     runtimeState === "ready",
     runtimeState === "failed",
   );
+  // Turning Vim on for the first time replaces the editor twice (a disabled
+  // placeholder while the runtime loads, then the real one). Each replacement
+  // is a new CM6 document: seed it with what was typed, or enabling Vim
+  // reverts the prompt to the text this composer opened with.
+  const cmLifetime = policy.awaitingRuntime ? "vim-loading" : "interactive";
+  const cmLifetimeRef = useRef(cmLifetime);
+  if (cmLifetimeRef.current !== cmLifetime) {
+    cmLifetimeRef.current = cmLifetime;
+    cmSeedRef.current = latestTextRef.current;
+  }
+  // React disconnects layout effects when a Suspense boundary above hides its
+  // content, and the editor library answers by discarding its view; it builds
+  // a new one from `value` when the boundary shows again. Hand it what was
+  // typed, or a sibling that suspends reverts the document to the mount-time
+  // seed and the next keystroke stores that. The seed changes only while no
+  // view is alive, so a living view never receives a new `value`.
+  const [, adoptLatestSeed] = useState(0);
+  useLayoutEffect(() => (): void => {
+    if (cmSeedRef.current === latestTextRef.current) return;
+    cmSeedRef.current = latestTextRef.current;
+    adoptLatestSeed((epoch) => epoch + 1);
+  }, []);
   const mountFocus = desktopEditorMountFocusPolicy(
     focusEndOnMount,
     policy.awaitingRuntime,
@@ -375,7 +406,7 @@ export const PlatformComposerEditor = forwardRef<
       // The loading editor is deliberately a separate, non-interactive CM6
       // lifetime. The real editor mounts only after Vim can be included in its
       // initial EditorState, so native IME composition never spans reconfigure.
-      key={policy.awaitingRuntime ? "vim-loading" : "interactive"}
+      key={cmLifetime}
       ref={bindEditorRef}
       disabled={props.disabled || policy.awaitingRuntime}
       vim={policy.enableVim}

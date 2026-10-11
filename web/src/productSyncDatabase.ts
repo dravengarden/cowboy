@@ -189,11 +189,12 @@ export type ProductCacheScope =
     readonly session: string;
     // `draft` holds the composer's staged attachments (bytes too large for
     // the localStorage text mirror); it is device-local, never server-derived,
-    // but shares the dataset fence and the sign-out discard.
-    readonly state: "tail" | "delivery" | "draft";
+    // but shares the dataset fence and the sign-out discard. `edits` holds the
+    // attachments of the session's in-progress Queue/Draft row edits likewise.
+    readonly state: "tail" | "delivery" | "draft" | "edits";
   };
 
-const CACHE_SESSION_STATES = ["tail", "delivery", "draft"] as const;
+const CACHE_SESSION_STATES = ["tail", "delivery", "draft", "edits"] as const;
 
 function cacheSuffix(scope: ProductCacheScope): string {
   if (scope.kind === "service") {
