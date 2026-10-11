@@ -116,6 +116,13 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    Cowboy binds Obsidian's list Enter in both live preview and Source mode
    (`web/src/composer/markdownEditing.ts`); upstream duplicated the marker when
    Enter was pressed at the start of an item. Do not re-add it on sync.
+10. **The Vim command sink counts as editor focus** (`inline-preview.ts`,
+    `editorOwnsCursor`): the three `view.hasFocus` tests that gate the
+    active-line and active-link reveal also accept focus on the
+    `[data-vim-command-sink]` element inside `view.dom`. Desktop Vim
+    Normal/Visual keeps browser focus there, so upstream's test hid the
+    markers of the cursor line and the block cursor sat on hidden characters
+    (PITFALLS #0b). Re-apply on sync.
 
 `edit-helpers.ts` is kept verbatim but no longer wired: Cowboy uses
 `web/src/composer/obsidianAutoPair.ts` instead of `extendEmphasisPair` and

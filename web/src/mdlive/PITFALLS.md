@@ -110,6 +110,24 @@ here says otherwise.
    atomic ranges, pointer behavior, or Mobile's native caret. Keep block images;
    reverting them to inline makes the caret as tall as the thumbnail.
 
+0b. **Desktop Vim cursor disappears ON an image line, and markers stay hidden
+   under it.** Vim does not move by CM6 atomic ranges: its motions set the
+   selection directly and its Normal cursor covers a character. `j`/`k`/`l`
+   therefore parked it on or inside the replaced token. At the token start
+   the block measured zero wide (invisible); inside, it was a thumbnail-tall
+   block beside the image, and `h`/`l` walked ~65 hidden characters. Second
+   cause, same symptom on any Markdown line: Normal/Visual focus lives on the
+   command sink, so the engine's `view.hasFocus` reveal never opened the
+   cursor line. Measured in Chrome over CDP with trusted keys.
+   **Fix (Obsidian Live Preview's rule):** the token under the Vim cursor, or
+   reached by a Visual selection, shows its source and the picture renders
+   on its own row below (`inlineImageSourceReveal.ts`; the mode reaches
+   editor state through `vimImageModeSync`). In Insert only a caret already
+   inside the token keeps it open. The engine treats the sink as focus
+   (SYNC.md #10). Without Vim nothing changes: the token stays an atomic
+   thumbnail, which the Mobile caret work (#69) depends on. Do not make the
+   token atomic for Vim instead: operators (`dd`, `x`, `w`) need real text.
+
 1. **Chinese pinyin IME drops/garbles on a marker line.** The original reason
    the mobile composer used a native `<textarea>`. CM6 contenteditable + IME on
    iOS is the hard constraint. **Mitigations that make it safe:** (a) the engine

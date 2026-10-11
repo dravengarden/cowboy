@@ -21,7 +21,12 @@ import {
   EditorView,
   WidgetType,
 } from "@codemirror/view";
-import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
+import {
+  imageBelowSource,
+  imageSourceRevealed,
+  setVimImageMode,
+} from "./inlineImageSourceReveal";
 import { type Attachment, isLoadablePreviewUrl } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 import { setProtectedImageSource } from "./protectedImage";
@@ -81,12 +86,15 @@ class InlineImageWidget extends WidgetType {
     // delete, or a range select) — draws the selection ring.
     private readonly selected: boolean,
     private readonly previewUrl: string | undefined,
+    // On its own row below a source line that Vim has revealed.
+    private readonly below = false,
   ) {
     super();
   }
   override eq(other: InlineImageWidget): boolean {
     return other.id === this.id && other.name === this.name &&
-      other.selected === this.selected && other.previewUrl === this.previewUrl;
+      other.selected === this.selected && other.previewUrl === this.previewUrl &&
+      other.below === this.below;
   }
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
@@ -95,6 +103,7 @@ class InlineImageWidget extends WidgetType {
       const widget = document.createElement("span");
       widget.className = "cm-inline-image-widget";
       widget.contentEditable = "false";
+      if (this.below) widget.style.display = "block";
       // @replit/codemirror-vim walks into the DOM immediately after an EOL
       // cursor to borrow its font style. A block widget whose first descendant
       // is an empty <img> makes that walk end at `undefined`, so its cursor
@@ -204,8 +213,15 @@ class InlineImageWidget extends WidgetType {
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 const IMG_TOKEN_RE = /!\[([^\]]*)\]\(cowboy-att:([^)]+)\)/g;
 
-function buildImageDecorations(state: EditorState): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
+interface ImageDecorations {
+  readonly all: DecorationSet;
+  /** The replaced tokens only: what the caret may not enter. */
+  readonly atomic: DecorationSet;
+}
+
+function buildImageDecorations(state: EditorState): ImageDecorations {
+  const all: Range<Decoration>[] = [];
+  const atomic: Range<Decoration>[] = [];
   const { doc } = state;
   const sel = state.selection.main;
   for (let i = 1; i <= doc.lines; i++) {
@@ -217,33 +233,39 @@ function buildImageDecorations(state: EditorState): DecorationSet {
       const from = line.from + match.index;
       const to = from + match[0].length;
       const selected = !sel.empty && sel.from <= from && sel.to >= to;
-      builder.add(
-        from,
-        to,
-        Decoration.replace({
-          widget: new InlineImageWidget(
-            match[2],
-            match[1] ?? "",
-            selected,
-            registry.get(match[2])?.previewUrl,
+      const previewUrl = registry.get(match[2])?.previewUrl;
+      // Under the Desktop Vim cursor the token is its source text, with the
+      // picture below the line (inlineImageSourceReveal.ts).
+      if (imageSourceRevealed(state, from, to)) {
+        all.push(
+          imageBelowSource(
+            new InlineImageWidget(match[2], match[1] ?? "", selected, previewUrl, true),
+            line.to,
           ),
-        }),
-      );
+        );
+        continue;
+      }
+      const token = Decoration.replace({
+        widget: new InlineImageWidget(match[2], match[1] ?? "", selected, previewUrl),
+      }).range(from, to);
+      all.push(token);
+      atomic.push(token);
     }
   }
-  return builder.finish();
+  return { all: Decoration.set(all, true), atomic: Decoration.set(atomic) };
 }
 
-export const inlineImageField = StateField.define<DecorationSet>({
+export const inlineImageField = StateField.define<ImageDecorations>({
   create: (state) => buildImageDecorations(state),
   update: (value, tr) =>
-    tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
+    tr.docChanged || tr.selection ||
+      tr.effects.some((effect) => effect.is(refreshInlineImages) || effect.is(setVimImageMode))
       ? buildImageDecorations(tr.state)
       : value,
   provide: (f) => [
-    EditorView.decorations.from(f),
+    EditorView.decorations.from(f, (value) => value.all),
     EditorView.atomicRanges.of(
-      (view) => view.state.field(f, false) ?? Decoration.none,
+      (view) => view.state.field(f, false)?.atomic ?? Decoration.none,
     ),
   ],
 });

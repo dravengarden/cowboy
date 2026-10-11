@@ -326,13 +326,25 @@ function pushReplace(
   }
 }
 
+// LOCAL: Desktop Vim Normal/Visual keeps browser focus on a non-editable
+// command sink inside view.dom, not on the content. The cursor is still in
+// this editor, so its line must reveal its markers: otherwise the block
+// cursor sits on hidden characters. See SYNC.md.
+function editorOwnsCursor(view: EditorView): boolean {
+  if (view.hasFocus) return true;
+  const active = view.root.activeElement;
+  return active instanceof HTMLElement && view.dom.contains(active) &&
+    active.matches('[data-vim-command-sink]');
+}
+
 function buildInlineDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const { doc } = state;
   const ranges: Range<Decoration>[] = [];
+  const focused = editorOwnsCursor(view); // LOCAL
 
   const activeLines = new Set<number>();
-  if (view.hasFocus) {
+  if (focused) {
     for (const r of state.selection.ranges) {
       const firstLine = doc.lineAt(r.from).number;
       const lastLine = doc.lineAt(r.to).number;
@@ -398,7 +410,7 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
           for (let n = firstLine; n <= lastLine; n++) activeLines.add(n);
         }
       }
-      if (node.name === 'Link' && view.hasFocus) {
+      if (node.name === 'Link' && focused) {
         for (const range of state.selection.ranges) {
           // Inclusive overlap: cursor sitting exactly on either
           // boundary counts as inside, matching the UX where the
@@ -665,7 +677,7 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
   // emitting the mark ourselves regardless of flanking. Once the
   // cursor leaves, lezer's opinion wins and the visual reverts to
   // what will actually persist when the line is serialized.
-  if (view.hasFocus) {
+  if (focused) {
     const head = state.selection.main.head;
     const line = doc.lineAt(head);
     if (activeLines.has(line.number)) {
