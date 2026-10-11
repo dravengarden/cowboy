@@ -1490,19 +1490,21 @@ function SessionList({
     };
     // Rows are flush with the rail: the grip and kebab glyphs already carry
     // their own inset inside their hit boxes, so an outer gutter and a
-    // rounded capsule only cost title width. Tree rows indent by PADDING, so
-    // a nested row's selection, hover and drop material is as flush with the
-    // rail as a top-level row's; the ancestors' guides paint over it. One
-    // step clears the parent chevron's centre (its guide) by 4px: base
-    // padding + half the chevron box + 4px.
+    // rounded capsule only cost title width. Tree rows indent by MARGIN, not
+    // padding, so a nested row's own selection, hover and drop material
+    // always stays inside its folder: it starts on the pixel after the
+    // parent's guide and never paints across it. One step is therefore the
+    // guide's offset (base padding + half the chevron box) plus its 1px.
     const ROW_BASE_PL = mobileDrawer ? "0px" : "max(env(safe-area-inset-left), 4px)";
     const ROW_END_PR = mobileDrawer ? 0 : "max(env(safe-area-inset-right), 4px)";
-    const INDENT_STEP = `calc(${ROW_BASE_PL} + 18px)`;
-    const INDENT_FINE_STEP = 16;
+    const INDENT_STEP = `calc(${ROW_BASE_PL} + 15px)`;
+    const INDENT_FINE_STEP = 13;
     const rowIndentSx = (depth: number, extraPl = 0, extraFinePl = extraPl) => ({
-        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px + ${String(depth)} * ${INDENT_STEP})`,
+        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px)`,
+        ml: `calc(${String(depth)} * ${INDENT_STEP})`,
         "@media (pointer: fine) and (hover: hover)": {
-            pl: `${String(extraFinePl + depth * INDENT_FINE_STEP)}px`,
+            pl: `${String(extraFinePl)}px`,
+            ml: `${String(depth * INDENT_FINE_STEP)}px`,
         },
     });
     // Flush Desktop rows drop the shared capsule: no radius, and no border
@@ -1519,9 +1521,9 @@ function SessionList({
         : {};
     // Obsidian-style indent guides: one hairline per ancestor level, centred
     // under that ancestor's chevron (28px touch / 24px fine box after the base
-    // padding). The pseudo-element paints over the row's own material; rows
-    // touch, so consecutive rows join into one continuous line and a folder's
-    // body is visibly fenced off. Paint-only.
+    // padding). The pseudo-element reaches back over the row's indent margin;
+    // rows touch, so consecutive rows join into one continuous line and a
+    // folder's body is visibly fenced off. Paint-only.
     const treeGuideSx = (depth: number) => {
         if (depth === 0) return {};
         const levels = Array.from({ length: depth }, (_, level) => level);
@@ -1531,7 +1533,7 @@ function SessionList({
                 position: "absolute",
                 top: 0,
                 bottom: 0,
-                left: 0,
+                left: `calc(-1 * ${String(depth)} * ${INDENT_STEP})`,
                 right: 0,
                 pointerEvents: "none",
                 backgroundImage: (t: Theme) =>
@@ -1542,6 +1544,7 @@ function SessionList({
                     .map((level) => `calc(${String(level)} * ${INDENT_STEP} + ${ROW_BASE_PL} + 14px) 0`)
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
+                    left: `${String(-depth * INDENT_FINE_STEP)}px`,
                     backgroundPosition: levels.map((level) => `${String(level * INDENT_FINE_STEP + 12)}px 0`).join(", "),
                 },
             },
@@ -1734,12 +1737,13 @@ function SessionList({
                         ? "calc(84px + env(safe-area-inset-bottom, 0px))"
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
                     // Touch keeps 44px grip and kebab targets, but the grip
-                    // overhangs its 32px slot so the glyph's own inset is the
-                    // only gutter a phone-width rail pays for. The kebab stays
+                    // overhangs its 24px slot, which is just the glyph: the
+                    // dots sit beside the row's leading edge (its folder's
+                    // guide) with no gutter of their own. The kebab stays
                     // inside the row: an overhang past the scroller's end edge
                     // would let focus scroll the list sideways.
-                    "& .cowboy-session-grip": { mx: "-6px" },
-                    "& .cowboy-session-grip-slot": { width: 32 },
+                    "& .cowboy-session-grip": { mx: "-10px" },
+                    "& .cowboy-session-grip-slot": { width: 24 },
                     "& .cowboy-session-actions": { ml: 0 },
                     // The folder chevron is decorative (the whole row toggles),
                     // so it needs no touch-sized box; tree indentation and
@@ -1757,14 +1761,15 @@ function SessionList({
                             minWidth: 0,
                             height: 32,
                             minHeight: 0,
-                            mx: 0,
                             borderRadius: "6px",
                         },
-                        // The slot follows its grip rather than reserving the
-                        // touch box, which otherwise sets the row height.
-                        "& .cowboy-session-grip-slot": { width: 24, height: 32 },
-                        "& .cowboy-session-actions": { ml: 0.25 },
-                        "& .cowboy-folder-chevron": { width: 24 },
+                        // The grip overhangs a 16px column, so its dots start
+                        // 5px from the row's leading edge; the slot's height
+                        // stops the touch box setting the row height.
+                        "& .cowboy-session-grip": { mx: "-4px" },
+                        "& .cowboy-session-grip-slot": { width: 16, height: 32 },
+                        "& .cowboy-session-actions": { ml: 0.25, mr: 0 },
+                        "& .cowboy-folder-chevron": { width: 24, mx: 0 },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
                             fontSize: "1.125rem",
                         },
