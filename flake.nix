@@ -287,7 +287,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-y+Zo8zLEQrYVIAOSOSN5v8JX2/KfRv+ZaibCTRjBBCU=";
+        depsHash = "sha256-YW82drFh+3plT/fOezH6OokDZfvwEfA83ILB7HePufs=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
@@ -341,7 +341,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-Dh7Ct4o87CF5A7C6ZSJQO3A6kCiUZR/Yh61GM+cX3Tc=";
+        hash = "sha256-+ERK15hTCGLXmYjhgEup4xZNJyL5Xh7KWQX3mTGNHSU=";
         preBuild = staticCratesVendorPatch + ''
           export PATH="${cardeaVendorGit}/bin:$PATH"
         '';
