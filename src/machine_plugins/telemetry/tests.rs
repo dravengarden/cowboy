@@ -114,8 +114,9 @@ impl Destination {
     }
     async fn started(&mut self) {
         // A bound on the plugin process reaching the fixture, not a timing
-        // assertion: a loaded host can take seconds to start it.
-        tokio::time::timeout(Duration::from_secs(15), self.entered.recv())
+        // assertion: a loaded host (the full gate runs suites in parallel)
+        // has taken more than 15 s to start it.
+        tokio::time::timeout(Duration::from_secs(60), self.entered.recv())
             .await
             .unwrap()
             .unwrap();
