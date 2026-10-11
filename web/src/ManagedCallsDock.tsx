@@ -19,6 +19,7 @@ import {
   ExpandMore,
   InfoOutlined,
   OpenInNew,
+  VerticalAlignBottom,
   VerticalAlignTop,
   StopCircleOutlined,
 } from "@mui/icons-material";
@@ -30,7 +31,7 @@ import {
   useState,
 } from "react";
 import { CallTranscript } from "./CallTranscript";
-import { requestScrollToTop } from "./stickyStore";
+import { requestScrollToTop, requestStickToBottom } from "./stickyStore";
 import { useStore } from "@cowboy/state-store";
 import { ProviderIcon } from "./ProviderIcon";
 import { Markdown } from "./Markdown";
@@ -1096,6 +1097,14 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
                 icon: <InfoOutlined fontSize="small" />,
                 onActivate: (): void =>
                   setRoute({ call: routed.call_id, level: "details" }),
+              },
+              {
+                // There is no Follow toggle here; this is the way back to the
+                // newest message after reading earlier ones.
+                label: "Scroll to latest",
+                icon: <VerticalAlignBottom fontSize="small" />,
+                onActivate: (): void =>
+                  requestStickToBottom(routed.child_session_id),
               },
             ]
             : undefined}

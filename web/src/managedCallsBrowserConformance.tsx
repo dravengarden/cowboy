@@ -476,12 +476,9 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         `[data-mobile-sheet-footer-shield] button[aria-label='${label}']`,
       );
     check(
-      island("Scroll to start") && island("Details"),
-      "the transcript island must offer start and details",
-    );
-    check(
-      !island("Scroll to latest"),
-      "a call transcript has no Follow control",
+      island("Scroll to start") && island("Details") &&
+        island("Scroll to latest"),
+      "the transcript island must offer start, details and latest",
     );
     const visible = (needle: string): boolean => {
       const box = document.querySelector("[data-call-transcript]")!
@@ -504,6 +501,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
     await until(
       () => visible("Review the billing retry change.") ? true : null,
       "scroll to start must show the first message",
+    );
+    island("Scroll to latest")!.click();
+    await until(
+      () => visible("Review complete.") ? true : null,
+      "scroll to latest must return to the newest message",
     );
     await until(
       () => text().includes("can be duplicated") ? true : null,
