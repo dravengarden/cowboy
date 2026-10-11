@@ -50,6 +50,16 @@ enum Command {
     /// Sign this computer in through Cowboy's browser login or the Cardea CLI broker.
     #[cfg(feature = "full")]
     Login(LoginArgs),
+    /// List, update, reload, hibernate, prompt, clear, rename, delete or start
+    /// sessions through this computer's login, as the Web UI does.
+    #[cfg(feature = "full")]
+    Session(crate::product_cli::SessionArgs),
+    /// Call any authenticated Cowboy HTTP route through this computer's login.
+    #[cfg(feature = "full")]
+    Api(crate::product_cli::ApiArgs),
+    /// Send any Cowboy WebSocket command through this computer's login.
+    #[cfg(feature = "full")]
+    Send(crate::product_cli::SendArgs),
     /// Operate the Controller through its explicitly enabled private host endpoint.
     #[cfg(all(feature = "full", unix))]
     Operator(crate::local_operator::OperatorArgs),
@@ -503,6 +513,12 @@ impl Cli {
             }
             #[cfg(feature = "full")]
             Command::Login(args) => login_client(args).await,
+            #[cfg(feature = "full")]
+            Command::Session(args) => Box::pin(crate::product_cli::run_session(args)).await,
+            #[cfg(feature = "full")]
+            Command::Api(args) => Box::pin(crate::product_cli::run_api(args)).await,
+            #[cfg(feature = "full")]
+            Command::Send(args) => Box::pin(crate::product_cli::run_send(args)).await,
             #[cfg(all(feature = "full", unix))]
             Command::Operator(args) => crate::local_operator::run(args).await,
             #[cfg(feature = "full")]
@@ -874,7 +890,7 @@ mod tests {
         let cli = Cli {
             command: Command::Serve(Box::new(args)),
         };
-        cli.run().await.unwrap();
+        Box::pin(cli.run()).await.unwrap();
         assert!(
             !root.exists(),
             "read-only preflight created Service/Catalog state"

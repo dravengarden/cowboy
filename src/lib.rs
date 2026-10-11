@@ -150,6 +150,8 @@ mod plugin_storage;
 #[cfg(feature = "full")]
 mod product_auth;
 #[cfg(feature = "full")]
+mod product_cli;
+#[cfg(feature = "full")]
 mod project_placement;
 #[cfg(feature = "full")]
 mod prompt_origin;

@@ -24,7 +24,9 @@ pub const ACCESS_TOKEN_PREFIX: &str = "cow_access_";
 pub const AUTOMATION_ACCESS_TOKEN_PREFIX: &str = "cow_automation_";
 pub const REFRESH_TOKEN_PREFIX: &str = "cow_refresh_";
 pub const ACCESS_TOKEN_TTL_MS: i64 = 10 * 60 * 1_000;
-pub const REFRESH_TOKEN_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+/// One approval keeps a sender-constrained device signed in for a year.
+/// Rotation keeps this absolute deadline; revocation still applies at once.
+pub const REFRESH_TOKEN_TTL_MS: i64 = 365 * 24 * 60 * 60 * 1_000;
 pub const AUTHORIZATION_TTL_MS: i64 = 5 * 60 * 1_000;
 pub const PROOF_CLOCK_SKEW_MS: i64 = 90 * 1_000;
 pub const DEVICE_LAST_USED_TOUCH_MS: i64 = 10 * 60 * 1_000;
