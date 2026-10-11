@@ -1462,21 +1462,19 @@ function SessionList({
     };
     // Rows are flush with the rail: the grip and kebab glyphs already carry
     // their own inset inside their hit boxes, so an outer gutter and a
-    // rounded capsule only cost title width. Tree rows indent by MARGIN, not
-    // padding, so a nested row's own selection, hover and drop material
-    // starts right of its ancestors' guides instead of painting across them.
-    // One step clears the parent chevron's centre (its guide) by 4px:
-    // base padding + half the chevron box + 4px.
+    // rounded capsule only cost title width. Tree rows indent by PADDING, so
+    // a nested row's selection, hover and drop material is as flush with the
+    // rail as a top-level row's; the ancestors' guides paint over it. One
+    // step clears the parent chevron's centre (its guide) by 4px: base
+    // padding + half the chevron box + 4px.
     const ROW_BASE_PL = mobileDrawer ? "0px" : "max(env(safe-area-inset-left), 4px)";
     const ROW_END_PR = mobileDrawer ? 0 : "max(env(safe-area-inset-right), 4px)";
     const INDENT_STEP = `calc(${ROW_BASE_PL} + 18px)`;
     const INDENT_FINE_STEP = 16;
     const rowIndentSx = (depth: number, extraPl = 0, extraFinePl = extraPl) => ({
-        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px)`,
-        ml: `calc(${String(depth)} * ${INDENT_STEP})`,
+        pl: `calc(${ROW_BASE_PL} + ${String(extraPl)}px + ${String(depth)} * ${INDENT_STEP})`,
         "@media (pointer: fine) and (hover: hover)": {
-            pl: `${String(extraFinePl)}px`,
-            ml: `${String(depth * INDENT_FINE_STEP)}px`,
+            pl: `${String(extraFinePl + depth * INDENT_FINE_STEP)}px`,
         },
     });
     // Flush Desktop rows drop the shared capsule: no radius, and no border
@@ -1493,9 +1491,9 @@ function SessionList({
         : {};
     // Obsidian-style indent guides: one hairline per ancestor level, centred
     // under that ancestor's chevron (28px touch / 24px fine box after the base
-    // padding). The pseudo-element reaches back over the row's indent margin;
-    // rows touch, so consecutive rows join into one continuous line and a
-    // folder's body is visibly fenced off. Paint-only.
+    // padding). The pseudo-element paints over the row's own material; rows
+    // touch, so consecutive rows join into one continuous line and a folder's
+    // body is visibly fenced off. Paint-only.
     const treeGuideSx = (depth: number) => {
         if (depth === 0) return {};
         const levels = Array.from({ length: depth }, (_, level) => level);
@@ -1505,7 +1503,7 @@ function SessionList({
                 position: "absolute",
                 top: 0,
                 bottom: 0,
-                left: `calc(-1 * ${String(depth)} * ${INDENT_STEP})`,
+                left: 0,
                 right: 0,
                 pointerEvents: "none",
                 backgroundImage: (t: Theme) =>
@@ -1516,7 +1514,6 @@ function SessionList({
                     .map((level) => `calc(${String(level)} * ${INDENT_STEP} + ${ROW_BASE_PL} + 14px) 0`)
                     .join(", "),
                 "@media (pointer: fine) and (hover: hover)": {
-                    left: `${String(-depth * INDENT_FINE_STEP)}px`,
                     backgroundPosition: levels.map((level) => `${String(level * INDENT_FINE_STEP + 12)}px 0`).join(", "),
                 },
             },
@@ -1986,12 +1983,11 @@ function SessionList({
                                 // selected/current selectors with higher
                                 // specificity so desktopListItemSx's quieter
                                 // shared selection material cannot override it.
-                                // A flush row has no capsule edge to tint, so
-                                // an accent bar on its leading edge marks it.
+                                // A flush row is marked by its fill alone: an
+                                // edge on one side reads as a lopsided border.
                                 "&&.Mui-selected, &&[data-desktop-current='true']": {
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.13),
-                                    boxShadow: (t) =>
-                                        `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.85)}`,
+                                    boxShadow: "none",
                                 },
                                 "&&.Mui-selected:hover, &&[data-desktop-current='true']:hover": {
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
@@ -4331,7 +4327,7 @@ export function App({
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
                         boxShadow: (t) =>
-                            `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.85)}, inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.68)}`,
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.68)}`,
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
