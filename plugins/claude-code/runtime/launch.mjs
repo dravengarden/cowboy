@@ -9,6 +9,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -108,6 +109,66 @@ export function startupTrace(output = process.stderr) {
   );
   return { path, server };
 }
+// A runtime killed by its unit (SIGKILL) cannot remove its private socket
+// directories, so each launch would leave one behind in /tmp. Remove this
+// user's older ones whose socket no longer accepts connections; a live
+// runtime's socket always does.
+export async function sweepStaleRuntimeDirectories(
+  roots = [...new Set(["/tmp", tmpdir()])],
+  { olderThanMs = 10 * 60 * 1000, now = Date.now() } = {},
+) {
+  const uid = process.getuid?.();
+  let removed = 0;
+  for (const root of roots) {
+    let names;
+    try {
+      names = await readdir(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const socket = /^cowboy-claude-mod-[A-Za-z0-9]{6}$/.test(name)
+        ? "bridge.sock"
+        : /^cowboy-claude-trace-[A-Za-z0-9]{6}$/.test(name)
+        ? "s"
+        : undefined;
+      if (!socket) continue;
+      const directory = join(root, name);
+      try {
+        const info = await lstat(directory);
+        if (
+          !info.isDirectory() || info.uid !== uid ||
+          now - info.mtimeMs < olderThanMs
+        ) continue;
+        if (await accepts(join(directory, socket))) continue;
+        await rm(directory, { recursive: true, force: true });
+        removed++;
+      } catch {
+        // Another runtime's directory changed under us; leave it.
+      }
+    }
+  }
+  return removed;
+}
+
+function accepts(path) {
+  return new Promise((resolve) => {
+    const connection = createConnection(path);
+    const settle = (value) => {
+      connection.destroy();
+      resolve(value);
+    };
+    connection.once("connect", () => settle(true));
+    // Refused or missing: nothing listens. Any other error keeps the
+    // directory, since it may still belong to a live runtime.
+    connection.once(
+      "error",
+      (error) => settle(!["ECONNREFUSED", "ENOENT"].includes(error.code)),
+    );
+    connection.setTimeout(2000, () => settle(true));
+  });
+}
+
 export const FORBIDDEN_TOOLS = [
   "EnterWorktree",
   "ExitWorktree",
@@ -1317,6 +1378,8 @@ export async function main(args) {
       } catch {
         // Milestones are diagnostics; startup continues without them.
       }
+      // Off the startup path; a failure leaves the directories in place.
+      sweepStaleRuntimeDirectories().catch(() => {});
     }
   }
   const upstream = fileURLToPath(

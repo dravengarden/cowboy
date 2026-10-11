@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { createConnection } from "node:net";
+import { mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
+import { createConnection, createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   allowedControl,
@@ -9,6 +12,7 @@ import {
   STARTUP_TRACE,
   startupPhase,
   startupTrace,
+  sweepStaleRuntimeDirectories,
 } from "./launch.mjs";
 import { NATIVE_TOOLS } from "./tools.mjs";
 
@@ -177,4 +181,35 @@ test("startup milestones reach the adapter's stderr through its private socket",
     lines[1],
     /^\[cowboy-claude\] phase=target-discovery totalMs=\d+\n$/,
   );
+});
+
+test("stale runtime socket directories are removed and live ones kept", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "cowboy-sweep-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const old = new Date(Date.now() - 60 * 60 * 1000);
+  const make = async (name) => {
+    const directory = join(root, name);
+    await mkdir(directory);
+    return directory;
+  };
+  const stale = await make("cowboy-claude-mod-AAAAAA");
+  const staleTrace = await make("cowboy-claude-trace-BBBBBB");
+  const live = await make("cowboy-claude-mod-CCCCCC");
+  const recent = await make("cowboy-claude-mod-DDDDDD");
+  const other = await make("cowboy-claude-mod-toolongname");
+  const server = createServer();
+  await new Promise((resolve) =>
+    server.listen(join(live, "bridge.sock"), resolve)
+  );
+  t.after(() => server.close());
+  for (const directory of [stale, staleTrace, live, other]) {
+    await utimes(directory, old, old);
+  }
+  assert.equal(await sweepStaleRuntimeDirectories([root]), 2);
+  const exists = (path) => stat(path).then(() => true, () => false);
+  assert.equal(await exists(stale), false);
+  assert.equal(await exists(staleTrace), false);
+  assert.equal(await exists(live), true);
+  assert.equal(await exists(recent), true);
+  assert.equal(await exists(other), true);
 });
