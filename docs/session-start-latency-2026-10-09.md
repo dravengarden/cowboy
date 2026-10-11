@@ -249,3 +249,25 @@ less the keeper's measured backend time (the command and any requested wait);
 `duration_ms` histograms in `cowboy logs metrics`. Executors started before this
 release do not time replies; their calls appear as
 `cowboy.execution.tool_untimed` until the executor is replaced.
+
+## Bulk lanes (adaptive Machine connection pool)
+
+Measured from Hawk at the same time, bypassing Stormbird's TUN: one TCP flow
+through JMS GIA carried 1.2-1.8 MB/s and eight parallel flows 3.0-7.3 MB/s,
+while the home line carried 13 MB/s per flow and 80-88 MB/s in parallel. A
+single cross-border flow is the limit, not the line or the JMS port.
+
+The Machine link therefore opens extra WebSockets ("lanes", `lanes-v1`) next to
+its primary connection. A lane carries only execution requests and replies of at
+least 64 KiB, which are independent RPCs, so ordered and small frames stay on
+the primary and are never queued behind bulk. The Controller returns a
+per-connection token on the primary upgrade and admits a lane only while that
+authenticated connection is current. The Machine opens a lane whenever it sends
+a large request or receives a large reply, one at a time at most every 500 ms
+and up to four, and closes a lane after 60 s without traffic; an idle Machine
+keeps none. The Controller sends replies only on lanes active in the last 45 s,
+so a lane it writes to never reaches the Machine's idle close. If a lane fails,
+replies routed to it may be lost: the Machine resends every execution request
+still awaiting a reply, which the keeper deduplicates by operation ID. The
+session conformance suite writes and reads four 300 KiB files through a real
+Controller and Machine and requires a lane to open.

@@ -78,6 +78,7 @@ mod draft_documents;
 mod execution;
 #[cfg(unix)]
 mod local_operator;
+mod machine_lanes;
 mod managed_calls;
 mod operator_approval;
 #[cfg(test)]
@@ -10288,6 +10289,7 @@ async fn serve_axum(
         .route("/api/machine/service", get(api_machine_service))
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
+        .route(crate::machine_lanes::LANE_PATH, any(machine_lanes::upgrade))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/calls", get(managed_calls::list))
         .route(
@@ -14186,9 +14188,34 @@ async fn machine_ws_upgrade(
         && headers
             .get(crate::machine_transport::STREAM_HEADER)
             .is_some_and(|value| value == crate::machine_transport::STREAM);
+    // Bulk lanes need the chunked transport; the token binds them to this
+    // connection once its Machine has proven its identity.
+    let lane_token = (chunked
+        && headers
+            .get(crate::machine_lanes::LANES_HEADER)
+            .is_some_and(|value| value == crate::machine_lanes::LANES))
+    .then(random_machine_token)
+    .and_then(Result::ok);
+    let upgrade_token = lane_token.clone();
     let mut response = ws.on_upgrade(move |socket| {
-        handle_machine_ws(socket, state, (chunked, compressed, paced, stream))
+        handle_machine_ws(
+            socket,
+            state,
+            (chunked, compressed, paced, stream),
+            upgrade_token,
+        )
     });
+    if let Some(token) = lane_token.as_deref()
+        && let Ok(value) = axum::http::HeaderValue::from_str(token)
+    {
+        response.headers_mut().insert(
+            crate::machine_lanes::LANES_HEADER,
+            axum::http::HeaderValue::from_static(crate::machine_lanes::LANES),
+        );
+        response
+            .headers_mut()
+            .insert(crate::machine_lanes::LANE_TOKEN_HEADER, value);
+    }
     if chunked {
         response.headers_mut().insert(
             crate::machine_transport::HEADER,
@@ -14373,6 +14400,7 @@ async fn handle_machine_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
     (chunked, compressed, paced, stream): (bool, bool, bool, bool),
+    lane_token: Option<String>,
 ) {
     let Some(store) = state.store.as_ref().cloned() else {
         let _ = send_json(
@@ -14597,6 +14625,21 @@ async fn handle_machine_ws(
         protocol,
         machine_command_tx,
     );
+    let lanes = Arc::new(crate::machine_lanes::LaneSet::default());
+    // Dropped when this connection ends, which refuses further lanes.
+    let _lane_registration = lane_token.map(|token| {
+        machine_lanes::register(
+            token,
+            machine_lanes::LaneTarget {
+                connection: connection.clone(),
+                machine_id: hello.machine_id.clone(),
+                execution_calls: Arc::clone(&execution_calls),
+                primary: machine_write_tx.clone(),
+                lanes: Arc::clone(&lanes),
+                features: (chunked, compressed, paced, stream),
+            },
+        )
+    });
     state.machine_control.record_remote(
         &connection,
         crate::machine_protocol::MachineEvent::Inventory {
@@ -15240,47 +15283,17 @@ async fn handle_machine_ws(
             }
             crate::machine_protocol::MachineFrame::Runtime { frame } => {
                 if let crate::runtime_wire::Frame::ExecutionRequest { request } = frame {
-                    let permit = Arc::clone(&execution_calls).try_acquire_owned();
-                    let execution_state = Arc::clone(&state);
-                    let execution_connection = connection.clone();
-                    let runtime_machine = hello.machine_id.clone();
-                    let outgoing = machine_write_tx.clone();
-                    tokio::spawn(async move {
-                        let reply = if let Ok(_permit) = permit {
-                            execution::forward(
-                                &execution_state,
-                                &execution_connection,
-                                &runtime_machine,
-                                *request,
-                            )
-                            .await
-                        } else {
-                            crate::execution_protocol::RuntimeReply {
-                                session_id: request.session_id,
-                                worker_epoch: request.worker_epoch,
-                                request_id: request.request_id,
-                                scope: crate::execution_protocol::Scope::from_binding(
-                                    &request.binding,
-                                ),
-                                response: crate::machine_protocol::execution::Response::Refused {
-                                    reason: crate::machine_protocol::execution::Refusal::Capacity,
-                                },
-                            }
-                        };
-                        if execution_state
-                            .machine_control
-                            .is_current(&execution_connection)
-                        {
-                            let _ = queue_machine_json(
-                                &outgoing,
-                                &crate::machine_protocol::MachineFrame::Runtime {
-                                    frame: crate::runtime_wire::Frame::ExecutionReply {
-                                        reply: Box::new(reply),
-                                    },
-                                },
-                            );
-                        }
-                    });
+                    machine_lanes::spawn_execution_request(
+                        &state,
+                        &connection,
+                        &hello.machine_id,
+                        &execution_calls,
+                        request,
+                        machine_lanes::ReplyRoute {
+                            primary: machine_write_tx.clone(),
+                            lanes: Arc::clone(&lanes),
+                        },
+                    );
                     continue;
                 }
                 if let Err(error) = runtime_write_tx.send(frame) {

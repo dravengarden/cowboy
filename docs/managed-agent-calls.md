@@ -232,6 +232,14 @@ minimal request and the wait/result commands, and says not to start `codex
 exec`, `codex review` or `claude -p` directly: those run hidden from the user,
 outside the session's policy and model choice. Managed children do not get it.
 
+Reviews are opt-in per session. The same paragraph tells the agent that,
+after a substantive code change and before reporting, it reads `cowboy call
+capabilities`: with calls enabled and the other family available it gets a
+read-only review and fixes or reports the findings; with calls off it neither
+reviews nor mentions the absence. An explicit user request while calls are off
+still goes through the approval prompt. Suger's Codex reviewer adapter applies
+the same rule to its review rounds (it skips without prompting when off).
+
 `--preset ID` on `cowboy codex|claude|call start` selects one of that explicit
 Provider's signed presets for this call (refused with Auto, with `continue`,
 and as `preset_unavailable` when the exact Provider has no such preset); it is
