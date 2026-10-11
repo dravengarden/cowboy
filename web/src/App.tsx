@@ -1279,14 +1279,18 @@ function SessionList({
             setNamePrompt(prompt);
         });
     };
-    const positionedMobileOpenRef = useRef(false);
+    // Each time the list comes into view — the Mobile drawer opening, or the
+    // in-flow rail mounting after a reload — bring the current session into
+    // the reading band once. Later picks never move the list under the pointer.
+    const listShown = !mobileDrawer || mobileDrawerOpen;
+    const positionedShownRef = useRef(false);
     useLayoutEffect(() => {
-        if (!mobileDrawer || !mobileDrawerOpen) {
-            positionedMobileOpenRef.current = false;
+        if (!listShown) {
+            positionedShownRef.current = false;
             return undefined;
         }
-        if (positionedMobileOpenRef.current || !loaded) return undefined;
-        positionedMobileOpenRef.current = true;
+        if (positionedShownRef.current || !loaded) return undefined;
+        positionedShownRef.current = true;
         let frame = requestAnimationFrame(() => {
             frame = requestAnimationFrame(() => {
                 const list = listRef.current;
@@ -1300,13 +1304,13 @@ function SessionList({
                     currentScroll: list.scrollTop,
                     viewportHeight: list.clientHeight,
                     contentHeight: list.scrollHeight,
-                    itemTop: current.offsetTop,
+                    itemTop: current.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop,
                     itemHeight: current.offsetHeight,
                 });
             });
         });
         return () => cancelAnimationFrame(frame);
-    }, [activeId, loaded, mobileDrawer, mobileDrawerOpen]);
+    }, [activeId, loaded, listShown]);
     useEffect(() => {
         const list = listRef.current;
         const region = list?.closest<HTMLElement>("[data-desktop-region='sessions.list']");
