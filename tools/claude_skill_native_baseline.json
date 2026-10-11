@@ -174,7 +174,7 @@
   "- user-only: user only",
   "- basic: basic fixture skill",
   "- no-frontmatter: First line describes it.",
-  "- renamed-dir: renamed fixture",
+  "- renamed-dir (renamed-alias): renamed fixture",
   "- shell-args: shell args",
   "- shell-both: shell both",
   "- shell-cd: shell cd",

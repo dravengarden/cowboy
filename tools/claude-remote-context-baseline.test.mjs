@@ -8,7 +8,10 @@ import {
   instructionFiles,
   nestedInstructions,
 } from "../plugins/claude-code/runtime/instructions.mjs";
-import { WorkspaceTools } from "../plugins/claude-code/runtime/tools.mjs";
+import {
+  UNTRUSTED_DOWNLOADS,
+  WorkspaceTools,
+} from "../plugins/claude-code/runtime/tools.mjs";
 import { unlabeledContext } from "../plugins/claude-code/runtime/context-mod.js";
 
 const baseline = JSON.parse(
@@ -32,6 +35,7 @@ const FILES = {
   "sub/AGENTS.md": "NESTED_SUB_AGENTS_MD\n",
   "sub2/CLAUDE.md": "NESTED_SUB2_CLAUDE_MD\n",
   "sub3/CLAUDE.md": "NESTED_SUB3_CLAUDE_MD\n",
+  "sub4/CLAUDE.md": "NESTED_SUB4_CLAUDE_MD\n",
 };
 const AGENTS_ONLY = {
   "AGENTS.md": "ROOT_AGENTS_MD\n",
@@ -62,12 +66,13 @@ const markers = (files) =>
     .filter((line) => /^[A-Z0-9_]+$/.test(line) && line.includes("_"))
     .sort();
 
-// The probe's steps; a Write attaches nothing natively.
+// The probe's steps; a Write or an Edit attaches as a Read does.
 const STEPS = {
   "read sub/file.txt": `${project}/sub/file.txt`,
   "read sub/file.txt again": `${project}/sub/file.txt`,
-  "write sub2/new.txt": null,
+  "write sub2/new.txt": `${project}/sub2/new.txt`,
   "read sub3/e.txt": `${project}/sub3/e.txt`,
+  "edit sub4/e.txt": `${project}/sub4/e.txt`,
   "read ../other/f.txt": "/r/parent/other/f.txt",
 };
 
@@ -85,7 +90,7 @@ for (
     assert.deepEqual(markers(initial), baseline[name].start);
     const attached = new Set(initial.map((file) => file.path));
     for (const [step, path] of Object.entries(STEPS)) {
-      const nested = path === null ? [] : await nestedInstructions({
+      const nested = await nestedInstructions({
         cwd: project,
         path,
         read,
@@ -145,6 +150,7 @@ test("the environment block has native's lines", () => {
       " - Platform: linux",
       " - Shell: SHELL",
       " - OS Version: OS",
+      ` - ${UNTRUSTED_DOWNLOADS}`,
     ]);
   }
   assert.ok(
@@ -154,6 +160,7 @@ test("the environment block has native's lines", () => {
   );
   assert.ok(source.includes("}\\n - Platform: linux\\n - Shell: ${"));
   assert.ok(source.includes("}\\n - OS Version: ${"));
+  assert.ok(source.includes("}\\n - ${UNTRUSTED_DOWNLOADS}`"));
 });
 
 test("native labels a Mod's tool context, and the plugin removes the label", () => {

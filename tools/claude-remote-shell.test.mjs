@@ -844,7 +844,7 @@ test("PDF pages parse and fail as native's", () => {
   assert.deepEqual(pdfPages("2-5"), { firstPage: 2, lastPage: 5 });
   assert.throws(
     () => pdfPages("abc"),
-    /^Error: Invalid pages parameter: "abc"\. Use formats like "1-5", "3", or "10-20"\. Pages are 1-indexed\.$/,
+    /^Error: Invalid pages parameter: "abc"\. Give one page \("3"\) or one range \("1-5"\), not a list\. To read several pages or ranges, read each one separately\. Pages are 1-indexed\.$/,
   );
   assert.throws(() => pdfPages("5-2"), /Invalid pages parameter/);
   assert.throws(
@@ -914,7 +914,7 @@ test("PDFs read on the target as native's document and page images", async (t) =
   );
   assert.match(
     (await tools.dispatch("Read", { file_path: "pdf-bytes.bin" })).deny,
-    /cannot read binary files\. The file appears to be a binary \.bin file/,
+    /cannot read binary files\. The file appears to be a binary \.bin file\. Use a skill for this file type if one is available, or a shell command or script that can read the format\.$/,
   );
   assert.equal(
     (await tools.dispatch("Read", { file_path: "pdf-missing.txt" })).deny,

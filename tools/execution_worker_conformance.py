@@ -54,6 +54,15 @@ def main():
         launcher = packaged
     node = shutil.which("node")
     require(node, "pinned Node is missing")
+    # The Provider's own native CLI, when its pin differs from the target's
+    # executor: the session's app-server is this one, the exec-server stays
+    # the executor given as --native-cli.
+    provider_cli = args.native_cli
+    if inputs.get("provider_cli"):
+        provider_cli = Path(inputs["provider_cli"])
+        require(provider_cli.is_absolute() and provider_cli.is_file(), "Provider CLI missing")
+        require(hashlib.sha256(provider_cli.read_bytes()).hexdigest() == inputs["provider_sha256"],
+                "Provider CLI changed")
     def cancel_background(requests):
         outputs = [item.get("output", "") for item in requests[-1].get("input", [])
                    if item.get("type") == "function_call_output" and item.get("call_id") == "fixture_background"]
@@ -153,7 +162,7 @@ def main():
     environment = closed_environment(args.runtime.parent / "agent-home")
     environment.update({
         "COWBOY_OFFLINE_FIXTURE_KEY": "not-a-production-credential",
-        "COWBOY_PRIVATE_CODEX_EXECUTABLE": str(args.native_cli),
+        "COWBOY_PRIVATE_CODEX_EXECUTABLE": str(provider_cli),
         "COWBOY_PRIVATE_CODEX_ARGUMENTS": "[]",
         "COWBOY_EXECUTION_DESCRIPTOR": str(args.descriptor),
     })
@@ -323,7 +332,7 @@ def main():
                             for key in ("code", "message", "data")})[:1800], flush=True)
                     return frame
 
-            acp_environment = {**environment, "CODEX_PATH": str(args.native_cli)}
+            acp_environment = {**environment, "CODEX_PATH": str(provider_cli)}
 
             def acp():
                 instance = Acp([node, str(packaged), "-c", "approval_policy=never",
@@ -371,6 +380,7 @@ def main():
         receipt = {
             "schema": "cowboy.execution-worker-conformance/v1", "accepted": False, "checks": checks,
             "native_sha256": hashlib.sha256(args.native_cli.read_bytes()).hexdigest(),
+            "provider_cli_sha256": hashlib.sha256(provider_cli.read_bytes()).hexdigest(),
             "sandbox_helper_sha256": hashlib.sha256((args.native_cli.parent.parent / "codex-resources/bwrap").read_bytes()).hexdigest(),
             "code_mode_host_sha256": hashlib.sha256((args.native_cli.parent / "codex-code-mode-host").read_bytes()).hexdigest()
                 if (args.native_cli.parent / "codex-code-mode-host").is_file() else None,

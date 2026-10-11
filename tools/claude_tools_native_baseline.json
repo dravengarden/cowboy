@@ -1,7 +1,7 @@
 {
  "default_tools": {
   "Agent": {
-   "input_schema": "c0512d25d4f0361d",
+   "input_schema": "b5b5a652f0e0520c",
    "description": "bf9f3782be80a421"
   },
   "AskUserQuestion": {
@@ -57,7 +57,7 @@
    "description": "fe2e4129fccf6461"
   },
   "Read": {
-   "input_schema": "26f36fe6e73680fc",
+   "input_schema": "d7da38e66005e00a",
    "description": "98b5f0d4ee26b770"
   },
   "ReportFindings": {
@@ -90,14 +90,14 @@
   },
   "TaskStop": {
    "input_schema": "08d0cc53dd12ce28",
-   "description": "52799babb9d70a8f"
+   "description": "a46c91863915c4b1"
   },
   "TaskUpdate": {
    "input_schema": "e7fae4a0f2ba5940",
    "description": "32f0eb8ffef957aa"
   },
   "WebFetch": {
-   "input_schema": "9d05cb4f3c0ca0c7",
+   "input_schema": "e22e914cebd21c85",
    "description": "f7470892c8d40dec"
   },
   "WebSearch": {

@@ -930,10 +930,12 @@ export async function nativeLocalRead($, event, next, answer) {
       : typeof named.result === "string"
       ? named.result
       : "Target image could not be read";
-    return { deny: message.replace(/^Error: /, "") };
+    return rememberDenial(event, {
+      deny: message.replace(/^Error: /, ""),
+    });
   }
   if (named.result === undefined) {
-    return { deny: "Target image could not be read" };
+    return rememberDenial(event, { deny: "Target image could not be read" });
   }
   // Whatever else native returns with it (its size note) stays.
   return { ...rest, ...named };
@@ -1000,9 +1002,12 @@ export function targetSkillText(text, skills) {
 export function targetSkillListing(text, skills) {
   if (typeof text !== "string" || !skills?.entries.length) return text;
   const [head, ...items] = text.split("\n- ");
-  // Over native's budget, an entry may be its name alone.
+  // Over native's budget, an entry may be its name alone. A skill whose own
+  // name differs from its directory's is listed as `<directory> (<name>)`
+  // (2.1.296); the directory is the name it is called by.
   const named = (item) =>
-    item.includes(": ") ? item.slice(0, item.indexOf(": ")) : item.trimEnd();
+    (item.includes(": ") ? item.slice(0, item.indexOf(": ")) : item.trimEnd())
+      .replace(/ \([^)\n]*\)$/, "");
   const own = new Map(skills.entries.map((entry) => [entry.name, entry]));
   const rank = (entry) =>
     entry.kind === "command" ? 2 : entry.scope === "user" ? 0 : 1;
@@ -1048,6 +1053,53 @@ export function skillAllows(command, rules) {
 // the skill, and this ties it to its call (agent and cancellation).
 const skillCalls = new Map();
 const skillTurns = new Map();
+
+// Native 2.1.296 prefaces a denial a Mod returns after the tool ran with
+// "<Tool> ran, and a plugin withheld its result: ". This module's denial there
+// is the tool's own failure on the target (a skill's command, a read of a
+// target file's copy), so the stored result keeps the failure text alone, as
+// natively. Only a denial this module returned for that call is rewritten;
+// the two places that answer after native ran record theirs.
+const WITHHELD = [
+  " ran, and a plugin withheld its result: ",
+  " started, and a plugin withheld its result: ",
+];
+const denials = new Map();
+
+export function rememberDenial(event, answer, reasons = denials) {
+  if (
+    typeof answer?.deny !== "string" || typeof event?.tool_use_id !== "string"
+  ) return answer;
+  if (reasons.size >= 1024) reasons.delete(reasons.keys().next().value);
+  reasons.set(event.tool_use_id, answer.deny);
+  return answer;
+}
+
+export function withheldResult(event, reasons = denials) {
+  const content = event?.message?.content;
+  const tool = event?.origin?.tool;
+  if (!Array.isArray(content) || typeof tool !== "string") return event;
+  let changed = false;
+  const blocks = content.map((block) => {
+    if (block?.type !== "tool_result" || !reasons.has(block.tool_use_id)) {
+      return block;
+    }
+    const reason = reasons.get(block.tool_use_id);
+    reasons.delete(block.tool_use_id);
+    const text = typeof block.content === "string"
+      ? block.content
+      : Array.isArray(block.content) && block.content.length === 1 &&
+          block.content[0]?.type === "text"
+      ? block.content[0].text
+      : undefined;
+    if (!WITHHELD.some((note) => text === tool + note + reason)) return block;
+    changed = true;
+    return { ...block, content: reason };
+  });
+  return changed
+    ? { ...event, message: { ...event.message, content: blocks } }
+    : event;
+}
 let skillShellCount = 0;
 
 // One `!` command of a target skill, run by the target's Bash as native runs
@@ -1280,7 +1332,9 @@ async function skillCall($, event, next) {
     turn.resolve();
     if (skillTurns.get(skill) === queued) skillTurns.delete(skill);
   }
-  if (call.failure !== undefined) return { deny: call.failure };
+  if (call.failure !== undefined) {
+    return rememberDenial(event, { deny: call.failure });
+  }
   // Unchanged, native keeps the skill's own messages with its result; the
   // names in both are projected as they are appended (targetSkillAppend).
   return result;
@@ -1715,7 +1769,7 @@ export function register(on) {
   on(
     "session.append",
     { door: "tool-result" },
-    (_$, event, next) => next(targetImageResult(event)),
+    (_$, event, next) => next(targetImageResult(withheldResult(event))),
   );
   on(
     "session.append",

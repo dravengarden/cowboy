@@ -1,5 +1,5 @@
 {
- "claude_version": "2.1.287",
+ "claude_version": "2.1.296",
  "source": "tools/claude_shell_native_probe.py on native-local Bash, normalized by claude_shell_cases.normalize",
  "results": {
   "echo": {

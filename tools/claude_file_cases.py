@@ -31,6 +31,7 @@ def setup(root):
     write("nonl.txt", b"no newline old")
     write("unread.txt", b"never read\n")
     write("empty.txt", b"")
+    write("flag.txt", b"flag\n")
     (root / "adir").mkdir()
     return {name: os.stat(root / name).st_ino for name in
             ["exec.sh", "private.txt", "linked.txt", "crlf.txt", "bom.txt", "utf16.txt",
@@ -54,6 +55,8 @@ CASES = [
     ("read_bom", _read("bom.txt")), ("edit_bom", _edit("bom.txt", "bom old", "bom new")),
     ("read_utf16", _read("utf16.txt")), ("edit_utf16", _edit("utf16.txt", "line one", "line uno")),
     ("read_latin1", _read("latin1.txt")), ("edit_latin1", _edit("latin1.txt", "old", "new")),
+    # What Read showed for the undecodable byte, written back.
+    ("write_latin1_replacement", ("Write", {"file_path": "latin1.txt", "content": "caf\ufffd new\n"})),
     ("read_readonly", _read("readonly.txt")), ("edit_readonly", _edit("readonly.txt", "old", "new")),
     ("read_nonl", _read("nonl.txt")), ("edit_nonl", _edit("nonl.txt", "old", "new")),
     ("write_unread", ("Write", {"file_path": "unread.txt", "content": "overwritten\n"})),
@@ -61,6 +64,7 @@ CASES = [
     ("write_directory", ("Write", {"file_path": "adir", "content": "x\n"})),
     ("read_empty", _read("empty.txt")), ("edit_empty", _edit("empty.txt", "", "filled\n")),
     ("edit_missing", _edit("missing.txt", "", "made by edit\n")),
+    ("read_allow_large", ("Read", {"file_path": "flag.txt", "allow_large": True})),
 ]
 
 
