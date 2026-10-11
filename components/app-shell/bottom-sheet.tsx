@@ -226,6 +226,9 @@ export interface BottomSheetProps {
   /** Icon actions between Back and Close in that island (a nested level's
    * own controls, such as Details or jumping to the start or end). */
   readonly islandActions?: readonly IslandAction[] | undefined;
+  /** One line under the mobile footer island, set into the home-indicator
+   * clearance (a nested level's compact identity and state). */
+  readonly footerCaption?: ReactNode;
   /** Mobile cover body that does not scroll: the content fills it edge to edge
    *  and owns its scroller (an embedded transcript). */
   readonly fill?: boolean;
@@ -623,6 +626,7 @@ export function BottomSheet(
     animateOnOpen = true,
     onBack,
     islandActions,
+    footerCaption,
     fill = false,
   }: BottomSheetProps,
 ): ReactNode {
@@ -727,6 +731,22 @@ export function BottomSheet(
                 ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} actions={islandActions} />
                 : <MobileSheetDismiss onClose={onClose} />
               : null}
+            {footerCaption == null ? null : (
+              <Box
+                data-mobile-sheet-footer-caption
+                sx={{
+                  width: "100%",
+                  minWidth: 0,
+                  mt: -0.5,
+                  // Sit in the home-indicator clearance rather than add a row.
+                  mb: "calc(-1 * min(22px, env(safe-area-inset-bottom, 0px)))",
+                  display: "flex",
+                  justifyContent: "center",
+                }}
+              >
+                {footerCaption}
+              </Box>
+            )}
           </Box>
         )}
     >

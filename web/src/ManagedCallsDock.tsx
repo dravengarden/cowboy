@@ -505,11 +505,105 @@ function displayTitle(call: ManagedCallSummary): string {
   );
 }
 
+/** A phone's one-line identity and state for a call, under the footer
+ * island: title, Provider, placement, elapsed and the outcome. */
+function CallCaption({
+  call,
+  onDetails,
+}: {
+  call: ManagedCallSummary;
+  onDetails: () => void;
+}): React.JSX.Element {
+  const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
+  const tone = callTone(call.state);
+  // The shortest outcome: a finding count says more than its verdict.
+  const verdict = call.finding_count !== undefined && call.verdict
+    ? `${call.finding_count} finding${call.finding_count === 1 ? "" : "s"}`
+    : call.verdict
+    ? call.verdict.replace(/-/g, " ")
+    : null;
+  const attention = call.verdict !== undefined && call.verdict !== null &&
+    call.verdict !== "approve";
+  return (
+    <ButtonBase
+      data-call-caption={call.call_id}
+      aria-label={`${displayTitle(call)}: ${callStateLabel(call)}. Open details`}
+      onClick={onDetails}
+      sx={{
+        maxWidth: "100%",
+        minWidth: 0,
+        px: 1,
+        py: 0.25,
+        borderRadius: 999,
+        display: "flex",
+        alignItems: "center",
+        gap: 0.75,
+        typography: "caption",
+        lineHeight: 1.4,
+        color: "text.secondary",
+      }}
+    >
+      <ProviderIcon
+        provider={call.provider}
+        sx={{ fontSize: "0.875rem", flexShrink: 0 }}
+      />
+      <Box
+        component="span"
+        sx={{
+          fontWeight: 700,
+          color: "text.primary",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0,
+          maxWidth: "60%",
+          flexShrink: 0,
+        }}
+      >
+        {displayTitle(call)}
+      </Box>
+      <Box
+        component="span"
+        sx={{
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0,
+          flexShrink: 3,
+        }}
+      >
+        {providerLabel(call.provider)} {call.provider_version ?? ""} ·{" "}
+        {placementLabel(call)} · {elapsedLabel(call.created_at_ms, end)}
+      </Box>
+      <Box
+        component="span"
+        sx={{
+          flexShrink: 0,
+          fontWeight: 650,
+          whiteSpace: "nowrap",
+          color: verdict
+            ? (attention ? "warning.main" : "success.main")
+            : tone === "success"
+            ? "success.main"
+            : tone === "error"
+            ? "error.main"
+            : tone === "active"
+            ? "primary.main"
+            : "text.secondary",
+        }}
+      >
+        {verdict ?? callStateLabel(call)}
+      </Box>
+    </ButtonBase>
+  );
+}
+
 /** Which call the modal shows, and how deep: its transcript or its details. */
 type CallRoute = { call: string; level: "transcript" | "details" };
 
 /** The floating mobile footer island the newest message passes under. */
-const MOBILE_FOOTER_CLEARANCE = "calc(76px + env(safe-area-inset-bottom, 0px))";
+const MOBILE_FOOTER_CLEARANCE =
+  "calc(76px + max(22px, env(safe-area-inset-bottom, 0px)))";
 
 /** Level 2: the child's own conversation, headed by the call's state; its
  * details are one step further. */
@@ -531,10 +625,10 @@ function CallConversation({
       sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
     >
       {
-        /* One line of state above the transcript; on a phone Details lives in
-          the footer island beside Back and Close. */
+        /* Desktop: one line of state above the transcript. A phone shows the
+          same line under its footer island (CallCaption). */
       }
-      <Stack
+      {desktop && <Stack
         direction="row"
         alignItems="center"
         spacing={1}
@@ -590,7 +684,7 @@ function CallConversation({
             Details
           </Button>
         )}
-      </Stack>
+      </Stack>}
       <CallTranscript
         sessionId={call.child_session_id}
         provider={call.provider}
@@ -925,7 +1019,17 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
             ? "Calls"
             : level === "details"
             ? "Details"
-            : displayTitle(routed)}
+            // The transcript level names itself under the island instead.
+            : undefined}
+          footerCaption={routed && level === "transcript"
+            ? (
+              <CallCaption
+                call={routed}
+                onDetails={(): void =>
+                  setRoute({ call: routed.call_id, level: "details" })}
+              />
+            )
+            : undefined}
           onBack={routed ? back : undefined}
           islandActions={routed && level === "transcript"
             ? [
