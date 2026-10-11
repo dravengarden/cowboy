@@ -672,6 +672,8 @@ function SessionsSpotlight({ anchor }: { anchor: React.RefObject<HTMLElement | n
 }
 
 type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename";
+/** Input that hands the Sessions list back to the user while it settles. */
+const SETTLE_RELEASE_EVENTS = ["wheel", "pointerdown", "touchstart", "keydown"] as const;
 const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
     l: "open",
     h: "left",
@@ -1291,26 +1293,48 @@ function SessionList({
         }
         if (positionedShownRef.current || !loaded) return undefined;
         positionedShownRef.current = true;
-        let frame = requestAnimationFrame(() => {
-            frame = requestAnimationFrame(() => {
-                const list = listRef.current;
-                const current = activeId
-                    ? list?.querySelector<HTMLElement>(
-                        `[data-desktop-item="${CSS.escape(activeId)}"]`,
-                    )
-                    : null;
-                if (!list || !current) return;
-                list.scrollTop = sessionDrawerTargetScroll({
-                    currentScroll: list.scrollTop,
-                    viewportHeight: list.clientHeight,
-                    contentHeight: list.scrollHeight,
-                    itemTop: current.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop,
-                    itemHeight: current.offsetHeight,
-                });
+        const place = (): void => {
+            const list = listRef.current;
+            const current = activeId
+                ? list?.querySelector<HTMLElement>(
+                    `[data-desktop-item="${CSS.escape(activeId)}"]`,
+                )
+                : null;
+            if (!list || !current) return;
+            list.scrollTop = sessionDrawerTargetScroll({
+                currentScroll: list.scrollTop,
+                viewportHeight: list.clientHeight,
+                contentHeight: list.scrollHeight,
+                itemTop: current.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop,
+                itemHeight: current.offsetHeight,
             });
+        };
+        let frame = requestAnimationFrame(() => {
+            frame = requestAnimationFrame(place);
         });
-        return () => cancelAnimationFrame(frame);
-    }, [activeId, loaded, listShown]);
+        // A reload keeps filling the rail after the first paint (late rows,
+        // drafts, badges), which pushes the placed row back out of view.
+        // Follow those changes briefly, and stop as soon as the user takes
+        // the list. The drawer opens onto a settled list and needs none.
+        const list = listRef.current;
+        if (mobileDrawer || !list) return () => cancelAnimationFrame(frame);
+        const settle = new MutationObserver(() => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(place);
+        });
+        const release = (): void => {
+            settle.disconnect();
+            clearTimeout(timer);
+            for (const type of SETTLE_RELEASE_EVENTS) list.removeEventListener(type, release);
+        };
+        const timer = setTimeout(release, 3000);
+        settle.observe(list, { childList: true, subtree: true });
+        for (const type of SETTLE_RELEASE_EVENTS) list.addEventListener(type, release, { passive: true });
+        return () => {
+            cancelAnimationFrame(frame);
+            release();
+        };
+    }, [activeId, loaded, listShown, mobileDrawer]);
     useEffect(() => {
         const list = listRef.current;
         const region = list?.closest<HTMLElement>("[data-desktop-region='sessions.list']");
